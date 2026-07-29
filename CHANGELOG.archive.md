@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.101] — 2026-07-02
+
+### ✨ Features
+- Feat(placement): support valueless node labels as capability flags ([7797da6](https://github.com/sislelabs/kuso/commit/7797da615142c1550b5b3c403a0a68e8b88436d2))
+
 ## [0.18.100] — 2026-07-02
 
 ### 🐛 Bug Fixes

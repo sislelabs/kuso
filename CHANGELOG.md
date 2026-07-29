@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.1] — 2026-07-29
+
+### 🐛 Bug Fixes
+- Fix(netpol): allow kuso-buildkitd ingress to the registry ([6660541](https://github.com/sislelabs/kuso/commit/66605410977a5ff956fe73923b2762838174dca2))
+- Fix(namespaces): retry the kuso-server RoleBinding stamp on transient failure ([af1bfcd](https://github.com/sislelabs/kuso/commit/af1bfcd9a50a7e9b355436a28994376eac612944))
+
+### 🧪 Tests
+- Test(netpol): guard that registry ingress allows kuso-buildkitd ([1f33bfb](https://github.com/sislelabs/kuso/commit/1f33bfbe13558a5db86f86cfb54e1dbb051596a0))
+
 ## [0.22.0] — 2026-07-29
 
 ### Other
@@ -479,11 +488,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(cli): accept bare node-label keys (valueless capability flags) ([2784da8](https://github.com/sislelabs/kuso/commit/2784da882114a57377d27afc2545697dbcabe1e5))
-
-## [0.18.101] — 2026-07-02
-
-### ✨ Features
-- Feat(placement): support valueless node labels as capability flags ([7797da6](https://github.com/sislelabs/kuso/commit/7797da615142c1550b5b3c403a0a68e8b88436d2))
 
 
 ---
