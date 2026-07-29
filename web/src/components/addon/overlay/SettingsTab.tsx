@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
 import { useCan, Perms } from "@/features/auth";
+import { addonBlast } from "@/lib/blast-radius";
 
 // addonReconcileState reads the addon CR's real helm-reconcile condition
 // instead of inferring health from the form's dirty flag. "in sync" must
@@ -286,28 +287,34 @@ function ConfigurationSection({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
             <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Version
+              Version <span className="text-amber-400">· immutable</span>
             </label>
             <Input
               value={version}
-              onChange={(e) => setVersion(e.target.value)}
               placeholder="leave empty for chart default"
-              className="h-7 font-mono text-[12px]"
+              disabled
+              className="h-7 font-mono text-[12px] opacity-60"
             />
+            <p className="font-mono text-[10px] text-amber-300/80">
+              {addonBlast("version")?.message}
+            </p>
           </div>
           <div className="space-y-1">
             <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Tier
+              Tier <span className="text-amber-400">· immutable</span>
             </label>
             <select
               value={size}
-              onChange={(e) => setSize(e.target.value as "small" | "medium" | "large")}
-              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--border-strong)]"
+              disabled
+              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] opacity-60 outline-none focus:border-[var(--border-strong)]"
             >
               <option value="small">small</option>
               <option value="medium">medium</option>
               <option value="large">large</option>
             </select>
+            <p className="font-mono text-[10px] text-amber-300/80">
+              {addonBlast("size")?.message}
+            </p>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -317,7 +324,6 @@ function ConfigurationSection({
             </label>
             <Input
               value={storageSize}
-              onChange={(e) => setStorageSize(e.target.value)}
               placeholder="e.g. 10Gi"
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
@@ -329,28 +335,36 @@ function ConfigurationSection({
           </div>
           <div className="space-y-1">
             <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Default database
+              Default database <span className="text-amber-400">· immutable</span>
             </label>
             <Input
               value={database}
-              onChange={(e) => setDatabase(e.target.value)}
               placeholder="defaults to project name"
-              className="h-7 font-mono text-[12px]"
+              disabled
+              className="h-7 font-mono text-[12px] opacity-60"
             />
+            <p className="font-mono text-[10px] text-amber-300/80">
+              {addonBlast("database")?.message}
+            </p>
           </div>
         </div>
-        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
-          <input
-            type="checkbox"
-            checked={ha}
-            onChange={(e) => setHa(e.target.checked)}
-            className="h-3.5 w-3.5 accent-[var(--accent)]"
-          />
-          <span className="text-[12px] font-medium">High availability</span>
-          <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
-            multi-replica · primary/replica streaming
-          </span>
-        </label>
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 opacity-60">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={ha}
+              disabled
+              className="h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            <span className="text-[12px] font-medium">High availability</span>
+            <span className="ml-auto font-mono text-[10px] text-amber-400">
+              · immutable
+            </span>
+          </label>
+          <p className="mt-1 font-mono text-[10px] text-amber-300/80">
+            {addonBlast("ha")?.message}
+          </p>
+        </div>
         {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
           <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
             <input

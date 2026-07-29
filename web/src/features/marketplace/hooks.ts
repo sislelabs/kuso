@@ -7,6 +7,8 @@ export function useMarketplace() {
 
 export function useRenderApp(app: string) {
   return useMutation({
+    // DeployDialog mutateAsyncs this in a try/catch and toasts itself.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (vars: { project: string; answers: Record<string, string> }) =>
       renderApp(app, vars.project, vars.answers),
   });

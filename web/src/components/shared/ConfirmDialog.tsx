@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,15 +39,51 @@ export function ConfirmDialog({
 }: Props) {
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // panelRef scopes the focus trap; restoreRef remembers who had focus
+  // before we opened so we can hand it back on close (a11y: focus must
+  // not vanish to <body> when a modal dismisses).
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreRef = useRef<HTMLElement | null>(null);
+  // Stable id so aria-labelledby on the dialog can point at the title.
+  const titleId = useId();
 
   // Reset the typed text every time we open. Otherwise users
   // accidentally bypass the gate by reusing a prior session's input.
   useEffect(() => {
     if (open) {
       setText("");
+      // Remember the trigger so we can restore focus on close.
+      restoreRef.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       // Defer focus until the spring-in lands, otherwise the focus
-      // ring jumps before the modal is visually settled.
-      window.setTimeout(() => inputRef.current?.focus(), 80);
+      // ring jumps before the modal is visually settled. When there's
+      // a typed-name gate, land on that input; otherwise focus the
+      // first focusable in the panel so keyboard users start inside
+      // the trap rather than on <body>.
+      window.setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          return;
+        }
+        const first = panelRef.current?.querySelector<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        first?.focus();
+      }, 80);
+    }
+  }, [open]);
+
+  // Restore focus to the opener when the dialog closes/unmounts.
+  useEffect(() => {
+    if (open) return;
+    const el = restoreRef.current;
+    restoreRef.current = null;
+    // Only restore if focus is still loose (on <body>) — don't yank it
+    // away if the caller already moved focus somewhere intentional.
+    if (el && (document.activeElement === document.body || document.activeElement === null)) {
+      el.focus();
     }
   }, [open]);
 
@@ -56,6 +92,30 @@ export function ConfirmDialog({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
       if (e.key === "Enter" && allow()) onConfirm();
+      // Focus trap: keep Tab / Shift+Tab cycling inside the panel so
+      // keyboard focus can't escape to page content behind the modal.
+      if (e.key === "Tab") {
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusables = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+        if (focusables.length === 0) return;
+        const firstEl = focusables[0];
+        const lastEl = focusables[focusables.length - 1];
+        const active = document.activeElement as HTMLElement | null;
+        if (e.shiftKey) {
+          if (active === firstEl || !panel.contains(active)) {
+            e.preventDefault();
+            lastEl.focus();
+          }
+        } else if (active === lastEl || !panel.contains(active)) {
+          e.preventDefault();
+          firstEl.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -76,6 +136,10 @@ export function ConfirmDialog({
           onClick={onCancel}
         >
           <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
             initial={{ scale: 0.96, y: 6 }}
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.96, y: 6 }}
@@ -88,7 +152,7 @@ export function ConfirmDialog({
             <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
               <div className="flex items-center gap-2">
                 {destructive && <AlertTriangle className="h-4 w-4 text-red-400" />}
-                <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+                <h2 id={titleId} className="text-sm font-semibold tracking-tight">{title}</h2>
               </div>
               <button
                 type="button"
