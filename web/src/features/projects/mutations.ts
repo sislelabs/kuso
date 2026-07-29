@@ -51,6 +51,7 @@ async function createProject(body: CreateProjectBody): Promise<unknown> {
 export function useUpdateProject(name: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (body: UpdateProjectBody) => updateProject(name, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: projectQueryKey(name) });
@@ -66,6 +67,9 @@ export function useUpdateProject(name: string) {
 export function useSetIncidentMonitoring() {
   const qc = useQueryClient();
   return useMutation({
+    // Call site passes a per-call onError toast (mutateOptions), which
+    // the global handler's options.onError guard can't see — opt out.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
       updateProject(name, { incidentMonitoring: enabled }),
     onSuccess: (_data, { name }) => {
@@ -78,6 +82,7 @@ export function useSetIncidentMonitoring() {
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (name: string) => deleteProject(name),
     onSuccess: (_data, name) => {
       qc.invalidateQueries({ queryKey: projectsQueryKey });
@@ -153,6 +158,7 @@ export function useStartProject() {
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (body: CreateProjectBody) => createProject(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: projectsQueryKey });

@@ -403,6 +403,18 @@ func (s *Service) DeleteForEnv(ctx context.Context, project, service, env string
 	return s.deleteSecret(ctx, s.nsFor(ctx, project), Name(project, service, env))
 }
 
+// DeleteForService removes the service-level managed Secret
+// (<project>-<service>-secrets) mounted on every env of the service.
+// Called on service delete so recreating a service at the same name in
+// the shared namespace doesn't inherit the dead one's secret values
+// (HIGH-6b). Tolerant of NotFound.
+func (s *Service) DeleteForService(ctx context.Context, project, service string) error {
+	if service == "" {
+		return fmt.Errorf("%w: service is required for service secret cleanup", ErrInvalid)
+	}
+	return s.deleteSecret(ctx, s.nsFor(ctx, project), Name(project, service, ""))
+}
+
 // jsonPointerEscape per RFC 6901: ~ → ~0, / → ~1. Order matters — encode
 // ~ first or you'd encode the escape character itself.
 func jsonPointerEscape(s string) string {

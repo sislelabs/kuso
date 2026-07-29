@@ -1172,17 +1172,25 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// confirmDestructive prompts the user for a y/N answer on stderr when
-// stdin is a TTY AND skip is false. Returns nil to proceed, error to
-// abort.
+// confirmDestructive gates a destructive action. It returns nil to
+// proceed, error to abort.
 //
-// Non-interactive callers (CI, scripts, agents) hit the !isTTY branch
-// and proceed without a prompt — the caller has already committed to
-// the destructive action by invoking the command. The --yes flag is
-// the explicit opt-out for humans who want to skip the prompt.
+//   - skip (--yes) → proceed. This is the explicit, machine-safe opt-out.
+//   - TTY, no --yes → prompt for y/N on stderr.
+//   - non-TTY (CI, scripts, ssh, agents), no --yes → ABORT.
+//
+// The non-TTY branch fails CLOSED on purpose. A piped caller can't
+// answer a prompt, so if we proceeded here `kuso project delete prod`
+// in CI would run unattended with no confirmation at all — the exact
+// context where an accidental invocation is least recoverable. Callers
+// that genuinely mean it pass --yes. (Historically this branch returned
+// nil and proceeded, which made --yes decorative in automation.)
 func confirmDestructive(skip bool, prompt string) error {
-	if skip || !stdinIsTTY() {
+	if skip {
 		return nil
+	}
+	if !stdinIsTTYFn() {
+		return fmt.Errorf("refusing to run a destructive action non-interactively without confirmation — re-run with --yes to proceed")
 	}
 	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
 	var ans string
@@ -1209,6 +1217,11 @@ func confirmDestructive(skip bool, prompt string) error {
 func stdinIsTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
+
+// stdinIsTTYFn is the seam confirmDestructive calls, overridable in
+// tests so the TTY/non-TTY branches can be exercised without a real
+// terminal.
+var stdinIsTTYFn = stdinIsTTY
 
 func init() {
 	rootCmd.AddCommand(projectCmd)

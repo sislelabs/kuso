@@ -459,6 +459,7 @@ func main() {
 		// projects package free of a hard dep on secrets (and to make
 		// it trivial to no-op in tests).
 		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
+		projSvc.SecretsCleanupForService = secSvc.DeleteForService
 		// Revision history: log every successful spec mutation so the
 		// History tab + revert path have something to show. Best-
 		// effort — a DB miss never fails the user-facing save.
@@ -567,6 +568,10 @@ func main() {
 		// every existing project addon. Without this, services added
 		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
 		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
+		// Same resolver on the crons service so its onFailure webhook
+		// secretRef ownership check (HIGH-1) can tell whether a signing-key
+		// secret name belongs to the cron's own project.
+		cronSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
 		// Env-group clones write instance-shared addon CRs directly (bypassing
 		// addons.Add), so wire the provisioner that mints their per-project DB +
 		// <addon>-conn secret — without it the cloned service crashloops on a
@@ -1488,6 +1493,13 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 			{"kusoservices", kube.GVRServices},
 			{"kusoaddons", kube.GVRAddons},
 			{"kusoprojects", kube.GVRProjects},
+			// KusoCron / KusoRun are helm-operator-managed too
+			// (operator/watches.yaml), so they get the same
+			// uninstall-release finalizer. Without them in the sweep, a
+			// cron or run deleted after its helm release secret is gone
+			// wedges Terminating forever.
+			{"kusocrons", kube.GVRCrons},
+			{"kusoruns", kube.GVRRuns},
 		} {
 			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
 			if err != nil {

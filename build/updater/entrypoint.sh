@@ -35,6 +35,21 @@ write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
 TMP_CRDS=$(mktemp)
 curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
+
+# Server-side dry-run BEFORE the real apply. A CRD schema that
+# retroactively adds a required field, a tightened pattern, or a CEL
+# validation rule can make already-stored CRs unwritable — the apiserver
+# rejects them at admission. If that lands blind, every subsequent
+# reconcile/write against existing resources fails and there's no clean
+# recovery path. --dry-run=server runs the real admission/validation
+# against the live apiserver without persisting, so we catch the
+# rejection here and abort with a clear status instead of bricking.
+if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
+  echo "==> CRD server-side dry-run FAILED — refusing to apply:"
+  echo "$dryrun_out" | sed 's/^/    /'
+  write_status "failed" "CRD validation (dry-run) failed — not applied: $(echo "$dryrun_out" | tr '\n' ' ' | cut -c1-300)"
+  exit 1
+fi
 kubectl apply -f "$TMP_CRDS" >/dev/null
 
 # Apply the release's non-workload platform manifests (RBAC,
@@ -74,8 +89,37 @@ else
 fi
 
 write_status "rolling-server" "${KUSO_SERVER_IMAGE}"
+# Snapshot the CURRENT server image BEFORE we change it, so a
+# crashlooping new image can be reverted. This Job outlives the server
+# pod (the server is killed mid-roll), so the revert has to live here —
+# the in-app updater can't recover an API that's down, and BackoffLimit:0
+# means the Job won't retry. jsonpath returns "" if the container/deploy
+# is missing; we guard on that below before attempting a revert.
+PRIOR_SERVER_IMAGE=$(kubectl get -n "$NS" deploy/kuso-server \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="server")].image}' 2>/dev/null || true)
+
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
-kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s
+# Wrap rollout status so a timeout/crashloop on the new image triggers a
+# revert instead of aborting under `set -e` with the deploy stuck. The
+# explicit `if !` keeps this robust to set -euo pipefail.
+if ! kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
+  echo "==> kuso-server rollout to ${KUSO_SERVER_IMAGE} did NOT become ready"
+  if [ -n "$PRIOR_SERVER_IMAGE" ] && [ "$PRIOR_SERVER_IMAGE" != "${KUSO_SERVER_IMAGE}" ]; then
+    echo "==> reverting kuso-server to ${PRIOR_SERVER_IMAGE}"
+    write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed to roll out; reverting to ${PRIOR_SERVER_IMAGE}"
+    kubectl set image -n "$NS" deploy/kuso-server "server=${PRIOR_SERVER_IMAGE}" >/dev/null || true
+    if kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
+      write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed; reverted to working ${PRIOR_SERVER_IMAGE}"
+    else
+      write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed AND revert to ${PRIOR_SERVER_IMAGE} did not stabilise — manual intervention required"
+    fi
+  else
+    # No prior image to revert to (fresh install) or same image — nothing
+    # safe to roll back to. Report failure and leave state for an operator.
+    write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed to roll out and no prior image to revert to — manual intervention required"
+  fi
+  exit 1
+fi
 
 # The activator runs the SAME kuso-server-go image in `--activator` mode
 # (deploy/kuso-activator.yaml). Roll it in lockstep with the server so

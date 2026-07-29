@@ -276,6 +276,16 @@ func dial(ctx context.Context, c Credentials) (*ssh.Client, error) {
 	default:
 		return nil, errors.New("ssh: either password or privateKey is required")
 	}
+	// Guard the SSH dial against loopback and link-local targets. A node
+	// being joined legitimately lives on a public or private-network IP,
+	// so we do NOT block RFC1918 (that would break private-network joins)
+	// — but 127/8 and 169.254/16 (cloud metadata / link-local) are never
+	// a real node and would turn this admin endpoint into an internal
+	// probe / metadata-reach primitive (MED-4). Resolve first, then check
+	// every resolved address.
+	if err := rejectLoopbackOrLinkLocal(ctx, c.Host); err != nil {
+		return nil, err
+	}
 	addr := net.JoinHostPort(c.Host, fmt.Sprintf("%d", port))
 	dialer := net.Dialer{Timeout: cfg.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
@@ -469,4 +479,33 @@ func encodeBase64(b []byte) string {
 
 func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// rejectLoopbackOrLinkLocal resolves host and returns an error if any
+// resolved address is loopback (127/8, ::1) or link-local / cloud-metadata
+// (169.254/16, fe80::/10). A real node to be joined is never one of these,
+// so blocking them stops this admin endpoint being used as an internal
+// probe or a reach to 169.254.169.254. RFC1918 is deliberately NOT blocked
+// — nodes legitimately live on private networks.
+func rejectLoopbackOrLinkLocal(ctx context.Context, host string) error {
+	if host == "" {
+		return errors.New("ssh: host required")
+	}
+	var resolver net.Resolver
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		// If DNS fails, let the dial surface the real error rather than
+		// masking it — but if the host is already an IP literal, check it.
+		if ip := net.ParseIP(host); ip != nil {
+			ips = []net.IPAddr{{IP: ip}}
+		} else {
+			return nil
+		}
+	}
+	for _, a := range ips {
+		if a.IP.IsLoopback() || a.IP.IsLinkLocalUnicast() || a.IP.IsLinkLocalMulticast() {
+			return fmt.Errorf("ssh: refusing to connect to reserved address %s (resolved from %q)", a.IP, host)
+		}
+	}
+	return nil
 }

@@ -28,6 +28,12 @@ import {
 } from "./api";
 import type { KusoEnvVar } from "@/types/projects";
 
+// selfHandledErrors marks a mutation whose call sites handle their own
+// errors (mutateAsync + try/catch, or a per-call onError). The global
+// MutationCache.onError toast (query-client.tsx) skips these so the
+// user doesn't get two toasts for one failure.
+const selfHandledErrors = { skipGlobalErrorToast: true } as const;
+
 export const serviceQueryKey = (project: string, service: string) =>
   ["projects", project, "services", service] as const;
 export const serviceEnvQueryKey = (project: string, service: string) =>
@@ -87,6 +93,7 @@ export function useDetectedEnv(project: string, service: string) {
 export function useSetServiceEnv(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: (envVars: KusoEnvVar[]) => setServiceEnv(project, service, envVars),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serviceEnvQueryKey(project, service) });
@@ -160,6 +167,7 @@ export function useErrors(project: string, service: string, since = "24h") {
 export function useTriggerBuild(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: (body: { branch?: string; ref?: string } = {}) =>
       triggerBuild(project, service, body),
     onSuccess: () => {
@@ -195,6 +203,7 @@ export function useWakeService(project: string, service: string) {
 export function useStopService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: () => stopService(project, service),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
@@ -207,6 +216,7 @@ export function useStopService(project: string, service: string) {
 export function useStartService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: () => startService(project, service),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
@@ -219,6 +229,7 @@ export function useStartService(project: string, service: string) {
 export function usePatchService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: (body: PatchServiceBody) => patchService(project, service, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
@@ -230,6 +241,7 @@ export function usePatchService(project: string, service: string) {
 export function useDeleteService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: () => deleteService(project, service),
     onSuccess: () => {
       // Cascade: project detail (rolls services + envs into one shape)
@@ -301,6 +313,7 @@ export function useRuns(project: string, service: string) {
 export function useCreateRun(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: (body: CreateRunRequest) => createRun(project, service, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });
@@ -311,6 +324,7 @@ export function useCreateRun(project: string, service: string) {
 export function useCancelRun(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: (runName: string) => cancelRun(project, runName),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });

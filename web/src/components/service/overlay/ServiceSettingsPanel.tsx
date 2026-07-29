@@ -52,6 +52,88 @@ const SECTIONS = [
   { id: "danger",     label: "Danger",     icon: Trash2 },
 ] as const;
 
+// fieldDiffValues maps a PatchServiceBody key back to a human-readable
+// before/after pair, pulled from the real baseline vs current form
+// state. Several body keys aggregate multiple FormState fields (scale,
+// resources, repo, placement, image) so this can't be a naive
+// key-lookup — each field gets a small formatter. Returns
+// [before, after]; an empty string renders as "(unset)" / "(removed)"
+// in DiffConfirmDialog.
+function fieldDiffValues(
+  field: string,
+  base: FormState,
+  next: FormState,
+): [string, string] {
+  const norm = (s: string) =>
+    s.split("\n").map((x) => x.trim()).filter(Boolean).join(", ");
+  const resources = (s: FormState) =>
+    [
+      s.cpuRequest && `cpu req ${s.cpuRequest}`,
+      s.cpuLimit && `cpu lim ${s.cpuLimit}`,
+      s.memRequest && `mem req ${s.memRequest}`,
+      s.memLimit && `mem lim ${s.memLimit}`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const scale = (s: FormState) =>
+    `min ${s.scaleMin}, max ${s.scaleMax}, cpu ${s.scaleCPU}%`;
+  const repo = (s: FormState) =>
+    [s.repoURL, s.repoBranch && `@${s.repoBranch}`, s.repoPath && `/${s.repoPath}`]
+      .filter(Boolean)
+      .join(" ");
+  const image = (s: FormState) =>
+    [s.imageRepository, s.imageTag && `:${s.imageTag}`].filter(Boolean).join("");
+  const placement = (s: FormState) =>
+    [
+      s.placement
+        .filter((r) => r.key.trim())
+        .map((r) => `${r.key}=${r.value}`)
+        .join(", "),
+      s.placementNodes.filter(Boolean).length
+        ? `nodes: ${s.placementNodes.filter(Boolean).join(", ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  const volumes = (s: FormState) =>
+    s.volumes
+      .filter((v) => v.name && v.mountPath)
+      .map((v) => `${v.name}→${v.mountPath} (${v.sizeGi}Gi)`)
+      .join(", ");
+  const release = (s: FormState) =>
+    s.releaseCommand.trim()
+      ? `${s.releaseCommand.trim()}${s.releaseTimeout ? ` (${s.releaseTimeout}s)` : ""}`
+      : "";
+  const security = (s: FormState) =>
+    [
+      s.capAdd.trim() && `capAdd: ${s.capAdd.trim()}`,
+      s.allowPrivilegeEscalation ? "allowPrivilegeEscalation: true" : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const pick: Record<string, (s: FormState) => string> = {
+    displayName: (s) => s.displayName.trim(),
+    port: (s) => s.port,
+    domains: (s) => norm(s.domains),
+    internal: (s) => (s.internal ? "internal (no public URL)" : "public"),
+    scale: scale,
+    sleep: (s) => (Number(s.scaleMin) === 0 ? "sleep enabled (min 0)" : "sleep disabled"),
+    resources: resources,
+    runtime: (s) => s.runtime,
+    dockerfile: (s) => s.dockerfile,
+    image: image,
+    repo: repo,
+    placement: placement,
+    volumes: volumes,
+    previews: (s) => (s.previewsDisabled ? "disabled" : "enabled"),
+    release: release,
+    securityContext: security,
+  };
+  const fmt = pick[field];
+  if (!fmt) return ["current", "changed"];
+  return [fmt(base), fmt(next)];
+}
+
 // ServiceSettingsPanel orchestrates the per-service settings overlay.
 // Each section lives in ./settings/<Name>Section.tsx; this file owns
 // the form state, the dirty/save bar, and the section-anchor nav.
@@ -425,13 +507,20 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
 
   // diffEntries turns the pending patch body into the confirm
   // dialog's row list, each tagged with its EDIT_SAFETY blast radius.
+  // The before/after values are read from the real baseline vs state
+  // (NOT the patch body — several body keys are reshaped, e.g. `scale`
+  // spans three form fields) so the user sees the actual change per
+  // field, mirroring how EnvVarsEditor builds its diff.
   const diffEntries: DiffEntry[] = pendingBody
-    ? Object.keys(pendingBody).map((field) => ({
-        field,
-        before: "current",
-        after: "changed",
-        warning: serviceBlast(field) ?? undefined,
-      }))
+    ? Object.keys(pendingBody).map((field) => {
+        const [before, after] = fieldDiffValues(field, baseline, state);
+        return {
+          field,
+          before,
+          after,
+          warning: serviceBlast(field) ?? undefined,
+        };
+      })
     : [];
 
   const reset = () => {

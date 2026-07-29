@@ -32,6 +32,9 @@ export default function TokensPage() {
   const qc = useQueryClient();
   const tokens = useQuery({ queryKey: ["tokens", "my"], queryFn: listMyTokens });
   const issue = useMutation({
+    // Handled by the caller's try/catch toast — opt out of the global
+    // mutation-error toast to avoid doubling.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: ({ name, expiresAt }: { name: string; expiresAt: string }) =>
       issueMyToken(name, expiresAt),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens", "my"] }),

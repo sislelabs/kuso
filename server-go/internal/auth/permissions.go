@@ -80,6 +80,44 @@ func Compute(t db.GroupTenancy) []string {
 	return out
 }
 
+// reservedInstancePerms is the set of permission strings that Compute()
+// is the SOLE legitimate source of. They gate instance-wide admin
+// surfaces (settings, user administration, system update, billing/audit
+// reads). A custom Role must never be able to MINT these, because every
+// authorization gate decides by string-matching the flat claims list —
+// so a role-derived "settings:admin" is indistinguishable from a real
+// admin's. See ReservedInstancePermission / ValidateRolePermissions.
+var reservedInstancePerms = map[string]struct{}{
+	string(PermSettingsAdmin): {},
+	string(PermSettingsRead):  {},
+	string(PermAuditRead):     {},
+	string(PermUserWrite):     {},
+	string(PermBillingRead):   {},
+	string(PermSystemUpdate):  {},
+}
+
+// ReservedInstancePermission reports whether a "<resource>:<action>"
+// string is an instance-level permission a custom Role may not contain.
+func ReservedInstancePermission(resource, action string) bool {
+	_, ok := reservedInstancePerms[resource+":"+action]
+	return ok
+}
+
+// ValidateRolePermissions returns the first reserved permission found in
+// a proposed custom-role permission set, or "" if the set is clean. The
+// role/user administration endpoints call this to REJECT (not silently
+// drop) an attempt to embed an instance-admin permission in a role — the
+// privilege-escalation path where a user:write holder mints
+// settings:admin for themselves.
+func ValidateRolePermissions(pairs [][2]string) string {
+	for _, p := range pairs {
+		if ReservedInstancePermission(p[0], p[1]) {
+			return p[0] + ":" + p[1]
+		}
+	}
+	return ""
+}
+
 // PermsForProjectRole returns the permission set a principal holds on a
 // project given their EFFECTIVE role there (already resolved via
 // ProjectRoleFor, which applies admin > override > inherited-instance).

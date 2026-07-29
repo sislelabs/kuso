@@ -233,3 +233,61 @@ func TestIsPending(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateRolePermissions_RejectsReserved is the CRIT-1 regression
+// guard: a custom Role must never be able to embed an instance-level
+// permission (settings:admin, user:write, system:update, …). Without
+// this, a user:write holder could mint settings:admin into a role and
+// self-assign it for full instance takeover.
+func TestValidateRolePermissions_RejectsReserved(t *testing.T) {
+	t.Parallel()
+
+	reserved := [][2]string{
+		{"settings", "admin"},
+		{"user", "write"},
+		{"system", "update"},
+		{"billing", "read"},
+		{"audit", "read"},
+		{"settings", "read"},
+	}
+	for _, p := range reserved {
+		got := ValidateRolePermissions([][2]string{p})
+		if got == "" {
+			t.Errorf("ValidateRolePermissions allowed reserved perm %s:%s", p[0], p[1])
+		}
+		if !ReservedInstancePermission(p[0], p[1]) {
+			t.Errorf("ReservedInstancePermission(%s,%s) = false, want true", p[0], p[1])
+		}
+	}
+
+	// A reserved perm mixed into an otherwise-fine set is still caught.
+	mixed := [][2]string{
+		{"project", "read"},
+		{"services", "write"},
+		{"settings", "admin"}, // the poison
+	}
+	if bad := ValidateRolePermissions(mixed); bad != "settings:admin" {
+		t.Errorf("ValidateRolePermissions(mixed) = %q, want settings:admin", bad)
+	}
+}
+
+// TestValidateRolePermissions_AllowsProjectPerms confirms the validator
+// does NOT over-reach: legitimate project-scoped and custom permissions
+// must pass, or we'd break custom roles entirely.
+func TestValidateRolePermissions_AllowsProjectPerms(t *testing.T) {
+	t.Parallel()
+
+	ok := [][2]string{
+		{"project", "read"},
+		{"project", "write"},
+		{"services", "write"},
+		{"addons", "read"},
+		{"secrets", "write"},
+		{"logs", "ok"},
+		{"console", "ok"},
+		{"custom", "thing"}, // arbitrary non-reserved is fine
+	}
+	if bad := ValidateRolePermissions(ok); bad != "" {
+		t.Errorf("ValidateRolePermissions rejected a legitimate perm: %q", bad)
+	}
+}

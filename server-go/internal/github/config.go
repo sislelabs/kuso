@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config bundles the env-driven knobs the package needs. Construct via
@@ -82,5 +83,7 @@ func (c *Config) InstallURL() string {
 // installation-level) calls. Callers usually go through Client.App(),
 // which wraps this with the App JWT transport.
 func defaultHTTPClient() *http.Client {
-	return &http.Client{}
+	// A timeout so a hung GitHub API dial can't wedge the caller
+	// indefinitely (MED-4). 30s is generous for App-level calls.
+	return &http.Client{Timeout: 30 * time.Second}
 }

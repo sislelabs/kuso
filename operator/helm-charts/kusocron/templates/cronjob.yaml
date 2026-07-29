@@ -13,9 +13,23 @@ spec:
      kusoenvironment guards the same case by pinning replicas: 0; for a
      CronJob the equivalent is to not fire at all until an image
      exists. Once the first build promotes, this flips back to the
-     user's own suspend setting. */}}
-  suspend: {{ if not .Values.image.repository }}true{{ else }}{{ .Values.suspend }}{{ end }}
+     user's own suspend setting.
+
+     kind=http is exempt: it has NO image by design (the container
+     hardcodes curlimages/curl below), so the no-image guard would
+     otherwise pin every http cron suspended forever. Only apply the
+     guard to non-http kinds, which do carry a service/command image. */}}
+  suspend: {{ if and (ne (default "service" .Values.kind) "http") (not .Values.image.repository) }}true{{ else }}{{ .Values.suspend }}{{ end }}
   concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  {{- /* startingDeadlineSeconds bounds how far behind the controller
+     will look for missed schedules. Without it, a CronJob that misses
+     >100 consecutive schedules (e.g. suspended over a long window, or a
+     control-plane outage) permanently wedges — the controller refuses
+     to start any Job and never self-heals. A finite deadline caps the
+     miss-count window so it recovers on the next tick. */}}
+  {{- if gt (int .Values.startingDeadlineSeconds) 0 }}
+  startingDeadlineSeconds: {{ .Values.startingDeadlineSeconds }}
+  {{- end }}
   successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
   jobTemplate:
@@ -139,8 +153,15 @@ spec:
               {{- with .Values.envFromSecrets }}
               envFrom:
                 {{- range . }}
+                # optional=true mirrors the kusorun + kusoenvironment
+                # charts — a missing secret (e.g. an addon uninstalled
+                # while a cron still carries its conn-secret name)
+                # shouldn't pin every cron fire in
+                # CreateContainerConfigError with no alert. The Job still
+                # starts; the missing-env-var hint surfaces in the code.
                 - secretRef:
                     name: {{ . | quote }}
+                    optional: true
                 {{- end }}
               {{- end }}
               resources:

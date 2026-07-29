@@ -29,7 +29,9 @@ export function useInstallationRepos(installationId: number | null) {
 }
 
 export function useDetectRuntime() {
-  return useMutation({ mutationFn: detectRuntime });
+  // Callers swallow errors deliberately (.catch → leave defaults), so
+  // the global error toast must not fire for a failed runtime detect.
+  return useMutation({ meta: { skipGlobalErrorToast: true }, mutationFn: detectRuntime });
 }
 
 export function useScanAddons() {
@@ -50,5 +52,7 @@ export function useSetupStatus() {
 }
 
 export function useConfigureGithub() {
-  return useMutation({ mutationFn: configureGithub });
+  // The github settings page mutateAsyncs this in a try/catch and toasts
+  // the failure itself — opt out of the global toast to avoid doubling.
+  return useMutation({ meta: { skipGlobalErrorToast: true }, mutationFn: configureGithub });
 }

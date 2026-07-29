@@ -27,6 +27,10 @@ concurrencyPolicy: Forbid
 successfulJobsHistoryLimit: 3
 failedJobsHistoryLimit: 3
 activeDeadlineSeconds: 0
+# startingDeadlineSeconds bounds the missed-schedule lookback so a
+# CronJob that falls >100 schedules behind self-heals instead of
+# wedging permanently. 0 = unset (kube default: unbounded lookback).
+startingDeadlineSeconds: 300
 # Pod placement — same shape as services. region label gets a
 # matching toleration so the kuso.sislelabs.com/region NoSchedule
 # taint doesn't block scheduling.

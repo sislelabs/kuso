@@ -55,8 +55,21 @@ import (
 // stays optional — when it's nil, builds still go out, but with an
 // empty token (the clone will fail clearly instead of pods wedging on
 // "secret not found").
+//
+// MintRepoScopedToken restricts the token to the single repo being built
+// so a hostile/compromised build pod can't reach sibling repos in the
+// same installation. The github.Client implements it; when a caller wires
+// a legacy minter that only has MintInstallationToken, the build path
+// falls back to installation scope (see ensureCloneTokenSecret).
 type TokenMinter interface {
 	MintInstallationToken(ctx context.Context, installationID int64) (string, error)
+}
+
+// RepoScopedTokenMinter is the optional narrower interface: when the wired
+// TokenMinter also satisfies it, ensureCloneTokenSecret mints a token
+// scoped to just (owner, repo) instead of the whole installation.
+type RepoScopedTokenMinter interface {
+	MintRepoScopedToken(ctx context.Context, installationID int64, owner, repo string) (string, error)
 }
 
 // InstallationResolver looks up which GitHub App installation has
@@ -536,6 +549,20 @@ type CreateBuildRequest struct {
 	// "does this PR build?" feedback without burning registry
 	// storage or rolling prod.
 	DryRun bool `json:"dryRun,omitempty"`
+	// PreviewEnv, when set, names the preview KusoEnvironment CR
+	// (`<serviceFQN>-pr-<N>`) this build is for. It is populated by the
+	// dispatcher's ensurePreviewEnv path only — never from the user-
+	// supplied JSON body — so a caller can't spoof a build into reading
+	// another env's vars.
+	//
+	// SECURITY (HIGH-2): for a preview build we must NOT bake the parent
+	// service's PRODUCTION env (its live DATABASE_URL / API keys) into the
+	// image layers. When PreviewEnv is set, Create resolves spec.BuildEnv
+	// from the PREVIEW env's own already-isolated vars (subscription-
+	// filtered + PG-clone-swapped by ensurePreviewEnv) instead of the
+	// parent service's production vars. Production builds (PreviewEnv=="")
+	// keep the existing behaviour exactly.
+	PreviewEnv string `json:"-"`
 }
 
 // shaRE matches a full 40-char git SHA.
@@ -803,7 +830,8 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// release name == the KusoBuild CR name. Mint a fresh installation
 	// token and write the secret BEFORE creating the CR so the operator's
 	// helm render finds it the moment the Job pod schedules.
-	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID); err != nil {
+	tokenOwner, tokenRepo := splitGithubURL(repoURL)
+	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID, tokenOwner, tokenRepo); err != nil {
 		return nil, fmt.Errorf("clone token secret: %w", err)
 	}
 	// Ensure the per-service build cache PVC exists. Kept best-effort:
@@ -872,13 +900,39 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		BuildArgs: svcCR.Spec.BuildArgs,
 		PublicEnv: svcCR.Spec.PublicEnv,
 	}
-	// Build-time env: resolve the service's env vars to literals (reading
-	// referenced secrets) and stamp them onto the CR so the build job can
-	// bake them into the image. Apps that read env at build (Prisma
-	// generate needs DATABASE_URL, Next.js compiles NEXT_PUBLIC_* and
-	// validates env) require this. Unresolvable refs are omitted, not fatal.
+	// Build-time env: resolve env vars to literals (reading referenced
+	// secrets) and stamp them onto the CR so the build job can bake them
+	// into the image. Apps that read env at build (Prisma generate needs
+	// DATABASE_URL, Next.js compiles NEXT_PUBLIC_* and validates env)
+	// require this. Unresolvable refs are omitted, not fatal.
 	// NOTE: these values bake into image layers in the in-cluster registry.
-	if be := s.resolveBuildEnv(ctx, ns, svcCR.Spec.EnvVars); len(be) > 0 {
+	//
+	// SECURITY (HIGH-2): for a PREVIEW build we must not resolve the parent
+	// service's PRODUCTION env — that would bake the live production
+	// DATABASE_URL / API keys into a PR-preview image, defeating the per-PR
+	// isolation the dispatcher applies to the runtime pod (subscription
+	// filtering + per-PR PG-clone secret swaps). Instead we resolve from
+	// the preview KusoEnvironment's OWN env vars, whose secretKeyRefs
+	// already point at the per-PR clone secrets. A preview thus gets its
+	// own preview DB creds (or nothing) baked in — never production's.
+	buildEnvVars := svcCR.Spec.EnvVars
+	if req.PreviewEnv != "" {
+		if penv, perr := s.Kube.GetKusoEnvironment(ctx, ns, req.PreviewEnv); perr == nil && penv != nil {
+			// Use the preview env's isolated, post-swap vars.
+			buildEnvVars = penv.Spec.EnvVars
+		} else {
+			// Preview env not readable — refuse to fall back to the
+			// service's production vars, which would leak prod secrets.
+			// Drop build-time secret env entirely; plain build args still
+			// flow via spec.BuildArgs. A preview that genuinely needs a
+			// build-time DB URL gets it from its own env once the env CR
+			// is readable on the next resync.
+			slog.Default().Warn("preview build: preview env unreadable, skipping build-env resolution to avoid baking prod secrets",
+				"env", req.PreviewEnv, "err", perr)
+			buildEnvVars = nil
+		}
+	}
+	if be := s.resolveBuildEnv(ctx, ns, buildEnvVars); len(be) > 0 {
 		spec.BuildEnv = be
 	}
 	if !queued {
@@ -2711,6 +2765,26 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 // rewrite plan §5 / TS comment in github-webhooks.service.ts, that was
 // a known-incomplete feature. We close it here by matching on
 // spec.branch over the env list filtered to this build's service.
+// promotionBranchMatches decides whether a build on buildBranch may
+// promote to an env whose spec.branch is envBranch, given the project's
+// defaultBranch. Rules (MED-6):
+//   - both set: exact match required.
+//   - env branch unset: the env is treated as the DEFAULT-branch env, so
+//     only a default-branch build (or a build with no branch) promotes to
+//     it — NOT an arbitrary feature/staging branch. This closes the hole
+//     where a branch-unset production env received images from every push.
+//   - build branch unset (manual trigger with no branch): matches any env
+//     (unchanged behaviour — a deliberate manual promote).
+func promotionBranchMatches(buildBranch, envBranch, defaultBranch string) bool {
+	if buildBranch == "" {
+		return true
+	}
+	if envBranch == "" {
+		return buildBranch == defaultBranch
+	}
+	return buildBranch == envBranch
+}
+
 func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	if b.Spec.Image == nil {
 		return nil
@@ -2739,6 +2813,16 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		return fmt.Errorf("list envs for promotion: %w", err)
 	}
 	bTrigger := buildTriggerTimestamp(b)
+	// Resolve the project's default branch once (MED-6). An env with an
+	// UNSTAMPED branch (spec.branch == "") used to match EVERY build, so a
+	// push to `staging` could promote to a branch-unset production env. We
+	// now treat an empty env branch as "the default branch" — it matches
+	// only default-branch builds, not arbitrary feature/staging branches.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
 	matched := 0
 	// promoteFailed records whether promoting to ANY matched env hit a
 	// hard error (CAS exhausted, apiserver blip on the env Update). We
@@ -2766,7 +2850,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		if e.Spec.Service != b.Spec.Service {
 			continue
 		}
-		if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+		if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
 			continue
 		}
 		// Last-trigger-wins guard against back-to-back finishes.
@@ -2924,6 +3008,12 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
+	// MED-6: same empty-env-branch = default-branch semantics as promoteImage.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
 	for i := range rawSvcs.Items {
 		var s kube.KusoService
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
@@ -2948,7 +3038,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawEnvs.Items[j].Object, &e); err != nil {
 				continue
 			}
-			if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+			if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
 				continue
 			}
 			// Parsed-time compare (see promotedAtIsNewer) — raw string

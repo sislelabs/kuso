@@ -288,6 +288,7 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 		if !isPRClone(a, prLabel, suffix) {
 			continue
 		}
+		cloneFQN := a.Name
 		if err := c.Addons.Delete(ctx, project, short); err != nil {
 			c.Logger.Warn("preview db clone delete", "addon", short, "err", err)
 			if firstErr == nil {
@@ -295,9 +296,49 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 			}
 			continue
 		}
+		// Reclaim the clone's StatefulSet VCT PVC. helm uninstall does NOT
+		// delete it (VCT PVCs are never helm-owned, and carry
+		// resource-policy=keep semantics), so without this every closed PR
+		// leaks its clone volume — and because clone names are
+		// deterministic (<base>-pr-N), the NEXT PR #N in the same repo
+		// mounts the previous PR's database. The VCT PVC is named
+		// data-<cloneFQN>-<ordinal>; a single-pod clone has ordinal 0, but
+		// list-and-match the prefix to be robust. (HIGH-6a)
+		c.reclaimClonePVCs(ctx, project, cloneFQN)
 		c.Logger.Info("preview db clone deleted", "addon", short)
 	}
 	return firstErr
+}
+
+// reclaimClonePVCs force-deletes the StatefulSet VCT PVCs for a deleted
+// preview clone. Best-effort: a still-mounted PVC gets a deletionTimestamp
+// and GCs once the StatefulSet is gone.
+func (c *Cloner) reclaimClonePVCs(ctx context.Context, project, cloneFQN string) {
+	if c.Kube == nil || c.Kube.Clientset == nil {
+		return
+	}
+	ns := c.namespaceFor(ctx, project)
+	prefix := "data-" + cloneFQN + "-"
+	pvcs, err := c.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		c.Logger.Warn("preview clone pvc reclaim: list", "clone", cloneFQN, "err", err)
+		return
+	}
+	for i := range pvcs.Items {
+		name := pvcs.Items[i].Name
+		// Exact VCT match: "data-<cloneFQN>-<ordinal>". Guard against a
+		// prefix collision with a longer clone name by requiring the tail
+		// after the prefix to be all digits.
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if ord := name[len(prefix):]; ord == "" || strings.ContainsFunc(ord, func(r rune) bool { return r < '0' || r > '9' }) {
+			continue
+		}
+		if derr := c.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			c.Logger.Warn("preview clone pvc reclaim: delete", "pvc", name, "err", derr)
+		}
+	}
 }
 
 // seedAsync waits for the clone's StatefulSet to be ready, then

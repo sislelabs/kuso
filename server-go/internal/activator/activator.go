@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/scaledown"
 )
 
 // wakeOpTimeout bounds a single detached doWake (the Deployment scale
@@ -85,6 +86,23 @@ type Activator struct {
 	// proxyTransport is the cold-start-tolerant transport used for the
 	// reverse proxy (short dial timeout + retry on dial races).
 	proxyTransport http.RoundTripper
+
+	// activityMu / lastStamp throttle the per-env last-activity annotation
+	// write (recordActivity) to at most once per activityStampInterval, so
+	// a busy env doesn't generate an API write per request.
+	activityMu sync.Mutex
+	lastStamp  map[string]time.Time
+
+	// nowFn is time.Now, overridable in tests. Read via now().
+	nowFn func() time.Time
+}
+
+// now returns the activator's clock, defaulting to time.Now when unset.
+func (a *Activator) now() time.Time {
+	if a.nowFn != nil {
+		return a.nowFn()
+	}
+	return time.Now()
 }
 
 type hostEntry struct {
@@ -117,6 +135,8 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		hostCache:      map[string]hostEntry{},
 		hostTTL:        30 * time.Second,
 		proxyTransport: newProxyTransport(),
+		lastStamp:      map[string]time.Time{},
+		nowFn:          time.Now,
 	}
 }
 
@@ -210,7 +230,48 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Retry-After", "2")
 		http.Error(rw, "service is starting, please retry", http.StatusServiceUnavailable)
 	}
+	// Record activity so scaledown can tell this env is NOT idle. The
+	// app's own traefik counter reads zero for sleep-routed envs (all
+	// their traffic flows through kuso-activator, not the app's Service),
+	// so scaledown can't measure idleness from Prometheus (HIGH-5a). The
+	// activator IS in-path for 100% of this traffic, so it's the correct
+	// place to stamp a last-activity marker. Throttled to at most once per
+	// activityStampInterval per env to avoid an API write per request.
+	a.recordActivity(ctx, ns, env)
 	proxy.ServeHTTP(w, r)
+}
+
+// activityStampInterval throttles how often the activator writes the
+// last-activity annotation for a given env.
+const activityStampInterval = 30 * time.Second
+
+// recordActivity stamps LastActivityAnnotation on the env CR with the
+// current time, throttled per-env. Best-effort: a missed stamp just means
+// scaledown falls back to its Prometheus check.
+func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
+	key := ns + "/" + env
+	now := a.now()
+	a.activityMu.Lock()
+	last, ok := a.lastStamp[key]
+	if ok && now.Sub(last) < activityStampInterval {
+		a.activityMu.Unlock()
+		return
+	}
+	a.lastStamp[key] = now
+	a.activityMu.Unlock()
+
+	if a.kc == nil {
+		return
+	}
+	if _, err := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, env, func(e *kube.KusoEnvironment) error {
+		if e.Annotations == nil {
+			e.Annotations = map[string]string{}
+		}
+		e.Annotations[scaledown.LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
+		return nil
+	}); err != nil {
+		a.logger.Warn("activator: record activity", "ns", ns, "env", env, "err", err)
+	}
 }
 
 // newProxyTransport builds the transport the activator proxies through.
@@ -348,17 +409,25 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	return a.waitReady(ctx, ns, name)
 }
 
-// doWake bumps the Deployment to 1 replica (idempotent / level-triggered).
-// It patches the Deployment directly for an immediate effect, then best-
-// effort bumps the env CR's spec.replicaCount so the helm-operator's next
-// reconcile doesn't revert it back to 0.
+// doWake restores the env to its pre-sleep replica count (idempotent /
+// level-triggered). It patches the Deployment directly for an immediate
+// effect, then best-effort restores the env CR's spec.replicaCount so the
+// helm-operator's next reconcile doesn't revert it back to 0.
+//
+// The target count comes from the pre-sleep-replicas annotation that
+// scaledown stamped before zeroing (HIGH-5b) — so a service that ran at
+// 3 replicas wakes back at 3, not the hardcoded 1 it used to. Falls back
+// to 1 when no annotation is present (env slept by an older build, or
+// never had the annotation).
 func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	if a.kc == nil || a.kc.Clientset == nil {
 		return fmt.Errorf("activator: no kube client")
 	}
+	want := a.preSleepReplicas(ctx, ns, name)
+
 	// Direct Deployment scale → instant. The scale subresource avoids a
 	// full update conflict with the operator's reconcile.
-	patch := []byte(`{"spec":{"replicas":1}}`)
+	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, want))
 	_, err := a.kc.Clientset.AppsV1().Deployments(ns).Patch(
 		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -367,16 +436,34 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	// Persist desired replicas on the env CR so a later operator
 	// reconcile (which renders spec.replicas from .Values.replicaCount)
 	// doesn't clobber us back to 0. Best-effort: the Deployment patch is
-	// the authoritative wake; this just stops the revert.
+	// the authoritative wake; this just stops the revert. Also clears the
+	// pre-sleep annotation now that it's been consumed.
 	if _, uerr := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(e *kube.KusoEnvironment) error {
-		if e.Spec.ReplicaCountValue() < 1 {
-			e.Spec.SetReplicaCount(1)
+		if e.Spec.ReplicaCountValue() < want {
+			e.Spec.SetReplicaCount(want)
 		}
+		delete(e.Annotations, scaledown.PreSleepReplicasAnnotation)
 		return nil
 	}); uerr != nil {
 		a.logger.Warn("activator: persist replicaCount", "ns", ns, "env", name, "err", uerr)
 	}
 	return nil
+}
+
+// preSleepReplicas reads the count scaledown stashed before sleeping the
+// env. Returns 1 when the annotation is missing or unparseable — the safe
+// floor that always yields a serving pod.
+func (a *Activator) preSleepReplicas(ctx context.Context, ns, name string) int {
+	env, err := a.kc.GetKusoEnvironment(ctx, ns, name)
+	if err != nil || env == nil {
+		return 1
+	}
+	if v := env.Annotations[scaledown.PreSleepReplicasAnnotation]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			return n
+		}
+	}
+	return 1
 }
 
 // waitReady polls until the target Service has at least one READY

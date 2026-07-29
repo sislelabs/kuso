@@ -764,15 +764,57 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 		}
 		dbName = database
 	}
+	// SQL-browser connections use a dedicated NOSUPERUSER login role
+	// (kuso_browser) rather than the addon's admin user (kuso, which the
+	// stock postgres image makes a superuser). A superuser can run
+	// `COPY … TO PROGRAM` (shell exec) and pg_read_file regardless of any
+	// query denylist — the browser role can't, because it lacks
+	// pg_execute_server_program / pg_read_server_files membership. The
+	// role is provisioned lazily on first use (below), granted read+DML
+	// on the app schema so the browser still works, and shares the same
+	// password. This is the authoritative CRIT-2 fix; blockedSQLBuiltin
+	// is defense in depth on top of it.
+	//
+	// Fallback: if provisioning fails (older postgres, permission quirk),
+	// we fall back to the admin user so the browser keeps working —
+	// callers are still admin-gated and the denylist still applies. The
+	// fallback is logged so the missing hardening is visible.
+	browserUser := addons.BrowserRole
+	if err := h.Addons.EnsureBrowserRole(ctx, ns, releaseName, user, pass, dbName); err != nil {
+		h.Logger.Warn("sql-browser: could not provision NOSUPERUSER role; falling back to admin user (denylist still applies)",
+			"project", project, "addon", addon, "err", err)
+		browserUser = user
+	}
+
+	db, err := pgOpenAs(host, port, browserUser, pass, dbName)
+	if err != nil {
+		return nil, err
+	}
+	// If the browser role can't authenticate for some reason, fall back to
+	// the admin user rather than 500 the browser (denylist still applies).
+	if browserUser == addons.BrowserRole {
+		if perr := db.PingContext(ctx); perr != nil {
+			_ = db.Close()
+			h.Logger.Warn("sql-browser: browser role unusable; falling back to admin user",
+				"project", project, "addon", addon, "err", perr)
+			if db, err = pgOpenAs(host, port, user, pass, dbName); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return db, nil
+}
+
+// pgOpenAs opens a single-connection *sql.DB to the addon postgres as the
+// given user. One connection, no pooling: the request is short and we'd
+// rather spend a fresh handshake than risk pool reuse across users.
+func pgOpenAs(host, port, user, pass, dbName string) (*sql.DB, error) {
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
 		host, port, user, pass, dbName)
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}
-	// One per-request connection, no pooling: the request is short
-	// and we'd rather spend a fresh handshake than risk pool reuse
-	// across users.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(0)
 	return db, nil
@@ -856,32 +898,45 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// blockedSQLBuiltin rejects queries that call Postgres functions
-// outside the data-browse use case the SQL browser exists for.
-// Read-only TX already blocks writes, but a SELECT pg_read_file(...)
-// isn't a write — it's a privileged read of /etc/passwd. The
-// allowlist would be too restrictive (every WHERE clause uses
-// builtins); a denylist of the high-blast-radius primitives is
-// enough.
+// sqlCommentRe strips SQL comments (block and line) so they can't be
+// used to break up a denied token, e.g. `COPY/**/(...)`. Mirrors the
+// ClickHouse path's chCommentRe.
+var sqlCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
+
+// sqlDeniedTokenRe matches the high-blast-radius Postgres primitives as
+// whole tokens (word-boundaried), so `COPY` followed by ANY whitespace,
+// a comment, or an open paren is caught — not just `copy ` with a
+// literal trailing space (the historical bypass: `COPY\t(SELECT 1) TO
+// PROGRAM …` contained no "copy " substring and slipped through).
+var sqlDeniedTokenRe = regexp.MustCompile(`(?i)\b(copy|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|lo_import|lo_export|lo_from_bytea|dblink|dblink_connect|dblink_exec|pg_logfile_rotate|pg_reload_conf)\b`)
+
+// blockedSQLBuiltin rejects queries that reach Postgres' file / network
+// / process primitives, which a read-only TX does NOT stop (a SELECT
+// pg_read_file(...) is a read; COPY (SELECT …) TO PROGRAM forks a shell
+// but is "read-only" as far as the transaction is concerned). This is
+// DEFENSE IN DEPTH — the authoritative barrier is that the browser
+// connects as a NOSUPERUSER role without pg_execute_server_program /
+// pg_read_server_files membership (see addon chart), so COPY … TO/FROM
+// PROGRAM and pg_read_file are denied by Postgres regardless. This
+// filter is the belt to that role's braces.
+//
+// We normalize before matching: strip comments, then token-match on word
+// boundaries. A bare substring scan (the previous implementation) was
+// evadable with a tab/newline/comment/paren after the keyword.
 func blockedSQLBuiltin(q string) string {
-	lower := strings.ToLower(q)
-	for _, pat := range []struct {
-		match  string
-		reason string
-	}{
-		{"pg_read_file", "filesystem access (pg_read_file)"},
-		{"pg_read_binary_file", "filesystem access (pg_read_binary_file)"},
-		{"pg_ls_dir", "filesystem access (pg_ls_dir)"},
-		{"pg_stat_file", "filesystem access (pg_stat_file)"},
-		{"lo_import", "large-object filesystem import"},
-		{"lo_export", "large-object filesystem export"},
-		{"dblink", "outbound network (dblink)"},
-		{"copy ", "COPY (filesystem / outbound)"},
-		{"pg_logfile_rotate", "server-control function"},
-		{"pg_reload_conf", "server-control function"},
-	} {
-		if strings.Contains(lower, pat.match) {
-			return pat.reason
+	scrubbed := sqlCommentRe.ReplaceAllString(q, " ")
+	if m := sqlDeniedTokenRe.FindString(scrubbed); m != "" {
+		switch strings.ToLower(m) {
+		case "copy":
+			return "COPY (filesystem / TO PROGRAM / outbound)"
+		case "dblink", "dblink_connect", "dblink_exec":
+			return "outbound network (dblink)"
+		case "lo_import", "lo_export", "lo_from_bytea":
+			return "large-object filesystem access"
+		case "pg_logfile_rotate", "pg_reload_conf":
+			return "server-control function"
+		default:
+			return "filesystem access (" + strings.ToLower(m) + ")"
 		}
 	}
 	return ""

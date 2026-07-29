@@ -39,6 +39,12 @@ type Service struct {
 	// servers booting without the secrets package wired).
 	SecretsCleanupForEnv func(ctx context.Context, project, service, env string) error
 
+	// SecretsCleanupForService removes the service-level managed secret
+	// (<project>-<service>-secrets) on service delete, so a recreated
+	// service at the same name doesn't inherit the old one's values
+	// (HIGH-6b). nil = no-op. Backed by secrets.Service.DeleteForService.
+	SecretsCleanupForService func(ctx context.Context, project, service string) error
+
 	// AddonConnSecrets returns the project's addon connection-secret
 	// names so a freshly-created env starts with envFromSecrets
 	// already pointing at every existing addon (DATABASE_URL etc.

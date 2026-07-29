@@ -508,6 +508,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		applyProjectRename(&s.ObjectMeta, &s.Spec.Project, renameMap)
+		rewriteServiceSecretRefs(&s.Spec, renameMap)
 		stripServerMeta(&s.ObjectMeta)
 		if _, err := h.Kube.CreateKusoService(ctx, ns, &s); err != nil {
 			if apierrors.IsAlreadyExists(err) {
@@ -535,6 +536,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 		if newSvc, ok := renameMap[e.Spec.Service]; ok {
 			e.Spec.Service = newSvc
 		}
+		rewriteEnvSecretRefs(&e.Spec, renameMap)
 		stripServerMeta(&e.ObjectMeta)
 		// Re-attach the ownerRef to the freshly-imported parent service
 		// so kube GC continues to cascade on delete after restore.
@@ -699,6 +701,67 @@ func applyProjectRename(meta *metav1.ObjectMeta, specProject *string, renameMap 
 				meta.Labels["kuso.sislelabs.com/project"] = new
 			}
 		}
+	}
+}
+
+// rewriteSecretName maps a secret name carrying an OLD project prefix to
+// the renamed project (MED-5). Secret names are "<project>-<addon>-conn",
+// "<project>-shared", "<project>-<service>-secrets", etc. On import with
+// ?policy=rename, applyProjectRename rewrites spec.project but NOT these
+// refs — so without this the imported project would read the SOURCE
+// project's secrets. Returns the input unchanged when no prefix matches.
+func rewriteSecretName(name string, renameMap map[string]string) string {
+	for old, new := range renameMap {
+		if name == old {
+			return new
+		}
+		if pathHasPrefix(name, old+"-") {
+			return new + name[len(old):]
+		}
+	}
+	return name
+}
+
+// rewriteEnvSecretRefs rewrites every project-prefixed secret reference on
+// an env spec (EnvFromSecrets list + each EnvVar's valueFrom.secretKeyRef)
+// through renameMap, so an imported+renamed env points at its OWN
+// project's secrets, not the source's (MED-5). No-op when renameMap empty.
+func rewriteEnvSecretRefs(spec *kube.KusoEnvironmentSpec, renameMap map[string]string) {
+	if len(renameMap) == 0 {
+		return
+	}
+	for i, s := range spec.EnvFromSecrets {
+		spec.EnvFromSecrets[i] = rewriteSecretName(s, renameMap)
+	}
+	for i := range spec.EnvVars {
+		rewriteValueFromSecret(spec.EnvVars[i].ValueFrom, renameMap)
+	}
+}
+
+// rewriteServiceSecretRefs is the service-spec counterpart. The service
+// spec carries EnvVars (with valueFrom.secretKeyRef) but not an
+// EnvFromSecrets list — that lives on the env spec.
+func rewriteServiceSecretRefs(spec *kube.KusoServiceSpec, renameMap map[string]string) {
+	if len(renameMap) == 0 {
+		return
+	}
+	for i := range spec.EnvVars {
+		rewriteValueFromSecret(spec.EnvVars[i].ValueFrom, renameMap)
+	}
+}
+
+// rewriteValueFromSecret rewrites a free-form valueFrom map's
+// secretKeyRef.name in place (ValueFrom is stored as map[string]any).
+func rewriteValueFromSecret(vf map[string]any, renameMap map[string]string) {
+	if vf == nil {
+		return
+	}
+	skr, ok := vf["secretKeyRef"].(map[string]any)
+	if !ok {
+		return
+	}
+	if name, ok := skr["name"].(string); ok {
+		skr["name"] = rewriteSecretName(name, renameMap)
 	}
 }
 

@@ -5,8 +5,10 @@ import {
   QueryCache,
   QueryClient,
   QueryClientProvider,
+  type Mutation,
 } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import { clearJwt } from "./api-client";
 
 // onAuthError centralises the "session expired" handling. Triggered
@@ -73,6 +75,37 @@ function onAuthError(err: unknown) {
   }
 }
 
+// onMutationError is the MutationCache-level default so a mutation that
+// forgot to wire its own error handling still surfaces the failure
+// instead of dying silently (token revoke, alert-channel toggle, user
+// toggleActive all used to no-op on error). It runs FIRST, then the
+// mutation's own onError (React Query v5 fires both). To avoid a double
+// toast we suppress the default when the mutation handles errors itself
+// — either via an options.onError callback, or by setting
+// meta.skipGlobalErrorToast (the opt-out for callers that mutateAsync
+// + try/catch + toast in the catch, which don't register an
+// options.onError). This is TanStack's documented "one place for
+// mutation errors" pattern.
+function onMutationError(
+  err: unknown,
+  _variables: unknown,
+  _context: unknown,
+  mutation: Mutation<unknown, unknown, unknown, unknown>,
+) {
+  // 401s are a session-expiry redirect, handled globally — never toast.
+  onAuthError(err);
+  if (err && typeof err === "object" && "status" in err) {
+    if ((err as { status: number }).status === 401) return;
+  }
+  // The mutation handles its own errors — don't double up.
+  if (mutation.options.onError) return;
+  if ((mutation.meta as { skipGlobalErrorToast?: boolean } | undefined)?.skipGlobalErrorToast) {
+    return;
+  }
+  const msg = err instanceof Error && err.message ? err.message : "Something went wrong";
+  toast.error(msg);
+}
+
 // restoreFormDraft is called by pages that want post-login restoration.
 // Returns the draft map for the current pathname (or null) and clears
 // the entry so a future refresh doesn't surprise-fill the form.
@@ -101,7 +134,7 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         // session-expiry redirect lives here so individual hooks don't
         // each have to remember to handle 401 themselves.
         queryCache: new QueryCache({ onError: onAuthError }),
-        mutationCache: new MutationCache({ onError: onAuthError }),
+        mutationCache: new MutationCache({ onError: onMutationError }),
         defaultOptions: {
           queries: {
             staleTime: 30_000,

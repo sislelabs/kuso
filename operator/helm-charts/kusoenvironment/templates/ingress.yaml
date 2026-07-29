@@ -203,9 +203,11 @@ spec:
   {{- if .Values.tlsEnabled }}
   tls:
     {{- range .Values.wildcardDomains }}
+    {{- if .tlsSecret }}
     - hosts:
         - {{ .host | quote }}
       secretName: {{ .tlsSecret | quote }}
+    {{- end }}
     {{- end }}
   {{- end }}
   rules:

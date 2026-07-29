@@ -124,3 +124,76 @@ func TestRunMigrations_AppliesAndRecords(t *testing.T) {
 		t.Errorf("Audit_pipeline_id_idx not created: %v", err)
 	}
 }
+
+// TestRunMigrations_ConcurrentPodsSerialise is the MED-2b regression: two
+// pods (rolling-update overlap) calling runMigrations at once must not
+// error or double-apply. The advisory lock serialises them; the loser
+// blocks then no-ops. PG-backed (skips without KUSO_TEST_PG_DSN).
+func TestRunMigrations_ConcurrentPodsSerialise(t *testing.T) {
+	d := openTestDB(t) // openTestDB already ran migrations once
+	ctx := context.Background()
+
+	migs, _ := loadMigrations()
+
+	const pods = 5
+	errCh := make(chan error, pods)
+	start := make(chan struct{})
+	for i := 0; i < pods; i++ {
+		go func() {
+			<-start // release all at once to maximise contention
+			errCh <- d.runMigrations(ctx)
+		}()
+	}
+	close(start)
+	for i := 0; i < pods; i++ {
+		if err := <-errCh; err != nil {
+			t.Errorf("concurrent runMigrations returned error: %v", err)
+		}
+	}
+
+	// Exactly one row per migration — no duplicates from the race.
+	var n int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "SchemaMigration"`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != len(migs) {
+		t.Errorf("SchemaMigration rows = %d, want %d (no dup inserts)", n, len(migs))
+	}
+}
+
+// TestApplyMigration_InsertOnConflict verifies the ON CONFLICT DO NOTHING
+// on the bookkeeping insert: re-recording an already-present version is a
+// clean no-op rather than a duplicate-key error. Guards the partial-retry
+// path. PG-backed.
+func TestApplyMigration_InsertOnConflict(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	defer conn.Close()
+
+	// A trivial migration whose body is a harmless no-op (SELECT 1 is
+	// skipped only if it starts with --; use a real statement).
+	m := migration{version: 99999, name: "conflict_probe", body: "SELECT 1;", checksum: "deadbeef"}
+
+	if err := d.applyMigration(ctx, conn, m); err != nil {
+		t.Fatalf("first applyMigration: %v", err)
+	}
+	// Re-apply the SAME version — the ON CONFLICT clause must swallow the
+	// duplicate bookkeeping row instead of erroring.
+	if err := d.applyMigration(ctx, conn, m); err != nil {
+		t.Errorf("re-apply should be a no-op via ON CONFLICT, got: %v", err)
+	}
+
+	var n int
+	if err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM "SchemaMigration" WHERE "version" = 99999`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SchemaMigration rows for v99999 = %d, want 1", n)
+	}
+}

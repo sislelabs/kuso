@@ -1,9 +1,12 @@
 package crons
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"kuso/server/internal/kube"
 )
 
 func TestValidateSchedule(t *testing.T) {
@@ -74,5 +77,126 @@ func TestValidateSchedule(t *testing.T) {
 				t.Errorf("%s: error %q missing %q", c.name, err.Error(), c.wantSub)
 			}
 		}
+	}
+}
+
+// TestValidateOnFailureSecretRef is the HIGH-1 regression guard: a
+// cron's onFailure webhook signing-key secretRef must name a secret the
+// cron's OWN project owns. Naming a foreign project's `<addon>-conn`
+// (the exfiltration vector) must be rejected; naming the project's own
+// addon-conn / project-shared / instance-shared secret is allowed.
+func TestValidateOnFailureSecretRef(t *testing.T) {
+	// AddonConnSecrets resolver stubbed to a fixed owned set — no kube
+	// client needed, mirroring the fail-safe design of the projects
+	// package validator. "myproj" owns myproj-pg-conn; "victim" owns
+	// victim-pg-conn (which myproj must NOT be able to reference).
+	s := &Service{
+		AddonConnSecrets: func(_ context.Context, project string) ([]string, error) {
+			switch project {
+			case "myproj":
+				return []string{"myproj-pg-conn", "myproj-redis-conn"}, nil
+			case "victim":
+				return []string{"victim-pg-conn"}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+	cases := []struct {
+		name    string
+		project string
+		ref     *kube.KusoSecretKeyRef
+		wantOK  bool
+		wantErr error // when !wantOK, the sentinel the error must wrap
+	}{
+		// Own project's secrets — all allowed.
+		{"own-addon-conn", "myproj", &kube.KusoSecretKeyRef{Name: "myproj-pg-conn", Key: "url"}, true, nil},
+		{"own-other-conn", "myproj", &kube.KusoSecretKeyRef{Name: "myproj-redis-conn", Key: "url"}, true, nil},
+		{"own-project-shared", "myproj", &kube.KusoSecretKeyRef{Name: "myproj-shared", Key: "k"}, true, nil},
+		{"instance-shared", "myproj", &kube.KusoSecretKeyRef{Name: "kuso-instance-shared", Key: "k"}, true, nil},
+		{"nil-ref", "myproj", nil, true, nil},
+
+		// The exfiltration vector: myproj naming victim's conn secret.
+		{"foreign-conn", "myproj", &kube.KusoSecretKeyRef{Name: "victim-pg-conn", Key: "password"}, false, ErrConflict},
+		// Foreign project-shared secret.
+		{"foreign-shared", "myproj", &kube.KusoSecretKeyRef{Name: "victim-shared", Key: "k"}, false, ErrConflict},
+		// Empty name.
+		{"empty-name", "myproj", &kube.KusoSecretKeyRef{Name: "", Key: "k"}, false, ErrInvalid},
+	}
+	for _, c := range cases {
+		err := s.validateOnFailureSecretRef(context.Background(), c.project, c.ref)
+		gotOK := err == nil
+		if gotOK != c.wantOK {
+			t.Errorf("%s: validateOnFailureSecretRef ok=%v, want %v (err=%v)", c.name, gotOK, c.wantOK, err)
+			continue
+		}
+		if !c.wantOK && !errors.Is(err, c.wantErr) {
+			t.Errorf("%s: error should wrap %v; got %v", c.name, c.wantErr, err)
+		}
+	}
+}
+
+// TestAddProjectRejectsForeignSecretRef proves the guard is wired into
+// the create write path: a foreign secretRef is rejected BEFORE any CR
+// is written (the check short-circuits ahead of every kube call, so a
+// nil Kube client here never gets dereferenced).
+func TestAddProjectRejectsForeignSecretRef(t *testing.T) {
+	s := &Service{
+		Namespace: "kuso",
+		AddonConnSecrets: func(_ context.Context, project string) ([]string, error) {
+			if project == "victim" {
+				return []string{"victim-pg-conn"}, nil
+			}
+			return nil, nil
+		},
+	}
+	req := CreateProjectCronRequest{
+		Name:     "leak",
+		Kind:     "http",
+		Schedule: "*/5 * * * *",
+		URL:      "https://attacker.example.com/collect",
+		OnFailure: &kube.KusoCronOnFailure{
+			WebhookURL: "https://attacker.example.com/collect",
+			SecretRef:  &kube.KusoSecretKeyRef{Name: "victim-pg-conn", Key: "password"},
+		},
+	}
+	_, err := s.AddProject(context.Background(), "myproj", req)
+	if err == nil {
+		t.Fatal("AddProject accepted a foreign secretRef — cross-project exfiltration guard missing")
+	}
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("error should wrap ErrConflict; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "victim-pg-conn") {
+		t.Errorf("error %q should name the rejected secret", err.Error())
+	}
+}
+
+// TestUpdateProjectRejectsForeignSecretRef is the same guard on the
+// update write path — the live vector described in HIGH-1. The check
+// runs before UpdateKusoCronWithRetry, so a nil Kube client is never
+// reached on the reject path.
+func TestUpdateProjectRejectsForeignSecretRef(t *testing.T) {
+	s := &Service{
+		Namespace: "kuso",
+		AddonConnSecrets: func(_ context.Context, project string) ([]string, error) {
+			if project == "victim" {
+				return []string{"victim-pg-conn"}, nil
+			}
+			return nil, nil
+		},
+	}
+	req := UpdateProjectCronRequest{
+		OnFailure: &OnFailureUpdate{
+			WebhookURL: "https://attacker.example.com/collect",
+			SecretRef:  &kube.KusoSecretKeyRef{Name: "victim-pg-conn", Key: "password"},
+		},
+	}
+	_, err := s.UpdateProject(context.Background(), "myproj", "leak", req)
+	if err == nil {
+		t.Fatal("UpdateProject accepted a foreign secretRef — cross-project exfiltration guard missing")
+	}
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("error should wrap ErrConflict; got %v", err)
 	}
 }

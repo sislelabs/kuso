@@ -352,6 +352,13 @@ func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {
 			}
 			out = append(out, Volume{Name: name, MountPath: v.Target, SizeGi: defaultVolumeSizeGi})
 			rep.service(svc.Name, "volume %q → kuso volume `%s` at %s (%dGi default)", v.Source, name, v.Target, defaultVolumeSizeGi)
+			// kuso volumes have no read-only mode — mounting :ro in
+			// compose and rw in kuso silently inverts a safety guardrail.
+			// kuso can't honor it, so flag the drop loudly rather than
+			// mount read-write behind the user's back.
+			if v.ReadOnly {
+				rep.flag(svc.Name, "volume %q was mounted READ-ONLY (:ro) in compose, but kuso volumes are always read-write — the read-only guardrail is DROPPED; the mount at %s will be writable", v.Source, v.Target)
+			}
 		case "bind":
 			rep.skip(svc.Name, "bind mount %q→%q not imported — host paths don't exist on kuso nodes; use a named volume", v.Source, v.Target)
 		case "tmpfs":
@@ -428,6 +435,59 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	}
 	if svc.StopGracePeriod != nil {
 		rep.skip(svc.Name, "stop_grace_period not imported")
+	}
+
+	// platform is the most dangerous silent drop: importing an arm64
+	// image onto an amd64 cluster (or vice versa) crashloops the pod with
+	// "exec format error" AND a clean-looking report. Flag it loudly (not
+	// a quiet skip) so the mismatch surfaces before deploy.
+	if svc.Platform != "" {
+		rep.flag(svc.Name, "platform=%q NOT imported — kuso schedules on the cluster's node architecture; a cross-arch image (e.g. arm64 on an amd64 cluster) will crashloop with \"exec format error\". Push a multi-arch image or one matching the cluster", svc.Platform)
+	}
+
+	// cap_drop is a hardening step (dropping caps); silently ignoring it
+	// keeps the container MORE privileged than the author intended.
+	if len(svc.CapDrop) > 0 {
+		rep.flag(svc.Name, "cap_drop %s NOT imported — kuso already drops all capabilities by default, but verify no dropped cap is one you re-added; the hardening intent is not carried over", strings.Join(svc.CapDrop, ", "))
+	}
+	// security_opt (seccomp/apparmor/no-new-privileges) is a security
+	// posture the import can't preserve — flag rather than skip.
+	if len(svc.SecurityOpt) > 0 {
+		rep.flag(svc.Name, "security_opt %s NOT imported — seccomp/apparmor/no-new-privileges profiles are not carried over", strings.Join(svc.SecurityOpt, ", "))
+	}
+	// read_only root filesystem is another dropped safety guardrail.
+	if svc.ReadOnly {
+		rep.flag(svc.Name, "read_only root filesystem NOT imported — the container filesystem will be WRITABLE on kuso; the guardrail is dropped")
+	}
+	if len(svc.Devices) > 0 {
+		rep.skip(svc.Name, "devices (%d) not imported — host device passthrough is not supported on kuso", len(svc.Devices))
+	}
+	if len(svc.Tmpfs) > 0 {
+		rep.skip(svc.Name, "tmpfs %s not imported", strings.Join(svc.Tmpfs, ", "))
+	}
+	if svc.NetworkMode != "" {
+		rep.skip(svc.Name, "network_mode=%q not imported — kuso services share the cluster network; reach peers via ${{ svc.URL }}", svc.NetworkMode)
+	}
+	if svc.Pid != "" {
+		rep.skip(svc.Name, "pid=%q not imported — shared PID namespaces are not supported on kuso", svc.Pid)
+	}
+	if len(svc.DNS) > 0 {
+		rep.skip(svc.Name, "dns %s not imported — kuso uses the cluster DNS", strings.Join(svc.DNS, ", "))
+	}
+	if svc.Init != nil && *svc.Init {
+		rep.skip(svc.Name, "init not imported — kuso does not inject an init process; ensure your entrypoint reaps zombies if needed")
+	}
+	if len(svc.Expose) > 0 {
+		rep.skip(svc.Name, "expose %s not imported — kuso exposes the single service port; cluster peers reach any port via ${{ svc.URL }}", strings.Join(svc.Expose, ", "))
+	}
+	if svc.ContainerName != "" {
+		rep.skip(svc.Name, "container_name=%q not imported — kuso names pods from the service", svc.ContainerName)
+	}
+	if len(svc.PostStart) > 0 {
+		rep.skip(svc.Name, "post_start hook(s) not imported — kuso has no lifecycle post-start hook; fold the logic into the entrypoint or a run")
+	}
+	if len(svc.PreStop) > 0 {
+		rep.skip(svc.Name, "pre_stop hook(s) not imported — kuso has no lifecycle pre-stop hook; handle graceful shutdown via SIGTERM in the app")
 	}
 }
 

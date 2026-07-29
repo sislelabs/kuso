@@ -1119,6 +1119,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			TriggeredBy:     "webhook",
 			TriggeredByUser: pr.PullRequest.User.Login,
 			CommitMessage:   fmt.Sprintf("PR #%d: %s", pr.Number, pr.PullRequest.Title),
+			// SECURITY (HIGH-2): mark this as a preview build so builds.Create
+			// resolves build-time env from THIS preview env's isolated vars
+			// (per-PR clone DB creds, subscription-filtered) instead of the
+			// parent service's production secrets. envName == the preview
+			// KusoEnvironment CR created/updated above.
+			PreviewEnv: envName,
 		}); err != nil {
 			if errors.Is(err, builds.ErrConflict) {
 				d.Logger.Debug("preview build trigger deduped (already in flight)",

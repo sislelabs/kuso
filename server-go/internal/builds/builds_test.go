@@ -1465,3 +1465,145 @@ func TestPoller_MarkFailedSkipsCancelledMidTick(t *testing.T) {
 		t.Errorf("markFailed clobbered a mid-tick Cancel: phase=%q, want cancelled", ph)
 	}
 }
+
+// ---- HIGH-2: preview builds must not bake production secrets ----------------
+
+// seedServiceWithSecretEnv seeds a service whose envVars carry a
+// secretKeyRef to a project secret (the production isolation case).
+func seedServiceWithSecretEnv(project, service, secretName, key string) seed {
+	s := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service, Namespace: "kuso"},
+		Spec: kube.KusoServiceSpec{
+			Project: project,
+			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/" + service, Path: "."},
+			EnvVars: []kube.KusoEnvVar{
+				{Name: "DATABASE_URL", ValueFrom: map[string]any{
+					"secretKeyRef": map[string]any{"name": secretName, "key": key},
+				}},
+				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.prod.example"},
+			},
+		},
+	}
+	return typedSeed(kube.GVRServices, "KusoService", s)
+}
+
+// seedPreviewEnv seeds a preview KusoEnvironment whose DATABASE_URL
+// secretKeyRef has already been swapped to the per-PR clone secret (what
+// ensurePreviewEnv does), plus a preview-scoped NEXT_PUBLIC override.
+func seedPreviewEnv(project, service, envName, cloneSecret, key string) seed {
+	e := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: envName, Namespace: "kuso"},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: project, Service: project + "-" + service, Kind: "preview",
+			EnvVars: []kube.KusoEnvVar{
+				{Name: "DATABASE_URL", ValueFrom: map[string]any{
+					"secretKeyRef": map[string]any{"name": cloneSecret, "key": key},
+				}},
+				{Name: "NEXT_PUBLIC_API_URL", Value: "https://web-pr-7.preview.example"},
+			},
+		},
+	}
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
+}
+
+func mkSecret(t *testing.T, s *Service, name, key, val string) {
+	t.Helper()
+	_, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+		Data:       map[string][]byte{key: []byte(val)},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create secret %s: %v", name, err)
+	}
+}
+
+// TestCreate_ProductionBuildBakesServiceEnv confirms the un-changed
+// production path: a production build DOES resolve the service's
+// secretKeyRef env into spec.BuildEnv (Prisma/Next need it).
+func TestCreate_ProductionBuildBakesServiceEnv(t *testing.T) {
+	t.Parallel()
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedServiceWithSecretEnv("alpha", "web", "alpha-db-conn", "url"),
+	)
+	mkSecret(t, s, "alpha-db-conn", "url", "postgres://PROD-SECRET/db")
+
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got.Spec.BuildEnv["DATABASE_URL"] != "postgres://PROD-SECRET/db" {
+		t.Errorf("production build must bake resolved service secret; got %q", got.Spec.BuildEnv["DATABASE_URL"])
+	}
+	if got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"] != "https://api.prod.example" {
+		t.Errorf("production build literal env: %q", got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"])
+	}
+}
+
+// TestCreate_PreviewBuildDoesNotBakeProductionSecret is the HIGH-2
+// regression: a preview build must resolve build-time env from the
+// PREVIEW env (per-PR clone creds), never from the parent service's
+// production secret.
+func TestCreate_PreviewBuildDoesNotBakeProductionSecret(t *testing.T) {
+	t.Parallel()
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedServiceWithSecretEnv("alpha", "web", "alpha-db-conn", "url"),
+		seedPreviewEnv("alpha", "web", "alpha-web-pr-7", "alpha-db-pr-7-conn", "url"),
+	)
+	// Production secret (must NOT leak) + the per-PR clone secret (the
+	// only DB creds a preview build may bake).
+	mkSecret(t, s, "alpha-db-conn", "url", "postgres://PROD-SECRET/db")
+	mkSecret(t, s, "alpha-db-pr-7-conn", "url", "postgres://PREVIEW-CLONE/db")
+
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{
+		Ref:        ref,
+		PreviewEnv: "alpha-web-pr-7",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err = s.Kube.GetKusoBuild(context.Background(), "kuso", got.Name)
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	for k, v := range got.Spec.BuildEnv {
+		if strings.Contains(v, "PROD-SECRET") {
+			t.Fatalf("preview build leaked a production secret value in BuildEnv[%s]=%q", k, v)
+		}
+	}
+	if got.Spec.BuildEnv["DATABASE_URL"] != "postgres://PREVIEW-CLONE/db" {
+		t.Errorf("preview build must bake the per-PR clone creds; got %q", got.Spec.BuildEnv["DATABASE_URL"])
+	}
+	// Preview literal (host-rewritten) value comes from the preview env.
+	if got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"] != "https://web-pr-7.preview.example" {
+		t.Errorf("preview build literal env should come from preview env; got %q", got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"])
+	}
+}
+
+// TestCreate_PreviewBuildUnreadableEnvSkipsSecrets confirms the fail-safe:
+// when the preview env can't be read, we must NOT fall back to the
+// service's production vars — no secret value may enter BuildEnv.
+func TestCreate_PreviewBuildUnreadableEnvSkipsSecrets(t *testing.T) {
+	t.Parallel()
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedServiceWithSecretEnv("alpha", "web", "alpha-db-conn", "url"),
+		// NOTE: no preview env seeded → GetKusoEnvironment 404s.
+	)
+	mkSecret(t, s, "alpha-db-conn", "url", "postgres://PROD-SECRET/db")
+
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{
+		Ref:        ref,
+		PreviewEnv: "alpha-web-pr-9",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if v, ok := got.Spec.BuildEnv["DATABASE_URL"]; ok {
+		t.Fatalf("unreadable preview env must not bake any DB secret; got %q", v)
+	}
+}

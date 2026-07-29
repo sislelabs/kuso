@@ -414,8 +414,13 @@ type KusoDomain struct {
 // certificates. This is what lifts the Let's Encrypt ~50 certs/week
 // ceiling for platforms hosting many tenant subdomains.
 type KusoWildcardDomain struct {
-	Host      string `json:"host"`
-	TLSSecret string `json:"tlsSecret"`
+	Host string `json:"host"`
+	// omitempty (MED-8): without it a full-PUT round-trip materializes
+	// "tlsSecret":"" on the CR, and the chart's unconditional
+	// `secretName: {{ .tlsSecret | quote }}` then emits a present-but-empty
+	// TLS ref — an invalid Ingress that never serves certs. omitempty drops
+	// the field when unset so the chart's `with`/`if` guard sees it absent.
+	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
 // KusoEnvVar is intentionally permissive (preserve-unknown-fields on items)
@@ -1099,7 +1104,11 @@ type KusoCronSpec struct {
 	SuccessfulJobsHistoryLimit int            `json:"successfulJobsHistoryLimit,omitempty"`
 	FailedJobsHistoryLimit     int            `json:"failedJobsHistoryLimit,omitempty"`
 	ActiveDeadlineSeconds      int            `json:"activeDeadlineSeconds,omitempty"`
-	Resources                  map[string]any `json:"resources,omitempty"`
+	// StartingDeadlineSeconds bounds the missed-schedule lookback so a
+	// CronJob that falls >100 schedules behind self-heals rather than
+	// wedging forever. 0 = unset (kube default: unbounded).
+	StartingDeadlineSeconds int            `json:"startingDeadlineSeconds,omitempty"`
+	Resources               map[string]any `json:"resources,omitempty"`
 	// Image + envFromSecrets:
 	//   kind=service → server populates from the parent service's
 	//                  production env at create time / sync.
