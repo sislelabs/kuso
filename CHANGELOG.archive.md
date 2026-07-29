@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.100] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix: bound addon memory, log growth, and activator wake budget ([b59f86f](https://github.com/sislelabs/kuso/commit/b59f86f4918e3ae5236f8e209ae3d862284333e6))
+
 ## [0.18.99] — 2026-07-02
 
 ### 🐛 Bug Fixes
