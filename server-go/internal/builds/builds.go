@@ -2765,6 +2765,26 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 // rewrite plan §5 / TS comment in github-webhooks.service.ts, that was
 // a known-incomplete feature. We close it here by matching on
 // spec.branch over the env list filtered to this build's service.
+// promotionBranchMatches decides whether a build on buildBranch may
+// promote to an env whose spec.branch is envBranch, given the project's
+// defaultBranch. Rules (MED-6):
+//   - both set: exact match required.
+//   - env branch unset: the env is treated as the DEFAULT-branch env, so
+//     only a default-branch build (or a build with no branch) promotes to
+//     it — NOT an arbitrary feature/staging branch. This closes the hole
+//     where a branch-unset production env received images from every push.
+//   - build branch unset (manual trigger with no branch): matches any env
+//     (unchanged behaviour — a deliberate manual promote).
+func promotionBranchMatches(buildBranch, envBranch, defaultBranch string) bool {
+	if buildBranch == "" {
+		return true
+	}
+	if envBranch == "" {
+		return buildBranch == defaultBranch
+	}
+	return buildBranch == envBranch
+}
+
 func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	if b.Spec.Image == nil {
 		return nil
@@ -2793,6 +2813,16 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		return fmt.Errorf("list envs for promotion: %w", err)
 	}
 	bTrigger := buildTriggerTimestamp(b)
+	// Resolve the project's default branch once (MED-6). An env with an
+	// UNSTAMPED branch (spec.branch == "") used to match EVERY build, so a
+	// push to `staging` could promote to a branch-unset production env. We
+	// now treat an empty env branch as "the default branch" — it matches
+	// only default-branch builds, not arbitrary feature/staging branches.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
 	matched := 0
 	// promoteFailed records whether promoting to ANY matched env hit a
 	// hard error (CAS exhausted, apiserver blip on the env Update). We
@@ -2820,7 +2850,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		if e.Spec.Service != b.Spec.Service {
 			continue
 		}
-		if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+		if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
 			continue
 		}
 		// Last-trigger-wins guard against back-to-back finishes.
@@ -2978,6 +3008,12 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
+	// MED-6: same empty-env-branch = default-branch semantics as promoteImage.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
 	for i := range rawSvcs.Items {
 		var s kube.KusoService
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
@@ -3002,7 +3038,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawEnvs.Items[j].Object, &e); err != nil {
 				continue
 			}
-			if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+			if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
 				continue
 			}
 			// Parsed-time compare (see promotedAtIsNewer) — raw string
