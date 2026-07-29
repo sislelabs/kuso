@@ -1233,9 +1233,10 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 		}
 	}
 
-	// Now drop the old envs + service. DeleteService cascades to
-	// envs and (via SecretsCleanupForEnv) per-env secrets, so a
-	// single call covers both teardowns.
+	// Now drop the old envs + service. DeleteService routes each env
+	// through DeleteEnvironment (per-env secret + clone/volume PVC + TLS
+	// reclaim) and cleans the service-level secret, so a single call
+	// fully tears down the old service.
 	if err := s.DeleteService(ctx, project, oldName); err != nil {
 		// We've already created the new service + envs, so the
 		// rename is half-done. Surface this to the caller — they
@@ -1268,7 +1269,13 @@ func copyLabelsWithService(in map[string]string, project, service string) map[st
 	return out
 }
 
-// DeleteService cascades to the service's environments.
+// DeleteService cascades to the service's environments, reclaiming each
+// env's per-env Secret, clone PVCs, volume PVCs and TLS secrets (via
+// DeleteEnvironment), then removes the service-level managed Secret and
+// the service CR. Previously it deleted env CRs directly and left the
+// secrets + PVCs behind — and because names are deterministic and the
+// namespace is shared, recreating a service at the same name silently
+// inherited the dead one's secrets/volumes (HIGH-6b/HIGH-6c).
 func (s *Service) DeleteService(ctx context.Context, project, service string) error {
 	if _, err := s.GetService(ctx, project, service); err != nil {
 		return err
@@ -1284,15 +1291,34 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	// Route each env through DeleteEnvironment so per-env secrets, clone
+	// PVCs, volume PVCs and cert-manager TLS secrets are reclaimed — not
+	// just the env CR. Best-effort per env: keep tearing down the rest
+	// even if one env's cleanup hiccups, but surface the first error.
+	var firstErr error
 	for i := range envs {
-		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, envs[i].Name); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete env %s: %w", envs[i].Name, err)
+		// DeleteEnvironment resolves the env CR by its full name (the CR
+		// name equals <project>-<service>-<env>), so pass envs[i].Name, not
+		// the short form. Force: deleting the whole service must also remove
+		// its production env (the standalone production-delete guard doesn't
+		// apply here).
+		if derr := s.deleteEnvironmentForce(ctx, project, envs[i].Name); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
+			firstErr = fmt.Errorf("delete env %s: %w", envs[i].Name, derr)
+		}
+	}
+	// Reclaim the service-level managed Secret (<project>-<service>-secrets).
+	// DeleteEnvironment only handles the per-ENV secret; the service-scoped
+	// one has no env to hang off, so clean it here. Best-effort: an orphan
+	// secret is preferable to blocking the service delete.
+	if s.SecretsCleanupForService != nil {
+		if serr := s.SecretsCleanupForService(ctx, project, service); serr != nil && firstErr == nil {
+			firstErr = fmt.Errorf("service secret cleanup: %w", serr)
 		}
 	}
 	if err := s.Kube.DeleteKusoService(ctx, ns, serviceCRName(project, service)); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete service: %w", err)
 	}
-	return nil
+	return firstErr
 }
 
 // GetEnv returns the plain env vars on a service. Secret-backed entries

@@ -145,6 +145,19 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 // caller can retry on any error without worrying about which phase
 // failed.
 func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) error {
+	return s.deleteEnvironment(ctx, project, env, false)
+}
+
+// deleteEnvironmentForce tears an env down INCLUDING a production env —
+// used only by DeleteService, where deleting the whole service must also
+// remove its production environment (the standalone DeleteEnvironment
+// guard against deleting a lone production env doesn't apply). It performs
+// the same secret / clone-PVC / volume-PVC / TLS reclaim.
+func (s *Service) deleteEnvironmentForce(ctx context.Context, project, env string) error {
+	return s.deleteEnvironment(ctx, project, env, true)
+}
+
+func (s *Service) deleteEnvironment(ctx context.Context, project, env string, force bool) error {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
@@ -172,7 +185,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 		if grp == "" {
 			grp = e.Spec.Kind
 		}
-		if grp == "production" {
+		if grp == "production" && !force {
 			return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
 		}
 		serviceFQN = e.Spec.Service
@@ -267,6 +280,26 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 			}
 			for i := range pvcs.Items {
 				_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{})
+			}
+		}
+
+		// Reclaim the env's SERVICE volume PVCs (spec.volumes). They carry
+		// helm.sh/resource-policy=keep so that REMOVING a volume from
+		// spec.volumes doesn't nuke its data — but a full env DELETE should
+		// reclaim them, else a same-named env recreate in the shared
+		// namespace silently inherits the dead env's files (HIGH-6c). They
+		// carry app.kubernetes.io/instance=<envFQN> + the volume marker
+		// label; select on both so we never touch another env's disks.
+		envFQN := env
+		if e != nil {
+			envFQN = e.Name
+		}
+		volPVCs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/instance=" + envFQN + ",kuso.sislelabs.com/volume",
+		})
+		if lerr == nil {
+			for i := range volPVCs.Items {
+				_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, volPVCs.Items[i].Name, metav1.DeleteOptions{})
 			}
 		}
 	}

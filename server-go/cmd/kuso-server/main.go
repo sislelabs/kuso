@@ -459,6 +459,7 @@ func main() {
 		// projects package free of a hard dep on secrets (and to make
 		// it trivial to no-op in tests).
 		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
+		projSvc.SecretsCleanupForService = secSvc.DeleteForService
 		// Revision history: log every successful spec mutation so the
 		// History tab + revert path have something to show. Best-
 		// effort — a DB miss never fails the user-facing save.
