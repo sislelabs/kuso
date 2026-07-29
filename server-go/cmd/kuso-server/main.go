@@ -567,6 +567,10 @@ func main() {
 		// every existing project addon. Without this, services added
 		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
 		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
+		// Same resolver on the crons service so its onFailure webhook
+		// secretRef ownership check (HIGH-1) can tell whether a signing-key
+		// secret name belongs to the cron's own project.
+		cronSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
 		// Env-group clones write instance-shared addon CRs directly (bypassing
 		// addons.Add), so wire the provisioner that mints their per-project DB +
 		// <addon>-conn secret — without it the cloned service crashloops on a

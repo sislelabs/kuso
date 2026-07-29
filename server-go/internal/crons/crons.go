@@ -25,6 +25,18 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+	// AddonConnSecrets returns the project's addon connection-secret
+	// names (`<project>-<addon>-conn`). Wired from
+	// addons.Service.ConnSecretsForProject in main.go, exactly like the
+	// projects.Service field of the same name. Used by
+	// validateOnFailureSecretRef to confirm an onFailure signing-key
+	// secretRef points at a secret THIS project owns — otherwise an
+	// editor on a throwaway project could name another project's
+	// `<victim>-pg-conn` and exfiltrate its DB password via the HMAC
+	// signature on a caller-controlled webhook (HIGH-1). May be nil in
+	// tests; the deterministic project-shared / instance-shared names
+	// still validate without it, and a foreign `-conn` name is rejected.
+	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 }
 
 func New(k *kube.Client, namespace string) *Service {
@@ -97,6 +109,10 @@ type CreateProjectCronRequest struct {
 	PinImage              bool   `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int    `json:"activeDeadlineSeconds,omitempty"`
+	// OnFailure: optional failure webhook set at create time. Its
+	// SecretRef is ownership-validated before the CR is written — same
+	// guard the update path applies (HIGH-1). nil = no webhook.
+	OnFailure *kube.KusoCronOnFailure `json:"onFailure,omitempty"`
 }
 
 // UpdateCronRequest is the partial-update body. Pointer fields
@@ -402,6 +418,13 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 	default:
 		return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
 	}
+	// Ownership-check the onFailure signing-key secretRef BEFORE the CR
+	// is written (HIGH-1). A nil OnFailure/SecretRef carries no risk.
+	if req.OnFailure != nil {
+		if err := s.validateOnFailureSecretRef(ctx, project, req.OnFailure.SecretRef); err != nil {
+			return nil, err
+		}
+	}
 	ns := s.nsFor(ctx, project)
 	// Project-scoped CR name: <project>-<short>. Distinct from
 	// service-attached crons (which use <project>-<svc>-<short>) so
@@ -433,6 +456,7 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			PinImage:              req.PinImage,
 			ConcurrencyPolicy:     policy,
 			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
+			OnFailure:             req.OnFailure,
 		},
 	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
@@ -548,6 +572,60 @@ func (s *Service) Delete(ctx context.Context, project, service, name string) err
 	return nil
 }
 
+// instanceSharedSecretName is the instance-wide shared secret every
+// project may reference. Same value the projects package validator
+// uses; kept here so cronwatch's signBody and this validator agree on
+// the exact name.
+const instanceSharedSecretName = "kuso-instance-shared"
+
+// validateOnFailureSecretRef enforces that a cron's onFailure webhook
+// signing-key secretRef points at a secret THIS project legitimately
+// owns. This closes HIGH-1 (cross-project secret exfiltration): in the
+// default single-namespace install every project's `<addon>-conn` and
+// `<project>-shared` secrets live side by side, and cronwatch.signBody
+// resolves ANY secret name in that namespace. Without this guard an
+// editor on a throwaway project could set OnFailure.SecretRef.Name =
+// "victim-pg-conn" and recover the victim's DB password via offline
+// key-recovery against the known-plaintext HMAC signature POSTed to a
+// caller-controlled webhook URL.
+//
+// Allowed for project P:
+//   - any of P's addon conn secrets (via AddonConnSecrets)
+//   - "<P>-shared"             (project shared secret)
+//   - "kuso-instance-shared"   (instance-wide shared secret)
+//
+// Mirrors projects.validateSecretRefNameIn's acceptance rules (minus
+// the per-service secret, since a project-scoped cron has no service
+// segment). Fails safe: with AddonConnSecrets unwired (tests) the two
+// deterministic shared names still pass while a foreign `-conn` name is
+// rejected. Wrapped in ErrConflict so the HTTP handler maps it to 409
+// with the message passed through — the same convention addons.fail
+// uses so the UI shows a useful reason instead of a bare status code.
+func (s *Service) validateOnFailureSecretRef(ctx context.Context, project string, ref *kube.KusoSecretKeyRef) error {
+	if ref == nil {
+		return nil
+	}
+	name := strings.TrimSpace(ref.Name)
+	if name == "" {
+		return fmt.Errorf("%w: onFailure.secretRef.name required", ErrInvalid)
+	}
+	if name == instanceSharedSecretName || name == project+"-shared" {
+		return nil
+	}
+	if s.AddonConnSecrets != nil {
+		owned, err := s.AddonConnSecrets(ctx, project)
+		if err != nil {
+			return fmt.Errorf("resolve addon secrets: %w", err)
+		}
+		for _, sec := range owned {
+			if sec == name {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: onFailure.secretRef.name %q is not a secret owned by project %q", ErrConflict, name, project)
+}
+
 // UpdateProject patches a project-scoped (kind=http / kind=command)
 // cron. Mirrors the per-service Update flow but reads/writes the CR
 // at "<project>-<name>" (no service segment in the name) and lets
@@ -566,6 +644,16 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		case "Allow", "Forbid", "Replace":
 		default:
 			return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
+		}
+	}
+	// Ownership-check the onFailure signing-key secretRef BEFORE it can be
+	// written onto the CR (HIGH-1). Only meaningful when we're setting a
+	// non-cleared webhook with a secretRef; a Clear or a nil SecretRef
+	// carries no cross-project risk. Pure-input, so it runs outside the
+	// retry loop.
+	if req.OnFailure != nil && !req.OnFailure.Clear && req.OnFailure.WebhookURL != "" {
+		if err := s.validateOnFailureSecretRef(ctx, project, req.OnFailure.SecretRef); err != nil {
+			return nil, err
 		}
 	}
 	updated, err := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
