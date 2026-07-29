@@ -132,3 +132,43 @@ func TestFetchVersion_SynthesizesWhenNoManifest(t *testing.T) {
 		t.Errorf("operator image: %q", m.Components.Operator.Image)
 	}
 }
+
+// TestMinServerBlock covers the crds.minServer gate: an update whose
+// manifest requires a newer server than the one running must be refused,
+// while equal-or-newer (and absent minServer) pass. This is the guard
+// that stops a stale cluster jumping to a release its server can't
+// reconcile. Pure logic — no kube/DB needed.
+func TestMinServerBlock(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		current string
+		min     string
+		blocked bool
+	}{
+		{"no minServer set", "v0.19.0", "", false},
+		{"current older than min → block", "v0.19.0", "v0.21.0", true},
+		{"current equals min → allow", "v0.21.0", "v0.21.0", false},
+		{"current newer than min → allow", "v0.22.0", "v0.21.0", false},
+		{"patch older than min → block", "v0.21.0", "v0.21.5", true},
+		{"v-prefix tolerated both sides", "0.19.0", "v0.21.0", true},
+		{"whitespace-only min ignored", "v0.19.0", "   ", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Service{Current: tc.current}
+			m := &Manifest{Version: "vX", CRDs: ManifestCRDs{MinServer: tc.min}}
+			reason := s.minServerBlock(m)
+			if tc.blocked && reason == "" {
+				t.Errorf("current=%s min=%s: expected block, got allow", tc.current, tc.min)
+			}
+			if !tc.blocked && reason != "" {
+				t.Errorf("current=%s min=%s: expected allow, got block: %s", tc.current, tc.min, reason)
+			}
+		})
+	}
+	// nil manifest must not panic and must not block.
+	if reason := (&Service{Current: "v1.0.0"}).minServerBlock(nil); reason != "" {
+		t.Errorf("nil manifest should not block, got %q", reason)
+	}
+}

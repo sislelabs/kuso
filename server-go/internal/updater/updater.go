@@ -563,6 +563,26 @@ func canaryGateReason(m *Manifest) string {
 	return ""
 }
 
+// minServerBlock returns a non-empty reason string when the manifest
+// declares a crds.minServer that the running server is older than —
+// meaning this cluster must not apply the update yet. Returns "" when
+// there's no minServer set, or when the current server is >= minServer.
+// Reuses compareTags so the v-prefix / pre-release handling matches the
+// rest of the updater's version reasoning.
+func (s *Service) minServerBlock(m *Manifest) string {
+	if m == nil {
+		return ""
+	}
+	min := strings.TrimSpace(m.CRDs.MinServer)
+	if min == "" {
+		return ""
+	}
+	if compareTags(s.Current, min) < 0 {
+		return fmt.Sprintf("update to %s requires server >= %s but this server is %s — upgrade through an intermediate release first (crds.minServer gate)", m.Version, min, s.Current)
+	}
+	return ""
+}
+
 // parseIntDefault parses s as an int, returning fallback when s
 // doesn't parse cleanly. Avoids pulling strconv just for this one
 // call site.
@@ -689,6 +709,16 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 		if m == nil {
 			return "", errors.New("no manifest cached — try ?version=vX.Y.Z to pin")
 		}
+	}
+
+	// minServer gate: a release may declare the oldest server version
+	// that can safely apply it (crds.minServer). If we're older than
+	// that we refuse — a stale cluster jumping straight to a release
+	// whose operator/CRD shape its running server can't reconcile is
+	// exactly the "brick on upgrade" case this guards. Applies to both
+	// pinned and latest paths; the pin doesn't excuse an impossible jump.
+	if reason := s.minServerBlock(m); reason != "" {
+		return "", errors.New(reason)
 	}
 
 	// Reset / create the status ConfigMap so the UI doesn't see a
@@ -864,9 +894,22 @@ const (
 	operatorNamespace  = "kuso-operator-system"
 	operatorDeployment = "kuso-operator-controller-manager"
 	operatorContainer  = "manager"
-	serverDeployment   = "kuso-server"
-	serverContainer    = "server"
+	// serverDeployment/serverContainer name the kuso-server workload the
+	// updater Job rolls. The Go watchdog above deliberately does NOT roll
+	// the server back from here: the server process is killed mid-roll, so
+	// a crashlooping new server image is recovered by the updater Job
+	// itself (build/updater/entrypoint.sh snapshots the old image and
+	// reverts on a failed `rollout status`). These identifiers stay as the
+	// canonical names that entrypoint.sh mirrors (deploy/kuso-server,
+	// container "server"); keep the two in sync.
+	serverDeployment = "kuso-server"
+	serverContainer  = "server"
 )
+
+// Silence unused warnings for the canonical name constants above — they
+// document the server workload identity that the updater Job's shell
+// rollback keys off, and are referenced by that Job rather than Go code.
+var _, _ = serverDeployment, serverContainer
 
 // killSwitchEngaged returns true when the operator has set a hard
 // stop on auto-updates. Reads on every gate check so flipping the

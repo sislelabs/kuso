@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -37,6 +38,23 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// migrationsAdvisoryLockKey is the fixed Postgres advisory-lock key that
+// serialises schema migrations across pods. The deploy uses maxSurge:1/
+// maxUnavailable:0, so during a rolling update the OLD and NEW server
+// pods run concurrently and BOTH call runMigrations at boot — without a
+// lock they race the same pending migration (double-apply, duplicate
+// SchemaMigration insert, or a torn partial apply). pg_advisory_lock is
+// a session-level, cluster-wide mutex: the first pod to grab this key
+// runs the migrations; any other pod blocks on the same key until the
+// first releases it, then sees the migrations already applied and no-ops.
+//
+// The value is an arbitrary but STABLE int64 chosen once and never
+// changed (changing it would let two differently-versioned binaries
+// migrate concurrently again). 0x6b75736f5f6d6967 spells "kuso_mig" in
+// ASCII — mnemonic, and unlikely to collide with any other advisory lock
+// the app or an addon might take.
+const migrationsAdvisoryLockKey int64 = 0x6b75736f5f6d6967
+
 // migration is one parsed migration file.
 type migration struct {
 	version  int
@@ -47,9 +65,20 @@ type migration struct {
 
 // runMigrations applies the baseline schema then every pending numbered
 // migration in order. Called from Open after the DB connection is live.
+//
+// The pending-migration work is serialised across pods by a Postgres
+// session-level advisory lock (migrationsAdvisoryLockKey). During a
+// rolling update the old and new server pods overlap and both call this;
+// the lock ensures exactly one migrates at a time while the other blocks
+// then no-ops. The lock is session-scoped, so it's taken on a single
+// dedicated *sql.Conn and the whole read-applied + apply loop runs on
+// that same conn — an advisory lock held on one pooled connection means
+// nothing to a query that lands on a different one.
 func (d *DB) runMigrations(ctx context.Context) error {
 	// 1. Baseline: the existing idempotent schema.sql. Unchanged — this
 	//    is what fresh installs + already-running clusters rely on.
+	//    Idempotent + concurrency-safe on its own (all IF-NOT-EXISTS), so
+	//    it runs outside the advisory lock.
 	if err := d.applySchema(); err != nil {
 		return err
 	}
@@ -71,10 +100,35 @@ func (d *DB) runMigrations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(migs) == 0 {
+		return nil
+	}
 
-	// 4. Which versions are already applied?
+	// 4. Grab a dedicated connection and hold the migration advisory lock
+	//    on it for the whole read-applied + apply sequence. A concurrent
+	//    pod (rolling update overlap) blocks here until we unlock, then
+	//    finds every migration already applied and no-ops.
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("db: acquire migration conn: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationsAdvisoryLockKey); err != nil {
+		return fmt.Errorf("db: acquire migration advisory lock: %w", err)
+	}
+	// Release the session-level lock on the way out. Best-effort: if the
+	// unlock errors we still Close() the conn (deferred above), which
+	// drops the session and its locks server-side.
+	defer func() {
+		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationsAdvisoryLockKey)
+	}()
+
+	// 5. Which versions are already applied? Read on the locked conn so
+	//    we observe the state as of the moment we hold the lock (a pod
+	//    that just finished migrating has committed its rows before
+	//    releasing, so we see them).
 	applied := map[int]string{} // version → checksum
-	rows, err := d.QueryContext(ctx, `SELECT "version","checksum" FROM "SchemaMigration"`)
+	rows, err := conn.QueryContext(ctx, `SELECT "version","checksum" FROM "SchemaMigration"`)
 	if err != nil {
 		return fmt.Errorf("db: read applied migrations: %w", err)
 	}
@@ -92,7 +146,8 @@ func (d *DB) runMigrations(ctx context.Context) error {
 		return err
 	}
 
-	// 5. Apply pending, in version order, each in its own tx.
+	// 6. Apply pending, in version order, each in its own tx on the
+	//    locked conn.
 	for _, m := range migs {
 		if cs, ok := applied[m.version]; ok {
 			// Already applied. Guard against silent edits to a shipped
@@ -105,7 +160,7 @@ func (d *DB) runMigrations(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := d.applyMigration(ctx, m); err != nil {
+		if err := d.applyMigration(ctx, conn, m); err != nil {
 			return fmt.Errorf("db: migration %04d (%s) failed: %w", m.version, m.name, err)
 		}
 	}
@@ -113,12 +168,14 @@ func (d *DB) runMigrations(ctx context.Context) error {
 }
 
 // applyMigration runs one migration in a transaction and records it.
+// The tx is begun on conn — the caller holds the migration advisory lock
+// on that same session, so the apply is serialised cluster-wide.
 // Statement-split mirrors applySchema (lib/pq simple-query can't do
 // multi-statement strings); but unlike the baseline we do NOT swallow
 // "already exists" — a versioned migration is meant to run exactly once
 // against a known state, so any error is real.
-func (d *DB) applyMigration(ctx context.Context, m migration) error {
-	tx, err := d.BeginTx(ctx, nil)
+func (d *DB) applyMigration(ctx context.Context, conn *sql.Conn, m migration) error {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
@@ -133,8 +190,14 @@ func (d *DB) applyMigration(ctx context.Context, m migration) error {
 			return fmt.Errorf("stmt failed (%.80s…): %w", stmt, err)
 		}
 	}
+	// ON CONFLICT DO NOTHING: the advisory lock already prevents two pods
+	// racing this insert, but a migration that was partially applied and
+	// re-run (e.g. an outer boot retry after a transient failure) must not
+	// error on the duplicate bookkeeping row. Belt-and-braces — the insert
+	// is the last statement in the tx, so a no-op on conflict is correct.
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO "SchemaMigration" ("version","name","checksum") VALUES ($1,$2,$3)`,
+		`INSERT INTO "SchemaMigration" ("version","name","checksum") VALUES ($1,$2,$3)
+		 ON CONFLICT ("version") DO NOTHING`,
 		m.version, m.name, m.checksum); err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
