@@ -87,6 +87,25 @@ type roleRequest struct {
 	Permissions []db.PermissionInput `json:"permissions"`
 }
 
+// rejectReservedPerms 403s a role create/update that tries to embed an
+// instance-level permission (settings:admin, user:write, system:update,
+// …). Without this, a user:write holder could mint a role granting
+// settings:admin and assign it to themselves — a full privilege
+// escalation, since every gate matches the flat claims list and can't
+// tell a role-derived instance perm from a real admin's. Returns false
+// when the response was already written.
+func rejectReservedPerms(w http.ResponseWriter, perms []db.PermissionInput) bool {
+	pairs := make([][2]string, 0, len(perms))
+	for _, p := range perms {
+		pairs = append(pairs, [2]string{p.Resource, p.Action})
+	}
+	if bad := auth.ValidateRolePermissions(pairs); bad != "" {
+		http.Error(w, "forbidden: a custom role may not grant the instance-level permission "+bad, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !requireUserWrite(w, r) {
 		return
@@ -94,6 +113,9 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	if !rejectReservedPerms(w, req.Permissions) {
 		return
 	}
 	id, err := randomID()
@@ -130,6 +152,9 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	if !rejectReservedPerms(w, req.Permissions) {
 		return
 	}
 	ctx, cancel := rolesCtx(r)

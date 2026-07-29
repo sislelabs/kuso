@@ -168,10 +168,31 @@ func (d *DB) DeleteRole(ctx context.Context, id string) error {
 // (resource, action) pair the caller supplied. Each Permission row is
 // new — Prisma schema has no uniqueness on resource+action so we
 // follow the same shape.
+// reservedInstancePerms mirrors auth.reservedInstancePerms. Duplicated
+// here (not imported) because auth imports db — importing back would
+// cycle. This is the DEFENSE-IN-DEPTH backstop: the roles HTTP handler
+// rejects these with a 403 before we get here (auth.ValidateRolePermissions),
+// but if any future caller reaches insertRolePermissions directly, a
+// reserved instance permission must still never be minted into a role.
+// Keep in sync with server-go/internal/auth/permissions.go.
+var reservedInstancePerms = map[string]struct{}{
+	"settings:admin": {},
+	"settings:read":  {},
+	"audit:read":     {},
+	"user:write":     {},
+	"billing:read":   {},
+	"system:update":  {},
+}
+
 func insertRolePermissions(ctx context.Context, tx *Tx, roleID string, perms []PermissionInput) error {
 	now := prismaNow()
 	for _, p := range perms {
 		if p.Resource == "" || p.Action == "" {
+			continue
+		}
+		if _, reserved := reservedInstancePerms[p.Resource+":"+p.Action]; reserved {
+			// Never mint an instance-admin permission into a custom role.
+			// The handler already rejected this; skip as a backstop.
 			continue
 		}
 		permID := mustRandomID()

@@ -147,6 +147,17 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := usersCtx(r)
 	defer cancel()
 	userID := chi.URLParam(r, "id")
+	// A user:write holder may administer OTHER users' roles, but must not
+	// change their OWN role or active flag — otherwise a delegated "user
+	// manager" could grant themselves a higher role (self-escalation). The
+	// reserved-perm allowlist blocks minting settings:admin into a role,
+	// and this blocks the self-assignment leg of the same attack. Admins
+	// change their own role through a different, intentional path; a
+	// user:write-only principal editing themselves here is the risk.
+	if (req.RoleID != nil || req.IsActive != nil) && userID == actingUserID(r) {
+		http.Error(w, "forbidden: cannot change your own role or active status", http.StatusForbidden)
+		return
+	}
 	if err := h.DB.UpdateUser(ctx, userID, db.UpdateUserInput{
 		FirstName: req.FirstName, LastName: req.LastName, Email: req.Email, RoleID: req.RoleID, IsActive: req.IsActive,
 	}); err != nil {
