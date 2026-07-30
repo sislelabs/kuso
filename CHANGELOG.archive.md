@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.103] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): finalize reboots promptly + reschedule stranded pods ([843b42c](https://github.com/sislelabs/kuso/commit/843b42c29379b3ba567185831f50e64cb66d24c4))
+
 ## [0.18.102] — 2026-07-02
 
 ### ✨ Features

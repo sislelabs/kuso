@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.3] — 2026-07-30
+
+### Other
+- Deploy: add neutral review-host ingress (review.sislelabs.com → kuso-server) ([818fa23](https://github.com/sislelabs/kuso/commit/818fa2396a45b8a08fe10bebb85e2ffdb77848cb))
+
+### 🐛 Bug Fixes
+- Fix(previews): correct the reviewer PR comment — real version, no fake preview, no ops-domain leak ([b0e35e6](https://github.com/sislelabs/kuso/commit/b0e35e681efa3a8b5cc0e7f10a19ba4036a46e99))
+
 ## [0.22.2] — 2026-07-29
 
 ### 🐛 Bug Fixes
@@ -483,11 +491,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(pkgupdates): keep sweeping stranded pods through a settle window ([b9168f3](https://github.com/sislelabs/kuso/commit/b9168f3e2efa9c659db960738223110b4bde6c50))
-
-## [0.18.103] — 2026-07-02
-
-### 🐛 Bug Fixes
-- Fix(pkgupdates): finalize reboots promptly + reschedule stranded pods ([843b42c](https://github.com/sislelabs/kuso/commit/843b42c29379b3ba567185831f50e64cb66d24c4))
 
 
 ---
