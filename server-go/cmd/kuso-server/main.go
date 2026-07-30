@@ -857,17 +857,23 @@ func main() {
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.
 				disp.Secrets = secSvc
-				// v0.17.0 Phase 2: reviewer-page integration. DB +
-				// the public base URL the reviewer page is mounted
-				// under. Defaults to KUSO_DOMAIN/r so PR comments
-				// link at https://<kuso-domain>/r/<token>.
+				// v0.17.0 Phase 2: reviewer-page integration. The
+				// reviewer URL is posted as a PR comment and SHARED WITH
+				// THE CLIENT, so it must NOT expose the internal platform
+				// domain (KUSO_DOMAIN, e.g. kuso.sislelabs.com). Use an
+				// explicit neutral review host via KUSO_REVIEW_BASE_URL
+				// (e.g. https://review.example.com/r), pointed at the kuso
+				// server via DNS + ingress. If it's unset we deliberately
+				// leave ReviewBaseURL empty — ensureReviewerSurface then
+				// skips posting a reviewer URL rather than leaking the ops
+				// domain. (Previously this fell back to KUSO_DOMAIN/r,
+				// which handed the client the internal platform hostname.)
 				if database != nil {
 					disp.DB = database
-					reviewBase := os.Getenv("KUSO_REVIEW_BASE_URL")
-					if reviewBase == "" && os.Getenv("KUSO_DOMAIN") != "" {
-						reviewBase = "https://" + os.Getenv("KUSO_DOMAIN") + "/r"
+					disp.ReviewBaseURL = strings.TrimSpace(os.Getenv("KUSO_REVIEW_BASE_URL"))
+					if disp.ReviewBaseURL == "" {
+						logger.Warn("reviewer URL disabled: set KUSO_REVIEW_BASE_URL to a neutral review host (e.g. https://review.example.com/r) — refusing to leak KUSO_DOMAIN to clients")
 					}
-					disp.ReviewBaseURL = reviewBase
 				}
 				// Pre-populate preview envs with the project's addon
 				// connection secrets so the pod boots with DATABASE_URL
