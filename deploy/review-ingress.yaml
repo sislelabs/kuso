@@ -1,0 +1,45 @@
+# Neutral review host for the PR-preview reviewer page.
+#
+# The reviewer URL kuso posts as a PR comment is SHARED WITH THE CLIENT, so
+# it must not expose the internal platform host (KUSO_DOMAIN, e.g.
+# kuso.sislelabs.com). This Ingress routes a neutral host —
+# review.sislelabs.com — to the same kuso-server that serves the reviewer
+# page under /r. Set KUSO_REVIEW_BASE_URL=https://review.sislelabs.com/r on
+# the kuso-server Deployment so the dispatcher builds reviewer URLs against
+# this host. (Without KUSO_REVIEW_BASE_URL set, kuso posts no reviewer URL
+# rather than leaking the ops domain.)
+#
+# DNS: review.sislelabs.com must resolve to the cluster LB IPs (already
+# does, alongside kuso.sislelabs.com). cert-manager mints the TLS cert via
+# the same letsencrypt-prod issuer the kuso-server ingress uses.
+#
+# To rebrand per-install, change the host here + the KUSO_REVIEW_BASE_URL
+# value to match.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kuso-review
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-server
+    app.kubernetes.io/component: review
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.middlewares: kuso-kuso-https-redirect@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: review.sislelabs.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: kuso-server
+                port:
+                  number: 80
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - review.sislelabs.com
+      secretName: kuso-review-tls
