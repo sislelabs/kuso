@@ -32,22 +32,19 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 	if subscribedAddons == nil {
 		return envFromSecrets
 	}
-	// Build the allow-set of conn-secret names from subscribed addon
-	// short names. Conn secrets follow the "<project>-<addon>-conn"
-	// convention (services_ops.go:AddonConnSecrets), so we accept BOTH
-	// shapes the user might write: short ("pg" → "<project>-pg-conn")
-	// and FQ ("tickero-pg" → "tickero-pg-conn").
+	// Exact allow-set of conn-secret names from subscribed addon names.
+	// Conn secrets follow "<project>-<addon>-conn"; accept both the short
+	// ("pg" → "<project>-pg-conn") and FQ ("tickero-pg" → "tickero-pg-conn")
+	// shapes the user might write.
 	allow := make(map[string]bool, len(subscribedAddons))
 	for _, name := range subscribedAddons {
-		// FQ form: already has the project prefix.
 		allow[name+"-conn"] = true
-		// Short form: needs the project prefix.
 		if project != "" {
 			allow[project+"-"+name+"-conn"] = true
 		}
 	}
-	// Set of all project-owned conn-secret names. Anything NOT in
-	// this set passes through unchanged.
+	// Set of all project-owned conn-secret names. Anything NOT in this set
+	// passes through unchanged.
 	projectAddonSet := make(map[string]bool, len(projectAddons))
 	for _, name := range projectAddons {
 		projectAddonSet[name] = true
@@ -63,12 +60,47 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 			out = append(out, sec)
 			continue
 		}
-		// Project addon conn-secret — gated by the allow-list.
-		if allow[sec] {
+		// Project addon conn-secret — gated by the subscription. Match the
+		// exact name OR an ENV-SCOPED CLONE of a subscribed addon: a
+		// staging/qa/preview env's own conn is "<project>-<addon>-<scope>-conn"
+		// (e.g. tickero-db-staging-conn for subscribed "db"). Those must be
+		// kept too, or propagating an env-var change to a non-production env
+		// strips its addon connections and the pod crashes with no DB URL.
+		if allow[sec] || connMatchesSubscribedBase(sec, subscribedAddons, project) {
 			out = append(out, sec)
 		}
 	}
 	return out
+}
+
+// connMatchesSubscribedBase reports whether a "<project>-<addon>[-<scope>]-conn"
+// secret is a clone of a SUBSCRIBED base addon. A clone conn inserts an env
+// scope segment before "-conn" (tickero-db-staging-conn), so the exact
+// allow-set (which only has base names) misses it. We check whether, after
+// stripping the project prefix and the "-conn" suffix, the remainder BEGINS
+// with a subscribed addon name followed by "-" (the scope). Prefix-with-dash
+// avoids matching a different addon that merely shares a prefix
+// (e.g. subscribed "db" must not green-light "database-conn").
+func connMatchesSubscribedBase(sec string, subscribedAddons []string, project string) bool {
+	inner := strings.TrimSuffix(sec, "-conn")
+	if inner == sec {
+		return false // not a conn secret
+	}
+	if project != "" {
+		inner = strings.TrimPrefix(inner, project+"-")
+	}
+	for _, addon := range subscribedAddons {
+		short := addon
+		if project != "" {
+			short = strings.TrimPrefix(short, project+"-")
+		}
+		// Env-scoped clone: "<addon>-<scope>". Require the dash so "db"
+		// matches "db-staging" but never "database".
+		if strings.HasPrefix(inner, short+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // listProjectAddonConnSecrets resolves the full list of addon-conn

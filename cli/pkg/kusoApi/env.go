@@ -47,6 +47,17 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
+// DeleteEnvVar removes a single env var by name via the per-key endpoint.
+// The server's UnsetEnvVar removes ANY form — a CR literal, a secretKeyRef,
+// or a managed-secret key alike. This is the correct way to unset: the bulk
+// SetEnv (POST /env) only rewrites spec.envVars and CANNOT remove a
+// managed-secret value (it lives in <service>-secrets, off the CR), so a
+// read-modify-write unset silently left managed secrets behind. A 404 means
+// the name was already absent.
+func (k *KusoClient) DeleteEnvVar(project, service, name string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env-vars/" + esc(name))
+}
+
 // EnvVarRequest is the wire shape for a per-env override write:
 // {value} XOR {secretRef:{name,key}}.
 type EnvVarRequest struct {

@@ -279,67 +279,29 @@ var envUnsetCmd = &cobra.Command{
 			return nil
 		}
 
-		// Same precaution as set: status-check before unmarshal so a
-		// 401 doesn't silently empty the env list and the write doesn't
-		// wipe everything.
-		current, err := api.GetEnv(project, service)
-		if err != nil {
-			return fmt.Errorf("read current env: %w", err)
-		}
-		if current.StatusCode() >= 300 {
-			return fmt.Errorf("read current env: server returned %d: %s",
-				current.StatusCode(), string(current.Body()))
-		}
-		var existing struct {
-			EnvVars []map[string]any `json:"envVars"`
-			Masked  bool             `json:"masked"`
-		}
-		if err := json.Unmarshal(current.Body(), &existing); err != nil {
-			return fmt.Errorf("decode current env: %w", err)
-		}
-		// Role-system v2: non-admins get MASKED values from GetEnv. This
-		// is a read-modify-write of the full list, so proceeding would
-		// echo the mask sentinel back over untouched vars and destroy the
-		// real values. Refuse — needs the admin role to see/merge values.
-		if existing.Masked {
-			return fmt.Errorf("env values are hidden for your role (admin-only); " +
-				"this command can't safely merge masked values — ask an admin")
-		}
-
-		drop := map[string]bool{}
-		for _, k := range keys {
-			drop[k] = true
-		}
-		out := make([]map[string]any, 0, len(existing.EnvVars))
+		// Per-key DELETE for each name. The server's UnsetEnvVar removes
+		// ANY form — a CR literal, a secretKeyRef, or a managed-secret key.
+		// This replaces the old read-modify-write bulk SetEnv, which only
+		// rewrote spec.envVars and therefore could NOT remove a managed
+		// secret (its value lives in <service>-secrets, off the CR) —
+		// `env unset` reported success but left the secret behind. Per-key
+		// deletes are idempotent; a 404 means the key was already gone.
 		removed := 0
-		for _, e := range existing.EnvVars {
-			if drop[asString(e["name"])] {
+		for _, k := range keys {
+			resp, err := api.DeleteEnvVar(project, service, k)
+			if err != nil {
+				return err
+			}
+			switch {
+			case resp.StatusCode() < 300:
 				removed++
-				continue
+			case resp.StatusCode() == 404:
+				// Already absent — not an error, just not counted.
+			default:
+				return fmt.Errorf("unset %s: server returned %d: %s",
+					k, resp.StatusCode(), string(resp.Body()))
 			}
-			// Preserve the FULL surviving entry — especially valueFrom.
-			// Rebuilding as {name,value} only would emit value:nil for a
-			// secretKeyRef var, which the server then prunes, silently
-			// deleting every secret-backed env var on the service. Mirror
-			// the valueFrom-preserving shape `env set` uses above.
-			row := map[string]any{"name": e["name"]}
-			if v, ok := e["value"]; ok && v != nil {
-				row["value"] = v
-			}
-			if vf, ok := e["valueFrom"]; ok && vf != nil {
-				row["valueFrom"] = vf
-			}
-			out = append(out, row)
 		}
-		resp, err := api.SetEnv(project, service, kusoApi.SetEnvRequest{EnvVars: out})
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
-		}
-		// Report what actually changed, not what was requested — some of
-		// the named keys may not have existed.
 		fmt.Printf("unset %d env var(s) on %s/%s\n", removed, project, service)
 		return nil
 	},

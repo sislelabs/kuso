@@ -57,35 +57,28 @@ func TestServerSharedKeyCount(t *testing.T) {
 	}
 }
 
-// TestEnvUnset_PreservesValueFrom is the regression test for the data-loss
-// bug: `kuso env unset` must NOT drop secret-backed (valueFrom) env vars
-// when removing an unrelated plain var. Before the fix it rebuilt every
-// surviving entry as {name,value}, emitting value:nil for secretKeyRef vars,
-// which the server then pruned — silently deleting every secret-backed var.
-func TestEnvUnset_PreservesValueFrom(t *testing.T) {
-	// The service currently has: a plain var (DROP_ME), a plain var to keep
-	// (KEEP_PLAIN), and a secret-ref var (KEEP_SECRET via valueFrom).
-	getBody := `{"envVars":[
-		{"name":"DROP_ME","value":"x"},
-		{"name":"KEEP_PLAIN","value":"y"},
-		{"name":"KEEP_SECRET","valueFrom":{"secretKeyRef":{"name":"some-conn","key":"S3_ACCESS_KEY_ID"}}}
-	]}`
-
-	var posted kusoApi.SetEnvRequest
+// TestEnvUnset_OnlyDeletesNamedKey guards that `kuso env unset` removes
+// ONLY the named var and never touches the others. It now issues a per-key
+// DELETE /env-vars/{name} (which the server's UnsetEnvVar handles for every
+// form, incl. managed secrets) rather than a read-modify-write bulk POST
+// that couldn't remove a managed secret and risked dropping surviving vars.
+// Structurally, only the named key is ever mentioned.
+func TestEnvUnset_OnlyDeletesNamedKey(t *testing.T) {
+	var deleted []string
+	var sawBulkPost bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, getBody)
-		case r.Method == http.MethodPost:
-			defer r.Body.Close()
-			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/env-vars/"):
+			parts := strings.Split(r.URL.Path, "/env-vars/")
+			deleted = append(deleted, parts[len(parts)-1])
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"kind":"KusoService"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/env"):
+			sawBulkPost = true
+			w.WriteHeader(http.StatusOK)
 		default:
-			http.Error(w, "unexpected", 405)
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"envVars":[]}`)
 		}
 	}))
 	defer srv.Close()
@@ -98,25 +91,11 @@ func TestEnvUnset_PreservesValueFrom(t *testing.T) {
 	if err := envUnsetCmd.RunE(envUnsetCmd, []string{"alpha", "web", "DROP_ME"}); err != nil {
 		t.Fatalf("unset RunE: %v", err)
 	}
-
-	// The POSTed env list must contain KEEP_PLAIN and KEEP_SECRET (with its
-	// valueFrom intact) and must NOT contain DROP_ME.
-	names := map[string]map[string]any{}
-	for _, e := range posted.EnvVars {
-		names[asString(e["name"])] = e
+	if len(deleted) != 1 || deleted[0] != "DROP_ME" {
+		t.Fatalf("expected exactly one DELETE of DROP_ME, got %v", deleted)
 	}
-	if _, gone := names["DROP_ME"]; gone {
-		t.Error("DROP_ME should have been removed")
-	}
-	if _, ok := names["KEEP_PLAIN"]; !ok {
-		t.Error("KEEP_PLAIN should survive")
-	}
-	secret, ok := names["KEEP_SECRET"]
-	if !ok {
-		t.Fatal("KEEP_SECRET (secret-backed) was dropped — the valueFrom data-loss bug")
-	}
-	if secret["valueFrom"] == nil {
-		t.Errorf("KEEP_SECRET lost its valueFrom: %+v", secret)
+	if sawBulkPost {
+		t.Error("env unset must NOT bulk-POST the env list (can't remove managed secrets; risks dropping survivors)")
 	}
 }
 
@@ -384,3 +363,4 @@ func rowHas(out string, cells ...string) bool {
 	}
 	return false
 }
+
