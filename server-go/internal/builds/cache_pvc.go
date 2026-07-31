@@ -24,8 +24,18 @@ import (
 // we still write a secret (with empty token) so pods can start and
 // surface a clean clone error instead of wedging on
 // CreateContainerConfigError.
-func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName string, installationID int64, owner, repo string) error {
+func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName string, installationID int64, owner, repo string, repoRef *kube.KusoRepoRef) error {
 	token := ""
+	// GitLab: copy the service's stored token (deploy / project-access /
+	// personal) from its Secret into the <build>-token Secret. No minting —
+	// the token is long-lived and user-supplied. GitHub is handled below.
+	if kube.RepoProviderForRef(repoRef) == kube.ProviderGitLab && repoRef != nil && repoRef.TokenSecret != "" {
+		t, err := s.readRepoToken(ctx, ns, repoRef.TokenSecret)
+		if err != nil {
+			return fmt.Errorf("read gitlab repo token: %w", err)
+		}
+		token = t
+	}
 	if s.Tokens != nil && installationID > 0 {
 		// Prefer a token scoped to ONLY the repo being built. A build pod
 		// runs untrusted code (the repo + its dependencies, and — with fork
@@ -86,6 +96,21 @@ func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName stri
 		return fmt.Errorf("create clone token secret %s/%s: %w", ns, secret.Name, err)
 	}
 	return nil
+}
+
+// readRepoToken reads the clone token from a service's repo TokenSecret
+// (key kube.RepoTokenSecretKey). Used for GitLab, where the user stores a
+// deploy/project/personal token rather than kuso minting one.
+func (s *Service) readRepoToken(ctx context.Context, ns, secretName string) (string, error) {
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get repo token secret %s/%s: %w", ns, secretName, err)
+	}
+	tok := string(sec.Data[kube.RepoTokenSecretKey])
+	if tok == "" {
+		return "", fmt.Errorf("repo token secret %s/%s has no %s key", ns, secretName, kube.RepoTokenSecretKey)
+	}
+	return tok, nil
 }
 
 // ensureBuildCachePVC upserts a PVC named <fqn>-build-cache in the

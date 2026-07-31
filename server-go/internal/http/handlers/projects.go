@@ -81,7 +81,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		FromService: in.FromService,
 	}
 	if in.Repo != nil {
-		out.Repo = &projects.CreateServiceRepo{URL: in.Repo.URL, Path: in.Repo.Path}
+		out.Repo = &projects.CreateServiceRepo{URL: in.Repo.URL, Path: in.Repo.Path, Provider: in.Repo.Provider, Token: in.Repo.Token}
 	}
 	if len(in.Domains) > 0 {
 		out.Domains = make([]projects.ServiceDomain, len(in.Domains))

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -331,8 +332,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 
 	repoURL := ""
 	repoPath := "."
+	repoProvider := ""
+	repoTokenSecret := ""
 	if req.Repo != nil {
 		repoURL = req.Repo.URL
+		repoProvider = req.Repo.Provider
 		if req.Repo.Path != "" {
 			// Validate before stamping onto the CR — the chart
 			// interpolates this into shell strings, so a value like
@@ -343,6 +347,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 				return nil, err
 			}
 			repoPath = req.Repo.Path
+		}
+		// GitLab token supplied on create → store it in a per-service Secret.
+		if req.Repo.Token != "" {
+			ref := &kube.KusoRepoRef{URL: repoURL, Provider: repoProvider}
+			if kube.RepoProviderForRef(ref) == kube.ProviderGitLab {
+				secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
+				if serr != nil {
+					return nil, serr
+				}
+				repoTokenSecret = secName
+			}
 		}
 	}
 	if repoURL == "" && proj.Spec.DefaultRepo != nil {
@@ -453,7 +468,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		Spec: kube.KusoServiceSpec{
 			Project:     project,
 			DisplayName: displayName,
-			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
+			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath, Provider: repoProvider, TokenSecret: repoTokenSecret},
 			Runtime:     req.Runtime,
 			Dockerfile:  req.Dockerfile,
 			Command:     req.Command,
@@ -2054,6 +2069,12 @@ type PatchRepoRequest struct {
 	Branch         string `json:"branch,omitempty"`
 	Path           string `json:"path,omitempty"`
 	InstallationID int64  `json:"installationId,omitempty"`
+	// Provider: "github"|"gitlab", inferred from URL when empty.
+	Provider string `json:"provider,omitempty"`
+	// Token is a GitLab clone credential supplied on write. Stored in a
+	// per-service Secret; never persisted on the CR or returned. Empty
+	// leaves any existing stored token untouched.
+	Token string `json:"token,omitempty"`
 }
 
 // VolumePatch is the wire shape of a volume update. Mirrors
@@ -2166,6 +2187,21 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// flags are captured into `changed` for the post-update propagation.
 	var changed changedFields
 	var oldEffBranch, newEffBranch string
+	// A supplied GitLab repo token is stored ONCE here, before the retry
+	// loop — storing it inside the closure would re-write the Secret on
+	// every 409 retry. newRepoTokenSecret carries the resulting Secret name
+	// into the closure; empty when no token was supplied.
+	newRepoTokenSecret := ""
+	if req.Repo != nil && req.Repo.URL != "" && req.Repo.Token != "" {
+		refForProvider := &kube.KusoRepoRef{URL: req.Repo.URL, Provider: req.Repo.Provider}
+		if kube.RepoProviderForRef(refForProvider) == kube.ProviderGitLab {
+			secName, serr := s.storeRepoToken(ctx, project, service, req.Repo.Token)
+			if serr != nil {
+				return nil, serr
+			}
+			newRepoTokenSecret = secName
+		}
+	}
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		if req.DisplayName != nil {
 			dn := strings.TrimSpace(*req.DisplayName)
@@ -2279,11 +2315,23 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				if err := validateRepoPath(req.Repo.Path); err != nil {
 					return err
 				}
-				svc.Spec.Repo = &kube.KusoRepoRef{
+				ref := &kube.KusoRepoRef{
 					URL:           req.Repo.URL,
 					DefaultBranch: req.Repo.Branch,
 					Path:          req.Repo.Path,
+					Provider:      req.Repo.Provider,
 				}
+				// Preserve an existing GitLab TokenSecret across a repo edit
+				// that doesn't supply a new token (e.g. changing the branch).
+				if svc.Spec.Repo != nil {
+					ref.TokenSecret = svc.Spec.Repo.TokenSecret
+				}
+				// A newly-supplied token was stored before the retry loop;
+				// point the ref at that Secret.
+				if newRepoTokenSecret != "" {
+					ref.TokenSecret = newRepoTokenSecret
+				}
+				svc.Spec.Repo = ref
 			}
 			// installationId is recorded so the build path can mint a
 			// fresh installation token without re-asking the user. Per-
@@ -2687,4 +2735,51 @@ func isPublicFQDN(host string) bool {
 		return false
 	}
 	return true
+}
+
+// repoTokenSecretName is the per-service Secret that holds a GitLab clone
+// token: <project>-<service>-repo-token.
+func repoTokenSecretName(project, service string) string {
+	return project + "-" + service + "-repo-token"
+}
+
+// storeRepoToken upserts the per-service repo-token Secret with the given
+// GitLab clone token (under kube.RepoTokenSecretKey) and returns the Secret
+// name. The token is stored ONLY here — never on the CR, never returned on
+// read.
+func (s *Service) storeRepoToken(ctx context.Context, project, service, token string) (string, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return "", err
+	}
+	name := repoTokenSecretName(project, service)
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":  "kuso-server",
+				"kuso.sislelabs.com/project":    project,
+				"kuso.sislelabs.com/service":    service,
+				"kuso.sislelabs.com/repo-token": "true",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		// Write Data (bytes) rather than StringData: the real API server
+		// converts StringData→Data, but the fake clientset used in tests
+		// does not, so Data keeps prod + tests consistent.
+		Data: map[string][]byte{kube.RepoTokenSecretKey: []byte(token)},
+	}
+	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+		if uerr != nil {
+			return "", fmt.Errorf("update repo token secret %s/%s: %w", ns, name, uerr)
+		}
+		return name, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("create repo token secret %s/%s: %w", ns, name, err)
+	}
+	return name, nil
 }
