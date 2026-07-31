@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.104] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): keep sweeping stranded pods through a settle window ([b9168f3](https://github.com/sislelabs/kuso/commit/b9168f3e2efa9c659db960738223110b4bde6c50))
+
 ## [0.18.103] — 2026-07-02
 
 ### 🐛 Bug Fixes

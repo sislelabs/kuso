@@ -19,6 +19,16 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.4] — 2026-07-31
+
+### Other
+- Merge: one secret primitive — unified env value model + reveal ([48574ca](https://github.com/sislelabs/kuso/commit/48574ca146dfde6a0e6490a7864c16349ef3342f))
+
+### ✨ Features
+- Feat(web): one secret primitive — remove secret toggle, unify save, reveal ([fc095e6](https://github.com/sislelabs/kuso/commit/fc095e684e221d74543d984f8f39d036899fae75))
+- Feat(cli): one secret primitive — env list --reveal + unified auto write ([750e65b](https://github.com/sislelabs/kuso/commit/750e65b271583cde74ee0e35317cd59bd7d10e0c))
+- Feat(env): one secret primitive — unified write (auto storage) + reveal ([5dfd5af](https://github.com/sislelabs/kuso/commit/5dfd5affb30d2eef7ae219aeeccbfce9993a9bf0))
+
 ## [0.22.3] — 2026-07-30
 
 ### Other
@@ -486,11 +496,6 @@ messages on every release. The format is loosely based on
 - Docs(plans): one-click app marketplace implementation plan ([642aec9](https://github.com/sislelabs/kuso/commit/642aec91e024036de6ca92e9fa837fb70080893e))
 - Docs(specs): marketplace — why not addon kinds; unified catalog surface ([3222f5b](https://github.com/sislelabs/kuso/commit/3222f5bb278081d8812830855f95ee7dc621b6ef))
 - Docs(specs): one-click app marketplace design ([3c063e0](https://github.com/sislelabs/kuso/commit/3c063e0558eb8c5b37d0d13a8707fc07d1ccc9d8))
-
-## [0.18.104] — 2026-07-02
-
-### 🐛 Bug Fixes
-- Fix(pkgupdates): keep sweeping stranded pods through a settle window ([b9168f3](https://github.com/sislelabs/kuso/commit/b9168f3e2efa9c659db960738223110b4bde6c50))
 
 
 ---
