@@ -319,6 +319,140 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	return updated, nil
 }
 
+// SetEnvValue is the UNIFIED env write behind the "one secret primitive"
+// model: the caller supplies just {name, value} and the server decides
+// storage (see chooseEnvStorage), so the user never picks plain-vs-secret.
+//
+//   - ${{ ref }}          → secretKeyRef (addon/shared wiring)
+//   - publicEnv/buildArgs → literal on spec.envVars (stays build-resolvable)
+//   - everything else     → managed <service>-secrets Secret (off the CR)
+//
+// It also clears any STALE prior form of the same name so a value that
+// changes storage class (e.g. a plain CR var the user re-saves, which now
+// becomes a secret) doesn't leave a duplicate/shadowing entry behind.
+//
+// Delegates to the existing storage-specific paths (SetEnvVar's value/ref
+// branches, upsertManagedSecretKey) so all the tested write, propagation,
+// and secretsRev-bump logic is reused. Backward-compatible: the legacy
+// three-form SetEnvVar remains for internal callers (import, env-groups).
+func (s *Service) SetEnvValue(ctx context.Context, project, service, name, value string) (*kube.KusoService, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: env var name required", ErrInvalid)
+	}
+	if !validEnvVarName(name) {
+		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+	}
+	svc, err := s.GetService(ctx, project, service)
+	if err != nil {
+		return nil, err
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	switch chooseEnvStorage(name, value, svc) {
+	case StorageRef:
+		// A ${{ ref }} needs the addon/service rewrite the bulk SetEnv path
+		// performs (literal → secretKeyRef). Merge just this one var into
+		// the current env list and route through SetEnvPending so the ref
+		// expands exactly as it does elsewhere (AllowPending tolerates an
+		// addon still provisioning). A ref supersedes any managed-secret of
+		// the same name.
+		if err := s.clearManagedSecretKeyIfPresent(ctx, ns, project, service, name); err != nil {
+			return nil, err
+		}
+		merged := mergeEnvVar(s.currentEnvVars(svc), EnvVar{Name: name, Value: value})
+		if err := s.SetEnvPending(ctx, project, service, merged); err != nil {
+			return nil, err
+		}
+		return s.GetService(ctx, project, service)
+	case StorageCREnv:
+		// Build-relevant literal → stays on the CR so the build resolves it.
+		// Supersedes any managed-secret of the same name.
+		if err := s.clearManagedSecretKeyIfPresent(ctx, ns, project, service, name); err != nil {
+			return nil, err
+		}
+		return s.SetEnvVar(ctx, project, service, name, SetEnvVarRequest{Value: value})
+	default: // StorageSecret
+		// Default: the value becomes a kuso secret, off the CR. Supersedes
+		// any literal/ref of the same name still on the CR.
+		if err := s.clearCREnvVarIfPresent(ctx, ns, project, service, name); err != nil {
+			return nil, err
+		}
+		return s.SetEnvVar(ctx, project, service, name, SetEnvVarRequest{SecretValue: &value})
+	}
+}
+
+// currentEnvVars returns the service CR's env vars in the projects EnvVar
+// shape (for merge-and-rewrite). Refs come back as their valueFrom form.
+func (s *Service) currentEnvVars(svc *kube.KusoService) []EnvVar {
+	out := make([]EnvVar, 0, len(svc.Spec.EnvVars))
+	for _, e := range svc.Spec.EnvVars {
+		out = append(out, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source})
+	}
+	return out
+}
+
+// mergeEnvVar replaces the entry named next.Name in list, or appends it.
+func mergeEnvVar(list []EnvVar, next EnvVar) []EnvVar {
+	for i := range list {
+		if list[i].Name == next.Name {
+			list[i] = next
+			return list
+		}
+	}
+	return append(list, next)
+}
+
+// clearManagedSecretKeyIfPresent deletes name from the managed
+// <service>-secrets Secret if it exists there. No-op when absent. Used when
+// a value transitions AWAY from secret storage (to CR env or a ref).
+func (s *Service) clearManagedSecretKeyIfPresent(ctx context.Context, ns, project, service, name string) error {
+	keys, err := s.listSecretKeys(ctx, ns, kube.ServiceSecretName(project, service))
+	if err != nil {
+		return nil // best-effort: no secret / read error → nothing to clear
+	}
+	for _, k := range keys {
+		if k == name {
+			_, derr := s.removeManagedSecretKey(ctx, ns, project, service, name)
+			return derr
+		}
+	}
+	return nil
+}
+
+// clearCREnvVarIfPresent removes name from spec.envVars if present. No-op
+// when absent. Used when a value transitions INTO secret storage so the old
+// CR literal/ref doesn't shadow the managed-secret value.
+func (s *Service) clearCREnvVarIfPresent(ctx context.Context, ns, project, service, name string) error {
+	svc, err := s.GetService(ctx, project, service)
+	if err != nil {
+		return err
+	}
+	present := false
+	for _, e := range svc.Spec.EnvVars {
+		if e.Name == name {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return nil
+	}
+	_, err = s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+		out := svc.Spec.EnvVars[:0]
+		for _, e := range svc.Spec.EnvVars {
+			if e.Name != name {
+				out = append(out, e)
+			}
+		}
+		svc.Spec.EnvVars = out
+		return nil
+	})
+	return err
+}
+
 // UnsetEnvVar removes a single env var by name. ErrNotFound when the
 // var isn't present.
 //
