@@ -34,6 +34,14 @@ func (k *KusoClient) GetEnv(project, service string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
+// GetEnvRevealed is GetEnv with ?reveal=true — the server resolves EVERY
+// value to plaintext (managed secrets + addon/shared secretKeyRefs) when the
+// caller holds secrets:read (admin). A non-admin asking to reveal still gets
+// masked values back; the server decides. Used by `kuso env list --reveal`.
+func (k *KusoClient) GetEnvRevealed(project, service string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env?reveal=true")
+}
+
 func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
