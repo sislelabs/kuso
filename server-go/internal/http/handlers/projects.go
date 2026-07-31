@@ -851,14 +851,21 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	req := projects.SetEnvVarRequest{Value: wire.Value}
-	if wire.SecretRef != nil {
-		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
+	// Unified "one secret primitive" write: the server decides storage.
+	var out *kube.KusoService
+	var err error
+	if wire.Auto {
+		out, err = h.Svc.SetEnvValue(ctx, project, service, name, wire.Value)
+	} else {
+		req := projects.SetEnvVarRequest{Value: wire.Value}
+		if wire.SecretRef != nil {
+			req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
+		}
+		if wire.SecretValue != nil {
+			req.SecretValue = wire.SecretValue
+		}
+		out, err = h.Svc.SetEnvVar(ctx, project, service, name, req)
 	}
-	if wire.SecretValue != nil {
-		req.SecretValue = wire.SecretValue
-	}
-	out, err := h.Svc.SetEnvVar(ctx, project, service, name, req)
 	if err != nil {
 		h.fail(w, "set env var", err)
 		return
@@ -967,17 +974,29 @@ func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.GetEnv(ctx, project, chi.URLParam(r, "service"))
+	canReadSecrets := callerCanReadSecrets(ctx, h.DB, project)
+	// ?reveal=true resolves EVERY value to plaintext (managed secrets +
+	// addon/shared secretKeyRefs), the admin-only "view" path. It is gated
+	// on secrets:read — a non-admin asking to reveal still gets masked
+	// values (the request is honored only for those allowed to see them).
+	reveal := r.URL.Query().Get("reveal") == "true" && canReadSecrets
+	var out []projects.EnvVar
+	var err error
+	if reveal {
+		out, err = h.Svc.GetEnvRevealed(ctx, project, chi.URLParam(r, "service"))
+	} else {
+		out, err = h.Svc.GetEnv(ctx, project, chi.URLParam(r, "service"))
+	}
 	if err != nil {
 		h.fail(w, "get env", err)
 		return
 	}
 	masked := false
-	if !callerCanReadSecrets(ctx, h.DB, project) {
+	if !canReadSecrets {
 		out = maskEnvValues(out)
 		masked = true
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"envVars": out, "masked": masked})
+	writeJSON(w, http.StatusOK, map[string]any{"envVars": out, "masked": masked, "revealed": reveal})
 }
 
 // GetDrift returns the pending-changes summary for a service. Used

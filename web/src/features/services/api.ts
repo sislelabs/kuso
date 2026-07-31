@@ -10,11 +10,21 @@ export async function getService(project: string, service: string): Promise<Kuso
 // with values replaced by a sentinel; the editor must render read-only
 // so a non-admin can't accidentally save the sentinel back over real
 // values.
+// reveal=true asks the server to resolve EVERY value to its real
+// plaintext — managed <service>-secrets values AND addon/shared
+// secretKeyRefs. Admin-only (secrets:read): a non-admin passing
+// reveal still gets masked values, and `revealed` comes back false.
+// The editor uses this to power the per-row eye on secret-backed rows,
+// whose values are otherwise absent from the default (non-reveal) read.
 export async function getServiceEnv(
   project: string,
-  service: string
-): Promise<{ envVars: KusoEnvVar[]; masked?: boolean }> {
-  return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env`);
+  service: string,
+  reveal = false,
+): Promise<{ envVars: KusoEnvVar[]; masked?: boolean; revealed?: boolean }> {
+  const qs = reveal ? "?reveal=true" : "";
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env${qs}`,
+  );
 }
 
 export async function setServiceEnv(
@@ -34,15 +44,47 @@ export async function setServiceEnv(
   );
 }
 
+// setServiceEnvValue is the "one secret primitive" write: the user types
+// a value and the SERVER decides how to store it — a ${{ ref }} becomes a
+// secretKeyRef (addon/shared wiring), a build-relevant name stays a CR
+// literal so the build can resolve it, and everything else lands in the
+// managed <service>-secrets Secret (off the CR). The editor no longer
+// distinguishes "plain vs secret vs ref"; it hands the typed value here
+// and lets `auto:true` route it. An empty string is a valid write.
+export async function setServiceEnvValue(
+  project: string,
+  service: string,
+  name: string,
+  value: string,
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env-vars/${encodeURIComponent(name)}`,
+    { method: "PUT", body: { value, auto: true } },
+  );
+}
+
+// unsetServiceEnvVar removes a single env var by name via the per-key
+// DELETE endpoint. Handles every storage form — a CR literal, an opaque
+// secretKeyRef, or a managed <service>-secrets value with no spec.envVars
+// entry — so the editor can delete a row whatever the server chose to
+// store it as. 404 (ErrNotFound) when the name exists nowhere.
+export async function unsetServiceEnvVar(
+  project: string,
+  service: string,
+  name: string,
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env-vars/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+}
+
 // setServiceEnvSecret writes a single secret VALUE into the kuso-managed
-// <project>-<service>-secrets Secret via the per-key set endpoint. Unlike
-// the bulk POST /env (which overwrites spec.envVars), this never lands the
-// plaintext on the KusoService CR — the value lives only in the Secret and
-// the key surfaces back through the managed-secret enrichment path. Used
-// by the env editor for rows tagged source="managed-secret" (or rows the
-// user explicitly marks as a secret). An empty string is a valid write
-// (clears the value while keeping the key), so the caller always passes a
-// concrete string.
+// <project>-<service>-secrets Secret via the legacy per-key set endpoint.
+// Superseded in the env editor by setServiceEnvValue (auto storage);
+// retained for any non-editor caller that still needs the explicit
+// secretValue form. An empty string is a valid write (clears the value
+// while keeping the key), so the caller always passes a concrete string.
 export async function setServiceEnvSecret(
   project: string,
   service: string,

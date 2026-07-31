@@ -1325,6 +1325,20 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 // (valueFrom.secretKeyRef) come back with values redacted to their keys
 // only — same contract as the TS endpoint.
 func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar, error) {
+	return s.getEnv(ctx, project, service, false)
+}
+
+// GetEnvRevealed is GetEnv with every value RESOLVED to its real plaintext:
+// managed-secret values are read from <service>-secrets, and secretKeyRef
+// (addon/shared) values are resolved from the referenced Secret. This is the
+// admin-only reveal path ("view" in the web editor / `kuso env list
+// --reveal`). CALLERS MUST gate this on secrets:read — it returns secret
+// material. Never call it on a path a non-admin can reach.
+func (s *Service) GetEnvRevealed(ctx context.Context, project, service string) ([]EnvVar, error) {
+	return s.getEnv(ctx, project, service, true)
+}
+
+func (s *Service) getEnv(ctx context.Context, project, service string, reveal bool) ([]EnvVar, error) {
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
 		return nil, err
@@ -1334,15 +1348,61 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 	// editor + `kuso env list` consume, so enrichment MUST happen here too —
 	// not only on the full-CR read paths. Best-effort (no-op on read error).
 	s.EnrichServiceWithManagedSecretKeys(ctx, project, service, svc)
+
+	var ns string
+	var managed map[string]string
+	if reveal {
+		if ns, err = s.namespaceFor(ctx, project); err == nil {
+			// Pre-read the managed secret once for the managed-secret rows.
+			managed = s.readSecretData(ctx, ns, kube.ServiceSecretName(project, service))
+		}
+	}
+
 	out := make([]EnvVar, 0, len(svc.Spec.EnvVars))
 	for _, e := range svc.Spec.EnvVars {
 		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source}
-		if ev.ValueFrom != nil {
-			ev.Value = "" // redact opaque values
+		switch {
+		case !reveal:
+			if ev.ValueFrom != nil {
+				ev.Value = "" // redact opaque values
+			}
+		case e.Source == managedSecretSource:
+			// Managed-secret row: value lives in <service>-secrets.
+			if v, ok := managed[e.Name]; ok {
+				ev.Value = v
+			}
+		case ev.ValueFrom != nil:
+			// secretKeyRef (addon/shared wiring): resolve the referenced
+			// Secret + key to its real value.
+			if skr := secretKeyRefOf(e); skr != nil && skr.name != "" && skr.key != "" {
+				if data := s.readSecretData(ctx, ns, skr.name); data != nil {
+					ev.Value = data[skr.key]
+				}
+			}
+			// Keep ValueFrom so the caller still knows it's a ref, but the
+			// resolved value is now populated.
 		}
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+// readSecretData reads a Secret's data as string values, or nil on any
+// error (missing secret, no client). Best-effort — reveal degrades to a
+// blank value rather than failing the whole list.
+func (s *Service) readSecretData(ctx context.Context, ns, name string) map[string]string {
+	if s.Kube == nil || s.Kube.Clientset == nil || ns == "" || name == "" {
+		return nil
+	}
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(sec.Data))
+	for k, v := range sec.Data {
+		out[k] = string(v)
+	}
+	return out
 }
 
 // GetDetectedEnv returns the env-var names that the most recent build's

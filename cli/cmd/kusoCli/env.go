@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
@@ -54,25 +55,60 @@ var envSecretFlag bool
 // projects.managedSecretSource.
 const managedSecretSource = "managed-secret"
 
+// envRevealFlag is bound LOCALLY on envListCmd (NOT a shared package global).
+// The CLI has a documented hazard where binding shared globals across many
+// commands lets the last init() win and silently mis-render output; keep this
+// per-command so `-r` only affects `env list`.
+var envRevealFlag bool
+
+// secretKeyRefName/Key defensively extract valueFrom.secretKeyRef.{name,key}
+// out of the loosely-typed valueFrom map. The wire shape is
+// {"secretKeyRef":{"name":"<secret>","key":"<KEY>"}}; anything missing or
+// mis-shaped yields "" so a malformed entry degrades to a blank rather than
+// panicking.
+func secretKeyRefName(valueFrom map[string]any) (name, key string) {
+	if valueFrom == nil {
+		return "", ""
+	}
+	ref, ok := valueFrom["secretKeyRef"].(map[string]any)
+	if !ok {
+		return "", ""
+	}
+	name, _ = ref["name"].(string)
+	key, _ = ref["key"].(string)
+	return name, key
+}
+
 var envListCmd = &cobra.Command{
 	Use:     "list <project> <service>",
 	Aliases: []string{"ls"},
-	Short:   "List a service's plain env vars + the names of its secret keys",
+	Short:   "List a service's env vars, managed secrets, and addon/shared refs",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.GetEnv(args[0], args[1])
+		// --reveal resolves every value to plaintext server-side (admin /
+		// secrets:read only — a non-admin still gets masked values back).
+		var (
+			resp *resty.Response
+			err  error
+		)
+		if envRevealFlag {
+			resp, err = api.GetEnvRevealed(args[0], args[1])
+		} else {
+			resp, err = api.GetEnv(args[0], args[1])
+		}
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list env vars: %w", err)
 		}
-		// Server returns `{envVars: [{name, value, valueFrom, source}]}`.
-		// Plain entries have value populated; secret-ref entries have
-		// valueFrom + value redacted to empty; entries enumerated from the
+		// Server returns `{envVars: [{name, value, valueFrom, source}], masked,
+		// revealed}`. Plain entries have value populated; ref entries have
+		// valueFrom (value redacted to empty unless revealed); entries from the
 		// kuso-managed <service>-secrets envFrom mount carry
-		// source:"managed-secret" with an empty value (the actual value
-		// never round-trips).
+		// source:"managed-secret" (value empty unless revealed). With
+		// reveal=true AND admin, `revealed` is true and every value is
+		// resolved to plaintext.
 		var data struct {
 			EnvVars []struct {
 				Name      string         `json:"name"`
@@ -80,6 +116,8 @@ var envListCmd = &cobra.Command{
 				ValueFrom map[string]any `json:"valueFrom,omitempty"`
 				Source    string         `json:"source,omitempty"`
 			} `json:"envVars"`
+			Masked   bool `json:"masked"`
+			Revealed bool `json:"revealed"`
 		}
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
 			return fmt.Errorf("decode response: %w", err)
@@ -91,17 +129,33 @@ var envListCmd = &cobra.Command{
 			t := tablewriter.NewWriter(os.Stdout)
 			t.SetHeader([]string{"NAME", "VALUE", "TYPE"})
 			sort.Slice(data.EnvVars, func(i, j int) bool { return data.EnvVars[i].Name < data.EnvVars[j].Name })
+			// revealed is only true when the server actually resolved values
+			// (reveal=true AND admin). A non-admin's reveal request comes back
+			// revealed:false, so we correctly fall back to masked rendering.
+			revealed := data.Revealed
 			for _, e := range data.EnvVars {
 				switch {
 				case e.Source == managedSecretSource:
-					// Value stored in the kuso-managed <service>-secrets
-					// Secret and mounted via envFrom — the value never
-					// comes back over the wire.
-					t.Append([]string{e.Name, "•••••", "managed-secret"})
+					// The kuso managed secret: value lives in the
+					// <service>-secrets Secret (envFrom-mounted), off the CR.
+					val := "•••••"
+					if revealed {
+						val = e.Value
+					}
+					t.Append([]string{e.Name, val, "secret"})
 				case e.ValueFrom != nil:
-					t.Append([]string{e.Name, "<secret>", "secret"})
+					// An addon/shared reference — valueFrom.secretKeyRef points
+					// at another Secret. Show the wiring target when not
+					// revealed; the resolved value when revealed.
+					name, key := secretKeyRefName(e.ValueFrom)
+					val := "→ " + name + "." + key
+					if revealed {
+						val = e.Value
+					}
+					t.Append([]string{e.Name, val, "ref"})
 				default:
-					t.Append([]string{e.Name, e.Value, "plain"})
+					// A plain literal on the CR.
+					t.Append([]string{e.Name, e.Value, "env"})
 				}
 			}
 			t.Render()
@@ -168,76 +222,29 @@ var envSetCmd = &cobra.Command{
 			return nil
 		}
 
-		// Read current env so we can merge — set should add/update, not replace.
-		// Existing valueFrom-backed entries (secret refs) are preserved.
-		//
-		// Critical: if the read leg fails (typically 401 after a token
-		// expiry), we MUST NOT proceed to the write — silently
-		// unmarshalling an error body into `existing` produces an
-		// empty list, and the subsequent SetEnv would clobber every
-		// other env var on the service. The previous code did exactly
-		// that, with a `_ = json.Unmarshal(...)` swallowing the error.
-		current, err := api.GetEnv(project, service)
-		if err != nil {
-			return fmt.Errorf("read current env: %w", err)
-		}
-		if current.StatusCode() >= 300 {
-			return fmt.Errorf("read current env: server returned %d: %s",
-				current.StatusCode(), string(current.Body()))
-		}
-		var existing struct {
-			EnvVars []map[string]any `json:"envVars"`
-			Masked  bool             `json:"masked"`
-		}
-		if err := json.Unmarshal(current.Body(), &existing); err != nil {
-			return fmt.Errorf("decode current env: %w", err)
-		}
-		// Role-system v2: non-admins get MASKED values from GetEnv. This
-		// is a read-modify-write of the full list, so proceeding would
-		// echo the mask sentinel back over untouched vars and destroy the
-		// real values. Refuse — needs the admin role to see/merge values.
-		if existing.Masked {
-			return fmt.Errorf("env values are hidden for your role (admin-only); " +
-				"this command can't safely merge masked values — ask an admin")
-		}
-
-		// Build a map for easy update. Preserve valueFrom on existing
-		// entries so secret-backed vars survive a plain-var set.
-		byName := map[string]map[string]any{}
-		for _, e := range existing.EnvVars {
-			row := map[string]any{"name": e["name"]}
-			if v, ok := e["value"]; ok && v != nil {
-				row["value"] = v
-			}
-			if vf, ok := e["valueFrom"]; ok && vf != nil {
-				row["valueFrom"] = vf
-			}
-			byName[asString(e["name"])] = row
-		}
+		// Default (no --secret, no --env): the UNIFIED "one secret primitive"
+		// write. Each KEY=VALUE goes to the single-var PUT with {value, auto:
+		// true} and the SERVER decides storage — a ${{ ref }} becomes
+		// addon/shared wiring, a build-relevant name stays a CR literal, and
+		// everything else becomes a managed secret. The user no longer picks
+		// plain-vs-secret. Because each write is an idempotent per-key upsert,
+		// there's no read-merge-whole-list dance (and thus no risk of a failed
+		// read clobbering untouched vars, and no admin-mask merge hazard).
 		for _, kv := range kvs {
-			eq := -1
-			for i, c := range kv {
-				if c == '=' {
-					eq = i
-					break
-				}
-			}
+			eq := strings.IndexByte(kv, '=')
 			if eq <= 0 {
 				return fmt.Errorf("argument %q is not KEY=VALUE", kv)
 			}
-			byName[kv[:eq]] = map[string]any{"name": kv[:eq], "value": kv[eq+1:]}
-		}
-
-		out := make([]map[string]any, 0, len(byName))
-		for _, v := range byName {
-			out = append(out, v)
-		}
-		resp, err := api.SetEnv(project, service, kusoApi.SetEnvRequest{EnvVars: out})
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			resp, err := api.SetEnvVar(project, service, kv[:eq], kusoApi.SetEnvVarRequest{
+				Value: kv[eq+1:],
+				Auto:  true,
+			})
+			if err != nil {
+				return err
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
 		}
 		fmt.Printf("set %d env var(s) on %s/%s\n", len(kvs), project, service)
 		return nil
@@ -606,6 +613,10 @@ func init() {
 	rootCmd.AddCommand(envCmd)
 	envCmd.AddCommand(envListCmd, envSetCmd, envUnsetCmd, envShareCmd, envUnshareCmd)
 	envCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	// --reveal/-r: bound LOCALLY on envListCmd (never a shared global — see the
+	// envRevealFlag doc). Asks the server to resolve every value to plaintext;
+	// requires the admin/secrets:read role or values stay masked.
+	envListCmd.Flags().BoolVarP(&envRevealFlag, "reveal", "r", false, "resolve and print real values (requires secrets:read/admin)")
 	// --env on set/unset: write a per-env override instead of a service-level
 	// var. Empty keeps the service-level (all-envs) behavior.
 	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")

@@ -197,6 +197,14 @@ type SetEnvVarRequest struct {
 	// string is a valid write distinct from "not set". This is how the
 	// editor writes secret env values (e.g. WETRAVEL_API_KEY).
 	SecretValue *string `json:"secretValue,omitempty"`
+	// Auto is the "one secret primitive" write: the client sends just
+	// {value, auto:true} and the SERVER decides storage — a ${{ ref }}
+	// becomes addon/shared wiring, a build-relevant name (publicEnv/
+	// buildArgs) stays a CR literal, and everything else becomes a managed
+	// secret (off the CR). The user never picks plain-vs-secret. When Auto
+	// is set, Value is the value and SecretRef/SecretValue are ignored.
+	// Omitted (false) → the legacy explicit three-form contract, unchanged.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // SecretRefBody is the shape valueFrom.secretKeyRef takes in the

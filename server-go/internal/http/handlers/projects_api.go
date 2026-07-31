@@ -52,8 +52,13 @@ type ProjectsAPI interface {
 	AddDomain(ctx context.Context, project, service string, req projects.AddDomainRequest) (*kube.KusoService, error)
 	RemoveDomain(ctx context.Context, project, service, host string) (*kube.KusoService, error)
 	SetEnvVar(ctx context.Context, project, service, name string, req projects.SetEnvVarRequest) (*kube.KusoService, error)
+	// SetEnvValue is the unified "one secret primitive" write — the server
+	// decides storage from the value + service build declarations.
+	SetEnvValue(ctx context.Context, project, service, name, value string) (*kube.KusoService, error)
 	UnsetEnvVar(ctx context.Context, project, service, name string) (*kube.KusoService, error)
 	GetEnv(ctx context.Context, project, service string) ([]projects.EnvVar, error)
+	// GetEnvRevealed resolves every value to plaintext (admin-only reveal).
+	GetEnvRevealed(ctx context.Context, project, service string) ([]projects.EnvVar, error)
 	SetEnvWithOpts(ctx context.Context, project, service string, envVars []projects.EnvVar, opts projects.SetEnvOpts) error
 	GetDetectedEnv(ctx context.Context, project, service string) ([]string, string, error)
 	GetDrift(ctx context.Context, project, service string) (*projects.DriftReport, error)
