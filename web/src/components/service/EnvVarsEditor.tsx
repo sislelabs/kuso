@@ -6,10 +6,10 @@ import { Button } from "@/components/ui/button";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { serviceBlast } from "@/lib/blast-radius";
 import { Input } from "@/components/ui/input";
-import { Trash2, Plus, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2, KeyRound } from "lucide-react";
-import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
+import { Trash2, Plus, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
+import { useServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
 import type { DetectedEnv } from "@/features/services/api";
-import { listAddonSecretKeys, setServiceEnvSecret } from "@/features/services/api";
+import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
@@ -26,32 +26,35 @@ interface Row {
   id: string;
   name: string;
   value: string;
+  // fromSecret marks a row backed by an OPAQUE secretKeyRef the editor
+  // has no user-facing representation for — a manually-mounted secret,
+  // a legacy fieldRef/configMapKeyRef, or an addon ref that hasn't
+  // resolved yet (addons query still in flight). It stays non-editable:
+  // the user re-wires it with the 🔗 picker rather than typing over it.
+  // Addon/shared refs that DO resolve are NOT fromSecret — they render
+  // as an editable ${{ addon.KEY }} value like any other. This is the
+  // "one secret primitive" model: every row is just a value; the server
+  // decides storage on save (auto:true). There is no user-facing "store
+  // as secret" concept any more.
   fromSecret: boolean;
   visible: boolean;
-  // managedSecret marks a row backed by the kuso-managed
-  // <service>-secrets envFrom mount (server tags these source:
-  // "managed-secret"). Distinct from fromSecret (an opaque/addon
-  // secretKeyRef the editor re-emits verbatim and never lets the user
-  // change): a managedSecret row IS editable — typing a value and
-  // saving writes it back via the per-key `secretValue` endpoint, never
-  // as a literal on the CR. The value arrives masked/empty from the
-  // server; `secretDirty` tracks whether the user actually entered a new
-  // one so save only PUTs changed rows and the diff masks untouched ones.
-  managedSecret: boolean;
-  // origManaged is true only when the row was LOADED from the server as a
-  // managed-secret (source="managed-secret") — i.e. a value already exists
-  // in <service>-secrets. It stays false when the user toggles a plain var
-  // to secret in-session. cleanRows uses it to distinguish "untouched
-  // server secret, leave alone" (origManaged && !secretDirty) from
-  // "user converted a literal to secret but typed no value" (!origManaged
-  // && !secretDirty) — the latter would otherwise silently DELETE the var
-  // (excluded from the bulk payload, no secretValue write) and must be
-  // rejected instead.
-  origManaged?: boolean;
-  // secretDirty is true once the user edits a managedSecret row's value
-  // this session. Only dirty managed-secret rows get a secretValue PUT;
-  // untouched ones are left alone (their real value stays in the Secret).
-  secretDirty?: boolean;
+  // secretBacked marks a row whose real value lives OFF the CR — a
+  // managed <service>-secrets value (server tags it source:
+  // "managed-secret") or an addon/shared secretKeyRef. It arrives
+  // masked/blank on the default read, so the editor renders a "•••••"
+  // placeholder and lets the eye trigger a reveal fetch to show the real
+  // value. It's purely a display hint — save still routes through the
+  // unified {value, auto:true} write, so a secretBacked row the user
+  // re-types is stored wherever the server decides.
+  secretBacked: boolean;
+  // managed is true ONLY for a row loaded as source="managed-secret",
+  // i.e. a value that lives in the <service>-secrets Secret with NO
+  // spec.envVars entry. It's the one removal case the bulk POST (which
+  // overwrites spec.envVars) can't delete — the value survives in the
+  // Secret — so removing such a row needs an explicit per-key DELETE.
+  // Every other row (literal, opaque secretKeyRef, resolved addon ref)
+  // is deleted implicitly by being omitted from the bulk overwrite.
+  managed?: boolean;
   // origValueFrom preserves the raw `valueFrom` blob the server sent
   // for a secret-backed row that the editor has NO user-facing
   // representation for (legacy fieldRef / configMapKeyRef, a
@@ -93,13 +96,19 @@ function reservedEnvWarning(name: string): string {
 
 type Mode = "rows" | "bulk";
 
-// PendingSave is the two-channel payload the confirm dialog applies:
-// the bulk spec.envVars list (literals + secretKeyRefs, written via
-// POST /env) and the per-key managed-secret writes (written via the
-// secretValue PUT so plaintext never lands on the CR).
+// PendingSave is the payload the confirm dialog applies as idempotent
+// per-key operations (no wholesale bulk overwrite → no partial-save gap):
+//   1. valueWrites — every create/change, written per-key via the unified
+//      {value, auto:true} PUT so the SERVER decides storage (CR literal /
+//      managed secret / secretKeyRef) and clears any stale prior form.
+//   2. deletes — every removed row (any form). The server's UnsetEnvVar
+//      removes a literal, a secretKeyRef, or a managed-secret key alike, so
+//      one per-key DELETE covers all removals.
+// Unchanged opaque secret-ref rows are in NEITHER channel — they're left
+// exactly as they are.
 interface PendingSave {
-  envVars: KusoEnvVar[];
-  secretWrites: { name: string; value: string }[];
+  valueWrites: { name: string; value: string }[];
+  deletes: string[];
 }
 
 // addonByConnSecret maps "<project>-<addon>-conn" → "<addon>" so the
@@ -137,36 +146,47 @@ function toRow(
   // ${{ <addon>.<KEY> }} ref instead of treating it as opaque. Anything
   // else with a valueFrom (manual secretKeyRef, fieldRef, etc.) stays
   // fromSecret because we have no user-facing representation for it.
+  //
   // Managed-secret keys (source: "managed-secret") live in the
-  // <service>-secrets mount with no spec.envVars entry. They carry no
-  // value/valueFrom — the server sends the name only. Render as an
-  // editable secret row: masked placeholder, blank value until the user
-  // types a replacement, written back via the per-key secretValue PUT.
+  // <service>-secrets mount off the CR. On the default read they carry
+  // no value; on a reveal read the server resolves the plaintext into
+  // `value`. Under the "one secret primitive" model there's no separate
+  // managed-secret row type any more — it's just a value row whose real
+  // value is secret-backed (masked until revealed), edited + saved like
+  // any other via the unified auto write.
   if (v.source === "managed-secret") {
     return {
       id: rid(),
       name: v.name ?? "",
-      value: "",
+      value: v.value ?? "", // populated on a reveal read; blank otherwise
       fromSecret: false,
-      managedSecret: true,
-      origManaged: true,
+      secretBacked: true,
+      managed: true,
       visible: false,
     };
   }
   const ref = addonRefFromValueFrom(v.valueFrom, addonByConn);
   if (ref) {
-    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, managedSecret: false, visible: false };
+    // A resolved addon/shared ref. Editable as a ${{ addon.KEY }} value;
+    // secret-backed so the eye can reveal the underlying plaintext.
+    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, secretBacked: true, visible: false };
   }
   const fromSecret = !!v.valueFrom;
-  const raw = fromSecret ? "" : (v.value ?? "");
+  // On a reveal read the server populates `value` even for a secretKeyRef
+  // (keeping valueFrom); on the default read it's blank for fromSecret.
+  const raw = v.value ?? "";
   return {
     id: rid(),
     name: v.name ?? "",
     // Reverse server-resolved literals back to ${{ x.KEY }} form so
-    // the editor shows the original ref the user wrote.
-    value: fromSecret ? "" : literalToRef(raw, project, knownScopes),
+    // the editor shows the original ref the user wrote. fromSecret rows
+    // are opaque — the reveal read may populate `value` for the eye, but
+    // save re-emits their original valueFrom rather than the plaintext.
+    value: fromSecret ? raw : literalToRef(raw, project, knownScopes),
     fromSecret,
-    managedSecret: false,
+    // A valueFrom we couldn't represent is still secret-backed for the
+    // eye/reveal affordance; a plain literal is not.
+    secretBacked: fromSecret,
     visible: false,
     // Stash the opaque valueFrom so save() can re-emit it unchanged —
     // the editor can't render it, but it must not silently delete it.
@@ -193,37 +213,22 @@ function addonRefFromValueFrom(
   return `\${{ ${short}.${skr.key} }}`;
 }
 
-function toEnvVar(r: Row): KusoEnvVar {
-  if (r.managedSecret) {
-    // Managed-secret rows never serialize to spec.envVars — this form is
-    // only used to compute the diff's before/after, where formatEnvForDiff
-    // masks it. Carry the source tag so the mask path fires.
-    return { name: r.name.trim(), source: "managed-secret" };
+// rowDiffLabel renders a Row's value for the confirm-dialog diff without
+// leaking the plaintext of a genuine secret. Rules:
+//   - opaque secret ref (fromSecret) → "<secret>"
+//   - a ${{ ref }} value → shown verbatim (names the source, not the
+//     sensitive value; clipped so a long ref doesn't overflow the modal)
+//   - a secret-backed value the user retyped → masked ("•••••"), since the
+//     server may store it as a managed secret and the diff is shoulder-
+//     surfable
+//   - a plain literal → the value, clipped to 60 chars
+function rowDiffLabel(r: Row): string {
+  if (r.fromSecret) return "<secret>";
+  const val = r.value ?? "";
+  if (val.includes("${{")) {
+    return val.length > 60 ? val.slice(0, 57) + "…" : val;
   }
-  if (r.fromSecret) {
-    // Re-emit the original valueFrom verbatim. The server round-trips
-    // secretKeyRef / fieldRef / configMapKeyRef intact, so an untouched
-    // secret-backed row survives the save. Emitting `{name}` alone (the
-    // old behaviour) made the server drop the var — a name with neither
-    // value nor valueFrom is not a valid env entry.
-    if (r.origValueFrom) {
-      return { name: r.name.trim(), valueFrom: r.origValueFrom };
-    }
-    return { name: r.name.trim() };
-  }
-  return { name: r.name.trim(), value: r.value };
-}
-
-// formatEnvForDiff renders a KusoEnvVar as a single line for the
-// diff modal. Secret-backed entries are masked behind <secret-ref>
-// rather than dumping the secret name into the diff text — the
-// user only needs to see "VAR is now sourced from a secret", not
-// which key on which secret. Literal values are clipped to 60 chars
-// so a long DATABASE_URL doesn't push the modal off-screen.
-function formatEnvForDiff(v: KusoEnvVar): string {
-  if (v.source === "managed-secret") return "•••••";
-  if (v.valueFrom) return "<secret>";
-  const val = v.value ?? "";
+  if (r.secretBacked) return "•••••";
   if (val.length > 60) return val.slice(0, 57) + "…";
   return val;
 }
@@ -233,6 +238,12 @@ function formatEnvForDiff(v: KusoEnvVar): string {
 // CR but the kubelet drops invalid names from the pod env silently
 // — the user types "FOO BAR" and gets nothing on the pod.
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// ENV_MASK_SENTINEL mirrors the server's envMaskSentinel — the value a
+// non-admin (masked) session sees instead of real plaintext. The editor
+// is read-only when masked, but cleanRows also refuses to write this
+// literal back so it can never clobber a real value (defense in depth).
+const ENV_MASK_SENTINEL = "••••••••";
 
 // literalToRef reverses the server-side service-ref resolution. When
 // a value matches the cluster-local DNS shape we recognise, render it
@@ -307,7 +318,14 @@ function stripProjectPrefix(fqn: string, project: string): string {
 function rowsToDotenv(rows: Row[]): string {
   return rows
     .map((r) => {
-      if (r.fromSecret || r.managedSecret) return `# ${r.name}=<from secret>`;
+      // Opaque secret-ref rows (fromSecret) have no representable value in
+      // the dotenv textarea — emit them as a comment so they're visible
+      // but can't be rewritten as a plain literal. Secret-backed VALUE
+      // rows (managed secrets / addon refs) whose plaintext isn't revealed
+      // also can't round-trip through the textarea, so comment them too.
+      if (r.fromSecret || (r.secretBacked && r.value === "")) {
+        return `# ${r.name}=<from secret>`;
+      }
       const v = r.value ?? "";
       // Quote when the value contains whitespace, =, or # so the
       // round-trip parse picks it back up unchanged.
@@ -343,7 +361,7 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
         .replace(/\\"/g, '"')
         .replace(/\\\\/g, "\\");
     }
-    out.push({ id: rid(), name, value, fromSecret: false, managedSecret: false, visible: false });
+    out.push({ id: rid(), name, value, fromSecret: false, secretBacked: false, visible: false });
   }
   // Preserve any secret-backed entries — they aren't representable in
   // the bulk textarea, so we re-attach them after parsing so the user
@@ -368,8 +386,18 @@ export function EnvVarsEditor({
   env: string;
 }) {
   const qc = useQueryClient();
-  const env = useServiceEnv(project, service);
-  const setEnv = useSetServiceEnv(project, service);
+  // reveal drives the ?reveal=true env read: the server resolves every
+  // value (managed secrets + addon/shared secretKeyRefs) to plaintext,
+  // admin-only. Flipped on the first time the user clicks the eye on a
+  // secret-backed row whose value isn't loaded yet. A non-admin flipping
+  // it still gets masked values back (server-gated), so it's harmless.
+  const [reveal, setReveal] = useState(false);
+  const env = useServiceEnv(project, service, reveal);
+  // The save runs as per-key upserts/deletes (see applyPending), not a
+  // single mutation, so we drive the saving/error UI from local state
+  // rather than a mutation object.
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const detected = useDetectedEnv(project, service);
   const drift = useDrift(project, service);
   const addons = useAddons(project);
@@ -467,15 +495,15 @@ export function EnvVarsEditor({
   // SaveBar-click time, so the latest closure is the one that fires.
   const saveRef = useRef<() => void>(() => {});
   const discardRef = useRef<() => void>(() => {});
-  // setEnv.error stays populated after a failed mutation until the
+  // saveError stays set after a failed save until the next attempt
   // next mutate() resets it; surface it through the SaveBar so the
   // user sees a sticky reason for the failure (instead of a 4s toast
   // that disappears while they're still reading it).
   useOverlayDirty("variables", dirty && canWrite, {
     onSave: () => saveRef.current(),
     onDiscard: () => discardRef.current(),
-    saving: setEnv.isPending,
-    saveError: setEnv.error instanceof Error ? setEnv.error.message : undefined,
+    saving,
+    saveError,
   });
   // Tracks the last server-known row set so the concurrent-edit
   // detector can compare incoming refetches against the baseline,
@@ -558,10 +586,10 @@ export function EnvVarsEditor({
   };
   const onBulkChange = (text: string) => {
     setBulkText(text);
-    // Both opaque secret rows AND kuso-managed secret rows are
-    // unrepresentable in the dotenv textarea (their values never leave
-    // the Secret), so carry them across a bulk edit untouched.
-    const secrets = rows.filter((r) => r.fromSecret || r.managedSecret);
+    // Opaque secret-ref rows AND secret-backed rows whose plaintext isn't
+    // revealed are unrepresentable in the dotenv textarea (there's no
+    // value to round-trip), so carry them across a bulk edit untouched.
+    const secrets = rows.filter((r) => r.fromSecret || (r.secretBacked && r.value === ""));
     setRows(dotenvToRows(text, secrets));
     setDirty(true);
   };
@@ -580,19 +608,7 @@ export function EnvVarsEditor({
         setPickerOpenForIndex(idx);
       }
     }
-    setRows((prev) =>
-      prev.map((r, i) => {
-        if (i !== idx) return r;
-        const next = { ...r, ...patch };
-        // Editing a managed-secret row's value marks it for a per-key
-        // secretValue write on save. Toggling `visible` alone must not
-        // set it — that's a UI-only show/hide, not a value change.
-        if (next.managedSecret && typeof patch.value === "string" && patch.value !== r.value) {
-          next.secretDirty = true;
-        }
-        return next;
-      }),
-    );
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
     // Only mark dirty when an actually-persisted field changed. The
     // visible flag is a UI-only "show/hide value" toggle; clicking
     // the eye should not pop the save bar. Keys to ignore: `visible`,
@@ -609,20 +625,32 @@ export function EnvVarsEditor({
     setDirty(true);
   };
   const add = () => {
-    setRows((prev) => [...prev, { id: rid(), name: "", value: "", fromSecret: false, managedSecret: false, visible: true }]);
+    setRows((prev) => [...prev, { id: rid(), name: "", value: "", fromSecret: false, secretBacked: false, visible: true }]);
     setDirty(true);
   };
 
-  // Two-step save. cleanRows() validates + dedups, splitting the result
-  // into (1) the bulk spec.envVars payload for the POST /env path
-  // (literals + secretKeyRefs) and (2) per-key managed-secret writes
-  // routed through the secretValue PUT endpoint — managed-secret values
-  // must NEVER land as literals on the CR. Returns null when validation
-  // toast'd.
+  // Two-step save under the "one secret primitive" model. cleanRows()
+  // validates + dedups, splitting the result into:
+  //   1. envVars — the opaque secret-ref rows (fromSecret) the editor
+  //      can't represent as a typed value. Written via the bulk POST /env
+  //      (wholesale overwrite of spec.envVars). Running it first drops any
+  //      removed literal and clears the CR of everything the per-key
+  //      writes are about to re-add.
+  //   2. valueWrites — every typed value/ref the user entered, written
+  //      per-key via {value, auto:true} so the SERVER decides storage.
+  // Returns null when validation toast'd.
   const cleanRows = (): PendingSave | null => {
+    // Baseline value per name so we can tell an untouched managed-secret
+    // row (whose real plaintext may have been revealed into `value`) from
+    // one the user actually edited. Re-writing an unrevealed/unchanged
+    // managed secret is pointless and would re-store revealed plaintext.
+    const baselineValue = new Map<string, string>();
+    for (const b of baselineFromRows.current) {
+      const n = b.name.trim();
+      if (n) baselineValue.set(n, b.value);
+    }
     const seen = new Set<string>();
-    const envVars: KusoEnvVar[] = [];
-    const secretWrites: { name: string; value: string }[] = [];
+    const valueWrites: { name: string; value: string }[] = [];
     for (const r of rows) {
       const name = r.name.trim();
       if (!name) continue;
@@ -635,62 +663,72 @@ export function EnvVarsEditor({
         return null;
       }
       seen.add(name);
-      // Managed-secret rows are written per-key via secretValue and are
-      // excluded from the bulk payload entirely (so the bulk overwrite
-      // of spec.envVars leaves them alone). Only push a write when the
-      // user actually entered a new value this session — an untouched
-      // managed-secret row keeps whatever value already lives in the
-      // Secret.
-      if (r.managedSecret) {
-        if (r.secretDirty) {
-          secretWrites.push({ name, value: r.value });
-        } else if (!r.origManaged) {
-          // User toggled a plain var to secret but typed no value. This row
-          // is excluded from the bulk payload AND has no secretValue write,
-          // so saving would silently DELETE the var. Refuse instead — the
-          // user must enter a value to convert it to a secret.
-          toast.error(`Enter a value for "${name}" to store it as a secret (or toggle it back to a plain value)`);
-          return null;
-        }
-        // origManaged && !secretDirty: untouched server-backed secret —
-        // leave its value in the Secret alone.
-        continue;
-      }
-      if (!r.fromSecret && r.value === "") continue;
-      envVars.push(toEnvVar(r));
+      // Opaque secret-ref rows (fromSecret) can only be kept or removed —
+      // their inputs are locked, so an unchanged one needs NO write. It is
+      // NOT re-emitted through a wholesale bulk overwrite (that path
+      // introduced a save-atomicity gap: it cleared typed vars first, then
+      // re-added them per-key, so a mid-save failure left the CR partial).
+      // Removal is handled by the deletes channel below.
+      if (r.fromSecret) continue;
+      // Mask-sentinel guard: never write the masked "••••••••" placeholder
+      // back over the real value. Masked sessions are already read-only
+      // (canWrite=false), but defend in depth here too — a revealed row
+      // whose value somehow still holds the sentinel is skipped, not saved.
+      if (r.value === ENV_MASK_SENTINEL) continue;
+      // Empty value: skip. For a brand-new row that's a no-op; for a
+      // secret-backed row the user opened but didn't retype, skipping
+      // leaves the existing stored value untouched (we don't re-write it).
+      if (r.value === "") continue;
+      // Secret-backed value the user didn't change (a reveal populates
+      // `value` with the current plaintext, so an unedited revealed row
+      // matches its baseline): skip so we don't churn the Secret or
+      // re-store revealed plaintext. Everything else is a real
+      // create/change → a per-key {value, auto:true} upsert (server decides
+      // storage AND clears any stale prior form of the same name).
+      if (r.managed && r.value === baselineValue.get(name)) continue;
+      valueWrites.push({ name, value: r.value });
     }
-    return { envVars, secretWrites };
+    // Every removed row goes through an explicit per-key DELETE — the
+    // server's UnsetEnvVar removes any form (literal, secretKeyRef, or
+    // managed-secret key). This replaces the old wholesale bulk overwrite
+    // that dropped removals by omission; per-key deletes are idempotent
+    // and don't clear untouched vars. A DELETE on an already-gone name is
+    // tolerated (404 → treated as success in applyPending).
+    const present = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
+    const deletes: string[] = [];
+    for (const b of baselineFromRows.current) {
+      const name = b.name.trim();
+      if (name && !present.has(name)) deletes.push(name);
+    }
+    return { valueWrites, deletes };
   };
 
   const [pendingPayload, setPendingPayload] = useState<PendingSave | null>(null);
   const diffEntries = useMemo<DiffEntry[]>(() => {
     if (!pendingPayload) return [];
+    // Diff the server-known baseline rows against the current rows, keyed
+    // by name. Working row-to-row (rather than payload-to-server) keeps
+    // untouched secret-backed rows — whose blank value is skipped on save
+    // and left in their Secret — from showing as spurious removals, and
+    // renders every value through the same masking so no plaintext leaks.
     const beforeMap = new Map<string, string>();
-    for (const v of env.data?.envVars ?? []) {
-      if (!v.name) continue;
-      // Run the server's raw env var through the same reversal the
-      // editor applies on read (toRow reverses ${{ addon.KEY }} secret
-      // refs and ${{ svc.URL }} resolved DNS literals; toEnvVar maps
-      // it back to a KusoEnvVar). Without this the "before" side shows
-      // the raw resolved form (<secret> / in-cluster DNS) while the
-      // "after" side shows the ${{ }} ref form — so every untouched
-      // reference env var falsely appears as a change.
-      beforeMap.set(v.name, formatEnvForDiff(toEnvVar(toRow(v, project, addonByConn, knownScopes))));
-    }
-    const afterMap = new Map<string, string>();
-    for (const v of pendingPayload.envVars) {
-      if (!v.name) continue;
-      afterMap.set(v.name, formatEnvForDiff(v));
-    }
-    // Managed-secret rows aren't in the bulk payload — fold them into the
-    // diff directly from the rows so the confirm dialog lists them without
-    // leaking values: masked on both sides, and marked "(new value)" only
-    // when the user actually entered a replacement this session.
-    for (const r of rows) {
-      if (!r.managedSecret) continue;
+    for (const r of baselineFromRows.current) {
       const name = r.name.trim();
       if (!name) continue;
-      afterMap.set(name, r.secretDirty ? "••••• (new value)" : "•••••");
+      beforeMap.set(name, rowDiffLabel(r));
+    }
+    const afterMap = new Map<string, string>();
+    for (const r of rows) {
+      const name = r.name.trim();
+      if (!name || r.value === ENV_MASK_SENTINEL) continue;
+      // Untouched secret-backed row (blank value): not being rewritten,
+      // and its stored value survives — so treat it as unchanged by
+      // carrying the "before" label through rather than showing a diff.
+      if (r.value === "" && r.secretBacked) {
+        if (beforeMap.has(name)) afterMap.set(name, beforeMap.get(name)!);
+        continue;
+      }
+      afterMap.set(name, rowDiffLabel(r));
     }
     const keys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
     const out: DiffEntry[] = [];
@@ -707,7 +745,7 @@ export function EnvVarsEditor({
     }
     out.sort((x, y) => x.field.localeCompare(y.field));
     return out;
-  }, [pendingPayload, env.data, project, addonByConn, knownScopes, rows]);
+  }, [pendingPayload, rows]);
 
   const save = () => {
     const cleaned = cleanRows();
@@ -729,33 +767,45 @@ export function EnvVarsEditor({
 
   const applyPending = async () => {
     if (!pendingPayload) return;
-    const { envVars, secretWrites } = pendingPayload;
+    const { valueWrites, deletes } = pendingPayload;
+    setSaving(true);
+    setSaveError(undefined);
     try {
-      // Bulk literals + secretKeyRefs go through the POST /env path. This
-      // overwrites spec.envVars wholesale, but managed-secret keys were
-      // excluded from `envVars` (they live only in the Secret) so this
-      // leaves them intact. Always run it — an empty list is a valid
-      // "clear everything" write.
-      await setEnv.mutateAsync(envVars);
-      // Managed-secret values go per-key via the secretValue endpoint so
-      // the plaintext never lands on the CR. Sequential so a failure
-      // surfaces the offending key rather than a Promise.all blur.
-      for (const w of secretWrites) {
-        await setServiceEnvSecret(project, service, w.name, w.value);
+      // The whole save is expressed as idempotent per-key operations — no
+      // wholesale bulk overwrite, so there is no window where the CR is
+      // partially cleared (the earlier bulk-first-then-per-key approach had
+      // that atomicity gap). Upserts run before deletes; a failure surfaces
+      // the offending key and leaves already-applied keys correct.
+      //
+      // 1. Every create/change → {value, auto:true}. The server decides
+      //    storage (CR literal / managed secret / secretKeyRef) and clears
+      //    any stale prior form of the same name.
+      for (const w of valueWrites) {
+        await setServiceEnvValue(project, service, w.name, w.value);
       }
-      // The per-key writes bypass useSetServiceEnv's onSuccess, so
-      // invalidate the same env + drift queries by hand to refetch the
-      // now-current key list and surface the rollout banner.
-      if (secretWrites.length > 0) {
-        qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] });
-        qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
+      // 2. Every removed row → DELETE. UnsetEnvVar removes any form. A
+      //    404 (already gone) is fine — treat it as success.
+      for (const name of deletes) {
+        try {
+          await unsetServiceEnvVar(project, service, name);
+        } catch (e) {
+          if (!(e instanceof ApiError && e.status === 404)) throw e;
+        }
       }
+      // Invalidate the env (incl. the reveal variant) + drift queries to
+      // refetch current values and surface the rollout banner.
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
       toast.success("Env vars saved");
       setDirty(false);
       setSavedAt(Date.now());
       setPendingPayload(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save env vars");
+      const msg = e instanceof Error ? e.message : "Failed to save env vars";
+      setSaveError(msg);
+      toast.error(msg);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -885,7 +935,7 @@ export function EnvVarsEditor({
           const adds: Row[] = [];
           for (const n of names) {
             if (!existing.has(n.toUpperCase())) {
-              adds.push({ id: rid(), name: n, value: "", fromSecret: false, managedSecret: false, visible: false });
+              adds.push({ id: rid(), name: n, value: "", fromSecret: false, secretBacked: false, visible: false });
               existing.add(n.toUpperCase());
             }
           }
@@ -918,12 +968,14 @@ export function EnvVarsEditor({
             <div
               key={r.id}
               className={cn(
-                "flex flex-col gap-1.5 rounded-md border p-1.5 sm:grid sm:grid-cols-[180px_1fr_auto_auto_auto_auto] sm:items-center sm:rounded-none sm:border-0 sm:p-0",
-                // Managed-secret rows get a subtle amber tint on mobile so
-                // they read as "secret, editable" vs plain literals. On
-                // desktop the border collapses (sm:border-0) so the KeyRound
-                // marker + placeholder carry the distinction there.
-                r.managedSecret
+                // One row = one value. Three actions: 🔗 wire a ref,
+                // 👁 reveal, 🗑 remove.
+                "flex flex-col gap-1.5 rounded-md border p-1.5 sm:grid sm:grid-cols-[180px_1fr_auto_auto_auto] sm:items-center sm:rounded-none sm:border-0 sm:p-0",
+                // Opaque secret-ref rows (fromSecret) get a subtle tint so
+                // they read as "wired to a secret — edit with 🔗" vs a
+                // typed value. On desktop the border collapses
+                // (sm:border-0) so the placeholder carries the distinction.
+                r.fromSecret
                   ? "border-amber-500/30 bg-amber-500/5"
                   : "border-[var(--border-subtle)]",
               )}
@@ -937,10 +989,10 @@ export function EnvVarsEditor({
                     "h-8 font-mono text-[12px]",
                     reservedEnvWarning(r.name) && "border-amber-500/60",
                   )}
-                  // Managed-secret KEY names come from the Secret and can't
-                  // be renamed from here (a rename would mint a new key, not
-                  // move the value); keep the name locked like a fromSecret row.
-                  disabled={r.fromSecret || r.managedSecret}
+                  // A ref / secret-backed KEY comes from the server and can't
+                  // be renamed here (a rename would mint a new key, not move
+                  // the value). Brand-new rows are freely editable.
+                  disabled={r.fromSecret || r.secretBacked}
                   spellCheck={false}
                 />
                 {reservedEnvWarning(r.name) && (
@@ -952,17 +1004,19 @@ export function EnvVarsEditor({
               <Input
                 placeholder={
                   r.fromSecret
-                    ? "(from secret)"
-                    : r.managedSecret
+                    ? "→ secret ref (use 🔗 to change)"
+                    : r.secretBacked
                       ? "••••• (type to set a new value)"
                       : "value or ${{ ref }}"
                 }
-                // Managed-secret values arrive blank/masked — reveal only
-                // what the user types (password unless they hit the eye).
+                // Secret-backed values arrive blank/masked — show them only
+                // when revealed (eye), otherwise as a password field.
                 type={r.visible || r.fromSecret ? "text" : "password"}
                 value={r.value}
                 onChange={(e) => update(i, { value: e.target.value })}
                 className="h-8 min-w-0 font-mono text-[12px]"
+                // Opaque refs aren't type-editable — the value is a resolved
+                // secret we can't render; the 🔗 picker re-wires them.
                 disabled={r.fromSecret}
                 spellCheck={false}
               />
@@ -970,57 +1024,44 @@ export function EnvVarsEditor({
                   desktop they are grid cells (contents unwraps this flex so
                   each button lands in its own column). */}
               <div className="flex items-center justify-end gap-1 sm:contents">
-                {/* Secret toggle — flips a plain literal row into a
-                    managed-secret row (value written via secretValue, never
-                    stored on the CR) and back. Hidden for addon/opaque
-                    secretKeyRef rows (fromSecret), which the editor can't
-                    convert. Active (amber) when the row is a managed secret. */}
-                <button
-                  type="button"
-                  aria-label={r.managedSecret ? "Store as plain value" : "Store as secret"}
-                  title={
-                    r.managedSecret
-                      ? "Stored as a secret (value kept out of the service spec). Click to make it a plain value."
-                      : "Store this value as a secret (kept out of the service spec)."
-                  }
-                  onClick={() =>
-                    update(i, {
-                      managedSecret: !r.managedSecret,
-                      // Flipping either way starts from a blank value: a
-                      // plain→secret flip shouldn't silently secret-store the
-                      // literal already typed, and secret→plain has no
-                      // plaintext to reveal. secretDirty resets so a bare flip
-                      // with no new value is a no-op on save.
-                      value: "",
-                      secretDirty: false,
-                      visible: false,
-                    })
-                  }
-                  disabled={r.fromSecret}
-                  className={cn(
-                    "inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-[var(--bg-tertiary)] disabled:opacity-30",
-                    r.managedSecret
-                      ? "text-amber-400 hover:text-amber-300"
-                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
-                  )}
-                >
-                  <KeyRound className="h-3.5 w-3.5" />
-                </button>
                 <ReferencePicker
                   project={project}
                   excludeService={service}
-                  onPick={(ref) => update(i, { value: ref, visible: true })}
-                  // Refs resolve to literals/secretKeyRefs — meaningless for
-                  // a managed-secret value, so disable there too.
-                  disabled={r.fromSecret || r.managedSecret}
+                  // Picking a ref sets the value AND turns the row into an
+                  // editable ${{ ref }} value — a fromSecret/secret-backed
+                  // row becomes a plain editable ref the user can re-pick.
+                  onPick={(ref) =>
+                    update(i, {
+                      value: ref,
+                      visible: true,
+                      fromSecret: false,
+                      secretBacked: false,
+                      origValueFrom: undefined,
+                    })
+                  }
                   forceOpen={pickerOpenForIndex === i}
                   onForceCloseConsumed={() => setPickerOpenForIndex(null)}
                 />
                 <button
                   type="button"
                   aria-label={r.visible ? "Hide" : "Show"}
-                  onClick={() => update(i, { visible: !r.visible })}
-                  disabled={r.fromSecret}
+                  onClick={() => {
+                    // Reveal path: secret-backed / opaque-ref values aren't
+                    // loaded on the default read. First time the user opens
+                    // one, ask the server to resolve plaintext (?reveal=true,
+                    // admin-only). Guard on !dirty so the reveal refetch
+                    // doesn't collide with in-progress edits.
+                    if (
+                      !r.visible &&
+                      (r.secretBacked || r.fromSecret) &&
+                      r.value === "" &&
+                      !reveal &&
+                      !dirty
+                    ) {
+                      setReveal(true);
+                    }
+                    update(i, { visible: !r.visible });
+                  }}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
                 >
                   {r.visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -1029,11 +1070,6 @@ export function EnvVarsEditor({
                   type="button"
                   aria-label="Remove"
                   onClick={() => remove(i)}
-                  // Managed-secret rows map to a key in the Secret; dropping
-                  // the row here wouldn't delete it server-side (the bulk save
-                  // skips managed rows), so a Remove would look like a no-op.
-                  // Deleting a managed-secret key is out of this editor's scope.
-                  disabled={r.fromSecret || r.managedSecret}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400 disabled:opacity-30"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -1100,7 +1136,7 @@ export function EnvVarsEditor({
         description="Saving will roll a fresh pod with the updated environment. The current pod stays up until the new one is Ready."
         entries={diffEntries}
         confirmLabel="Apply & redeploy"
-        confirming={setEnv.isPending}
+        confirming={saving}
         onCancel={() => setPendingPayload(null)}
         onConfirm={applyPending}
       />
@@ -1748,7 +1784,7 @@ function rowsShallowEqual(a: Row[], b: Row[]): boolean {
     if (a[i].name !== b[i].name) return false;
     if (a[i].value !== b[i].value) return false;
     if (a[i].fromSecret !== b[i].fromSecret) return false;
-    if (a[i].managedSecret !== b[i].managedSecret) return false;
+    if (a[i].secretBacked !== b[i].secretBacked) return false;
   }
   return true;
 }

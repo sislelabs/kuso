@@ -51,10 +51,17 @@ export function useService(project: string, service: string) {
   });
 }
 
-export function useServiceEnv(project: string, service: string) {
+// reveal=true fetches values resolved to plaintext (admin-only). Keyed
+// separately from the masked read so flipping reveal doesn't clobber the
+// default cache entry and a non-admin's masked view is never served the
+// (would-be) revealed key. The server still masks for non-admins even
+// when reveal is asked, so this is safe to call for any role.
+export function useServiceEnv(project: string, service: string, reveal = false) {
   return useQuery({
-    queryKey: serviceEnvQueryKey(project, service),
-    queryFn: () => getServiceEnv(project, service),
+    queryKey: reveal
+      ? ([...serviceEnvQueryKey(project, service), "reveal"] as const)
+      : serviceEnvQueryKey(project, service),
+    queryFn: () => getServiceEnv(project, service, reveal),
     enabled: !!project && !!service,
   });
 }
