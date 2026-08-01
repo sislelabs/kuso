@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.111] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(service): copy Release hook onto first production env in AddService ([6c46e62](https://github.com/sislelabs/kuso/commit/6c46e627a123ba7927e07c2f9ddae3c3a8ed40d3))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([4e9e482](https://github.com/sislelabs/kuso/commit/4e9e482b2c9f7007177199493fb860ab4f0294f8))
+
 ## [0.18.110] — 2026-07-03
 
 ### 🐛 Bug Fixes

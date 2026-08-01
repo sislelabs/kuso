@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.11] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(namespaces): stamp project namespaces PSA baseline, not restricted ([30731a7](https://github.com/sislelabs/kuso/commit/30731a7c8710dfe8d5b7620e6fb17e990612e374))
+
 ## [0.22.10] — 2026-08-01
 
 ### 🐛 Bug Fixes
@@ -440,14 +445,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(kube): refresh CRD golden for pendingImage (+ pre-existing env-spec drift) ([c9011d0](https://github.com/sislelabs/kuso/commit/c9011d0651f3ba9d0822e25f8e073901187fd23a))
-
-## [0.18.111] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(service): copy Release hook onto first production env in AddService ([6c46e62](https://github.com/sislelabs/kuso/commit/6c46e627a123ba7927e07c2f9ddae3c3a8ed40d3))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([4e9e482](https://github.com/sislelabs/kuso/commit/4e9e482b2c9f7007177199493fb860ab4f0294f8))
 
 
 ---
