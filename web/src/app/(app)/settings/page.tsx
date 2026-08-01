@@ -58,7 +58,7 @@ const CARDS: Card[] = [
   { href: "/settings/tokens",        title: "API tokens",    description: "Mint personal access tokens for the CLI + scripts.",                      icon: KeyRound,     group: "you",  keywords: "pat bearer cli script automation" },
 
   // Cluster: state of this kuso deployment.
-  { href: "/settings/nodes",            title: "Cluster nodes",    description: "Tag nodes with labels for placement; schedulable state.",            icon: Server,       group: "cluster", keywords: "node labels placement cordon drain join bootstrap" },
+  { href: "/settings/nodes",            title: "Cluster nodes",    description: "Tag nodes with labels for placement; schedulable state.",            icon: Server,       perm: Perms.SettingsAdmin, group: "cluster", keywords: "node labels placement cordon drain join bootstrap" },
   { href: "/settings/config",           title: "Cluster config",   description: "Cluster-wide knobs (cert-manager email, base domain).",              icon: SettingsIcon, perm: Perms.SettingsRead,  group: "cluster", keywords: "cert-manager letsencrypt domain dns base hostname" },
   { href: "/settings/database",         title: "Cluster database", description: "First-class Postgres. Managed on-cluster or external, plus extra registered servers — per-project databases.", icon: Database, perm: Perms.SettingsAdmin, group: "cluster", keywords: "postgres pg database shared cluster instance addons redis mysql clickhouse external neon rds supabase dsn" },
   { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",        icon: Globe,        perm: Perms.SettingsAdmin, group: "cluster", keywords: "env environment variable global secret" },
