@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 )
 
@@ -523,4 +524,41 @@ func OwnerRefForService(s *KusoService) metav1.OwnerReference {
 		Controller:         &tru,
 		BlockOwnerDeletion: &tru,
 	}
+}
+
+// ProjectOwnerRefsForChild returns the KusoProject ownerReference to
+// stamp on a project-scoped child CR (KusoService / KusoAddon), gated on
+// namespace. Kubernetes ownerReferences CANNOT cross namespaces: the GC
+// resolves the owner in the CHILD's namespace, so a child in a custom
+// execution namespace (kuso-<proj>) pointing at a KusoProject CR that
+// lives in the home namespace is invalid — the GC sees the owner as
+// non-existent, marks the child dangling, and deletes it within seconds
+// (event: OwnerRefInvalidNamespace). That silently churns every service
+// and addon in a custom-namespace project.
+//
+// So we stamp the ref ONLY when the child lands in the same namespace as
+// the project CR (childNS == projectNS, i.e. both in home). When they
+// differ we return no owner ref and rely on the explicit list-and-delete
+// cascade in projects.DeleteWithOptions, which already tears down every
+// child CR by namespace + label and does NOT depend on GC.
+//
+// projectUID empty → no ref (project CR not yet resolved). Block/
+// Controller are both false: project deletion shouldn't wait on child GC
+// (BlockOwnerDeletion=nil is treated as true by the GC during foreground
+// cascades and would deadlock the terminating project behind every helm
+// finalizer), and helm-operator owns reconciliation (Controller).
+func ProjectOwnerRefsForChild(projectName, projectUID, childNS, projectNS string) []metav1.OwnerReference {
+	if projectUID == "" || childNS != projectNS {
+		return []metav1.OwnerReference{}
+	}
+	blockFalse := false
+	controllerFalse := false
+	return []metav1.OwnerReference{{
+		APIVersion:         GroupName + "/" + Version,
+		Kind:               "KusoProject",
+		Name:               projectName,
+		UID:                types.UID(projectUID),
+		BlockOwnerDeletion: &blockFalse,
+		Controller:         &controllerFalse,
+	}}
 }

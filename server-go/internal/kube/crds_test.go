@@ -309,3 +309,43 @@ func TestGVRs_MatchKindNamingConvention(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectOwnerRefsForChild guards the cross-namespace ownerReference
+// fix: a child in a custom execution namespace (kuso-<proj>) must NOT get
+// an ownerRef to a KusoProject CR that lives in the home namespace, or
+// the GC deletes it seconds after create (OwnerRefInvalidNamespace). The
+// ref is only valid — and only stamped — when child ns == project ns.
+func TestProjectOwnerRefsForChild(t *testing.T) {
+	t.Run("same namespace stamps the ref", func(t *testing.T) {
+		refs := ProjectOwnerRefsForChild("koreni", "uid-123", "kuso", "kuso")
+		if len(refs) != 1 {
+			t.Fatalf("expected 1 owner ref for same-ns child, got %d", len(refs))
+		}
+		r := refs[0]
+		if r.Kind != "KusoProject" || r.Name != "koreni" || string(r.UID) != "uid-123" {
+			t.Errorf("unexpected ref: %+v", r)
+		}
+		// Must not block project deletion or claim controller — helm-
+		// operator reconciles, and a blocking ref deadlocks terminating.
+		if r.BlockOwnerDeletion == nil || *r.BlockOwnerDeletion {
+			t.Errorf("BlockOwnerDeletion must be explicit false, got %v", r.BlockOwnerDeletion)
+		}
+		if r.Controller == nil || *r.Controller {
+			t.Errorf("Controller must be explicit false, got %v", r.Controller)
+		}
+	})
+
+	t.Run("cross namespace skips the ref", func(t *testing.T) {
+		// child in kuso-koreni, project CR in home kuso — the bug case.
+		refs := ProjectOwnerRefsForChild("koreni", "uid-123", "kuso-koreni", "kuso")
+		if len(refs) != 0 {
+			t.Fatalf("cross-ns child must get NO owner ref (would be GC-churned), got %d", len(refs))
+		}
+	})
+
+	t.Run("empty uid skips the ref", func(t *testing.T) {
+		if refs := ProjectOwnerRefsForChild("koreni", "", "kuso", "kuso"); len(refs) != 0 {
+			t.Fatalf("empty project UID must yield no ref, got %d", len(refs))
+		}
+	})
+}

@@ -385,27 +385,16 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		}
 	}
 
-	owners := []metav1.OwnerReference{}
-	if proj != nil && proj.UID != "" {
-		// Cascade-delete the service CR (and the KusoEnvironment +
-		// KusoBuild + KusoCron CRs that depend on it via their own
-		// ownerReferences) when the project is deleted.
-		// BlockOwnerDeletion is an explicit *false — a nil pointer
-		// would be treated as "true" by kube-GC during foreground
-		// cascades, deadlocking the project terminating phase behind
-		// every service's helm-uninstall finalizer.
-		// Controller=false because helm-operator owns reconciliation.
-		blockFalse := false
-		controllerFalse := false
-		owners = append(owners, metav1.OwnerReference{
-			APIVersion:         "application.kuso.sislelabs.com/v1alpha1",
-			Kind:               "KusoProject",
-			Name:               proj.Name,
-			UID:                proj.UID,
-			BlockOwnerDeletion: &blockFalse,
-			Controller:         &controllerFalse,
-		})
+	// Cascade-delete the service CR when the project is deleted — but
+	// ONLY when the child lands in the same namespace as the project CR.
+	// A cross-namespace ownerRef (custom execution namespace ≠ home) is
+	// invalid and makes the GC churn the child; DeleteWithOptions does
+	// the explicit cascade in that case. See kube.ProjectOwnerRefsForChild.
+	var projUID string
+	if proj != nil {
+		projUID = string(proj.UID)
 	}
+	owners := kube.ProjectOwnerRefsForChild(project, projUID, ns, s.Namespace)
 
 	// runtime=image services bypass the build pipeline entirely. The
 	// caller supplies an existing registry image; we stamp it onto the

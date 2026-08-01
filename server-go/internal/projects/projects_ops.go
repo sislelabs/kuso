@@ -237,23 +237,20 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 		},
 	}
 	// Ensure the execution namespace exists with PSA labels + the
-	// kuso-server RoleBinding. Best-effort for project creation (a
-	// pre-created namespace shouldn't fail the create). EnsureNamespace now
-	// retries the RoleBinding stamp internally, so a transient RBAC blip
-	// right after namespace creation no longer permanently leaves the
-	// namespace without kuso-server access (which the HIGH-7 live smoke
-	// test caught). Errors after retries are surfaced to the caller.
+	// kuso-server RoleBinding, BEFORE the project CR is created so a
+	// failure leaves nothing behind. This is NOT best-effort: a custom
+	// namespace without the kuso-server RoleBinding is a broken project —
+	// children can't be managed there and `project delete` 500s on the
+	// first forbidden secret op (the exact failure the koreni report
+	// hit). EnsureNamespace already retries the binding stamp internally;
+	// if it still fails, abort the create with a clear error rather than
+	// leaving a half-provisioned project the user can neither use nor
+	// delete. (Home-namespace projects skip this — the home binding ships
+	// in the static deploy bundle.)
 	if req.Namespace != "" && req.Namespace != s.Namespace {
-		// Best-effort: don't fail project creation on namespace setup (a
-		// pre-created namespace, a dynamic-only/degraded server, or an
-		// RBAC restriction shouldn't block the CR). EnsureNamespace now
-		// retries the RoleBinding stamp internally, which fixes the real
-		// gap the HIGH-7 live smoke test found — a transient blip right
-		// after namespace creation used to leave the namespace
-		// permanently without the kuso-server binding. A hard failure
-		// after retries is still surfaced via the returned error so it's
-		// not silent, but it doesn't abort the create.
-		_ = s.Kube.EnsureNamespace(ctx, req.Namespace)
+		if err := s.Kube.EnsureNamespace(ctx, req.Namespace); err != nil {
+			return nil, fmt.Errorf("%w: prepare namespace %q (create the namespace + kuso-server RBAC): %s", ErrInvalid, req.Namespace, err.Error())
+		}
 	}
 	out, err := s.Kube.CreateKusoProject(ctx, s.Namespace, p)
 	if err != nil {
