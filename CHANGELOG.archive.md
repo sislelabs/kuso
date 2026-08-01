@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.110] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): plausible needs a DB migration release hook ([5a822d3](https://github.com/sislelabs/kuso/commit/5a822d36389c50738b75ca66eaeb0a5aa5c4a5b5))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([82beec5](https://github.com/sislelabs/kuso/commit/82beec5be7928895b26d40609c66c83eb721f733))
+
 ## [0.18.109] — 2026-07-03
 
 ### 🐛 Bug Fixes
