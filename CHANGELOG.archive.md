@@ -2,6 +2,17 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.109] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(addons): keep conn Secret on delete so re-add over a surviving PVC keeps the matching password ([974fca3](https://github.com/sislelabs/kuso/commit/974fca30ca2c4ba148eeb72a72357b972113fc05))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([357cfaa](https://github.com/sislelabs/kuso/commit/357cfaaea41c340b440d7cf9d32bcdea44a53438))
+
+### 🧪 Tests
+- Test(addons): assert conn Secret carries resource-policy=keep ([dd398e6](https://github.com/sislelabs/kuso/commit/dd398e6bc779065aebddf05d8425091ea7876319))
+
 ## [0.18.108] — 2026-07-03
 
 ### ✨ Features

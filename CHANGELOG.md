@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.9] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(projects): stop custom-namespace projects churning + un-deletable ([48a04e9](https://github.com/sislelabs/kuso/commit/48a04e9484f5ce9047d570c40be6e2fc0fa3302c))
+
 ## [0.22.8] — 2026-08-01
 
 ### 🐛 Bug Fixes
@@ -446,17 +451,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(changelog): promote older entries into the archive ([82beec5](https://github.com/sislelabs/kuso/commit/82beec5be7928895b26d40609c66c83eb721f733))
-
-## [0.18.109] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(addons): keep conn Secret on delete so re-add over a surviving PVC keeps the matching password ([974fca3](https://github.com/sislelabs/kuso/commit/974fca30ca2c4ba148eeb72a72357b972113fc05))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([357cfaa](https://github.com/sislelabs/kuso/commit/357cfaaea41c340b440d7cf9d32bcdea44a53438))
-
-### 🧪 Tests
-- Test(addons): assert conn Secret carries resource-policy=keep ([dd398e6](https://github.com/sislelabs/kuso/commit/dd398e6bc779065aebddf05d8425091ea7876319))
 
 
 ---
