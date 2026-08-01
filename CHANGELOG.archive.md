@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.108] — 2026-07-03
+
+### ✨ Features
+- Feat(web): release-hook settings section + fix service-settings horizontal scroll ([e6ed287](https://github.com/sislelabs/kuso/commit/e6ed287d6cb9e9732bbd4e05cdb267d1c657db57))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([69fc675](https://github.com/sislelabs/kuso/commit/69fc6754d1dc5654febd85350cfd570a91735157))
+
 ## [0.18.107] — 2026-07-03
 
 ### 🐛 Bug Fixes

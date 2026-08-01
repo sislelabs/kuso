@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.8] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(nav): hide the Cluster nodes pill from non-admins ([e793407](https://github.com/sislelabs/kuso/commit/e79340733f0618733d43d886a178b2c4e2f67e56))
+
 ## [0.22.7] — 2026-08-01
 
 ### 🐛 Bug Fixes
@@ -452,14 +457,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(addons): assert conn Secret carries resource-policy=keep ([dd398e6](https://github.com/sislelabs/kuso/commit/dd398e6bc779065aebddf05d8425091ea7876319))
-
-## [0.18.108] — 2026-07-03
-
-### ✨ Features
-- Feat(web): release-hook settings section + fix service-settings horizontal scroll ([e6ed287](https://github.com/sislelabs/kuso/commit/e6ed287d6cb9e9732bbd4e05cdb267d1c657db57))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([69fc675](https://github.com/sislelabs/kuso/commit/69fc6754d1dc5654febd85350cfd570a91735157))
 
 
 ---
