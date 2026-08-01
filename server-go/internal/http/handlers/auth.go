@@ -97,7 +97,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	// The login field is a single identifier: accept the account's
+	// username OR its email. Users reach for their email by default, and
+	// the invite-redeem flow sets username and email independently, so a
+	// username-only lookup locks out anyone who signs in with their
+	// email. Try username first, then fall back to email when the
+	// identifier looks like one (contains "@").
 	user, err := h.DB.FindUserByUsername(ctx, req.Username)
+	if err != nil && strings.Contains(req.Username, "@") {
+		user, err = h.DB.FindUserByEmail(ctx, req.Username)
+	}
 	if err != nil {
 		// Constant-time miss branch so user-enumeration timing is
 		// uninformative. The dummy is bcrypt of "" at cost 10.

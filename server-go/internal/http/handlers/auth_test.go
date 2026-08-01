@@ -92,6 +92,55 @@ func TestLogin_Success(t *testing.T) {
 	}
 }
 
+// TestLogin_ByEmail verifies the login identifier accepts the account's
+// email, not just its username. Users reach for their email by default
+// (the invite-redeem flow sets username + email independently), so a
+// username-only lookup would lock them out. The seeded admin's email is
+// "a@b"; logging in with it must succeed and issue the same claims.
+func TestLogin_ByEmail(t *testing.T) {
+	r, d, iss := newTestServer(t)
+	seedAdmin(t, d, "hunter2")
+
+	body := strings.NewReader(`{"username":"a@b","password":"hunter2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%q", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	claims, err := iss.Verify(resp.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.UserID != "u1" {
+		t.Errorf("expected u1 for email login, got %+v", claims)
+	}
+}
+
+// TestLogin_ByEmailWrongPassword confirms the email-fallback path still
+// gates on the password: a real email with a bad password is 401, not a
+// bypass.
+func TestLogin_ByEmailWrongPassword(t *testing.T) {
+	r, d, _ := newTestServer(t)
+	seedAdmin(t, d, "hunter2")
+
+	body := strings.NewReader(`{"username":"a@b","password":"nope"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
 func TestLogin_BadPassword(t *testing.T) {
 	r, d, _ := newTestServer(t)
 	seedAdmin(t, d, "hunter2")
