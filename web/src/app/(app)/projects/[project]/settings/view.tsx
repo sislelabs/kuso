@@ -7,7 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useProject, useUpdateProject, useDeleteProject } from "@/features/projects";
+import {
+  useProject,
+  useUpdateProject,
+  useDeleteProject,
+  getProjectNotificationMute,
+  muteProjectNotifications,
+  unmuteProjectNotifications,
+} from "@/features/projects";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
@@ -35,6 +42,18 @@ export function ProjectSettingsView() {
   const [previewsTtl, setPreviewsTtl] = useState<number>(7);
   const [alwaysOn, setAlwaysOn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
+  // Notification mute is NOT part of the project spec (it lives in the
+  // control-plane DB and takes effect immediately), so the toggle acts
+  // on change instead of waiting for Save. null = still loading.
+  const [muted, setMuted] = useState<boolean | null>(null);
+  const [muteBusy, setMuteBusy] = useState(false);
+
+  useEffect(() => {
+    if (!projectName) return;
+    getProjectNotificationMute(projectName)
+      .then((m) => setMuted(m.muted))
+      .catch(() => setMuted(false));
+  }, [projectName]);
 
   useEffect(() => {
     if (project.data?.project?.spec) {
@@ -239,6 +258,51 @@ export function ProjectSettingsView() {
               </p>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Notifications */}
+      <section className="space-y-4">
+        <header>
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            notifications
+          </h2>
+        </header>
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={muted === true}
+              disabled={muted === null || muteBusy}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setMuteBusy(true);
+                try {
+                  if (next) {
+                    await muteProjectNotifications(projectName);
+                  } else {
+                    await unmuteProjectNotifications(projectName);
+                  }
+                  setMuted(next);
+                  toast.success(next ? "Notifications muted" : "Notifications unmuted");
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Failed to update mute");
+                } finally {
+                  setMuteBusy(false);
+                }
+              }}
+              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            <span className="flex-1">
+              <span className="text-[13px] font-medium">Mute external notifications</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+                Stops this project&rsquo;s events (builds, deploys, crashes, alerts) from
+                reaching Discord, Slack, webhooks, email, Telegram, and Pushover. The in-app
+                bell feed keeps recording everything, so nothing is lost from the audit trail.
+                Applies immediately — no Save needed.
+              </span>
+            </span>
+          </label>
         </div>
       </section>
 

@@ -604,3 +604,38 @@ export async function applyConfig(
   if (!res.ok) throw new Error((await res.text()) || `apply failed: ${res.status}`);
   return res.json();
 }
+
+// --- Per-project notification mute -----------------------------------
+// Muting silences external channel delivery (Discord/Slack/webhook/…)
+// for the project's events; the in-app bell feed keeps recording them.
+
+export type ProjectNotificationMute = {
+  muted: boolean;
+  since?: string;
+  by?: string;
+};
+
+export async function getProjectNotificationMute(
+  project: string
+): Promise<ProjectNotificationMute> {
+  return api(`/api/projects/${encodeURIComponent(project)}/notifications/mute`);
+}
+
+export async function muteProjectNotifications(project: string): Promise<void> {
+  return api(`/api/projects/${encodeURIComponent(project)}/notifications/mute`, {
+    method: "PUT",
+  });
+}
+
+export async function unmuteProjectNotifications(project: string): Promise<void> {
+  return api(`/api/projects/${encodeURIComponent(project)}/notifications/mute`, {
+    method: "DELETE",
+  });
+}
+
+// listMutedProjects — admin-only roster for the settings page.
+export async function listMutedProjects(): Promise<
+  { project: string; createdAt: string; createdBy?: string }[]
+> {
+  return api(`/api/notifications/muted-projects`);
+}

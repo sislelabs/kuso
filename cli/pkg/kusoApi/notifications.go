@@ -43,3 +43,23 @@ func (k *KusoClient) DeleteNotification(id string) (*resty.Response, error) {
 func (k *KusoClient) TestNotification(id string) (*resty.Response, error) {
 	return k.client.Post("/api/notifications/" + esc(id) + "/test")
 }
+
+// Per-project notification mute. Muting silences external channel
+// delivery (Discord/Slack/webhook/…) for the project's events; the
+// in-app bell feed keeps recording them.
+
+func (k *KusoClient) GetProjectNotificationMute(project string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/notifications/mute")
+}
+
+func (k *KusoClient) MuteProjectNotifications(project string) (*resty.Response, error) {
+	return k.client.Put("/api/projects/" + esc(project) + "/notifications/mute")
+}
+
+func (k *KusoClient) UnmuteProjectNotifications(project string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/notifications/mute")
+}
+
+func (k *KusoClient) ListMutedProjects() (*resty.Response, error) {
+	return k.client.Get("/api/notifications/muted-projects")
+}

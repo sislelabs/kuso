@@ -49,8 +49,13 @@ export {
   setEnvGroupServiceBranch,
   getProjectSpec,
   applyConfig,
+  getProjectNotificationMute,
+  muteProjectNotifications,
+  unmuteProjectNotifications,
+  listMutedProjects,
 } from "./api";
 export type {
+  ProjectNotificationMute,
   BackupObject,
   SQLTable,
   SQLQueryResponse,

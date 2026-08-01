@@ -84,7 +84,92 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		// operators only learn from kuso_notify_outbox_dead Prometheus
 		// alerts (and most installs don't ship Prom).
 		r.Get("/api/notifications/outbox-stats", h.OutboxStats)
+		// Muted-projects roster for the settings page. The per-project
+		// mute toggle lives on the project-scoped routes below.
+		r.Get("/api/notifications/muted-projects", h.ListMutedProjects)
 	})
+
+	// Per-project notification mute. Project editors can silence their
+	// own project's external channel delivery (Discord/Slack/webhook/…);
+	// the bell feed keeps recording muted projects' events, so this is
+	// a "stop pinging us" switch, not an audit-trail eraser.
+	r.Get("/api/projects/{project}/notifications/mute", h.GetProjectMute)
+	r.Put("/api/projects/{project}/notifications/mute", h.MuteProject)
+	r.Delete("/api/projects/{project}/notifications/mute", h.UnmuteProject)
+}
+
+// ListMutedProjects returns every muted project (admin-only, feeds the
+// settings page roster).
+func (h *NotificationsHandler) ListMutedProjects(w http.ResponseWriter, r *http.Request) {
+	mutes, err := h.DB.ListProjectNotificationMutes(r.Context())
+	if err != nil {
+		http.Error(w, "list muted projects: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, mutes)
+}
+
+// GetProjectMute reports whether one project is muted. Any member can
+// read it (the project settings page shows the toggle state to viewers
+// too; flipping it needs editor).
+func (h *NotificationsHandler) GetProjectMute(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	mutes, err := h.DB.ListProjectNotificationMutes(ctx)
+	if err != nil {
+		http.Error(w, "read mute state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := map[string]any{"muted": false}
+	for _, m := range mutes {
+		if m.Project == project {
+			out = map[string]any{"muted": true, "since": m.CreatedAt, "by": m.CreatedBy}
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// MuteProject silences external channel delivery for one project.
+// Idempotent.
+func (h *NotificationsHandler) MuteProject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	by := ""
+	if claims, ok := auth.ClaimsFromContext(ctx); ok {
+		by = claims.UserID
+	}
+	if err := h.DB.SetProjectNotificationMute(ctx, project, by); err != nil {
+		http.Error(w, "mute project: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if h.Notify != nil {
+		h.Notify.InvalidateNotifications()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UnmuteProject re-enables external channel delivery. Idempotent.
+func (h *NotificationsHandler) UnmuteProject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	if err := h.DB.ClearProjectNotificationMute(ctx, project); err != nil {
+		http.Error(w, "unmute project: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if h.Notify != nil {
+		h.Notify.InvalidateNotifications()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // MyFeed returns recent NotificationEvent rows scoped to the
