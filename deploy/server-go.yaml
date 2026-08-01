@@ -154,6 +154,22 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, list, create]
+  # `bind` on the managed-ns ClusterRole. Kubernetes privilege-escalation
+  # prevention forbids a subject from creating a RoleBinding that grants
+  # permissions it does not itself hold — and kuso-server deliberately
+  # does NOT hold pods/exec, pods/portforward, or secret WRITES cluster-
+  # wide (those are namespace-scoped to limit RCE blast radius). So when
+  # EnsureNamespace tries to stamp the managed-ns binding into a brand-new
+  # project namespace, the API server rejects it as an escalation attempt
+  # ("attempting to grant RBAC permissions not currently held"). The
+  # standard escape hatch is the `bind` verb, scoped by resourceNames to
+  # the ONE ClusterRole we bind — this authorises the binding without
+  # granting kuso-server those permissions everywhere. Without this, every
+  # custom-namespace (i.e. every new) project failed to create.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [kuso-server-managed-ns]
+    verbs: [bind]
   # The in-cluster updater Job applies dist/upgrade-manifests.yaml on
   # every release. That bundle carries the RBAC for the platform's own
   # helper workloads (kuso-pkg-probe, kuso-prometheus,
