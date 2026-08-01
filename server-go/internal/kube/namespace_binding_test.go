@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,6 +56,62 @@ func TestEnsureManagedNSBinding_AlreadyExistsOK(t *testing.T) {
 	c := &Client{Clientset: cs}
 	if err := c.ensureManagedNSBinding(context.Background(), "kuso-proj"); err != nil {
 		t.Fatalf("already-exists should be success, got %v", err)
+	}
+}
+
+// TestEnsureNamespace_StampsBaselinePSS: project namespaces must get
+// PSA enforce=baseline, NOT restricted. Build pods deliberately run
+// clone/nixpacks-plan as root, and user images pick their own USER
+// directive — restricted rejected every build pod (podless Job → death
+// by activeDeadlineSeconds with zero logs, the koreni failure).
+func TestEnsureNamespace_StampsBaselinePSS(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset()
+	c := &Client{Clientset: cs}
+	if err := c.EnsureNamespace(context.Background(), "kuso-proj"); err != nil {
+		t.Fatalf("EnsureNamespace: %v", err)
+	}
+	ns, err := cs.CoreV1().Namespaces().Get(context.Background(), "kuso-proj", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("namespace not created: %v", err)
+	}
+	for _, k := range []string{
+		"pod-security.kubernetes.io/enforce",
+		"pod-security.kubernetes.io/audit",
+		"pod-security.kubernetes.io/warn",
+	} {
+		if got := ns.Labels[k]; got != "baseline" {
+			t.Errorf("%s = %q, want baseline", k, got)
+		}
+	}
+	if got := ns.Labels[ManagedByLabel]; got != ManagedByValue {
+		t.Errorf("%s = %q, want %q", ManagedByLabel, got, ManagedByValue)
+	}
+}
+
+// TestEnsureNamespace_HealsRestrictedNamespace: namespaces stamped
+// enforce=restricted by older versions must be re-stamped baseline on
+// the next EnsureNamespace (project create re-run or boot sweep), so
+// existing custom-ns projects self-heal after upgrade.
+func TestEnsureNamespace_HealsRestrictedNamespace(t *testing.T) {
+	existing := &corev1.Namespace{}
+	existing.Name = "kuso-proj"
+	existing.Labels = map[string]string{
+		ManagedByLabel:                       ManagedByValue,
+		"pod-security.kubernetes.io/enforce": "restricted",
+		"pod-security.kubernetes.io/audit":   "restricted",
+		"pod-security.kubernetes.io/warn":    "restricted",
+	}
+	cs := k8sfake.NewSimpleClientset(existing)
+	c := &Client{Clientset: cs}
+	if err := c.EnsureNamespace(context.Background(), "kuso-proj"); err != nil {
+		t.Fatalf("EnsureNamespace: %v", err)
+	}
+	ns, err := cs.CoreV1().Namespaces().Get(context.Background(), "kuso-proj", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["pod-security.kubernetes.io/enforce"]; got != "baseline" {
+		t.Errorf("enforce = %q after heal, want baseline", got)
 	}
 }
 

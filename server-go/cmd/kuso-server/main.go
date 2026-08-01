@@ -423,14 +423,21 @@ func main() {
 			logger.Warn("home namespace: label managed-by failed (builds may be blocked by BuildKit NetworkPolicy)",
 				"ns", *namespace, "err", err)
 		}
-		// Backfill the managed-ns RoleBinding for every project
-		// namespace from pre-RBAC-split installs. EnsureNamespace
-		// stamps the binding on Project.Create, but existing project
-		// namespaces never call that code path on upgrade — so
-		// without this sweep, secret writes (env vars, addon password
-		// rotation, etc.) 403 forever after the upgrade.
-		// Best-effort + idempotent: AlreadyExists on the RoleBinding
-		// short-circuits without an error.
+		// Re-ensure every project namespace on boot. EnsureNamespace
+		// runs on Project.Create, but existing project namespaces
+		// never see that code path again — so this sweep is the
+		// upgrade-migration vehicle. It backfills:
+		//   - the managed-ns RoleBinding (pre-RBAC-split installs;
+		//     without it secret writes 403 forever), and
+		//   - the PSA labels, healing namespaces stamped
+		//     enforce=restricted by older versions — restricted
+		//     rejected every build pod (clone/nixpacks-plan run as
+		//     root by design) and would have rejected user service
+		//     pods too. See pssLabels in internal/kube/namespaces.go.
+		// The home namespace is deliberately excluded: it must carry
+		// NO PSA labels (buildkitd runs privileged there) and gets
+		// its managed-by label + binding from LabelNamespaceManaged
+		// above. Best-effort + idempotent.
 		if projects, err := kc.ListKusoProjects(ctx, *namespace); err == nil {
 			seen := map[string]struct{}{*namespace: {}}
 			for i := range projects {
@@ -442,8 +449,8 @@ func main() {
 					continue
 				}
 				seen[ns] = struct{}{}
-				if err := kc.LabelNamespaceManaged(ctx, ns); err != nil {
-					logger.Warn("project namespace: backfill managed-by failed",
+				if err := kc.EnsureNamespace(ctx, ns); err != nil {
+					logger.Warn("project namespace: boot re-ensure failed",
 						"ns", ns, "err", err)
 				}
 			}

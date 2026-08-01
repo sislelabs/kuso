@@ -27,19 +27,29 @@ const (
 )
 
 // pssLabels are the Pod Security Admission labels stamped on every
-// project namespace. `restricted` is the strict tier — pods must
-// runAsNonRoot, no privileged escalation, no hostPath, no hostNetwork.
-// We enforce + audit + warn at the same level so policy violations
-// surface in events even if a future enforce-tier downgrade lands.
+// project namespace. `baseline` blocks the dangerous stuff (privileged
+// containers, hostPath, hostNetwork, hostPID) while still admitting
+// root containers — which kuso REQUIRES in execution namespaces:
+//   - build Jobs run clone/nixpacks-plan as root by design
+//     (buildcontroller/render.go: apk add needs it), and
+//   - user service images pick their own USER directive; many run as
+//     root or as named users that runAsNonRoot can't verify
+//     (kusoenvironment chart deliberately doesn't pin runAsNonRoot).
 //
-// Operators who need to ship a legacy image that won't yet pass
-// `restricted` can override per-namespace by re-labelling — the
-// EnsureNamespace path uses an Apply patch that won't clobber labels
-// the operator has manually overridden.
+// `restricted` was tried first and broke every build in a custom
+// namespace: PSA rejected the build pod at admission, the Job sat
+// podless with zero logs, and activeDeadlineSeconds killed it with an
+// opaque "Job was active longer than specified deadline".
+//
+// NOTE: EnsureNamespace merge-patches these labels onto pre-existing
+// namespaces too, so a manual per-namespace re-label is overwritten
+// the next time EnsureNamespace runs for it (project create and the
+// boot-time sweep in cmd/kuso-server). That's deliberate — it's how
+// namespaces stamped `restricted` by older versions self-heal.
 var pssLabels = map[string]string{
-	"pod-security.kubernetes.io/enforce": "restricted",
-	"pod-security.kubernetes.io/audit":   "restricted",
-	"pod-security.kubernetes.io/warn":    "restricted",
+	"pod-security.kubernetes.io/enforce": "baseline",
+	"pod-security.kubernetes.io/audit":   "baseline",
+	"pod-security.kubernetes.io/warn":    "baseline",
 }
 
 // ManagedByLabel is the namespace-level marker the BuildKit
@@ -54,9 +64,9 @@ const (
 )
 
 // EnsureNamespace creates ns if it doesn't already exist and patches
-// in the Pod Security Standards labels so user pods scheduled there
-// can't run as root or escape the container boundary. AlreadyExists is
-// treated as success (idempotent). Other errors propagate so callers
+// in the Pod Security Standards labels (baseline — see pssLabels) so
+// user pods scheduled there can't go privileged or mount host paths.
+// AlreadyExists is treated as success (idempotent). Other errors propagate so callers
 // can decide whether to keep going (a hand-pre-created namespace + RBAC
 // blocking us is still a working setup).
 func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
@@ -165,8 +175,8 @@ func (c *Client) ensureManagedNSBinding(ctx context.Context, ns string) error {
 // app.kubernetes.io/managed-by=kuso. The build controller calls
 // this before reconciling any KusoBuild CR — a malicious or
 // erroneously-applied CR in kube-system (which doesn't carry the
-// label) would otherwise get a privileged build pod scheduled in
-// a context that lacks pod-security.kubernetes.io/enforce=restricted.
+// label) would otherwise get a root-running build pod scheduled in
+// a namespace that carries no kuso PSA labels at all.
 //
 // Result is cached for 30s per namespace. NotFound returns (false,
 // nil) — the caller treats that as "not managed" without erroring,
@@ -219,9 +229,9 @@ var (
 // namespace at kuso-server boot so upgrades from pre-3cc6c57 installs
 // (which never carried the label) pick it up and the BuildKit
 // NetworkPolicy starts admitting build-pod traffic again. Different
-// from EnsureNamespace because we DON'T want to stamp PSS=restricted on
-// the home ns — kuso-server lives there and PSS=restricted blocks the
-// in-cluster registry's runAsRoot. Idempotent.
+// from EnsureNamespace because the home ns must carry NO PSA labels
+// at all — buildkitd runs privileged there (deploy/buildkitd.yaml),
+// which even the baseline tier rejects. Idempotent.
 func (c *Client) LabelNamespaceManaged(ctx context.Context, ns string) error {
 	if ns == "" {
 		return nil
