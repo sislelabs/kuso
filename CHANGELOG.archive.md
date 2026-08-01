@@ -2,6 +2,26 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.106] — 2026-07-03
+
+### ✨ Features
+- Feat(web): surface per-service securityContext in settings ([08c0d37](https://github.com/sislelabs/kuso/commit/08c0d37521504d89e19fa61b3a9b30bab86885e4))
+- Feat(spec): securityContext in kuso.yaml + apply wiring + uptime-kuma caps ([4662c9a](https://github.com/sislelabs/kuso/commit/4662c9a86f1bc8fabcb6e8cbe1d2198db4caa114))
+- Feat(crd): securityContext schema on kusoservice + kusoenvironment ([487bbba](https://github.com/sislelabs/kuso/commit/487bbba2c727833983676d32a7a1bb3c0faedf09))
+- Feat(chart): render opt-in container securityContext (caps.add + allowPrivilegeEscalation) ([4bb3482](https://github.com/sislelabs/kuso/commit/4bb3482ed9a553da2e18fd12021031a27d728d82))
+- Feat(service): propagate SecurityContext service→env ([c734974](https://github.com/sislelabs/kuso/commit/c7349746b04e591110f472bf862f38befa598824))
+- Feat(service): KusoSecurityContext type on service + env spec ([096ab42](https://github.com/sislelabs/kuso/commit/096ab42ecdfc5a0c405c0de03004fcb24dde227a))
+
+### 🐛 Bug Fixes
+- Fix(service): fire propagation on securityContext-only patch + drift indicator ([aec4edc](https://github.com/sislelabs/kuso/commit/aec4edc899c1de4a46d1bacf3ec34aeb04909383))
+- Fix(cli): fetch-then-merge securityContext so a partial edit doesn't clobber the other field ([12d6252](https://github.com/sislelabs/kuso/commit/12d6252f73226ae3eea80fe490527175b75d024e))
+- Fix(service): copy SecurityContext (and Resources) onto first production env in AddService ([53e4879](https://github.com/sislelabs/kuso/commit/53e48794d360fff36d1e5d2287429aa43d770fba))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([ad86f76](https://github.com/sislelabs/kuso/commit/ad86f7680f661ebed717d86dca84cda4047949ff))
+- Docs(plans): per-service securityContext implementation plan ([ee0982c](https://github.com/sislelabs/kuso/commit/ee0982ce93f1291415ee26208673702abaab153e))
+- Docs(smoke): record marketplace setpriv/caps crash found on first live smoke ([d2a1088](https://github.com/sislelabs/kuso/commit/d2a1088123afc5c8b4fb834294da5a43c6d4e086))
+
 ## [0.18.105] — 2026-07-02
 
 ### ✨ Features
