@@ -11,7 +11,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouteParams } from "@/lib/dynamic-params";
+import { sessionQueryKey } from "@/features/auth/hooks";
 import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -42,6 +44,7 @@ export function InviteRedeemView() {
   // past "Loading…".
   const params = useRouteParams<{ token: string }>(["token"]);
   const router = useRouter();
+  const qc = useQueryClient();
   const token = params.token ?? "";
 
   const [summary, setSummary] = useState<InviteSummary | null>(null);
@@ -96,8 +99,15 @@ export function InviteRedeemView() {
       // server-side middleware sees it on the next request.
       const { setJwt } = await import("@/lib/api-client");
       setJwt(res.access_token);
+      // Mirror useLogin's identity boundary: without invalidating the
+      // session query, the mounted session observer still holds its
+      // cached "logged out" result and bounces the freshly-created
+      // account straight back to /login. clear() drops any stale cache
+      // and forces the session observer to refetch with the new cookie.
+      qc.clear();
+      await qc.invalidateQueries({ queryKey: sessionQueryKey });
       toast.success("Welcome to kuso");
-      router.push("/");
+      router.replace("/");
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
       toast.error(msg);

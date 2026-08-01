@@ -13,6 +13,7 @@ import { Server, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { useCan, Perms } from "@/features/auth";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { DbHealthTile } from "@/components/shared/DbHealthTile";
 
@@ -66,9 +67,16 @@ function serialize(labels: Label[]): string {
 
 export function NodesView() {
   const qc = useQueryClient();
+  // The nodes API is admin-only (server: requireAdmin → settings:admin).
+  // Gate the queries on that so a non-admin who lands here directly
+  // (bookmark, typed URL) never fires a request that 403s and shows the
+  // raw "Failed to load nodes: forbidden" — we render a friendly notice
+  // instead. The settings landing card is also perm-gated to match.
+  const isAdmin = useCan(Perms.SettingsAdmin);
   const nodes = useQuery({
     queryKey: ["kubernetes", "nodes"],
     queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
+    enabled: isAdmin,
   });
   // Host package-update advisory per node (from the pkg-probe DaemonSet
   // annotations). Separate query so a slow/absent probe never blocks the
@@ -78,6 +86,7 @@ export function NodesView() {
     queryFn: () =>
       api<{ data: NodeUpdateAdvisory[] }>("/api/kubernetes/nodes/updates").then((r) => r.data ?? []),
     staleTime: 60_000,
+    enabled: isAdmin,
   });
   const advisoryByNode = new Map((updates.data ?? []).map((a) => [a.node, a]));
 
@@ -176,6 +185,16 @@ export function NodesView() {
       return copy;
     });
   };
+
+  if (!isAdmin) {
+    return (
+      <div className="mx-auto max-w-4xl p-6 lg:p-8">
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+          Cluster nodes are admin-only. Ask a team admin to enable it for you.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-4xl p-6 lg:p-8 pb-24">
