@@ -232,7 +232,72 @@ export default function NotificationsPage() {
       {editing === "__new__" && (
         <NotificationEditor notification={null} onClose={() => setEditing(null)} />
       )}
+
+      <MutedProjects />
     </div>
+  );
+}
+
+// MutedProjects — roster of projects whose external delivery is muted
+// (per-project toggle lives on each project's settings page). Rendered
+// only when at least one mute exists, so the common all-unmuted case
+// adds no visual noise.
+function MutedProjects() {
+  const qc = useQueryClient();
+  const mutes = useQuery({
+    queryKey: ["admin", "notifications", "muted-projects"],
+    queryFn: () =>
+      api<{ project: string; createdAt: string; createdBy?: string }[]>(
+        "/api/notifications/muted-projects"
+      ),
+  });
+  if (mutes.isPending || !mutes.data || mutes.data.length === 0) return null;
+  return (
+    <section className="mt-8 space-y-2">
+      <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        muted projects
+      </h2>
+      <p className="text-[11px] text-[var(--text-tertiary)]">
+        These projects&rsquo; events skip every channel above but keep landing in the bell
+        feed. Unmute here or from the project&rsquo;s settings page.
+      </p>
+      <ul className="space-y-1.5">
+        {mutes.data.map((m) => (
+          <li
+            key={m.project}
+            className="flex items-center justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2"
+          >
+            <div className="min-w-0">
+              <span className="font-mono text-[12px]">{m.project}</span>
+              <span className="ml-2 text-[10px] text-[var(--text-tertiary)]">
+                since {new Date(m.createdAt).toLocaleString()}
+                {m.createdBy ? ` · by ${m.createdBy}` : ""}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await api(
+                    `/api/projects/${encodeURIComponent(m.project)}/notifications/mute`,
+                    { method: "DELETE" }
+                  );
+                  toast.success(`Unmuted ${m.project}`);
+                  void qc.invalidateQueries({
+                    queryKey: ["admin", "notifications", "muted-projects"],
+                  });
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed to unmute");
+                }
+              }}
+            >
+              Unmute
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

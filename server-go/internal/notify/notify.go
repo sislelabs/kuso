@@ -216,6 +216,14 @@ type Dispatcher struct {
 	notifsMu      sync.RWMutex
 	notifsCache   []db.Notification
 	notifsExpires time.Time
+
+	// mutedCache mirrors notifsCache for the per-project mute set: the
+	// dispatch hot path checks it before enqueueing outbox rows, so it
+	// must not hit the DB per event. Same TTL + invalidation as the
+	// channel configs (the mute handler calls InvalidateNotifications).
+	mutedMu      sync.RWMutex
+	mutedCache   map[string]bool
+	mutedExpires time.Time
 }
 
 // notifsCacheTTL bounds how stale the dispatcher's view of the
@@ -428,6 +436,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 		d.logger.Warn("notify: list configs", "err", err)
 		return
 	}
+	// Per-project mute: muted projects skip external channel delivery
+	// entirely. The bell-feed mirror is untouched (Emit persisted the
+	// NotificationEvent before we got here), so the in-app audit trail
+	// survives a mute. Project-less events (node.*, backup health) are
+	// never muted. Fail-open: if the mute read errors, deliver — a
+	// missed mute beats silently dropped notifications.
+	if e.Project != "" {
+		if muted, merr := d.cachedMutedProjects(ctx); merr != nil {
+			d.logger.Warn("notify: list muted projects", "err", merr)
+		} else if muted[e.Project] {
+			return
+		}
+	}
 	// Enqueue one outbox row per matching channel. The worker pool
 	// (StartOutboxWorkers, called from cmd/kuso-server's
 	// startSingletons) drains with exponential backoff. This flips
@@ -517,6 +538,40 @@ func (d *Dispatcher) InvalidateNotifications() {
 	d.notifsCache = nil
 	d.notifsExpires = time.Time{}
 	d.notifsMu.Unlock()
+	d.mutedMu.Lock()
+	d.mutedCache = nil
+	d.mutedExpires = time.Time{}
+	d.mutedMu.Unlock()
+}
+
+// cachedMutedProjects returns the set of projects whose events skip
+// external channel delivery, refreshing from the DB on cache miss.
+// Mirrors cachedNotifications (same TTL, same locking discipline).
+func (d *Dispatcher) cachedMutedProjects(ctx context.Context) (map[string]bool, error) {
+	d.mutedMu.RLock()
+	if time.Now().Before(d.mutedExpires) && d.mutedCache != nil {
+		out := d.mutedCache
+		d.mutedMu.RUnlock()
+		return out, nil
+	}
+	d.mutedMu.RUnlock()
+
+	d.mutedMu.Lock()
+	defer d.mutedMu.Unlock()
+	if time.Now().Before(d.mutedExpires) && d.mutedCache != nil {
+		return d.mutedCache, nil
+	}
+	mutes, err := d.db.ListProjectNotificationMutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(mutes))
+	for _, m := range mutes {
+		set[m.Project] = true
+	}
+	d.mutedCache = set
+	d.mutedExpires = time.Now().Add(notifsCacheTTL)
+	return set, nil
 }
 
 // eventMatches returns true if `event` is in `whitelist`, or if the
