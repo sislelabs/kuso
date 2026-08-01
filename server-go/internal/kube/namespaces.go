@@ -64,9 +64,14 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 		return nil
 	}
 	if c == nil || c.Clientset == nil {
-		// No typed client wired (e.g. dynamic-only test harness). Callers
-		// invoke this best-effort; don't panic.
-		return fmt.Errorf("kube: no clientset to ensure namespace %q", ns)
+		// No typed client wired (e.g. dynamic-only test harness, or a
+		// degraded server running without a kube clientset). There's
+		// nothing to create and no RBAC to stamp — treat as a benign
+		// no-op rather than an error so a namespace-setup failure means
+		// an ACTUAL kube/RBAC failure, which the caller (project create)
+		// now treats as fatal. Returning an error here would abort every
+		// create in the dynamic-only test harness.
+		return nil
 	}
 	labels := map[string]string{ManagedByLabel: ManagedByValue}
 	for k, v := range pssLabels {

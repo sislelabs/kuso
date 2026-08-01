@@ -283,26 +283,18 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	for k, v := range req.ExtraLabels {
 		labels[k] = v
 	}
-	owners := []metav1.OwnerReference{}
-	if projectCR != nil && projectCR.UID != "" {
-		// BlockOwnerDeletion=false: project deletion shouldn't wait
-		// for addon GC. Must be a non-nil pointer — kube-GC treats a
-		// nil pointer as "true" during foreground cascades, which
-		// would deadlock the project's terminating state behind every
-		// addon's helm-uninstall finalizer.
-		// Controller=false: helm-operator owns the reconcile loop;
-		// this ref is purely for cascade-delete.
-		blockFalse := false
-		controllerFalse := false
-		owners = append(owners, metav1.OwnerReference{
-			APIVersion:         "application.kuso.sislelabs.com/v1alpha1",
-			Kind:               "KusoProject",
-			Name:               projectCR.Name,
-			UID:                projectCR.UID,
-			BlockOwnerDeletion: &blockFalse,
-			Controller:         &controllerFalse,
-		})
+	// Cascade-delete the addon CR (and its helm release → StatefulSet +
+	// conn Secret) when the project is deleted — but ONLY when the addon
+	// lands in the same namespace as the project CR. A cross-namespace
+	// ownerRef (custom execution namespace ≠ home) is invalid and makes
+	// the GC churn the addon seconds after create; Project.DeleteWithOptions
+	// enumerates-and-cascades addons by ns+label in that case. See
+	// kube.ProjectOwnerRefsForChild.
+	var projUID string
+	if projectCR != nil {
+		projUID = string(projectCR.UID)
 	}
+	owners := kube.ProjectOwnerRefsForChild(project, projUID, ns, s.Namespace)
 	addon := &kube.KusoAddon{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fqn,
