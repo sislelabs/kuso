@@ -265,6 +265,14 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		if err := s.upsertManagedSecretKey(ctx, ns, project, service, name, *req.SecretValue); err != nil {
 			return nil, err
 		}
+		// Mount the managed Secret on every non-preview env. Nothing else
+		// guarantees this (AddService seeds it for NEW envs, but envs from
+		// before that seed — or from external kuso.yml applies — lack it),
+		// and an unmounted Secret means the value silently never reaches
+		// the pod while `env list` still shows it (the koreni bug).
+		if err := s.attachServiceSecretToEnvs(ctx, ns, project, service); err != nil {
+			return nil, fmt.Errorf("attach managed secret to envs: %w", err)
+		}
 		// Value-only Secret changes do NOT restart pods on their own —
 		// the helm chart re-renders the Deployment only when a watched
 		// env-CR field changes. Bump spec.secretsRev on every owned env
@@ -535,10 +543,12 @@ func btoi(b bool) int {
 // secrets.kuso.sislelabs.com/generated-* markers). Creates the Secret
 // with the kuso managed labels if it doesn't exist yet.
 //
-// The chart marks this Secret optional and the kusoenvironment
-// envFromSecrets already references <svc>-secrets on every non-preview
-// env, so a freshly-created Secret is picked up without any env-CR wiring
-// change here (see managed_secret_env.go / secrets.attachToAllEnvs).
+// The chart marks envFromSecrets entries optional:true, so the mount can
+// exist before the Secret does. The mount itself is NOT assumed: callers
+// in the write path follow up with attachServiceSecretToEnvs (a prior
+// version of this comment claimed every env already mounted <svc>-secrets
+// — false, and the resulting gap silently dropped every literal env var
+// on pods; see managed_secret_attach.go).
 func (s *Service) upsertManagedSecretKey(ctx context.Context, ns, project, service, key, value string) error {
 	name := kube.ServiceSecretName(project, service)
 	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
