@@ -104,14 +104,14 @@ quota:
 
 # Pod Security Standards are enforced server-side, not via this chart.
 # kuso-server stamps `pod-security.kubernetes.io/{enforce,audit,warn}=
-# restricted` labels on every project namespace at create time
-# (server-go/internal/kube/namespaces.go::pssLabels). Operators who
-# need a relaxed tier should re-label the namespace manually after
-# create:
-#
-#   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
+# baseline` labels on every project namespace at create time AND on
+# every server boot (server-go/internal/kube/namespaces.go::pssLabels).
+# baseline — not restricted — because build pods run clone/nixpacks-plan
+# as root by design and user images pick their own USER directive.
+# Manual re-labels don't stick: the boot sweep re-stamps baseline on
+# every kuso-server restart.
 #
 # We don't expose a helm value here because the helm-operator runs
 # AFTER the namespace is already labelled, so a chart-driven label
-# would arrive too late to affect the first pod admission and might
-# get overwritten on the next EnsureNamespace tick.
+# would arrive too late to affect the first pod admission and would
+# get overwritten on the next EnsureNamespace pass anyway.

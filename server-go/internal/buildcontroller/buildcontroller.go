@@ -268,10 +268,10 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 
 	// Refuse to reconcile CRs outside kuso-managed namespaces. An
 	// admin (or compromised kuso-server with cluster-wide write
-	// perms) could apply a KusoBuild in `kube-system` — which lacks
-	// pod-security.kubernetes.io/enforce=restricted — and the
-	// controller would happily schedule a build pod there in a less-
-	// restricted PSS context. The managed-by=kuso label on the
+	// perms) could apply a KusoBuild in `kube-system` — which carries
+	// no kuso PSA labels — and the controller would happily schedule
+	// a root-running build pod there, outside the baseline-enforced
+	// boundary. The managed-by=kuso label on the
 	// namespace is the same gate the BuildKit NetworkPolicy uses;
 	// we're enforcing it here at the controller level too so the
 	// namespace serves as a single coherent trust boundary.
