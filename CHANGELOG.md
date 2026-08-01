@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.7] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(settings): gate Cluster nodes behind admin like the server does ([a8b90de](https://github.com/sislelabs/kuso/commit/a8b90de1b155f8241df7569aa38bff165f43d7c6))
+- Fix(auth): log in by email, and actually auto-login after invite redeem ([5fb7194](https://github.com/sislelabs/kuso/commit/5fb719421c1aea1bdf0bbef505571cafc12e6ed3))
+
 ## [0.22.6] — 2026-08-01
 
 ### ✨ Features
@@ -454,14 +460,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(changelog): promote older entries into the archive ([69fc675](https://github.com/sislelabs/kuso/commit/69fc6754d1dc5654febd85350cfd570a91735157))
-
-## [0.18.107] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(marketplace): live-smoke template fixes + hex64 generator ([985f6a4](https://github.com/sislelabs/kuso/commit/985f6a46518b79cbe8ef9fd6678fcfc5b23aac8c))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([0ce819b](https://github.com/sislelabs/kuso/commit/0ce819b81b768b6fea387398f70d0e4b6355de8f))
 
 
 ---

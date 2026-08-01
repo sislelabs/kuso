@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.107] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): live-smoke template fixes + hex64 generator ([985f6a4](https://github.com/sislelabs/kuso/commit/985f6a46518b79cbe8ef9fd6678fcfc5b23aac8c))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([0ce819b](https://github.com/sislelabs/kuso/commit/0ce819b81b768b6fea387398f70d0e4b6355de8f))
+
 ## [0.18.106] — 2026-07-03
 
 ### ✨ Features
