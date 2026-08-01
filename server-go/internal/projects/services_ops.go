@@ -516,6 +516,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// exist yet — the env helm chart marks the entry optional:true so
 	// the pod boots cleanly even when no shared secret has been set.
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(project)...)
+	// And the managed <project>-<service>-secrets Secret, where the
+	// unified env write stores plain values. Also optional:true-safe to
+	// mount before it exists; without this seed, literals written before
+	// any attach-triggering write never reached the pod (koreni bug).
+	envFromSecrets = append(envFromSecrets, kube.ServiceSecretName(project, req.Name))
 	// Apply subscription filters at create time (B2.1+B3.1 from the
 	// v0.17.0 audit). Pre-v0.17.1 the production env was created with
 	// every addon-conn + both shared secrets blanket-mounted, and the
@@ -882,6 +887,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		}
 	}
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(project)...)
+	// Managed <project>-<service>-secrets mount — same seed as the
+	// AddService production env (optional:true, safe pre-creation).
+	envFromSecrets = append(envFromSecrets, kube.ServiceSecretName(project, service))
 	if svc.Spec.SubscribedAddons != nil {
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = filterEnvFromForSubscription(envFromSecrets, svc.Spec.SubscribedAddons, projectAddons, project)

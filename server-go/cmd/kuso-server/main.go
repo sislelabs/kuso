@@ -459,6 +459,12 @@ func main() {
 		}
 		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
+		// Heal services whose managed <svc>-secrets Secret exists but was
+		// never mounted on their env CRs (the pre-fix unified-write gap:
+		// values sat in the Secret while pods ran without them). Runs in
+		// the background — it lists every project/service and shouldn't
+		// gate boot. Idempotent across replicas and restarts.
+		go projSvc.HealManagedSecretMounts(ctx, logger)
 		secSvc = secrets.New(kc, *namespace)
 		secSvc.NSResolver = nsResolver
 		// Wire the per-env Secret cleanup hook so DeleteEnvironment in
