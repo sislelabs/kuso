@@ -5,6 +5,7 @@ import { Server } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api-client";
+import { useCan, Perms } from "@/features/auth";
 import { cn } from "@/lib/utils";
 
 export interface NodeSummary {
@@ -40,11 +41,16 @@ export interface NodeSummary {
 // the kuso.sislelabs.com/region=eu-west tarp. The full editor lives at
 // /settings/nodes — this popover is the read-mostly summary.
 export function ServersPopover() {
+  // Node data is admin-only (server: requireAdmin → settings:admin). For
+  // a regular viewer the fetch 403s and the pill degrades to "0/0 nodes".
+  // Hide the whole thing for non-admins and don't fire the doomed request.
+  const isAdmin = useCan(Perms.SettingsAdmin);
   const nodes = useQuery({
     queryKey: ["kubernetes", "nodes"],
     queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
     refetchInterval: 30_000,
     staleTime: 15_000,
+    enabled: isAdmin,
   });
 
   const list = nodes.data ?? [];
@@ -62,6 +68,9 @@ export function ServersPopover() {
     grouped.set(region, arr);
   }
   const regions = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  // Non-admins never see the nodes pill at all.
+  if (!isAdmin) return null;
 
   return (
     <Popover>
