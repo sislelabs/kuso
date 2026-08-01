@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Github, ExternalLink } from "lucide-react";
+import { Github, ExternalLink, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +57,27 @@ export function SourceSection({
     const m = state.repoURL.match(/github\.com[:/]+([^/]+)\/([^/.]+)/i);
     return m ? { owner: m[1], repo: m[2] } : null;
   }, [state.repoURL]);
+  // Effective provider for UX purposes. The SERVER does the
+  // authoritative github-vs-gitlab detection; this is only used to
+  // decide whether to surface the GitLab token field. An explicit
+  // state.repoProvider override wins; otherwise we sniff the URL host
+  // (host contains "gitlab" → gitlab, else github), mirroring the
+  // server's inference. Garbage URLs fall back to github.
+  const effectiveProvider = useMemo<"github" | "gitlab">(() => {
+    if (state.repoProvider === "gitlab") return "gitlab";
+    if (state.repoProvider === "github") return "github";
+    const raw = state.repoURL.trim();
+    if (!raw) return "github";
+    let host = "";
+    try {
+      host = new URL(raw).host.toLowerCase();
+    } catch {
+      host = raw.toLowerCase();
+    }
+    return host.includes("gitlab") ? "gitlab" : "github";
+  }, [state.repoProvider, state.repoURL]);
+  const isGitlab = effectiveProvider === "gitlab";
+
   const autoResolved = useMemo(() => {
     if (!parsed || !installs.data) return null;
     // Exact full-name match wins.
@@ -94,9 +115,13 @@ export function SourceSection({
       <Row
         label="repository"
         hint={
-          autoResolved
-            ? `full https URL · github app: ${autoResolved.accountLogin} (auto)`
-            : "full https URL"
+          isGitlab
+            ? `full https URL · gitlab${
+                state.repoProvider === "gitlab" ? "" : " (auto-detected)"
+              }`
+            : autoResolved
+              ? `full https URL · github app: ${autoResolved.accountLogin} (auto)`
+              : "full https URL · github"
         }
         control={
           <div className="flex w-full items-center gap-1.5">
@@ -156,8 +181,27 @@ export function SourceSection({
             spellCheck={false}
           />
         }
-        last
+        last={!isGitlab}
       />
+      {/* GitLab access token — shown only when the URL looks like a
+          GitLab repo (the server does the authoritative detection; this
+          gate is UX). WRITE-ONLY: the server stores it in a Secret and
+          never returns it, so the field starts blank and is never
+          pre-filled. Leaving it blank on save does NOT clear an existing
+          token — the write path omits it unless the user typed one. */}
+      {isGitlab && (
+        <Row
+          label="gitlab access token"
+          hint="private repos only · write-only · blank keeps the existing token"
+          control={
+            <GitlabTokenInput
+              value={state.repoToken}
+              onChange={(v) => setState((s) => ({ ...s, repoToken: v }))}
+            />
+          }
+          last
+        />
+      )}
       {/* The installation row used to live here. Removed since
           kuso auto-resolves the GitHub App installation from the
           repo URL's owner — the dropdown was a power-user knob
@@ -167,6 +211,49 @@ export function SourceSection({
           via the API if a future multi-org corner case needs it. */}
       <RenameRow project={project} service={service} />
     </Section>
+  );
+}
+
+// GitlabTokenInput is a masked write-only credential field. The token
+// is never read back from the server (it lives in a Secret), so the
+// input is always what the user typed this session — starts blank,
+// masked as a password by default, with an eye toggle to verify the
+// pasted value before saving. Mirrors the masked-input affordance the
+// env editor uses (Eye/EyeOff), minus the reveal-fetch since there's
+// nothing on the server to reveal.
+function GitlabTokenInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="flex w-full items-center gap-1.5">
+      <Input
+        type={shown ? "text" : "password"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="glpat-… (leave blank to keep current)"
+        className="h-7 flex-1 font-mono text-[12px]"
+        spellCheck={false}
+        autoComplete="off"
+        // Hint password managers to leave this alone — it's a clone
+        // credential, not a login.
+        data-1p-ignore
+        data-lpignore="true"
+      />
+      <button
+        type="button"
+        onClick={() => setShown((s) => !s)}
+        aria-label={shown ? "Hide token" : "Show token"}
+        title={shown ? "Hide token" : "Show token"}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        {shown ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+      </button>
+    </div>
   );
 }
 

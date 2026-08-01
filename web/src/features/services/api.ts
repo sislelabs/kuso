@@ -375,6 +375,17 @@ export interface PatchRepoBody {
   branch?: string;
   path?: string;
   installationId?: number;
+  // provider selects the git host driver. "github" | "gitlab". Optional
+  // — the server infers it from the URL host when empty (host contains
+  // "gitlab" → gitlab, else github), so we only send it when the UI has
+  // a reason to be explicit.
+  provider?: "github" | "gitlab";
+  // token is the GitLab clone credential for a private GitLab repo.
+  // WRITE-ONLY: the server stores it in a Secret and NEVER returns it on
+  // read, so it's never pre-filled. An empty/omitted token leaves any
+  // existing stored token untouched — only send a non-empty value when
+  // the user actually typed one, so a blank field can't wipe the secret.
+  token?: string;
 }
 
 export interface PlacementPatch {

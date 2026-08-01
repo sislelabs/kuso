@@ -226,6 +226,17 @@ type PatchRepoRequest struct {
 	Branch         string `json:"branch,omitempty"`
 	Path           string `json:"path,omitempty"`
 	InstallationID int64  `json:"installationId,omitempty"`
+	// Provider names the VCS host: "github" or "gitlab". Optional — the
+	// server infers it from the URL host when empty (github.com → github,
+	// gitlab.com / *gitlab* → gitlab). Set it for self-hosted hosts the
+	// inference can't recognise.
+	Provider string `json:"provider,omitempty"`
+	// Token is a GitLab clone credential (deploy / project-access /
+	// personal token) supplied on write. WRITE-ONLY: the server stores it
+	// in a per-service Secret and NEVER returns it on read, so it never
+	// round-trips through a fetch-then-patch. Empty leaves any existing
+	// stored token untouched. Ignored for GitHub (App-authenticated).
+	Token string `json:"token,omitempty"`
 }
 
 // PatchScaleRequest mirrors the server's projects.PatchScaleRequest.

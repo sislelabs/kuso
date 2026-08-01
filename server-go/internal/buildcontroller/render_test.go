@@ -187,12 +187,12 @@ func TestRenderJobPrivateRepoSecretRef(t *testing.T) {
 	}
 	var tokenRef *corev1.EnvVar
 	for i := range clone.Env {
-		if clone.Env[i].Name == "GITHUB_INSTALLATION_TOKEN" {
+		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
 			tokenRef = &clone.Env[i]
 		}
 	}
 	if tokenRef == nil {
-		t.Fatal("GITHUB_INSTALLATION_TOKEN env missing on private-repo clone")
+		t.Fatal("KUSO_GIT_TOKEN env missing on private-repo clone")
 	}
 	if tokenRef.ValueFrom == nil || tokenRef.ValueFrom.SecretKeyRef == nil {
 		t.Fatal("token env should be a secretKeyRef")
@@ -493,5 +493,55 @@ func TestNixpacksBuildEnvFlagsAreWordSplitSafe(t *testing.T) {
 	// The safe positional-param form must be present.
 	if !strings.Contains(script, `nixpacks build . --out . "$@"`) {
 		t.Error("nixpacks build does not pass env flags via quoted \"$@\"")
+	}
+}
+
+// TestRenderJobGitLabPrivateRepo covers the GitLab clone path: a repo on a
+// GitLab host with a stored token secret must render a private clone that
+// mounts KUSO_GIT_TOKEN and uses GitLab's oauth2:<tok> auth form (not
+// GitHub's x-access-token).
+func TestRenderJobGitLabPrivateRepo(t *testing.T) {
+	b := baseBuild()
+	b.Spec.GithubInstallationID = 0
+	b.Spec.Repo = &kube.KusoRepoRef{
+		URL:         "https://gitlab.com/group/app.git",
+		TokenSecret: "alpha-api-gitlab-token",
+	}
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	clone := findInit(job.Spec.Template.Spec, "clone")
+	if clone == nil {
+		t.Fatal("clone missing")
+	}
+	// Token mounted as KUSO_GIT_TOKEN from the <build>-token Secret.
+	var hasToken bool
+	for i := range clone.Env {
+		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
+			hasToken = true
+			if clone.Env[i].ValueFrom.SecretKeyRef.Name != "b1-token" {
+				t.Errorf("token ref name = %q, want b1-token", clone.Env[i].ValueFrom.SecretKeyRef.Name)
+			}
+		}
+	}
+	if !hasToken {
+		t.Fatal("GitLab private clone must mount KUSO_GIT_TOKEN")
+	}
+	// GitLab auth form: oauth2:<tok>, NOT x-access-token.
+	if !strings.Contains(clone.Args[0], "oauth2:${KUSO_GIT_TOKEN}") {
+		t.Errorf("GitLab clone should use oauth2: auth, script:\n%s", clone.Args[0])
+	}
+	if strings.Contains(clone.Args[0], "x-access-token") {
+		t.Errorf("GitLab clone must NOT use GitHub's x-access-token: %s", clone.Args[0])
+	}
+}
+
+// TestRenderJobGitHubStillUsesXAccessToken guards that the GitHub path is
+// unchanged: x-access-token auth, KUSO_GIT_TOKEN mount.
+func TestRenderJobGitHubStillUsesXAccessToken(t *testing.T) {
+	b := baseBuild()
+	b.Spec.GithubInstallationID = 999
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	clone := findInit(job.Spec.Template.Spec, "clone")
+	if !strings.Contains(clone.Args[0], "x-access-token:${KUSO_GIT_TOKEN}") {
+		t.Errorf("GitHub clone should keep x-access-token auth:\n%s", clone.Args[0])
 	}
 }

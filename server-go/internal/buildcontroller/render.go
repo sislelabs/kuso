@@ -266,42 +266,54 @@ du -sh /cache/* 2>/dev/null || true
 	}
 }
 
-// renderCloneContainer is the always-on git clone init. Private repos
-// (githubInstallationId > 0) read GITHUB_INSTALLATION_TOKEN from the
-// chart-rendered <build>-token Secret; the kuso-server build poller
-// mints that token at CR-create time so we don't have to.
+// renderCloneContainer is the always-on git clone init. Private repos read
+// a clone token (KUSO_GIT_TOKEN) from the chart-rendered <build>-token
+// Secret. For GitHub the kuso-server build poller mints a short-lived App
+// installation token; for GitLab it copies the service's stored deploy /
+// project-access token. The HTTP userinfo differs per provider: GitHub uses
+// "x-access-token:<tok>", GitLab uses "oauth2:<tok>".
 func renderCloneContainer(buildName string, b *kube.KusoBuild) corev1.Container {
 	repoURL := ""
 	branch := "main"
 	ref := ""
-	if b != nil && b.Spec.Repo != nil {
-		repoURL = b.Spec.Repo.URL
-	}
+	var repoRef *kube.KusoRepoRef
 	if b != nil {
+		repoRef = b.Spec.Repo
+		if repoRef != nil {
+			repoURL = repoRef.URL
+		}
 		if b.Spec.Branch != "" {
 			branch = b.Spec.Branch
 		}
 		ref = b.Spec.Ref
 	}
-	private := b != nil && b.Spec.GithubInstallationID > 0
+	// Private = a token is needed to clone: a GitHub App installation OR a
+	// GitLab repo with a stored token secret.
+	provider := kube.RepoProviderForRef(repoRef)
+	private := buildNeedsCloneToken(b)
 
-	// Build the clone script. We assemble it as a string with the
-	// values quoted via Go's %q so a malicious repo URL or branch
-	// (validated upstream but defense-in-depth) doesn't break out
-	// of the quotes.
+	// Build the clone script. Values are quoted via shellQuote so a
+	// malicious repo URL or branch (validated upstream but defense-in-
+	// depth) can't break out.
 	cloneCmd := ""
 	if private {
+		// Auth userinfo by provider. GitHub: x-access-token:<tok>.
+		// GitLab: oauth2:<tok> (works for deploy/project/personal tokens).
+		userinfo := "x-access-token"
+		if provider == kube.ProviderGitLab {
+			userinfo = "oauth2"
+		}
 		cloneCmd = fmt.Sprintf(`
-if [ -z "$GITHUB_INSTALLATION_TOKEN" ]; then
-  echo "ERROR: GITHUB_INSTALLATION_TOKEN must be set for private repos"
+if [ -z "$KUSO_GIT_TOKEN" ]; then
+  echo "ERROR: KUSO_GIT_TOKEN must be set for private repos"
   exit 1
 fi
 URL=%s
 BRANCH=%s
 git clone --depth 1 --branch "$BRANCH" \
-  "https://x-access-token:${GITHUB_INSTALLATION_TOKEN}@$(echo "$URL" | sed -E 's|^https?://||')" \
+  "https://%s:${KUSO_GIT_TOKEN}@$(echo "$URL" | sed -E 's|^https?://||')" \
   /workspace/src
-`, shellQuote(repoURL), shellQuote(branch))
+`, shellQuote(repoURL), shellQuote(branch), userinfo)
 	} else {
 		cloneCmd = fmt.Sprintf(`
 git clone --depth 1 --branch %s %s /workspace/src
@@ -336,19 +348,38 @@ echo "checked out: $(git rev-parse HEAD)"
 		},
 	}
 	if private {
-		c.Env = []corev1.EnvVar{
-			{
-				Name: "GITHUB_INSTALLATION_TOKEN",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: buildName + "-token"},
-						Key:                  "token",
-					},
-				},
-			},
-		}
+		c.Env = []corev1.EnvVar{gitTokenEnvVar(buildName)}
 	}
 	return c
+}
+
+// buildNeedsCloneToken reports whether a build must clone with a token: a
+// GitHub App installation OR a GitLab repo with a stored token secret.
+func buildNeedsCloneToken(b *kube.KusoBuild) bool {
+	if b == nil {
+		return false
+	}
+	if b.Spec.GithubInstallationID > 0 {
+		return true
+	}
+	return kube.RepoProviderForRef(b.Spec.Repo) == kube.ProviderGitLab &&
+		b.Spec.Repo != nil && b.Spec.Repo.TokenSecret != ""
+}
+
+// gitTokenEnvVar mounts the clone token from the <build>-token Secret as
+// KUSO_GIT_TOKEN. Provider-agnostic: the poller writes the right token
+// (GitHub App installation token or the GitLab stored token) under the
+// same "token" key.
+func gitTokenEnvVar(buildName string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: "KUSO_GIT_TOKEN",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: buildName + "-token"},
+				Key:                  "token",
+			},
+		},
+	}
 }
 
 // renderEnvDetectContainer runs the env-detect baked image. Output
@@ -753,16 +784,8 @@ func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.R
 			},
 		})
 	}
-	if b != nil && b.Spec.GithubInstallationID > 0 {
-		envs = append(envs, corev1.EnvVar{
-			Name: "GITHUB_INSTALLATION_TOKEN",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: buildName + "-token"},
-					Key:                  "token",
-				},
-			},
-		})
+	if buildNeedsCloneToken(b) {
+		envs = append(envs, gitTokenEnvVar(buildName))
 	}
 	return corev1.Container{
 		Name:            "buildpacks",

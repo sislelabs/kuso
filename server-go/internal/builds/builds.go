@@ -831,7 +831,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// token and write the secret BEFORE creating the CR so the operator's
 	// helm render finds it the moment the Job pod schedules.
 	tokenOwner, tokenRepo := splitGithubURL(repoURL)
-	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID, tokenOwner, tokenRepo); err != nil {
+	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID, tokenOwner, tokenRepo, svcCR.Spec.Repo); err != nil {
 		return nil, fmt.Errorf("clone token secret: %w", err)
 	}
 	// Ensure the per-service build cache PVC exists. Kept best-effort:
@@ -883,7 +883,11 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		Service:              fqn,
 		Ref:                  sha,
 		Branch:               branch,
-		Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
+		// Carry provider + tokenSecret onto the build CR so the clone
+		// init container knows GitHub vs GitLab and where the GitLab
+		// token lives. Dropping these would make a GitLab private clone
+		// fall back to a token-less (and thus failing) clone.
+		Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath, Provider: repoProviderOf(svcCR), TokenSecret: repoTokenSecretOf(svcCR)},
 		GithubInstallationID: installationID,
 		Strategy:             strategy,
 		Dockerfile:           svcCR.Spec.Dockerfile,
@@ -3293,3 +3297,20 @@ func asUnstructured(b *kube.KusoBuild) (*unstructured.Unstructured, error) {
 // Used by tests under the same package to build seed objects without
 // re-importing kube internals.
 var _ = asUnstructured
+
+// repoProviderOf / repoTokenSecretOf pull the provider + token-secret from
+// a service's repo ref (empty when the service or repo is nil). Used to
+// stamp them onto the KusoBuild CR so the clone container can auth GitLab.
+func repoProviderOf(svc *kube.KusoService) string {
+	if svc == nil || svc.Spec.Repo == nil {
+		return ""
+	}
+	return svc.Spec.Repo.Provider
+}
+
+func repoTokenSecretOf(svc *kube.KusoService) string {
+	if svc == nil || svc.Spec.Repo == nil {
+		return ""
+	}
+	return svc.Spec.Repo.TokenSecret
+}

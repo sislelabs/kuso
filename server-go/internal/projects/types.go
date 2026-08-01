@@ -152,8 +152,12 @@ type ServiceBuildpacksSpec struct {
 }
 
 type CreateServiceRepo struct {
-	URL  string `json:"url,omitempty"`
-	Path string `json:"path,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// Token: a GitLab clone credential, stored in a per-service Secret on
+	// create (never persisted on the CR or returned).
+	Token string `json:"token,omitempty"`
 }
 
 type ServiceDomain struct {

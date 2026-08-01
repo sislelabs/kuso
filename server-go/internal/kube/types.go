@@ -105,6 +105,17 @@ type KusoRepoRef struct {
 	URL           string `json:"url,omitempty"`
 	DefaultBranch string `json:"defaultBranch,omitempty"`
 	Path          string `json:"path,omitempty"`
+	// Provider names the VCS host: "github" or "gitlab". Optional — when
+	// empty it's inferred from the URL host (see RepoProviderForURL). Set
+	// explicitly only for self-hosted hosts the inference can't recognise.
+	Provider string `json:"provider,omitempty"`
+	// TokenSecret references a kube Secret holding a private-repo clone
+	// credential (currently GitLab: a deploy / project-access / personal
+	// token). Empty for public repos and for GitHub (which authenticates
+	// via the App installation, not a stored token). The build reads it
+	// into the clone container. Name of the Secret in the project ns; the
+	// token lives under RepoTokenSecretKey.
+	TokenSecret string `json:"tokenSecret,omitempty"`
 }
 
 type KusoProjectGithubSpec struct {

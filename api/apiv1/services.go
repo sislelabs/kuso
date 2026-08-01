@@ -97,6 +97,17 @@ type ServiceCapabilities struct {
 type ServiceRepoSpec struct {
 	URL  string `json:"url,omitempty"`
 	Path string `json:"path,omitempty"`
+	// Provider names the VCS host: "github" or "gitlab". Optional —
+	// inferred from the URL host when empty (github.com → github,
+	// gitlab.com / *gitlab* → gitlab). Set for self-hosted hosts the
+	// inference can't recognise.
+	Provider string `json:"provider,omitempty"`
+	// Token is a GitLab clone credential (deploy / project-access /
+	// personal token) supplied on write. WRITE-ONLY: the server stores it
+	// in a per-service Secret and NEVER returns it on read. Empty leaves
+	// any existing stored token untouched. Not used for GitHub (which
+	// authenticates via the App installation).
+	Token string `json:"token,omitempty"`
 }
 
 // ServiceDomain is one host + TLS-flag pair on a service. TLS=true

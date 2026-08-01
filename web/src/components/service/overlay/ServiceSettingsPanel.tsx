@@ -78,7 +78,18 @@ function fieldDiffValues(
   const scale = (s: FormState) =>
     `min ${s.scaleMin}, max ${s.scaleMax}, cpu ${s.scaleCPU}%`;
   const repo = (s: FormState) =>
-    [s.repoURL, s.repoBranch && `@${s.repoBranch}`, s.repoPath && `/${s.repoPath}`]
+    [
+      s.repoURL,
+      s.repoBranch && `@${s.repoBranch}`,
+      s.repoPath && `/${s.repoPath}`,
+      s.repoProvider && `(${s.repoProvider})`,
+      // The token is write-only and never shown, but flag its presence
+      // in the "after" column so a token-only change doesn't render as
+      // an identical before/after in the confirm dialog. `base` never
+      // carries a token (baseline repoToken is always ""), so this only
+      // ever decorates the changed side.
+      s.repoToken.trim() && "· token updated",
+    ]
       .filter(Boolean)
       .join(" ");
   const image = (s: FormState) =>
@@ -378,11 +389,19 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       }
       body.image = { repository, tag: state.imageTag.trim() || undefined };
     }
+    // A typed GitLab token is write-only — it never round-trips from the
+    // server, so it can't be diffed against the baseline the way the
+    // other repo fields are. Treat a non-empty token as its own reason
+    // to send the repo patch, in addition to url/branch/path/provider
+    // edits.
+    const tokenToSend = state.repoToken.trim();
     if (
       state.repoURL !== baseline.repoURL ||
       state.repoBranch !== baseline.repoBranch ||
       state.repoPath !== baseline.repoPath ||
-      state.repoInstallationID !== baseline.repoInstallationID
+      state.repoInstallationID !== baseline.repoInstallationID ||
+      state.repoProvider !== baseline.repoProvider ||
+      tokenToSend
     ) {
       body.repo = {
         url: state.repoURL,
@@ -392,6 +411,16 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         // installationId with "unset"; only send when explicitly
         // changed by the picker.
         installationId: state.repoInstallationID || undefined,
+        // Only send an explicit provider override; "" means "let the
+        // server infer from the URL host" (its authoritative detection).
+        provider:
+          state.repoProvider === "gitlab" || state.repoProvider === "github"
+            ? state.repoProvider
+            : undefined,
+        // WRITE-ONLY GitLab clone credential. Only send when the user
+        // actually typed one — a blank field must NOT clear an existing
+        // stored token, so we omit it entirely when empty.
+        token: tokenToSend || undefined,
       };
     }
     const pNow = JSON.stringify({ p: state.placement, n: state.placementNodes });
@@ -493,6 +522,14 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       await patch.mutateAsync(body);
       toast.success("Changes saved");
       setPendingBody(null);
+      // The GitLab token is write-only — the server took it into a
+      // Secret and will never echo it back, so clear the field now that
+      // it's committed. Without this the typed value lingers in state
+      // while the refetched baseline has repoToken="", leaving the form
+      // permanently "dirty" and the save bar stuck open.
+      if (body.repo?.token) {
+        setState((s) => ({ ...s, repoToken: "" }));
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save";
       // Both surfaces: toast for momentary visibility, inline

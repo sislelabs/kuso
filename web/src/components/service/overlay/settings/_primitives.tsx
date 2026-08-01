@@ -26,6 +26,17 @@ export interface FormState {
   repoBranch: string;
   repoPath: string;
   repoInstallationID: number; // 0 = unchanged / inherit
+  // repoProvider is the git-host override. "" = auto (server infers from
+  // the URL host: gitlab.* → gitlab, else github). "github" | "gitlab"
+  // force it. Kept as a free string so we never widen the union in the
+  // form state; the write path narrows it before sending.
+  repoProvider: string;
+  // repoToken is the GitLab clone credential for a private GitLab repo.
+  // WRITE-ONLY: the server never returns it, so this is ALWAYS "" in the
+  // baseline (see fromSvc) and is never pre-filled from a read. A blank
+  // field on save leaves any existing stored token untouched — the write
+  // path only sends it when the user actually typed a value.
+  repoToken: string;
   // Networking
   port: string;
   domains: string; // newline-separated
@@ -107,12 +118,20 @@ export function fromSvc(svc?: KusoService): FormState {
   // addition), so cast through unknown to read it without forcing a
   // type-system rev.
   const ghSpec = (svc?.spec as { github?: { installationId?: number } } | undefined)?.github;
+  // provider may be surfaced on spec.repo.provider once the server
+  // detects/stores it. It's non-secret, so we DO seed it into the
+  // baseline (unlike the token) — an explicit value here means the
+  // provider row shows the stored driver and isn't marked dirty on load.
+  const repoProvider = (repo as { provider?: string } | undefined)?.provider ?? "";
   return {
     displayName: svc?.spec.displayName ?? "",
     repoURL: repo?.url ?? "",
     repoBranch: repo?.defaultBranch ?? "",
     repoPath: repo?.path && repo.path !== "." ? repo.path : "",
     repoInstallationID: ghSpec?.installationId ?? 0,
+    repoProvider,
+    // Write-only — never returned by the server, so always blank on load.
+    repoToken: "",
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
     internal: !!(svc?.spec as { internal?: boolean } | undefined)?.internal,
