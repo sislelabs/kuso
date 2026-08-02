@@ -30,8 +30,11 @@ export type BuildRowStatus =
 
 // statusBadge renders the small mono pill on the left of each row.
 // Kept here so the row + the badge live in one file (the panel only
-// needs the row component).
-export function StatusBadge({ s }: { s: BuildRowStatus }) {
+// needs the row component). queuePos is the build's 1-based place in
+// the cluster-wide build queue — rendered as "QUEUED #3" so users can
+// see how many builds are ahead of theirs; only meaningful (and only
+// read) when s=queued.
+export function StatusBadge({ s, queuePos }: { s: BuildRowStatus; queuePos?: number }) {
   const map: Record<BuildRowStatus, { label: string; cls: string }> = {
     active:     { label: "ACTIVE",     cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
     superseded: { label: "SUPERSEDED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
@@ -48,6 +51,7 @@ export function StatusBadge({ s }: { s: BuildRowStatus }) {
     unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
   };
   const m = map[s];
+  const label = s === "queued" && queuePos ? `QUEUED #${queuePos}` : m.label;
   return (
     <span
       className={cn(
@@ -55,7 +59,7 @@ export function StatusBadge({ s }: { s: BuildRowStatus }) {
         m.cls
       )}
     >
-      {m.label}
+      {label}
     </span>
   );
 }
@@ -125,7 +129,7 @@ export function BuildRow({
           onClick={onToggle}
           className="flex flex-1 items-center gap-3 text-left"
         >
-          <StatusBadge s={s} />
+          <StatusBadge s={s} queuePos={b.queuePosition} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium">
               <span className="font-mono">{sha || "—"}</span>

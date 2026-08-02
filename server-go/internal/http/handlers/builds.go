@@ -160,6 +160,20 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 			})
 		}
 	}
+	// Stamp queue positions on any queued latest-builds so the canvas
+	// can mirror the deployments tab's "QUEUED #N" badge.
+	if len(out) > 0 {
+		flat := make([]buildSummary, 0, len(out))
+		keys := make([]string, 0, len(out))
+		for k, v := range out {
+			keys = append(keys, k)
+			flat = append(flat, v)
+		}
+		stampQueuePositions(ctx, h.Svc, flat)
+		for i, k := range keys {
+			out[k] = flat[i]
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -253,6 +267,34 @@ type buildSummary struct {
 	// a copy-pasteable fix. Stamped on the CR as JSON by builds.markFailed;
 	// nil for non-failed builds or builds from before the field existed.
 	FailureClass *failures.Classification `json:"failureClass,omitempty"`
+	// QueuePosition is the build's 1-based place in the cluster-wide
+	// build queue, present only while status=queued. Ordered by CR
+	// creation time (see builds.Service.QueuePositions for the exact
+	// semantics vs the dispatcher's round-robin promote order). 0 /
+	// absent = not queued, or position unknown.
+	QueuePosition int `json:"queuePosition,omitempty"`
+}
+
+// stampQueuePositions fills QueuePosition on any queued summaries in
+// out. The extra kube list only happens when the response actually
+// contains a queued build — the common all-terminal case pays nothing.
+func stampQueuePositions(ctx context.Context, svc *builds.Service, out []buildSummary) {
+	hasQueued := false
+	for i := range out {
+		if out[i].Status == "queued" {
+			hasQueued = true
+			break
+		}
+	}
+	if !hasQueued {
+		return
+	}
+	pos := svc.QueuePositions(ctx)
+	for i := range out {
+		if out[i].Status == "queued" {
+			out[i].QueuePosition = pos[out[i].ID]
+		}
+	}
 }
 
 func toBuildSummary(b kube.KusoBuild) buildSummary {
@@ -379,6 +421,7 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	stampQueuePositions(ctx, h.Svc, out)
 	writeJSON(w, http.StatusOK, out)
 }
 

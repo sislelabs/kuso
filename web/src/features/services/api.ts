@@ -170,6 +170,10 @@ export interface BuildSummary {
   imageTag?: string;
   // status ∈ queued | pending | running | succeeded | failed | cancelled
   status: string;
+  // queuePosition is the build's 1-based place in the cluster-wide
+  // build queue; only present while status=queued. The badge renders
+  // it as "QUEUED #N". Absent = not queued or position unknown.
+  queuePosition?: number;
   startedAt?: string;
   finishedAt?: string;
   // Trigger context: who/what kicked off the build. Surfaces in the

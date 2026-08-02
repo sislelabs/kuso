@@ -171,6 +171,9 @@ var buildListCmd = &cobra.Command{
 			StartedAt    string `json:"startedAt"`
 			FinishedAt   string `json:"finishedAt"`
 			ErrorMessage string `json:"errorMessage,omitempty"`
+			// QueuePosition is the 1-based place in the cluster-wide
+			// build queue; only set while status=queued.
+			QueuePosition int `json:"queuePosition,omitempty"`
 		}
 		var items []buildRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
@@ -216,12 +219,16 @@ var buildListCmd = &cobra.Command{
 				if len(sha) > 12 {
 					sha = sha[:12]
 				}
+				status := b.Status
+				if b.Status == "queued" && b.QueuePosition > 0 {
+					status = fmt.Sprintf("queued (#%d)", b.QueuePosition)
+				}
 				row := []string{
 					b.ID,
 					b.Branch,
 					sha,
 					b.ImageTag,
-					b.Status,
+					status,
 					relativeAge(b.StartedAt),
 				}
 				if showReason {
