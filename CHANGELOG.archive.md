@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.113] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): public icon route, real theme tokens, move entry to create-project flow ([fac3a42](https://github.com/sislelabs/kuso/commit/fac3a422a72b3555a8d790b5b7d8faa46e8095af))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([add9e1d](https://github.com/sislelabs/kuso/commit/add9e1dbfc54aabc07780e53c2e1ecf2656d1003))
+
 ## [0.18.112] — 2026-07-03
 
 ### ✨ Features

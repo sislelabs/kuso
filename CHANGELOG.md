@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.13] — 2026-08-02
+
+### ✨ Features
+- Feat(builds): show queue position on queued builds ([f06204a](https://github.com/sislelabs/kuso/commit/f06204aa8ac3599439e5b40e64e0cf70cbf97911))
+
 ## [0.22.12] — 2026-08-01
 
 ### ✨ Features
@@ -428,14 +433,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(changelog): promote older entries into the archive ([bb04cec](https://github.com/sislelabs/kuso/commit/bb04cecb61efdac1bd6af91217c97a4b6f6354cb))
-
-## [0.18.113] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(marketplace): public icon route, real theme tokens, move entry to create-project flow ([fac3a42](https://github.com/sislelabs/kuso/commit/fac3a422a72b3555a8d790b5b7d8faa46e8095af))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([add9e1d](https://github.com/sislelabs/kuso/commit/add9e1dbfc54aabc07780e53c2e1ecf2656d1003))
 
 
 ---
