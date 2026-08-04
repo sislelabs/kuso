@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.14] — 2026-08-04
+
+### 🐛 Bug Fixes
+- Fix(canvas): non-prod tabs lost all service nodes + preview clones didn't replace bases ([1ce65a8](https://github.com/sislelabs/kuso/commit/1ce65a8dccc2fa2a7bef857e74fc8050366bf11b))
+
 ## [0.22.13] — 2026-08-02
 
 ### ✨ Features
@@ -425,14 +430,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(changelog): promote older entries into the archive ([6262481](https://github.com/sislelabs/kuso/commit/6262481d65c52d970125ea24bd4382c37c23bd63))
-
-## [0.18.114] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(marketplace): stop caching stale icons (no-cache + cache-bust query) ([f7c5e78](https://github.com/sislelabs/kuso/commit/f7c5e782618df62de2d384d414e6dc76f793b5ad))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([bb04cec](https://github.com/sislelabs/kuso/commit/bb04cecb61efdac1bd6af91217c97a4b6f6354cb))
 
 
 ---

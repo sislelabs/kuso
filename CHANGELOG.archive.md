@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.114] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): stop caching stale icons (no-cache + cache-bust query) ([f7c5e78](https://github.com/sislelabs/kuso/commit/f7c5e782618df62de2d384d414e6dc76f793b5ad))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([bb04cec](https://github.com/sislelabs/kuso/commit/bb04cecb61efdac1bd6af91217c97a4b6f6354cb))
+
 ## [0.18.113] — 2026-07-03
 
 ### 🐛 Bug Fixes
