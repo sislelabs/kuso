@@ -149,13 +149,29 @@ export function ProjectDetailView() {
   //     kuso.sislelabs.com/env=<group> — it belongs ONLY to that group.
   //     Not filtering these was the "duplicate node in production" bug
   //     (the staging clone's service leaked into the production canvas).
-  // inGroup handles both: no label -> shown everywhere; a label -> shown
-  // only on its own env tab. So we CAN filter services through it now
-  // (clone services carry the label as of the env-group service-label fix).
+  // svcInGroup handles both: no label -> shown everywhere; a label ->
+  // shown only on its own env tab (clone services carry the label as of
+  // the env-group service-label fix).
   const envLabel = "kuso.sislelabs.com/env";
+  // inGroup is the ENV-CR predicate: env CRs always carry the group
+  // label (unlabeled = legacy production), so "no label" only matches
+  // the production tab. Do NOT use it for services — see svcInGroup.
   const inGroup = (labels: Record<string, string> | undefined) => {
     const v = labels?.[envLabel];
     if (selectedEnv === "production") return !v || v === "production";
+    return v === selectedEnv;
+  };
+  // svcInGroup is the SERVICE predicate: a shared KusoService carries
+  // NO env label and belongs to EVERY env-group (model A above), so
+  // "no label" matches every tab; an env-group clone's labeled service
+  // (model B) matches only its own tab. Running services through
+  // inGroup instead was the v0.21.x regression that emptied every
+  // non-production canvas (staging + preview-pr-N showed addons only:
+  // inGroup returns v === selectedEnv, false when v is undefined).
+  const svcInGroup = (labels: Record<string, string> | undefined) => {
+    const v = labels?.[envLabel];
+    if (!v) return true;
+    if (selectedEnv === "production") return v === "production";
     return v === selectedEnv;
   };
   const envs = allEnvs.filter((e) => inGroup(e.metadata.labels));
@@ -172,16 +188,26 @@ export function ProjectDetailView() {
   //    matches what the env's services actually mount. Production (and any env
   //    without a clone of a given base) still shows the shared base.
   //
-  // replacedBases = the short base names this env has an env-scoped clone for,
-  // derived as "<base>-<selectedEnv>" → "<base>".
-  const cloneSuffix = `-${selectedEnv}`;
+  // replacedBases = the base names this env has an env-scoped clone for.
+  // Custom env-group clones are named "<base>-<selectedEnv>" (staging →
+  // scubatony-db-staging), but PREVIEW clones use the SHORT pr suffix:
+  // env-group "preview-pr-46" names its clones "<base>-pr-46" (server-
+  // side previewdb naming). Strip whichever suffix matches — deriving
+  // only "-<selectedEnv>" left replacedBases empty on preview tabs, so
+  // the shared bases rendered alongside their pr-N clones.
+  const cloneSuffixes = [`-${selectedEnv}`];
+  if (selectedEnv.startsWith("preview-")) {
+    cloneSuffixes.push(`-${selectedEnv.slice("preview-".length)}`);
+  }
   const replacedBases = new Set(
     selectedEnv !== "production"
       ? allAddons
           .filter((a) => a.metadata.labels?.[envLabel] === selectedEnv)
           .map((a) => a.metadata.name)
-          .filter((n) => n.endsWith(cloneSuffix))
-          .map((n) => n.slice(0, -cloneSuffix.length))
+          .flatMap((n) => {
+            const suffix = cloneSuffixes.find((s) => n.endsWith(s));
+            return suffix ? [n.slice(0, -suffix.length)] : [];
+          })
       : [],
   );
   const addonsList = allAddons.filter((a) => {
@@ -201,7 +227,7 @@ export function ProjectDetailView() {
   // Filter services to the selected env-group: shared (no env label)
   // services show on every tab; a clone's env-labeled service shows only
   // on its own tab (fixes the duplicate node bleeding into production).
-  const services = envExists ? allServices.filter((s) => inGroup(s.metadata.labels)) : [];
+  const services = envExists ? allServices.filter((s) => svcInGroup(s.metadata.labels)) : [];
   const onProduction = selectedEnv === "production";
 
   if (services.length === 0 && addonsList.length === 0) {
