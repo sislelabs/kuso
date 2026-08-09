@@ -140,15 +140,16 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Tenancy edit changes effective permissions for every member of
-	// the group. Bump their watermarks so the new shape takes effect
-	// immediately instead of waiting for token expiry. Spare the acting
-	// admin so editing a group they belong to doesn't log them out
-	// (their own perms re-resolve fresh per-request from the new DB).
-	if n, err := h.DB.InvalidateUsersByGroup(ctx, chi.URLParam(r, "id"), "group.tenancy.update", actingUserID(r)); err != nil {
-		h.Logger.Warn("put tenancy: invalidate user tokens", "group", chi.URLParam(r, "id"), "err", err)
-	} else if n > 0 {
-		h.Logger.Info("put tenancy: invalidated user tokens", "group", chi.URLParam(r, "id"), "users", n)
-	}
+	// the group. With per-request permission resolution (the
+	// PermissionResolver on the auth middleware), members' EXISTING
+	// tokens pick the new shape up within the 60s tenancy-cache TTL —
+	// so we only evict the cache. We deliberately do NOT bump token
+	// watermarks anymore: that killed every member's session on every
+	// tenancy edit, which was the only way to apply changes when perms
+	// were baked into the JWT, but is pure UX damage now (an upgrade
+	// forced the exact "grant then re-login" dance the resolver
+	// removes; a downgrade is enforced by resolution within the TTL).
+	h.DB.EvictAllTenancy()
 	w.WriteHeader(http.StatusNoContent)
 }
 
