@@ -92,6 +92,7 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// Admin-only: a port-forward to a database is a strictly
 	// elevated capability — not even the deployer role gets one.
 	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {

@@ -35,6 +35,13 @@ const (
 	PermUserWrite     Permission = "user:write"
 	PermBillingRead   Permission = "billing:read"
 	PermSystemUpdate  Permission = "system:update"
+	// PermProjectsCreate gates creating NEW projects — the one write
+	// that has no project to be a member of yet. Instance-role
+	// EDITORS carry it (they self-serve new projects and become
+	// project-admin of what they create); admins carry it with the
+	// rest of the instance set. Deliberately NOT in
+	// reservedInstancePerms: a custom role may legitimately grant it.
+	PermProjectsCreate Permission = "projects:create"
 
 	// Project-scoped permissions. NOT baked into the JWT — resolved
 	// fresh per-request from the caller's effective role on the target
@@ -59,10 +66,18 @@ const (
 //
 // Pure function — easy to test without DB.
 func Compute(t db.GroupTenancy) []string {
+	if t.InstanceRole == db.InstanceRoleEditor {
+		// Instance editors self-serve NEW projects (they become
+		// project-admin of what they create — see the Create handler's
+		// self-grant). Everything else stays project-scoped and is
+		// resolved per-request from their grants.
+		return []string{string(PermProjectsCreate)}
+	}
 	if t.InstanceRole != db.InstanceRoleAdmin {
-		// Non-admins carry NO instance-level perms. They authenticate,
-		// but every project-scoped check re-resolves their effective
-		// role from the DB against the specific project being accessed.
+		// Viewers/pending carry NO instance-level perms. They
+		// authenticate, but every project-scoped check re-resolves
+		// their effective role from the DB against the specific
+		// project being accessed.
 		return []string{}
 	}
 	// Admins get every instance perm. Project perms are granted
@@ -71,7 +86,7 @@ func Compute(t db.GroupTenancy) []string {
 	// nil ("no filter — all projects").
 	perms := []Permission{
 		PermSettingsAdmin, PermSettingsRead, PermAuditRead, PermUserWrite,
-		PermBillingRead, PermSystemUpdate,
+		PermBillingRead, PermSystemUpdate, PermProjectsCreate,
 	}
 	out := make([]string, 0, len(perms))
 	for _, p := range perms {

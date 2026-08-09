@@ -135,6 +135,40 @@ func main() {
 	// enough that a flaky pool burst doesn't 401 every active session.
 	issuer.SetRevocationChecker(makeRevocationChecker(database))
 
+	// Per-request permission resolution: the JWT is identity only —
+	// the effective permission set is recomputed on every request as
+	// UserPermissions (custom-role perms) ∪ Compute(tenancy), both
+	// behind the 60s tenancy cache. This is what makes a role grant
+	// (or revoke) take effect on tokens the user ALREADY holds; the
+	// pre-resolver behaviour froze authority at mint time, so a
+	// granted role sat inert until the user minted a fresh token —
+	// and a revoked one kept working until expiry.
+	issuer.SetPermissionResolver(func(ctx context.Context, c *auth.Claims) ([]string, bool) {
+		rolePerms, err := database.UserPermissionsCached(ctx, c.UserID)
+		if err != nil {
+			return nil, false
+		}
+		tenancy, err := database.ListUserTenancyCached(ctx, c.UserID)
+		if err != nil {
+			return nil, false
+		}
+		perms := make([]string, 0, len(rolePerms)+8)
+		seen := make(map[string]bool, len(rolePerms)+8)
+		for _, p := range rolePerms {
+			if !seen[p] {
+				seen[p] = true
+				perms = append(perms, p)
+			}
+		}
+		for _, p := range auth.Compute(tenancy) {
+			if !seen[p] {
+				seen[p] = true
+				perms = append(perms, p)
+			}
+		}
+		return perms, true
+	})
+
 	// Two-tier shutdown contexts (R4 audit fix):
 	//
 	//   sigCtx     — signal-driven; cancels on SIGTERM / SIGINT
@@ -923,6 +957,36 @@ func main() {
 				// updating kuso" with one HTTP round-trip instead of a
 				// 30-60s failed-clone cycle.
 				buildSvc.RepoAccess = ghCli
+				// Preview TTL sweep gate: before deleting an expired
+				// preview env, ask GitHub whether its PR is still open
+				// on any of the project's repos (project defaultRepo +
+				// each service's spec.repo — multi-repo projects preview
+				// per-service repos). Open → the sweep extends the TTL
+				// instead of tearing down an active PR's preview.
+				projSvc.PreviewPROpen = func(ctx context.Context, project string, prNumber int) (bool, error) {
+					ns := *namespace
+					if nsResolver != nil {
+						ns = nsResolver.NamespaceFor(ctx, project)
+					}
+					var urls []string
+					if proj, err := kc.GetKusoProject(ctx, *namespace, project); err == nil && proj != nil && proj.Spec.DefaultRepo != nil {
+						urls = append(urls, proj.Spec.DefaultRepo.URL)
+					}
+					svcs, err := kc.ListKusoServices(ctx, ns)
+					if err != nil {
+						return false, fmt.Errorf("list services: %w", err)
+					}
+					for i := range svcs {
+						s := &svcs[i]
+						if s.Spec.Project != project && s.Labels[kube.LabelProject] != project {
+							continue
+						}
+						if s.Spec.Repo != nil && s.Spec.Repo.URL != "" {
+							urls = append(urls, s.Spec.Repo.URL)
+						}
+					}
+					return ghCli.PROpenInAny(ctx, ghCache, urls, prNumber)
+				}
 			}
 		}
 	}

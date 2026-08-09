@@ -50,6 +50,12 @@ func TestCompute_InstanceLevelOnly(t *testing.T) {
 						t.Errorf("admin JWT should not carry project perm %s (resolved per-request)", p)
 					}
 				}
+			} else if tc.role == db.InstanceRoleEditor {
+				// Editors carry exactly projects:create — the self-serve
+				// new-project perm — and nothing else instance-level.
+				if len(got) != 1 || got[0] != string(PermProjectsCreate) {
+					t.Errorf("editor: expected exactly [projects:create], got %v", got)
+				}
 			} else if len(got) != 0 {
 				t.Errorf("%s: expected NO instance perms, got %v", tc.name, got)
 			}

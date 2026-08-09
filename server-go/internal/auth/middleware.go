@@ -37,6 +37,33 @@ func (i *Issuer) SetRevocationChecker(fn RevocationChecker) {
 	i.revoked = fn
 }
 
+// PermissionResolver recomputes a principal's effective permission set
+// from live state (DB) on each request, replacing the set baked into
+// the JWT at issue time. Returns (perms, true) on success; (nil,
+// false) when resolution failed.
+//
+// Why: baked claims froze authorization at mint time — granting a user
+// a role did nothing until they minted a fresh token, and (worse)
+// REVOKING one kept working until token expiry. With the resolver
+// wired, the JWT is identity only; authority is always current.
+//
+// On resolution failure the middleware fails CLOSED to an EMPTY
+// permission set (the request stays authenticated — project-scoped
+// routes do their own DB-backed resolution — but instance-level gates
+// 403). Falling back to the baked claims would resurrect exactly the
+// staleness this hook exists to remove, on exactly the DB-outage
+// window where a just-revoked admin's old token would matter most.
+type PermissionResolver func(ctx context.Context, c *Claims) ([]string, bool)
+
+// SetPermissionResolver installs the per-request permission resolver.
+// Pass nil to disable (claims keep their baked permissions — the
+// pre-resolver behaviour, used by tests and stripped-down wiring).
+// Safe to call once at startup; not safe to mutate concurrently with
+// in-flight requests.
+func (i *Issuer) SetPermissionResolver(fn PermissionResolver) {
+	i.resolvePerms = fn
+}
+
 // Middleware returns an http.Handler middleware that pulls the bearer
 // token from Authorization, verifies it, and stuffs the *Claims into the
 // request context. Requests without a token, or with an invalid token,
@@ -78,6 +105,7 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			i.ResolvePermissions(r.Context(), claims)
 			ctx := context.WithValue(r.Context(), claimsCtxKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -102,6 +130,26 @@ func (i *Issuer) CheckRevoked(ctx context.Context, c *Claims) bool {
 		iat = c.IssuedAt.Time
 	}
 	return i.revoked(ctx, c.ID, c.UserID, iat)
+}
+
+// ResolvePermissions overwrites c.Permissions with the live set from
+// the installed PermissionResolver. No-op when no resolver is wired
+// (claims keep their baked perms). On resolver failure the set is
+// emptied — see the PermissionResolver doc for why we fail closed.
+//
+// Handlers on the PUBLIC router that verify tokens themselves (the
+// WebSocket upgraders) MUST call this after Verify + CheckRevoked,
+// for the same reason they must call CheckRevoked: a stale-claims
+// bypass on those surfaces would undo the per-request model.
+func (i *Issuer) ResolvePermissions(ctx context.Context, c *Claims) {
+	if i.resolvePerms == nil || c == nil {
+		return
+	}
+	if perms, ok := i.resolvePerms(ctx, c); ok {
+		c.Permissions = perms
+	} else {
+		c.Permissions = []string{}
+	}
 }
 
 // ClaimsFromContext returns the verified Claims previously stored by

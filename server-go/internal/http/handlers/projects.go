@@ -451,12 +451,20 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	// Project creation is an instance-level action. In role-system v2
-	// project:write is a per-PROJECT perm not present in any JWT, so we
-	// gate creation on instance admin (settings:admin) — you must be an
-	// admin to conjure a brand-new project; editors are added to
-	// existing projects via grants.
-	if !requireAdmin(w, r) {
+	// Project creation is an instance-level action: project:write is a
+	// per-PROJECT perm not present in any JWT, and there is no project
+	// to be a member of yet. Gate on projects:create — carried by
+	// instance ADMINS and instance EDITORS (self-serve; they become
+	// project-admin of what they create via the grant below). The
+	// settings:admin alternative keeps pre-resolver admin tokens
+	// working on wiring that has no PermissionResolver installed.
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !auth.HasAny(claims.Permissions, auth.PermProjectsCreate, auth.PermSettingsAdmin) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var wire apiv1.CreateProjectRequest
@@ -470,6 +478,20 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, "create project", err)
 		return
+	}
+	// Self-grant: a non-admin creator gets project-admin on the project
+	// they just created — otherwise it would be invisible to them (no
+	// grant → ProjectRoleFor returns ""). Instance admins skip this;
+	// they're implicitly admin-on-every-project. Best-effort: a failed
+	// grant leaves a project only admins can see, which the error nudges
+	// the operator to fix; it must not roll back the created project.
+	if h.DB != nil && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		if _, gerr := h.DB.AddProjectGrant(ctx, out.Name, claims.UserID, "", db.ProjectRoleAdmin); gerr != nil {
+			h.Logger.Error("create project: self-grant failed — project visible to admins only",
+				"project", out.Name, "user", claims.UserID, "err", gerr)
+		} else {
+			h.DB.EvictUserTenancy(claims.UserID)
+		}
 	}
 	writeJSON(w, http.StatusCreated, out)
 }

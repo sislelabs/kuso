@@ -35,9 +35,10 @@ type Claims struct {
 // the TS server (process.env.JWT_SECRET) so tokens round-trip between
 // implementations during the staged cutover.
 type Issuer struct {
-	secret  []byte
-	ttl     time.Duration
-	revoked RevocationChecker // optional; set via SetRevocationChecker
+	secret       []byte
+	ttl          time.Duration
+	revoked      RevocationChecker  // optional; set via SetRevocationChecker
+	resolvePerms PermissionResolver // optional; set via SetPermissionResolver
 }
 
 // NewIssuer constructs an Issuer with the given HMAC secret and TTL.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,16 @@ func (s *Service) GetEnvironment(ctx context.Context, project, env string) (*kub
 // the past. Webhooks are the primary teardown mechanism; this is the
 // safety net for missed close events / suspended Apps / past outages.
 //
+// When PreviewPROpen is wired, an expired env is only deleted after
+// GitHub confirms its PR is no longer open. An OPEN PR gets its
+// expiresAt re-stamped (project ttlDays) instead — the TTL alone is
+// not evidence of abandonment, just of no pushes: tickero PR 46 sat
+// quietly for 7 days while still open and under review, and the sweep
+// silently tore its preview down (2026-08-06). A check error keeps
+// the env for this tick; the 5-minute ticker retries. Without the
+// checker (nil, e.g. no GitHub App configured) the legacy
+// delete-on-expiry behaviour is unchanged.
+//
 // Returns the number of envs deleted. Errors against individual envs
 // are logged via the supplied callback (or swallowed when nil) so one
 // flaky teardown doesn't stop the sweep.
@@ -56,7 +67,13 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 	}
 	seen := map[string]bool{s.Namespace: true}
 	nss := []string{s.Namespace}
+	// ttlDaysByProject feeds the open-PR extension below — re-stamp
+	// with the same TTL the dispatcher would use, not a hardcoded one.
+	ttlDaysByProject := make(map[string]int, len(projects))
 	for _, p := range projects {
+		if p.Spec.Previews != nil && p.Spec.Previews.TTLDays > 0 {
+			ttlDaysByProject[p.Name] = p.Spec.Previews.TTLDays
+		}
 		ns := p.Spec.Namespace
 		if ns == "" || seen[ns] {
 			continue
@@ -83,6 +100,44 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 			if err != nil || !exp.Before(now) {
 				continue
 			}
+			proj := e.Spec.Project
+			if proj == "" {
+				proj = e.Labels[kube.LabelProject]
+			}
+			// PR-state gate: an expired preview whose PR is still OPEN is
+			// not abandoned — extend its TTL instead of deleting. Only a
+			// confirmed closed/merged/vanished PR falls through to the
+			// delete. Check errors keep the env for this tick (the ticker
+			// retries in 5 minutes); deleting an active PR's preview on a
+			// transient GitHub error is strictly worse than a short leak.
+			if s.PreviewPROpen != nil && proj != "" {
+				if prNum, ok := previewPRNumberFromEnv(&e); ok {
+					open, cerr := s.PreviewPROpen(ctx, proj, prNum)
+					if cerr != nil {
+						if onErr != nil {
+							onErr(e.Name, fmt.Errorf("pr-state check: %w", cerr))
+						}
+						continue
+					}
+					if open {
+						ttlDays := ttlDaysByProject[proj]
+						if ttlDays <= 0 {
+							ttlDays = 7
+						}
+						newExp := now.Add(time.Duration(ttlDays) * 24 * time.Hour).Format(time.RFC3339)
+						if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, e.Name, func(live *kube.KusoEnvironment) error {
+							if live.Spec.TTL == nil {
+								live.Spec.TTL = &kube.KusoTTL{}
+							}
+							live.Spec.TTL.ExpiresAt = newExp
+							return nil
+						}); uerr != nil && onErr != nil {
+							onErr(e.Name, fmt.Errorf("extend ttl: %w", uerr))
+						}
+						continue
+					}
+				}
+			}
 			// Route through the full DeleteEnvironment rather than
 			// DeleteKusoEnvironment. The bare CR delete leaves the per-env
 			// Secret, the PR's addon clones (StatefulSet + data PVC) and
@@ -93,10 +148,6 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 			// close event), so this was the main orphan source.
 			// DeleteEnvironment is documented idempotent and resumable, so
 			// it is safe to call here and safe to retry on the next tick.
-			proj := e.Spec.Project
-			if proj == "" {
-				proj = e.Labels[kube.LabelProject]
-			}
 			if proj == "" {
 				// Can't resolve the project — fall back to the bare CR
 				// delete so an unlabelled env still expires rather than
@@ -126,6 +177,26 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 		}
 	}
 	return deleted, nil
+}
+
+// previewPRNumberFromEnv extracts the PR number a preview env belongs to.
+// Primary source is the env-group label (kuso.sislelabs.com/env =
+// "preview-pr-N" — stamped by ensurePreviewEnv); fallback is the CR
+// name's "-pr-N" suffix for hand-created / pre-label CRs. Returns
+// ok=false when neither yields a number, in which case the sweep
+// falls back to legacy delete-on-expiry.
+func previewPRNumberFromEnv(e *kube.KusoEnvironment) (int, bool) {
+	if v, ok := strings.CutPrefix(e.Labels[kube.LabelEnv], "preview-pr-"); ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	if i := strings.LastIndex(e.Name, "-pr-"); i >= 0 {
+		if n, err := strconv.Atoi(e.Name[i+len("-pr-"):]); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // DeleteEnvironment removes a preview env. Production envs cannot be

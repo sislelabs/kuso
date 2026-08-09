@@ -176,6 +176,7 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// Project-ownership check. Auth middleware would normally do this
 	// for us, but the WS handler is mounted on the public router and
 	// has to roll its own gates. Admins (settings:admin) bypass.

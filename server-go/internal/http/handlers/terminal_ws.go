@@ -82,6 +82,7 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// The auth middleware (which we bypass) is the only production code
 	// that stuffs claims into the request context. callerHasProjectPerm
 	// reads them back via ClaimsFromContext, so inject them here — without

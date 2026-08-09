@@ -39,13 +39,26 @@ type tenancyCacheEntry struct {
 	storedAt time.Time
 }
 
+// rolePermsEntry memoises UserPermissions (custom-role perms) with the
+// same TTL as tenancy. Both feed the per-request permission resolver in
+// the auth middleware, so they must stale-out together — a role change
+// that shows in one but not the other would produce a mixed perms set.
+type rolePermsEntry struct {
+	perms    []string
+	storedAt time.Time
+}
+
 type tenancyCache struct {
-	mu      sync.RWMutex
-	entries map[string]tenancyCacheEntry
+	mu        sync.RWMutex
+	entries   map[string]tenancyCacheEntry
+	rolePerms map[string]rolePermsEntry
 }
 
 func newTenancyCache() *tenancyCache {
-	return &tenancyCache{entries: map[string]tenancyCacheEntry{}}
+	return &tenancyCache{
+		entries:   map[string]tenancyCacheEntry{},
+		rolePerms: map[string]rolePermsEntry{},
+	}
 }
 
 func (c *tenancyCache) get(userID string) (GroupTenancy, bool) {
@@ -79,6 +92,7 @@ func (c *tenancyCache) evict(userID string) {
 	}
 	c.mu.Lock()
 	delete(c.entries, userID)
+	delete(c.rolePerms, userID)
 	c.mu.Unlock()
 }
 
@@ -88,6 +102,29 @@ func (c *tenancyCache) evictAll() {
 	}
 	c.mu.Lock()
 	c.entries = map[string]tenancyCacheEntry{}
+	c.rolePerms = map[string]rolePermsEntry{}
+	c.mu.Unlock()
+}
+
+func (c *tenancyCache) getPerms(userID string) ([]string, bool) {
+	if c == nil || userID == "" {
+		return nil, false
+	}
+	c.mu.RLock()
+	e, ok := c.rolePerms[userID]
+	c.mu.RUnlock()
+	if !ok || time.Since(e.storedAt) > tenancyCacheTTL {
+		return nil, false
+	}
+	return e.perms, true
+}
+
+func (c *tenancyCache) putPerms(userID string, perms []string) {
+	if c == nil || userID == "" {
+		return
+	}
+	c.mu.Lock()
+	c.rolePerms[userID] = rolePermsEntry{perms: perms, storedAt: time.Now()}
 	c.mu.Unlock()
 }
 
@@ -112,6 +149,33 @@ func (d *DB) ListUserTenancyCached(ctx context.Context, userID string) (GroupTen
 		d.tenancy.put(userID, t)
 	}
 	return t, nil
+}
+
+// UserPermissionsCached returns the user's custom-role permissions
+// (UserPermissions) through the same TTL cache tenancy uses. The auth
+// middleware's per-request permission resolver calls this on EVERY
+// authenticated request — uncached it would re-run the role/permission
+// JOIN per request, exactly the load the tenancy cache exists to absorb.
+func (d *DB) UserPermissionsCached(ctx context.Context, userID string) ([]string, error) {
+	if d == nil {
+		return nil, nil
+	}
+	if d.tenancy != nil {
+		if p, ok := d.tenancy.getPerms(userID); ok {
+			return p, nil
+		}
+	}
+	p, err := d.UserPermissions(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		p = []string{}
+	}
+	if d.tenancy != nil {
+		d.tenancy.putPerms(userID, p)
+	}
+	return p, nil
 }
 
 // EvictUserTenancy drops the cached entry for one user. Called from

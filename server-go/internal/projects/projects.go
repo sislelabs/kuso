@@ -53,6 +53,14 @@ type Service struct {
 	// re-attach secrets manually after creating the addon.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 
+	// PreviewPROpen reports whether PR #prNumber is still open on any
+	// of the project's repos. SweepExpiredPreviews consults it before
+	// deleting a TTL-expired preview env: open PR → extend the TTL,
+	// closed/vanished → delete, error → keep and retry next tick.
+	// nil = legacy delete-on-expiry (no GitHub App configured).
+	// Wired in main.go against the github client + installation cache.
+	PreviewPROpen func(ctx context.Context, project string, prNumber int) (bool, error)
+
 	// ProvisionInstanceAddon provisions the per-project database +
 	// <addon>-conn secret for an instance-shared addon (spec.useInstanceAddon)
 	// whose CR was written directly — i.e. an env-group clone, which calls
