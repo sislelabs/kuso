@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.115] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): unify icon glyphs — consistent stroke weight, centering, rounded joins ([2cd676a](https://github.com/sislelabs/kuso/commit/2cd676a559991405152b62a54bbf6e4c518901c0))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([6262481](https://github.com/sislelabs/kuso/commit/6262481d65c52d970125ea24bd4382c37c23bd63))
+
 ## [0.18.114] — 2026-07-03
 
 ### 🐛 Bug Fixes

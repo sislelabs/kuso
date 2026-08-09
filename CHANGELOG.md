@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.15] — 2026-08-09
+
+### ✨ Features
+- Feat(auth): per-request permission resolution + instance editors can create projects ([b76f5c8](https://github.com/sislelabs/kuso/commit/b76f5c8902e3b0dadaaf83b8ed529212b5dbe16f))
+
+### 🐛 Bug Fixes
+- Fix(auth): tenancy edits no longer kill member sessions ([6c96a3a](https://github.com/sislelabs/kuso/commit/6c96a3a102965dc5c9b29a28dbaf8992f05cc9b8))
+
 ## [0.22.14] — 2026-08-04
 
 ### 🐛 Bug Fixes
@@ -422,14 +430,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(skill): update kuso skill to v0.18.115 + correct secret-set guidance ([82fb981](https://github.com/sislelabs/kuso/commit/82fb98150f69f10e5783906fad21a7422f51f69c))
-
-## [0.18.115] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(marketplace): unify icon glyphs — consistent stroke weight, centering, rounded joins ([2cd676a](https://github.com/sislelabs/kuso/commit/2cd676a559991405152b62a54bbf6e4c518901c0))
-
-### 📝 Docs
-- Docs(changelog): promote older entries into the archive ([6262481](https://github.com/sislelabs/kuso/commit/6262481d65c52d970125ea24bd4382c37c23bd63))
 
 
 ---
