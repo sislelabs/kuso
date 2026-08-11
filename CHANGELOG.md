@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.16] — 2026-08-11
+
+### 🐛 Bug Fixes
+- Fix(security): repo-URL deploy-token credentials no longer leak to non-admins ([9cc53ad](https://github.com/sislelabs/kuso/commit/9cc53ad18a66d9627d1acb385e39bbb41f31459d))
+
 ## [0.22.15] — 2026-08-09
 
 ### ✨ Features
@@ -421,15 +426,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(crd): refresh kusoruns golden for valueFrom (revert collateral) ([ea8d066](https://github.com/sislelabs/kuso/commit/ea8d0669fa35389761fa5401cea6564377c7fdc1))
-
-## [0.18.116] — 2026-07-03
-
-### 🐛 Bug Fixes
-- Fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift) ([f024f58](https://github.com/sislelabs/kuso/commit/f024f58a037dfb70774d31a8f5a255a53bd74f01))
-- Fix(run): carry ${{ }} env aliases into run pods (DATABASE_URI drop) ([3aea00b](https://github.com/sislelabs/kuso/commit/3aea00baa32d3850edf6fd47a6a01a751532a3ea))
-
-### 📝 Docs
-- Docs(skill): update kuso skill to v0.18.115 + correct secret-set guidance ([82fb981](https://github.com/sislelabs/kuso/commit/82fb98150f69f10e5783906fad21a7422f51f69c))
 
 
 ---

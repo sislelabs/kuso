@@ -2,6 +2,15 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.116] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift) ([f024f58](https://github.com/sislelabs/kuso/commit/f024f58a037dfb70774d31a8f5a255a53bd74f01))
+- Fix(run): carry ${{ }} env aliases into run pods (DATABASE_URI drop) ([3aea00b](https://github.com/sislelabs/kuso/commit/3aea00baa32d3850edf6fd47a6a01a751532a3ea))
+
+### 📝 Docs
+- Docs(skill): update kuso skill to v0.18.115 + correct secret-set guidance ([82fb981](https://github.com/sislelabs/kuso/commit/82fb98150f69f10e5783906fad21a7422f51f69c))
+
 ## [0.18.115] — 2026-07-03
 
 ### 🐛 Bug Fixes
