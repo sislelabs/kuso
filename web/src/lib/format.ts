@@ -22,3 +22,20 @@ export function shortSha(s?: string, n = 7): string {
   if (!s) return "";
   return s.slice(0, n);
 }
+
+// stripRepoCredentials removes embedded credentials (userinfo) from a
+// git clone URL before DISPLAY. Users store deploy-token URLs like
+//   https://kuso-deploy:gldt-xxxx@gitlab.com/org/repo.git
+// so the builder can clone — but any surface that renders the stored
+// URL verbatim (project card, service settings label) was printing a
+// working credential to every viewer. Handles scheme-ful and bare
+// forms; scp-style SSH (git@host:org/repo) is left alone — its
+// userinfo is a username, not a secret.
+export function stripRepoCredentials(raw?: string): string {
+  if (!raw) return "";
+  const m = raw.match(/^([a-z][a-z0-9+.-]*:\/\/)?([^/@]+)@(.+)$/i);
+  if (!m) return raw;
+  // scp-style (git@host:path, no scheme, no password) → keep as-is.
+  if (!m[1] && !m[2].includes(":")) return raw;
+  return (m[1] ?? "") + m[3];
+}

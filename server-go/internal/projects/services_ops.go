@@ -2312,8 +2312,22 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				if err := validateRepoPath(req.Repo.Path); err != nil {
 					return err
 				}
+				// Round-trip credential preservation: API reads redact
+				// deploy-token userinfo from repo URLs, so a patch that
+				// echoes the redacted URL back (same repo, no creds)
+				// keeps the stored credentials instead of clobbering
+				// them. A genuinely different URL replaces them.
+				effURL := req.Repo.URL
+				if svc.Spec.Repo != nil {
+					stored := svc.Spec.Repo.URL
+					if kube.RepoURLHasCredentials(stored) &&
+						!kube.RepoURLHasCredentials(effURL) &&
+						kube.StripRepoURLCredentials(stored) == effURL {
+						effURL = stored
+					}
+				}
 				ref := &kube.KusoRepoRef{
-					URL:           req.Repo.URL,
+					URL:           effURL,
 					DefaultBranch: req.Repo.Branch,
 					Path:          req.Repo.Path,
 					Provider:      req.Repo.Provider,

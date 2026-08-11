@@ -8,6 +8,7 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
+import { stripRepoCredentials } from "@/lib/format";
 import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -717,9 +718,11 @@ function EnvBranchSection({
   const suggestedBranch = env;
   const currentBranch = hasOverride ? overrideBranch : suggestedBranch;
   const repoLabel = (() => {
-    const url = svc?.spec?.repo?.url ?? "";
+    // Credentials out FIRST: a gitlab deploy-token URL fell through the
+    // github-only match below and rendered the token verbatim.
+    const url = stripRepoCredentials(svc?.spec?.repo?.url ?? "");
     if (!url) return "";
-    const m = url.match(/github\.com[/:]([^/]+\/[^/.]+)/i);
+    const m = url.match(/(?:github|gitlab)\.com[/:]([^/]+\/[^/.]+)/i);
     return m ? m[1] : url;
   })();
   const [branch, setBranch] = useState(currentBranch);

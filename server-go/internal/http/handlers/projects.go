@@ -417,6 +417,52 @@ func maskEnvsIfNeeded(ctx context.Context, dbConn *db.DB, project string, envs [
 	}
 }
 
+// redactRepoRefCreds returns a clone of ref with embedded URL
+// credentials removed, or ref itself when there's nothing to strip.
+// Clone (not in-place mutate) because the ref pointer may be shared
+// with a fresh decode the caller still owns elsewhere.
+func redactRepoRefCreds(ref *kube.KusoRepoRef) *kube.KusoRepoRef {
+	if ref == nil || !kube.RepoURLHasCredentials(ref.URL) {
+		return ref
+	}
+	cp := *ref
+	cp.URL = kube.StripRepoURLCredentials(ref.URL)
+	return &cp
+}
+
+// redactProjectRepoIfNeeded strips credentials from a project's
+// defaultRepo URL unless the caller may read secrets on that project.
+// Deploy-token URLs (https://user:gldt-xxx@gitlab.com/…) are working
+// clone credentials; kuso treats secret VALUES as admin-only
+// (secrets:read), and a token in a repo URL is exactly that. Same
+// contract as maskServiceEnvIfNeeded: every endpoint serializing a
+// KusoProject must route through here.
+func redactProjectRepoIfNeeded(ctx context.Context, dbConn *db.DB, p *kube.KusoProject) {
+	if p == nil || callerCanReadSecrets(ctx, dbConn, p.Name) {
+		return
+	}
+	p.Spec.DefaultRepo = redactRepoRefCreds(p.Spec.DefaultRepo)
+}
+
+// redactServicesRepoIfNeeded is the service-slice form (one gate check
+// per project, like maskServicesEnvIfNeeded).
+func redactServicesRepoIfNeeded(ctx context.Context, dbConn *db.DB, project string, svcs []kube.KusoService) {
+	if len(svcs) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	for i := range svcs {
+		svcs[i].Spec.Repo = redactRepoRefCreds(svcs[i].Spec.Repo)
+	}
+}
+
+// redactServiceRepoIfNeeded is the single-service form.
+func redactServiceRepoIfNeeded(ctx context.Context, dbConn *db.DB, project string, svc *kube.KusoService) {
+	if svc == nil || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	svc.Spec.Repo = redactRepoRefCreds(svc.Spec.Repo)
+}
+
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
@@ -446,6 +492,12 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 				out = filtered
 			}
 		}
+	}
+	// Strip repo-URL credentials per project (the gate differs per
+	// project: a caller can be admin on one and viewer on another).
+	// Tenancy is cached, so this is N map lookups, not N queries.
+	for i := range out {
+		redactProjectRepoIfNeeded(ctx, h.DB, &out[i])
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -518,6 +570,8 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 		enrichEnvsWithManagedSecretKeys(ctx, h.Svc, project, out.Environments)
 		maskServicesEnvIfNeeded(ctx, h.DB, project, out.Services)
 		maskEnvsIfNeeded(ctx, h.DB, project, out.Environments)
+		redactProjectRepoIfNeeded(ctx, h.DB, out.Project)
+		redactServicesRepoIfNeeded(ctx, h.DB, project, out.Services)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -599,6 +653,7 @@ func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	}
 	enrichServicesWithManagedSecretKeys(ctx, h.Svc, project, out)
 	maskServicesEnvIfNeeded(ctx, h.DB, project, out)
+	redactServicesRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -647,6 +702,7 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	// values. Mutates the returned CR copy in place; GetService returns a
 	// fresh decode per call so this doesn't poison a cache.
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -741,6 +797,9 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	// references, not values, so they stay verbatim (they leak nothing).
 	if f != nil && !callerCanReadSecrets(ctx, h.DB, project) {
 		for si := range f.Services {
+			// Repo URLs can embed deploy-token credentials — same
+			// admin-only disclosure as env values.
+			f.Services[si].Repo = kube.StripRepoURLCredentials(f.Services[si].Repo)
 			for k, ev := range f.Services[si].Env {
 				if ev.Generate != "" {
 					continue // a generator directive, not a value

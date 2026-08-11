@@ -298,7 +298,19 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 				cur.Spec.DefaultRepo = &kube.KusoRepoRef{}
 			}
 			if req.DefaultRepo.URL != "" {
-				cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
+				// Round-trip credential preservation: API reads redact
+				// the userinfo from deploy-token URLs, so an edit that
+				// saves the redacted form back (same repo, no creds)
+				// must NOT clobber the stored credentials. Only an URL
+				// that differs beyond its userinfo replaces them.
+				stored := cur.Spec.DefaultRepo.URL
+				if kube.RepoURLHasCredentials(stored) &&
+					!kube.RepoURLHasCredentials(req.DefaultRepo.URL) &&
+					kube.StripRepoURLCredentials(stored) == req.DefaultRepo.URL {
+					// keep stored URL (credentials intact)
+				} else {
+					cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
+				}
 			}
 			if req.DefaultRepo.DefaultBranch != "" {
 				cur.Spec.DefaultRepo.DefaultBranch = req.DefaultRepo.DefaultBranch

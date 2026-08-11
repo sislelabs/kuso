@@ -18,7 +18,7 @@ import {
   type ContextMenuItem,
 } from "@/components/canvas/CanvasContextMenu";
 import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
-import { relativeTime } from "@/lib/format";
+import { relativeTime, stripRepoCredentials } from "@/lib/format";
 import { isProductionGroup } from "@/lib/env-group";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -462,7 +462,11 @@ function ProjectsGrid({
         // repo row rather than arbitrarily picking one.
         const effectiveRepoRaw =
           p.spec.defaultRepo?.url ?? distinctServiceRepo(services);
-        const repo = effectiveRepoRaw?.replace(/^https?:\/\/(www\.)?/, "");
+        // stripRepoCredentials BEFORE display: deploy-token URLs
+        // (https://user:gldt-xxx@gitlab.com/…) must never render their
+        // userinfo on the card — that's a working clone credential
+        // shown to every viewer.
+        const repo = stripRepoCredentials(effectiveRepoRaw)?.replace(/^https?:\/\/(www\.)?/, "");
         // Clickable web URL for the repo row. Normalises the stored
         // clone URL (https://…, git@host:…, or bare host/path, with or
         // without a trailing .git) to an https:// browser link. Returns
