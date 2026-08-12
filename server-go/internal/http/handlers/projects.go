@@ -478,19 +478,26 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
 		if h.DB != nil {
 			tenancy, terr := h.DB.ListUserTenancyCached(ctx, claims.UserID)
-			if terr == nil {
-				allowed := map[string]struct{}{}
-				for _, m := range tenancy.ProjectMemberships {
-					allowed[m.Project] = struct{}{}
-				}
-				filtered := out[:0]
-				for _, p := range out {
-					if _, ok := allowed[p.Name]; ok {
-						filtered = append(filtered, p)
-					}
-				}
-				out = filtered
+			if terr != nil {
+				// Fail CLOSED: skipping the filter on a tenancy error
+				// would hand a non-admin the full project list (names +
+				// specs). A 500 is honest and retryable; the silent
+				// full-list disclosure is neither.
+				h.Logger.Error("list projects: tenancy filter unavailable", "user", claims.UserID, "err", terr)
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
 			}
+			allowed := map[string]struct{}{}
+			for _, m := range tenancy.ProjectMemberships {
+				allowed[m.Project] = struct{}{}
+			}
+			filtered := out[:0]
+			for _, p := range out {
+				if _, ok := allowed[p.Name]; ok {
+					filtered = append(filtered, p)
+				}
+			}
+			out = filtered
 		}
 	}
 	// Strip repo-URL credentials per project (the gate differs per
@@ -545,6 +552,9 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			h.DB.EvictUserTenancy(claims.UserID)
 		}
 	}
+	// The creator is normally project-admin (self-grant above) so this
+	// is a no-op for them; it matters when the self-grant failed.
+	redactProjectRepoIfNeeded(ctx, h.DB, out)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -595,6 +605,7 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "update project", err)
 		return
 	}
+	redactProjectRepoIfNeeded(ctx, h.DB, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -602,7 +613,13 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// Admin, not editor: this is the single most destructive op in the
+	// API (fans out to every service/env/addon/build/secret, and
+	// ?purgeData=true takes the PVCs). Editors deploy and configure;
+	// removing the whole project — data included — is an owner-level
+	// decision. Project creators hold admin via the create self-grant,
+	// so self-serve delete of your own project still works.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleAdmin) {
 		return
 	}
 	// ?purgeData=true also wipes every PVC labeled with this
@@ -617,6 +634,29 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.Svc.DeleteWithOptions(ctx, project, opts); err != nil {
 		h.fail(w, "delete project", err)
 		return
+	}
+	// DB state scoped to the project dies with it. Grants especially:
+	// a stale ProjectGrant row resurrects its holder as project-admin
+	// the moment anyone recreates a project under this name (the
+	// create-time self-grant makes stale rows the default, not the
+	// exception). Best-effort — the kube delete already happened, so
+	// log-and-continue beats failing the request. Fresh context: a
+	// slow fan-out delete can eat most of the request's 5s budget,
+	// and running the cleanup on the dregs would silently re-open the
+	// stale-grant window on exactly the big projects where it hurts.
+	if h.DB != nil {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if n, gerr := h.DB.RemoveProjectGrantsForProject(ctx, project); gerr != nil {
+			h.Logger.Error("delete project: removing grants failed — stale rows will re-attach to a reborn project name",
+				"project", project, "err", gerr)
+		} else if n > 0 {
+			h.Logger.Info("delete project: removed grants", "project", project, "count", n)
+		}
+		if merr := h.DB.ClearProjectNotificationMute(ctx, project); merr != nil {
+			h.Logger.Error("delete project: clearing notification mute failed — a reborn project name starts muted",
+				"project", project, "err", merr)
+		}
 	}
 	if h.Audit != nil {
 		// Project delete is the most destructive single op — it
@@ -678,6 +718,7 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -852,6 +893,7 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -879,6 +921,7 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -902,6 +945,7 @@ func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -958,6 +1002,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 		_ = h.DB.DeleteEnvHint(ctx, project, service, name)
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -979,6 +1024,7 @@ func (h *ProjectsHandler) UnsetEnvVar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1041,6 +1087,7 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 

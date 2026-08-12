@@ -15,9 +15,11 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -45,6 +47,11 @@ type Status struct {
 	Stale          bool   `json:"stale"`
 	Healthy        bool   `json:"healthy"`
 	Detail         string `json:"detail"`
+	// Indeterminate: a transient (non-NotFound) kube read failed while
+	// computing this status — Healthy may be wrong in either
+	// direction. The watcher carries its previous verdict across
+	// indeterminate ticks instead of flapping; the UI can badge it.
+	Indeterminate bool `json:"indeterminate,omitempty"`
 }
 
 // Compute reads the Secret + CronJob + recent Jobs and derives the
@@ -60,6 +67,8 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 	if _, err := kc.Clientset.CoreV1().Secrets(namespace).
 		Get(ctx, secretName, metav1.GetOptions{}); err == nil {
 		s.Configured = true
+	} else if !apierrors.IsNotFound(err) {
+		s.Indeterminate = true
 	}
 
 	if cj, err := kc.Clientset.BatchV1().CronJobs(namespace).
@@ -69,6 +78,8 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			s.Suspended = true
 		}
+	} else if !apierrors.IsNotFound(err) {
+		s.Indeterminate = true
 	}
 
 	if jobs, err := kc.Clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
@@ -84,6 +95,7 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		s.Stale = success.IsZero() || time.Since(success) > StaleAfter
 	} else {
 		s.Stale = true // fail-safe: can't read → don't claim healthy
+		s.Indeterminate = true
 	}
 
 	s.Healthy = s.Configured && s.CronJobPresent && !s.Suspended && !s.Stale
@@ -131,6 +143,204 @@ func terminalTime(j *batchv1.Job) time.Time {
 	return time.Time{}
 }
 
+// AddonBackupStatus is the per-addon verdict for chart-rendered addon
+// backup CronJobs (<addon>-backup in the project's execution
+// namespace). These were previously invisible to every kuso surface:
+// `backup health` covered only the control-plane CronJob, so an addon
+// with spec.backup whose runs all died on the missing kuso-backup-s3
+// Secret (sportnopz, 2026-08-12: 2+ days of failures) reported nothing
+// anywhere.
+type AddonBackupStatus struct {
+	Addon          string `json:"addon"`
+	Project        string `json:"project,omitempty"`
+	Namespace      string `json:"namespace"`
+	Schedule       string `json:"schedule"`
+	CronJobPresent bool   `json:"cronJobPresent"`
+	// SecretPresent: the kuso-backup-s3 Secret exists in the CronJob's
+	// namespace. False = every run fails CreateContainerConfigError.
+	SecretPresent bool   `json:"secretPresent"`
+	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
+	LastScheduleAt string `json:"lastScheduleAt,omitempty"`
+	Healthy       bool   `json:"healthy"`
+	Detail        string `json:"detail,omitempty"`
+}
+
+// addonBackupLateGrace: a scheduled run that hasn't succeeded within
+// this window after its schedule time counts as failing. Generous (6h)
+// because LastScheduleTime stamps at job CREATION: a long-running dump
+// plus one Forbid-policy retry cycle must not page — a config-level
+// failure (missing Secret) is caught separately and immediately.
+const addonBackupLateGrace = 6 * time.Hour
+
+// ComputeAddons lists addon CRs with a rendered backup CronJob and
+// derives a per-addon verdict from the CronJob's status + the backup
+// Secret's presence. Addon CRs live in their project's EXECUTION
+// namespace (custom-namespace projects — the koreni pattern), so the
+// listing fans out over home + every project spec.namespace; a
+// home-only list silently missed exactly the projects the check
+// exists for.
+//
+// The second return is false when the evaluation was INCOMPLETE — a
+// list failed or a transient (non-NotFound) GET errored. Callers that
+// ALERT on the result must not treat an incomplete evaluation as
+// either healthy (spurious recovery) or unhealthy (false page); the
+// Watcher carries its previous verdict across incomplete ticks.
+func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]AddonBackupStatus, bool) {
+	if kc == nil || kc.Clientset == nil {
+		return nil, true
+	}
+	complete := true
+	execNS := map[string]string{}
+	namespaces := []string{namespace}
+	seenNS := map[string]bool{namespace: true}
+	if projects, perr := kc.ListKusoProjects(ctx, namespace); perr == nil {
+		for i := range projects {
+			pns := projects[i].Spec.Namespace
+			if pns == "" {
+				continue
+			}
+			execNS[projects[i].Name] = pns
+			if !seenNS[pns] {
+				seenNS[pns] = true
+				namespaces = append(namespaces, pns)
+			}
+		}
+	} else {
+		complete = false
+	}
+
+	var addons []kube.KusoAddon
+	for _, ns := range namespaces {
+		list, err := kc.ListKusoAddons(ctx, ns)
+		if err != nil {
+			complete = false
+			continue
+		}
+		addons = append(addons, list...)
+	}
+
+	secretPresent := map[string]*bool{} // nil entry = lookup errored
+	var out []AddonBackupStatus
+	for i := range addons {
+		a := &addons[i]
+		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
+			continue
+		}
+		project := a.Labels["kuso.sislelabs.com/project"]
+		ns := execNS[project]
+		if ns == "" {
+			ns = a.Namespace
+		}
+		st := AddonBackupStatus{
+			Addon:     a.Name,
+			Project:   project,
+			Namespace: ns,
+			Schedule:  a.Spec.Backup.Schedule,
+		}
+		if !kube.AddonBackupCronJobRendered(a) {
+			// The chart deliberately renders no CronJob for this
+			// shape — nothing to monitor, and paging would be a false
+			// alarm. The HA-postgres case is still worth surfacing
+			// (kuso doesn't plumb CNPG barman itself), but as detail
+			// on a healthy row, not a page.
+			st.Healthy = true
+			if kube.AddonBackupSuppressedHA(a) {
+				st.Detail = "schedule set but kuso renders no CronJob in HA mode (CNPG owns backups) — verify CNPG barman backups are configured, or this addon has none"
+			} else {
+				st.Detail = "no backup CronJob for this addon shape (instance-shared or unsupported kind) — schedule is inert"
+			}
+			out = append(out, st)
+			continue
+		}
+		if p, seen := secretPresent[ns]; seen {
+			if p == nil {
+				complete = false
+				continue // lookup errored earlier — skip, don't guess
+			}
+			st.SecretPresent = *p
+		} else {
+			_, gerr := kc.Clientset.CoreV1().Secrets(ns).Get(ctx, "kuso-backup-s3", metav1.GetOptions{})
+			switch {
+			case gerr == nil:
+				v := true
+				secretPresent[ns] = &v
+				st.SecretPresent = true
+			case apierrors.IsNotFound(gerr):
+				v := false
+				secretPresent[ns] = &v
+				st.SecretPresent = false
+			default:
+				// Transient apiserver failure ≠ "Secret missing". A
+				// false "backups broken" page teaches operators to
+				// ignore the real one.
+				secretPresent[ns] = nil
+				complete = false
+				continue
+			}
+		}
+		cj, cerr := kc.Clientset.BatchV1().CronJobs(ns).Get(ctx, a.Name+"-backup", metav1.GetOptions{})
+		switch {
+		case cerr == nil:
+			st.CronJobPresent = true
+			if cj.Status.LastSuccessfulTime != nil {
+				st.LastSuccessAt = cj.Status.LastSuccessfulTime.UTC().Format(time.RFC3339)
+			}
+			if cj.Status.LastScheduleTime != nil {
+				st.LastScheduleAt = cj.Status.LastScheduleTime.UTC().Format(time.RFC3339)
+			}
+			// Failing = a run was scheduled but hasn't succeeded since
+			// (grace period absorbs in-flight dumps + one retry).
+			// Never-scheduled (new CronJob) is healthy-so-far.
+			lateFail := cj.Status.LastScheduleTime != nil &&
+				time.Since(cj.Status.LastScheduleTime.Time) > addonBackupLateGrace &&
+				(cj.Status.LastSuccessfulTime == nil ||
+					cj.Status.LastSuccessfulTime.Time.Before(cj.Status.LastScheduleTime.Time))
+			st.Healthy = st.SecretPresent && !lateFail
+		case apierrors.IsNotFound(cerr):
+			// Eligible but not rendered → operator hasn't reconciled
+			// (or is wedged). Unhealthy, distinct detail below.
+		default:
+			complete = false
+			continue // transient — skip, don't guess
+		}
+		switch {
+		case !st.SecretPresent:
+			st.Detail = "kuso-backup-s3 Secret missing in " + ns + " — every scheduled run no-ops; configure backup settings or remove the schedule"
+		case !st.CronJobPresent:
+			st.Detail = "backup CronJob not rendered yet (operator reconcile pending or wedged)"
+		case !st.Healthy:
+			st.Detail = "last scheduled run has not succeeded"
+		}
+		out = append(out, st)
+	}
+	return out, complete
+}
+
+// AddonsHealthy is true when every configured addon backup is healthy
+// (vacuously true with none configured).
+func AddonsHealthy(addons []AddonBackupStatus) bool {
+	for i := range addons {
+		if !addons[i].Healthy {
+			return false
+		}
+	}
+	return true
+}
+
+// AddonsWorstSeverity ranks how bad the unhealthy set is: a missing
+// backup Secret is a config-level certainty ("you have no backups") →
+// error; anything else (late run, unreconciled CronJob) may be
+// transient → warn.
+func AddonsWorstSeverity(addons []AddonBackupStatus) string {
+	worst := "warn"
+	for i := range addons {
+		if !addons[i].Healthy && !addons[i].SecretPresent {
+			worst = "error"
+		}
+	}
+	return worst
+}
+
 // Watcher periodically checks backup health and fires a one-shot notify
 // event on the healthy↔unhealthy edge — so an operator who never opens
 // the settings page still learns their control-plane DB stopped being
@@ -145,12 +355,45 @@ type Watcher struct {
 	// responsive enough without hammering the apiserver).
 	Interval time.Duration
 
-	// unhealthy tracks the last-emitted state so we only fire on a flip.
-	// nil = not yet evaluated (first tick establishes the baseline
-	// without alerting on a cold start that's already unhealthy — we DO
-	// want that first alert, so we treat nil as "previously healthy").
-	lastUnhealthy bool
-	evaluated     bool
+	// lastState is the comma-joined SET of unhealthy subsystems last
+	// emitted ("" = all healthy). Edge-triggering on the SET, not a
+	// boolean, matters: with a plain healthy/unhealthy flag, an
+	// install whose control-plane backup was never configured is
+	// latched unhealthy forever, and an addon-backup failure arriving
+	// later would never fire any event — the exact silent failure this
+	// watcher exists to catch.
+	lastState string
+	evaluated bool
+	// last*OK carry each subsystem's verdict across INDETERMINATE /
+	// incomplete evaluations (transient kube read failures): an
+	// unknown state must neither page nor "recover" — without the
+	// carry, one apiserver flake fired a spurious unhealthy+recovered
+	// event pair.
+	lastAddonsOK  bool
+	addonsWasEval bool
+	lastBackupOK  bool
+	backupWasEval bool
+	lastGCOK      bool
+	gcWasEval     bool
+	// lastAddonsPart is the addon component of the state string from
+	// the last COMPLETE evaluation, reused verbatim during incomplete
+	// ones so alternating complete↔incomplete ticks with the same
+	// underlying failure can't flip the state and fire spuriously.
+	lastAddonsPart string
+}
+
+// carryVerdict resolves a subsystem verdict: the current one when the
+// evaluation was determinate, else the carried previous verdict
+// (healthy before the first determinate evaluation).
+func carryVerdict(current, indeterminate bool, last *bool, wasEval *bool) bool {
+	if indeterminate {
+		if *wasEval {
+			return *last
+		}
+		return true
+	}
+	*last, *wasEval = current, true
+	return current
 }
 
 func (w *Watcher) Run(ctx context.Context) {
@@ -180,35 +423,93 @@ func (w *Watcher) tick(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s := Compute(cctx, w.Kube, w.Namespace)
 	gc := RegistryGC(cctx, w.Kube, w.Namespace)
+	addons, addonsComplete := ComputeAddons(cctx, w.Kube, w.Namespace)
 	cancel()
 
-	// Either subsystem being unhealthy trips the alert; the detail
-	// names whichever is wrong (backup is the more severe, so it wins
-	// the message when both are bad).
-	unhealthy := !s.Healthy || !gc.Healthy
-	detailMsg := s.Detail
-	if s.Healthy && !gc.Healthy {
-		detailMsg = gc.Detail
+	// Per-subsystem verdicts, carrying the previous one across
+	// indeterminate/incomplete evaluations — a transient apiserver
+	// flake must neither page nor "recover".
+	backupOK := carryVerdict(s.Healthy, s.Indeterminate, &w.lastBackupOK, &w.backupWasEval)
+	gcOK := carryVerdict(gc.Healthy, gc.Indeterminate, &w.lastGCOK, &w.gcWasEval)
+	addonsOK := carryVerdict(AddonsHealthy(addons), !addonsComplete, &w.lastAddonsOK, &w.addonsWasEval)
+
+	// Build the unhealthy-subsystem set + a combined detail naming
+	// EVERY broken subsystem (a single-detail message hid the addon
+	// failure behind the control-plane one). The addon part carries
+	// the failing addon NAMES so a same-size swap (A recovers, B
+	// breaks) still changes the state and fires.
+	var parts, details []string
+	if !backupOK {
+		parts = append(parts, "backup")
+		details = append(details, s.Detail)
+	}
+	if !gcOK {
+		parts = append(parts, "registry-gc")
+		details = append(details, gc.Detail)
+	}
+	if !addonsOK {
+		part := "addon-backups"
+		if addonsComplete {
+			var names []string
+			for i := range addons {
+				if !addons[i].Healthy {
+					names = append(names, addons[i].Addon)
+					details = append(details, "addon "+addons[i].Addon+": "+addons[i].Detail)
+				}
+			}
+			part += "(" + strings.Join(names, "+") + ")"
+			w.lastAddonsPart = part
+		} else {
+			// Carried verdict on an incomplete slice: reuse the last
+			// COMPLETE part verbatim so an incomplete tick can't flip
+			// the state string and fire spuriously.
+			if w.lastAddonsPart != "" {
+				part = w.lastAddonsPart
+			}
+			details = append(details, "addon backups unhealthy (evaluation incomplete this tick)")
+		}
+		parts = append(parts, part)
 	}
 	severity := alertSeverity(s, gc)
-	// Only emit on a state change (or the first observation of an
-	// unhealthy state). evaluated guards the very first tick so we don't
-	// double-fire.
-	if w.evaluated && unhealthy == w.lastUnhealthy {
-		w.evaluated, w.lastUnhealthy = true, unhealthy
+	if !addonsOK && addonsComplete {
+		// A missing backup Secret is a config-level "you have no
+		// backups" → error outranks whatever the others said; a late
+		// or unreconciled run may be transient → keep the higher of
+		// the two verdicts.
+		if AddonsWorstSeverity(addons) == "error" {
+			severity = "error"
+		}
+	}
+	// Severity is part of the edge state: an escalation within an
+	// unchanged subsystem set (addon CronJob-late warn → Secret-gone
+	// error) must fire, not be swallowed as "same set".
+	state := strings.Join(parts, ",")
+	if state != "" {
+		state += "|" + severity
+	}
+	detailMsg := strings.Join(details, " · ")
+	// Only emit when the SET of broken subsystems changes. evaluated
+	// guards the very first tick so we don't double-fire; a cold start
+	// that's already unhealthy still alerts (lastState zero value "").
+	if w.evaluated && state == w.lastState {
 		return
 	}
-	prevUnhealthy := w.lastUnhealthy
-	w.evaluated, w.lastUnhealthy = true, unhealthy
+	prevState := w.lastState
+	w.evaluated, w.lastState = true, state
 
 	if w.Notify == nil {
 		return
 	}
 	switch {
-	case unhealthy:
+	case state != "":
 		title := "Control-plane backup unhealthy"
-		if s.Healthy && !gc.Healthy {
+		switch {
+		case !backupOK:
+			// keep default title
+		case !gcOK:
 			title = "Registry garbage-collection unhealthy"
+		default:
+			title = "Addon backups failing"
 		}
 		w.Notify.Emit(notify.Event{
 			Type:        notify.EventBackupFailed,
@@ -218,17 +519,17 @@ func (w *Watcher) tick(ctx context.Context) {
 			Description: detailMsg,
 			Severity:    severity,
 		})
-		w.Logger.Warn("backup/registry health: unhealthy", "detail", detailMsg, "severity", severity)
-	case prevUnhealthy:
-		// Recovered (both healthy again).
+		w.Logger.Warn("backup health: unhealthy", "subsystems", state, "detail", detailMsg, "severity", severity)
+	case prevState != "":
+		// Recovered (everything healthy again).
 		w.Notify.Emit(notify.Event{
 			Type:      notify.EventBackupOK,
 			Timestamp: time.Now().UTC(),
 			Title:     "Backup / registry maintenance recovered",
-			Body:      "Control-plane backups and registry GC are healthy again.",
+			Body:      "Control-plane backups, registry GC, and addon backups are healthy again.",
 			Severity:  "info",
 		})
-		w.Logger.Info("backup/registry health: recovered")
+		w.Logger.Info("backup health: recovered")
 	}
 }
 
@@ -248,6 +549,10 @@ type RegistryGCStatus struct {
 	Stale   bool   `json:"stale"`
 	Healthy bool   `json:"healthy"`
 	Detail  string `json:"detail"`
+	// Indeterminate mirrors Status.Indeterminate: a transient kube
+	// read failed; Healthy may be wrong. Watcher carries the previous
+	// verdict rather than flapping.
+	Indeterminate bool `json:"indeterminate,omitempty"`
 }
 
 const (
@@ -274,10 +579,14 @@ func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) Registry
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			s.Suspended = true
 		}
+	} else if !apierrors.IsNotFound(err) {
+		s.Indeterminate = true
 	}
 	if jobs, err := kc.Clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: registryGCJobLabel,
-	}); err == nil {
+	}); err != nil {
+		s.Indeterminate = true
+	} else {
 		success, failure := newestTerminalTimes(jobs.Items)
 		if !success.IsZero() {
 			s.LastSuccessAt = success.UTC().Format(time.RFC3339)

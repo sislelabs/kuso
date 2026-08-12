@@ -92,8 +92,13 @@ func (d *DB) CreateIncident(ctx context.Context, in Incident) error {
 	if in.ContextPack == nil {
 		in.ContextPack = json.RawMessage(`{}`)
 	}
+	// A nil slice marshals to the 4-byte string "null", not "" — and
+	// jsonb `null` poisons AppendIncidentFeedback's `feedback || $2`:
+	// Postgres treats the scalar null as a one-element array, so the
+	// first real append produced [null, entry] and every incident's
+	// feedback log led with a phantom empty entry.
 	fb, _ := json.Marshal(in.Feedback)
-	if len(fb) == 0 {
+	if len(fb) == 0 || string(fb) == "null" {
 		fb = []byte(`[]`)
 	}
 	_, err := d.ExecContext(ctx, `
@@ -226,9 +231,14 @@ func (d *DB) AppendIncidentFeedback(ctx context.Context, id string, fb IncidentF
 	if err != nil {
 		return err
 	}
+	// CASE guard: `null || entry` would silently mint [null, entry]
+	// (scalar-as-array concat), resurrecting the phantom-first-entry
+	// bug if any writer ever stores a non-array again.
 	res, err := d.ExecContext(ctx, `
 UPDATE "Incident"
-SET "feedback" = "feedback" || $2::jsonb, "updatedAt"=now()
+SET "feedback" = (CASE WHEN jsonb_typeof("feedback") = 'array'
+                       THEN "feedback" ELSE '[]'::jsonb END) || $2::jsonb,
+    "updatedAt"=now()
 WHERE "id"=$1`, id, string(b))
 	if err != nil {
 		return err

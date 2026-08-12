@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -502,6 +503,18 @@ func mountAuthenticatedRoutes(
 			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			invitesH.Mount(r)
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
+			if d.Projects != nil {
+				notifH.ProjectExists = func(ctx context.Context, name string) (bool, error) {
+					_, err := d.Projects.Get(ctx, name)
+					if errors.Is(err, projects.ErrNotFound) {
+						return false, nil
+					}
+					if err != nil {
+						return false, err
+					}
+					return true, nil
+				}
+			}
 			notifH.Mount(r)
 			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			tokAdminH.Mount(r)

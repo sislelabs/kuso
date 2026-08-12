@@ -304,10 +304,10 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 				// must NOT clobber the stored credentials. Only an URL
 				// that differs beyond its userinfo replaces them.
 				stored := cur.Spec.DefaultRepo.URL
-				if kube.RepoURLHasCredentials(stored) &&
-					!kube.RepoURLHasCredentials(req.DefaultRepo.URL) &&
-					kube.StripRepoURLCredentials(stored) == req.DefaultRepo.URL {
-					// keep stored URL (credentials intact)
+				if !kube.RepoURLHasCredentials(req.DefaultRepo.URL) &&
+					kube.RepoURLEchoesRedacted(stored, req.DefaultRepo.URL) {
+					// Redacted echo (current OR legacy redaction form) —
+					// keep the stored URL, userinfo intact.
 				} else {
 					cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
 				}

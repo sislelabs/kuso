@@ -442,7 +442,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 	// survives a mute. Project-less events (node.*, backup health) are
 	// never muted. Fail-open: if the mute read errors, deliver — a
 	// missed mute beats silently dropped notifications.
-	if e.Project != "" {
+	//
+	// Error-severity alert.fired bypasses the mute: mute exists to
+	// silence deploy chatter, but an alert rule the team explicitly
+	// marked severity=error is a page ("service down"), and a mute
+	// that swallows pages turns "stop pinging us" into "never learn
+	// prod is down". info/warn alerts stay muted with everything else.
+	pageThrough := e.Type == EventAlertFired && e.Severity == "error"
+	if e.Project != "" && !pageThrough {
 		if muted, merr := d.cachedMutedProjects(ctx); merr != nil {
 			d.logger.Warn("notify: list muted projects", "err", merr)
 		} else if muted[e.Project] {

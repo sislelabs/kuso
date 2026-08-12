@@ -31,7 +31,7 @@ func seedGrantsUser(t *testing.T, d *db.DB, id string) {
 	t.Helper()
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, 'h', false, true, 'local', NOW(), NOW())`, id, id, id+"@x"); err != nil {
+VALUES ($1, $2, $3, 'h', false, true, 'local', NOW(), NOW())`, id, id, id+"@x"); err != nil {
 		t.Fatalf("seed user %s: %v", id, err)
 	}
 }

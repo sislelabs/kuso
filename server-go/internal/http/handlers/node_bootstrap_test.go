@@ -102,6 +102,25 @@ func TestBootstrap_MintAndScript(t *testing.T) {
 		t.Errorf("one-liner has wrong URL shape: %s", minted.OneLiner)
 	}
 
+	// Pending list shows our token — checked BEFORE fetching the
+	// script, because the script fetch consumes the one-shot token
+	// (see TestBootstrap_ReplayConsumed_410) and a consumed token
+	// drops off the pending list.
+	listReq := httptest.NewRequest(http.MethodGet,
+		"/api/kubernetes/nodes/bootstrap-tokens", nil)
+	listReq.Header.Set("Authorization", "Bearer "+tok)
+	listRR := httptest.NewRecorder()
+	r.ServeHTTP(listRR, listReq)
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("list: status=%d body=%s", listRR.Code, listRR.Body.String())
+	}
+	// The list intentionally never echoes the cleartext jti — it
+	// surfaces only the hash prefix (the cleartext is shown ONCE at
+	// mint). Match on the hash-derived prefix.
+	if !strings.Contains(listRR.Body.String(), db.HashJTI(minted.JTI)[:8]) {
+		t.Errorf("list missing jti hash prefix")
+	}
+
 	// Public /bootstrap returns the script with the token baked in.
 	scriptReq := httptest.NewRequest(http.MethodGet,
 		"/bootstrap?token="+minted.JTI, nil)
@@ -116,19 +135,6 @@ func TestBootstrap_MintAndScript(t *testing.T) {
 	}
 	if !strings.Contains(body2, minted.JTI) {
 		t.Errorf("script missing jti")
-	}
-
-	// Pending list shows our token.
-	listReq := httptest.NewRequest(http.MethodGet,
-		"/api/kubernetes/nodes/bootstrap-tokens", nil)
-	listReq.Header.Set("Authorization", "Bearer "+tok)
-	listRR := httptest.NewRecorder()
-	r.ServeHTTP(listRR, listReq)
-	if listRR.Code != http.StatusOK {
-		t.Fatalf("list: status=%d body=%s", listRR.Code, listRR.Body.String())
-	}
-	if !strings.Contains(listRR.Body.String(), minted.JTI) {
-		t.Errorf("list missing jti")
 	}
 }
 
@@ -157,9 +163,10 @@ func TestBootstrap_RevokedToken_410(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	// Revoke via API.
+	// Revoke via API — the DELETE path takes the JTIHash (the list's
+	// revoke handle), never the cleartext.
 	revReq := httptest.NewRequest(http.MethodDelete,
-		"/api/kubernetes/nodes/bootstrap-tokens/"+jti, nil)
+		"/api/kubernetes/nodes/bootstrap-tokens/"+db.HashJTI(jti), nil)
 	revReq.Header.Set("Authorization", "Bearer "+tok)
 	revRR := httptest.NewRecorder()
 	r.ServeHTTP(revRR, revReq)
@@ -266,7 +273,7 @@ func TestBootstrap_RevokeIdempotent(t *testing.T) {
 	})
 	doRevoke := func() int {
 		req := httptest.NewRequest(http.MethodDelete,
-			"/api/kubernetes/nodes/bootstrap-tokens/"+jti, nil)
+			"/api/kubernetes/nodes/bootstrap-tokens/"+db.HashJTI(jti), nil)
 		req.Header.Set("Authorization", "Bearer "+tok)
 		rr := httptest.NewRecorder()
 		r.ServeHTTP(rr, req)

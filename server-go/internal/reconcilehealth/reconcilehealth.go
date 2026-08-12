@@ -24,6 +24,9 @@ import (
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -53,6 +56,20 @@ const (
 	// way that makes upgrades fail (e.g. ha=false on a CR running an HA
 	// StatefulSet). Fix is to reconcile the CR back to reality.
 	KindSpecMismatch Kind = "spec_mismatch"
+	// KindBackupSecretMissing: the addon declares a backup schedule but
+	// the kuso-backup-s3 Secret its CronJob mounts doesn't exist in the
+	// execution namespace — every scheduled run no-ops (or, pre chart
+	// fix, died in CreateContainerConfigError), so the addon LOOKS
+	// backed up while having zero backups. Found live on sportnopz
+	// (2026-08-12): 2+ days of failed runs, invisible to every kuso
+	// surface.
+	KindBackupSecretMissing Kind = "backup_secret_missing"
+	// KindBackupUnrendered: a backup schedule is set on an addon shape
+	// the chart deliberately renders NO CronJob for. The HA-postgres
+	// case is the dangerous one — CNPG owns backups there and kuso
+	// doesn't plumb barman, so unless the operator configured CNPG
+	// backups out-of-band the schedule is a false comfort.
+	KindBackupUnrendered Kind = "backup_unrendered"
 )
 
 // Action is the machine-readable remediation the auto-remediator knows
@@ -100,6 +117,10 @@ type Report struct {
 	Critical int     `json:"critical"` // count by severity (convenience for badges)
 	Warning  int     `json:"warning"`
 	Info     int     `json:"info"`
+	// SkippedNamespaces lists project execution namespaces whose CR
+	// lists failed mid-scan — their resources are absent from the
+	// counts above. Non-empty means "all green" is not authoritative.
+	SkippedNamespaces []string `json:"skippedNamespaces,omitempty"`
 }
 
 // Scanner reads CRs and classifies their reconcile health. It depends
@@ -108,37 +129,70 @@ type Scanner struct {
 	Kube *kube.Client
 }
 
-// Scan walks every addon + environment in the namespace and returns a
-// Report. Empty namespace scans "kuso". Read-only.
+// Scan walks every addon + environment in the home namespace AND every
+// project execution namespace (spec.namespace — custom-namespace
+// projects keep their addon/env CRs there, so a home-only scan was
+// blind to exactly those projects) and returns a Report. Empty
+// namespace scans "kuso". Read-only.
 func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 	if namespace == "" {
 		namespace = "kuso"
 	}
 	rep := &Report{}
 
-	addons, err := s.Kube.ListKusoAddons(ctx, namespace)
-	if err != nil {
-		return nil, fmt.Errorf("list addons: %w", err)
-	}
-	for i := range addons {
-		rep.Scanned++
-		if iss, ok := ClassifyAddon(&addons[i]); ok {
-			rep.Issues = append(rep.Issues, iss)
-		} else {
-			rep.Healthy++
+	// Home + distinct project execution namespaces. A project-list
+	// failure degrades to the home-only scan rather than failing the
+	// report (the projects themselves live in home).
+	namespaces := []string{namespace}
+	seenNS := map[string]bool{namespace: true}
+	if projects, perr := s.Kube.ListKusoProjects(ctx, namespace); perr == nil {
+		for i := range projects {
+			if pns := projects[i].Spec.Namespace; pns != "" && !seenNS[pns] {
+				seenNS[pns] = true
+				namespaces = append(namespaces, pns)
+			}
 		}
 	}
 
-	envs, err := s.Kube.ListKusoEnvironments(ctx, namespace)
-	if err != nil {
-		return nil, fmt.Errorf("list environments: %w", err)
-	}
-	for i := range envs {
-		rep.Scanned++
-		if iss, ok := ClassifyEnv(&envs[i]); ok {
-			rep.Issues = append(rep.Issues, iss)
-		} else {
-			rep.Healthy++
+	backupCheck := s.newBackupSecretCheck(ctx, namespace)
+	for _, ns := range namespaces {
+		addons, err := s.Kube.ListKusoAddons(ctx, ns)
+		if err != nil {
+			if ns == namespace {
+				return nil, fmt.Errorf("list addons: %w", err)
+			}
+			// Exec-ns list failure: skip that project's resources but
+			// SAY so — an all-green report with a whole namespace
+			// missing would read as authoritative.
+			rep.SkippedNamespaces = append(rep.SkippedNamespaces, ns)
+			continue
+		}
+		for i := range addons {
+			rep.Scanned++
+			if iss, ok := ClassifyAddon(&addons[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else if iss, ok := backupCheck(ctx, &addons[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else {
+				rep.Healthy++
+			}
+		}
+
+		envs, err := s.Kube.ListKusoEnvironments(ctx, ns)
+		if err != nil {
+			if ns == namespace {
+				return nil, fmt.Errorf("list environments: %w", err)
+			}
+			rep.SkippedNamespaces = append(rep.SkippedNamespaces, ns+" (environments)")
+			continue
+		}
+		for i := range envs {
+			rep.Scanned++
+			if iss, ok := ClassifyEnv(&envs[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else {
+				rep.Healthy++
+			}
 		}
 	}
 
@@ -223,6 +277,108 @@ func ClassifyAddon(a *kube.KusoAddon) (Issue, bool) {
 	iss.Safe = true
 	iss.Fix = "Re-run the helm upgrade (force a reconcile). Safe to retry; if it keeps failing the detail above is the root cause."
 	return iss, true
+}
+
+// newBackupSecretCheck returns a per-addon check for the silent-backup
+// failure mode: spec.backup.schedule set, but the kuso-backup-s3 Secret
+// the chart-rendered backup CronJob mounts is absent from the addon's
+// EXECUTION namespace (project spec.namespace, else the scanned ns).
+// Every scheduled run then dies in CreateContainerConfigError — the
+// addon looks backed up while producing zero backups, and neither the
+// CR conditions nor `backup health` (control-plane CronJob only)
+// surfaces it. Found live on sportnopz: 2+ days of ~13s-interval
+// failures visible only via kubectl.
+//
+// The project list and per-namespace Secret lookups are resolved
+// lazily and memoised — a cluster with no backup schedules pays
+// nothing. Lookup failures fail SILENT-HEALTHY (skip the check, not
+// the scan): this scanner is read-only advisory, and a flaky Secrets
+// GET must not paint 45 healthy addons red. Requires Clientset (nil in
+// some unit-test fixtures → check disabled).
+func (s *Scanner) newBackupSecretCheck(ctx context.Context, namespace string) func(context.Context, *kube.KusoAddon) (Issue, bool) {
+	disabled := s.Kube == nil || s.Kube.Clientset == nil
+	var execNS map[string]string // project → execution ns, nil until loaded
+	secretPresent := map[string]bool{}
+	return func(ctx context.Context, a *kube.KusoAddon) (Issue, bool) {
+		if disabled || a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
+			return Issue{}, false
+		}
+		if !kube.AddonBackupCronJobRendered(a) {
+			// The chart renders no CronJob for this shape — a missing
+			// Secret is irrelevant. Surface the HA-postgres trap
+			// (schedule set, CNPG owns backups, kuso doesn't plumb
+			// barman) as a warning; other inert schedules as info.
+			iss := Issue{
+				Resource:  a.Name,
+				Namespace: a.Namespace,
+				Project:   a.Labels["kuso.sislelabs.com/project"],
+				Type:      "addon",
+				AddonKind: a.Labels["kuso.sislelabs.com/addon-kind"],
+				Kind:      KindBackupUnrendered,
+				Severity:  SeverityInfo,
+				Summary:   "Backup schedule is set but this addon shape gets no backup CronJob — the schedule is inert.",
+				Fix:       "Remove the schedule, or move backups to a supported shape.",
+			}
+			if kube.AddonBackupSuppressedHA(a) {
+				iss.Severity = SeverityWarning
+				iss.Summary = "Backup schedule is set but HA postgres backups are CNPG's job — kuso renders no CronJob and does not configure CNPG barman."
+				iss.Fix = "Configure CNPG barman-cloud backups on the Cluster CR (out-of-band), or this addon has NO backups despite the schedule."
+			}
+			return iss, true
+		}
+		if execNS == nil {
+			execNS = map[string]string{}
+			projects, perr := s.Kube.ListKusoProjects(ctx, namespace)
+			if perr != nil {
+				disabled = true
+				return Issue{}, false
+			}
+			for i := range projects {
+				if pns := projects[i].Spec.Namespace; pns != "" {
+					execNS[projects[i].Name] = pns
+				}
+			}
+		}
+		project := a.Labels["kuso.sislelabs.com/project"]
+		ns := execNS[project]
+		if ns == "" {
+			// The addon CR lives where its workloads render — for a
+			// custom-namespace addon reached via the multi-ns scan,
+			// that's its own namespace, not the home one.
+			ns = a.Namespace
+		}
+		if ns == "" {
+			ns = namespace
+		}
+		present, seen := secretPresent[ns]
+		if !seen {
+			_, gerr := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, "kuso-backup-s3", metav1.GetOptions{})
+			switch {
+			case gerr == nil:
+				present = true
+			case apierrors.IsNotFound(gerr):
+				present = false
+			default:
+				return Issue{}, false // transient lookup failure — skip, don't flag
+			}
+			secretPresent[ns] = present
+		}
+		if present {
+			return Issue{}, false
+		}
+		return Issue{
+			Resource:  a.Name,
+			Namespace: a.Namespace,
+			Project:   project,
+			Type:      "addon",
+			AddonKind: a.Labels["kuso.sislelabs.com/addon-kind"],
+			Kind:      KindBackupSecretMissing,
+			Severity:  SeverityCritical, // "backed up" that isn't is a data-loss trap, not a degradation
+			Summary:   "Scheduled backups are configured but the kuso-backup-s3 Secret is missing — every run produces nothing; this addon has NO backups.",
+			Detail:    fmt.Sprintf("spec.backup.schedule=%q but Secret kuso-backup-s3 does not exist in namespace %s; every scheduled run no-ops (on pre-fix charts it fails CreateContainerConfigError).", a.Spec.Backup.Schedule, ns),
+			Fix:       "Configure the instance backup S3 target (Settings → Backups, or `kuso backup settings set`) — or remove this addon's backup schedule if backups are not wanted.",
+		}, true
+	}
 }
 
 // ClassifyEnv inspects one environment CR for a failed rollout.

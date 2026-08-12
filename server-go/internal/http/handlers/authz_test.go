@@ -222,7 +222,7 @@ func seedUserNoGroup(t *testing.T, d *db.DB, userID string) {
 	t.Helper()
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, 'h', false, true, 'local', NOW(), NOW())`,
+VALUES ($1, $2, $3, 'h', false, true, 'local', NOW(), NOW())`,
 		userID, userID, userID+"@x"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

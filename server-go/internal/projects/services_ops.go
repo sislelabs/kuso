@@ -2320,9 +2320,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				effURL := req.Repo.URL
 				if svc.Spec.Repo != nil {
 					stored := svc.Spec.Repo.URL
-					if kube.RepoURLHasCredentials(stored) &&
-						!kube.RepoURLHasCredentials(effURL) &&
-						kube.StripRepoURLCredentials(stored) == effURL {
+					if !kube.RepoURLHasCredentials(effURL) &&
+						kube.RepoURLEchoesRedacted(stored, effURL) {
+						// Redacted echo (current OR legacy redaction
+						// form) — keep the stored URL, userinfo intact.
 						effURL = stored
 					}
 				}
@@ -2571,6 +2572,18 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// Wrap the request as {"patch": <req>} so RevertService can
 		// peel it back the same way regardless of which mutator
 		// produced the snapshot.
+		//
+		// The GitLab clone token must NOT ride along: PatchRepoRequest
+		// documents it as "stored in a per-service Secret; never
+		// persisted" — recording the raw req put the working
+		// credential in the Revision row, readable by any project
+		// viewer via the History endpoints. Replay doesn't need it
+		// either: an empty Token leaves the stored Secret untouched.
+		if req.Repo != nil && req.Repo.Token != "" {
+			repoNoToken := *req.Repo
+			repoNoToken.Token = ""
+			req.Repo = &repoNoToken
+		}
 		if snap, err := json.Marshal(map[string]any{"patch": req}); err == nil {
 			s.RecordRevision(ctx, project, "service", service, "patch", snap)
 		}

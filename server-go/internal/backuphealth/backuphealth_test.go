@@ -64,44 +64,53 @@ func TestNewestTerminalTimes(t *testing.T) {
 	}
 }
 
-// TestWatcherEdgeTriggers verifies the watcher fires only on state
-// changes: first unhealthy → 1 event, stays unhealthy → 0 more, recovers
-// → 1 event.
+// TestWatcherEdgeTriggers verifies the watcher fires only when the SET
+// of unhealthy subsystems changes — not just on a healthy/unhealthy
+// boolean flip. The set matters: an install whose control-plane backup
+// was never configured is "unhealthy" forever, and with boolean edge
+// logic an addon-backup failure arriving later would never fire.
 func TestWatcherEdgeTriggers(t *testing.T) {
 	t.Parallel()
 	w := &Watcher{}
 
 	// Simulate the tick's decision logic directly via a small driver,
-	// since tick() does kube I/O. We exercise the edge bookkeeping by
-	// calling a fake-state helper.
-	type emit struct{ unhealthy, recovered bool }
+	// since tick() does kube I/O. Mirrors the lastState bookkeeping.
+	type emit struct {
+		state     string
+		recovered bool
+	}
 	var emits []emit
-	step := func(unhealthy bool) {
-		if w.evaluated && unhealthy == w.lastUnhealthy {
-			w.evaluated, w.lastUnhealthy = true, unhealthy
+	step := func(state string) {
+		if w.evaluated && state == w.lastState {
 			return
 		}
-		prev := w.lastUnhealthy
-		w.evaluated, w.lastUnhealthy = true, unhealthy
+		prev := w.lastState
+		w.evaluated, w.lastState = true, state
 		switch {
-		case unhealthy:
-			emits = append(emits, emit{unhealthy: true})
-		case prev:
+		case state != "":
+			emits = append(emits, emit{state: state})
+		case prev != "":
 			emits = append(emits, emit{recovered: true})
 		}
 	}
 
-	step(true)  // first: unhealthy → fire
-	step(true)  // still unhealthy → no fire
-	step(true)  // still → no fire
-	step(false) // recovered → fire
-	step(false) // still healthy → no fire
-	step(true)  // unhealthy again → fire
+	step("backup")               // first: unhealthy → fire
+	step("backup")               // same set → no fire
+	step("backup,addon-backups") // set GREW (addon failure on top) → fire
+	step("backup,addon-backups") // same → no fire
+	step("backup")               // addon recovered, backup still bad → fire
+	step("")                     // all recovered → fire recovered
+	step("")                     // still healthy → no fire
+	step("addon-backups")        // unhealthy again → fire
 
-	if len(emits) != 3 {
-		t.Fatalf("expected 3 edge emits, got %d: %+v", len(emits), emits)
+	if len(emits) != 5 {
+		t.Fatalf("expected 5 edge emits, got %d: %+v", len(emits), emits)
 	}
-	if !emits[0].unhealthy || !emits[1].recovered || !emits[2].unhealthy {
+	if emits[0].state != "backup" ||
+		emits[1].state != "backup,addon-backups" ||
+		emits[2].state != "backup" ||
+		!emits[3].recovered ||
+		emits[4].state != "addon-backups" {
 		t.Errorf("edge sequence wrong: %+v", emits)
 	}
 }

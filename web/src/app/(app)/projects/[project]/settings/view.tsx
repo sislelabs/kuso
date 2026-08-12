@@ -18,7 +18,7 @@ import {
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
-import { useCan, Perms } from "@/features/auth/hooks";
+import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
 import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon } from "lucide-react";
 
@@ -33,6 +33,10 @@ export function ProjectSettingsView() {
   const update = useUpdateProject(projectName);
   const del = useDeleteProject();
   const isAdmin = useCan(Perms.SettingsAdmin);
+  // Delete requires project-ADMIN server-side (the single most
+  // destructive op); showing the button to editors just hands them a
+  // confirm-text ritual that ends in a 403.
+  const isProjectAdmin = useProjectRole(projectName) === "admin";
 
   const [description, setDescription] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
@@ -296,10 +300,11 @@ export function ProjectSettingsView() {
             <span className="flex-1">
               <span className="text-[13px] font-medium">Mute external notifications</span>
               <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
-                Stops this project&rsquo;s events (builds, deploys, crashes, alerts) from
-                reaching Discord, Slack, webhooks, email, Telegram, and Pushover. The in-app
-                bell feed keeps recording everything, so nothing is lost from the audit trail.
-                Applies immediately — no Save needed.
+                Stops this project&rsquo;s events (builds, deploys, crashes, info/warn alerts)
+                from reaching Discord, Slack, webhooks, email, Telegram, and Pushover.
+                Error-severity alerts still page through — a mute silences chatter, not
+                &ldquo;service down&rdquo;. The in-app bell feed keeps recording everything,
+                so nothing is lost from the audit trail. Applies immediately — no Save needed.
               </span>
             </span>
           </label>
@@ -362,7 +367,8 @@ export function ProjectSettingsView() {
       {/* Config as code — kuso.yaml export / dry-run / apply */}
       <ConfigTab project={projectName} />
 
-      {/* Danger zone */}
+      {/* Danger zone — project-admin only, mirroring the server gate */}
+      {isProjectAdmin && (
       <section className="space-y-3">
         <header className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-red-400" />
@@ -401,6 +407,7 @@ export function ProjectSettingsView() {
           </Button>
         </div>
       </section>
+      )}
     </div>
   );
 }

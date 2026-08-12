@@ -158,6 +158,27 @@ func (d *DB) RemoveProjectGrant(ctx context.Context, id string) error {
 	return nil
 }
 
+// RemoveProjectGrantsForProject deletes every grant on a project.
+// Called when the project itself is deleted so authorization state
+// can't outlive the resource: the create-time self-grant means grant
+// rows accumulate by default, and a stale row silently hands
+// project-admin (secrets, SQL, shell) to its old holder the moment
+// anyone recreates a project under the dead name. Idempotent; returns
+// the number of rows removed.
+func (d *DB) RemoveProjectGrantsForProject(ctx context.Context, project string) (int64, error) {
+	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectGrant" WHERE project = $1`, project)
+	if err != nil {
+		return 0, fmt.Errorf("db: remove grants for project %s: %w", project, err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		// Grantees are gone with the rows — no per-grantee eviction
+		// possible, so drop the whole tenancy cache on this replica.
+		d.EvictAllTenancy()
+	}
+	return n, nil
+}
+
 // ListProjectGrants returns every grant on a project (users + groups).
 func (d *DB) ListProjectGrants(ctx context.Context, project string) ([]ProjectGrant, error) {
 	rows, err := d.QueryContext(ctx, `

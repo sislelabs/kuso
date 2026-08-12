@@ -228,3 +228,51 @@ func TestRoleV2Migration_WipesNonAdmins(t *testing.T) {
 		t.Fatalf("second migrate: %v", err)
 	}
 }
+
+// TestRemoveProjectGrantsForProject: deleting a project must take every
+// grant on it along — user AND group — or a recreated project under the
+// same name silently resurrects the old holders as admins/editors. Other
+// projects' grants must survive.
+func TestRemoveProjectGrantsForProject(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	seedUser(t, d, "u1")
+	seedGroupWithRole(t, d, "g1", InstanceRoleViewer)
+	if _, err := d.AddProjectGrant(ctx, "doomed", "u1", "", ProjectRoleAdmin); err != nil {
+		t.Fatalf("add user grant: %v", err)
+	}
+	if _, err := d.AddProjectGrant(ctx, "doomed", "", "g1", ProjectRoleEditor); err != nil {
+		t.Fatalf("add group grant: %v", err)
+	}
+	if _, err := d.AddProjectGrant(ctx, "survivor", "u1", "", ProjectRoleViewer); err != nil {
+		t.Fatalf("add survivor grant: %v", err)
+	}
+
+	n, err := d.RemoveProjectGrantsForProject(ctx, "doomed")
+	if err != nil {
+		t.Fatalf("remove grants: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("removed %d grants, want 2", n)
+	}
+	if left, _ := d.ListProjectGrants(ctx, "doomed"); len(left) != 0 {
+		t.Errorf("doomed still has %d grants: %+v", len(left), left)
+	}
+	if kept, _ := d.ListProjectGrants(ctx, "survivor"); len(kept) != 1 {
+		t.Errorf("survivor grants = %d, want 1 (unrelated project must be untouched)", len(kept))
+	}
+	// The stale-grant resurrection scenario: u1 must NOT resolve any
+	// role on a reborn "doomed".
+	ten, err := d.ListUserTenancy(ctx, "u1")
+	if err != nil {
+		t.Fatalf("tenancy: %v", err)
+	}
+	if got := projectRoleOn(ten, "doomed"); got != "" {
+		t.Errorf("u1 still resolves role %q on deleted project", got)
+	}
+
+	// Idempotent on a project with no grants.
+	if n, err := d.RemoveProjectGrantsForProject(ctx, "doomed"); err != nil || n != 0 {
+		t.Errorf("second remove = (%d, %v), want (0, nil)", n, err)
+	}
+}

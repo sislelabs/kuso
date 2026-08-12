@@ -18,7 +18,8 @@ var projectMuteCmd = &cobra.Command{
 	Long: `Mute a project's notifications. Events from the project stop going to
 external channels (Discord, Slack, webhooks, email, Telegram, Pushover)
 but keep appearing in the in-app bell feed, so the audit trail survives.
-Undo with 'kuso project unmute <project>'.`,
+Error-severity alerts still page through — a mute silences chatter, not
+"service down". Undo with 'kuso project unmute <project>'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -97,6 +98,45 @@ var projectMutesCmd = &cobra.Command{
 	},
 }
 
+var projectMuteStatusCmd = &cobra.Command{
+	Use:   "mute-status <project>",
+	Short: "Show whether a project's notifications are muted",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.GetProjectNotificationMute(args[0])
+		if err != nil {
+			return fmt.Errorf("mute status: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		var st struct {
+			Muted bool   `json:"muted"`
+			Since string `json:"since"`
+			By    string `json:"by"`
+		}
+		if err := json.Unmarshal(resp.Body(), &st); err != nil {
+			return fmt.Errorf("decode mute status: %w", err)
+		}
+		if !st.Muted {
+			fmt.Printf("project %s notifications are not muted\n", args[0])
+			return nil
+		}
+		line := fmt.Sprintf("project %s notifications are MUTED", args[0])
+		if st.Since != "" {
+			line += " since " + st.Since
+		}
+		if st.By != "" {
+			line += " by " + st.By
+		}
+		fmt.Println(line)
+		return nil
+	},
+}
+
 func init() {
-	projectCmd.AddCommand(projectMuteCmd, projectUnmuteCmd, projectMutesCmd)
+	projectCmd.AddCommand(projectMuteCmd, projectUnmuteCmd, projectMutesCmd, projectMuteStatusCmd)
 }

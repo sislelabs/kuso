@@ -464,6 +464,14 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			// higher-level Service.Delete because that path enforces
 			// "no production envs"; the destructive policy is the
 			// operator's explicit ask.
+			//
+			// ProjectGrant/mute rows are deliberately KEPT: overwrite
+			// is an admin-only in-place restore of the SAME project —
+			// the team's access and mute state belong to the project
+			// identity, not the CR generation. This differs from the
+			// user-facing Delete handler, which does clean up grants:
+			// there the name becomes free for an UNRELATED project,
+			// and stale grants would silently re-attach to it.
 			if err := h.Kube.DeleteKusoProject(ctx, h.Namespace, desiredName); err != nil && !apierrors.IsNotFound(err) {
 				http.Error(w, fmt.Sprintf("overwrite: delete existing project: %v", err), http.StatusInternalServerError)
 				return

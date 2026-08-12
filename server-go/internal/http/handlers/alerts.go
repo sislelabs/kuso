@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -82,8 +83,23 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "kind must be one of log_match|node_cpu|node_mem|node_disk", http.StatusBadRequest)
 		return
 	}
-	if body.Severity == "" {
+	// Normalize severity to the canonical info|warn|error set. This
+	// matters beyond display: the notify dispatcher's mute carve-out
+	// pages through ONLY exact `severity == "error"` alert.fired
+	// events — an API/CLI rule stored as "critical" or "Error" would
+	// look page-worthy everywhere and silently stay muted.
+	switch strings.ToLower(strings.TrimSpace(body.Severity)) {
+	case "":
 		body.Severity = "warn"
+	case "info":
+		body.Severity = "info"
+	case "warn", "warning":
+		body.Severity = "warn"
+	case "error", "critical", "crit":
+		body.Severity = "error"
+	default:
+		http.Error(w, "severity must be one of info|warn|error", http.StatusBadRequest)
+		return
 	}
 	if body.WindowSeconds <= 0 {
 		body.WindowSeconds = 300

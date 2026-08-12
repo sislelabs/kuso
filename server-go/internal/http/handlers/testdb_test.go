@@ -38,7 +38,7 @@ func openHandlerTestDB(t *testing.T) *db.DB {
 			"InviteRedemption", "Invite",
 			"NotificationEvent", "BuildLog", "BuildRecord", "AlertRule", "UserProjectPref",
 			"NodeMetric", "LogLine", "SSHKey",
-			"NodeBootstrapToken",
+			"NodeBootstrapToken", "LoginAttempt",
 			"OAuthState", "ErrorEvent", "ErrorScannerState",
 			"Audit", "Token", "Permission",
 			"Notification", "GithubInstallation", "GithubUserLink",

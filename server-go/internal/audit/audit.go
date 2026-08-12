@@ -255,9 +255,14 @@ func (s *Service) trim(ctx context.Context) error {
 		return nil
 	}
 	defer s.mu.Unlock()
+	// The OFFSET row is the (MaxBackups+1)-th newest; deleting it and
+	// everything older (<=) keeps exactly MaxBackups rows. `<` kept
+	// MaxBackups+1 (off-by-one). No row at that offset → NULL → the
+	// comparison is false for every row → nothing deleted, which is
+	// the correct no-op when the table is under the cap.
 	_, err := s.DB.ExecContext(ctx, `
 DELETE FROM "Audit"
-WHERE id < (
+WHERE id <= (
   SELECT id FROM "Audit"
   ORDER BY id DESC
   LIMIT 1 OFFSET $1

@@ -26,6 +26,16 @@ func openAuditTestDB(t *testing.T) *db.DB {
 	if _, err := d.DB.Exec(`TRUNCATE TABLE "Audit" RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate Audit: %v", err)
 	}
+	// Audit rows FK "user" → User.id, and Service.Log stamps entries
+	// with the system user "1" when no user is set. A real install
+	// seeds that user at first boot; a bare test DB doesn't — without
+	// this every Log() dies on Audit_user_fkey.
+	if _, err := d.DB.Exec(`
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
+VALUES ('1', 'system', 'system@test', 'h', false, true, 'local', NOW(), NOW())
+ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatalf("seed system user: %v", err)
+	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }

@@ -46,6 +46,13 @@ type NotificationsHandler struct {
 
 	DB     *db.DB
 	Logger *slog.Logger
+
+	// ProjectExists guards MuteProject against minting mute rows for
+	// names that aren't projects: admins bypass requireProjectAccess,
+	// so without this a typo'd PUT inserts a junk row that silently
+	// pre-mutes any FUTURE project created under that name. Nil (no
+	// kube wiring, tests) skips the check.
+	ProjectExists func(ctx context.Context, project string) (bool, error)
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -140,6 +147,17 @@ func (h *NotificationsHandler) MuteProject(w http.ResponseWriter, r *http.Reques
 	project := chi.URLParam(r, "project")
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
+	}
+	if h.ProjectExists != nil {
+		exists, err := h.ProjectExists(ctx, project)
+		if err != nil {
+			http.Error(w, "verify project: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			http.Error(w, "no such project", http.StatusNotFound)
+			return
+		}
 	}
 	by := ""
 	if claims, ok := auth.ClaimsFromContext(ctx); ok {

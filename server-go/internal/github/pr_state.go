@@ -23,9 +23,12 @@ import (
 //   - PR found, closed/merged → definitive no for this repo, continue.
 //   - 404 (no such PR in this repo) → definitive no, continue.
 //   - any other failure (installation unresolvable, network, rate
-//     limit) → recorded; if NO repo answered "open", the first such
-//     error is returned so the caller keeps the env and retries,
-//     instead of treating "couldn't ask" as "closed".
+//     limit) → recorded; unless some repo answered "open", the first
+//     such error is returned so the caller keeps the env and retries,
+//     instead of treating "couldn't ask" as "closed". One repo's 404
+//     says nothing about the repo that errored — the PR may live
+//     exactly there — so ANY unanswered repo poisons a "closed"
+//     verdict, not just all of them failing.
 func (c *Client) PROpenInAny(ctx context.Context, store CacheStore, repoURLs []string, number int) (bool, error) {
 	if c == nil {
 		return false, errors.New("github client not configured")
@@ -35,7 +38,7 @@ func (c *Client) PROpenInAny(ctx context.Context, store CacheStore, repoURLs []s
 	}
 	seen := map[string]bool{}
 	var firstErr error
-	checked := 0
+	answered, skipped := 0, 0
 	for _, raw := range repoURLs {
 		owner, repo := ParseGithubRepoURL(raw)
 		if owner == "" || repo == "" {
@@ -53,6 +56,18 @@ func (c *Client) PROpenInAny(ctx context.Context, store CacheStore, repoURLs []s
 			}
 			continue
 		}
+		if instID == 0 {
+			// No App installation covers this repo (deploy-token/PAT
+			// repo, or the App was uninstalled). Skip it WITHOUT
+			// recording an error: previews are only ever created from
+			// App-webhook events, so an App-less repo can't be the
+			// PR's home — and treating it as an error would defer
+			// every preview delete in mixed App+PAT projects to the
+			// 14-day grace path. (Installation(0) would fail with a
+			// non-404 error and poison firstErr forever.)
+			skipped++
+			continue
+		}
 		cli, err := c.Installation(instID)
 		if err != nil {
 			if firstErr == nil {
@@ -63,24 +78,36 @@ func (c *Client) PROpenInAny(ctx context.Context, store CacheStore, repoURLs []s
 		pr, resp, err := cli.PullRequests.Get(ctx, owner, repo, number)
 		if err != nil {
 			if resp != nil && resp.StatusCode == 404 {
-				checked++ // definitive: this repo has no such PR
-				continue
+				answered++
+				continue // definitive: this repo has no such PR
 			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("get pr %s#%d: %w", key, number, err)
 			}
 			continue
 		}
-		checked++
+		answered++
 		if pr.GetState() == "open" {
 			return true, nil
 		}
 	}
-	// No repo said "open". Only trust that as a definitive "closed"
-	// when at least one repo actually answered; otherwise surface the
-	// failure so the sweep keeps the env and retries next tick.
-	if checked == 0 && firstErr != nil {
+	// No repo said "open". Trust that as a definitive "closed" only
+	// when EVERY repo actually answered. A partial sweep (repo A
+	// errored, repo B said 404) proves nothing about A — and A may be
+	// exactly where the PR lives, so returning (false, nil) here would
+	// tear down a live preview on a transient A-side failure. Surface
+	// the error instead; the sweep keeps the env and retries next tick.
+	if firstErr != nil {
 		return false, firstErr
+	}
+	// EVERY candidate repo was skipped for lacking an App installation
+	// and none answered. For a preview that EXISTS (they're only ever
+	// created by App webhooks) that isn't proof of "closed" — it's a
+	// transiently empty/lost installations cache, or the App was just
+	// uninstalled. "Couldn't ask" must not silently become "closed";
+	// surface it and let the sweep's grace cap bound the retention.
+	if answered == 0 && skipped > 0 {
+		return false, fmt.Errorf("github: no App installation covers any of the %d candidate repo(s) for pr #%d — cannot verify PR state", skipped, number)
 	}
 	return false, nil
 }

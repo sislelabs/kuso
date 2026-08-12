@@ -969,7 +969,16 @@ func main() {
 						ns = nsResolver.NamespaceFor(ctx, project)
 					}
 					var urls []string
-					if proj, err := kc.GetKusoProject(ctx, *namespace, project); err == nil && proj != nil && proj.Spec.DefaultRepo != nil {
+					// A failed project read must surface, not degrade to
+					// "no repos": for a single-repo project (services carry
+					// no spec.repo) a transient apiserver error here would
+					// yield zero URLs → PROpenInAny answers (false, nil) →
+					// the sweep tears down a possibly-open PR's preview.
+					proj, err := kc.GetKusoProject(ctx, *namespace, project)
+					if err != nil {
+						return false, fmt.Errorf("get project %s: %w", project, err)
+					}
+					if proj != nil && proj.Spec.DefaultRepo != nil {
 						urls = append(urls, proj.Spec.DefaultRepo.URL)
 					}
 					svcs, err := kc.ListKusoServices(ctx, ns)

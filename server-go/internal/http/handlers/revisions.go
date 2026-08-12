@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // Revision endpoints. The CR-mutating endpoints (PatchService,
@@ -50,6 +51,9 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "list revisions", err)
 		return
 	}
+	for i := range out {
+		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -78,7 +82,80 @@ func (h *ProjectsHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleViewer) {
 		return
 	}
+	redactRevisionSnapshotIfNeeded(ctx, h.DB, rev.Project, rev)
 	writeJSON(w, http.StatusOK, rev)
+}
+
+// redactRevisionSnapshotIfNeeded strips secret material from a revision
+// snapshot for callers without secrets:read on the project. Snapshots
+// are the RAW patch bodies ({"patch": <req>}) — they carry whatever the
+// mutating request carried: token-bearing repo URLs, plaintext env-var
+// values, addon passwords. The live handlers mask/redact all of those;
+// without this the History tab was a viewer-readable side door around
+// every one of the read gates. Revert is unaffected — it replays the
+// STORED row server-side and never echoes it.
+func redactRevisionSnapshotIfNeeded(ctx context.Context, dbConn *db.DB, project string, rev *db.Revision) {
+	if rev == nil || len(rev.Snapshot) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	var v any
+	if err := json.Unmarshal(rev.Snapshot, &v); err != nil {
+		// Unparseable snapshot: fail closed — an empty object beats
+		// echoing bytes we couldn't inspect.
+		rev.Snapshot = json.RawMessage(`{}`)
+		return
+	}
+	b, err := json.Marshal(redactSnapshotValue(v))
+	if err != nil {
+		rev.Snapshot = json.RawMessage(`{}`)
+		return
+	}
+	rev.Snapshot = b
+}
+
+// redactSnapshotValue walks arbitrary snapshot JSON and scrubs the
+// secret shapes patch bodies can carry: env-var literals
+// ({"name": …, "value": …} pairs), addon "password" fields, repo
+// "token" fields (GitLab clone credentials — old rows persisted them
+// verbatim before the write path learned to drop them), and
+// credential-bearing repo URLs in any string. Shape-based rather than
+// schema-based so it holds for service, addon, and future kinds.
+func redactSnapshotValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		_, hasName := t["name"].(string)
+		for k, val := range t {
+			if s, ok := val.(string); ok && s != "" {
+				switch {
+				case k == "password" || k == "token":
+					t[k] = envMaskSentinel
+					continue
+				case k == "value" && hasName:
+					t[k] = envMaskSentinel
+					continue
+				}
+				if kube.RepoURLHasCredentials(s) {
+					t[k] = kube.StripRepoURLCredentials(s)
+					continue
+				}
+				continue
+			}
+			t[k] = redactSnapshotValue(val)
+		}
+		return t
+	case []any:
+		for i := range t {
+			t[i] = redactSnapshotValue(t[i])
+		}
+		return t
+	case string:
+		if kube.RepoURLHasCredentials(t) {
+			return kube.StripRepoURLCredentials(t)
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 // RevertRevision replays the stored snapshot back through the

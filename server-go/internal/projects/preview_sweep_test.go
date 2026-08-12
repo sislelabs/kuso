@@ -144,6 +144,37 @@ func TestSweepExpiredPreviews_CheckErrorKeepsEnv(t *testing.T) {
 	}
 }
 
+// TestSweepExpiredPreviews_CheckErrorPastGraceCapDeletes: a check that
+// has been failing since past the grace cap (App uninstalled, repo
+// transferred — permanent, not transient) must stop deferring and
+// delete, or the preview env + clone + PVC leak forever.
+func TestSweepExpiredPreviews_CheckErrorPastGraceCapDeletes(t *testing.T) {
+	t.Parallel()
+	longPast := time.Now().Add(-(previewPRCheckGraceCap + 24*time.Hour))
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedPreviewEnv("alpha", "web", "alpha-web-pr-9", "preview-pr-9", longPast),
+	)
+	s.PreviewPROpen = func(_ context.Context, _ string, _ int) (bool, error) {
+		return false, errors.New("resolve installation: app not installed")
+	}
+
+	var reported int
+	deleted, err := s.SweepExpiredPreviews(context.Background(), func(string, error) { reported++ })
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (grace cap exceeded)", deleted)
+	}
+	if reported == 0 {
+		t.Error("grace-cap delete was not reported via onErr")
+	}
+	if getEnv(t, s, "alpha-web-pr-9") != nil {
+		t.Error("env still present after grace-cap sweep")
+	}
+}
+
 // TestSweepExpiredPreviews_NoCheckerLegacyDelete: nil checker (no
 // GitHub App) → pre-existing delete-on-expiry behaviour.
 func TestSweepExpiredPreviews_NoCheckerLegacyDelete(t *testing.T) {

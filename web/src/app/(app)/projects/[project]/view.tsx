@@ -210,11 +210,6 @@ export function ProjectDetailView() {
           })
       : [],
   );
-  const addonsList = allAddons.filter((a) => {
-    const v = a.metadata.labels?.[envLabel];
-    if (!v) return !replacedBases.has(a.metadata.name); // shared: hide if this env clones it
-    return v === selectedEnv; // env-scoped: only on its own tab
-  });
   // When the selected env exists at all (i.e. has at least one env
   // CR or env-scoped addon), show every service so the canvas
   // matches the shape of the project. If the env-group has zero
@@ -223,12 +218,52 @@ export function ProjectDetailView() {
   // a service-less env-group is still empty from the user's POV.
   const envExists =
     envs.length > 0 ||
-    allAddons.some((a) => a.metadata.labels?.[envLabel] === selectedEnv);
+    allAddons.some((a) => a.metadata.labels?.[envLabel] === selectedEnv) ||
+    // Env-labeled service CRs count too: a clone group whose env CRs
+    // are mid-teardown but whose labeled service CR survives is still
+    // a live thing to show, not an "Environment not found".
+    allServices.some((s) => s.metadata.labels?.[envLabel] === selectedEnv);
+  const onProduction = selectedEnv === "production";
+  // Addons are gated on envExists like services below: a stale ?env=
+  // param (a preview torn down while the tab was open) must render the
+  // empty state, not a ghost canvas of every project-shared addon with
+  // zero services. Production always exists.
+  const addonsList =
+    onProduction || envExists
+      ? allAddons.filter((a) => {
+          const v = a.metadata.labels?.[envLabel];
+          if (!v) return !replacedBases.has(a.metadata.name); // shared: hide if this env clones it
+          return v === selectedEnv; // env-scoped: only on its own tab
+        })
+      : [];
   // Filter services to the selected env-group: shared (no env label)
   // services show on every tab; a clone's env-labeled service shows only
   // on its own tab (fixes the duplicate node bleeding into production).
   const services = envExists ? allServices.filter((s) => svcInGroup(s.metadata.labels)) : [];
-  const onProduction = selectedEnv === "production";
+
+  // Stale ?env= (a preview torn down while the tab was open, a typo'd
+  // URL): the generic "Empty project" copy would be false and — with
+  // no env tabs rendered on empty states — a dead end. Name the
+  // problem and hand back the way out.
+  if (!onProduction && !envExists) {
+    return (
+      <div className="p-6 lg:p-8">
+        <EmptyState
+          icon={<Package className="h-5 w-5" />}
+          title={`Environment "${selectedEnv}" not found`}
+          description="This environment doesn't exist (anymore) — a preview environment may have been torn down after its PR closed or expired."
+          action={
+            <a
+              href={`/projects/${encodeURIComponent(projectName)}`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
+            >
+              Back to production
+            </a>
+          }
+        />
+      </div>
+    );
+  }
 
   if (services.length === 0 && addonsList.length === 0) {
     return (

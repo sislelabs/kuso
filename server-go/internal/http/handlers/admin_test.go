@@ -29,13 +29,24 @@ func seedAdminUser(t *testing.T, d *db.DB) string {
 	hash, _ := auth.HashPassword("hunter2", 4)
 	now := time.Now().UTC()
 	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1', 'admin', ?, ?)`, now, now); err != nil {
+INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1', 'admin', $1, $2)`, now, now); err != nil {
 		t.Fatalf("seed role: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', ?, false, true, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', $2, $3)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
+	}
+	// The per-request resolver (v0.22.15) derives perms from
+	// _PermissionToRole — a role merely NAMED admin resolves to zero
+	// permissions and every admin-gated endpoint 403s.
+	if _, err := d.ExecContext(context.Background(), `
+INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ('padm', 'settings', 'admin', $1, $2)`, now, now); err != nil {
+		t.Fatalf("seed admin perm: %v", err)
+	}
+	if _, err := d.ExecContext(context.Background(), `
+INSERT INTO "_PermissionToRole" ("A", "B") VALUES ('padm', 'r1')`); err != nil {
+		t.Fatalf("seed admin pivot: %v", err)
 	}
 	return "u1"
 }
@@ -162,7 +173,7 @@ func TestAdmin_Tokens_DeleteOtherUserFails(t *testing.T) {
 	// Insert a token belonging to a different user.
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES ('u2', 'other', 'o@o', 'h', false, true, 'local', ?, ?)`, time.Now().UTC(), time.Now().UTC()); err != nil {
+VALUES ('u2', 'other', 'o@o', 'h', false, true, 'local', $1, $2)`, time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("seed other user: %v", err)
 	}
 	if err := d.CreateToken(context.Background(), &db.Token{

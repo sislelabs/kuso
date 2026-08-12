@@ -57,6 +57,17 @@ func (s *Service) GetEnvironment(ctx context.Context, project, env string) (*kub
 // Returns the number of envs deleted. Errors against individual envs
 // are logged via the supplied callback (or swallowed when nil) so one
 // flaky teardown doesn't stop the sweep.
+//
+// previewPRCheckGraceCap bounds how long a check-error can defer the
+// delete: past this far beyond expiresAt the failure is treated as
+// permanent (App uninstalled, repo transferred — it retries every 5
+// minutes, so 14 days ≈ 4000 consecutive failures) and the env is
+// deleted anyway. An open PR under active review re-stamps its TTL on
+// every push, so a genuinely live preview doesn't sit weeks past
+// expiry. Without the cap an uninstalled App leaked the preview env +
+// DB clone + PVC forever.
+const previewPRCheckGraceCap = 14 * 24 * time.Hour
+
 func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name string, err error)) (int, error) {
 	// Build the set of namespaces to scan: home + every distinct
 	// spec.namespace declared by a KusoProject. Dedupe so we don't
@@ -114,12 +125,24 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 				if prNum, ok := previewPRNumberFromEnv(&e); ok {
 					open, cerr := s.PreviewPROpen(ctx, proj, prNum)
 					if cerr != nil {
-						if onErr != nil {
-							onErr(e.Name, fmt.Errorf("pr-state check: %w", cerr))
+						// Transient failures keep the env (retry next tick).
+						// But a PERMANENTLY failing check — GitHub App
+						// uninstalled, repo transferred — must not leak the
+						// preview forever: past the grace cap the env has
+						// been expired AND unanswerable for so long that an
+						// active PR would have re-stamped the TTL by pushing.
+						// Fall through to the delete at that point.
+						if now.Sub(exp) < previewPRCheckGraceCap {
+							if onErr != nil {
+								onErr(e.Name, fmt.Errorf("pr-state check: %w", cerr))
+							}
+							continue
 						}
-						continue
-					}
-					if open {
+						if onErr != nil {
+							onErr(e.Name, fmt.Errorf("pr-state check failing %s past expiry — grace cap exceeded, deleting: %w",
+								now.Sub(exp).Round(time.Hour), cerr))
+						}
+					} else if open {
 						ttlDays := ttlDaysByProject[proj]
 						if ttlDays <= 0 {
 							ttlDays = 7

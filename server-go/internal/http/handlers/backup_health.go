@@ -24,8 +24,17 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	addons, addonsComplete := backuphealth.ComputeAddons(ctx, h.Kube, h.Namespace)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"backup":     backuphealth.Compute(ctx, h.Kube, h.Namespace),
 		"registryGC": backuphealth.RegistryGC(ctx, h.Kube, h.Namespace),
+		// Per-addon backup CronJob health. Previously invisible: an
+		// addon with spec.backup whose runs all failed on a missing
+		// kuso-backup-s3 Secret reported nothing on any kuso surface.
+		// addonBackupsComplete=false → a list/GET failed mid-sweep and
+		// rows may be missing; don't treat the set as authoritative.
+		"addonBackups":         addons,
+		"addonBackupsHealthy":  backuphealth.AddonsHealthy(addons),
+		"addonBackupsComplete": addonsComplete,
 	})
 }

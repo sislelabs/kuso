@@ -2,13 +2,11 @@ package projects
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -40,14 +38,18 @@ func (s *Service) attachServiceSecretToEnvs(ctx context.Context, ns, project, se
 		if hasEnvFromSecret(env.Spec.EnvFromSecrets, secretName) {
 			continue
 		}
-		next, jerr := json.Marshal(append(env.Spec.EnvFromSecrets, secretName))
-		if jerr != nil {
-			return fmt.Errorf("marshal envFromSecrets for %s: %w", env.Name, jerr)
-		}
-		patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, next)
-		if _, perr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-			Patch(ctx, env.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
-			return fmt.Errorf("attach %s to env %s: %w", secretName, env.Name, perr)
+		// RMW, not a merge patch of the full array: a concurrent writer
+		// (addon provision appending a clone-conn, AddEnvironment) that
+		// lands between our List and the write must not get its entry
+		// clobbered by our stale snapshot. Mutating the LIVE object and
+		// letting updateWithRetry re-read on conflict keeps both edits.
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			if !hasEnvFromSecret(live.Spec.EnvFromSecrets, secretName) {
+				live.Spec.EnvFromSecrets = append(live.Spec.EnvFromSecrets, secretName)
+			}
+			return nil
+		}); uerr != nil {
+			return fmt.Errorf("attach %s to env %s: %w", secretName, env.Name, uerr)
 		}
 	}
 	return nil
@@ -84,6 +86,10 @@ func (s *Service) HealManagedSecretMounts(ctx context.Context, logger *slog.Logg
 		project := projects[i].Name
 		ns, nerr := s.namespaceFor(ctx, project)
 		if nerr != nil {
+			if logger != nil {
+				logger.Warn("managed-secret heal: resolve namespace failed — project skipped unhealed",
+					"project", project, "err", nerr)
+			}
 			continue
 		}
 		services, serr := s.ListServices(ctx, project)
