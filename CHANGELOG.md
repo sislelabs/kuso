@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.18] — 2026-08-12
+
+### 🐛 Bug Fixes
+- Fix(env-groups): clones no longer inherit custom domains or an ambiguous displayName ([8ad1645](https://github.com/sislelabs/kuso/commit/8ad164519927f6317dc59914f3fb2ea6744dde9c))
+
 ## [0.22.17] — 2026-08-12
 
 ### 🐛 Bug Fixes
@@ -412,14 +417,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(addons): direct on-demand backup download ([9c48d7d](https://github.com/sislelabs/kuso/commit/9c48d7d491a8aa886a9de9da44a30bbab02483d7))
-
-## [0.18.118] — 2026-07-03
-
-### Other
-- Revert "fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it" ([7578cdf](https://github.com/sislelabs/kuso/commit/7578cdfda11165fadf4aaddae47f87d11e1a5a4e))
-
-### 🐛 Bug Fixes
-- Fix(db): actionable error when pods/portforward RBAC is stale ([ed20945](https://github.com/sislelabs/kuso/commit/ed20945d9a89b42ea2d19272564ec84f430e9a9d))
 
 
 ---

@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.118] — 2026-07-03
+
+### Other
+- Revert "fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it" ([7578cdf](https://github.com/sislelabs/kuso/commit/7578cdfda11165fadf4aaddae47f87d11e1a5a4e))
+
+### 🐛 Bug Fixes
+- Fix(db): actionable error when pods/portforward RBAC is stale ([ed20945](https://github.com/sislelabs/kuso/commit/ed20945d9a89b42ea2d19272564ec84f430e9a9d))
+
 ## [0.18.117] — 2026-07-03
 
 ### Other
