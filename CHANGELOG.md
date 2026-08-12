@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.17] — 2026-08-12
+
+### 🐛 Bug Fixes
+- Fix: platform-wide security + data-safety fixes from full adversarial review ([06972e2](https://github.com/sislelabs/kuso/commit/06972e2d1bd980fe2d1e12a48e1d601b8b770cf0))
+
 ## [0.22.16] — 2026-08-11
 
 ### 🐛 Bug Fixes
@@ -415,17 +420,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(db): actionable error when pods/portforward RBAC is stale ([ed20945](https://github.com/sislelabs/kuso/commit/ed20945d9a89b42ea2d19272564ec84f430e9a9d))
-
-## [0.18.117] — 2026-07-03
-
-### Other
-- Revert "fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift)" ([da0e999](https://github.com/sislelabs/kuso/commit/da0e999757757f0e579ccbb55664a7349b55bb4e))
-
-### 🐛 Bug Fixes
-- Fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it ([6d85611](https://github.com/sislelabs/kuso/commit/6d85611202f8b7f19b51e32253d4d63b9a1fd806))
-
-### 🧪 Tests
-- Test(crd): refresh kusoruns golden for valueFrom (revert collateral) ([ea8d066](https://github.com/sislelabs/kuso/commit/ea8d0669fa35389761fa5401cea6564377c7fdc1))
 
 
 ---

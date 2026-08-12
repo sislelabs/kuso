@@ -2,6 +2,17 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.117] — 2026-07-03
+
+### Other
+- Revert "fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift)" ([da0e999](https://github.com/sislelabs/kuso/commit/da0e999757757f0e579ccbb55664a7349b55bb4e))
+
+### 🐛 Bug Fixes
+- Fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it ([6d85611](https://github.com/sislelabs/kuso/commit/6d85611202f8b7f19b51e32253d4d63b9a1fd806))
+
+### 🧪 Tests
+- Test(crd): refresh kusoruns golden for valueFrom (revert collateral) ([ea8d066](https://github.com/sislelabs/kuso/commit/ea8d0669fa35389761fa5401cea6564377c7fdc1))
+
 ## [0.18.116] — 2026-07-03
 
 ### 🐛 Bug Fixes
