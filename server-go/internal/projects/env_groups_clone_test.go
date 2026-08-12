@@ -345,3 +345,46 @@ func TestCreateEnvGroup_ClonedServiceCarriesServiceLabel(t *testing.T) {
 		t.Errorf("cloned service env label = %q, want staging", svc.Labels[kube.LabelEnv])
 	}
 }
+
+// TestCreateEnvGroup_CloneDropsDomainsAndSuffixesDisplayName guards the
+// bukvite confusion (2026-08-12): the service clone copied production's
+// spec verbatim, so the staging service carried production's custom
+// domains (a re-armed traffic-hijack hazard — any domains propagation
+// on the clone would push prod hostnames onto the staging env) and an
+// identical displayName (canvas node + Discord build cards for staging
+// were indistinguishable from production's).
+func TestCreateEnvGroup_CloneDropsDomainsAndSuffixesDisplayName(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		seedService("acme", "web", kube.KusoServiceSpec{
+			Project:     "acme",
+			Port:        8080,
+			DisplayName: "webby",
+			Domains: []kube.KusoDomain{
+				{Host: "acme.example.com", TLS: true},
+				{Host: "www.acme.example.com", TLS: true},
+			},
+		}),
+		seedEnv("acme", "web", "production", "main", "acme-web-production"),
+	)
+
+	if _, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"}); err != nil {
+		t.Fatalf("CreateEnvGroup: %v", err)
+	}
+	clone, err := s.Kube.GetKusoService(context.Background(), "kuso", "acme-web-staging")
+	if err != nil {
+		t.Fatalf("get clone: %v", err)
+	}
+	if len(clone.Spec.Domains) != 0 {
+		t.Errorf("clone inherited custom domains: %+v", clone.Spec.Domains)
+	}
+	if clone.Spec.DisplayName != "webby-staging" {
+		t.Errorf("clone displayName = %q, want %q", clone.Spec.DisplayName, "webby-staging")
+	}
+	// The source must be untouched.
+	src, _ := s.Kube.GetKusoService(context.Background(), "kuso", "acme-web")
+	if len(src.Spec.Domains) != 2 || src.Spec.DisplayName != "webby" {
+		t.Errorf("source service mutated: displayName=%q domains=%+v", src.Spec.DisplayName, src.Spec.Domains)
+	}
+}

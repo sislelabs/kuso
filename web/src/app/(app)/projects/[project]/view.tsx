@@ -236,10 +236,34 @@ export function ProjectDetailView() {
           return v === selectedEnv; // env-scoped: only on its own tab
         })
       : [];
+  // Services replaced by a clone in THIS env, mirroring replacedBases
+  // for addons. Without it a base service rendered as a ghost on its
+  // clone's tab — two nodes both titled by the (cloned-verbatim)
+  // displayName, the ghost showing production's domain chip (the
+  // bukvite staging confusion).
+  const replacedBaseServices = new Set(
+    selectedEnv !== "production"
+      ? allServices
+          .filter((s) => s.metadata.labels?.[envLabel] === selectedEnv)
+          .map((s) => s.metadata.name)
+          .flatMap((n) => {
+            const suffix = cloneSuffixes.find((sfx) => n.endsWith(sfx));
+            return suffix ? [n.slice(0, -suffix.length)] : [];
+          })
+      : [],
+  );
   // Filter services to the selected env-group: shared (no env label)
-  // services show on every tab; a clone's env-labeled service shows only
-  // on its own tab (fixes the duplicate node bleeding into production).
-  const services = envExists ? allServices.filter((s) => svcInGroup(s.metadata.labels)) : [];
+  // services show on every tab UNLESS this env has a clone of them; a
+  // clone's env-labeled service shows only on its own tab (fixes the
+  // duplicate node bleeding into production).
+  const services = envExists
+    ? allServices.filter((s) => {
+        if (!svcInGroup(s.metadata.labels)) return false;
+        const v = s.metadata.labels?.[envLabel];
+        if (!v) return !replacedBaseServices.has(s.metadata.name); // shared: hide if this env clones it
+        return true;
+      })
+    : [];
 
   // Stale ?env= (a preview torn down while the tab was open, a typo'd
   // URL): the generic "Empty project" copy would be false and — with

@@ -534,7 +534,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// Clone the KusoService with the rewritten envVars. Branch
 		// defaults to whatever production has — user retunes per-
 		// service after create.
-		clonedSpec := cloneServiceSpec(item.svc.Spec, project)
+		clonedSpec := cloneServiceSpec(item.svc.Spec, project, req.Name)
 		clonedSpec.EnvVars = newEnvVars
 		svcClone := &kube.KusoService{
 			ObjectMeta: metav1.ObjectMeta{
@@ -991,9 +991,26 @@ func rewriteEnvVarsForGroup(
 // cloneServiceSpec returns a deep-ish copy of a service spec, suitable
 // for use as the spec of a cloned KusoService in a new env-group.
 // Same data; new resource will get its own metadata.name.
-func cloneServiceSpec(in kube.KusoServiceSpec, project string) kube.KusoServiceSpec {
+func cloneServiceSpec(in kube.KusoServiceSpec, project, env string) kube.KusoServiceSpec {
 	out := in
 	out.Project = project
+	// Custom domains must NOT ride into the clone. The env-level clone
+	// already nils AdditionalHosts (the traffic-hijack guard below),
+	// but leaving production's hosts on the clone SERVICE spec kept
+	// the hazard armed — any later domains edit or propagation pass on
+	// the clone would re-push them onto its env — and every display
+	// surface (canvas URL chip, Discord build card's Site field) read
+	// the copied hosts as if the clone served them. Domains on a clone
+	// are an explicit opt-in after creation, same as the env level.
+	out.Domains = nil
+	// A verbatim displayName made the clone indistinguishable from its
+	// base on every surface that renders titles (canvas node header,
+	// build notifications — the bukvite "two identical Discord cards"
+	// confusion). Suffix with the env name; empty stays empty (slug
+	// fallback already carries the env suffix).
+	if out.DisplayName != "" {
+		out.DisplayName = out.DisplayName + "-" + env
+	}
 	// envVars need to be a fresh slice so the rewrite below doesn't
 	// alias back into the source service.
 	if len(in.EnvVars) > 0 {
