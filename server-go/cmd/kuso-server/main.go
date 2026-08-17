@@ -335,6 +335,14 @@ func main() {
 	// per active source IP; rows past their resetAt window are inert
 	// but eventually pile up. A slow ticker keeps the table bounded
 	// without contending with the hot-path INSERT-on-conflict.
+	//
+	// Deliberately NOT leader-gated: this starts before leader election
+	// is wired, and the work is an idempotent bounded DELETE. With N
+	// replicas it runs N times every 5 minutes — wasteful, not
+	// incorrect, and cheap enough that reordering boot to gate it would
+	// buy less than it risks. Contrast the build poller and updater
+	// loop, which are gated because duplicate runs there DO cause harm
+	// (double promotion, duplicate notifications, racing patches).
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
@@ -652,8 +660,12 @@ func main() {
 		//   request from a second pod no-ops.
 		// - cfgSvc (Kuso CR cache) is per-pod state.
 		if os.Getenv("KUSO_UPDATER_DISABLED") != "true" {
+			// Construct unconditionally — the HTTP handler reads state off
+			// this service on every replica. Only the POLLING LOOP is a
+			// singleton (see startSingletons): it calls the GitHub releases
+			// API against one shared rate limit and patches the operator
+			// Deployment, so running it on every replica multiplies both.
 			updaterSvc = updater.New(database, kc, *namespace, version.Version(), logger)
-			go updaterSvc.Run(ctx)
 		}
 		go cfgSvc.Run(ctx, 60*time.Second, func(err error) {
 			logger.Warn("config: reload", "err", err)
@@ -712,6 +724,14 @@ func main() {
 
 		startSingletons := func(workCtx context.Context) {
 			leaderActive.Store(true)
+			// Updater poll loop: leader-only. Every replica used to run
+			// it, so an N-replica deploy made N GitHub calls per tick
+			// against one shared rate limit and raced N operator-
+			// Deployment patches. The updater's HTTP surface still works
+			// on every replica — only this loop is gated.
+			if updaterSvc != nil {
+				go updaterSvc.Run(workCtx)
+			}
 			// Just became leader: sweep every in-flight KusoBuild once so a
 			// build created during the ~15s lease transfer (when both the
 			// outgoing and incoming leader skip its Add event) gets its Job

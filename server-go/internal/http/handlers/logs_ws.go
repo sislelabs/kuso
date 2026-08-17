@@ -151,9 +151,31 @@ type wsSink struct {
 	conn *websocket.Conn
 }
 
+// wsWriteTimeout bounds a single frame write.
+//
+// Without a deadline, WriteJSON blocks for as long as the peer refuses
+// to drain its receive window — which for a browser tab that was
+// suspended, backgrounded, or is on a dead network is indefinitely.
+// The frame producer is a per-connection goroutine holding this mutex,
+// so one stalled viewer leaks a goroutine plus its kube log stream for
+// the life of the process, and a handful of them exhaust the pod. A
+// deadline turns that into a normal write error, which unwinds the
+// stream and closes the connection the way any other failure does.
+//
+// 10s is generous for a JSON log frame on any working connection; it is
+// a liveness backstop, not a latency budget.
+const wsWriteTimeout = 10 * time.Second
+
+// wsMaxInboundBytes caps a single inbound message on the log stream.
+// The client is not expected to send data frames at all.
+const wsMaxInboundBytes = 4 << 10
+
 func (s *wsSink) Write(f logs.Frame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return err
+	}
 	return s.conn.WriteJSON(f)
 }
 
@@ -224,6 +246,11 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	// This is a one-way stream: the server pushes log frames and the
+	// client sends nothing but control frames. Without a read limit a
+	// client can stream an unbounded message at us and we will buffer
+	// all of it. 4 KiB is far more than any control frame needs.
+	conn.SetReadLimit(wsMaxInboundBytes)
 
 	// Detect client disconnect via a close handler instead of a
 	// ReadMessage loop. The old loop raced with the kube list call

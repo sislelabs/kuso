@@ -138,6 +138,7 @@ var domainsListCmd = &cobra.Command{
 var (
 	domainsAddNoTLS     bool
 	domainsAddTLSSecret string
+	domainsRemoveYes    bool
 )
 
 var domainsAddCmd = &cobra.Command{
@@ -208,12 +209,29 @@ var domainsRemoveCmd = &cobra.Command{
 	Use:     "remove <project> <service> <host>",
 	Aliases: []string{"rm"},
 	Short:   "Unbind a custom hostname from a service",
-	Args:    cobra.ExactArgs(3),
+	Long: "Unbind a custom hostname from a service.\n\n" +
+		"The host stops serving as soon as the ingress reconciles — this is a\n" +
+		"user-visible outage for anyone hitting that URL. Re-adding it later\n" +
+		"re-requests a certificate, which counts against the Let's Encrypt\n" +
+		"rate limit (50 certs/week per registered domain), so an unbind/rebind\n" +
+		"loop can lock you out of issuing certs for that domain.",
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, host := args[0], args[1], args[2]
+
+		// Gate BOTH removal paths (env-scoped and service-scoped) — the
+		// live hostname goes dark either way.
+		scope := fmt.Sprintf("%s/%s", project, service)
+		if domainsEnv != "" {
+			scope += " env=" + domainsEnv
+		}
+		if err := confirmDestructive(domainsRemoveYes,
+			fmt.Sprintf("Unbind %s from %s? The hostname stops serving and re-adding it re-requests a certificate.", host, scope)); err != nil {
+			return err
+		}
 
 		if domainsEnv != "" {
 			resp, err := api.RemoveEnvDomain(project, service, domainsEnv, host)
@@ -245,6 +263,7 @@ var domainsRemoveCmd = &cobra.Command{
 func init() {
 	domainsAddCmd.Flags().BoolVar(&domainsAddNoTLS, "no-tls", false, "skip the cert-manager TLS entry (HTTP-only host)")
 	domainsAddCmd.Flags().StringVar(&domainsAddTLSSecret, "tls-secret", "", "pre-provisioned TLS secret name (required for wildcard hosts)")
+	domainsRemoveCmd.Flags().BoolVarP(&domainsRemoveYes, "yes", "y", false, "skip the confirmation prompt")
 	// --env on the group: scope add/remove/list to one environment. Empty
 	// (default) = service-level (the server mirrors to production).
 	domainsCmd.PersistentFlags().StringVar(&domainsEnv, "env", "",

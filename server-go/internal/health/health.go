@@ -45,8 +45,8 @@ type Watcher struct {
 	// fire alert.fired. Default 85.
 	DiskWarnPct int
 
-	mu     sync.Mutex
-	fired  map[string]bool // alert key → was already fired
+	mu    sync.Mutex
+	fired map[string]bool // alert key → was already fired
 }
 
 // New returns a Watcher with sensible defaults.
@@ -87,7 +87,14 @@ func (w *Watcher) tick(ctx context.Context) {
 // CreateContainerConfigError and fires once per (pod, reason). When
 // the pod recovers we forget the key so a later relapse alerts again.
 func (w *Watcher) checkPods(ctx context.Context) {
-	pods, err := w.Kube.Clientset.CoreV1().Pods(w.Namespace).List(ctx, metav1.ListOptions{})
+	// Only kuso-managed workload pods can be in a state this watcher
+	// reports on, so select on the project label rather than listing
+	// every pod in the namespace. On a busy cluster the unfiltered list
+	// pulled back multi-MB payloads every tick, most of it platform
+	// pods this loop then skipped. Mirrors logship's selector.
+	pods, err := w.Kube.Clientset.CoreV1().Pods(w.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelProject,
+	})
 	if err != nil {
 		w.Logger.Warn("health: list pods", "err", err)
 		return

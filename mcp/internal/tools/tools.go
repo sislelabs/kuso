@@ -20,6 +20,13 @@
 //   status             a project's runtime rollup (read-only)
 //   run                fire a one-shot task pod against a service
 //                      (migrations, seeds, scripts) — mutating
+//   list_builds        recent builds for a service (read-only)
+//   rollback           re-point an env at a previous build's image
+//                      (mutating) — so an agent can UNDO a deploy
+//                      without switching to the CLI mid-incident
+//   sql_tables         list an addon database's tables (read-only)
+//   sql_query          run one read-only SELECT against an addon
+//                      (read-only; server enforces a read-only tx)
 //
 // With apply + build + status + logs an agent can drive a deploy
 // end-to-end (init/author kuso.yml → apply → build → status → logs)
@@ -55,4 +62,6 @@ func Register(server *mcp.Server, cfg *config.Config) {
 	registerLogs(server, client)
 	registerStatus(server, client)
 	registerRun(server, client)
+	registerRollback(server, client)
+	registerDB(server, client)
 }

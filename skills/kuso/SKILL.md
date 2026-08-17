@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.18.128**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.22.19**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
@@ -83,6 +83,26 @@ kuso completion zsh  > "${fpath[1]}/_kuso"   # zsh
 kuso completion bash > /etc/bash_completion.d/kuso
 ```
 
+### CLI or MCP? (for agents)
+
+kuso ships **two** agent surfaces. They hit the same API and the same
+auth/permission layers, so they see the same truth:
+
+- **The `kuso` CLI** — the complete surface (~50 command groups). Use it
+  for anything not covered below.
+- **The `kuso-mcp` server** — a focused tool set: `list_projects`,
+  `describe_project`, `status`, `logs`, `plan`/`apply`, `build`,
+  `build_status`, `list_builds`, `rollback`, `sql_tables`, `sql_query`,
+  `set_env`, `set_secret`, `run`, `manage_addon`, `add_service`,
+  `bootstrap_project`, `update_project`. Every mutating tool requires
+  `confirm=true`, and `--read-only` refuses all of them — worth running
+  when you only mean to investigate.
+
+The full loop — deploy → inspect → debug → query the DB → roll back —
+works on either. Prefer MCP when it covers the task (the confirm gates
+and read-only mode are real guardrails); fall back to the CLI for
+everything else.
+
 ## Imperative path (recommended) — create everything via subcommands
 
 ```bash
@@ -99,7 +119,6 @@ kuso project addon add papelito cache --kind redis
 # All IMPLEMENTED kinds (chart renders a real workload + conn secret):
 #   postgres, redis, valkey, mongodb, rabbitmq, s3, mailpit, nats,
 #   meilisearch, clickhouse, redpanda (Kafka API).
-#   (CLIs ≤ v0.18.128 reject --kind valkey — upgrade the CLI or use kuso.yml.)
 # RESERVED-but-not-implemented (creating one renders only a "pending"
 # marker — DON'T use as if it works): mysql, memcached, elasticsearch,
 # kafka (use redpanda), cockroachdb, couchdb.
@@ -693,7 +712,7 @@ kuso doctor                                     # pre-flight checks (incl. webho
 kuso version
 kuso upgrade --check                            # see if a newer kuso-server is available
 kuso upgrade --version vX.Y.Z                   # pin to a specific release
-kuso revision list <project> <kind> <name>      # service / project / addon — edit history
+kuso revision list <project> <kind> <name>      # kind ∈ {service, environment, addon, cron}
 kuso revision revert <project> <id>             # replay an old snapshot
 kuso token create --name ci --expires 90d       # long-lived API token (printed ONCE)
 

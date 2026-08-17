@@ -103,12 +103,18 @@ func (s *Scanner) tick(ctx context.Context) {
 		s.Logger.Warn("errorscan: read watermark", "err", err)
 		return
 	}
+	// $N placeholders, NOT `?`. The driver is lib/pq (see internal/db),
+	// which passes `?` through as a literal — the query then fails to
+	// parse on EVERY tick, so this scanner silently never populated
+	// ErrorEvent. Same class of bug as the one documented in
+	// handlers/log_search.go; the db package's `?`→$N shim was removed
+	// in v0.18 and this query was missed. Guarded by TestTickQueryUsesPositionalPlaceholders.
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, ts, pod, project, service, env, line
 		FROM "LogLine"
-		WHERE id > ?
+		WHERE id > $1
 		ORDER BY id ASC
-		LIMIT ?`,
+		LIMIT $2`,
 		wm, s.BatchSize,
 	)
 	if err != nil {

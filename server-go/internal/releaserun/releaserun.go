@@ -376,7 +376,10 @@ func (r *Runner) poll(ctx context.Context, ns, jobName string, timeout time.Dura
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		job, err := r.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
+		// Status read on a 2s loop for the whole migration window.
+		// Informer when warm, live Get on a miss — the loop below
+		// distinguishes NotFound, so a cold cache must not fake it.
+		job, err := r.getJobCached(ctx, ns, jobName)
 		if err != nil {
 			return Result{JobName: jobName}, fmt.Errorf("get release job: %w", err)
 		}
@@ -470,3 +473,15 @@ var ErrNoJob = errors.New("releaserun: no job for env+tag")
 func ptrBool(b bool) *bool    { return &b }
 func ptrInt32(i int32) *int32 { return &i }
 func ptrInt64(i int64) *int64 { return &i }
+
+// getJobCached reads a Job from the shared informer, falling back to a
+// live Get. The fallback matters: the poll loop treats NotFound as a
+// real terminal signal, so a cache gap must never be reported as one.
+func (r *Runner) getJobCached(ctx context.Context, ns, name string) (*batchv1.Job, error) {
+	if r.Kube != nil && r.Kube.Cache != nil {
+		if job, ok := r.Kube.Cache.GetJob(ns, name); ok {
+			return job, nil
+		}
+	}
+	return r.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+}

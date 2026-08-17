@@ -13,19 +13,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/instancesecrets"
 )
 
+// Audited: these endpoints write instance-wide credentials (shared
+// secret keys and superuser addon DSNs) that every project can end up
+// consuming, so the mutations need a durable "who changed what, when".
+//
+// Only KEY NAMES and ADDON NAMES are recorded — never a secret value and
+// never a DSN, which carries a superuser password in its userinfo. Audit
+// rows are readable with audit:read, a strictly weaker permission than
+// the settings:admin these endpoints require, so a value logged here
+// would be a privilege downgrade on the secret itself.
 type InstanceSecretsHandler struct {
 	Svc    *instancesecrets.Service
+	Audit  *audit.Service
 	Logger *slog.Logger
+}
+
+// auditSecret writes one instance-secret audit row. Severity "warn" —
+// instance-wide credential changes are never routine.
+func (h *InstanceSecretsHandler) auditSecret(ctx context.Context, action, resource, message string) {
+	if h.Audit == nil {
+		return
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   action,
+		Resource: resource,
+		Message:  message,
+	})
 }
 
 func (h *InstanceSecretsHandler) Mount(r chi.Router) {
@@ -123,6 +150,9 @@ func (h *InstanceSecretsHandler) RegisterAddon(w http.ResponseWriter, r *http.Re
 		h.fail(w, "register instance addon", err)
 		return
 	}
+	// Name only — body.DSN embeds a superuser password.
+	h.auditSecret(ctx, "instance-addon.register", "instance-addon",
+		fmt.Sprintf("registered instance addon %q (DSN not recorded)", body.Name))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -135,10 +165,13 @@ func (h *InstanceSecretsHandler) UnregisterAddon(w http.ResponseWriter, r *http.
 	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
-	if err := h.Svc.UnregisterInstanceAddon(ctx, chi.URLParam(r, "name")); err != nil {
+	name := chi.URLParam(r, "name")
+	if err := h.Svc.UnregisterInstanceAddon(ctx, name); err != nil {
 		h.fail(w, "unregister instance addon", err)
 		return
 	}
+	h.auditSecret(ctx, "instance-addon.unregister", "instance-addon",
+		fmt.Sprintf("unregistered instance addon %q", name))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -184,6 +217,9 @@ func (h *InstanceSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "set instance secret", err)
 		return
 	}
+	// Key name only — body.Value is the secret itself.
+	h.auditSecret(ctx, "instance-secret.set", "instance-secret",
+		fmt.Sprintf("set instance secret key %q (value not recorded)", body.Key))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -193,10 +229,13 @@ func (h *InstanceSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
-	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "key")); err != nil {
+	key := chi.URLParam(r, "key")
+	if err := h.Svc.UnsetKey(ctx, key); err != nil {
 		h.fail(w, "unset instance secret", err)
 		return
 	}
+	h.auditSecret(ctx, "instance-secret.unset", "instance-secret",
+		fmt.Sprintf("unset instance secret key %q", key))
 	w.WriteHeader(http.StatusNoContent)
 }
 

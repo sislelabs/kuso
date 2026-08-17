@@ -31,6 +31,7 @@ var tokenCmd = &cobra.Command{
 var (
 	tokenCreateName    string
 	tokenCreateExpires string
+	tokenRevokeYes     bool
 )
 
 var tokenCreateCmd = &cobra.Command{
@@ -119,10 +120,22 @@ var tokenRevokeCmd = &cobra.Command{
 	Use:     "revoke <id>",
 	Aliases: []string{"delete", "rm"},
 	Short:   "Revoke an API token",
-	Args:    cobra.ExactArgs(1),
+	Long: "Revoke an API token.\n\n" +
+		"Takes effect immediately: any CI job, script, or agent still\n" +
+		"presenting the token starts getting 401s on its next request.\n" +
+		"Revocation cannot be undone — issue a new token with\n" +
+		"'kuso token create' if you revoke the wrong one.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// Revoking is instant and irreversible, and the id alone gives
+		// no hint about which integration it belongs to — a mistyped
+		// argument silently breaks a live pipeline.
+		if err := confirmDestructive(tokenRevokeYes,
+			fmt.Sprintf("Revoke API token %s? Anything still using it will start failing with 401.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteToken(args[0])
 		if err != nil {
@@ -175,4 +188,5 @@ func init() {
 	tokenCmd.AddCommand(tokenListCmd)
 	tokenListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	tokenCmd.AddCommand(tokenRevokeCmd)
+	tokenRevokeCmd.Flags().BoolVarP(&tokenRevokeYes, "yes", "y", false, "skip the confirmation prompt")
 }

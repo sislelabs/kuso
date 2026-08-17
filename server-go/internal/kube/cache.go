@@ -34,10 +34,12 @@ package kube
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -46,6 +48,7 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	coreinformers "k8s.io/client-go/informers"
 	appslisters "k8s.io/client-go/listers/apps/v1"
+	batchlisters "k8s.io/client-go/listers/batch/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -79,6 +82,24 @@ type Cache struct {
 	// namespaced lister covers it.
 	depLister appslisters.DeploymentLister
 	depSynced cache.InformerSynced
+
+	// Job informer — the build poller (5s), runs poller (5s), cronwatch
+	// (30s cluster-wide LIST) and release-hook poll all read Jobs on a
+	// tick. Those were live apiserver calls scaling with project count;
+	// one shared WATCH replaces all of them.
+	jobLister batchlisters.JobLister
+	jobSynced cache.InformerSynced
+
+	// Secret informer — the dashboard enriches EVERY service with its
+	// managed-secret KEY NAMES, which was one live Secret GET per
+	// service per page load.
+	//
+	// SECURITY/MEMORY: a Transform strips Data (and StringData) off
+	// every Secret before it enters the indexer, so this cache holds
+	// key NAMES only. Secret VALUES are never resident. Any caller that
+	// needs a value must still go to the live API — see SecretKeysOnly.
+	secretLister corelisters.SecretLister
+	secretSynced cache.InformerSynced
 
 	// Node informer — nodewatch.Watcher (30s tick) and nodemetrics.Sampler
 	// (5min tick) used to Nodes().List() every iteration. On a 50-node
@@ -170,6 +191,19 @@ func NewCache(c *Client) *Cache {
 		ni := pf.Core().V1().Nodes()
 		cc.nodeLister = ni.Lister()
 		cc.nodeSynced = ni.Informer().HasSynced
+
+		ji := pf.Batch().V1().Jobs()
+		cc.jobLister = ji.Lister()
+		cc.jobSynced = ji.Informer().HasSynced
+
+		// Secrets: strip the payload BEFORE it is indexed. The only
+		// cached consumer needs key names, and keeping every Secret's
+		// Data resident in every replica would be both a large memory
+		// cost and an unnecessary blast-radius increase.
+		si := pf.Core().V1().Secrets()
+		_ = si.Informer().SetTransform(stripSecretData)
+		cc.secretLister = si.Lister()
+		cc.secretSynced = si.Informer().HasSynced
 	}
 
 	return cc
@@ -295,6 +329,27 @@ func (c *Cache) GetDeployment(namespace, name string) (*appsv1.Deployment, bool)
 	return d, true
 }
 
+// GetPod returns one Pod by namespace/name from the Pod informer.
+// Returns (nil, false) when the cache isn't ready or the pod isn't
+// present — the caller decides whether to fall back to a live Get.
+//
+// Exists for the log-stream phase watcher, which probes a single pod's
+// status on a 2s ticker for as long as a viewer has the log panel open.
+// Against the live API that is one apiserver GET per pod per viewer
+// every 2 seconds (50 viewers × 10 pods = 250 GET/s just to render a
+// status string). The informer already watches Pods cluster-wide for
+// ListPodsByLabel, so serving this from cache costs nothing extra.
+func (c *Cache) GetPod(namespace, name string) (*corev1.Pod, bool) {
+	if c == nil || c.podLister == nil || c.podSynced == nil || !c.podSynced() {
+		return nil, false
+	}
+	p, err := c.podLister.Pods(namespace).Get(name)
+	if err != nil || p == nil {
+		return nil, false
+	}
+	return p, true
+}
+
 // ListPodsByLabel returns every Pod (cluster-wide) whose labels match
 // the given selector, served from the Pod informer. Returns
 // (nil, false) when the cache isn't ready — caller should fall back to
@@ -326,6 +381,12 @@ func (c *Cache) WaitForSync(ctx context.Context) bool {
 	}
 	if c.podSynced != nil {
 		syncs = append(syncs, c.podSynced)
+	}
+	if c.jobSynced != nil {
+		syncs = append(syncs, c.jobSynced)
+	}
+	if c.secretSynced != nil {
+		syncs = append(syncs, c.secretSynced)
 	}
 	if c.depSynced != nil {
 		syncs = append(syncs, c.depSynced)
@@ -384,4 +445,97 @@ func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string,
 		out = append(out, u.DeepCopy())
 	}
 	return out, true
+}
+
+// stripSecretData is the informer Transform for Secrets. It drops the
+// payload so the shared cache holds metadata + KEY NAMES only.
+//
+// Why: the sole cached consumer (managed-secret key enrichment on the
+// dashboard) needs to know WHICH keys exist, never their values.
+// Keeping values would put every Secret in the cluster — addon
+// passwords, clone tokens, JWT signing keys — permanently in every
+// replica's heap, for no benefit. It would also mean a heap dump or a
+// memory-disclosure bug leaks everything at once.
+//
+// The keys are preserved by replacing each value with nil: `len(Data)`
+// and `range Data` still work, so the lister is a drop-in for the key
+// listing path, and any caller that wants a VALUE gets an empty byte
+// slice rather than a wrong one — a bug that fails loudly.
+func stripSecretData(obj any) (any, error) {
+	sec, ok := obj.(*corev1.Secret)
+	if !ok {
+		// Tombstones and non-Secret objects pass through untouched.
+		return obj, nil
+	}
+	if sec.Data == nil && sec.StringData == nil {
+		return sec, nil
+	}
+	out := sec.DeepCopy()
+	for k := range out.Data {
+		out.Data[k] = nil
+	}
+	out.StringData = nil
+	return out, nil
+}
+
+// GetJob returns a Job from the informer cache. Returns (nil, false)
+// when the cache isn't ready or the Job isn't present — the caller must
+// fall back to a live Get, because "absent from cache" is NOT the same
+// as "does not exist" (a Job created moments ago may not have landed).
+func (c *Cache) GetJob(namespace, name string) (*batchv1.Job, bool) {
+	if c == nil || c.jobLister == nil || c.jobSynced == nil || !c.jobSynced() {
+		return nil, false
+	}
+	job, err := c.jobLister.Jobs(namespace).Get(name)
+	if err != nil || job == nil {
+		return nil, false
+	}
+	return job, true
+}
+
+// ListJobs returns Jobs in a namespace (empty namespace = cluster-wide)
+// matching sel, from the informer cache. (nil, false) when not ready.
+func (c *Cache) ListJobs(namespace string, sel labels.Selector) ([]*batchv1.Job, bool) {
+	if c == nil || c.jobLister == nil || c.jobSynced == nil || !c.jobSynced() {
+		return nil, false
+	}
+	if sel == nil {
+		sel = labels.Everything()
+	}
+	var (
+		jobs []*batchv1.Job
+		err  error
+	)
+	if namespace == "" {
+		jobs, err = c.jobLister.List(sel)
+	} else {
+		jobs, err = c.jobLister.Jobs(namespace).List(sel)
+	}
+	if err != nil {
+		return nil, false
+	}
+	return jobs, true
+}
+
+// SecretKeysOnly returns the KEY NAMES of a Secret from the informer
+// cache, sorted. (nil, false) when the cache isn't ready or the Secret
+// isn't present.
+//
+// Values are deliberately unavailable through this path — the cache
+// stores none (see stripSecretData). Callers needing a value must use
+// the live client.
+func (c *Cache) SecretKeysOnly(namespace, name string) ([]string, bool) {
+	if c == nil || c.secretLister == nil || c.secretSynced == nil || !c.secretSynced() {
+		return nil, false
+	}
+	sec, err := c.secretLister.Secrets(namespace).Get(name)
+	if err != nil || sec == nil {
+		return nil, false
+	}
+	keys := make([]string, 0, len(sec.Data))
+	for k := range sec.Data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, true
 }

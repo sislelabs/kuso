@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -97,6 +98,87 @@ func TestEveryMaskedServiceEchoAlsoRedacts(t *testing.T) {
 					"the repo deploy-token leaks on the same response the env mask protects",
 					name, strings.TrimSuffix(p.mask, "("), strings.TrimSuffix(p.redact, "("))
 			}
+		}
+	}
+}
+
+// allHandlerBodies returns "file.go:MethodName" → body source for EVERY
+// handler method in the package, not just the ones in projects.go.
+//
+// Why this exists: the tests above read projects.go by name, so a
+// service-echoing handler living in ANY other file was structurally
+// invisible to them. Two real leaks hid in exactly that blind spot —
+// shared_env_keys.go and subscribed_addons.go both echoed a
+// *kube.KusoService with plaintext spec.envVars to EDITOR-gated callers
+// while the guard tests reported green. Scanning the whole package
+// closes the blind spot permanently.
+func allHandlerBodies(t *testing.T) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob handlers: %v", err)
+	}
+	splitRe := regexp.MustCompile(`(?m)^func `)
+	nameRe := regexp.MustCompile(`^\(h \*\w+\) (\w+)\(`)
+	out := map[string]string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, p := range splitRe.Split(string(src), -1) {
+			if m := nameRe.FindStringSubmatch(p); m != nil {
+				out[f+":"+m[1]] = p
+			}
+		}
+	}
+	return out
+}
+
+// Any handler ANYWHERE in the package that writes a value produced by a
+// Set*/Patch*/Add* service call and named like a service CR must run the
+// mask+redact pair. We detect the echo structurally — a writeJSON of a
+// variable the handler got back from h.Svc — rather than maintaining a
+// hand-written list, because the hand-written list is what failed before.
+func TestNoHandlerEchoesServiceWithoutMasking(t *testing.T) {
+	t.Parallel()
+	// Handlers that legitimately echo a service-shaped payload the
+	// caller already supplied, or that serve admin-only routes where
+	// the value is intentionally visible, can be listed here WITH a
+	// reason. Keep this empty unless there's a real justification.
+	allowed := map[string]string{}
+
+	// Detect the echo precisely: the handler must call a service-shaped
+	// mutator on h.Svc AND serialize its *kube.KusoService result.
+	// Matching on the RESULT TYPE is what keeps this honest — handlers
+	// that echo an environment/cron/addon CR carry no plaintext
+	// spec.envVars (those live on the service) and must not be flagged.
+	svcMutatorRe := regexp.MustCompile(`h\.Svc\.(SetSubscribedAddons|SetSharedEnvKeys|SetEnvVar|UnsetEnvVar|PatchService|AddService|RenameService|AddDomain|RemoveDomain)\(`)
+	for name, body := range allHandlerBodies(t) {
+		if _, ok := allowed[name]; ok {
+			continue
+		}
+		if !svcMutatorRe.MatchString(body) || !strings.Contains(body, "writeJSON(") {
+			continue
+		}
+		hasMask := strings.Contains(body, "maskServiceEnvIfNeeded(") ||
+			strings.Contains(body, "maskServicesEnvIfNeeded(")
+		hasRedact := strings.Contains(body, "redactServiceRepoIfNeeded(") ||
+			strings.Contains(body, "redactServicesRepoIfNeeded(")
+		if !hasMask || !hasRedact {
+			missing := ""
+			if !hasMask {
+				missing += "maskServiceEnvIfNeeded "
+			}
+			if !hasRedact {
+				missing += "redactServiceRepoIfNeeded"
+			}
+			t.Errorf("%s echoes a KusoService from a mutating Svc call but is missing %s— "+
+				"an EDITOR-gated route that returns spec.envVars in plaintext leaks every secret "+
+				"on the service to a caller without secrets:read", name, missing)
 		}
 	}
 }

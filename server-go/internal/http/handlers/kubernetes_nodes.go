@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"golang.org/x/sync/singleflight"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -103,7 +105,71 @@ func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) 
 // REST client. Returns name → usage. Empty map on any failure —
 // cluster monitoring shouldn't be a hard dependency for the nodes
 // list (metrics-server is optional in some k3s installs).
+// nodeMetrics returns per-node live usage, cached for nodeMetricsTTL.
+//
+// The nodes page polls every 5s and every open tab issues its own
+// request, so without a cache N viewers meant N metrics-server hits per
+// 5s window on top of everything else already querying it. Same
+// reasoning (and same TTL) as the pod-metrics cache in
+// metrics_cache.go; metrics.k8s.io has no watch verb, so a short TTL is
+// the only option. Errors are not cached — the caller renders zeros.
 func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
+	if kc == nil || kc.Clientset == nil {
+		return map[string]nodeshape.Usage{}
+	}
+	nodeMetricsCache.mu.RLock()
+	e := nodeMetricsCache.entry
+	nodeMetricsCache.mu.RUnlock()
+	if e.usage != nil && time.Since(e.fetched) < nodeMetricsTTL {
+		return e.usage
+	}
+	v, err, _ := nodeMetricsCache.sf.Do("nodes", func() (any, error) {
+		nodeMetricsCache.mu.RLock()
+		e := nodeMetricsCache.entry
+		nodeMetricsCache.mu.RUnlock()
+		if e.usage != nil && time.Since(e.fetched) < nodeMetricsTTL {
+			return e.usage, nil
+		}
+		u := fetchNodeMetrics(ctx, kc)
+		nodeMetricsCache.mu.Lock()
+		nodeMetricsCache.entry = nodeMetricsEntry{usage: u, fetched: time.Now()}
+		nodeMetricsCache.mu.Unlock()
+		return u, nil
+	})
+	if err != nil {
+		return map[string]nodeshape.Usage{}
+	}
+	if u, ok := v.(map[string]nodeshape.Usage); ok {
+		return u
+	}
+	return map[string]nodeshape.Usage{}
+}
+
+// nodeMetricsTTL matches podMetricsTTL: below the UI's 5s poll and
+// below metrics-server's own scrape interval, so the cache is never the
+// dominant source of staleness.
+const nodeMetricsTTL = 5 * time.Second
+
+type nodeMetricsEntry struct {
+	usage   map[string]nodeshape.Usage
+	fetched time.Time
+}
+
+var nodeMetricsCache = struct {
+	mu    sync.RWMutex
+	entry nodeMetricsEntry
+	sf    singleflight.Group
+}{}
+
+// ResetNodeMetricsCacheForTesting drops the cached node usage.
+func ResetNodeMetricsCacheForTesting() {
+	nodeMetricsCache.mu.Lock()
+	nodeMetricsCache.entry = nodeMetricsEntry{}
+	nodeMetricsCache.mu.Unlock()
+}
+
+// fetchNodeMetrics is the uncached read against metrics.k8s.io.
+func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
 	out := map[string]nodeshape.Usage{}
 	if kc == nil || kc.Clientset == nil {
 		return out

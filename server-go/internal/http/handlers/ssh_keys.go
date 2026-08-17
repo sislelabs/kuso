@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,13 +21,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/nodejoin"
 )
 
 // SSHKeysHandler exposes /api/ssh-keys.
+// Audited: an SSH key is a credential that grants access to node-join
+// and git remotes, so "who added/removed which key" must outlive the
+// pod's slog buffer. Only the NAME and FINGERPRINT are ever recorded —
+// never the public or private key material, since audit rows are
+// readable by any holder of audit:read, which is a weaker permission
+// than the settings:admin needed to mint the key.
 type SSHKeysHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -113,6 +122,10 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	// Fingerprint only — never row.PublicKey / row.PrivateKey.
+	h.auditKey(ctx, "ssh-key.create", fmt.Sprintf(
+		"created ssh key %q (id=%s, fingerprint=%s, generated=%t)",
+		row.Name, id, row.Fingerprint, body.Generate))
 	writeJSON(w, http.StatusCreated, row)
 }
 
@@ -122,7 +135,15 @@ func (h *SSHKeysHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	if err := h.DB.DeleteSSHKey(ctx, chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	// Resolve the name/fingerprint BEFORE deleting so the audit row says
+	// which key went away rather than just an opaque id. Best-effort: a
+	// failed lookup must not block the delete.
+	var name, fingerprint string
+	if k, err := h.DB.GetSSHKey(ctx, id); err == nil && k != nil {
+		name, fingerprint = k.Name, k.Fingerprint
+	}
+	if err := h.DB.DeleteSSHKey(ctx, id); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -131,7 +152,24 @@ func (h *SSHKeysHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	h.auditKey(ctx, "ssh-key.delete", fmt.Sprintf(
+		"deleted ssh key %q (id=%s, fingerprint=%s)", name, id, fingerprint))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditKey writes one ssh-key audit row. Severity "warn": adding or
+// removing a credential is never routine.
+func (h *SSHKeysHandler) auditKey(ctx context.Context, action, message string) {
+	if h.Audit == nil {
+		return
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   action,
+		Resource: "ssh-key",
+		Message:  message,
+	})
 }
 
 func randomID16() string {

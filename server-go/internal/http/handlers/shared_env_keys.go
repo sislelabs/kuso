@@ -60,5 +60,14 @@ func (h *ProjectsHandler) SetSharedEnvKeys(w http.ResponseWriter, r *http.Reques
 		h.fail(w, "set sharedEnvKeys", err)
 		return
 	}
+	// SECURITY: the echoed KusoService carries spec.envVars with
+	// PLAINTEXT values and a repo URL that may embed a clone token.
+	// This route is gated at EDITOR, but reading env VALUES requires
+	// secrets:read (admin) — so without these two calls an editor
+	// learned every secret on the service simply by toggling a shared
+	// key, bypassing the mask every sibling read path applies. Both
+	// helpers no-op for callers who legitimately may read.
+	maskServiceEnvIfNeeded(ctx, h.DB, project, updated)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, updated)
 	writeJSON(w, http.StatusOK, updated)
 }

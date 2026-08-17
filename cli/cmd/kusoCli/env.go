@@ -61,6 +61,10 @@ const managedSecretSource = "managed-secret"
 // per-command so `-r` only affects `env list`.
 var envRevealFlag bool
 
+// envUnsetYes is bound LOCALLY on envUnsetCmd for the same reason as
+// envRevealFlag above — no shared globals for per-command flags.
+var envUnsetYes bool
+
 // secretKeyRefName/Key defensively extract valueFrom.secretKeyRef.{name,key}
 // out of the loosely-typed valueFrom map. The wire shape is
 // {"secretKeyRef":{"name":"<secret>","key":"<KEY>"}}; anything missing or
@@ -254,12 +258,30 @@ var envSetCmd = &cobra.Command{
 var envUnsetCmd = &cobra.Command{
 	Use:   "unset <project> <service> KEY [KEY ...]",
 	Short: "Remove plain env var(s) from a service",
-	Args:  cobra.MinimumNArgs(3),
+	Long: "Remove plain env var(s) from a service.\n\n" +
+		"Removing a variable rolls the pods, and an app that reads it at\n" +
+		"boot may crash-loop on the new revision. Values are NOT recoverable\n" +
+		"from kuso once unset — re-add them from your own records.",
+	Args: cobra.MinimumNArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, keys := args[0], args[1], args[2:]
+
+		// KEY is variadic, so one stray shell word (an unquoted glob, a
+		// trailing token) silently removes an extra variable. Echo the
+		// exact key list back before doing it, and gate both the
+		// --env-scoped and service-level paths below.
+		scope := fmt.Sprintf("%s/%s", project, service)
+		if envScopeFlag != "" {
+			scope += " [env=" + envScopeFlag + "]"
+		}
+		if err := confirmDestructive(envUnsetYes,
+			fmt.Sprintf("Unset %d env var(s) on %s: %s? Pods will roll and the values are not recoverable.",
+				len(keys), scope, strings.Join(keys, ", "))); err != nil {
+			return err
+		}
 
 		// --env: remove per-env overrides directly from ONE env CR.
 		if envScopeFlag != "" {
@@ -586,6 +608,7 @@ func init() {
 	// (envFrom-mounted) instead of as a plaintext literal on the CR.
 	envSetCmd.Flags().BoolVar(&envSecretFlag, "secret", false, "store the value as a managed secret in <service>-secrets (envFrom-mounted) instead of a plaintext literal")
 	envUnsetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
+	envUnsetCmd.Flags().BoolVarP(&envUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 
 	rootCmd.AddCommand(secretCmd)
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)

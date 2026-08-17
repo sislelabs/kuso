@@ -391,6 +391,13 @@ spec:
   #     can hit maxWSPerUser × N pods worth of streams
   #   - WebSocket reconnects on pod failover (acceptable for log
   #     tails; the next frame is the current tail anyway)
+  #   - The DB connection pool is PER POD: each replica opens up to
+  #     KUSO_DB_MAX_CONNS (default 25). Fleet total = that × replicas,
+  #     so 4 replicas exhausts Postgres's default max_connections of
+  #     100 and new sessions — including the operator's and your own
+  #     psql — start failing with "too many clients already". Past 2
+  #     replicas either raise max_connections or lower
+  #     KUSO_DB_MAX_CONNS so the product stays under ~60% of it.
   #
   # The DB still needs to be HA on its own — point KUSO_DB_DSN at a
   # managed Postgres (RDS / Crunchy / Supabase) when running >1

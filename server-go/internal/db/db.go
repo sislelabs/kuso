@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,63 @@ type DB struct {
 	tenancy *tenancyCache
 }
 
+// Pool sizing. defaultMaxOpenConns is the historical hard-coded value;
+// it stays the default so an install that sets nothing behaves exactly
+// as before.
+const (
+	defaultMaxOpenConns = 25
+	minMaxOpenConns     = 2
+)
+
+// maxOpenConns returns the per-replica open-connection cap, honouring
+// the KUSO_DB_MAX_CONNS override.
+//
+// Sizing rule: keep (value × replicas) comfortably under the server's
+// max_connections, leaving headroom for the operator, addon poolers,
+// backup jobs and an operator's own psql session. Postgres's default
+// max_connections is 100.
+//
+// An unparseable or nonsensical value falls back to the default rather
+// than failing boot — a typo'd tuning knob must not take the control
+// plane down. Values below minMaxOpenConns are clamped up: a pool of 1
+// serialises every request behind one connection and deadlocks any code
+// path that holds a conn while acquiring a second (the migration runner
+// does exactly this).
+func maxOpenConns() int {
+	v := strings.TrimSpace(os.Getenv("KUSO_DB_MAX_CONNS"))
+	if v == "" {
+		return defaultMaxOpenConns
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultMaxOpenConns
+	}
+	if n < minMaxOpenConns {
+		return minMaxOpenConns
+	}
+	return n
+}
+
+// idleConnsFor sizes the idle pool from the open cap.
+//
+// The previous fixed 5-idle against 25-open meant that under the
+// dashboard's 3-10s polling the pool steadily opened and closed the
+// other 20, paying a TCP+TLS+auth handshake each time. Keeping ~40% of
+// the cap warm (min 5, so small pools are unaffected) absorbs the
+// steady-state poll load without holding connections a bigger install
+// would rather leave free. ConnMaxIdleTime still reaps genuinely idle
+// ones, so a quiet instance converges back down.
+func idleConnsFor(maxOpen int) int {
+	idle := maxOpen * 2 / 5
+	if idle < 5 {
+		idle = 5
+	}
+	if idle > maxOpen {
+		idle = maxOpen
+	}
+	return idle
+}
+
 // Open opens a Postgres connection. dsn is the libpq URI (e.g.
 // "postgres://kuso:secret@kuso-postgres:5432/kuso?sslmode=disable").
 // Idempotent — applies the embedded schema on every Open so a fresh
@@ -58,8 +116,18 @@ func Open(dsn string) (*DB, error) {
 	// Connection pool. Postgres handles concurrent writes; cap at 25
 	// so we don't exhaust the per-database max_connections (default
 	// 100, shared with operator + addons).
-	sqldb.SetMaxOpenConns(25)
-	sqldb.SetMaxIdleConns(5)
+	//
+	// The cap is per REPLICA, so the fleet-wide total is
+	// maxOpen × replicas. At the documented HA target of 2 replicas
+	// that's 50/100 — fine. At 4 it is the entire default
+	// max_connections and new sessions (including the operator's and
+	// psql) start getting "too many clients already". Hence the
+	// override: an install running many replicas, or one pointed at a
+	// managed Postgres with a larger max_connections, needs to tune
+	// this without a rebuild. See maxOpenConns for the sizing rule.
+	maxOpen := maxOpenConns()
+	sqldb.SetMaxOpenConns(maxOpen)
+	sqldb.SetMaxIdleConns(idleConnsFor(maxOpen))
 	sqldb.SetConnMaxIdleTime(5 * time.Minute)
 	// 5min lifetime cycles connections aggressively enough that a
 	// Postgres rollout's stale connections get reaped in tens of

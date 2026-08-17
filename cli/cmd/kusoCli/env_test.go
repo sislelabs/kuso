@@ -87,6 +87,15 @@ func TestEnvUnset_OnlyDeletesNamedKey(t *testing.T) {
 	api.Init(srv.URL, "test-token")
 	defer func() { api = nil }()
 
+	// `env unset` is gated by confirmDestructive, which fails closed off
+	// a TTY (this test process has no terminal). Opt in the same way a
+	// script would, with --yes: this test is about WHICH keys get
+	// deleted, not about the prompt. The guard itself is covered in
+	// destructive_guard_test.go.
+	origYes := envUnsetYes
+	envUnsetYes = true
+	t.Cleanup(func() { envUnsetYes = origYes })
+
 	envUnsetCmd.SetArgs([]string{"alpha", "web", "DROP_ME"})
 	if err := envUnsetCmd.RunE(envUnsetCmd, []string{"alpha", "web", "DROP_ME"}); err != nil {
 		t.Fatalf("unset RunE: %v", err)

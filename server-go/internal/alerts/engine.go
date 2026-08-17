@@ -162,14 +162,30 @@ func (e *Engine) evaluateNode(ctx context.Context, kind string, threshold float6
 	// Use the latest sample per node from NodeMetric. The sampler
 	// runs every 5 min so this is fresh enough for slow-burn
 	// alerting (CPU pinned, disk filling).
-	nodes, err := e.Kube.Clientset.CoreV1().Nodes().List(listCtx, metav1.ListOptions{})
-	if err != nil {
-		return false, "", err
+	// Prefer the informer cache: this runs on every alert tick and only
+	// needs node NAMES, so a live cluster-wide LIST per tick is pure
+	// apiserver load. Falls back to the live API when the cache is
+	// unsynced (fresh boot) or absent (tests).
+	var nodeNames []string
+	if e.Kube.Cache != nil {
+		if cached, ok := e.Kube.Cache.ListNodes(); ok {
+			for _, n := range cached {
+				nodeNames = append(nodeNames, n.Name)
+			}
+		}
+	}
+	if nodeNames == nil {
+		nodes, err := e.Kube.Clientset.CoreV1().Nodes().List(listCtx, metav1.ListOptions{})
+		if err != nil {
+			return false, "", err
+		}
+		for i := range nodes.Items {
+			nodeNames = append(nodeNames, nodes.Items[i].Name)
+		}
 	}
 	var hot []string
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
-		samples, err := e.DB.ListNodeMetrics(listCtx, n.Name, time.Now().Add(-15*time.Minute))
+	for _, nodeName := range nodeNames {
+		samples, err := e.DB.ListNodeMetrics(listCtx, nodeName, time.Now().Add(-15*time.Minute))
 		if err != nil || len(samples) == 0 {
 			continue
 		}
@@ -191,7 +207,7 @@ func (e *Engine) evaluateNode(ctx context.Context, kind string, threshold float6
 			}
 		}
 		if pct >= threshold {
-			hot = append(hot, fmt.Sprintf("%s=%.1f%%", n.Name, pct))
+			hot = append(hot, fmt.Sprintf("%s=%.1f%%", nodeName, pct))
 		}
 	}
 	if len(hot) == 0 {

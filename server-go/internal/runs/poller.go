@@ -110,9 +110,21 @@ func (p *Poller) tick(ctx context.Context) error {
 // the helm-operator's reconcile may not have rendered the Job yet
 // (CR was just created). We'll catch it on a subsequent tick.
 func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error {
-	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, r.Name, metav1.GetOptions{})
-	if err != nil {
-		return err
+	// Shared Job informer when warm; live Get on a miss. The caller
+	// treats NotFound as "not rendered yet", so a cold cache must fall
+	// through rather than masquerade as NotFound.
+	var job *batchv1.Job
+	if p.Svc.Kube.Cache != nil {
+		if cached, ok := p.Svc.Kube.Cache.GetJob(ns, r.Name); ok {
+			job = cached
+		}
+	}
+	if job == nil {
+		var err error
+		job, err = p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, r.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
 	}
 	if cond := jobTerminalCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 )
 
@@ -27,9 +29,33 @@ import (
 // see/act on what is an admin action. Every mutation invalidates the
 // affected principals' tokens so the new access takes effect on the next
 // request instead of waiting for token expiry.
+//
+// Every mutation here is also audited. These endpoints are the ones that
+// decide WHO CAN DO WHAT, so "who granted this person admin on this
+// project, and when" has to be answerable after the fact — it's the first
+// question asked during an incident review, and slog lines age out with
+// the pod. Audit is optional (nil-safe) so stripped-down wiring and tests
+// don't need to construct one.
 type GrantsHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
+}
+
+// auditGrant writes one grant-surface audit row. Severity is "warn" for
+// every mutation on this handler — matching RolesHandler, which treats
+// authorization changes as inherently notable rather than routine.
+func (h *GrantsHandler) auditGrant(ctx context.Context, action, resource, message string) {
+	if h.Audit == nil {
+		return
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   action,
+		Resource: resource,
+		Message:  message,
+	})
 }
 
 func (h *GrantsHandler) Mount(r chi.Router) {
@@ -44,6 +70,33 @@ func (h *GrantsHandler) Mount(r chi.Router) {
 
 func grantsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
+}
+
+// roleForAudit renders a role for the audit message. The empty role is
+// meaningful on both surfaces — "cleared" on an instance role, "inherit"
+// on a project grant — and logging a bare "" would read as a missing
+// field rather than a deliberate value.
+func roleForAudit(role string) string {
+	if role == "" {
+		return "(none/inherit)"
+	}
+	return role
+}
+
+// granteeForAudit names whichever principal a project grant points at.
+// Exactly one of the two is set (the handler rejects both/neither), so
+// this never has to disambiguate.
+func granteeForAudit(userID, groupID string) string {
+	switch {
+	case userID != "":
+		return "user id=" + userID
+	case groupID != "":
+		return "group id=" + groupID
+	default:
+		// Only reachable if RemoveGrant's pre-delete lookup failed; the
+		// deletion still happened and must still be recorded.
+		return "unknown principal"
+	}
 }
 
 // validInstanceRole accepts the three v2 roles plus "" (clear).
@@ -99,6 +152,8 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 	if err := h.DB.InvalidateUserTokens(ctx, userID, "user.instance-role.update", time.Now()); err != nil {
 		h.Logger.Warn("set user role: invalidate tokens", "user", userID, "err", err)
 	}
+	h.auditGrant(ctx, "user.instance-role.update", "user",
+		fmt.Sprintf("set instance role of user id=%s to %q", userID, roleForAudit(string(body.Role))))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -143,6 +198,8 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 	} else if n > 0 {
 		h.Logger.Info("set group role: invalidated tokens", "group", groupID, "users", n)
 	}
+	h.auditGrant(ctx, "group.instance-role.update", "group",
+		fmt.Sprintf("set instance role of group id=%s to %q", groupID, roleForAudit(string(body.Role))))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -201,6 +258,9 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidateGrantee(ctx, body.UserID, body.GroupID, "project.grant.add", actingUserID(r))
+	h.auditGrant(ctx, "project.grant.add", "project",
+		fmt.Sprintf("granted %s access to project %q with role %q (grant id=%s)",
+			granteeForAudit(body.UserID, body.GroupID), project, roleForAudit(string(body.Role)), id))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
@@ -235,6 +295,9 @@ func (h *GrantsHandler) RemoveGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidateGrantee(ctx, userID, groupID, "project.grant.remove", actingUserID(r))
+	h.auditGrant(ctx, "project.grant.remove", "project",
+		fmt.Sprintf("revoked %s access to project %q (grant id=%s)",
+			granteeForAudit(userID, groupID), project, grantID))
 	w.WriteHeader(http.StatusNoContent)
 }
 

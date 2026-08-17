@@ -38,6 +38,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/httpx"
@@ -144,14 +145,33 @@ func (w *Watcher) tick(ctx context.Context) {
 	// no global deadline, so a hung apiserver would otherwise block this
 	// tick forever and silently stop all cron-failure alerting. nodewatch
 	// and nodemetrics guard their LISTs the same way.
-	listCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
-	jobs, err := w.Kube.Clientset.BatchV1().Jobs("").List(listCtx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/cron",
-	})
-	cancel()
-	if err != nil {
-		w.Logger.Warn("cronwatch list jobs", "err", err)
-		return
+	// Prefer the shared Job informer: this is a CLUSTER-WIDE list on a
+	// 30s tick, so on a busy cluster it was one of the largest single
+	// sources of apiserver load in the control plane. The informer
+	// already watches Jobs for the build/runs pollers; reusing it here
+	// costs nothing. Falls back to a live LIST when the cache is cold
+	// (fresh boot) or absent (tests).
+	var jobList []*batchv1.Job
+	sel, selErr := labels.Parse("kuso.sislelabs.com/cron")
+	if selErr == nil && w.Kube.Cache != nil {
+		if cached, ok := w.Kube.Cache.ListJobs("", sel); ok {
+			jobList = cached
+		}
+	}
+	if jobList == nil {
+		listCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
+		jobs, err := w.Kube.Clientset.BatchV1().Jobs("").List(listCtx, metav1.ListOptions{
+			LabelSelector: "kuso.sislelabs.com/cron",
+		})
+		cancel()
+		if err != nil {
+			w.Logger.Warn("cronwatch list jobs", "err", err)
+			return
+		}
+		jobList = make([]*batchv1.Job, 0, len(jobs.Items))
+		for i := range jobs.Items {
+			jobList = append(jobList, &jobs.Items[i])
+		}
 	}
 	// Fire each newly-failed Job's handler in its own goroutine so a
 	// single slow/unreachable webhook (up to ~15s of retry backoff)
@@ -161,8 +181,8 @@ func (w *Watcher) tick(ctx context.Context) {
 	// before returning so the prune below sees a stable state and the
 	// goroutines stay bounded (never more than one tick's worth live).
 	var wg sync.WaitGroup
-	for i := range jobs.Items {
-		job := &jobs.Items[i]
+	for i := range jobList {
+		job := jobList[i]
 		if !isFailed(job) {
 			continue
 		}
@@ -185,9 +205,9 @@ func (w *Watcher) tick(ctx context.Context) {
 	// this map — without an explicit prune the map grows for the life of
 	// the process as failed Jobs age out. We have the full current Job
 	// list in hand, so drop any UID that isn't in it.
-	live := make(map[types.UID]struct{}, len(jobs.Items))
-	for i := range jobs.Items {
-		live[jobs.Items[i].UID] = struct{}{}
+	live := make(map[types.UID]struct{}, len(jobList))
+	for i := range jobList {
+		live[jobList[i].UID] = struct{}{}
 	}
 	w.mu.Lock()
 	for uid := range w.dispatched {

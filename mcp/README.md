@@ -34,6 +34,32 @@ The server speaks MCP over stdio. Wire it up in your client by pointing at the `
 }
 ```
 
+**Read-only mode.** `--read-only` refuses every mutating tool (apply,
+build, rollback, set_env, set_secret, run, manage_addon, …) while
+leaving the whole read surface — including `sql_query`, which the server
+runs in a read-only transaction — available. Pass it via `args`; it is
+NOT settable through `env`, so the copy-paste block above starts in
+read-write mode:
+
+```json
+{
+  "mcpServers": {
+    "kuso": {
+      "command": "/path/to/kuso-mcp",
+      "args": ["--read-only"],
+      "env": {
+        "KUSO_URL": "https://kuso.example.com",
+        "KUSO_TOKEN": "..."
+      }
+    }
+  }
+}
+```
+
+Worth defaulting to when the agent's job is to investigate rather than
+to ship. Note the kuso token's own permissions still apply on top —
+read-only mode narrows what the *tools* will do, not what the token can.
+
 ## Tool surface
 
 All tools are project-shaped (intent-grouped, not REST-mirrored). Registered today:
@@ -56,6 +82,10 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `run`               | one-shot Job in a service's context (mutating) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
 | `apply`             | reconcile kuso.yaml (mutating; `confirm: true`) |
+| `list_builds`       | recent builds for a service, newest first (read-only) |
+| `rollback`          | re-point an env at a previous build's image (mutating; `confirm: true`) |
+| `sql_tables`        | list an addon database's tables (read-only) |
+| `sql_query`         | one read-only SELECT against an addon (read-only) |
 
 `--read-only` disables every mutating tool.
 

@@ -130,6 +130,11 @@ func NewRouter(d Deps) http.Handler {
 	// documents a 16 MiB cap, which the global 1 MiB ceiling would
 	// silently break (MaxBytesReader wrapping is outermost-wins).
 	r.Use(maxBodyBytes(1 << 20))
+	// gzip discrete responses. Mounted AFTER maxBodyBytes (which only
+	// touches the request body) and BEFORE the handlers, so it wraps the
+	// ResponseWriter every route writes through. Streaming paths opt
+	// themselves out — see compressJSON.
+	r.Use(compressJSON())
 	r.Use(apiSecurityHeadersMW)
 	r.Use(metricsMW)
 	// Stamp X-Kuso-Server-Version on every response. The web client
@@ -505,7 +510,7 @@ func mountAuthenticatedRoutes(
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
-			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Logger: d.Logger}
+			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			grantsH.Mount(r)
 			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			invitesH.Mount(r)
@@ -583,14 +588,14 @@ func mountAuthenticatedRoutes(
 				psH.Mount(r)
 			}
 			if d.InstanceSecrets != nil {
-				isH := &httphandlers.InstanceSecretsHandler{Svc: d.InstanceSecrets, Logger: d.Logger}
+				isH := &httphandlers.InstanceSecretsHandler{Svc: d.InstanceSecrets, Audit: d.Audit, Logger: d.Logger}
 				isH.Mount(r)
 			}
 			if d.InstancePG != nil {
 				ipgH := &httphandlers.InstancePGHandler{Svc: d.InstancePG}
 				ipgH.Mount(r)
 			}
-			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Logger: d.Logger}
+			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			sshH.Mount(r)
 			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, LogDB: d.LogDB, Logger: d.Logger}
 			logSearchH.Mount(r)
@@ -877,6 +882,62 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 	}
 }
 
+// isStreamingPath reports whether a path serves a long-lived stream
+// (WebSocket upgrade or SSE) rather than a discrete response.
+//
+// Two middlewares need this and must agree: inFlightLimit (a stream
+// would hold a semaphore slot for minutes) and compressJSON (buffering
+// a stream in a gzip writer defeats the incremental flush that makes
+// live log tailing live — the client would see nothing until the
+// compressor's window filled).
+func isStreamingPath(path string) bool {
+	return strings.HasPrefix(path, "/ws/") ||
+		strings.Contains(path, "/logs/stream") ||
+		strings.Contains(path, "/events/stream")
+}
+
+// compressJSON gzips discrete API responses when the client advertises
+// support.
+//
+// The dashboard polls /api/projects/{p}/describe (project + every
+// service + every env, each carrying an embedded CR spec) every few
+// seconds. That payload is deeply repetitive JSON — the shape gzip
+// handles best — and it was going out uncompressed, making it the
+// largest recurring cost on the wire for a remote operator.
+//
+// Deliberately scoped:
+//   - Streaming paths are skipped (see isStreamingPath). chi's Compress
+//     wraps the ResponseWriter, and although the wrapper proxies Flush,
+//     gzip still withholds bytes until it has enough to emit a block —
+//     so a log tail would stall.
+//   - Level 5, not the max: past ~5 the CPU cost climbs sharply for a
+//     few percent of size on JSON, and the control plane shares a small
+//     node with builds.
+//   - Content types are enumerated rather than left to chi's default so
+//     already-compressed payloads (backup tarballs, gzipped exports)
+//     aren't run through the compressor a second time for nothing.
+func compressJSON() func(http.Handler) http.Handler {
+	compressor := chimw.NewCompressor(5,
+		"application/json",
+		"text/plain",
+		"text/html",
+		"text/css",
+		"application/javascript",
+		"image/svg+xml",
+	)
+	gz := compressor.Handler
+	return func(next http.Handler) http.Handler {
+		wrapped := gz(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isStreamingPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			wrapped.ServeHTTP(w, r)
+		})
+	}
+}
+
 // inFlightLimit caps concurrent in-flight requests via a buffered
 // channel semaphore. SSE/WS endpoints are excluded — they hold the
 // connection for minutes and would otherwise eat every slot.
@@ -886,10 +947,7 @@ func inFlightLimit(n int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Long-lived streams bypass the limiter entirely.
-			path := r.URL.Path
-			if strings.HasPrefix(path, "/ws/") ||
-				strings.Contains(path, "/logs/stream") ||
-				strings.Contains(path, "/events/stream") {
+			if isStreamingPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}

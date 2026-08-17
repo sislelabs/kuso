@@ -1,3 +1,14 @@
+# NOT APPLIED TO ANY CLUSTER — operator-sdk scaffolding only.
+#
+# The install path applies deploy/operator.yaml (see hack/install.sh);
+# this file is what `make manifests` regenerates from kubebuilder
+# markers and is kept for that tooling. Nothing reads it at install or
+# upgrade time, and it is NOT the operator's effective RBAC.
+#
+# Consequence to be aware of: the rules below are broader than what the
+# operator actually runs with (notably secrets: ["*"]), so reading this
+# file to reason about the operator's real privileges will mislead you.
+# Edit deploy/operator.yaml for anything that must take effect.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

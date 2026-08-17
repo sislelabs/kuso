@@ -16,7 +16,18 @@ export type FailureKind =
   | "image_pull_failed"
   | "port_conflict"
   | "healthcheck_failed"
-  | "build_command_failed";
+  | "build_command_failed"
+  // Build-time (pre-image) kinds. These come from the build log, not a
+  // running pod, and most carry a server-computed Remediation with a
+  // copy-pasteable fix — see the `remediation` prop.
+  | "dockerfile_missing_copy"
+  | "lockfile_drift"
+  | "missing_build_arg"
+  | "dependency_resolution"
+  | "dockerfile_not_found"
+  | "build_oom"
+  | "registry_auth"
+  | "clone_ref_missing";
 
 interface CopyPair {
   // headline reads as the bold first line ("Build crashed: missing env
@@ -55,6 +66,38 @@ const COPY: Record<FailureKind, CopyPair> = {
     headline: "Build command exited non-zero.",
     body: "See the build log below — the failing step is the last command before the non-zero exit.",
   },
+  dockerfile_missing_copy: {
+    headline: "A COPY in the Dockerfile referenced a missing path.",
+    body: "The file isn't in the build context — check .dockerignore and the build path in Settings → Source.",
+  },
+  lockfile_drift: {
+    headline: "Lockfile is out of sync with the manifest.",
+    body: "The install ran with a frozen lockfile. Re-run the install locally, commit the updated lockfile, and push.",
+  },
+  missing_build_arg: {
+    headline: "Build needed an ARG that wasn't provided.",
+    body: "Add it as a build arg in Settings → Build, or give it a default in the Dockerfile.",
+  },
+  dependency_resolution: {
+    headline: "A dependency couldn't be resolved.",
+    body: "The package or version doesn't exist, or the registry was unreachable. Check the failing package in the log below.",
+  },
+  dockerfile_not_found: {
+    headline: "Dockerfile not found at the configured path.",
+    body: "Check the Dockerfile path in Settings → Source — it's relative to the build path, not the repo root.",
+  },
+  build_oom: {
+    headline: "The build ran out of memory.",
+    body: "This is the BUILD pod, not your app. Raise the build memory limit in instance settings, or reduce build parallelism.",
+  },
+  registry_auth: {
+    headline: "Registry denied the pull or push.",
+    body: "Check the registry credentials in Settings → Build. A private base image needs auth too.",
+  },
+  clone_ref_missing: {
+    headline: "The git ref no longer exists.",
+    body: "The branch or commit was deleted or force-pushed away. Pick an existing branch and redeploy.",
+  },
   generic: {
     headline: "Deploy failed.",
     body: "See logs below for details.",
@@ -70,10 +113,32 @@ interface Props {
   // Rendered in a code block under the body when provided. Truncation
   // happens server-side (max ~400 chars) so we don't need to clamp here.
   lineHint?: string;
+  // remediation is the server-computed, actionable fix for this
+  // failure (internal/failures attaches one to most BUILD-time kinds).
+  // When present it renders below the copy as a titled block with a
+  // copy-pasteable snippet and a docs link.
+  //
+  // This used to be dropped on the floor: the classifier computed a
+  // Remediation, BuildRow rendered it, and this banner — the other
+  // surface users hit — showed only "Deploy failed. See logs below."
+  // The server's best diagnostic reached one of two UIs.
+  remediation?: FailureRemediation;
   // onDismiss clears the banner. Wired to the overlay so closing the
   // service overlay implicitly dismisses; clicking the X dismisses
   // explicitly without closing.
   onDismiss?: () => void;
+}
+
+// FailureRemediation mirrors the server's failures.Remediation and the
+// web API's BuildFailureRemediation. Declared structurally (not
+// imported) so this presentational component stays free of a features/
+// dependency.
+export interface FailureRemediation {
+  title: string;
+  detail?: string;
+  fix?: string;
+  fixLang?: string;
+  docsAnchor?: string;
 }
 
 // FailureBanner shows up at the top of the routed overlay tab when a
@@ -86,7 +151,7 @@ interface Props {
 // dismisses or navigates away. Inline placement also keeps the
 // affordance scoped to the right tab — variables tab shows env-var
 // hints, logs tab shows crash hints, etc.
-export function FailureBanner({ kind, lineHint, onDismiss }: Props) {
+export function FailureBanner({ kind, lineHint, remediation, onDismiss }: Props) {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
   const key = (kind && (COPY as Record<string, CopyPair>)[kind])
@@ -107,6 +172,31 @@ export function FailureBanner({ kind, lineHint, onDismiss }: Props) {
             <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[0.75rem] text-[var(--text-secondary)]">
               {lineHint}
             </pre>
+          ) : null}
+          {remediation ? (
+            <div className="mt-2 rounded-md border border-[var(--error)]/30 bg-[var(--bg-primary)]/40 p-2">
+              <div className="text-[0.8rem] font-semibold">{remediation.title}</div>
+              {remediation.detail ? (
+                <p className="mt-0.5 text-[0.8rem] leading-snug text-[var(--text-secondary)]">
+                  {remediation.detail}
+                </p>
+              ) : null}
+              {remediation.fix ? (
+                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[0.75rem]">
+                  {remediation.fix}
+                </pre>
+              ) : null}
+              {remediation.docsAnchor ? (
+                <a
+                  href={remediation.docsAnchor}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1.5 inline-block font-mono text-[0.7rem] underline underline-offset-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  read the docs →
+                </a>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <button

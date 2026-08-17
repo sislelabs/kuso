@@ -27,7 +27,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -232,17 +231,19 @@ func (s *Shipper) scanNamespaces(ctx context.Context) []string {
 	}
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRProjects).Namespace(s.Namespace).List(listCtx, metav1.ListOptions{})
+	// Go through ListKusoProjects rather than the dynamic client
+	// directly: that helper serves from the informer cache when it is
+	// synced and falls back to a live LIST when it isn't. The raw
+	// Dynamic call here bypassed the cache entirely and hand-decoded
+	// the same objects, so this 30s loop paid a live apiserver LIST
+	// forever for data already resident in memory.
+	projects, err := s.Kube.ListKusoProjects(listCtx, s.Namespace)
 	if err != nil {
 		s.Logger.Warn("logship list projects for namespaces", "err", err)
 		return out
 	}
-	for i := range raw.Items {
-		var p kube.KusoProject
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &p); err != nil {
-			continue
-		}
-		ns := p.Spec.Namespace
+	for i := range projects {
+		ns := projects[i].Spec.Namespace
 		if ns == "" {
 			ns = s.Namespace
 		}

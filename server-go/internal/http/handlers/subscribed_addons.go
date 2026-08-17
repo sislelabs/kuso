@@ -49,5 +49,12 @@ func (h *ProjectsHandler) SetSubscribedAddons(w http.ResponseWriter, r *http.Req
 		h.fail(w, "set subscribed addons", err)
 		return
 	}
+	// SECURITY: same reason as shared_env_keys.go — the echoed
+	// KusoService carries plaintext spec.envVars and a possibly
+	// token-bearing repo URL. This route is EDITOR-gated, but reading
+	// env VALUES needs secrets:read, so an editor could otherwise
+	// harvest every secret on the service by toggling a subscription.
+	maskServiceEnvIfNeeded(ctx, h.DB, project, updated)
+	redactServiceRepoIfNeeded(ctx, h.DB, project, updated)
 	writeJSON(w, http.StatusOK, updated)
 }

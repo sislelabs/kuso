@@ -275,10 +275,10 @@ type BuildSettingsView struct {
 	// adaptive cap (Service.MaxConcurrentBuilds) instead — see
 	// loadSettings.
 	MaxConcurrentSet bool
-	MemoryLimit   string
-	MemoryRequest string
-	CPULimit      string
-	CPURequest    string
+	MemoryLimit      string
+	MemoryRequest    string
+	CPULimit         string
+	CPURequest       string
 	// External registry overrides. When RegistryAuthSecret is set,
 	// builds push to RegistryHost using credentials from the named
 	// Secret instead of the in-cluster anonymous kuso-registry. The
@@ -923,10 +923,10 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		annos[annCommitMessage] = req.CommitMessage
 	}
 	spec := kube.KusoBuildSpec{
-		Project:              project,
-		Service:              fqn,
-		Ref:                  sha,
-		Branch:               branch,
+		Project: project,
+		Service: fqn,
+		Ref:     sha,
+		Branch:  branch,
 		// Carry provider + tokenSecret onto the build CR so the clone
 		// init container knows GitHub vs GitLab and where the GitLab
 		// token lives. Dropping these would make a GitLab private clone
@@ -1940,7 +1940,14 @@ func buildStuckTimeout() time.Duration {
 // ns is the namespace the KusoBuild + Job live in (determined by the
 // project's spec.namespace, looked up by the caller).
 func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) error {
-	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, b.Name, metav1.GetOptions{})
+	// Serve from the shared Job informer when it's warm. This runs for
+	// every in-flight build on a 5s tick across every namespace, so it
+	// was a steady per-build apiserver Get.
+	//
+	// A cache MISS must fall through to the live Get, not be treated as
+	// NotFound: the whole not-found branch below drives stuck-build
+	// force-failure, and a cold cache must never trip that.
+	job, err := p.getJobCached(ctx, ns, b.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// A promotion-held build (atomic same-repo gate) whose Job
@@ -3531,4 +3538,17 @@ func (s *Service) CreateForService(ctx context.Context, project, service, branch
 		TriggeredBy: "system",
 	})
 	return err
+}
+
+// getJobCached reads a Job from the informer cache, falling back to a
+// live Get on any cache miss. The fallback is load-bearing: callers
+// distinguish NotFound (a real "the Job is gone") from a transient
+// cache gap, and only the live API can tell them apart.
+func (p *Poller) getJobCached(ctx context.Context, ns, name string) (*batchv1.Job, error) {
+	if p.Svc != nil && p.Svc.Kube != nil && p.Svc.Kube.Cache != nil {
+		if job, ok := p.Svc.Kube.Cache.GetJob(ns, name); ok {
+			return job, nil
+		}
+	}
+	return p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
 }

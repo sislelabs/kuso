@@ -81,6 +81,21 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 // not-found as an empty list — neither shared secret is guaranteed
 // to exist on a fresh project.
 func (s *Service) listSecretKeys(ctx context.Context, ns, name string) ([]string, error) {
+	// Serve key NAMES from the informer cache when it's warm. This runs
+	// once per service while rendering the projects dashboard, so at
+	// 100 projects × 10 services it was ~1,000 live Secret GETs per
+	// page load. The cache holds no Secret VALUES at all (an informer
+	// Transform strips them before indexing), which is exactly the
+	// shape this caller needs.
+	//
+	// A cache miss falls through to the live Get below rather than
+	// reporting "no keys": absent-from-cache is not the same as
+	// absent-from-cluster for a Secret written moments ago.
+	if s.Kube != nil && s.Kube.Cache != nil {
+		if keys, ok := s.Kube.Cache.SecretKeysOnly(ns, name); ok {
+			return keys, nil
+		}
+	}
 	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {

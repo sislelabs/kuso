@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,7 +127,19 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		// and the WS closes before the user sees the result.
 		alreadyTerminal := false
 		if s.Kube != nil && s.Kube.Clientset != nil {
-			if jb, jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, buildName, metav1.GetOptions{}); jerr == nil {
+			// Informer first — this is a plain "did the Job finish"
+			// probe on every log-stream open. A miss falls through to
+			// the live Get below via jb == nil.
+			var jb *batchv1.Job
+			if s.Kube.Cache != nil {
+				if cached, ok := s.Kube.Cache.GetJob(ns, buildName); ok {
+					jb = cached
+				}
+			}
+			if jb == nil {
+				jb, _ = s.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, buildName, metav1.GetOptions{})
+			}
+			if jb != nil {
 				if jb.Status.Succeeded > 0 || jb.Status.Failed > 0 {
 					alreadyTerminal = true
 				}
@@ -531,9 +544,30 @@ func (s *Service) watchPodPhase(ctx context.Context, ns, podName string, frames 
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
-		pod, err := s.Kube.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			return
+		// Informer first. This ticker runs for as long as a viewer keeps
+		// the log panel open, so a live Get here is one apiserver call
+		// per pod per viewer every 2s — the worst read amplification in
+		// the service. The Pod informer is already watching cluster-wide
+		// for ListPodsByLabel, so the cached read is free and always
+		// within one watch-event of current, which is well inside the 2s
+		// cadence this loop already accepts.
+		//
+		// A cache miss is NOT an error: it means the informer hasn't
+		// synced yet, or the pod genuinely isn't there. Fall through to
+		// the live Get and let ITS error decide whether to stop, so a
+		// cold cache can't silently kill the phase stream.
+		var pod *corev1.Pod
+		if s.Kube != nil && s.Kube.Cache != nil {
+			if cached, ok := s.Kube.Cache.GetPod(ns, podName); ok {
+				pod = cached
+			}
+		}
+		if pod == nil {
+			live, err := s.Kube.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+			if err != nil {
+				return
+			}
+			pod = live
 		}
 		phase := derivePodPhase(pod)
 		if phase != last {

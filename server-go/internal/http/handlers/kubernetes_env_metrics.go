@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,8 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -71,24 +70,28 @@ func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "pods",
-	}
-	list, err := h.Kube.Dynamic.Resource(gvr).Namespace(h.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + envName,
-	})
-	if err != nil {
+	// Shares the namespace-wide cached fetch with the project cards
+	// (see metrics_cache.go), then filters to this env in memory. Unlike
+	// the project card this is a single deliberate view rather than a
+	// fan-out, so the win here is smaller — but when a card poll has
+	// just warmed the entry, opening the overlay costs nothing upstream.
+	items, ok := listPodMetricsCached(ctx, h.Kube, h.Namespace)
+	if !ok {
 		// metrics-server not installed → return empty so the UI shows
 		// a "no metrics yet" state rather than an error banner.
 		writeJSON(w, http.StatusOK, envMetricsResponse{Env: envName, Pods: []podMetricRow{}})
 		return
 	}
-	out := envMetricsResponse{Env: envName, Pods: make([]podMetricRow, 0, len(list.Items))}
-	for i := range list.Items {
-		item := list.Items[i].Object
-		row := podMetricRow{Pod: list.Items[i].GetName()}
+	mine := make([]unstructured.Unstructured, 0, len(items))
+	for i := range items {
+		if podMetricsInstance(items[i]) == envName {
+			mine = append(mine, items[i])
+		}
+	}
+	out := envMetricsResponse{Env: envName, Pods: make([]podMetricRow, 0, len(mine))}
+	for i := range mine {
+		item := mine[i].Object
+		row := podMetricRow{Pod: mine[i].GetName()}
 		if ts, ok := item["timestamp"].(string); ok {
 			row.Timestamp = ts
 		}
@@ -185,49 +188,33 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	// Build a label-selector that matches any of the production env
-	// names. metrics.k8s.io supports the standard set-based selector.
-	envNames := make([]string, 0, len(prodEnvs))
-	for n := range prodEnvs {
-		envNames = append(envNames, n)
-	}
-	selector := "app.kubernetes.io/instance in (" + strings.Join(envNames, ",") + ")"
-	gvr := schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "pods",
-	}
-	list, err := h.Kube.Dynamic.Resource(gvr).Namespace(h.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
+	// Fetch the namespace's pod metrics ONCE (cached, 5s TTL) and filter
+	// to this project's production envs in memory.
+	//
+	// This used to issue a label-selected LIST against metrics.k8s.io per
+	// request. The dashboard renders one card per project and polls every
+	// 30s, so at 100 projects that was 100 metrics-server queries per
+	// cycle per viewer — and metrics-server is a single replica that
+	// degrades well before the kube apiserver does. It was the first
+	// thing to fall over as project count grew. Now every card on the
+	// page shares one upstream fetch.
+	//
+	// metrics.k8s.io has no watch verb (it's an aggregated API over an
+	// in-memory window), so a TTL cache is the right tool here rather
+	// than an informer.
+	items, ok := listPodMetricsCached(ctx, h.Kube, h.Namespace)
+	if !ok {
 		// metrics-server missing or transient API outage — return zeros
 		// rather than 500ing the card. The UI renders a "—" state.
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	for i := range list.Items {
-		item := list.Items[i].Object
-		containers, ok := item["containers"].([]any)
-		if !ok {
+	for i := range items {
+		if _, mine := prodEnvs[podMetricsInstance(items[i])]; !mine {
 			continue
 		}
-		out.Pods++
-		for _, c := range containers {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			usage, ok := cm["usage"].(map[string]any)
-			if !ok {
-				continue
-			}
-			if cpu, ok := usage["cpu"].(string); ok {
-				out.CPUm += parseCPU(cpu)
-			}
-			if mem, ok := usage["memory"].(string); ok {
-				out.MemBytes += parseQuantity(mem)
-			}
+		if sumPodMetricsUsage(items[i], &out.CPUm, &out.MemBytes) {
+			out.Pods++
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
