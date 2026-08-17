@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.21] — 2026-08-17
+
+### 🐛 Bug Fixes
+- Fix(security)/fix(cli)/fix(mcp)/fix(web)/feat(resilience): platform-review remediation batch ([8291111](https://github.com/sislelabs/kuso/commit/829111156375eceb055211168fda53fe314cd50e))
+
 ## [0.22.20] — 2026-08-17
 
 ### 🐛 Bug Fixes
@@ -406,14 +411,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive changelog for v0.18.121 ([5fde907](https://github.com/sislelabs/kuso/commit/5fde9075e3860dd31f493a29a993d33334a6f7f5))
-
-## [0.18.121] — 2026-07-04
-
-### 🐛 Bug Fixes
-- Fix(web): render release-failed builds as RELEASE FAILED, not UNKNOWN ([8131804](https://github.com/sislelabs/kuso/commit/813180452776609292789cb14ac5c218af6008d8))
-
-### 🧹 Chores
-- Chore: archive changelog for v0.18.120 ([079b34c](https://github.com/sislelabs/kuso/commit/079b34c20613950ee0f9990f47a0c8b776e2c456))
 
 
 ---

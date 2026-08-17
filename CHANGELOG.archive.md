@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.121] — 2026-07-04
+
+### 🐛 Bug Fixes
+- Fix(web): render release-failed builds as RELEASE FAILED, not UNKNOWN ([8131804](https://github.com/sislelabs/kuso/commit/813180452776609292789cb14ac5c218af6008d8))
+
+### 🧹 Chores
+- Chore: archive changelog for v0.18.120 ([079b34c](https://github.com/sislelabs/kuso/commit/079b34c20613950ee0f9990f47a0c8b776e2c456))
+
 ## [0.18.120] — 2026-07-04
 
 ### ✨ Features
