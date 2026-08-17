@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -443,6 +444,18 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	if err != nil {
 		return err
 	}
+	// Best-effort cleanup steps (TLS Secrets etc.) must not abort the
+	// cascade — the project is going away either way — but their failures
+	// must not be swallowed either (the v0.21.6 leak class: `_ =` on a
+	// child delete = invisible orphan). NotFound stays ignored; anything
+	// else is logged with locator context and collected, and the join is
+	// surfaced at the end.
+	var cleanupErrs []error
+	cleanupFail := func(kind, resName string, err error) {
+		slog.Warn("project delete: cleanup step failed; resource may be orphaned",
+			"project", name, "ns", ns, "kind", kind, "name", resName, "err", err)
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("%s %s/%s: %w", kind, ns, resName, err))
+	}
 	envs, err := s.listEnvsForProject(ctx, name)
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
@@ -458,12 +471,18 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		// env CR directly (not via DeleteEnvironment), so mirror that path's
 		// Phase-5 TLS cleanup here to avoid leaking a Secret per env/preview.
 		if s.Kube.Clientset != nil {
-			_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, e.Name+"-tls", metav1.DeleteOptions{})
+			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, e.Name+"-tls", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				cleanupFail("Secret", e.Name+"-tls", derr)
+			}
 			prefix := e.Name + "-tls-extra-"
-			if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {
+			if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr != nil {
+				cleanupFail("SecretList", prefix+"*", lerr)
+			} else {
 				for i := range secs.Items {
 					if strings.HasPrefix(secs.Items[i].Name, prefix) {
-						_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{})
+						if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+							cleanupFail("Secret", secs.Items[i].Name, derr)
+						}
 					}
 				}
 			}
@@ -662,6 +681,12 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				return fmt.Errorf("purge-data: delete pvc %s: %w", pvcName, derr)
 			}
 		}
+	}
+	// The cascade finished (project CR is gone); surface any collected
+	// best-effort cleanup failures so the orphans are visible instead of
+	// hiding behind a false success.
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("project %s deleted, but cleanup left orphans: %w", name, errors.Join(cleanupErrs...))
 	}
 	return nil
 }

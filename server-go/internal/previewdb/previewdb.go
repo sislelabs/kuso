@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
@@ -227,6 +228,13 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 		if !c.tryAcquireSeed(cloneFQN) {
 			continue
 		}
+		// Durable in-flight marker, stamped BEFORE the async work starts.
+		// The seed runs in a plain goroutine; if the server restarts
+		// between here and seed completion, this annotation is the only
+		// evidence a seed is still owed. ResumePendingSeeds sweeps for it
+		// on leader acquisition and re-kicks the seed; seedAsync clears it
+		// once the seed lands.
+		c.markSeedPending(ctx, ns, cloneFQN, addons.CRName(project, s.Name))
 		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
@@ -243,6 +251,133 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 // suffix alone is NOT, because a real project addon can legitimately be
 // named "events-pr-2".
 const previewPRLabel = "kuso.sislelabs.com/preview-pr"
+
+// seedPendingAnnotation is the durable "a seed is owed" marker on a clone
+// addon CR. Value = the SOURCE addon's FQN (the one input to seedAsync
+// that can't be re-derived from the clone CR itself; project/env-scope/
+// instance-pg all can). Stamped by EnsureEnvAddons BEFORE the async seed
+// goroutine starts, cleared by seedAsync after the seed lands. A server
+// restart mid-seed leaves it behind, and ResumePendingSeeds re-kicks any
+// clone still carrying it.
+const seedPendingAnnotation = "kuso.sislelabs.com/seed-pending"
+
+// markSeedPending stamps the durable in-flight seed marker. Best-effort:
+// a failed stamp only costs the restart-resume guarantee for this one
+// seed attempt, so it must not block the seed itself.
+func (c *Cloner) markSeedPending(ctx context.Context, ns, cloneFQN, sourceFQN string) {
+	if _, err := c.Kube.UpdateKusoAddonWithRetry(ctx, ns, cloneFQN, func(a *kube.KusoAddon) error {
+		if a.Annotations == nil {
+			a.Annotations = map[string]string{}
+		}
+		a.Annotations[seedPendingAnnotation] = sourceFQN
+		return nil
+	}); err != nil {
+		c.Logger.Warn("seed-pending mark failed; a restart during this seed will not auto-resume",
+			"clone", cloneFQN, "ns", ns, "err", err)
+	}
+}
+
+// clearSeedPending removes the marker once a seed has completed. NotFound
+// is fine — the clone may have been torn down (PR closed) mid-seed.
+func (c *Cloner) clearSeedPending(ctx context.Context, ns, cloneFQN string) {
+	if _, err := c.Kube.UpdateKusoAddonWithRetry(ctx, ns, cloneFQN, func(a *kube.KusoAddon) error {
+		delete(a.Annotations, seedPendingAnnotation)
+		return nil
+	}); err != nil && !apierrors.IsNotFound(err) {
+		c.Logger.Warn("seed-pending clear failed; boot resume will re-check this clone",
+			"clone", cloneFQN, "ns", ns, "err", err)
+	}
+}
+
+// ResumePendingSeeds is the boot-time (leader-acquisition-time) resume
+// sweep for interrupted clone seeds. seedAsync runs in a plain goroutine
+// with in-memory state only; if the server restarts between clone-addon
+// creation and seed completion, the half-seeded clone used to stay empty
+// until the next PR resync event. This sweep discovers every clone still
+// carrying the seed-pending annotation and re-kicks seedAsync for it.
+//
+// Idempotent: a clone whose latest seed Job already succeeded (crash
+// landed between Job completion and marker clear) is NOT re-seeded —
+// re-running pg_dump --clean would wipe post-seed release-hook
+// migrations — its stale marker is just cleared. Returns the clone FQNs
+// whose seeds were re-kicked (used by tests; callers may ignore it).
+func (c *Cloner) ResumePendingSeeds(ctx context.Context) []string {
+	if c == nil || c.Kube == nil || c.Kube.Dynamic == nil || c.Addons == nil {
+		return nil
+	}
+	// Cluster-wide list: clones live in each project's namespace
+	// (KusoProject.spec.namespace), not only the home namespace.
+	ul, err := c.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		c.Logger.Warn("seed resume: list addons", "err", err)
+		return nil
+	}
+	var resumed []string
+	for i := range ul.Items {
+		var a kube.KusoAddon
+		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(ul.Items[i].Object, &a); derr != nil {
+			c.Logger.Warn("seed resume: decode addon", "name", ul.Items[i].GetName(), "err", derr)
+			continue
+		}
+		sourceFQN := a.Annotations[seedPendingAnnotation]
+		if sourceFQN == "" {
+			continue
+		}
+		ns := a.Namespace
+		project := a.Labels[kube.LabelProject]
+		envScope := a.Labels[kube.LabelEnv]
+		if project == "" || envScope == "" {
+			c.Logger.Warn("seed resume: pending clone missing project/env label; skipping",
+				"clone", a.Name, "ns", ns)
+			continue
+		}
+		cloneFQN := a.Name
+		// Completion check: if the latest seed Job for this clone already
+		// succeeded, the seed landed and only the marker clear was lost.
+		if c.latestSeedJobSucceeded(ctx, ns, project, cloneFQN) {
+			c.clearSeedPending(ctx, ns, cloneFQN)
+			c.Logger.Info("seed resume: seed already completed; cleared stale marker", "clone", cloneFQN)
+			continue
+		}
+		if !c.tryAcquireSeed(cloneFQN) {
+			continue
+		}
+		instancePG := a.Spec.UseInstanceAddon != ""
+		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
+		go func(ns, project, src, clone, scope string, ipg bool) {
+			defer cancel()
+			defer c.releaseSeed(clone)
+			c.seedAsync(seedCtx, ns, project, src, clone, ipg, scope)
+		}(ns, project, sourceFQN, cloneFQN, envScope, instancePG)
+		resumed = append(resumed, cloneFQN)
+		c.Logger.Info("seed resume: re-kicked interrupted clone seed",
+			"clone", cloneFQN, "source", sourceFQN, "scope", envScope)
+	}
+	return resumed
+}
+
+// latestSeedJobSucceeded reports whether the most recent preview-seed Job
+// for this clone finished successfully. False on any doubt (no typed
+// client, list error, no Jobs, latest not succeeded) — the caller then
+// re-seeds, which is the safe default for an incomplete clone.
+func (c *Cloner) latestSeedJobSucceeded(ctx context.Context, ns, project, cloneFQN string) bool {
+	if c.Kube.Clientset == nil {
+		return false
+	}
+	jobs, err := c.Kube.Clientset.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/role=preview-seed,kuso.sislelabs.com/clone-addon=%s", addons.ShortName(project, cloneFQN)),
+	})
+	if err != nil || len(jobs.Items) == 0 {
+		return false
+	}
+	latest := jobs.Items[0]
+	for i := range jobs.Items {
+		if jobs.Items[i].CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = jobs.Items[i]
+		}
+	}
+	return latest.Status.Succeeded > 0
+}
 
 // isPRClone reports whether addon a is a preview clone belonging to the
 // PR identified by prLabel (the decimal PR number) / suffix ("-pr-<N>").
@@ -373,6 +508,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 			c.Logger.Warn("preview db seed job (instance-pg)", "clone", cloneFQN, "err", err)
 			return
 		}
+		c.clearSeedPending(ctx, ns, cloneFQN)
 		c.Logger.Info("preview db clone seeded (instance-pg)", "clone", cloneFQN)
 		return
 	}
@@ -395,6 +531,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 		c.Logger.Warn("preview db seed job", "clone", cloneFQN, "err", err)
 		return
 	}
+	c.clearSeedPending(ctx, ns, cloneFQN)
 	c.Logger.Info("preview db clone seeded", "clone", cloneFQN)
 }
 
@@ -468,8 +605,10 @@ func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, clo
 	}
 	if waitName != "" {
 		if werr := c.waitForJobComplete(ctx, ns, waitName, 5*time.Minute); werr != nil {
-			c.Logger.Warn("preview seed job did not complete; skipping migrate", "clone", cloneFQN, "job", waitName, "err", werr)
-			return nil
+			// Surface the failure (skipping the migrate) so seedAsync does
+			// NOT clear the seed-pending marker — the boot-time resume sweep
+			// then re-checks this clone instead of treating it as seeded.
+			return fmt.Errorf("seed job %s did not complete (migrate skipped): %w", waitName, werr)
 		}
 	}
 	c.migrateAfterSeed(ctx, ns, project, envScope, cloneFQN, nonce)

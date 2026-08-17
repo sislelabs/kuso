@@ -40,9 +40,13 @@ var initCmd = &cobra.Command{
   kuso init --runtime nixpacks --port 3000
   kuso init --template payload        # Payload CMS / Next.js, fully wired`,
 	Run: func(cmd *cobra.Command, args []string) {
-		path := "kuso.yml"
-		if _, err := os.Stat(path); err == nil && !initForce {
-			fmt.Fprintln(os.Stderr, "kuso.yml already exists; pass --force to overwrite")
+		path := manifestNamePrimary
+		// Refuse when EITHER manifest spelling exists — writing kuso.yml
+		// next to an existing kuso.yaml would leave two manifests and
+		// every reader preferring the freshly-scaffolded one.
+		if existing, _, err := resolveManifestPath("."); err == nil && !initForce {
+			fmt.Fprintf(os.Stderr, "%s already exists; pass --force to overwrite (kuso init writes %s)\n",
+				filepath.Base(existing), path)
 			os.Exit(1)
 		}
 

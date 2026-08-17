@@ -36,6 +36,12 @@ type listBuildsArgs struct {
 	Limit   int    `json:"limit,omitempty" jsonschema:"max builds to return (default 10, max 50)"`
 }
 
+// listBuildsResult wraps the build list in an object — the MCP SDK
+// requires tool output schemas to be objects, not bare arrays.
+type listBuildsResult struct {
+	Builds []buildSummary `json:"builds"`
+}
+
 type rollbackArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
@@ -50,9 +56,9 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 		Description: "List recent builds for a service, newest first. Read-only. " +
 			"Use this to find a rollback target: pick a build with status=succeeded that " +
 			"predates the bad deploy, then pass its id to rollback.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args listBuildsArgs) (*mcp.CallToolResult, []buildSummary, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args listBuildsArgs) (*mcp.CallToolResult, listBuildsResult, error) {
 		if args.Project == "" || args.Service == "" {
-			return nil, nil, errors.New("project and service are required")
+			return nil, listBuildsResult{}, errors.New("project and service are required")
 		}
 		limit := args.Limit
 		if limit <= 0 {
@@ -64,7 +70,7 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 		var out []buildSummary
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
 		if err := client.GetJSON(ctx, path, &out); err != nil {
-			return nil, nil, fmt.Errorf("list builds: %w", err)
+			return nil, listBuildsResult{}, fmt.Errorf("list builds: %w", err)
 		}
 		if len(out) > limit {
 			out = out[:limit]
@@ -88,7 +94,7 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
-		}, out, nil
+		}, listBuildsResult{Builds: out}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

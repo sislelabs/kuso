@@ -191,13 +191,25 @@ var nodePendingCmd = &cobra.Command{
 	},
 }
 
+var nodeRevokeYes bool
+
 var nodeRevokeCmd = &cobra.Command{
 	Use:   "revoke <jti>",
 	Args:  cobra.ExactArgs(1),
 	Short: "Revoke a pending bootstrap token by jti.",
+	Long: "Revoke a pending bootstrap token by jti.\n\n" +
+		"Takes effect immediately: any node join still presenting the token\n" +
+		"will fail. Revocation cannot be undone — mint a fresh token if you\n" +
+		"revoke the wrong one.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// Same guard as the twin `token revoke` — instant, irreversible,
+		// and the jti alone gives no hint which join it belongs to.
+		if err := confirmDestructive(nodeRevokeYes,
+			fmt.Sprintf("Revoke pending bootstrap token %s? Any node join still using it will fail.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.RevokeNodeBootstrapToken(args[0])
 		if err != nil {
@@ -834,6 +846,7 @@ func init() {
 
 	nodeCmd.AddCommand(nodeAddTokenCmd)
 	nodeCmd.AddCommand(nodePendingCmd)
+	nodeRevokeCmd.Flags().BoolVarP(&nodeRevokeYes, "yes", "y", false, "skip the confirmation prompt")
 	nodeCmd.AddCommand(nodeRevokeCmd)
 
 	// --- node management parity commands ---

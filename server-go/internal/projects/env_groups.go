@@ -23,7 +23,9 @@ package projects
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -363,14 +365,29 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	// retries. Recorded only AFTER a successful provision so we never try to
 	// clean up something that never provisioned.
 	var provisionedInstanceAddons []string
-	rollback := func() {
-		// Best-effort. Errors here are noise; the create already
-		// failed and the user's caller will retry or clean up.
+	rollback := func() error {
+		// Best-effort in the sense that every child is attempted regardless
+		// of earlier failures — but failures are NOT noise: a half-rolled-
+		// back clone leaves orphan CRs/DB roles that compound across
+		// retries. NotFound is fine (never created / already gone); any
+		// other failure is logged with locator context and joined into the
+		// returned error so the caller surfaces it next to the original
+		// create failure.
+		var errs []error
+		rbFail := func(kind, resName string, err error) {
+			slog.Warn("env-group create rollback: delete failed; resource orphaned",
+				"project", project, "group", req.Name, "ns", ns, "kind", kind, "name", resName, "err", err)
+			errs = append(errs, fmt.Errorf("%s %s/%s: %w", kind, ns, resName, err))
+		}
 		for _, n := range createdEnvs {
-			_ = s.Kube.DeleteKusoEnvironment(ctx, ns, n)
+			if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+				rbFail("KusoEnvironment", n, err)
+			}
 		}
 		for _, n := range createdServices {
-			_ = s.Kube.DeleteKusoService(ctx, ns, n)
+			if err := s.Kube.DeleteKusoService(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+				rbFail("KusoService", n, err)
+			}
 		}
 		// Drop the instance DB/role + conn secret BEFORE deleting the addon
 		// CR: CleanupInstanceAddon reads the CR's spec.useInstanceAddon to
@@ -379,12 +396,26 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// cleaned, but the DB/role would orphan).
 		for _, short := range provisionedInstanceAddons {
 			if s.CleanupInstanceAddon != nil {
-				_ = s.CleanupInstanceAddon(ctx, project, short)
+				if err := s.CleanupInstanceAddon(ctx, project, short); err != nil {
+					rbFail("InstanceAddon", short, err)
+				}
 			}
 		}
 		for _, n := range createdAddons {
-			_ = s.Kube.DeleteKusoAddon(ctx, ns, n)
+			if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+				rbFail("KusoAddon", n, err)
+			}
 		}
+		return errors.Join(errs...)
+	}
+	// failCreate wraps a create-step failure with any rollback failures so
+	// neither is swallowed. errors.Join keeps errors.Is working on the
+	// original cause (the HTTP fail() mapping still sees ErrInvalid etc.).
+	failCreate := func(cause error) error {
+		if rberr := rollback(); rberr != nil {
+			return errors.Join(cause, fmt.Errorf("rollback incomplete, orphans left behind: %w", rberr))
+		}
+		return cause
 	}
 
 	// 1) Clone fresh addons. Conn-secret name pattern stays
@@ -421,8 +452,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		clone.Spec.PasswordSecret = nil
 		clone.Spec.Project = project
 		if _, err := s.Kube.CreateKusoAddon(ctx, ns, clone); err != nil {
-			rollback()
-			return nil, fmt.Errorf("clone addon %s: %w", short, err)
+			return nil, failCreate(fmt.Errorf("clone addon %s: %w", short, err))
 		}
 		createdAddons = append(createdAddons, newCRName)
 		freshAddonRename[short] = newShort
@@ -435,8 +465,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// leave a broken env (CreateContainerConfigError, 0/N ready).
 		if clone.Spec.UseInstanceAddon != "" && s.ProvisionInstanceAddon != nil {
 			if err := s.ProvisionInstanceAddon(ctx, project, newShort, clone.Spec.UseInstanceAddon); err != nil {
-				rollback()
-				return nil, fmt.Errorf("provision instance addon %s: %w", newShort, err)
+				return nil, failCreate(fmt.Errorf("provision instance addon %s: %w", newShort, err))
 			}
 			// Provision landed the DB/role + conn secret on the shared server;
 			// record it so a LATER-step failure's rollback reclaims them.
@@ -557,8 +586,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 		createdClone, err := s.Kube.CreateKusoService(ctx, ns, svcClone)
 		if err != nil {
-			rollback()
-			return nil, fmt.Errorf("clone service %s: %w", item.short, err)
+			return nil, failCreate(fmt.Errorf("clone service %s: %w", item.short, err))
 		}
 
 		// Seed the clone's OWN managed app-config secret by copying the
@@ -573,8 +601,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// label-consistent name. Best-effort: a missing source secret just
 		// means there's nothing to copy (service had no managed secrets).
 		if err := s.copyManagedServiceSecret(ctx, ns, item.short, newSvcShort, project, req.Name); err != nil {
-			rollback()
-			return nil, fmt.Errorf("copy managed secret for %s: %w", item.short, err)
+			return nil, failCreate(fmt.Errorf("copy managed secret for %s: %w", item.short, err))
 		}
 		createdServices = append(createdServices, newSvcCR)
 
@@ -737,8 +764,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			},
 		}
 		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR); err != nil {
-			rollback()
-			return nil, fmt.Errorf("clone env for %s: %w", item.short, err)
+			return nil, failCreate(fmt.Errorf("clone env for %s: %w", item.short, err))
 		}
 		createdEnvs = append(createdEnvs, envCRName)
 	}
@@ -812,6 +838,11 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if err != nil {
 		return fmt.Errorf("list addons for group %s: %w", name, err)
 	}
+	// Side-effect cleanup failures (instance DB/role drops) must not stop
+	// the CR cascade — the group is being torn down either way — but they
+	// leave live credentials + DBs orphaned on the shared server, so they
+	// are collected and surfaced instead of `_ =`-swallowed.
+	var cleanupErrs []error
 	if addonList != nil {
 		for i := range addonList.Items {
 			n := addonList.Items[i].GetName()
@@ -826,7 +857,11 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 				if short == "" {
 					short = n
 				}
-				_ = s.CleanupInstanceAddon(ctx, project, short)
+				if cerr := s.CleanupInstanceAddon(ctx, project, short); cerr != nil {
+					slog.Warn("env-group delete: instance addon cleanup failed; DB/role/conn-secret may be orphaned on the shared server",
+						"project", project, "group", name, "ns", ns, "kind", "InstanceAddon", "name", short, "err", cerr)
+					cleanupErrs = append(cleanupErrs, fmt.Errorf("instance addon cleanup %s: %w", short, cerr))
+				}
 			}
 			if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete addon %s: %w", n, err)
@@ -834,6 +869,9 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 		}
 	}
 
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("env group %s deleted, but cleanup left orphans: %w", name, errors.Join(cleanupErrs...))
+	}
 	return nil
 }
 

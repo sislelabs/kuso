@@ -232,14 +232,24 @@ of users holding the role so the change takes effect immediately.`,
 	},
 }
 
+var roleDeleteYes bool
+
 var roleDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm", "remove"},
 	Short:   "Delete a role",
-	Args:    cobra.ExactArgs(1),
+	Long: "Delete a role.\n\n" +
+		"Users and groups bound to it lose those permissions immediately,\n" +
+		"and the role's permission set is not recoverable — recreate it with\n" +
+		"'kuso role create' and re-bind everyone if you delete the wrong one.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(roleDeleteYes,
+			fmt.Sprintf("Delete role %s? Users and groups bound to it lose those permissions immediately.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteRole(args[0])
 		if err := checkRespErr(resp, err); err != nil {
@@ -270,6 +280,7 @@ func init() {
 	roleCmd.AddCommand(roleGetCmd)
 	roleCmd.AddCommand(roleCreateCmd)
 	roleCmd.AddCommand(roleEditCmd)
+	roleDeleteCmd.Flags().BoolVarP(&roleDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	roleCmd.AddCommand(roleDeleteCmd)
 
 	roleCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

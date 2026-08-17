@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** v0.1.0 — pre-release, but functional: 16 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, and config-as-code plan/apply.
+**Status:** v0.1.0 — pre-release, but functional: 20 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, and config-as-code plan/apply.
 
 ## Run
 

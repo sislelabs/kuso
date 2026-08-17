@@ -117,10 +117,10 @@ kuso project addon add papelito db --kind postgres --version 16 --size small
 kuso project addon add papelito storage --kind s3
 kuso project addon add papelito cache --kind redis
 # All IMPLEMENTED kinds (chart renders a real workload + conn secret):
-#   postgres, redis, valkey, mongodb, rabbitmq, s3, mailpit, nats,
-#   meilisearch, clickhouse, redpanda (Kafka API).
+#   postgres, redis, valkey, mongodb, mysql, rabbitmq, s3, mailpit,
+#   nats, meilisearch, clickhouse, redpanda (Kafka API).
 # RESERVED-but-not-implemented (creating one renders only a "pending"
-# marker — DON'T use as if it works): mysql, memcached, elasticsearch,
+# marker — DON'T use as if it works): memcached, elasticsearch,
 # kafka (use redpanda), cockroachdb, couchdb.
 # Postgres wire TLS (off by default): --tls require  (see "Addon TLS").
 

@@ -265,6 +265,42 @@ var buildListCmd = &cobra.Command{
 	},
 }
 
+// buildLatestRows decodes the /builds/latest payload (map keyed by
+// service short-name → build summary) into sorted table rows of
+// {service, id, branch, sha12, tag, status, age}. ok=false means the
+// body wasn't that shape and the caller should fall back to JSON so a
+// differently-shaped response is never silently dropped. The service
+// key — the thing that makes the map useful — becomes the first column,
+// which is why `-o table` is renderable here at all.
+func buildLatestRows(body []byte) ([][]string, bool) {
+	var m map[string]struct {
+		ID        string `json:"id"`
+		Branch    string `json:"branch"`
+		CommitSha string `json:"commitSha"`
+		ImageTag  string `json:"imageTag"`
+		Status    string `json:"status"`
+		StartedAt string `json:"startedAt"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, false
+	}
+	services := make([]string, 0, len(m))
+	for s := range m {
+		services = append(services, s)
+	}
+	sort.Strings(services)
+	rows := make([][]string, 0, len(m))
+	for _, s := range services {
+		b := m[s]
+		sha := b.CommitSha
+		if len(sha) > 12 {
+			sha = sha[:12]
+		}
+		rows = append(rows, []string{s, b.ID, b.Branch, sha, b.ImageTag, b.Status, relativeAge(b.StartedAt)})
+	}
+	return rows, true
+}
+
 // relativeAge converts an ISO8601 timestamp to "<n>m" / "<n>h" / "<n>d".
 func relativeAge(iso string) string {
 	if iso == "" {
@@ -325,14 +361,39 @@ per service regardless of branch.`,
 			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("build latest: %w", err)
 			}
-			// Server returns map[service]buildSummary. Decode generically
-			// and pretty-print (JSON out); a table would drop the service
-			// key that makes the map useful.
-			var out map[string]any
-			if err := json.Unmarshal(resp.Body(), &out); err != nil {
-				return fmt.Errorf("decode response: %w", err)
+			// Server returns map[service]buildSummary.
+			switch outputFormat {
+			case "json":
+				var out map[string]any
+				if err := json.Unmarshal(resp.Body(), &out); err != nil {
+					return fmt.Errorf("decode response: %w", err)
+				}
+				return jsonOut(out)
+			case "table", "":
+				rows, ok := buildLatestRows(resp.Body())
+				if !ok {
+					// Unexpected shape — emit JSON rather than silently
+					// dropping data (same fallback rule as `db sql`).
+					var out any
+					if err := json.Unmarshal(resp.Body(), &out); err != nil {
+						return fmt.Errorf("decode response: %w", err)
+					}
+					return jsonOut(out)
+				}
+				if len(rows) == 0 {
+					fmt.Println("no builds yet — try `kuso build trigger <project> <service>`")
+					return nil
+				}
+				t := tablewriter.NewWriter(os.Stdout)
+				t.SetHeader([]string{"SERVICE", "ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"})
+				for _, r := range rows {
+					t.Append(r)
+				}
+				t.Render()
+				return nil
+			default:
+				return fmt.Errorf("unsupported output format %q", outputFormat)
 			}
-			return jsonOut(out)
 		},
 	}
 	buildLatestCmd.Flags().StringVar(&buildLatestEnv, "env", "", "env-group filter (production, staging, preview-pr-N)")

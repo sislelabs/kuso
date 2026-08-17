@@ -118,8 +118,7 @@ func registerDescribeProject(server *mcp.Server, client *kusoclient.Client) {
 		Description: "Return a kuso project's declared configuration: project spec (repo, base domain, namespace, placement, previews), " +
 			"services (runtime, port, domains, volumes, scale/sleep, placement, security context, release hook), " +
 			"environments (production + preview, hosts + TLS hosts), and addons (kind, version, size, HA, storage, backup, TLS, placement, external/instance wiring). " +
-			"Fields outside this projection are not included. For the runtime view (is it up?) use status. " +
-			"For incident triage of a specific running env, prefer troubleshoot_environment(project, env) once it lands.",
+			"Fields outside this projection are not included. For the runtime view (is it up?) use status.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args describeProjectArgs) (*mcp.CallToolResult, describeProjectResult, error) {
 		out, err := runDescribeProject(ctx, client, args)
 		if err != nil {
@@ -353,7 +352,7 @@ type manageAddonArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Action  string `json:"action" jsonschema:"add | delete"`
 	Name    string `json:"name" jsonschema:"addon name (used in connection-secret name)"`
-	Kind    string `json:"kind,omitempty" jsonschema:"required for add: postgres|redis|mongodb|mysql|rabbitmq|memcached|clickhouse|elasticsearch|kafka|cockroachdb|couchdb"`
+	Kind    string `json:"kind,omitempty" jsonschema:"required for add: postgres|redis|valkey|mongodb|mysql|rabbitmq|s3|mailpit|nats|meilisearch|clickhouse|redpanda"`
 	Version string `json:"version,omitempty"`
 	Size    string `json:"size,omitempty" jsonschema:"small|medium|large (default: small)"`
 	HA      bool   `json:"ha,omitempty"`
@@ -367,11 +366,28 @@ type manageAddonResult struct {
 	Status  string `json:"status"`
 }
 
-var allowedAddonKinds = map[string]bool{
-	"postgres": true, "redis": true, "mongodb": true, "mysql": true,
-	"rabbitmq": true, "memcached": true, "clickhouse": true,
-	"elasticsearch": true, "kafka": true, "cockroachdb": true, "couchdb": true,
+// allowedAddonKindList is the set of IMPLEMENTED addon kinds — the ones
+// the kusoaddon chart renders a real workload + conn Secret for. Ground
+// truth is the chart's $supported gate in
+// operator/helm-charts/kusoaddon/templates/unsupported.yaml (one
+// per-kind template each); keep in sync. Reserved-but-not-implemented
+// kinds (memcached, elasticsearch, kafka, cockroachdb, couchdb) render
+// only a "pending" marker ConfigMap, so they're refused here rather
+// than letting an agent "create" a datastore that never comes up.
+// The manage_addon description is generated from this list so the two
+// can't drift.
+var allowedAddonKindList = []string{
+	"postgres", "redis", "valkey", "mongodb", "mysql", "rabbitmq",
+	"s3", "mailpit", "nats", "meilisearch", "clickhouse", "redpanda",
 }
+
+var allowedAddonKinds = func() map[string]bool {
+	m := make(map[string]bool, len(allowedAddonKindList))
+	for _, k := range allowedAddonKindList {
+		m[k] = true
+	}
+	return m
+}()
 
 func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageAddonArgs) (manageAddonResult, error) {
 	if !args.Confirm {
@@ -386,7 +402,8 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 	switch args.Action {
 	case "add":
 		if !allowedAddonKinds[args.Kind] {
-			return manageAddonResult{}, fmt.Errorf("kind %q is not supported", args.Kind)
+			return manageAddonResult{}, fmt.Errorf("kind %q is not supported (implemented kinds: %s)",
+				args.Kind, strings.Join(allowedAddonKindList, ", "))
 		}
 		body := map[string]any{
 			"name":    args.Name,
@@ -419,7 +436,8 @@ func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "manage_addon",
 		Description: "Add or delete an addon on a project. Adding emits a connection-info Secret that's auto-injected as envFrom into every service in the project (DATABASE_URL etc.). " +
-			"Supported kinds today: postgres, redis. Other kinds are reserved (placeholder created, no workload). " +
+			"Supported kinds: " + strings.Join(allowedAddonKindList, ", ") + ". " +
+			"Other kinds are reserved (no workload would be deployed) and are refused. " +
 			"REQUIRES confirm=true. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args manageAddonArgs) (*mcp.CallToolResult, manageAddonResult, error) {
 		out, err := runManageAddon(ctx, client, args)

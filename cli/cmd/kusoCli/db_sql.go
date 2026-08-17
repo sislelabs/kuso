@@ -17,6 +17,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"kuso/pkg/kusoApi"
@@ -132,14 +133,14 @@ Requires the project admin role.`,
 
 var dbRowsCmd = &cobra.Command{
 	Use:   "rows <project> <addon> --table <table> [--schema <schema>] [--limit N]",
-	Short: "Page rows from a single table (JSON)",
+	Short: "Page rows from a single table",
 	Long: `Fetch a page of rows from one table. --schema defaults to "public",
---limit defaults to the server's page size (100, max 1000). Output is
-JSON only — rows can be wide, so a table view is a poor fit. Requires the
-project admin role.`,
+--limit defaults to the server's page size (100, max 1000). Renders a
+table by default; wide tables wrap badly, so -o json is often nicer (and
+is the stable shape for scripts). Requires the project admin role.`,
 	Args: cobra.ExactArgs(2),
 	Example: `  kuso db rows scubatony scubatony-db --table users
-  kuso db rows scubatony scubatony-db --table users --limit 10 | jq '.rows'`,
+  kuso db rows scubatony scubatony-db --table users --limit 10 -o json | jq '.rows'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -155,7 +156,19 @@ project admin role.`,
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
-		return jsonOut(data)
+		switch outputFormat {
+		case "json":
+			return jsonOut(data)
+		case "table", "":
+			// Same {columns, rows, truncated} wire shape as `db sql`;
+			// same renderer, same JSON fallback for odd shapes.
+			if !renderSQLTable(os.Stdout, data) {
+				return jsonOut(data)
+			}
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", outputFormat)
+		}
 	},
 }
 
@@ -191,38 +204,47 @@ Requires the project admin role.`,
 		case "json":
 			return jsonOut(data)
 		case "table", "":
-			cols := asAnySlice(data["columns"])
-			// Render as a table when the response is the expected
-			// columns+rows shape; anything else falls back to JSON so we
-			// never silently drop a differently-shaped response.
-			if _, ok := data["rows"]; !ok || len(cols) == 0 {
+			if !renderSQLTable(os.Stdout, data) {
 				return jsonOut(data)
-			}
-			header := make([]string, len(cols))
-			for i, c := range cols {
-				header[i] = asString(c)
-			}
-			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader(header)
-			for _, rv := range asAnySlice(data["rows"]) {
-				cells := asAnySlice(rv)
-				row := make([]string, len(header))
-				for i := range header {
-					if i < len(cells) {
-						row[i] = asString(cells[i])
-					}
-				}
-				t.Append(row)
-			}
-			t.Render()
-			if b, ok := data["truncated"].(bool); ok && b {
-				fmt.Fprintln(os.Stderr, "[kuso] result truncated — pass --limit to fetch more")
 			}
 			return nil
 		default:
 			return fmt.Errorf("unsupported output format %q", outputFormat)
 		}
 	},
+}
+
+// renderSQLTable renders the SQL-browser wire shape {columns, rows,
+// truncated} as a table to w. Returns false when data isn't that shape
+// (missing rows key, empty columns) so the caller can fall back to JSON
+// — we never silently drop a differently-shaped response. Shared by
+// `db sql` and `db rows`, which speak the same shape.
+func renderSQLTable(w io.Writer, data map[string]any) bool {
+	cols := asAnySlice(data["columns"])
+	if _, ok := data["rows"]; !ok || len(cols) == 0 {
+		return false
+	}
+	header := make([]string, len(cols))
+	for i, c := range cols {
+		header[i] = asString(c)
+	}
+	t := tablewriter.NewWriter(w)
+	t.SetHeader(header)
+	for _, rv := range asAnySlice(data["rows"]) {
+		cells := asAnySlice(rv)
+		row := make([]string, len(header))
+		for i := range header {
+			if i < len(cells) {
+				row[i] = asString(cells[i])
+			}
+		}
+		t.Append(row)
+	}
+	t.Render()
+	if b, ok := data["truncated"].(bool); ok && b {
+		fmt.Fprintln(os.Stderr, "[kuso] result truncated — pass --limit to fetch more")
+	}
+	return true
 }
 
 // sqlTypeText renders a column's display type, preferring the enum type

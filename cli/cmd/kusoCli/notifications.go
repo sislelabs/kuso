@@ -264,14 +264,24 @@ var notificationsUpdateCmd = &cobra.Command{
 	},
 }
 
+var notificationsDeleteYes bool
+
 var notificationsDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm"},
 	Short:   "Delete a notification channel",
-	Args:    cobra.ExactArgs(1),
+	Long: "Delete a notification channel.\n\n" +
+		"Events stop delivering to it immediately and the channel config\n" +
+		"(webhook URL, secret, event filters) is not recoverable. To pause\n" +
+		"delivery but keep the config, use 'kuso notifications disable'.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(notificationsDeleteYes,
+			fmt.Sprintf("Delete notification channel %s? Events stop delivering immediately and its config is not recoverable.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteNotification(args[0])
 		if err != nil {
@@ -512,6 +522,7 @@ func init() {
 	}
 	notificationsCmd.AddCommand(notificationsCreateCmd)
 	notificationsCmd.AddCommand(notificationsUpdateCmd)
+	notificationsDeleteCmd.Flags().BoolVarP(&notificationsDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	notificationsCmd.AddCommand(notificationsDeleteCmd)
 	notificationsCmd.AddCommand(notificationsTestCmd)
 	notificationsCmd.AddCommand(notificationsEnableCmd)

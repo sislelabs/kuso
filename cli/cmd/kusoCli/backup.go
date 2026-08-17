@@ -35,23 +35,46 @@ var (
 // the server does it now.
 
 var (
-	backupOutput  string
-	restoreNoWait bool
-	restoreWait   time.Duration
-	restoreYes    bool
+	backupOutput string
+	// backupLegacyOutput backs the retired -o/--output shorthand. On
+	// ~59 other commands -o selects the output FORMAT (json/table); on
+	// this command it historically named the destination FILE, so
+	// `kuso backup -o json` silently wrote a file literally named
+	// "json". Passing it now errors and points at --file.
+	backupLegacyOutput string
+	restoreNoWait      bool
+	restoreWait        time.Duration
+	restoreYes         bool
 )
+
+// rejectRetiredOutputFlag is the shared refusal for `kuso backup` and
+// `kuso addon-backup download`, the only two commands where -o/--output
+// used to mean the destination FILE instead of the output format. Both
+// meanings are dead here: the file meaning moved to --file, and there is
+// no json/table rendering (the commands write a gzipped archive).
+func rejectRetiredOutputFlag(cmdName, value string) error {
+	if value == "json" || value == "table" {
+		return fmt.Errorf("%s writes a gzipped archive and has no %s rendering — -o/--output is retired on this command because it used to name the destination FILE (so '-o %s' created a file literally named %q); use --file <path> to choose the destination", cmdName, value, value, value)
+	}
+	return fmt.Errorf("-o/--output no longer names the destination file on %s (on every other command -o selects the output format); use --file %s instead", cmdName, value)
+}
 
 var backupCmd = &cobra.Command{
 	Use:   "backup",
 	Short: "Download a gzipped pg_dump of the kuso server DB",
 	Long: `Streams /api/admin/backup as gzipped pg_dump SQL and writes it to
---output (default: kuso-backup-<timestamp>.sql.gz in the current dir).
+--file (default: kuso-backup-<timestamp>.sql.gz in the current dir).
 
 Admin role required. The dump contains user creds, JWT secrets, and
 audit logs — treat the output like a credential. To restore:
 
     kuso restore <file>`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Check the retired flag BEFORE the login gate so the guidance is
+		// reachable even when the immediate failure would be auth.
+		if cmd.Flags().Changed("output") {
+			return rejectRetiredOutputFlag("kuso backup", backupLegacyOutput)
+		}
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
@@ -342,7 +365,12 @@ var backupDBStatsCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(backupCmd)
-	backupCmd.Flags().StringVarP(&backupOutput, "output", "o", "", "destination file (default: kuso-backup-<timestamp>.sql.gz)")
+	// --file is deliberately long-only: -f collides with the --follow
+	// convention elsewhere, and -o is the format/file trap being removed.
+	backupCmd.Flags().StringVar(&backupOutput, "file", "", "destination file (default: kuso-backup-<timestamp>.sql.gz)")
+	// Retired: kept registered so old invocations get an explanation
+	// instead of writing a file named "json" (or an unknown-flag error).
+	backupCmd.Flags().StringVarP(&backupLegacyOutput, "output", "o", "", "retired — use --file (elsewhere -o selects the output format)")
 
 	// backup settings / health / db-stats
 	backupCmd.AddCommand(backupSettingsCmd)

@@ -740,6 +740,15 @@ func main() {
 			if buildCtrl != nil {
 				buildCtrl.ResyncActive(workCtx)
 			}
+			// Resume interrupted preview-DB clone seeds. seedAsync runs in a
+			// plain goroutine with in-memory state; a restart between clone
+			// creation and seed completion used to strand a half-seeded (empty)
+			// clone until the next PR resync. Clones still carrying the
+			// seed-pending annotation get their seed re-kicked here; ones whose
+			// seed Job already succeeded just get the stale marker cleared.
+			// Leader-gated like the other singleton sweeps so multi-replica
+			// installs don't double-seed, and idempotent across acquisitions.
+			go envAddonCloner.ResumePendingSeeds(workCtx)
 			// Tell readyz this pod is leading AND running the poller, so
 			// it enforces the poller heartbeat. Only set when the poller
 			// is actually enabled — otherwise readyz would expect a beat

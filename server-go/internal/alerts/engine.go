@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -23,11 +24,12 @@ const tickInterval = 1 * time.Minute
 type Engine struct {
 	// DB holds alert rules + node metrics — main kuso.db.
 	DB *db.DB
-	// LogDB holds the LogLine + LogLineFts tables — separate sqlite
-	// file as of v0.7.17 so log volume doesn't starve the control
-	// plane. Optional; when nil, log-match alert rules are skipped
-	// with a warn log instead of a hard failure (lets dev runs
-	// without log-shipping wired through).
+	// LogDB holds the LogLine table — a typed view over the same
+	// Postgres database (db.AsLogDB; the separate sqlite log file
+	// died in the v0.9 Postgres migration). Optional; when nil,
+	// log-match alert rules are skipped with a warn log instead of
+	// a hard failure (lets dev runs without log-shipping wired
+	// through).
 	LogDB  *db.LogDB
 	Kube   *kube.Client
 	Notify *notify.Dispatcher
@@ -218,11 +220,17 @@ func (e *Engine) evaluateNode(ctx context.Context, kind string, threshold float6
 	return true, body, nil
 }
 
-// summary trims a string to maxLen with a trailing ellipsis. Used
+// summary trims a string to maxLen bytes with a trailing ellipsis. Used
 // to keep alert bodies legible when the user pastes a 200-char regex.
+// Trims on a rune boundary — a mid-rune cut is invalid UTF-8, which
+// Postgres rejects on the NotificationEvent insert.
 func summary(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "…"
+	cut := maxLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

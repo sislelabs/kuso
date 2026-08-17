@@ -28,13 +28,18 @@ var statusCmd = &cobra.Command{
 		project := ""
 		if len(args) > 0 {
 			project = args[0]
-		} else {
-			if body, err := os.ReadFile("kuso.yml"); err == nil {
+		} else if path, note, err := resolveManifestPath("."); err == nil {
+			// Accept BOTH manifest names via the shared resolver so
+			// zero-arg status agrees with apply/init.
+			if note != "" {
+				fmt.Fprintln(os.Stderr, "note:", note)
+			}
+			if body, rerr := os.ReadFile(path); rerr == nil {
 				project = readProjectFromYAML(body)
 			}
 		}
 		if project == "" {
-			fmt.Fprintln(os.Stderr, "error: pass <project> or run from a directory containing kuso.yml")
+			fmt.Fprintln(os.Stderr, "error: pass <project> or run from a directory containing kuso.yml (or kuso.yaml)")
 			os.Exit(1)
 		}
 		resp, err := api.GetProjectFull(project)

@@ -61,6 +61,12 @@ type sqlTable struct {
 	Rows   int64  `json:"rows,omitempty"`
 }
 
+// sqlTablesResult wraps the table list in an object — the MCP SDK
+// requires tool output schemas to be objects, not bare arrays.
+type sqlTablesResult struct {
+	Tables []sqlTable `json:"tables"`
+}
+
 // sqlQueryResult mirrors handlers.SQLQueryResponse.
 type sqlQueryResult struct {
 	Columns   []string   `json:"columns"`
@@ -74,14 +80,14 @@ func registerDB(server *mcp.Server, client *kusoclient.Client) {
 		Description: "List the tables in an addon's database (postgres and clickhouse addons). " +
 			"Read-only — allowed in --read-only mode. Use this to discover schema before calling " +
 			"sql_query. Requires the caller's token to hold sql:read on the project (admin).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sqlTablesArgs) (*mcp.CallToolResult, []sqlTable, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sqlTablesArgs) (*mcp.CallToolResult, sqlTablesResult, error) {
 		if args.Project == "" || args.Addon == "" {
-			return nil, nil, errors.New("project and addon are required")
+			return nil, sqlTablesResult{}, errors.New("project and addon are required")
 		}
 		var out []sqlTable
 		path := apiPath("api", "projects", args.Project, "addons", args.Addon, "sql", "tables")
 		if err := client.GetJSON(ctx, path, &out); err != nil {
-			return nil, nil, fmt.Errorf("sql_tables: %w", err)
+			return nil, sqlTablesResult{}, fmt.Errorf("sql_tables: %w", err)
 		}
 		var b strings.Builder
 		if len(out) == 0 {
@@ -102,7 +108,7 @@ func registerDB(server *mcp.Server, client *kusoclient.Client) {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
-		}, out, nil
+		}, sqlTablesResult{Tables: out}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

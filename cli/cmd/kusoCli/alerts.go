@@ -185,14 +185,25 @@ var alertAddNodePressureCmd = &cobra.Command{
 	},
 }
 
+var alertDeleteYes bool
+
 var alertDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm"},
 	Short:   "Delete an alert rule",
-	Args:    cobra.ExactArgs(1),
+	Long: "Delete an alert rule.\n\n" +
+		"Its condition stops being watched immediately and the rule is not\n" +
+		"recoverable — recreate it with 'kuso alert add-log-match' or\n" +
+		"'add-node-pressure'. To silence a rule temporarily, use\n" +
+		"'kuso alert disable' instead.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(alertDeleteYes,
+			fmt.Sprintf("Delete alert rule %s? Its condition stops being watched immediately and the rule is not recoverable.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteAlert(args[0])
 		if err != nil {
@@ -304,6 +315,7 @@ func init() {
 	alertAddLogMatchCmd.Flags().Int64Var(&alertAddThresh, "threshold", 1, "match-count threshold")
 	// Node-pressure-only.
 	alertAddNodePressureCmd.Flags().Float64Var(&alertAddPct, "threshold-pct", 80, "percentage threshold")
+	alertDeleteCmd.Flags().BoolVarP(&alertDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	alertCmd.AddCommand(alertDeleteCmd)
 	alertCmd.AddCommand(alertEnableCmd)
 	alertCmd.AddCommand(alertDisableCmd)

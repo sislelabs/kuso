@@ -13,12 +13,12 @@
 {{- end -}}
 {{- if not (has .Values.kind $supported) }}
 
-# Skeleton for addon kinds reserved in v0.2.0 but not yet implemented:
-#   mysql, memcached, elasticsearch, kafka, cockroachdb, couchdb
+# Skeleton for addon kinds reserved but not yet implemented:
+#   memcached, elasticsearch, kafka (use redpanda), cockroachdb, couchdb
 #
 # Implemented: redpanda (Kafka-API streaming), valkey (BSD redis fork),
-# mongodb (document DB), rabbitmq (AMQP broker + mgmt UI). See their
-# per-kind templates.
+# mongodb (document DB), mysql, rabbitmq (AMQP broker + mgmt UI). See
+# their per-kind templates.
 #
 # Real implementations land across v0.2.x as users ask. v0.9.37
 # added: mailpit (dev SMTP), nats (MQ + JetStream), meilisearch

@@ -84,14 +84,25 @@ var instanceSecretSetCmd = &cobra.Command{
 	},
 }
 
+var instanceSecretUnsetYes bool
+
 var instanceSecretUnsetCmd = &cobra.Command{
 	Use:     "unset <KEY>",
 	Aliases: []string{"rm", "delete"},
 	Short:   "Remove an instance secret",
-	Args:    cobra.ExactArgs(1),
+	Long: "Remove an instance secret.\n\n" +
+		"Every service subscribed to the key (across ALL projects) loses it,\n" +
+		"and the value is NOT recoverable from kuso once removed — re-add it\n" +
+		"from your own records.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(instanceSecretUnsetYes,
+			fmt.Sprintf("Remove instance secret %s? Every subscribed service (across all projects) loses it and the value is not recoverable.",
+				args[0])); err != nil {
+			return err
 		}
 		resp, err := api.UnsetInstanceSecret(args[0])
 		if err != nil {
@@ -110,5 +121,6 @@ func init() {
 	instanceSecretCmd.AddCommand(instanceSecretListCmd)
 	instanceSecretListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	instanceSecretCmd.AddCommand(instanceSecretSetCmd)
+	instanceSecretUnsetCmd.Flags().BoolVarP(&instanceSecretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 	instanceSecretCmd.AddCommand(instanceSecretUnsetCmd)
 }

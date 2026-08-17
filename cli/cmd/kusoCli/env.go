@@ -445,13 +445,32 @@ var secretSetCmd = &cobra.Command{
 	},
 }
 
+// secretUnsetYes is bound LOCALLY on secretUnsetCmd — no shared globals
+// for per-command flags (see envRevealFlag).
+var secretUnsetYes bool
+
 var secretUnsetCmd = &cobra.Command{
 	Use:   "unset <project> <service> KEY",
 	Short: "Remove a secret key from a service (--env to scope to one env)",
-	Args:  cobra.ExactArgs(3),
+	Long: "Remove a secret key from a service (--env to scope to one env).\n\n" +
+		"Removing a secret rolls the pods, and an app that reads it at boot\n" +
+		"may crash-loop on the new revision. The value is NOT recoverable\n" +
+		"from kuso once unset — re-add it from your own records.",
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// Same guard as the twin `env unset` — the value is gone for good
+		// and the pods roll.
+		scope := "shared"
+		if secretEnvFlag != "" {
+			scope = secretEnvFlag
+		}
+		if err := confirmDestructive(secretUnsetYes,
+			fmt.Sprintf("Unset secret %s on %s/%s [%s]? Pods will roll and the value is not recoverable.",
+				args[2], args[0], args[1], scope)); err != nil {
+			return err
 		}
 		resp, err := api.UnsetSecret(args[0], args[1], args[2], secretEnvFlag)
 		if err != nil {
@@ -459,10 +478,6 @@ var secretUnsetCmd = &cobra.Command{
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
-		}
-		scope := "shared"
-		if secretEnvFlag != "" {
-			scope = secretEnvFlag
 		}
 		fmt.Printf("secret %s unset on %s/%s [%s]\n", args[2], args[0], args[1], scope)
 		return nil
@@ -615,4 +630,5 @@ func init() {
 	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one environment (production|preview-pr-N); empty = shared across all envs")
 	secretSetCmd.Flags().BoolVar(&secretForceFlag, "force", false, "override the shadow check (set even if a project-shared secret with the same key exists)")
+	secretUnsetCmd.Flags().BoolVarP(&secretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 }

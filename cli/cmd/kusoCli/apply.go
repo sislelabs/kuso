@@ -15,7 +15,7 @@ var (
 )
 
 func init() {
-	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "kuso.yaml", "path to the kuso.yaml file")
+	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "", "path to the manifest (default: kuso.yml, or kuso.yaml if only that exists)")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "show the plan without writing")
 	applyCmd.Flags().BoolVar(&applyRotateSecrets, "rotate-secrets", false, "re-mint generated ({generate: …}) secrets even if they already exist (default: generate-once)")
 	rootCmd.AddCommand(applyCmd)
@@ -46,15 +46,20 @@ needed.`,
 			path = args[0]
 			explicit = true
 		}
-		// When the user didn't explicitly pick a file and the default
-		// kuso.yaml is absent, fall back to the legacy kuso.yml name
-		// before erroring.
+		// No explicit file: resolve via the shared helper so apply,
+		// status, and init all agree — kuso.yml preferred (the name
+		// `kuso init` writes), kuso.yaml accepted, a note when both
+		// exist.
 		if !explicit {
-			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-				if _, altErr := os.Stat("kuso.yml"); altErr == nil {
-					path = "kuso.yml"
-				}
+			resolved, note, rerr := resolveManifestPath(".")
+			if rerr != nil {
+				fmt.Fprintln(os.Stderr, "error:", rerr)
+				os.Exit(1)
 			}
+			if note != "" {
+				fmt.Fprintln(os.Stderr, "note:", note)
+			}
+			path = resolved
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {

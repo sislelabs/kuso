@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -302,12 +303,25 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		return fmt.Errorf("delete env: %w", err)
 	}
 
+	// Cleanup-failure collection. The env CR is already gone by phase 3,
+	// so a swallowed failure below is a FALSE SUCCESS that orphans a
+	// PVC/Secret/addon invisibly — the exact class behind the v0.21.6
+	// preview-PVC leak. Contract: NotFound stays ignored (deletes are
+	// idempotent/resumable), any other failure is logged with enough
+	// context to find the orphan AND collected; the cascade keeps going
+	// past it, and the join is returned at the end.
+	var cleanupErrs []error
+	cleanupFail := func(kind, name string, err error) {
+		slog.Warn("env delete: cleanup step failed; resource may be orphaned",
+			"project", project, "env", env, "ns", ns, "kind", kind, "name", name, "err", err)
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("%s %s/%s: %w", kind, ns, name, err))
+	}
+
 	// Phase 3: tear down preview-DB clones tied to this PR. Label-based
 	// discovery doesn't require the env CR to exist any more. Without
 	// this, 100 PRs/day × occasional missed close-webhook = compounding
-	// orphan StatefulSets + PVCs forever. Per-addon errors are tolerated
-	// — the env is already gone, the addon will get reconciled on the
-	// next sweep tick.
+	// orphan StatefulSets + PVCs forever. Per-addon failures don't abort
+	// the cascade, but they are collected — see cleanupFail above.
 	var deletedCloneAddons []string
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
 		selector := kube.LabelSelector(map[string]string{
@@ -316,11 +330,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		})
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
-		}); lerr == nil {
+		}); lerr != nil {
+			cleanupFail("KusoAddonList", selector, lerr)
+		} else {
 			for i := range addonList.Items {
 				name := addonList.Items[i].GetName()
 				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
-					_ = derr
+					cleanupFail("KusoAddon", name, derr)
 				} else {
 					deletedCloneAddons = append(deletedCloneAddons, name)
 				}
@@ -335,11 +351,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		})
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
-		}); lerr == nil {
+		}); lerr != nil {
+			cleanupFail("KusoAddonList", selector, lerr)
+		} else {
 			for i := range addonList.Items {
 				name := addonList.Items[i].GetName()
 				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
-					_ = derr
+					cleanupFail("KusoAddon", name, derr)
 				} else {
 					deletedCloneAddons = append(deletedCloneAddons, name)
 				}
@@ -370,10 +388,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 				LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
 			})
 			if lerr != nil {
+				cleanupFail("PersistentVolumeClaimList", "app.kubernetes.io/instance="+addonFQN, lerr)
 				continue
 			}
 			for i := range pvcs.Items {
-				_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{})
+				if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					cleanupFail("PersistentVolumeClaim", pvcs.Items[i].Name, derr)
+				}
 			}
 		}
 
@@ -391,9 +412,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		volPVCs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: "app.kubernetes.io/instance=" + envFQN + ",kuso.sislelabs.com/volume",
 		})
-		if lerr == nil {
+		if lerr != nil {
+			cleanupFail("PersistentVolumeClaimList", "app.kubernetes.io/instance="+envFQN, lerr)
+		} else {
 			for i := range volPVCs.Items {
-				_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, volPVCs.Items[i].Name, metav1.DeleteOptions{})
+				if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, volPVCs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					cleanupFail("PersistentVolumeClaim", volPVCs.Items[i].Name, derr)
+				}
 			}
 		}
 	}
@@ -413,7 +438,11 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 			envShort = env
 		}
 		if cerr := s.SecretsCleanupForEnv(ctx, project, svcShort, envShort); cerr != nil {
-			_ = cerr
+			// Deliberately tolerated (not collected): per the contract above,
+			// an orphan per-env Secret is preferable to failing the delete —
+			// but it must at least be visible in the logs.
+			slog.Warn("env delete: per-env secret cleanup failed (tolerated)",
+				"project", project, "env", env, "service", svcShort, "err", cerr)
 		}
 	}
 	// Phase 5: delete the cert-manager TLS Secrets for this env. The
@@ -427,14 +456,20 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// teardown but leaves the Secret behind; we reclaim it here.
 	if s.Kube.Clientset != nil {
 		// Primary host secret is the well-known "<env>-tls".
-		_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, env+"-tls", metav1.DeleteOptions{})
+		if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, env+"-tls", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			cleanupFail("Secret", env+"-tls", derr)
+		}
 		// Additional-host secrets are "<env>-tls-extra-<host>"; the host
 		// suffix isn't known here without the env CR, so name-prefix match.
 		prefix := env + "-tls-extra-"
-		if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {
+		if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr != nil {
+			cleanupFail("SecretList", prefix+"*", lerr)
+		} else {
 			for i := range secs.Items {
 				if strings.HasPrefix(secs.Items[i].Name, prefix) {
-					_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{})
+					if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+						cleanupFail("Secret", secs.Items[i].Name, derr)
+					}
 				}
 			}
 		}
@@ -444,6 +479,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// the variable live so future cleanup phases that need to vary by
 	// kind don't have to re-fetch.
 	_ = envKind
+	// Surface collected cleanup failures. The env CR itself is gone (the
+	// delete is resumable — re-running takes the CR-already-gone path and
+	// re-attempts this cleanup), so the error is "deleted with orphans",
+	// not "delete failed".
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("env %s deleted, but cleanup left orphans: %w", env, errors.Join(cleanupErrs...))
+	}
 	return nil
 }
 

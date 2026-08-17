@@ -304,6 +304,12 @@ func (h *AuthHandler) Methods(w http.ResponseWriter, _ *http.Request) {
 // trusted proxy (KUSO_TRUSTED_PROXIES, comma-separated CIDRs); falls
 // back to the raw RemoteAddr otherwise so XFF can't be spoofed.
 //
+// The XFF list is walked right-to-left, skipping trusted proxies: the
+// rightmost untrusted entry is the address a trusted proxy actually
+// observed. The leftmost entries are client-supplied — proxies append
+// rather than replace — so taking the leftmost would let any client
+// pick its own limiter bucket with a forged header.
+//
 // Returns RemoteAddr verbatim when SplitHostPort fails (Unix socket
 // dev — `@/tmp/kuso.sock` shape) so the limiter doesn't bucket every
 // dev request together under an empty key.
@@ -315,16 +321,25 @@ func clientIP(r *http.Request) string {
 		// peerIsTrustedProxy needs a parseable IP anyway.
 		return r.RemoteAddr
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && peerIsTrustedProxy(host) {
-		// X-Forwarded-For is a comma-separated list; the leftmost is the
-		// original client.
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return strings.TrimSpace(xff[:i])
-			}
-		}
-		return strings.TrimSpace(xff)
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" || !peerIsTrustedProxy(host) {
+		return host
 	}
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		p := strings.TrimSpace(parts[i])
+		if p == "" || peerIsTrustedProxy(p) {
+			continue
+		}
+		if net.ParseIP(p) == nil {
+			// Garbage where a proxy-observed address should be means a
+			// misconfigured chain; the connection peer is the only
+			// value we can still vouch for.
+			return host
+		}
+		return p
+	}
+	// Every hop was one of our own proxies — bucket by the peer.
 	return host
 }
 

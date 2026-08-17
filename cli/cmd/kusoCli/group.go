@@ -189,14 +189,26 @@ var groupMemberAddCmd = &cobra.Command{
 	},
 }
 
+var groupMemberRemoveYes bool
+
 var groupMemberRemoveCmd = &cobra.Command{
 	Use:     "rm <id> <userId>",
 	Aliases: []string{"remove"},
 	Short:   "Remove a user from a group",
-	Args:    cobra.ExactArgs(2),
+	Long: "Remove a user from a group.\n\n" +
+		"They immediately lose the group's project grants and instance role;\n" +
+		"re-add them with 'kuso group member add' to restore access.",
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// Same guard as the twin `grant remove` — an access change that
+		// takes effect on the user's next request.
+		if err := confirmDestructive(groupMemberRemoveYes,
+			fmt.Sprintf("Remove user %s from group %s? They immediately lose the group's grants and role.",
+				args[1], args[0])); err != nil {
+			return err
 		}
 		resp, err := api.RemoveGroupMember(args[0], args[1])
 		if err != nil {
@@ -291,6 +303,7 @@ func init() {
 	groupCmd.AddCommand(groupMemberCmd)
 	groupMemberCmd.AddCommand(groupMemberListCmd)
 	groupMemberCmd.AddCommand(groupMemberAddCmd)
+	groupMemberRemoveCmd.Flags().BoolVarP(&groupMemberRemoveYes, "yes", "y", false, "skip the confirmation prompt")
 	groupMemberCmd.AddCommand(groupMemberRemoveCmd)
 
 	groupListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")

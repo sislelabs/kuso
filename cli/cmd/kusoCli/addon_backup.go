@@ -127,7 +127,10 @@ The target addon must already exist + be the same engine as the source.`,
 
 var (
 	addonBackupDownloadOutput string
-	addonBackupDownloadForce  bool
+	// addonBackupDownloadLegacyOutput backs the retired -o/--output —
+	// see rejectRetiredOutputFlag in backup.go for why it errors.
+	addonBackupDownloadLegacyOutput string
+	addonBackupDownloadForce        bool
 )
 
 var addonBackupDownloadCmd = &cobra.Command{
@@ -144,9 +147,13 @@ Other addon kinds (redis, clickhouse, redpanda) aren't supported.
 The dump is the addon's entire dataset — treat the output like a
 credential. Editor role required.`,
 	Example: `  kuso addon-backup download myproj myproj-db
-  kuso addon-backup download myproj myproj-db -o /tmp/db.sql.gz`,
+  kuso addon-backup download myproj myproj-db --file /tmp/db.sql.gz`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Retired-flag check before the login gate — see backup.go.
+		if cmd.Flags().Changed("output") {
+			return rejectRetiredOutputFlag("kuso addon-backup download", addonBackupDownloadLegacyOutput)
+		}
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
@@ -157,7 +164,7 @@ credential. Editor role required.`,
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		// --output is user-chosen and used verbatim (incl. any path they
+		// --file is user-chosen and used verbatim (incl. any path they
 		// typed). The server-derived Content-Disposition name is NOT
 		// trusted: a hostile/spoofing server could send
 		// filename="../../.ssh/authorized_keys". Constrain it to a bare
@@ -299,7 +306,11 @@ func init() {
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the addon name to acknowledge a DESTRUCTIVE in-place restore")
 	addonBackupCmd.AddCommand(addonBackupDownloadCmd)
-	addonBackupDownloadCmd.Flags().StringVarP(&addonBackupDownloadOutput, "output", "o", "", "output file (default: name from server, e.g. <project>-<addon>-<ts>.sql.gz)")
+	// Long-only --file for the destination; -o/--output is retired here
+	// (it used to mean the FILE while meaning the FORMAT everywhere
+	// else, so `-o json` wrote a file named "json").
+	addonBackupDownloadCmd.Flags().StringVar(&addonBackupDownloadOutput, "file", "", "output file (default: name from server, e.g. <project>-<addon>-<ts>.sql.gz)")
+	addonBackupDownloadCmd.Flags().StringVarP(&addonBackupDownloadLegacyOutput, "output", "o", "", "retired — use --file (elsewhere -o selects the output format)")
 	addonBackupDownloadCmd.Flags().BoolVar(&addonBackupDownloadForce, "force", false, "overwrite the output file if it already exists")
 	addonBackupCmd.AddCommand(addonBackupScheduleCmd)
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupSchedule, "schedule", "", "5-field cron expression (UTC); empty disables")

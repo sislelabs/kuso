@@ -174,14 +174,24 @@ var cronAddCommand = &cobra.Command{
 	},
 }
 
+var cronDeleteYes bool
+
 var cronDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <service> <name>",
 	Aliases: []string{"rm"},
 	Short:   "Delete a cron",
-	Args:    cobra.ExactArgs(3),
+	Long: "Delete a cron.\n\n" +
+		"Its schedule stops immediately and the cron spec is not recoverable\n" +
+		"from kuso — re-add it from your own records. To pause it instead,\n" +
+		"suspend it with 'kuso cron edit-service ... --suspend'.",
+	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(cronDeleteYes,
+			fmt.Sprintf("Delete cron %s/%s? Its schedule stops immediately and the spec is not recoverable.", args[1], args[2])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteCron(args[0], args[1], args[2])
 		if err != nil {
@@ -438,14 +448,23 @@ add roundtrip via the per-service path.`,
 	},
 }
 
+var cronProjectDeleteYes bool
+
 var cronProjectDeleteCmd = &cobra.Command{
 	Use:     "delete-project <project> <name>",
 	Aliases: []string{"rm-project"},
 	Short:   "Delete a project-scoped cron",
-	Args:    cobra.ExactArgs(2),
+	Long: "Delete a project-scoped cron.\n\n" +
+		"Its schedule stops immediately and the cron spec is not recoverable\n" +
+		"from kuso — re-add it from your own records.",
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(cronProjectDeleteYes,
+			fmt.Sprintf("Delete cron %s/%s? Its schedule stops immediately and the spec is not recoverable.", args[0], args[1])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteProjectCron(args[0], args[1])
 		if err != nil {
@@ -470,6 +489,7 @@ func init() {
 	cronAddCommand.Flags().BoolVar(&cronAddSuspend, "suspend", false, "create suspended")
 	cronAddCommand.Flags().BoolVar(&cronAddPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
 	cronAddCommand.Flags().StringVar(&cronAddConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
+	cronDeleteCmd.Flags().BoolVarP(&cronDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	cronCmd.AddCommand(cronDeleteCmd)
 	cronCmd.AddCommand(cronSyncCmd)
 	cronEditServiceCmd.Flags().StringVar(&cronSetSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
@@ -504,5 +524,6 @@ func init() {
 	cronCmd.AddCommand(cronAddHTTPCmd)
 	cronCmd.AddCommand(cronAddCommandCmd)
 	cronCmd.AddCommand(cronEditCmd)
+	cronProjectDeleteCmd.Flags().BoolVarP(&cronProjectDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	cronCmd.AddCommand(cronProjectDeleteCmd)
 }

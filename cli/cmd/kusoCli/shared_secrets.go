@@ -164,14 +164,24 @@ var sharedSecretSetCmd = &cobra.Command{
 	},
 }
 
+var sharedSecretUnsetYes bool
+
 var sharedSecretUnsetCmd = &cobra.Command{
 	Use:     "unset <project> <KEY>",
 	Aliases: []string{"rm", "delete"},
 	Short:   "Remove a shared secret",
-	Args:    cobra.ExactArgs(2),
+	Long: "Remove a shared secret.\n\n" +
+		"Every subscribed service's pods roll, and the value is NOT\n" +
+		"recoverable from kuso once unset — re-add it from your own records.",
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(sharedSecretUnsetYes,
+			fmt.Sprintf("Unset shared secret %s on %s? Every subscribed service's pods will roll and the value is not recoverable.",
+				args[1], args[0])); err != nil {
+			return err
 		}
 		resp, err := api.UnsetSharedSecret(args[0], args[1])
 		if err != nil {
@@ -212,5 +222,6 @@ func init() {
 	sharedSecretListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	sharedSecretCmd.AddCommand(sharedSecretSetCmd)
 	sharedSecretSetCmd.Flags().BoolVar(&sharedSecretForceFlag, "force", false, "override the shadow check (set even if a service-scoped secret with the same key exists)")
+	sharedSecretUnsetCmd.Flags().BoolVarP(&sharedSecretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 	sharedSecretCmd.AddCommand(sharedSecretUnsetCmd)
 }
