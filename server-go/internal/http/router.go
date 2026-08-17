@@ -451,6 +451,13 @@ func mountAuthenticatedRoutes(
 			if d.Addons != nil {
 				projH.AddonReverter = d.Addons
 			}
+			// Same nil-interface caution as above: only assign when the
+			// concrete service exists. Without this the new service's
+			// first build never starts and it sits at 0/0 until someone
+			// pushes a commit.
+			if d.Builds != nil {
+				projH.FirstBuildTrigger = d.Builds
+			}
 			projH.Mount(r)
 		}
 		// Per-user project preferences (starring + folders for the

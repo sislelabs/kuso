@@ -161,16 +161,16 @@ spec:
                 echo "ERROR: GITHUB_INSTALLATION_TOKEN must be set for private repos"
                 exit 1
               fi
-              git clone --depth 1 --branch {{ .Values.branch | quote }} \
-                https://x-access-token:$GITHUB_INSTALLATION_TOKEN@$(echo {{ .Values.repo.url | quote }} | sed -E 's|^https?://||') \
+              git clone --depth 1 --branch {{ .Values.branch | squote }} \
+                https://x-access-token:$GITHUB_INSTALLATION_TOKEN@$(echo {{ .Values.repo.url | squote }} | sed -E 's|^https?://||') \
                 /workspace/src
               {{- else }}
-              git clone --depth 1 --branch {{ .Values.branch | quote }} \
-                {{ .Values.repo.url | quote }} \
+              git clone --depth 1 --branch {{ .Values.branch | squote }} \
+                {{ .Values.repo.url | squote }} \
                 /workspace/src
               {{- end }}
               cd /workspace/src
-              REF="{{ .Values.ref }}"
+              REF={{ .Values.ref | squote }}
               if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
                 if ! git checkout "$REF" 2>/dev/null; then
                   echo "checkout $REF failed; deepening clone"

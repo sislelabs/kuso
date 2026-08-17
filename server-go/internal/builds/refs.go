@@ -8,6 +8,7 @@ package builds
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -171,3 +172,92 @@ func containerNames(cs []corev1.Container) []string {
 	}
 	return out
 }
+
+// --- Boundary validation for values that reach the clone shell -------
+//
+// repoURL and branch/ref are interpolated into the clone init
+// container's /bin/sh script (buildcontroller/render.go). shellQuote
+// single-quotes them there, which is correct — but its doc comment
+// asserts that the kuso-server boundary already validated these
+// fields, and for a long time nothing did. These functions make that
+// claim true. Belt AND braces: quoting protects the shell, validation
+// keeps hostile values out of the CR in the first place (and out of
+// image tags, Job labels, and log lines derived from them).
+
+// gitRefRe matches the safe subset of git ref names we accept.
+//
+// Deliberately narrower than git's own check-ref-format: alphanumerics
+// plus . _ - / and the + sometimes used in release branches. That's
+// enough for every real branch/tag name while excluding whitespace,
+// quotes, backslashes, $, backticks, and shell metacharacters outright.
+var gitRefRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]{0,254}$`)
+
+// ValidateGitRef checks a branch/tag/ref name. Returns nil when safe.
+//
+// Beyond the charset, it enforces the git ref rules that matter for us:
+// no "..", no leading/trailing "/", no "//", no trailing ".lock", and
+// no "@{" sequence. A ref failing any of these is rejected rather than
+// sanitized — silently rewriting a user's branch name would deploy the
+// wrong code, which is worse than a clear error.
+func ValidateGitRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	if len(ref) > 255 {
+		return fmt.Errorf("must be 255 characters or fewer")
+	}
+	if !gitRefRe.MatchString(ref) {
+		return fmt.Errorf("%q contains characters that are not allowed in a git ref "+
+			"(allowed: letters, digits, and . _ - / +)", ref)
+	}
+	switch {
+	case strings.Contains(ref, ".."):
+		return fmt.Errorf("%q must not contain %q", ref, "..")
+	case strings.Contains(ref, "//"):
+		return fmt.Errorf("%q must not contain %q", ref, "//")
+	case strings.Contains(ref, "@{"):
+		return fmt.Errorf("%q must not contain %q", ref, "@{")
+	case strings.HasPrefix(ref, "/"), strings.HasSuffix(ref, "/"):
+		return fmt.Errorf("%q must not start or end with %q", ref, "/")
+	case strings.HasSuffix(ref, ".lock"):
+		return fmt.Errorf("%q must not end with %q", ref, ".lock")
+	case strings.HasSuffix(ref, "."):
+		return fmt.Errorf("%q must not end with %q", ref, ".")
+	}
+	return nil
+}
+
+// ValidateRepoURL checks a git remote URL. Returns nil when safe.
+//
+// Accepts http(s):// and scp-style git@host:org/repo. Rejects anything
+// carrying shell metacharacters or whitespace — the clone script embeds
+// the URL in a command substitution pipeline (`echo "$URL" | sed ...`),
+// so a value that survives quoting today could bite a future refactor.
+// file:// and ssh:// are rejected: the former would let a build read the
+// builder's filesystem, and the latter isn't a supported clone path.
+func ValidateRepoURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("repo URL must not be empty")
+	}
+	if len(raw) > 2048 {
+		return fmt.Errorf("repo URL is too long")
+	}
+	if strings.ContainsAny(raw, " \t\r\n\"'`$;|&<>(){}[]*?!#^\\") {
+		return fmt.Errorf("repo URL contains characters that are not allowed")
+	}
+	switch {
+	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
+		if len(strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")) == 0 {
+			return fmt.Errorf("repo URL has no host")
+		}
+		return nil
+	case scpStyleRepoRe.MatchString(raw):
+		return nil
+	}
+	return fmt.Errorf("repo URL must be http(s):// or git@host:org/repo")
+}
+
+// scpStyleRepoRe matches the scp-style remote git accepts:
+// user@host:path/to/repo(.git). Host and path are restricted to the
+// same conservative charset as the rest of this file.
+var scpStyleRepoRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+$`)

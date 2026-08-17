@@ -98,6 +98,25 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	// kaniko Job pod that ran the build.
 	if strings.HasPrefix(env, "build:") {
 		buildName := strings.TrimPrefix(env, "build:")
+		// Tenancy check — the build CR's spec is authoritative, exactly
+		// like the env path below does with envCR.Spec.Project.
+		//
+		// SECURITY: buildName is caller-supplied and enumerable (it's
+		// the predictable "<project>-<service>-<ref>" from
+		// builds.BuildName). Without this check, a caller authorized on
+		// project A could pass a build belonging to project B and read
+		// its pod logs / archived tail — build output carries env vars
+		// and build args. Namespace scoping is NOT sufficient on its
+		// own: projects without a custom spec.namespace all resolve to
+		// the shared home namespace (kube.ProjectNamespaceResolver),
+		// which is the default install shape.
+		//
+		// Fail closed: a build CR we can't read or whose spec doesn't
+		// name this project is ErrNotFound, never a fallthrough to the
+		// pod/archive lookups below.
+		if !s.buildBelongsToProject(ctx, ns, buildName, project) {
+			return env, ErrNotFound
+		}
 		// First-look: if the build is already terminal, skip the
 		// live-stream path entirely and ship the archived snapshot.
 		// This avoids the "tail a Completed pod and close the WS
@@ -114,7 +133,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 			}
 		}
 		if alreadyTerminal && s.BuildLogs != nil {
-			if archived, err := s.BuildLogs.GetBuildLog(ctx, buildName); err == nil && archived != "" {
+			if archived, err := s.BuildLogs.GetBuildLog(ctx, project, buildName); err == nil && archived != "" {
 				for _, line := range strings.Split(archived, "\n") {
 					if line == "" {
 						continue
@@ -138,7 +157,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 			// snapshot the build poller took at terminal-phase
 			// transition (last 200 lines × init+main containers).
 			if s.BuildLogs != nil {
-				if archived, err := s.BuildLogs.GetBuildLog(ctx, buildName); err == nil && archived != "" {
+				if archived, err := s.BuildLogs.GetBuildLog(ctx, project, buildName); err == nil && archived != "" {
 					_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "── archived logs (pod GC'd) ──"})
 					for _, line := range strings.Split(archived, "\n") {
 						if line == "" {
@@ -571,4 +590,46 @@ func derivePodPhase(pod *corev1.Pod) string {
 		return string(pod.Status.Phase)
 	}
 	return "Pending"
+}
+
+// buildBelongsToProject reports whether a caller authorized on
+// `project` may read logs for `buildName`. Fail-closed by construction:
+// every path that can't positively prove ownership returns false.
+//
+// Two sources of truth, in order:
+//
+//  1. The KusoBuild CR's spec.project — authoritative while the CR
+//     lives. Note the CR is fetched from `ns`, the namespace resolved
+//     from the CALLER's project, so a foreign build isn't even
+//     reachable when projects have distinct namespaces. That is not
+//     enough on its own: projects without a custom spec.namespace all
+//     share the home namespace on a default install, which is exactly
+//     why we compare spec.project rather than trusting the lookup.
+//
+//  2. The BuildLog archive row's project column, for builds whose CR
+//     the retention sweep already deleted. Without this fallback,
+//     scoping the check to the CR alone would break the legitimate
+//     "read yesterday's failed build" flow the archive exists to serve.
+//
+// A build with neither a readable CR nor an archive row is denied.
+func (s *Service) buildBelongsToProject(ctx context.Context, ns, buildName, project string) bool {
+	if project == "" || buildName == "" {
+		return false
+	}
+	if s.Kube != nil {
+		if b, err := s.Kube.GetKusoBuild(ctx, ns, buildName); err == nil && b != nil {
+			// Spec present and mismatched → definitively someone else's.
+			// Spec empty (legacy CR / decode gap) falls through to the
+			// archive rather than being treated as a match.
+			if b.Spec.Project != "" {
+				return b.Spec.Project == project
+			}
+		}
+	}
+	if s.BuildLogs != nil {
+		if owner, err := s.BuildLogs.BuildLogProject(ctx, buildName); err == nil && owner != "" {
+			return owner == project
+		}
+	}
+	return false
 }

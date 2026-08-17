@@ -775,32 +775,37 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	// password. This is the authoritative CRIT-2 fix; blockedSQLBuiltin
 	// is defense in depth on top of it.
 	//
-	// Fallback: if provisioning fails (older postgres, permission quirk),
-	// we fall back to the admin user so the browser keeps working —
-	// callers are still admin-gated and the denylist still applies. The
-	// fallback is logged so the missing hardening is visible.
-	browserUser := addons.BrowserRole
+	// FAIL CLOSED: if the NOSUPERUSER role can't be provisioned, refuse
+	// the connection instead of falling back to the addon's admin user.
+	//
+	// The previous behaviour degraded to the superuser and relied on the
+	// statement denylist alone. That's not equivalent: a superuser
+	// session can reach `COPY … TO PROGRAM` and pg_read_file, which is
+	// shell execution inside the addon pod, and the denylist is a
+	// string-matching layer that was only ever meant as defense in depth
+	// *on top of* the role. Worse, the degraded path was reachable by
+	// making provisioning fail, which turned a provisioning error into a
+	// privilege upgrade. A broken SQL browser is a far better outcome
+	// than a superuser console.
 	if err := h.Addons.EnsureBrowserRole(ctx, ns, releaseName, user, pass, dbName); err != nil {
-		h.Logger.Warn("sql-browser: could not provision NOSUPERUSER role; falling back to admin user (denylist still applies)",
+		h.Logger.Error("sql-browser: could not provision NOSUPERUSER role — refusing to open the browser as the addon superuser",
 			"project", project, "addon", addon, "err", err)
-		browserUser = user
+		return nil, fmt.Errorf("SQL browser unavailable: the restricted %s role could not be provisioned on this addon (refusing to fall back to the superuser account)",
+			addons.BrowserRole)
 	}
 
-	db, err := pgOpenAs(host, port, browserUser, pass, dbName)
+	db, err := pgOpenAs(host, port, addons.BrowserRole, pass, dbName)
 	if err != nil {
 		return nil, err
 	}
-	// If the browser role can't authenticate for some reason, fall back to
-	// the admin user rather than 500 the browser (denylist still applies).
-	if browserUser == addons.BrowserRole {
-		if perr := db.PingContext(ctx); perr != nil {
-			_ = db.Close()
-			h.Logger.Warn("sql-browser: browser role unusable; falling back to admin user",
-				"project", project, "addon", addon, "err", perr)
-			if db, err = pgOpenAs(host, port, user, pass, dbName); err != nil {
-				return nil, err
-			}
-		}
+	// Same rule if the role exists but can't authenticate — no silent
+	// downgrade to the admin account.
+	if perr := db.PingContext(ctx); perr != nil {
+		_ = db.Close()
+		h.Logger.Error("sql-browser: restricted role unusable — refusing to open the browser as the addon superuser",
+			"project", project, "addon", addon, "err", perr)
+		return nil, fmt.Errorf("SQL browser unavailable: the restricted %s role could not connect (refusing to fall back to the superuser account)",
+			addons.BrowserRole)
 	}
 	return db, nil
 }

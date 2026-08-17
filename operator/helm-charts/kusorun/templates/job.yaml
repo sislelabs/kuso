@@ -26,6 +26,11 @@ spec:
       labels:
         {{- include "kusorun.labels" . | nindent 8 }}
     spec:
+      # One-shot task pods run user-supplied commands with the
+      # service's real production env. They have no reason to reach the
+      # kube apiserver, so don't mount a ServiceAccount token — same
+      # rule the kusoenvironment deployment and kusocron apply.
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}

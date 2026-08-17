@@ -1542,6 +1542,21 @@ func adaptiveBuildCap(ctx context.Context, kc *kube.Client, logger *slog.Logger)
 	if chosen < safeDefault {
 		chosen = safeDefault
 	}
+	// Clamp to what the build backend can actually absorb. Every build
+	// Job is a thin buildctl client against ONE shared buildkitd replica
+	// (deploy/buildkitd.yaml: replicas 1, RWO snapshot PVC, limit 4 CPU).
+	// Past roughly that width the extra Jobs don't build faster — they
+	// sit blocked inside the daemon while still holding pod slots and
+	// cluster memory. On a 20-node cluster the unclamped formula would
+	// admit 40 concurrent builds into a 4-CPU daemon. An admin who
+	// genuinely wants more can still set build.maxConcurrent explicitly;
+	// this only bounds the AUTOMATIC default.
+	const adaptiveCeiling = 8
+	if chosen > adaptiveCeiling {
+		logger.Info("adaptive build cap clamped to the shared buildkitd ceiling",
+			"computed", chosen, "clamped", adaptiveCeiling)
+		chosen = adaptiveCeiling
+	}
 	logger.Info("adaptive build cap",
 		"readyNodes", readyCount,
 		"allocatableMilliCPU", totalMilli,
@@ -1799,6 +1814,7 @@ func (a buildsSettingsAdapter) GetBuildSettings(ctx context.Context) (builds.Bui
 	}
 	return builds.BuildSettingsView{
 		MaxConcurrent:      v.MaxConcurrent,
+		MaxConcurrentSet:   v.MaxConcurrentSet,
 		MemoryLimit:        v.MemoryLimit,
 		MemoryRequest:      v.MemoryRequest,
 		CPULimit:           v.CPULimit,

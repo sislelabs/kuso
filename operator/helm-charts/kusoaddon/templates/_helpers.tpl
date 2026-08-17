@@ -138,9 +138,28 @@ tolerations:
 
 {{/*
 storage size by t-shirt size. Override via .Values.storageSize.
+
+SECURITY: storageSize is user-supplied (KusoAddon.spec.storageSize, set
+by anyone with project-editor rights) and is rendered into 15 manifests.
+It used to be emitted RAW. A YAML block scalar could therefore carry a
+newline plus `---` and inject a COMPLETE, SEPARATE Kubernetes object into
+the release — reproduced with a privileged, hostPID Pod, which Helm's
+kind-ordering even installs BEFORE the StatefulSet. On a namespace with
+no PodSecurity labels (notably the home namespace, which deliberately
+carries none so buildkitd can run privileged) that is node compromise
+from a semi-trusted role.
+
+`regexMatch` against a strict Kubernetes quantity is the fix: anything
+that is not a bare quantity falls back to the t-shirt default, so a
+malicious value renders as `5Gi` instead of as markup. Quoting alone
+would not be enough here — the value lands in a context where a
+multi-line scalar can still break out.
+
+The API boundary validates this too (addons.validateStorageSize); this
+layer also covers a CR applied directly with kubectl.
 */}}
 {{- define "kusoaddon.storageSize" -}}
-{{- if .Values.storageSize -}}
+{{- if and .Values.storageSize (regexMatch "^[0-9]+(\\.[0-9]+)?(E|P|T|G|M|K|Ei|Pi|Ti|Gi|Mi|Ki)?$" (toString .Values.storageSize)) -}}
 {{ .Values.storageSize }}
 {{- else if eq .Values.size "small" -}}
 5Gi

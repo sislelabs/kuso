@@ -254,6 +254,15 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 	if b.Spec.Done {
 		return
 	}
+	// Skip promotion-held builds (kuso.sislelabs.com/promote-hold,
+	// stamped by builds/promotion_group.go): their Job COMPLETED
+	// successfully — they're non-terminal only because the atomic
+	// same-repo gate is waiting on sibling builds. Re-ensuring here
+	// would recreate the TTL-reaped Job on the next leadership
+	// handover's ResyncActive and re-run the entire kaniko build.
+	if b.Annotations["kuso.sislelabs.com/promote-hold"] != "" {
+		return
+	}
 	// Belt-and-braces validity check, mirroring the chart's top-level
 	// guard. A partially-written CR (missing image.repository or
 	// repo.url) can't produce a usable Job; skip silently — the

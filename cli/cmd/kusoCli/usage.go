@@ -35,11 +35,17 @@ const usageTemplate = `{{hdr "Usage:"}}{{if .Runnable}}
   {{.NameAndAliases}}{{end}}{{if .HasExample}}
 
 {{hdr "Examples:"}}
-{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+{{.Example}}{{end}}{{$cmd := .}}{{if .HasAvailableSubCommands}}{{if eq (len .Groups) 0}}
 
 {{hdr "Available Commands:"}}
-{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
-  {{name (rpad .Name .NamePadding)}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{name (rpad .Name .NamePadding)}} {{.Short}}
+{{end}}{{end}}{{else}}{{range $group := .Groups}}
+{{hdr $group.Title}}
+{{range $cmd.Commands}}{{if (and (eq .GroupID $group.ID) .IsAvailableCommand)}}  {{name (rpad .Name .NamePadding)}} {{.Short}}
+{{end}}{{end}}{{end}}{{if not .AllChildCommandsHaveGroup}}
+{{hdr "Additional Commands:"}}
+{{range $cmd.Commands}}{{if (and (eq .GroupID "") (or .IsAvailableCommand (eq .Name "help")))}}  {{name (rpad .Name .NamePadding)}} {{.Short}}
+{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
 
 {{hdr "Flags:"}}
 {{flags (.LocalFlags.FlagUsages | trimTrailingWhitespaces)}}{{end}}{{if .HasAvailableInheritedFlags}}

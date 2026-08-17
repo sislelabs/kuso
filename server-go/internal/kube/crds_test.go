@@ -33,6 +33,10 @@ func fakeClient(t *testing.T, seeds ...seedObj) *Client {
 		GVRAddons:       "KusoAddonList",
 		GVRBuilds:       "KusoBuildList",
 		GVRCrons:        "KusoCronList",
+		// Must cover every GVR NewCache informs on — the fake dynamic
+		// client panics on a LIST for an unregistered resource. Keep in
+		// sync with the gvrs slice in cache.go.
+		GVRRuns: "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	for _, s := range seeds {

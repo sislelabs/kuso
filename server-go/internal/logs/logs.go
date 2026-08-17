@@ -23,8 +23,14 @@ import (
 // BuildLogReader is the read-side of the BuildLog archive (db.DB).
 // Optional dependency: if non-nil, Stream will fall back to the
 // archive when a "build:<id>" stream request finds no live pod.
+// The project argument is REQUIRED and is what scopes the lookup to
+// the tenant the caller was authorized against — see db.GetBuildLog.
 type BuildLogReader interface {
-	GetBuildLog(ctx context.Context, buildName string) (string, error)
+	GetBuildLog(ctx context.Context, project, buildName string) (string, error)
+	// BuildLogProject reports the owning project of an archived build,
+	// or "" when unknown. Used as the tenancy oracle once the KusoBuild
+	// CR has been GC'd by retention.
+	BuildLogProject(ctx context.Context, buildName string) (string, error)
 }
 
 // Service handles log reads. Construct via New.
@@ -99,7 +105,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		// Pods gone (helm uninstalled the build). Fall back to the
 		// archived tail in postgres.
 		if s.BuildLogs != nil {
-			archived, err := s.BuildLogs.GetBuildLog(ctx, buildName)
+			archived, err := s.BuildLogs.GetBuildLog(ctx, project, buildName)
 			if err == nil && archived != "" {
 				return archivedTextToLines(archived, lines), env, nil
 			}

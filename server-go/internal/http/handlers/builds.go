@@ -273,6 +273,11 @@ type buildSummary struct {
 	// semantics vs the dispatcher's round-robin promote order). 0 /
 	// absent = not queued, or position unknown.
 	QueuePosition int `json:"queuePosition,omitempty"`
+	// PromoteHold is the atomic same-repo promotion gate's hold reason
+	// (builds/promotion_group.go): the Job succeeded but the image is
+	// not promoted until every same-repo sibling build of the same
+	// commit is green. Present only while held.
+	PromoteHold string `json:"promoteHold,omitempty"`
 }
 
 // stampQueuePositions fills QueuePosition on any queued summaries in
@@ -326,6 +331,9 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 		}
 		if v, ok := b.Annotations["kuso.sislelabs.com/build-triggered-by-user"]; ok {
 			out.TriggeredByUser = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/promote-hold"]; ok {
+			out.PromoteHold = v
 		}
 		if v, ok := b.Annotations["kuso.sislelabs.com/build-commit-message"]; ok {
 			out.CommitMessage = v

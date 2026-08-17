@@ -60,6 +60,13 @@ spec:
           labels:
             {{- include "kusocron.labels" . | nindent 12 }}
         spec:
+          # Cron pods run user-supplied commands (kind=command) or probe
+          # user-supplied URLs (kind=http). Neither needs to talk to the
+          # kube apiserver, so don't hand them a ServiceAccount token —
+          # without this, any code execution inside a cron pod also gets
+          # cluster credentials. Mirrors the kusoenvironment deployment,
+          # which has disabled automount since the pod-hardening pass.
+          automountServiceAccountToken: false
           restartPolicy: OnFailure
           {{- /* Pod securityContext is kind-dependent:
 
@@ -135,12 +142,32 @@ spec:
               {{- if eq (default "service" .Values.kind) "http" }}
               image: "curlimages/curl:8.10.1"
               imagePullPolicy: IfNotPresent
+              {{- /* SECURITY: the URL is passed as an ENV VAR and
+                     referenced as "$PROBE_URL", never interpolated into
+                     the script text.
+
+                     It used to be templated straight in: the `echo` was
+                     bare and the curl argument used sprig `quote`, which
+                     emits DOUBLE quotes — so `$(...)` and backticks
+                     inside a user-supplied url executed in the cron pod.
+                     Reproduced with url=http://x$(id)`whoami`. A cron is
+                     editor-createable, so this was command execution
+                     from a semi-trusted role, with the SA token
+                     automounted.
+
+                     An env var has no such escape: the shell expands
+                     $PROBE_URL to the literal value and never re-parses
+                     it as source. Quoting the expansion keeps a value
+                     with spaces as one argv entry. */}}
+              env:
+                - name: PROBE_URL
+                  value: {{ .Values.url | quote }}
               command: ["sh", "-c"]
               args:
                 - |
                   set -e
-                  echo "==> probe {{ .Values.url }}"
-                  curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" {{ .Values.url | quote }}
+                  echo "==> probe $PROBE_URL"
+                  curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" "$PROBE_URL"
                   echo "==> ok"
               {{- else }}
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"

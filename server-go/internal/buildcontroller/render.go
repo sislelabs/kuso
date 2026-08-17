@@ -975,10 +975,17 @@ exec buildctl \
 
 // shellQuote single-quotes a string for safe embedding in a /bin/sh
 // command line. Embedded single quotes get the standard '\'' escape.
-// The kuso-server boundary validates repo URLs, branches, and refs
-// before stamping the CR — this is defense-in-depth so a malformed
-// or hostile CR (kubectl apply by an admin) can't break out of the
-// argument quoting and run arbitrary commands as the clone init.
+//
+// The kuso-server boundary validates repo URLs and branches before
+// stamping the CR (builds.ValidateRepoURL / builds.ValidateGitRef) —
+// this is defense-in-depth so a malformed or hostile CR (kubectl apply
+// by an admin, bypassing the API) can't break out of the argument
+// quoting and run arbitrary commands as the clone init.
+//
+// NOTE: that first sentence was aspirational until those validators
+// existed — for several releases this function was the ONLY barrier.
+// If you add another interpolation site, quote it here AND validate at
+// the boundary; neither layer is meant to stand alone.
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }

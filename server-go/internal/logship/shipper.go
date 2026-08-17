@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -114,6 +115,21 @@ type Shipper struct {
 	streams map[string]context.CancelFunc // podUID → cancel
 	buf     []db.LogLine
 	bufMu   sync.Mutex
+
+	// flushing is a single-flight guard for the out-of-band flush that
+	// append() kicks off when the buffer crosses flushBatchSize.
+	//
+	// Without it, EVERY append past the threshold spawned a new
+	// goroutine. A burst of log lines (a crash-looping service, a
+	// verbose worker) therefore spawned flushes far faster than they
+	// complete: each one holds a Postgres connection for up to the 10s
+	// InsertLogLines timeout, so a few hundred of them exhaust the
+	// 25-connection pool (db.go:61) and starve every other query in
+	// the server — API requests included. Only one out-of-band flush
+	// may be in flight; the timed flusher still runs on its own
+	// cadence, and a skipped burst-flush is picked up either by the
+	// next append or by that ticker.
+	flushing atomic.Bool
 
 	// rate caps per-service log ingestion so one chatty service can't
 	// dominate the shared LogLine table (observed: a single worker
@@ -499,7 +515,17 @@ func (s *Shipper) append(l db.LogLine) {
 		// Out-of-band flush so a single noisy pod doesn't gate the
 		// rest of the system on the timed flush. runCtx is seeded in
 		// New() and replaced by Run(), so it's never nil here.
-		go s.flush(s.runCtx)
+		//
+		// Single-flight: see the `flushing` field. Losing the CAS means
+		// a flush is already draining the buffer, so this batch is
+		// already covered — spawning another would only add a second
+		// goroutine contending for the same connection pool.
+		if s.flushing.CompareAndSwap(false, true) {
+			go func() {
+				defer s.flushing.Store(false)
+				s.flush(s.runCtx)
+			}()
+		}
 	}
 }
 

@@ -2584,12 +2584,38 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			repoNoToken.Token = ""
 			req.Repo = &repoNoToken
 		}
+		// Same reasoning for buildArgs. They're the conventional home
+		// for build-time credentials (NPM_TOKEN, private registry auth,
+		// SENTRY_AUTH_TOKEN), and the Revision row is readable by any
+		// project VIEWER via the History endpoints — a role that must
+		// not see secret values. Keys are preserved so a revert still
+		// shows which args existed; only the values are masked.
+		//
+		// Replay note: unlike Repo.Token (where empty means "leave the
+		// stored Secret alone"), reverting to a snapshot with masked
+		// buildArgs would write the sentinel as a real value. The
+		// History UI surfaces these as masked and the revert path
+		// treats them as non-restorable — a redacted revision is for
+		// auditing what changed, not for round-tripping a credential.
+		if req.BuildArgs != nil && len(*req.BuildArgs) > 0 {
+			masked := make(map[string]string, len(*req.BuildArgs))
+			for k := range *req.BuildArgs {
+				masked[k] = revisionMaskSentinel
+			}
+			req.BuildArgs = &masked
+		}
 		if snap, err := json.Marshal(map[string]any{"patch": req}); err == nil {
 			s.RecordRevision(ctx, project, "service", service, "patch", snap)
 		}
 	}
 	return updated, nil
 }
+
+// revisionMaskSentinel replaces secret values in recorded Revision
+// snapshots. Must stay visually identical to the handlers package's
+// envMaskSentinel so the History UI renders one consistent mask
+// regardless of which layer did the redacting.
+const revisionMaskSentinel = "••••••••"
 
 // envSelector matches every KusoEnvironment owned by (project,
 // service-short-name). Real env CRs label `kuso.sislelabs.com/service`

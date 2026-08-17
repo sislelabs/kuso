@@ -66,8 +66,11 @@ func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason st
 	// values level is the only way to make cancel idempotent against
 	// future operator catch-ups.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true,"image":{"tag":""}}}`,
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:null},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true,"image":{"tag":""}}}`,
 		annPhase, annCompletedAt, now, annMessage, reason,
+		// Clear any promotion hold: a cancelled build must not render
+		// as "held" nor count as awaiting-the-wave to siblings.
+		annPromoteHold,
 	)
 	if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, buildName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {

@@ -174,6 +174,11 @@ export interface BuildSummary {
   // build queue; only present while status=queued. The badge renders
   // it as "QUEUED #N". Absent = not queued or position unknown.
   queuePosition?: number;
+  // promoteHold: the atomic same-repo promotion gate's reason — the
+  // build's Job succeeded but the image won't roll until every
+  // same-repo sibling build of this commit is green. Present only
+  // while held.
+  promoteHold?: string;
   startedAt?: string;
   finishedAt?: string;
   // Trigger context: who/what kicked off the build. Surfaces in the

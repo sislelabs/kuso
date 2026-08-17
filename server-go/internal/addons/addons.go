@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -243,11 +244,72 @@ func (s *Service) ConnSecretsForProject(ctx context.Context, project string) ([]
 	return out, nil
 }
 
+// pgIdentRe matches an unquoted Postgres identifier: a letter or
+// underscore, then letters/digits/underscore/$, capped at Postgres's
+// 63-byte NAMEDATALEN limit. Deliberately ASCII-only — Postgres accepts
+// more, but every extra character we admit is one that has to survive
+// quoting in DDL we execute as superuser, and no real addon needs them.
+var pgIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]{0,62}$`)
+
+// validDatabaseName gates KusoAddon.spec.database. Empty is allowed —
+// the field is optional and the charts derive a default from the addon
+// name when it's unset. Any non-empty value must be a plain Postgres
+// identifier, because it reaches DDL executed as the addon superuser
+// (EnsureBrowserRole) where identifiers cannot be parameter-bound.
+func validDatabaseName(s string) bool {
+	if s == "" {
+		return true
+	}
+	return pgIdentRe.MatchString(s)
+}
+
+// validateStorageSize gates KusoAddon.spec.storageSize. Empty is
+// allowed — the chart derives a default from the t-shirt `size`.
+//
+// A non-empty value must parse as a Kubernetes quantity AND contain no
+// whitespace. ParseQuantity alone is not sufficient protection: the
+// danger is not a malformed quantity but a value carrying a newline,
+// which lets a YAML block scalar break out of its field and inject a
+// whole extra manifest. Rejecting whitespace outright is what closes
+// that, and it costs nothing — no legitimate quantity contains any.
+func validateStorageSize(s string) error {
+	if s == "" {
+		return nil
+	}
+	if strings.ContainsAny(s, " \t\r\n") {
+		return fmt.Errorf("storageSize must not contain whitespace")
+	}
+	if _, err := resource.ParseQuantity(s); err != nil {
+		return fmt.Errorf("storageSize %q is not a valid quantity (e.g. 10Gi, 500Mi)", s)
+	}
+	return nil
+}
+
 // Add creates a KusoAddon CR and refreshes every env's envFromSecrets
 // list to include the new addon's connection secret.
 func (s *Service) Add(ctx context.Context, project string, req CreateAddonRequest) (*kube.KusoAddon, error) {
 	if req.Name == "" || req.Kind == "" {
 		return nil, fmt.Errorf("%w: name and kind are required", ErrInvalid)
+	}
+	// SECURITY: spec.database is interpolated into DDL that runs as the
+	// addon's Postgres SUPERUSER (see EnsureBrowserRole / the backup
+	// path). Identifiers can't be bound as parameters, so the only
+	// defenses are quoting at the sink and a strict charset here.
+	// Reject at the boundary so a bad value never reaches the CR —
+	// previously this field was copied verbatim into the spec.
+	if !validDatabaseName(req.Database) {
+		return nil, fmt.Errorf("%w: database must be a valid Postgres identifier "+
+			"(letter or underscore, then letters/digits/underscore/$, max 63 chars)", ErrInvalid)
+	}
+	// SECURITY: storageSize is rendered into 15 addon manifests. Emitted
+	// unvalidated, a YAML block scalar carrying a newline + `---` injects
+	// a COMPLETE separate Kubernetes object into the helm release — a
+	// privileged hostPID Pod was reproducible this way, and Helm's
+	// kind-ordering installs it before the StatefulSet. The chart helper
+	// now regex-guards this too, but reject it here so the user gets a
+	// clear 400 instead of a silent fallback to the t-shirt default.
+	if err := validateStorageSize(req.StorageSize); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
 	// Project CR always lives in the home namespace. We also need its
 	// UID for the ownerReferences cascade below — so kube garbage-

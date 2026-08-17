@@ -1,5 +1,5 @@
-// Cache wraps a client-go DynamicSharedInformerFactory over the six
-// kuso CRDs so List* read paths can serve from an in-process cache
+// Cache wraps a client-go DynamicSharedInformerFactory over the kuso
+// CRDs so List* read paths can serve from an in-process cache
 // instead of round-tripping the API server on every request.
 //
 // Why bother:
@@ -102,7 +102,7 @@ type informerEntry struct {
 	synced cache.InformerSynced
 }
 
-// NewCache builds a shared informer factory over kuso's six CRDs and
+// NewCache builds a shared informer factory over every kuso CRD and
 // starts all watches. The returned Cache is safe to use immediately —
 // reads against an unsynced informer fall back to the live API.
 func NewCache(c *Client) *Cache {
@@ -111,9 +111,16 @@ func NewCache(c *Client) *Cache {
 	}
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(c.Dynamic, resyncPeriod, "", nil)
 
+	// Every kuso CRD belongs here. GVRRuns was missing for a long time
+	// and it was the single largest source of apiserver load in the
+	// control plane: list[T] silently falls through to a live LIST for
+	// any uncached GVR, and the runs poller walks EVERY project
+	// namespace on a 5s tick. At 100 projects that was ~1,200 live
+	// LISTs/min for a resource type that is idle almost always.
+	// If you add a CRD, add it here too.
 	gvrs := []schema.GroupVersionResource{
 		GVRProjects, GVRServices, GVREnvironments,
-		GVRAddons, GVRBuilds, GVRCrons,
+		GVRAddons, GVRBuilds, GVRCrons, GVRRuns,
 	}
 	informers := make(map[schema.GroupVersionResource]informerEntry, len(gvrs))
 	for _, gvr := range gvrs {

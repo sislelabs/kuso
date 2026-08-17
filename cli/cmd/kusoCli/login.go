@@ -180,18 +180,41 @@ func runUsernamePasswordLogin() error {
 	return persistToken(body.AccessToken)
 }
 
-// persistToken writes the bearer to credentials.yaml and re-points
-// the in-process API client so the rest of this command run is
-// authenticated.
+// persistToken validates the bearer against the instance, then writes
+// it to credentials.yaml and re-points the in-process API client so
+// the rest of this command run is authenticated.
+//
+// Validation is NOT optional: this path used to save whatever was
+// pasted and print "Login successful." without a single request — an
+// expired browser JWT (web tokens are short-lived), a token minted on
+// a DIFFERENT instance, or a mangled paste all "logged in"
+// successfully and then every real command (and kuso doctor) said the
+// user isn't logged in.
 func persistToken(token string) error {
 	if currentInstanceName == "" {
 		return fmt.Errorf("no current instance to attach token to")
 	}
+	api.SetApiUrl(currentInstance.ApiUrl, token)
+	verified := false
+	if resp, err := api.RawGet("/api/users/profile"); err != nil {
+		// Can't reach the instance at all. Save anyway (CI boxes may
+		// mint before the server is routable) but be honest about it.
+		fmt.Fprintf(os.Stderr, "warning: could not verify token against %s (%v) — saved unverified.\n",
+			currentInstance.ApiUrl, err)
+	} else if resp.StatusCode() == 401 || resp.StatusCode() == 403 {
+		return fmt.Errorf("token rejected by %s (%d).\n\nThe token was NOT saved. Likely causes:\n  - it expired (web-session JWTs are short-lived — mint a long-lived API token at %s/settings/tokens)\n  - it was minted on a different instance\n  - the paste got truncated",
+			currentInstance.ApiUrl, resp.StatusCode(), strings.TrimRight(currentInstance.ApiUrl, "/"))
+	} else if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
+		verified = true
+	}
 	if err := saveToken(currentInstanceName, token); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	api.SetApiUrl(currentInstance.ApiUrl, token)
-	fmt.Fprintln(os.Stderr, "Login successful.")
+	if verified {
+		fmt.Fprintln(os.Stderr, "Login successful.")
+	} else {
+		fmt.Fprintln(os.Stderr, "Token saved (unverified).")
+	}
 	return nil
 }
 

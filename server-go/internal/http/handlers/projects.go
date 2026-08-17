@@ -206,6 +206,19 @@ type ProjectsHandler struct {
 	// revisions revert path for kind=addon). Optional — when nil,
 	// addon revert returns 501. Satisfied by *addons.Service.
 	AddonReverter AddonReverter
+	// FirstBuildTrigger kicks the initial build for a newly created
+	// repo-backed service. Optional — when nil, service creation
+	// behaves as before (the service waits for the next git push).
+	// Satisfied by *builds.Service.
+	//
+	// Why this lives on the SERVER: AddService creates the CR and its
+	// production env but never built anything, so a new service sat at
+	// 0/0 until someone pushed a commit. The web wizard papered over it
+	// by calling POST .../builds itself, which meant `kuso project
+	// service add` and the MCP add_service tool — the two surfaces an
+	// agent uses — still dead-ended silently. Triggering here fixes all
+	// three at once.
+	FirstBuildTrigger FirstBuildTrigger
 }
 
 // AddonReverter is the slice of addons.Service the revisions revert
@@ -213,6 +226,13 @@ type ProjectsHandler struct {
 // import the addons package wholesale.
 type AddonReverter interface {
 	RevertAddon(ctx context.Context, project, name string, patch json.RawMessage) error
+}
+
+// FirstBuildTrigger is the slice of builds.Service needed to start a
+// service's first build. Interface-typed so the projects handler
+// doesn't take a hard dependency on the builds package.
+type FirstBuildTrigger interface {
+	CreateForService(ctx context.Context, project, service, branch string) error
 }
 
 // Mount registers all /api/projects/* routes onto the given router.
@@ -717,9 +737,49 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if out != nil {
 		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
+	h.triggerFirstBuild(ctx, project, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// triggerFirstBuild kicks the initial build for a newly created
+// repo-backed service so it actually deploys instead of sitting at 0/0
+// until the next git push. See ProjectsHandler.FirstBuildTrigger.
+//
+// Skipped for runtimes with nothing to build:
+//   - "image" deploys a pre-built tag straight from a registry.
+//   - "worker" reuses its fromService sibling's image and has no repo
+//     of its own (builds.Create rejects it outright).
+//
+// Also skipped when the service has no repo at all, which is the
+// same "nothing to build from" condition expressed on the CR.
+//
+// Best-effort by design: the service is already created and the 201 has
+// to reflect that. A build that fails to start is logged, not surfaced
+// as a creation failure — the user can retry with `kuso build trigger`.
+func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string, svc *kube.KusoService) {
+	if h.FirstBuildTrigger == nil || svc == nil {
+		return
+	}
+	switch svc.Spec.Runtime {
+	case "image", "worker":
+		return
+	}
+	if svc.Spec.Repo == nil || svc.Spec.Repo.URL == "" {
+		return
+	}
+	branch := ""
+	if svc.Spec.Repo != nil {
+		branch = svc.Spec.Repo.DefaultBranch
+	}
+	short := shortServiceName(project, svc.Name)
+	if err := h.FirstBuildTrigger.CreateForService(ctx, project, short, branch); err != nil {
+		if h.Logger != nil {
+			h.Logger.Warn("first build for new service did not start (service was created; retry with `kuso build trigger`)",
+				"project", project, "service", short, "branch", branch, "err", err)
+		}
+	}
 }
 
 func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {

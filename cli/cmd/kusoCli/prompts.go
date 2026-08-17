@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
+	"golang.org/x/term"
 )
 
 // Interactive prompt helpers used by `kuso login` and `kuso remote`.
@@ -27,6 +28,22 @@ func promptLine(question, hint, def string) string {
 
 	if def != "" && force {
 		fmt.Println(prefix + def)
+		return def
+	}
+
+	// Non-interactive stdin (CI, a container, an AI agent driving the
+	// CLI): there is no human to answer, and ReadString on a closed or
+	// empty stdin either blocks forever or returns "" in a loop. Return
+	// the default immediately instead of hanging.
+	//
+	// This is the real guard — the `force` check above is effectively
+	// dead: nothing binds that global to a flag, so it is always false.
+	// Detecting the terminal is also the more honest signal: a script
+	// shouldn't have to remember a flag to avoid a deadlock.
+	if !stdinIsTerminal() {
+		if def != "" {
+			fmt.Println(prefix + def)
+		}
 		return def
 	}
 
@@ -58,4 +75,15 @@ func selectFromList(question string, options []string, def string) string {
 		return ""
 	}
 	return answer
+}
+
+// stdinIsTerminal reports whether stdin is an interactive terminal.
+//
+// Used to keep prompts from deadlocking a non-interactive caller (CI,
+// a container, an agent shelling out). Mirrors the check
+// confirmDestructive already makes; note the macOS caveat documented
+// there — a process with stdin redirected from /dev/null is correctly
+// reported as non-interactive.
+func stdinIsTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }

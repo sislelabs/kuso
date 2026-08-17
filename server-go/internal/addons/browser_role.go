@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/lib/pq"
 )
 
 // BrowserRole is the dedicated NOSUPERUSER login role the SQL browser
@@ -45,26 +47,50 @@ func (s *Service) EnsureBrowserRole(ctx context.Context, ns, releaseName, adminU
 	}
 
 	// Passwords are generated alnum/hex, but escape defensively (mirrors
-	// RepairPassword). dbName/adminUser are Postgres identifiers (validated
-	// upstream); they interpolate as quoted identifiers / role names.
+	// RepairPassword).
 	escPass := strings.ReplaceAll(pass, "'", "''")
+
+	// SECURITY: dbName and adminUser originate from the addon's -conn
+	// Secret, which is populated from user-supplied CR spec fields
+	// (KusoAddon.spec.database). They are NOT trustworthy here — an
+	// earlier version of this comment claimed they were "validated
+	// upstream", which was false: addons.Add copied req.Database
+	// verbatim into the spec. This whole DDL string is executed by
+	// `psql -c` as the addon's SUPERUSER, so an unquoted identifier
+	// reaches `COPY … TO PROGRAM` (shell execution inside the addon
+	// pod). Quote every interpolated identifier — pq.QuoteIdentifier
+	// wraps in double quotes and doubles embedded ones, which is what
+	// makes `db"; COPY …` inert.
+	//
+	// The API boundary now validates spec.database as well (see
+	// addons.validDatabaseName); this is the second layer, kept because
+	// CRs can also be applied directly with kubectl, bypassing it.
+	qDB := pq.QuoteIdentifier(dbName)
+	qAdmin := pq.QuoteIdentifier(adminUser)
+	qRole := pq.QuoteIdentifier(BrowserRole)
+	// %[1]s = quoted role ident, %[2]s = escaped password literal,
+	// %[3]s = quoted db ident, %[4]s = quoted admin ident,
+	// %[5]s = role name as a STRING LITERAL for the pg_roles lookup
+	// (that one is a value comparison, not an identifier, so it takes
+	// single quotes — BrowserRole is a compile-time constant, not user
+	// input, so it needs no escaping).
 	ddl := fmt.Sprintf(`
 DO $kuso$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='%[1]s') THEN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='%[5]s') THEN
     ALTER ROLE %[1]s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '%[2]s';
   ELSE
     CREATE ROLE %[1]s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '%[2]s';
   END IF;
 END
 $kuso$;
-GRANT CONNECT ON DATABASE "%[3]s" TO %[1]s;
+GRANT CONNECT ON DATABASE %[3]s TO %[1]s;
 GRANT USAGE ON SCHEMA public TO %[1]s;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %[1]s;
 GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA public TO %[1]s;
 ALTER DEFAULT PRIVILEGES FOR ROLE %[4]s IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %[1]s;
 ALTER DEFAULT PRIVILEGES FOR ROLE %[4]s IN SCHEMA public GRANT SELECT, USAGE ON SEQUENCES TO %[1]s;
-`, BrowserRole, escPass, dbName, adminUser)
+`, qRole, escPass, qDB, qAdmin, BrowserRole)
 
 	podName := releaseName + "-0"
 	// psql over the local trust socket as the admin OS user — no password

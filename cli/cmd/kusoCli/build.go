@@ -174,6 +174,10 @@ var buildListCmd = &cobra.Command{
 			// QueuePosition is the 1-based place in the cluster-wide
 			// build queue; only set while status=queued.
 			QueuePosition int `json:"queuePosition,omitempty"`
+			// PromoteHold: the atomic same-repo promotion gate's hold
+			// reason — Job green, image not rolled until every sibling
+			// build of this commit is green. Set only while held.
+			PromoteHold string `json:"promoteHold,omitempty"`
 		}
 		var items []buildRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
@@ -203,7 +207,7 @@ var buildListCmd = &cobra.Command{
 			// have to ssh to the cluster to find out why.
 			showReason := false
 			for _, b := range items {
-				if b.ErrorMessage != "" {
+				if b.ErrorMessage != "" || b.PromoteHold != "" {
 					showReason = true
 					break
 				}
@@ -223,6 +227,11 @@ var buildListCmd = &cobra.Command{
 				if b.Status == "queued" && b.QueuePosition > 0 {
 					status = fmt.Sprintf("queued (#%d)", b.QueuePosition)
 				}
+				if b.PromoteHold != "" && (b.Status == "running" || b.Status == "pending") {
+					// Only rewrite non-terminal rows: a stale annotation on
+					// a terminal build must not masquerade as held.
+					status = "held"
+				}
 				row := []string{
 					b.ID,
 					b.Branch,
@@ -233,6 +242,9 @@ var buildListCmd = &cobra.Command{
 				}
 				if showReason {
 					reason := b.ErrorMessage
+					if reason == "" && b.PromoteHold != "" {
+						reason = b.PromoteHold
+					}
 					// Cap to one line; the full text is in `-o json` for
 					// scripts and in the archived build log for humans.
 					if i := indexNewline(reason); i >= 0 {

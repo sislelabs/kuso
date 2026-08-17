@@ -138,6 +138,11 @@ export function BuildRow({
             {b.commitMessage && (
               <div className="truncate text-xs text-[var(--text-secondary)]">{b.commitMessage}</div>
             )}
+            {b.promoteHold && (s === "running" || s === "pending") && (
+              <div className="truncate text-xs text-amber-400" title={b.promoteHold}>
+                ⏸ promotion held — {b.promoteHold}
+              </div>
+            )}
             {(b.status === "failed" || b.status === "release-failed") && b.errorMessage && (
               <div
                 className="truncate font-mono text-[11px] text-red-300/90"

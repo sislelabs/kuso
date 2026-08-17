@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -791,6 +792,7 @@ func TestPoller_PromotesImageOnSuccess(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 
 	// Build status should be succeeded now.
 	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-abc")
@@ -896,6 +898,7 @@ func TestPoller_MarksFailed(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-fff")
 	if got.Annotations[annPhase] != "failed" {
 		t.Errorf("phase annotation: %v", got.Annotations)
@@ -923,6 +926,7 @@ func TestPoller_MarksRunning(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-rrr")
 	if got.Annotations[annPhase] != "running" {
 		t.Errorf("phase annotation: %v", got.Annotations)
@@ -946,6 +950,7 @@ func TestPoller_SkipsTerminal(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 }
 
 // TestCursor_RoundRobin verifies that the fairness cursor advances
@@ -1085,6 +1090,7 @@ func TestPoller_ReleaseFailedDoesNotPromoteFromServiceConsumers(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 
 	if rr.calls == 0 {
 		t.Fatal("expected the release runner to be invoked")
@@ -1152,6 +1158,7 @@ func TestPoller_ReleaseSucceededPromotesFromServiceConsumers(t *testing.T) {
 	if err := p.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	drainPromotions(t, p)
 
 	apiEnv, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
 	if apiEnv.Spec.Image == nil || apiEnv.Spec.Image.Tag != "def" {
@@ -1605,5 +1612,193 @@ func TestCreate_PreviewBuildUnreadableEnvSkipsSecrets(t *testing.T) {
 	}
 	if v, ok := got.Spec.BuildEnv["DATABASE_URL"]; ok {
 		t.Fatalf("unreadable preview env must not bake any DB secret; got %q", v)
+	}
+}
+
+// drainPromotions waits for markSucceededAsync's detached goroutines to
+// finish. Image promotion (and the release hook it may run) moved off
+// the poller's tick goroutine so a slow migration can't stall the whole
+// poller — see markSucceededAsync. Tests that tick and then assert on
+// promoted state must therefore wait for the worker rather than
+// assuming tick() did the work inline.
+func drainPromotions(t *testing.T, p *Poller) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if !p.WaitForPromotions(ctx) {
+		t.Fatal("timed out waiting for async promotions to drain")
+	}
+}
+
+// slowReleaseRunner blocks until released, simulating a long migration.
+// The real ReleaseRunner polls the migration Job to completion — up to
+// spec.release.timeoutSeconds + 30s, default 930s.
+type slowReleaseRunner struct {
+	started  chan struct{}
+	release  chan struct{}
+	onceOpen sync.Once
+}
+
+func (f *slowReleaseRunner) Run(ctx context.Context, _ string, _ *kube.KusoEnvironment, _ *kube.KusoImage) (releaserun.Result, error) {
+	f.onceOpen.Do(func() { close(f.started) })
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		return releaserun.Result{}, ctx.Err()
+	}
+	return releaserun.Result{Outcome: releaserun.OutcomeSucceeded, JobName: "rel-job"}, nil
+}
+
+// TestPoller_SlowReleaseHookDoesNotBlockTick is the regression test for
+// the head-of-line block: markSucceeded runs the release hook, which
+// BLOCKS for the length of the migration. It used to run inline on the
+// poller's single tick goroutine, so one project's slow migration
+// stalled every other project's build status, the queue dispatcher, and
+// the retention sweeps — and because the poller heartbeat is only
+// stamped between ticks while readyz fails the leader after 30s of
+// staleness, it also drained and recycled the leader mid-migration.
+//
+// The tick must now return promptly while the migration is still
+// running.
+func TestPoller_SlowReleaseHookDoesNotBlockTick(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-abc", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-api",
+			Ref:     "abc",
+			Image:   &kube.KusoImage{Repository: "registry/alpha/api", Tag: "abc"},
+		},
+	}
+	s := fakeService(t,
+		seedBuild(build),
+		seedService("alpha", "api"),
+		seedEnvWithRelease("alpha", "api", []string{"sh", "-c", "migrate up"}),
+	)
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-abc", Namespace: "kuso"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	rr := &slowReleaseRunner{started: make(chan struct{}), release: make(chan struct{})}
+	p := &Poller{Svc: s, Interval: time.Hour, ReleaseRunner: rr}
+
+	done := make(chan error, 1)
+	go func() { done <- p.tick(context.Background()) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tick blocked on the release hook — the head-of-line block is back")
+	}
+
+	// The hook really is running; the tick just isn't waiting on it.
+	select {
+	case <-rr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release hook never started")
+	}
+
+	// A second tick must also not block while the first promotion is
+	// still in flight (the `promoting` set makes it a no-op).
+	done2 := make(chan error, 1)
+	go func() { done2 <- p.tick(context.Background()) }()
+	select {
+	case err := <-done2:
+		if err != nil {
+			t.Fatalf("second tick: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second tick blocked while a promotion was in flight")
+	}
+
+	// Let the migration finish; the promotion must then complete.
+	close(rr.release)
+	drainPromotions(t, p)
+
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if envCR.Spec.Image == nil || envCR.Spec.Image.Tag != "abc" {
+		t.Errorf("env image not promoted after the release hook completed: %+v", envCR.Spec.Image)
+	}
+}
+
+// stubSettings returns a fixed BuildSettingsView, standing in for the
+// Postgres-backed adapter.
+type stubSettings struct{ view BuildSettingsView }
+
+func (s stubSettings) GetBuildSettings(context.Context) (BuildSettingsView, error) {
+	return s.view, nil
+}
+
+// A fresh install has no `build.maxConcurrent` row, so the DB layer
+// returns its conservative built-in default of 1. That silently beat
+// the adaptive cap main.go computes from cluster CPU, meaning every
+// install serialized builds cluster-wide no matter how big the node —
+// and the adaptive sizing was effectively dead code.
+//
+// Unset → adaptive wins. Explicitly set → the admin always wins,
+// including an explicit 1 and an explicit 0 ("no cap").
+func TestLoadSettings_AdaptiveCapWhenAdminHasNotChosen(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		view     BuildSettingsView
+		adaptive int
+		want     int
+	}{
+		{
+			name:     "unset falls back to the adaptive cap, not the built-in 1",
+			view:     BuildSettingsView{MaxConcurrent: 1, MaxConcurrentSet: false},
+			adaptive: 6,
+			want:     6,
+		},
+		{
+			name:     "explicit admin value wins over the adaptive cap",
+			view:     BuildSettingsView{MaxConcurrent: 2, MaxConcurrentSet: true},
+			adaptive: 6,
+			want:     2,
+		},
+		{
+			name:     "an explicit 1 is honoured (small box, deliberate)",
+			view:     BuildSettingsView{MaxConcurrent: 1, MaxConcurrentSet: true},
+			adaptive: 6,
+			want:     1,
+		},
+		{
+			name:     "an explicit 0 means no cap and must not be overridden",
+			view:     BuildSettingsView{MaxConcurrent: 0, MaxConcurrentSet: true},
+			adaptive: 6,
+			want:     0,
+		},
+		{
+			name:     "no adaptive value available leaves the DB default alone",
+			view:     BuildSettingsView{MaxConcurrent: 1, MaxConcurrentSet: false},
+			adaptive: 0,
+			want:     1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &Service{
+				Settings:            stubSettings{view: tc.view},
+				MaxConcurrentBuilds: tc.adaptive,
+			}
+			got := s.loadSettings(context.Background()).MaxConcurrent
+			if got != tc.want {
+				t.Errorf("MaxConcurrent = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

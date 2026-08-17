@@ -60,6 +60,29 @@ kuso doctor
 kuso login --api https://kuso.<your-domain> --token <pat>
 ```
 
+### Finding your way around the CLI
+
+`kuso --help` groups all ~50 commands by task — **Ship code**, **Inspect &
+debug**, **Data & addons**, **Configure a project**, **Users & access**,
+**Cluster & platform**, **Setup & session**. Start there rather than guessing
+command names.
+
+```bash
+kuso --help                  # grouped command index
+kuso <group> --help          # e.g. `kuso db --help`, `kuso env --help`
+kuso <group> <cmd> --help    # every leaf command carries a worked Example
+kuso api GET projects        # raw escape hatch for anything without a command
+```
+
+Shell completion knows your real project and service names (it queries the
+API), so `kuso logs <TAB>` lists projects and `kuso logs myapp <TAB>` lists that
+project's services:
+
+```bash
+kuso completion zsh  > "${fpath[1]}/_kuso"   # zsh
+kuso completion bash > /etc/bash_completion.d/kuso
+```
+
 ## Imperative path (recommended) — create everything via subcommands
 
 ```bash
@@ -430,6 +453,65 @@ on stdin — handy for migrations); for a raw local socket use
 `kuso db port-forward`. Row writes are intentionally NOT in the CLI — do those
 from a migration or the web data-grid.
 
+### Picking a DB access path — decision guide
+
+Four ways in, in order of preference. **Start at the top and stop at the first
+one that works** — each step down widens the blast radius.
+
+| # | Path | Use when | Cost / risk |
+|---|------|----------|-------------|
+| 1 | `kuso db sql/tables/columns/rows` | Reading data, inspecting schema, debugging | None — proxied through the API, audited, read-oriented, nothing exposed |
+| 2 | `kuso run <p> <s> -- <cmd>` | Writes, migrations, backfills, seeds | Runs with the service's real prod env; one-shot pod, no open port |
+| 3 | `kuso db port-forward` / `db connect` | Interactive session, a tool that needs a real socket (psql, DBeaver, `\copy`) | Local socket only, dies with the process — no public exposure |
+| 4 | `kuso project addon public-tcp enable` | An **external, long-lived** consumer genuinely outside the cluster (managed BI, a SaaS ETL, a teammate's GUI) | **Internet-exposed.** Addon protocol auth is the ONLY gate |
+
+**Agents: default to #1 for reads and #2 for writes.** Both are one command,
+leave an audit trail, and require no cleanup. Reach for #3 only when a tool
+needs a socket. **Do not reach for #4 to answer a question** — a query you can
+run with `kuso db sql` never justifies opening a database to the internet.
+
+**Before enabling public-TCP, confirm with the user.** It is admin-only,
+internet-facing, and unauthenticated beyond the DB's own password. If you do
+enable it:
+
+```bash
+kuso project addon public-tcp enable <project> <addon>   # note the port it prints
+kuso get addons <project> -o json                        # → spec.publicTCP.{enabled,port}
+# ... do the external work ...
+kuso project addon public-tcp disable <project> <addon>  # ALWAYS close it after
+```
+
+Treat it like a firewall hole: open it deliberately, say why, close it when
+done. Leaving it open is the failure mode — nothing expires it for you.
+
+### Writing to a database — do it as a migration, not by hand
+
+Ad-hoc `UPDATE`/`DELETE` against production is the most common way to lose data
+on any PaaS. kuso deliberately gives the CLI no row-write verbs so the easy path
+is the safe one.
+
+```bash
+# Preferred: the change lives in the repo, runs once, is reviewable + repeatable
+kuso run <project> <service> -- npx prisma migrate deploy
+kuso run <project> <service> -- python manage.py migrate
+
+# Schema changes on deploy: use a release hook so a failed migration
+# BLOCKS the image promotion instead of half-deploying (see "Release hooks")
+```
+
+Rules that save you:
+
+- **Snapshot first for anything destructive.** `spec.snapshotBeforeDeploy` on the
+  env takes a pre-deploy Postgres snapshot automatically; for a manual one use
+  the backup surface before you start.
+- **`kuso run` carries REAL production secrets** — the same `envFromSecrets` the
+  service runs with. A "quick test" here writes to live data. Point it at a
+  staging env when you're unsure.
+- **Read before you write.** `kuso db sql "SELECT count(*) …"` to confirm the row
+  count you expect, then make the change, then re-check.
+- **Never paste credentials into a command.** They're already in the pod's env —
+  `kuso run` inherits them; `kuso db …` resolves them server-side.
+
 ### `${{ ... }}` reference syntax
 
 The `${{ ... }}` must be the ENTIRE value (no `prefix-${{ ... }}-suffix`).
@@ -719,6 +801,49 @@ the command at the single process kuso should serve. `worker` runtime has
 `PATCH /api/projects/<p>/services/<s>` with `{"command":["node","server.js"]}`.
 
 Only edit production env-vars when you mean to. The web UI shows a **Diff Confirm** modal before applying; the CLI applies immediately. Every spec edit is snapshotted — `kuso revision list/revert` undoes a bad one.
+
+## Best practices — the short list
+
+Habits that prevent the failure modes this platform actually sees. If you read
+nothing else in this skill, read this.
+
+**Shipping**
+- **A merge to the tracked branch IS the deploy.** Don't run `build trigger`
+  as part of a normal ship — it's for out-of-band rebuilds only.
+- **Put schema changes in a release hook** (`spec.release.command`), not in a
+  manual step. A failed hook BLOCKS promotion, so the last green image keeps
+  serving instead of half-deploying against an un-migrated DB.
+- **Verify after deploying**: `kuso status <p>` for the rollup, then
+  `kuso logs <p> <s>` if a service didn't go green. `kuso build why <p> <s>`
+  explains a failed build in plain language with a copy-pasteable fix.
+
+**Data**
+- **Read with `kuso db sql`, write with `kuso run`.** Never hand-edit
+  production rows. See "Picking a DB access path" for the full ladder.
+- **Snapshot before anything destructive.** `spec.snapshotBeforeDeploy` gives
+  you a one-click restore point on every deploy that runs a migration.
+- **Don't leave public-TCP enabled.** It's an internet-facing port guarded only
+  by the DB's own password. Open it deliberately, close it when done.
+- **Configure off-cluster backups.** A PVC survives pod restarts and helm
+  upgrades — it does NOT survive node failure or addon deletion.
+
+**Secrets**
+- **Never paste credentials into a command.** They're already in the pod env;
+  `kuso run` inherits them and `kuso db` resolves them server-side.
+- **Subscribe services to only the addons they need**
+  (`kuso project addon subscribe/unsubscribe`). By default every addon mounts
+  into every service, which puts `DATABASE_URL` in your public frontend.
+- **Use `env set` for most values** so they show in the Variables tab and the
+  audit trail; reserve `secret set` for values that must stay out of the
+  rendered spec.
+
+**Changing things safely**
+- **Check blast radius before editing a running service.** The "Editing safely"
+  table above says which fields hot-swap and which roll pods.
+- **Every spec edit is snapshotted** — `kuso revision list <p> service <name>`
+  then `kuso revision revert <p> <id>` undoes a bad change.
+- **Prefer a named env (`staging`) over testing in production.** It tracks its
+  own branch and gets its own addons.
 
 ## When NOT to use kuso
 

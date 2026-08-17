@@ -27,6 +27,20 @@ type BuildSettings struct {
 	//   2  — 8 GB box. Two parallel builds, ~5 GB headroom.
 	//   4  — 16 GB+ box.
 	MaxConcurrent int `json:"maxConcurrent"`
+	// MaxConcurrentSet reports whether an admin EXPLICITLY chose the
+	// value above, as opposed to it coming from DefaultBuildSettings().
+	// Not persisted — derived per read from the presence of the
+	// `build.maxConcurrent` row.
+	//
+	// Why it exists: the conservative default of 1 is right for a 4 GB
+	// box and wrong for everything else, and on a fresh install there
+	// is no Setting row at all — so the default silently won over the
+	// server's adaptive max(2, allocatableCPU/4) sizing, and every
+	// install shipped serialized builds regardless of cluster size.
+	// Callers use this to apply the adaptive default when unset while
+	// still honouring an explicit admin choice (including an explicit
+	// 1, and an explicit 0 meaning "no cap").
+	MaxConcurrentSet bool `json:"-"`
 	// MemoryLimit / MemoryRequest / CPULimit / CPURequest are the
 	// kube quantity strings the kusobuild chart consumes for each
 	// kaniko Job pod. The strings are validated at admin-write
@@ -81,6 +95,7 @@ func (d *DB) GetBuildSettings(ctx context.Context) (BuildSettings, error) {
 			var n int
 			if err := json.Unmarshal([]byte(v), &n); err == nil {
 				out.MaxConcurrent = n
+				out.MaxConcurrentSet = true
 			}
 		case "build.memoryLimit":
 			out.MemoryLimit = unquote(v)

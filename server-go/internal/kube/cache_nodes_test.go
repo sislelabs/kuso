@@ -59,11 +59,15 @@ func TestCache_ListNodes_ReturnsInformerSnapshot(t *testing.T) {
 	// run on the dynamic factory. Use the existing fakeClient
 	// helper's shape: an empty fake dynamic client is enough since
 	// this test only exercises the typed Node informer.
+	// Must cover EVERY GVR NewCache starts an informer for — the fake
+	// dynamic client panics on a LIST for an unregistered resource, so
+	// a missing entry here surfaces as a reflector panic rather than a
+	// clean failure. Keep in sync with the gvrs slice in cache.go.
 	listKinds := map[schema.GroupVersionResource]string{
 		GVRKuso: "KusoList", GVRProjects: "KusoProjectList",
 		GVRServices: "KusoServiceList", GVREnvironments: "KusoEnvironmentList",
 		GVRAddons: "KusoAddonList", GVRBuilds: "KusoBuildList",
-		GVRCrons: "KusoCronList",
+		GVRCrons: "KusoCronList", GVRRuns: "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
 	c := &Client{Clientset: clientset, Dynamic: dyn}

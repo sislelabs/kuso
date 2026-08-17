@@ -2,10 +2,13 @@
 // into per-day per-node usage + per-node totals, then attaches the
 // cost rates the operator set in the Kuso CR's spec.cost.* keys.
 //
-// All authed users can hit /api/usage — there's nothing project-
-// scoped to leak, just node-level usage + the operator-set rates.
-// The page itself (web /settings/usage) is admin-only at the UI
-// level; the underlying API is read-only and informative.
+// Both endpoints require billing:read (instance-admin). An earlier
+// version of this comment argued that any authed user could hit
+// /api/usage because there was "nothing project-scoped to leak, just
+// node-level usage" — that was wrong: /api/usage/projects returns a
+// per-project breakdown BY NAME, so an unprivileged viewer could
+// enumerate every project on the instance and its spend. The UI page
+// (/settings/usage) was already admin-only; the API now agrees.
 
 package handlers
 
@@ -15,6 +18,7 @@ import (
 
 	"log/slog"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
 )
@@ -77,7 +81,16 @@ type UsageProjection struct {
 }
 
 // Get handles GET /api/usage?days=N (default 30, max 365).
+//
+// SECURITY: gated on billing:read (an instance-admin permission). The
+// rollup spans EVERY project, so without a gate any authenticated
+// principal — including a viewer scoped to one project — could
+// enumerate every project name and its spend. The settings UI that
+// consumes this was already admin-only; the API just never enforced it.
 func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requirePerm(w, r, auth.PermBillingRead) {
+		return
+	}
 	days := 30
 	if v := r.URL.Query().Get("days"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 365 {
@@ -136,7 +149,13 @@ type ProjectUsageResponse struct {
 
 // GetProjects handles GET /api/usage/projects?days=N (default 30).
 // Drives the per-project rollup on the rewritten /settings/usage page.
+//
+// Same billing:read gate as Get — this one is strictly more sensitive,
+// since it returns the per-project breakdown by name.
 func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
+	if !requirePerm(w, r, auth.PermBillingRead) {
+		return
+	}
 	days := 30
 	if v := r.URL.Query().Get("days"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 365 {

@@ -17,6 +17,7 @@ import {
 } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useServices } from "@/features/projects";
+import { triggerBuild } from "@/features/services";
 import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -202,7 +203,42 @@ export function AddServiceView() {
         method: "POST",
         body,
       });
-      toast.success(`Service ${name} added`);
+
+      // Kick the first build. AddService creates the CR + production env
+      // but does NOT build — without this the service sits at 0/0 until
+      // the next git push, while onboarding promises kuso will "start a
+      // build immediately". That was the single worst first-run bug:
+      // a new user finishes the wizard and watches a service that never
+      // deploys.
+      //
+      // Only for services that actually build from a repo:
+      //   - runtime=image deploys a pre-built tag; there is nothing to build.
+      //   - runtime=worker reuses its fromService sibling's image and has
+      //     no repo of its own (builds.Create rejects it outright).
+      //
+      // Best-effort: the service IS created at this point, so a failed
+      // trigger must not read as a failed creation. We surface it as a
+      // warning with the manual next step instead of throwing.
+      let buildStarted = false;
+      if (source === "repo" && runtime !== "worker") {
+        try {
+          await triggerBuild(project, slug, { branch: picked!.repo.defaultBranch });
+          buildStarted = true;
+        } catch (be) {
+          toast.warning(
+            be instanceof ApiError
+              ? `Service created, but the first build didn't start: ${be.message}`
+              : "Service created, but the first build didn't start — trigger one from the service page.",
+          );
+        }
+      }
+      if (buildStarted) {
+        toast.success(`Service ${name} added — building from ${picked!.repo.defaultBranch}`);
+      } else if (source === "repo" && runtime !== "worker") {
+        // A warning toast already explained why; don't double-report.
+      } else {
+        toast.success(`Service ${name} added`);
+      }
       router.replace(`/projects/${encodeURIComponent(project)}`);
     } catch (e) {
       if (e instanceof ApiError) {

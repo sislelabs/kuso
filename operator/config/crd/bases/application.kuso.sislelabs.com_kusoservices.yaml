@@ -238,8 +238,26 @@ spec:
                       properties:
                         add:
                           type: array
+                          description: >-
+                            Linux capabilities to ADD. Constrained to the same
+                            allowlist kube.ValidateSecurityContext enforces at
+                            the API boundary. Duplicated here on purpose: the
+                            API validator only guards requests that go THROUGH
+                            kuso-server, so a direct `kubectl apply` of a
+                            KusoService would otherwise smuggle in escape-
+                            equivalent caps (SYS_ADMIN, SYS_PTRACE, SYS_MODULE,
+                            NET_ADMIN, NET_RAW). Keep the two lists in sync.
                           items:
                             type: string
+                            enum:
+                              - NET_BIND_SERVICE
+                              - CHOWN
+                              - DAC_OVERRIDE
+                              - FOWNER
+                              - SETUID
+                              - SETGID
+                              - SETPCAP
+                              - KILL
                     allowPrivilegeEscalation:
                       type: boolean
                 sleep:

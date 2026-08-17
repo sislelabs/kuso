@@ -109,6 +109,10 @@ const (
 	annStartedAt    = "kuso.sislelabs.com/build-started-at"
 	annMessage      = "kuso.sislelabs.com/build-message"
 	annSupersededBy = "kuso.sislelabs.com/superseded-by"
+	// annPromoteHold carries the atomic same-repo promotion gate's
+	// hold reason (see promotion_group.go). Presence also signals "my
+	// Job succeeded, awaiting the wave" to sibling builds' verdicts.
+	annPromoteHold = "kuso.sislelabs.com/promote-hold"
 	// annClassification carries the JSON-encoded failures.Classification
 	// (kind + tab + summary + actionable Remediation) for a failed build,
 	// so the Deployments tab can surface the fix when the user opens the
@@ -265,6 +269,12 @@ type SettingsProvider interface {
 // admitBuild + the chart-render path that overrides spec.resources.
 type BuildSettingsView struct {
 	MaxConcurrent int
+	// MaxConcurrentSet reports whether an admin explicitly chose
+	// MaxConcurrent. When false, the value is the conservative
+	// built-in default and callers should prefer the server's
+	// adaptive cap (Service.MaxConcurrentBuilds) instead — see
+	// loadSettings.
+	MaxConcurrentSet bool
 	MemoryLimit   string
 	MemoryRequest string
 	CPULimit      string
@@ -312,6 +322,19 @@ func (s *Service) loadSettings(ctx context.Context) BuildSettingsView {
 		// we couldn't reach Postgres. The cache stays empty so the
 		// next call retries.
 		return BuildSettingsView{MaxConcurrent: s.MaxConcurrentBuilds}
+	}
+	// No admin has chosen a concurrency cap → prefer the server's
+	// adaptive sizing (max(2, allocatableCPU/4), set in main.go) over
+	// the DB layer's conservative built-in default of 1.
+	//
+	// Without this, a fresh install has no `build.maxConcurrent` row,
+	// GetBuildSettings returns DefaultBuildSettings(), and MaxConcurrent=1
+	// silently won — so EVERY install serialized its builds cluster-wide
+	// no matter how large the node, and the adaptive cap that main.go
+	// computes was effectively dead code. An explicit admin choice still
+	// wins, including an explicit 1 and an explicit 0 ("no cap").
+	if !v.MaxConcurrentSet && s.MaxConcurrentBuilds > 0 {
+		v.MaxConcurrent = s.MaxConcurrentBuilds
 	}
 	s.settingsCache = &cachedBuildSettings{view: v, expires: time.Now().Add(ttl)}
 	return v
@@ -473,8 +496,14 @@ func (s *Service) RunServiceLockGC(ctx context.Context) {
 // main.go ALWAYS sets them before the service is used: MaxConcurrentBuilds
 // from KUSO_BUILD_MAX_CONCURRENT or the adaptive default (max(2,
 // allocatableCPU/4)), and AdmitTimeout from KUSO_BUILD_ADMIT_TIMEOUT_SECONDS
-// (default 60s). The live cap is admin-tunable via the Settings table.
-// Do not treat the zero-value here as the production default — it is not.
+// (default 60s). Do not treat the zero-value here as the production
+// default — it is not.
+//
+// Precedence for the live cap (see loadSettings): an explicit
+// `build.maxConcurrent` Setting row wins; with no row, MaxConcurrentBuilds
+// (this adaptive value) wins. It previously lost to the DB layer's
+// conservative built-in default of 1, which serialized builds on every
+// fresh install regardless of node size.
 func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
@@ -654,6 +683,18 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if repoURL == "" {
 		return nil, fmt.Errorf("%w: service has no repo URL configured", ErrInvalid)
 	}
+	// SECURITY: repoURL and branch are interpolated into the clone
+	// init-container's /bin/sh script (buildcontroller/render.go). That
+	// code single-quotes them via shellQuote, and shellQuote's own doc
+	// comment claims "the kuso-server boundary validates repo URLs,
+	// branches, and refs before stamping the CR" — which was NOT true:
+	// nothing validated either field, leaving shellQuote as the only
+	// barrier where the comment promised two. These checks make that
+	// stated contract real, so a future edit to the quoting (or a new
+	// interpolation site) isn't a single point of failure.
+	if err := ValidateRepoURL(repoURL); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
 
 	branch := req.Branch
 	if branch == "" {
@@ -662,6 +703,9 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		} else {
 			branch = "main"
 		}
+	}
+	if err := ValidateGitRef(branch); err != nil {
+		return nil, fmt.Errorf("%w: branch: %s", ErrInvalid, err.Error())
 	}
 
 	sha := req.Ref
@@ -1260,6 +1304,22 @@ type Poller struct {
 	// into "fair every tick".
 	cursorMu       sync.Mutex
 	fairnessCursor map[string]string // ns → last-promoted project
+
+	// promoting tracks builds whose markSucceeded is running on a
+	// detached goroutine, so successive poller ticks don't start a
+	// second promotion for the same build. Keyed "<ns>/<build>".
+	//
+	// Why detached at all: markSucceeded runs the release hook
+	// (ReleaseRunner.Run), which BLOCKS polling the migration Job to
+	// completion — up to spec.release.timeoutSeconds + 30s, default
+	// 930s. On the tick goroutine that stalled every other build's
+	// status updates, the queue dispatcher, and the retention sweeps
+	// cluster-wide; worse, the poller heartbeat is only stamped
+	// between ticks, and readyz fails the leader after just 30s of
+	// staleness (internal/http/probes.go) — so a slow migration made
+	// the leader unready and got the pod recycled mid-migration.
+	promotingMu sync.Mutex
+	promoting   map[string]struct{}
 
 	// archiveQueue dispatches archiveLogs work to a bounded worker
 	// pool so a tick that finds 15 builds finishing simultaneously
@@ -1883,6 +1943,17 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, b.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// A promotion-held build (atomic same-repo gate) whose Job
+			// was TTL-reaped is NOT stuck: the hold annotation is only
+			// ever stamped from markSucceeded after the Job completed
+			// successfully, so route straight back to markSucceeded to
+			// re-check the gate. Without this, any hold outliving the
+			// Job's 1h TTL fell into the stuck-timeout below and was
+			// force-FAILED — converting a green, waiting build into a
+			// false build.failed page and poisoning its whole wave.
+			if b.Annotations[annPromoteHold] != "" {
+				return p.markSucceededAsync(ctx, ns, b)
+			}
 			// No Job for this build. Either it hasn't rendered yet (young
 			// CR — keep waiting for the operator) or it never will / was
 			// TTL-reaped after completing during a poller outage (old CR —
@@ -1904,7 +1975,7 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	}
 	if cond := completedCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {
-			return p.markSucceeded(ctx, ns, b)
+			return p.markSucceededAsync(ctx, ns, b)
 		}
 		return p.markFailed(ctx, ns, b, cond.Message)
 	}
@@ -2308,6 +2379,28 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	//
 	// DryRun builds never push an image, so there's nothing to promote
 	// and they're terminal immediately (handled after the stamp).
+	//
+	// Atomic same-repo promotion gate (promotion_group.go): a webhook
+	// build whose same-repo siblings aren't all green yet stays
+	// non-terminal with a hold annotation; the next tick re-checks.
+	// A held build superseded by a newer build of its own service is
+	// stamped terminal-not-promoted so its queue advances.
+	if !b.Spec.DryRun && shaRE.MatchString(b.Spec.Ref) {
+		all, lerr := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+			kube.LabelProject: b.Spec.Project,
+		})
+		if lerr != nil {
+			return fmt.Errorf("list project builds for promotion gate: %w", lerr)
+		}
+		if hold := promotionHoldVerdict(b, all); hold != "" {
+			if newer := newerBuildOf(b, all); newer != "" {
+				return p.stampHeldSuperseded(ctx, ns, b, newer)
+			}
+			p.notePromotionHold(ctx, ns, b, hold)
+			return nil // stays active; re-checked next tick
+		}
+		p.clearPromotionHold(ctx, ns, b)
+	}
 	if !b.Spec.DryRun {
 		if err := p.promoteImage(ctx, ns, b); err != nil {
 			p.logger().Error("build promote failed; leaving build non-terminal for retry",
@@ -2419,6 +2512,15 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 			cur.Labels["kuso.sislelabs.com/build-state"] == "done" || cur.Spec.Done {
 			p.logger().Info("build already terminal; skipping mark-failed",
 				"build", b.Name, "phase", ph)
+			return nil
+		}
+		// A promotion-held build's Job SUCCEEDED — no failure path may
+		// stamp it failed (belt to checkBuild's no-Job routing; also
+		// guards any future caller). The gate resolves it: promote,
+		// supersede, or operator cancel.
+		if cur.Annotations[annPromoteHold] != "" {
+			p.logger().Info("build is promotion-held (job succeeded); refusing mark-failed",
+				"build", b.Name, "reason", msg)
 			return nil
 		}
 	}
@@ -3313,4 +3415,120 @@ func repoTokenSecretOf(svc *kube.KusoService) string {
 		return ""
 	}
 	return svc.Spec.Repo.TokenSecret
+}
+
+// promoteAsyncTimeout bounds a detached markSucceeded. Sized above the
+// release hook's own ceiling (spec.release.timeoutSeconds + 30s, default
+// 930s) so this never fires before the hook's internal deadline — it's a
+// backstop against a wedged goroutine, not the primary timeout.
+const promoteAsyncTimeout = 30 * time.Minute
+
+// markSucceededAsync runs markSucceeded off the poller's tick goroutine.
+//
+// markSucceeded can block for many minutes when the env defines a
+// release hook (Heroku-style migration): ReleaseRunner.Run polls the
+// migration Job to completion. Running that inline stalled the whole
+// poller — every namespace's build status, the queue dispatcher, and
+// the retention sweeps — and, because the poller heartbeat is only
+// stamped between ticks while readyz tolerates 30s of staleness, it
+// also drained and recycled the leader pod mid-migration.
+//
+// Semantics are otherwise unchanged, which is what makes this safe:
+//
+//   - markSucceeded already only stamps the terminal markers AFTER a
+//     successful promote (SEC-6). A failure leaves the build
+//     non-terminal, so the next tick simply retries — exactly as
+//     before, just without blocking the tick.
+//   - The `promoting` set makes concurrent ticks idempotent: while a
+//     promotion is in flight the build is skipped rather than started
+//     twice. Combined with promoteEnvImageCAS's optimistic concurrency,
+//     a duplicate promote couldn't corrupt state anyway; this just
+//     avoids the wasted work and duplicate release Jobs.
+//   - The detached context is derived from the poller's context, so
+//     losing leadership still cancels in-flight promotions.
+//
+// Returns nil always: errors are logged on the worker, and retry is the
+// next tick's job.
+func (p *Poller) markSucceededAsync(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	key := ns + "/" + b.Name
+	p.promotingMu.Lock()
+	if p.promoting == nil {
+		p.promoting = make(map[string]struct{})
+	}
+	if _, busy := p.promoting[key]; busy {
+		p.promotingMu.Unlock()
+		return nil // already promoting; next tick re-checks
+	}
+	p.promoting[key] = struct{}{}
+	p.promotingMu.Unlock()
+
+	// Copy the CR value: the caller's `b` points into a slice element
+	// that the next tick's List overwrites. markSucceeded re-reads the
+	// live CR before it stamps anything, so a shallow copy of the
+	// identifying fields is all this goroutine actually needs.
+	buildCopy := *b
+	build := &buildCopy
+	go func() {
+		defer func() {
+			p.promotingMu.Lock()
+			delete(p.promoting, key)
+			p.promotingMu.Unlock()
+		}()
+		// Detached from the tick, but still a child of the poller's
+		// context so leadership loss unwinds it.
+		wctx, cancel := context.WithTimeout(ctx, promoteAsyncTimeout)
+		defer cancel()
+		if err := p.markSucceeded(wctx, ns, build); err != nil && !apierrors.IsNotFound(err) {
+			// Non-terminal build + logged error: the next tick retries.
+			p.logger().Warn("build promote (async) failed; will retry next tick",
+				"build", build.Name, "ns", ns, "err", err)
+		}
+	}()
+	return nil
+}
+
+// WaitForPromotions blocks until every in-flight async promotion has
+// finished, or the context expires. Returns true when the set drained.
+//
+// Exists for tests and for graceful shutdown: promotion moved off the
+// tick goroutine (see markSucceededAsync), so a caller that ticks and
+// then immediately asserts on the promoted state would otherwise race
+// the worker. Production code doesn't need this — the next tick
+// reconciles whatever is still outstanding.
+func (p *Poller) WaitForPromotions(ctx context.Context) bool {
+	for {
+		p.promotingMu.Lock()
+		n := len(p.promoting)
+		p.promotingMu.Unlock()
+		if n == 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+// CreateForService starts the first build of a newly created service.
+//
+// Thin wrapper over Create so the projects HTTP handler can trigger a
+// build without importing this package's request type (see
+// handlers.FirstBuildTrigger). branch may be empty — Create resolves
+// the service/project default in that case.
+//
+// TriggeredBy is "system": this build is a side effect of service
+// creation, not a user pressing Deploy, and the distinction matters for
+// the notification feed and the build cards.
+//
+// Errors are the caller's to swallow: the service HAS been created by
+// the time this runs, so a failed first build must not turn a
+// successful creation into an error response.
+func (s *Service) CreateForService(ctx context.Context, project, service, branch string) error {
+	_, err := s.Create(ctx, project, service, CreateBuildRequest{
+		Branch:      branch,
+		TriggeredBy: "system",
+	})
+	return err
 }

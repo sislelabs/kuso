@@ -7,6 +7,7 @@ package kusoCli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -72,10 +73,16 @@ by a helm-operator.
 
 Run ` + "`kuso login`" + ` once to point at a kuso server, then explore the
 command tree.`,
-	Example: `  kuso login --api https://kuso.example.com
+	Example: `  kuso login --api https://kuso.example.com          # once, per instance
+  kuso doctor                                       # verify session + DNS + webhooks
   kuso project create my-app --repo https://github.com/me/my-app
-  kuso get projects -o json
-  kuso logs my-app web --follow`,
+  kuso status my-app                                # services, URLs, replicas, builds
+  kuso logs my-app web --follow                     # tail production logs
+  kuso db sql my-app my-app-db "SELECT count(*) FROM users"
+
+Deploying is a git push: kuso builds and rolls the new pod for you.
+Use 'kuso build trigger' only for an out-of-band rebuild.
+`,
 }
 
 // Execute is the entry point called by cmd/main.go. Wires up shared
@@ -84,6 +91,8 @@ command tree.`,
 func Execute() {
 	rootCmd.CompletionOptions.HiddenDefaultCmd = false
 	rootCmd.AddCommand(version.CliCommand())
+	registerCommandGroups(rootCmd)
+	registerCompletions(rootCmd)
 	setUsageTemplate(rootCmd)
 
 	loadInstances()
@@ -93,11 +102,27 @@ func Execute() {
 	// on it even when the user isn't logged in yet (login itself still
 	// works, since it uses Login() with the URL but no token).
 	api = &kusoApi.KusoClient{}
-	tok := ""
-	if currentInstanceName != "" {
+	// KUSO_TOKEN beats saved credentials — same precedence `kuso doctor`
+	// (doctor.go) and the MCP server (mcp/internal/config) already use.
+	//
+	// This path used to read the credentials file ONLY, so a container
+	// or CI job that exported KUSO_TOKEN got the worst possible
+	// outcome: `kuso doctor` reported "[PASS] token" (it does check the
+	// env var) while every real command failed "not logged in; run
+	// 'kuso login' first". The diagnostic tool actively disagreed with
+	// the thing it was diagnosing.
+	tok := strings.TrimSpace(os.Getenv("KUSO_TOKEN"))
+	if tok == "" && currentInstanceName != "" {
 		tok = credentialsConfig.GetString(currentInstanceName)
 	}
-	api.Init(currentInstance.ApiUrl, tok)
+	// KUSO_API_URL likewise lets a headless caller point at an instance
+	// without a prior `kuso remote add`; the saved instance still wins
+	// when the env var is unset.
+	apiURL := currentInstance.ApiUrl
+	if v := strings.TrimSpace(os.Getenv("KUSO_API_URL")); v != "" {
+		apiURL = v
+	}
+	api.Init(apiURL, tok)
 
 	for _, cmd := range rootCmd.Commands() {
 		setUsageTemplate(cmd)

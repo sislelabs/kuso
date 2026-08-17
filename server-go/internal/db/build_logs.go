@@ -44,10 +44,25 @@ func (d *DB) SaveBuildLog(ctx context.Context, buildName, project, service, phas
 // GetBuildLog returns the archived tail for a build. Returns "" if
 // no row exists (the pod might still be alive — caller should fall
 // back to streaming).
-func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) {
+//
+// SECURITY: the query is scoped by project as well as buildName. The
+// build name is a predictable `<project>-<service>-<ref>` string
+// (builds.BuildName), so keying on it alone let any caller with a
+// role on ANY project read another project's archived build logs by
+// naming their build — env vars and build args included. The caller's
+// project is authorized upstream (the WS handler checks the caller
+// holds a role on it); adding it here makes the row lookup agree with
+// that authorization instead of trusting an attacker-supplied name.
+// project is REQUIRED — an empty value matches nothing rather than
+// falling back to a name-only lookup.
+func (d *DB) GetBuildLog(ctx context.Context, project, buildName string) (string, error) {
+	if project == "" || buildName == "" {
+		return "", nil
+	}
 	var logs string
 	err := d.QueryRowContext(ctx,
-		`SELECT "logs" FROM "BuildLog" WHERE "buildName"=$1`, buildName,
+		`SELECT "logs" FROM "BuildLog" WHERE "buildName"=$1 AND "project"=$2`,
+		buildName, project,
 	).Scan(&logs)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -56,6 +71,32 @@ func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) 
 		return "", fmt.Errorf("GetBuildLog: %w", err)
 	}
 	return logs, nil
+}
+
+// BuildLogProject returns the project that owns an archived build's
+// row, or "" when no row exists. It's the tenancy oracle for builds
+// whose KusoBuild CR has already been reaped by the retention sweep:
+// the CR is the authoritative owner while it lives, and this row —
+// written by the build poller from the CR's own spec — outlives it.
+//
+// Callers MUST compare the result to the project the caller was
+// authorized against; "" means "unknown owner" and must be treated as
+// access denied, not as a pass.
+func (d *DB) BuildLogProject(ctx context.Context, buildName string) (string, error) {
+	if buildName == "" {
+		return "", nil
+	}
+	var project string
+	err := d.QueryRowContext(ctx,
+		`SELECT "project" FROM "BuildLog" WHERE "buildName"=$1`, buildName,
+	).Scan(&project)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("BuildLogProject: %w", err)
+	}
+	return project, nil
 }
 
 // DeleteBuildLogsForService removes archived logs for a service —

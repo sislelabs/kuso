@@ -125,6 +125,25 @@ func redactSnapshotValue(v any) any {
 	case map[string]any:
 		_, hasName := t["name"].(string)
 		for k, val := range t {
+			// buildArgs / buildEnv are KEY→VALUE maps whose values are
+			// conventionally build-time credentials (NPM_TOKEN, private
+			// registry auth, SENTRY_AUTH_TOKEN). The per-key rules below
+			// can't catch them: the keys are user-chosen, so nothing is
+			// literally named "token". Mask every value, keep every key
+			// so History still shows WHICH args changed.
+			//
+			// The write path now masks buildArgs before persisting, but
+			// this read-side pass still matters for rows written before
+			// that fix — they hold plaintext on disk today.
+			if k == "buildArgs" || k == "buildEnv" {
+				if m, ok := val.(map[string]any); ok {
+					for mk := range m {
+						m[mk] = envMaskSentinel
+					}
+					t[k] = m
+					continue
+				}
+			}
 			if s, ok := val.(string); ok && s != "" {
 				switch {
 				case k == "password" || k == "token":

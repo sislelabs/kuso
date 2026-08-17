@@ -70,3 +70,53 @@ func TestRedactRevisionSnapshot_UnparseableFailsClosed(t *testing.T) {
 		t.Errorf("unparseable snapshot must collapse to {}, got %s", rev.Snapshot)
 	}
 }
+
+// buildArgs / buildEnv are KEY→VALUE maps with user-chosen keys, so the
+// per-key "password"/"token" rules can't reach them — yet they're the
+// conventional home for build-time credentials. A project VIEWER (who
+// must not see secret values) can read revisions, so every value has to
+// be masked while the keys survive for the History diff.
+func TestRedactRevisionSnapshot_BuildArgsMasked(t *testing.T) {
+	t.Parallel()
+	snap := []byte(`{"patch":{
+		"buildArgs":{"NPM_TOKEN":"npm_FAKESECRET","SENTRY_AUTH_TOKEN":"sntrys_FAKE","PUBLIC_FLAG":"true"},
+		"buildEnv":{"PRIVATE_KEY":"-----BEGIN KEY-----abc"},
+		"port":8080}}`)
+	rev := &db.Revision{Project: "alpha", Snapshot: snap}
+	redactRevisionSnapshotIfNeeded(maskViewerCtx(), nil, "alpha", rev)
+
+	out := string(rev.Snapshot)
+	for _, leaked := range []string{"npm_FAKESECRET", "sntrys_FAKE", "-----BEGIN KEY-----abc"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("build secret %q survived redaction: %s", leaked, out)
+		}
+	}
+	// Even a non-secret-looking value is masked: we can't tell which
+	// build args are sensitive, so all values go.
+	if strings.Contains(out, `"true"`) {
+		t.Errorf("buildArgs values must be masked wholesale: %s", out)
+	}
+
+	var decoded struct {
+		Patch struct {
+			BuildArgs map[string]string `json:"buildArgs"`
+			BuildEnv  map[string]string `json:"buildEnv"`
+			Port      int               `json:"port"`
+		} `json:"patch"`
+	}
+	if err := json.Unmarshal(rev.Snapshot, &decoded); err != nil {
+		t.Fatalf("redacted snapshot no longer parses: %v", err)
+	}
+	// Keys must survive so History can still show WHICH args changed.
+	for _, k := range []string{"NPM_TOKEN", "SENTRY_AUTH_TOKEN", "PUBLIC_FLAG"} {
+		if _, ok := decoded.Patch.BuildArgs[k]; !ok {
+			t.Errorf("buildArgs key %q was dropped; keys must survive redaction", k)
+		}
+	}
+	if _, ok := decoded.Patch.BuildEnv["PRIVATE_KEY"]; !ok {
+		t.Error("buildEnv key was dropped; keys must survive redaction")
+	}
+	if decoded.Patch.Port != 8080 {
+		t.Errorf("non-secret fields mangled: %+v", decoded.Patch)
+	}
+}
