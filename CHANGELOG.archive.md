@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.120] — 2026-07-04
+
+### ✨ Features
+- Feat(github): build persistent envs on push to their tracked branch ([417ff69](https://github.com/sislelabs/kuso/commit/417ff69b1cb67d52fa46fb0650d777a73c2253f0))
+
+### 🧹 Chores
+- Chore: archive changelog for v0.18.119 ([8a65aa2](https://github.com/sislelabs/kuso/commit/8a65aa27fd4067d33e3a970c1cc4892912cd787a))
+
 ## [0.18.119] — 2026-07-04
 
 ### ✨ Features

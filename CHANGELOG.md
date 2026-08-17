@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.20] — 2026-08-17
+
+### 🐛 Bug Fixes
+- Fix(security)/feat(ops): editor secret-leak fixes + audit trails + ops hardening ([5941e2e](https://github.com/sislelabs/kuso/commit/5941e2e6d6d7b09cf3ca0e526716611a6c3087e5))
+
 ## [0.22.19] — 2026-08-17
 
 ### ✨ Features
@@ -409,14 +414,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive changelog for v0.18.120 ([079b34c](https://github.com/sislelabs/kuso/commit/079b34c20613950ee0f9990f47a0c8b776e2c456))
-
-## [0.18.120] — 2026-07-04
-
-### ✨ Features
-- Feat(github): build persistent envs on push to their tracked branch ([417ff69](https://github.com/sislelabs/kuso/commit/417ff69b1cb67d52fa46fb0650d777a73c2253f0))
-
-### 🧹 Chores
-- Chore: archive changelog for v0.18.119 ([8a65aa2](https://github.com/sislelabs/kuso/commit/8a65aa27fd4067d33e3a970c1cc4892912cd787a))
 
 
 ---
