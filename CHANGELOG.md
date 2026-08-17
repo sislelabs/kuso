@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.19] — 2026-08-17
+
+### ✨ Features
+- Feat(builds): atomic same-repo promotion + security hardening batch ([15ec203](https://github.com/sislelabs/kuso/commit/15ec203b1401b1d170c4170b57068905c3257976))
+
 ## [0.22.18] — 2026-08-12
 
 ### 🐛 Bug Fixes
@@ -412,11 +417,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive changelog for v0.18.119 ([8a65aa2](https://github.com/sislelabs/kuso/commit/8a65aa27fd4067d33e3a970c1cc4892912cd787a))
-
-## [0.18.119] — 2026-07-04
-
-### ✨ Features
-- Feat(addons): direct on-demand backup download ([9c48d7d](https://github.com/sislelabs/kuso/commit/9c48d7d491a8aa886a9de9da44a30bbab02483d7))
 
 
 ---

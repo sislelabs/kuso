@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.119] — 2026-07-04
+
+### ✨ Features
+- Feat(addons): direct on-demand backup download ([9c48d7d](https://github.com/sislelabs/kuso/commit/9c48d7d491a8aa886a9de9da44a30bbab02483d7))
+
 ## [0.18.118] — 2026-07-03
 
 ### Other

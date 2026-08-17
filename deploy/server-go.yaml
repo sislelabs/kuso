@@ -196,9 +196,41 @@ rules:
   # them. RBAC rules are additive — the union is what applies — so
   # listing it here grants the updater's re-apply without rewriting the
   # narrower rule's intent.
+  #
+  # SCOPING: update/patch on CLUSTER-scoped RBAC is restricted by
+  # resourceNames to the exact objects the upgrade bundle owns. K8s
+  # escalation-prevention already stops kuso-server from granting more
+  # than it holds, so this was never a blank cheque — but an unscoped
+  # `patch clusterroles` still let a compromised server REWRITE any
+  # existing ClusterRole in the cluster (including ones belonging to
+  # other operators), which is a much larger blast radius than
+  # re-applying its own bundle. Namespaced roles/rolebindings stay
+  # unscoped: they're per-project and created on demand, so their names
+  # aren't knowable ahead of time, and they're already bounded to
+  # namespaces kuso manages.
+  #
+  # `create` is listed separately because Kubernetes IGNORES
+  # resourceNames on create (the name isn't known at admission time) —
+  # a rule that mixes create with resourceNames silently grants nothing.
+  # Adding a new cluster-scoped RBAC object to deploy/ means adding its
+  # name to the list below, or the upgrade will report
+  # "applying-manifests — partial".
   - apiGroups: [rbac.authorization.k8s.io]
-    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+    resources: [roles, rolebindings]
     verbs: [get, list, create, update, patch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles, clusterrolebindings]
+    verbs: [get, list, create]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles, clusterrolebindings]
+    verbs: [update, patch]
+    resourceNames:
+      - kuso-server
+      - kuso-server-managed-ns
+      - kuso-operator
+      - kuso-prometheus
+      - kuso-pkg-probe
+      - kuso-incident-agent
   # PodDisruptionBudgets ship with the pgbouncer/prometheus manifests
   # so a drain can't take out the last replica. PriorityClasses come
   # with the same bundle (control-plane workloads preempt tenant pods
@@ -429,7 +461,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.22.18
+          image: ghcr.io/sislelabs/kuso-server-go:v0.22.19
           imagePullPolicy: IfNotPresent
           # Burstable QoS. Setting requests below limits puts us in
           # Burstable — survives host pressure without pre-allocating

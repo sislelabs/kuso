@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.22.18}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.22.18}"
+KUSO_VERSION="${KUSO_VERSION:-v0.22.19}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.22.19}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 # Public-TCP entrypoint pool for addons (docs/superpowers/specs/
@@ -337,9 +337,65 @@ done
 log "k3s ready"
 
 # -------- 3. helm --------
+# Pinned + checksum-verified, deliberately NOT the upstream
+# `get-helm-3 | bash` one-liner.
+#
+# That script is fetched from the helm repo's MOVING `main` branch and
+# piped straight into a root shell: whatever is at that path at the
+# moment you install is what executes with full privileges. A bad day
+# upstream (compromised account, bad merge, or just an unreviewed
+# change) becomes root on every cluster installed that day, with no
+# record of what ran. Pinning the version and verifying the published
+# SHA-256 means we execute a known artifact or nothing at all.
+#
+# Bumping: set HELM_VERSION, then update the checksum from
+# https://get.helm.sh/helm-<version>-linux-<arch>.tar.gz.sha256sum
+HELM_VERSION="${KUSO_HELM_VERSION:-v3.16.3}"
+declare -A HELM_SHA256=(
+  ["linux-amd64"]="f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea"
+  ["linux-arm64"]="5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798"
+)
+
+install_helm() {
+  local arch platform url tgz sum want tmp
+  case "$(uname -m)" in
+    x86_64)  arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) die "unsupported architecture for helm install: $(uname -m). Install helm manually, then re-run." ;;
+  esac
+  platform="linux-${arch}"
+  want="${HELM_SHA256[$platform]:-}"
+  [[ -n "$want" ]] || die "no pinned helm checksum for ${platform}; install helm manually, then re-run."
+
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064  # expand tmp now, not at trap time
+  trap "rm -rf '$tmp'" RETURN
+  url="https://get.helm.sh/helm-${HELM_VERSION}-${platform}.tar.gz"
+  tgz="${tmp}/helm.tar.gz"
+
+  log "installing helm ${HELM_VERSION} (${platform})"
+  curl -fsSL "$url" -o "$tgz" || die "helm download failed: $url"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum="$(sha256sum "$tgz" | awk '{print $1}')"
+  else
+    sum="$(shasum -a 256 "$tgz" | awk '{print $1}')"
+  fi
+  if [[ "$sum" != "$want" ]]; then
+    die "helm checksum MISMATCH for ${platform}
+  expected: ${want}
+  actual:   ${sum}
+Refusing to install. Either the download was corrupted or the artifact
+changed — do not bypass this."
+  fi
+
+  tar -xzf "$tgz" -C "$tmp" || die "helm extract failed"
+  install -m 0755 "${tmp}/${platform}/helm" /usr/local/bin/helm || die "helm install failed"
+  log "helm ${HELM_VERSION} installed (sha256 verified)"
+}
+
 if ! command -v helm >/dev/null 2>&1; then
-  log "installing helm"
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  install_helm
 fi
 
 # -------- 4. traefik --------
