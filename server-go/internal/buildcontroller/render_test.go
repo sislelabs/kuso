@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -27,13 +28,13 @@ func baseBuild() *kube.KusoBuild {
 
 func TestStrategyDefault(t *testing.T) {
 	cases := map[string]string{
-		"":            "dockerfile",
-		"dockerfile":  "dockerfile",
-		"DockerFile":  "dockerfile",
-		"nixpacks":    "nixpacks",
-		"buildpacks":  "buildpacks",
-		"static":      "static",
-		"unknown":     "dockerfile",
+		"":           "dockerfile",
+		"dockerfile": "dockerfile",
+		"DockerFile": "dockerfile",
+		"nixpacks":   "nixpacks",
+		"buildpacks": "buildpacks",
+		"static":     "static",
+		"unknown":    "dockerfile",
 	}
 	for in, want := range cases {
 		b := baseBuild()
@@ -251,9 +252,9 @@ func TestRenderJobLabelsRoundTrip(t *testing.T) {
 	b := baseBuild()
 	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
 	want := map[string]string{
-		"app.kubernetes.io/name":        "kusobuild",
-		"app.kubernetes.io/component":   "kusobuild",
-		"app.kubernetes.io/managed-by":  "kuso",
+		"app.kubernetes.io/name":       "kusobuild",
+		"app.kubernetes.io/component":  "kusobuild",
+		"app.kubernetes.io/managed-by": "kuso",
 		// `instance=<build-name>` is the critical selector key used
 		// by logs/stream + builds.Cancel + drift. The helm chart
 		// stamped this automatically from .Release.Name; the Go
@@ -379,16 +380,23 @@ func containsEnv(env []corev1.EnvVar, name, value string) bool {
 	return false
 }
 
-// TestBuildEnvContainerVars verifies the service's build-time env is passed to
-// the nixpacks-plan container as KUSO_BE_<KEY> vars + a KUSO_BUILDENV_KEYS
-// list (kubelet-escaped values, no shell injection), and that non-identifier
-// keys are dropped at the render boundary.
+// TestBuildEnvContainerVars verifies the service's LITERAL build-time env is
+// passed as KUSO_BE_<KEY> vars + a KUSO_BUILDENV_KEYS list (kubelet-escaped
+// values, no shell injection), that non-identifier keys are dropped at the
+// render boundary, and that kuso-secret-ref:// values never flow through the
+// literal channel (everything in KUSO_BUILDENV_KEYS persists into the
+// published image as build-args / ENV lines).
 func TestBuildEnvContainerVars(t *testing.T) {
 	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
 		BuildEnv: map[string]string{
-			"DATABASE_URL":        "postgres://u:p@h:6432/d?sslmode=disable",
+			"MAIL_FROM":           "Sender <noreply@x.example.com>",
 			"NEXT_PUBLIC_APP_URL": "https://x.example.com",
 			"BAD$(x)":             "evil", // dropped
+			// secret-sourced (as builds.buildEnvFromVars stamps it) — must be
+			// excluded here and handled only by buildEnvSecretContainerVars.
+			"DATABASE_URL": builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+			// prefix-carrying junk: dropped entirely, never demoted to literal.
+			"SNEAKY": "kuso-secret-ref://not a valid ref",
 		},
 	}}
 	vars := buildEnvContainerVars(b)
@@ -396,8 +404,8 @@ func TestBuildEnvContainerVars(t *testing.T) {
 	for _, e := range vars {
 		got[e.Name] = e.Value
 	}
-	if got["KUSO_BE_DATABASE_URL"] != "postgres://u:p@h:6432/d?sslmode=disable" {
-		t.Errorf("DATABASE_URL not passed: %q", got["KUSO_BE_DATABASE_URL"])
+	if got["KUSO_BE_MAIL_FROM"] != "Sender <noreply@x.example.com>" {
+		t.Errorf("MAIL_FROM not passed: %q", got["KUSO_BE_MAIL_FROM"])
 	}
 	if got["KUSO_BE_NEXT_PUBLIC_APP_URL"] != "https://x.example.com" {
 		t.Errorf("NEXT_PUBLIC_APP_URL not passed: %q", got["KUSO_BE_NEXT_PUBLIC_APP_URL"])
@@ -405,9 +413,238 @@ func TestBuildEnvContainerVars(t *testing.T) {
 	if _, bad := got["KUSO_BE_BAD$(x)"]; bad {
 		t.Error("malicious key must be dropped")
 	}
+	if _, leaked := got["KUSO_BE_DATABASE_URL"]; leaked {
+		t.Error("secret-ref value must not flow through the literal channel")
+	}
+	if _, leaked := got["KUSO_BE_SNEAKY"]; leaked {
+		t.Error("malformed secret-ref must be dropped, not demoted to literal")
+	}
 	keys := got["KUSO_BUILDENV_KEYS"]
-	if keys != "DATABASE_URL NEXT_PUBLIC_APP_URL" {
-		t.Errorf("KUSO_BUILDENV_KEYS = %q, want sorted valid keys", keys)
+	if keys != "MAIL_FROM NEXT_PUBLIC_APP_URL" {
+		t.Errorf("KUSO_BUILDENV_KEYS = %q, want sorted literal keys only", keys)
+	}
+}
+
+// TestBuildEnvSecretContainerVars: kuso-secret-ref:// entries render as
+// kubelet secretKeyRef env mounts (no plaintext anywhere in the Job) plus
+// the KUSO_BUILDENV_SECRET_KEYS list the buildkit script turns into
+// `--secret id=<KEY>,env=KUSO_BE_<KEY>` flags. Literals and malformed refs
+// must not appear.
+func TestBuildEnvSecretContainerVars(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		BuildEnv: map[string]string{
+			"DATABASE_URL":        builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+			"REDIS_PASSWORD":      builds.BuildEnvSecretRef("foo-cache-conn", "password"),
+			"NEXT_PUBLIC_APP_URL": "https://x.example.com",             // literal → excluded
+			"SNEAKY":              "kuso-secret-ref://not a valid ref", // malformed → dropped
+		},
+	}}
+	vars := buildEnvSecretContainerVars(b)
+	byName := map[string]corev1.EnvVar{}
+	for _, e := range vars {
+		byName[e.Name] = e
+	}
+	db, ok := byName["KUSO_BE_DATABASE_URL"]
+	if !ok {
+		t.Fatal("KUSO_BE_DATABASE_URL secret env missing")
+	}
+	if db.Value != "" || db.ValueFrom == nil || db.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("secret env must be a secretKeyRef, got %+v", db)
+	}
+	if db.ValueFrom.SecretKeyRef.Name != "foo-db-conn" || db.ValueFrom.SecretKeyRef.Key != "DATABASE_URL" {
+		t.Errorf("secretKeyRef = %+v", db.ValueFrom.SecretKeyRef)
+	}
+	if db.ValueFrom.SecretKeyRef.Optional == nil || !*db.ValueFrom.SecretKeyRef.Optional {
+		t.Error("secret env must be optional (missing secret degrades to omit, not CreateContainerConfigError)")
+	}
+	if _, ok := byName["KUSO_BE_NEXT_PUBLIC_APP_URL"]; ok {
+		t.Error("literal must not appear in the secret channel")
+	}
+	if _, ok := byName["KUSO_BE_SNEAKY"]; ok {
+		t.Error("malformed ref must be dropped")
+	}
+	if got := byName["KUSO_BUILDENV_SECRET_KEYS"].Value; got != "DATABASE_URL REDIS_PASSWORD" {
+		t.Errorf("KUSO_BUILDENV_SECRET_KEYS = %q, want sorted secret keys", got)
+	}
+}
+
+// TestBuildkitContainerSecretsNeverBuildArgs is the regression test for the
+// credential-baking leak: secretKeyRef-sourced env used to reach the buildkit
+// invocation as plaintext `--opt build-arg:` values, which buildkit records
+// in the pushed image's config/history — anyone with registry read access
+// could recover live addon credentials. Now a secret-sourced entry must
+// render as a secretKeyRef env mount (never a literal), be absent from
+// KUSO_BUILDENV_KEYS (the build-arg list), present in
+// KUSO_BUILDENV_SECRET_KEYS (the --secret list), and the script must forward
+// it via the non-persisting buildkit secret mechanism.
+func TestBuildkitContainerSecretsNeverBuildArgs(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "dockerfile",
+		BuildEnv: map[string]string{
+			"DATABASE_URL":        builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+			"NEXT_PUBLIC_APP_URL": "https://x.example.com",
+		},
+		Image: &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+
+	var keys, secretKeys string
+	for _, e := range c.Env {
+		switch e.Name {
+		case "KUSO_BUILDENV_KEYS":
+			keys = e.Value
+		case "KUSO_BUILDENV_SECRET_KEYS":
+			secretKeys = e.Value
+		case "KUSO_BE_DATABASE_URL":
+			if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
+				t.Errorf("secret env must be a secretKeyRef mount, got %+v", e)
+			}
+		}
+		// No env var on the container may carry the ref as a literal value
+		// (the literal channel is what feeds --opt build-arg).
+		if strings.Contains(e.Value, "foo-db-conn/DATABASE_URL") {
+			t.Errorf("secret ref leaked as literal env %s=%q", e.Name, e.Value)
+		}
+	}
+	if keys != "NEXT_PUBLIC_APP_URL" {
+		t.Errorf("KUSO_BUILDENV_KEYS = %q — secret key must not be in the build-arg list", keys)
+	}
+	if secretKeys != "DATABASE_URL" {
+		t.Errorf("KUSO_BUILDENV_SECRET_KEYS = %q", secretKeys)
+	}
+	// Script must forward secrets via buildkit's secret mechanism, sourced
+	// from the KUSO_BE_* env, and never interpolate values.
+	if !strings.Contains(c.Args[0], `--secret "id=${k},env=KUSO_BE_${k}"`) {
+		t.Error("buildkit script does not forward KUSO_BUILDENV_SECRET_KEYS as --secret flags")
+	}
+	if !strings.Contains(c.Args[0], "KUSO_BUILDENV_SECRET_KEYS") {
+		t.Error("buildkit script does not consume KUSO_BUILDENV_SECRET_KEYS")
+	}
+}
+
+// TestBuildkitNonDockerfileStrategiesWithholdSecrets: nixpacks/static build
+// kuso-GENERATED Dockerfiles that cannot opt into RUN --mount=type=secret,
+// so the secret values must be withheld from the buildkit pod entirely for
+// those strategies — not merely kept out of the build-arg list.
+func TestBuildkitNonDockerfileStrategiesWithholdSecrets(t *testing.T) {
+	for _, strategy := range []string{"nixpacks", "static"} {
+		b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+			Strategy: strategy,
+			BuildEnv: map[string]string{
+				"DATABASE_URL": builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+			},
+			Image: &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+		}}
+		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+		for _, e := range c.Env {
+			if e.Name == "KUSO_BE_DATABASE_URL" || e.Name == "KUSO_BUILDENV_SECRET_KEYS" {
+				t.Errorf("%s: secret env %s must not be mounted", strategy, e.Name)
+			}
+		}
+	}
+}
+
+// TestBuildkitWarnsOnWithheldSecrets: withholding secret-sourced build env
+// is a silent breaking change without a signal — a Dockerfile still reading
+// `ARG DATABASE_URL` builds with an empty value, and a nixpacks/static build
+// that needs a secret at build time just builds without it. The build LOG
+// (which users already view) must therefore name the withheld keys and the
+// migration path. Key NAMES only — never values or secret refs.
+func TestBuildkitWarnsOnWithheldSecrets(t *testing.T) {
+	secretEnv := map[string]string{
+		"DATABASE_URL":        builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+		"REDIS_PASSWORD":      builds.BuildEnvSecretRef("foo-cache-conn", "password"),
+		"NEXT_PUBLIC_APP_URL": "https://x.example.com", // literal → not withheld
+	}
+
+	// nixpacks/static withhold the secrets from the pod entirely: the key
+	// NAMES must surface via KUSO_BUILDENV_WITHHELD_KEYS so the script's
+	// WARNING block fires.
+	for _, strategy := range []string{"nixpacks", "static"} {
+		b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+			Strategy: strategy,
+			BuildEnv: secretEnv,
+			Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+		}}
+		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+		var withheld string
+		for _, e := range c.Env {
+			if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
+				withheld = e.Value
+			}
+			if strings.Contains(e.Value, "foo-db-conn") || strings.Contains(e.Value, "kuso-secret-ref://") {
+				t.Errorf("%s: env %s leaks the secret ref (%q) — key NAMES only", strategy, e.Name, e.Value)
+			}
+		}
+		if withheld != "DATABASE_URL REDIS_PASSWORD" {
+			t.Errorf("%s: KUSO_BUILDENV_WITHHELD_KEYS = %q, want sorted withheld key names", strategy, withheld)
+		}
+	}
+
+	// dockerfile forwards the secrets as buildkit secret mounts; the
+	// warning there rides KUSO_BUILDENV_SECRET_KEYS, so the withheld list
+	// must be absent (no double signal).
+	bDf := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "dockerfile",
+		BuildEnv: secretEnv,
+		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	for _, e := range renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}).Env {
+		if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
+			t.Errorf("dockerfile: KUSO_BUILDENV_WITHHELD_KEYS present (%q) — dockerfile secrets are forwarded, not withheld", e.Value)
+		}
+	}
+
+	// No secret-sourced vars → no withheld list (and the runtime warning
+	// blocks are gated on non-empty vars, so nothing fires).
+	bNone := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "nixpacks",
+		BuildEnv: map[string]string{"NEXT_PUBLIC_APP_URL": "https://x.example.com"},
+		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	for _, e := range renderBuildkitContainer(bNone, "nixpacks", corev1.ResourceRequirements{}).Env {
+		if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
+			t.Errorf("no-secret build: KUSO_BUILDENV_WITHHELD_KEYS present (%q), want absent", e.Value)
+		}
+	}
+
+	// The script itself must carry both warning blocks: the build-arg→
+	// secret-mount migration hint (dockerfile) and the withheld-at-build-
+	// time explanation (nixpacks/static).
+	script := renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	for _, want := range []string{
+		"KUSO_BUILDENV_SECRET_KEYS:-",
+		"KUSO_BUILDENV_WITHHELD_KEYS:-",
+		"WARNING",
+		"--mount=type=secret,id=<KEY>",
+		"EMPTY value",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("buildkit script missing warning fragment %q", want)
+		}
+	}
+}
+
+// TestNixpacksPlanWithholdsSecrets: the nixpacks-plan container bakes every
+// KUSO_BE_* it receives into permanent ENV layers of the generated
+// Dockerfile, so secret-sourced entries must be absent from its env and from
+// KUSO_BUILDENV_KEYS.
+func TestNixpacksPlanWithholdsSecrets(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "nixpacks",
+		BuildEnv: map[string]string{
+			"DATABASE_URL":        builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+			"NEXT_PUBLIC_APP_URL": "https://x.example.com",
+		},
+	}}
+	c := renderNixpacksPlanContainer(b)
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BE_DATABASE_URL" || e.Name == "KUSO_BUILDENV_SECRET_KEYS" {
+			t.Errorf("nixpacks-plan must not receive secret env %s", e.Name)
+		}
+		if e.Name == "KUSO_BUILDENV_KEYS" && e.Value != "NEXT_PUBLIC_APP_URL" {
+			t.Errorf("KUSO_BUILDENV_KEYS = %q, want literals only", e.Value)
+		}
 	}
 }
 

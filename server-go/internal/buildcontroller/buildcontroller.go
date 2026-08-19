@@ -57,9 +57,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/cache"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -87,6 +89,22 @@ const (
 	jobTTLSecondsAfter  = int32(3600)
 	jobActiveBudgetMins = int32(60) // ActiveDeadlineSeconds = 1h ceiling
 	jobBackoffLimit     = int32(0)
+
+	// Passive-retry policy for ensureJob failures (resilience W5).
+	// Before this existed, a failed ensureJob only dropped the dedup
+	// key and waited for the NEXT informer event — which never comes
+	// for a freshly-created CR nobody is patching (the build poller
+	// only stamps annotations once a Job exists), so a transient
+	// apiserver blip at exactly the wrong moment stranded the build
+	// as "pending" until the informer's 10-minute resync.
+	//
+	// Exponential ladder: 5s → 10s → 20s → 40s → 80s → 160s → 5m →
+	// 5m (capped), 8 retries total ≈ 15 minutes of patience, then a
+	// loud give-up that stamps the CR failed so it surfaces in the
+	// Deployments tab instead of dangling forever.
+	retryBaseDelay   = 5 * time.Second
+	retryMaxDelay    = 5 * time.Minute
+	retryMaxAttempts = 8
 )
 
 // Service is the controller entry point. Held on the server-go Deps
@@ -120,6 +138,21 @@ type Service struct {
 	// re-reconcile).
 	mu      sync.Mutex
 	running map[string]struct{}
+
+	// retries tracks per-CR backoff state for failed ensureJob calls
+	// (guarded by mu, same as running). Entry lifecycle: created on
+	// the first ensureJob failure, timer re-armed with exponential
+	// backoff on each subsequent failure, cleared on success, CR
+	// delete, terminal CR, leadership loss, or give-up. The retry
+	// path re-enters reconcile(), so it shares the running-key CAS
+	// with the informer-event path — a retry firing concurrently with
+	// an informer event can never double-create the Job.
+	retries map[string]*retryState
+
+	// retryBase / retryMax override the retry ladder in tests.
+	// Zero values mean retryBaseDelay / retryMaxAttempts.
+	retryBase time.Duration
+	retryMax  int
 
 	// startOnce makes Start idempotent. The whole struct is intended
 	// to live for the process lifetime; accidental double-Start (e.g.
@@ -188,6 +221,9 @@ func (s *Service) handleDelete(obj any) {
 	s.mu.Lock()
 	delete(s.running, key)
 	s.mu.Unlock()
+	// A deleted CR has nothing left to retry — stop any pending
+	// backoff timer so it doesn't fire against a ghost.
+	s.clearRetry(key)
 }
 
 // maybeReconcile is the leader-gated dispatch step. Non-leaders see
@@ -251,7 +287,10 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 	// Skip terminal CRs — Cancel + markSucceeded + markFailed all
 	// stamp spec.done=true. No Job should exist for these; if one
 	// does, the existing Cancel path or the reaper handles cleanup.
+	// Any pending retry is moot for a terminal CR — drop it so the
+	// retries map doesn't accumulate dead entries.
 	if b.Spec.Done {
+		s.clearRetry(u.GetNamespace() + "/" + u.GetName())
 		return
 	}
 	// Skip promotion-held builds (kuso.sislelabs.com/promote-hold,
@@ -309,6 +348,21 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 	key := u.GetNamespace() + "/" + u.GetName()
 	s.mu.Lock()
 	if _, already := s.running[key]; already {
+		// Another reconcile holds the key (its ensureJob is in flight).
+		// If a retry timer fired into this race, retryFire already set
+		// st.timer=nil — and if we just returned, neither scheduleRetry
+		// nor clearRetry would ever run for THIS fire, leaving a
+		// timer-less ledger entry whose stale attempts count shortens a
+		// future unrelated failure's backoff ladder. Re-arm the timer
+		// instead of dropping the fire: the holder's outcome still wins
+		// (success → clearRetry stops this timer and deletes the entry;
+		// failure → scheduleRetry sees a live timer and keeps it).
+		// Bounded: attempts is NOT incremented — losing a CAS race is
+		// not an ensureJob failure — and the holder resolves within its
+		// 30s reconcile budget, so the re-armed fire finds the key free.
+		if st := s.retries[key]; st != nil && st.timer == nil {
+			st.timer = time.AfterFunc(s.backoffFor(st.attempts), func() { s.retryFire(ctx, key) })
+		}
 		s.mu.Unlock()
 		return
 	}
@@ -318,12 +372,11 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 	reconcileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := s.ensureJob(reconcileCtx, u, b); err != nil {
-		// Drop from `running` so the next informer event retries.
-		// Best practice: workqueue with backoff, but for a single-
-		// tenant control plane the informer's resync + the next
-		// patch from the build poller (kuso-server stamps phase
-		// annotations every ~5s while a build is active) provides
-		// enough retry signal.
+		// Drop from `running` so a retry (or the next informer
+		// event) can re-enter, then arm the backoff ladder. Note
+		// scheduleRetry gets the PARENT ctx, not reconcileCtx —
+		// the deferred cancel above would kill the timer's context
+		// the moment this function returns.
 		s.mu.Lock()
 		delete(s.running, key)
 		s.mu.Unlock()
@@ -331,11 +384,189 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 			s.Logger.Warn("buildcontroller: ensure job",
 				"err", err, "build", u.GetName(), "ns", u.GetNamespace(), "source", source)
 		}
+		s.scheduleRetry(ctx, key, u)
 		return
 	}
+	// Success clears any backoff state left by earlier failures —
+	// including a pending timer armed by a previous attempt (the
+	// informer-event path can succeed while a retry is still queued).
+	s.clearRetry(key)
 	if s.Logger != nil {
 		s.Logger.Info("buildcontroller: ensured job",
 			"build", u.GetName(), "ns", u.GetNamespace(), "source", source)
+	}
+}
+
+// retryState is the per-CR backoff ledger. attempts counts scheduled
+// retries (not the initial informer-event attempt); timer is non-nil
+// exactly while a retry is queued; obj is the last-seen CR, used as a
+// fallback when the informer cache is unavailable at fire time.
+type retryState struct {
+	attempts int
+	timer    *time.Timer
+	obj      *unstructured.Unstructured
+}
+
+// scheduleRetry arms (or declines to arm) a backoff retry after an
+// ensureJob failure. Double-enqueue safe: if a retry is already
+// pending for the key, the existing timer is kept — a concurrent
+// informer-event failure must not reset the ladder or stack timers.
+// Past retryMaxAttempts it gives up loudly via giveUp.
+func (s *Service) scheduleRetry(ctx context.Context, key string, u *unstructured.Unstructured) {
+	maxAttempts := s.retryMax
+	if maxAttempts <= 0 {
+		maxAttempts = retryMaxAttempts
+	}
+	s.mu.Lock()
+	if s.retries == nil {
+		s.retries = make(map[string]*retryState)
+	}
+	st := s.retries[key]
+	if st == nil {
+		st = &retryState{}
+		s.retries[key] = st
+	}
+	if st.timer != nil {
+		// A retry is already queued; let it run its course.
+		s.mu.Unlock()
+		return
+	}
+	st.attempts++
+	st.obj = u
+	attempt := st.attempts
+	if attempt > maxAttempts {
+		delete(s.retries, key)
+		s.mu.Unlock()
+		s.giveUp(ctx, u, attempt-1)
+		return
+	}
+	delay := s.backoffFor(attempt)
+	st.timer = time.AfterFunc(delay, func() { s.retryFire(ctx, key) })
+	s.mu.Unlock()
+	if s.Logger != nil {
+		s.Logger.Info("buildcontroller: ensure job failed — retry scheduled",
+			"build", u.GetName(), "ns", u.GetNamespace(),
+			"attempt", attempt, "max", maxAttempts, "delay", delay)
+	}
+}
+
+// backoffFor returns the delay before the given (1-based) retry
+// attempt: base·2^(attempt-1), capped at retryMaxDelay.
+func (s *Service) backoffFor(attempt int) time.Duration {
+	base := s.retryBase
+	if base <= 0 {
+		base = retryBaseDelay
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= retryMaxDelay {
+			return retryMaxDelay
+		}
+	}
+	if d > retryMaxDelay {
+		d = retryMaxDelay
+	}
+	return d
+}
+
+// retryFire runs when a backoff timer expires. It re-checks the leader
+// gate (the lease may have moved while we waited — the new leader's
+// ResyncActive owns in-flight builds then), refreshes the CR from the
+// informer cache when available (the build may have been cancelled or
+// deleted in the meantime), and re-enters reconcile, which re-runs the
+// same terminal/validity guards and the running-key CAS as any other
+// event source.
+func (s *Service) retryFire(ctx context.Context, key string) {
+	s.mu.Lock()
+	st := s.retries[key]
+	if st == nil {
+		s.mu.Unlock()
+		return
+	}
+	st.timer = nil
+	obj := st.obj
+	s.mu.Unlock()
+	if obj == nil || ctx.Err() != nil {
+		return
+	}
+	if s.LeaderActive != nil && !s.LeaderActive.Load() {
+		s.clearRetry(key)
+		return
+	}
+	if s.Cache != nil {
+		if items, ok := s.Cache.ListFromCache(kube.GVRBuilds, obj.GetNamespace(), labels.Everything()); ok {
+			var fresh *unstructured.Unstructured
+			for _, it := range items {
+				if it.GetName() == obj.GetName() {
+					fresh = it
+					break
+				}
+			}
+			if fresh == nil {
+				// CR deleted while we waited — nothing to build.
+				s.clearRetry(key)
+				return
+			}
+			obj = fresh
+		}
+	}
+	s.reconcile(ctx, obj, "retry")
+}
+
+// clearRetry drops the backoff state for a key, stopping any pending
+// timer. Called on ensureJob success, CR delete, terminal CR, and
+// leadership loss at fire time.
+func (s *Service) clearRetry(key string) {
+	s.mu.Lock()
+	if st := s.retries[key]; st != nil {
+		if st.timer != nil {
+			st.timer.Stop()
+		}
+		delete(s.retries, key)
+	}
+	s.mu.Unlock()
+}
+
+// giveUp is the loud end of the retry ladder. The slog.Error is the
+// primary signal; the merge-patch is best-effort routing into the
+// existing failure surface — it stamps the same terminal contract
+// builds.markFailed writes (and toBuildSummary reads): the build-phase /
+// build-message / build-completed-at annotations, spec.done=true, AND
+// the build-state=done label. The label is load-bearing, not cosmetic:
+// admission's active-build check treats any CR without it as in-flight
+// (queueing every later build for the service forever), the poller's
+// stuck-build healer skips phase=failed, retention sweeps only select
+// build-state=done, and Cancel refuses terminal CRs — so a give-up
+// without the label permanently wedged the service's build queue. No
+// notify card is emitted — the controller has no notifier wired; the
+// operator-facing signal is the error log plus the red build row.
+func (s *Service) giveUp(ctx context.Context, u *unstructured.Unstructured, attempts int) {
+	if s.Logger != nil {
+		s.Logger.Error("buildcontroller: giving up after repeated ensureJob failures — build will NOT run",
+			"build", u.GetName(), "ns", u.GetNamespace(), "attempts", attempts,
+			"hint", "check apiserver health / RBAC / resource quota, then retrigger the build")
+	}
+	if s.Kube == nil || s.Kube.Dynamic == nil {
+		return
+	}
+	msg := fmt.Sprintf("build controller could not create the build Job after %d attempts — check server logs, then retrigger", attempts+1)
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{%q:%q}},"spec":{"done":true}}`,
+		builds.AnnBuildPhase,
+		builds.AnnBuildMessage, msg,
+		builds.AnnBuildCompletedAt, time.Now().UTC().Format(time.RFC3339),
+		builds.LabelBuildState, builds.BuildStateDone)
+	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(u.GetNamespace()).
+		Patch(pctx, u.GetName(), types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		if s.Logger != nil {
+			s.Logger.Warn("buildcontroller: stamp give-up failure state", "build", u.GetName(), "err", err)
+		}
 	}
 }
 

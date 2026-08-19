@@ -30,6 +30,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
 
 const (
@@ -42,6 +43,10 @@ const (
 	Retention = 7 * 24 * time.Hour
 	// How often we list pods to reconcile follow streams.
 	pollInterval = 30 * time.Second
+	// HeartbeatInterval is pollInterval, exported so main.go can register
+	// the shipper in the serverstate liveness registry at the cadence its
+	// main loop actually beats. Kept in lockstep with pollInterval.
+	HeartbeatInterval = pollInterval
 	// Flush batch buffer this often or when len ≥ flushBatchSize.
 	flushInterval  = 1 * time.Second
 	flushBatchSize = 500
@@ -213,6 +218,12 @@ func (s *Shipper) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.reconcilePods(ctx)
+			// Heartbeat off the pod-reconcile ticker (pollInterval, ~30s).
+			// The buffer flusher / pruner / rate-reset run as separate
+			// goroutines with their own cadences; this main loop's tick is
+			// the representative "logship is alive" signal. Register logship
+			// at pollInterval to match.
+			serverstate.LoopHeartbeat(serverstate.LoopLogship)
 		}
 	}
 }

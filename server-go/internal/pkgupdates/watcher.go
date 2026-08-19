@@ -10,6 +10,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
 
 // DefaultInterval is the read cadence for the advisory digest. Package
@@ -27,6 +28,13 @@ const DefaultInterval = time.Hour
 // check is cheap (one node list + a pod list only when a reboot is in
 // flight), so 15s is safe on the apiserver.
 const finalizeInterval = 15 * time.Second
+
+// HeartbeatInterval is finalizeInterval, exported so main.go registers the
+// watcher in the serverstate liveness registry at the cadence it actually
+// beats — the FAST finalize ticker, NOT the hourly advisory digest (which
+// fires too rarely to be a liveness signal). Kept in lockstep with
+// finalizeInterval.
+const HeartbeatInterval = finalizeInterval
 
 // Watcher reads node pkg-updates annotations on a timer, and notifies
 // (once, edge-triggered, restart-safe) when a node gains a fresh
@@ -69,10 +77,16 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-ft.C:
 			w.reconcileReboots(ctx, logger)
+			// Heartbeat off the FAST finalize ticker (finalizeInterval,
+			// ~15s), not the hourly digest timer — the digest fires too
+			// rarely to be a liveness signal. Register pkgupdates at
+			// finalizeInterval to match. See main.go.
+			serverstate.LoopHeartbeat(serverstate.LoopPkgUpdates)
 			continue
 		case <-t.C:
 		}
 		w.tick(ctx, logger)
+		serverstate.LoopHeartbeat(serverstate.LoopPkgUpdates)
 		t.Reset(interval)
 	}
 }

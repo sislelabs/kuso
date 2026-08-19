@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/serverstate"
 )
 
 // patterns is the list of regexes that flag a log line as an error.
@@ -64,10 +65,16 @@ type Scanner struct {
 
 const watermarkKey = "errorscan.lastLogLineId"
 
+// HeartbeatInterval is the scanner's default tick cadence, exported so
+// main.go can register errorscan in the serverstate liveness registry at
+// the interval it beats. main.go sets Scanner.Interval to this same value,
+// and Run falls back to it when Interval is unset.
+const HeartbeatInterval = 30 * time.Second
+
 // Run is the goroutine entrypoint. Returns when ctx is canceled.
 func (s *Scanner) Run(ctx context.Context) {
 	if s.Interval <= 0 {
-		s.Interval = 30 * time.Second
+		s.Interval = HeartbeatInterval
 	}
 	if s.BatchSize <= 0 {
 		s.BatchSize = 500
@@ -86,6 +93,10 @@ func (s *Scanner) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.tick(ctx)
+			// Liveness heartbeat: the loop completed an iteration (even one
+			// that hit a DB error and logged — the goroutine is alive). A
+			// no-op unless registered (leader-gated in startSingletons).
+			serverstate.LoopHeartbeat(serverstate.LoopErrorScan)
 		}
 	}
 }

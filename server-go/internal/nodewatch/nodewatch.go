@@ -29,6 +29,7 @@ import (
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
 
 const (
@@ -49,9 +50,15 @@ type Config struct {
 	Threshold time.Duration
 }
 
+// DefaultTickInterval is the watcher's tick cadence when Config.Tick is
+// unset. Exported so main.go can register nodewatch in the serverstate
+// liveness registry at the cadence it beats. main.go constructs the
+// Watcher with the zero-value Config, so this is the effective interval.
+const DefaultTickInterval = 1 * time.Minute
+
 func (c Config) tick() time.Duration {
 	if c.Tick <= 0 {
-		return 1 * time.Minute
+		return DefaultTickInterval
 	}
 	return c.Tick
 }
@@ -111,6 +118,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			w.tick(ctx)
+			serverstate.LoopHeartbeat(serverstate.LoopNodeWatch)
 		}
 	}
 }

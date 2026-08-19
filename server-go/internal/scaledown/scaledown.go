@@ -31,9 +31,16 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
 
 const defaultPromURL = "http://kuso-prometheus.kuso.svc.cluster.local:9090"
+
+// DefaultTickInterval is the watcher's tick cadence when Watcher.Tick is
+// unset. Exported so main.go can register scaledown in the serverstate
+// liveness registry at the cadence it beats. main.go leaves Tick unset,
+// so this is the effective interval.
+const DefaultTickInterval = time.Minute
 
 // Watcher scales idle sleep-enabled services to zero.
 type Watcher struct {
@@ -69,7 +76,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 	tick := w.Tick
 	if tick <= 0 {
-		tick = time.Minute
+		tick = DefaultTickInterval
 	}
 	if w.PromURL == "" {
 		w.PromURL = defaultPromURL
@@ -96,12 +103,24 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			w.evaluate(ctx)
+			serverstate.LoopHeartbeat(serverstate.LoopScaledown)
 		}
 	}
 }
 
 // evaluate runs one pass: scale idle sleep-enabled services to 0.
 func (w *Watcher) evaluate(ctx context.Context) {
+	// Never scale anything to zero unless the thing that wakes it back
+	// up is actually alive. kuso-activator is a SEPARATE Deployment
+	// (deploy/kuso-activator.yaml) that ship/updater don't roll — it has
+	// historically been down without anyone noticing. Scaling to 0 with
+	// no activator turns every idle sleep-enabled service into hard
+	// downtime: nothing is listening to wake them. Fail safe: skip the
+	// whole tick and leave services warm.
+	if !w.activatorReady(ctx) {
+		w.Logger.Warn("scaledown: kuso-activator has no ready replicas — skipping scale-to-zero this tick (services stay warm; nothing could wake them)")
+		return
+	}
 	// List sleep-enabled services across all kuso namespaces. Empty ns
 	// → cluster-wide; each service carries its own namespace via labels.
 	svcs, err := w.Kube.ListKusoServices(ctx, "")
@@ -116,6 +135,37 @@ func (w *Watcher) evaluate(ctx context.Context) {
 		}
 		w.evaluateService(ctx, svc)
 	}
+}
+
+// activatorDeployment is the scale-to-zero wake proxy's Deployment name
+// (deploy/kuso-activator.yaml). It lives in the kuso control-plane
+// namespace regardless of per-project namespaces.
+const activatorDeployment = "kuso-activator"
+
+// activatorReady reports whether the kuso-activator Deployment has at
+// least one ready replica. Reads the informer cache when available
+// (this runs every tick) and falls back to a live Get. Any failure —
+// Deployment missing, apiserver error — reads as NOT ready: without a
+// wake path, scaling to zero is guaranteed downtime, while skipping a
+// tick just leaves an idle pod warm for another minute.
+func (w *Watcher) activatorReady(ctx context.Context) bool {
+	ns := w.Namespace
+	if ns == "" {
+		ns = "kuso"
+	}
+	if w.Kube.Cache != nil {
+		if dep, ok := w.Kube.Cache.GetDeployment(ns, activatorDeployment); ok {
+			return dep.Status.ReadyReplicas >= 1
+		}
+	}
+	dep, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, activatorDeployment, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			w.Logger.Warn("scaledown: get activator deployment", "err", err)
+		}
+		return false
+	}
+	return dep.Status.ReadyReplicas >= 1
 }
 
 // sleepEligible reports whether a service is a candidate for scale-to-

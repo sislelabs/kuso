@@ -43,7 +43,14 @@ import (
 
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
+
+// HeartbeatInterval is Run's default reconcile cadence (used when the
+// caller passes interval=0, as main.go does), exported so main.go can
+// register instancepg in the serverstate liveness registry at the
+// interval it beats.
+const HeartbeatInterval = 15 * time.Second
 
 // Sentinels exposed for HTTP-layer status mapping.
 var (
@@ -557,7 +564,7 @@ func (s *Service) healthSnapshotCopy() healthSnapshot {
 // the UI's status poll catches the ready transition within ~1 tick.
 func (s *Service) Run(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
-		interval = 15 * time.Second
+		interval = HeartbeatInterval
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -574,6 +581,10 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 			if err := s.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				s.Logger.Warn("instancepg: reconcile", "err", err)
 			}
+			// Liveness heartbeat: the loop completed a reconcile pass (even
+			// one that errored — the goroutine is alive). A no-op unless
+			// registered (leader-gated in startSingletons).
+			serverstate.LoopHeartbeat(serverstate.LoopInstancePG)
 		}
 	}
 }

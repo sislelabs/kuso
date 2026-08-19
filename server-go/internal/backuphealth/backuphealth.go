@@ -9,6 +9,20 @@
 // settings UI renders as a banner and (b) a Watcher that fires a
 // one-shot notify event on the healthy↔unhealthy edge so an operator
 // who never opens the page still finds out.
+//
+// It also enumerates other silent-data-loss surfaces so the banner
+// can't stay green while data is unprotected: per-addon backup CronJobs
+// (ComputeAddons) and per-service app-data PVCs (ComputeServiceVolumes).
+// Service volumes (spec.volumes → RWO PVCs rendered by the
+// kusoenvironment chart) have NO scheduled-backup mechanism in any kuso
+// chart today — ComputeServiceVolumes reports them as uncovered
+// (covered=false, healthy=true) so the gap is VISIBLE. A backup
+// mechanism is deliberately deferred: a VolumeSnapshot path needs a CSI
+// snapshot class that may not exist on k3s+local-path, and an RWO
+// tar-to-S3 Job can't co-attach a PVC the app pod already holds — either
+// would be a half-working path that fails on some clusters, which is
+// worse than an honest "not covered" row. Visibility is the important
+// half of the fix and ships whole here.
 package backuphealth
 
 import (
@@ -24,6 +38,7 @@ import (
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
 
 const (
@@ -151,18 +166,31 @@ func terminalTime(j *batchv1.Job) time.Time {
 // Secret (sportnopz, 2026-08-12: 2+ days of failures) reported nothing
 // anywhere.
 type AddonBackupStatus struct {
-	Addon          string `json:"addon"`
-	Project        string `json:"project,omitempty"`
-	Namespace      string `json:"namespace"`
-	Schedule       string `json:"schedule"`
-	CronJobPresent bool   `json:"cronJobPresent"`
+	Addon     string `json:"addon"`
+	Project   string `json:"project,omitempty"`
+	Namespace string `json:"namespace"`
+	// Kind is the addon's datastore kind (postgres/redis/mysql/…).
+	Kind     string `json:"kind,omitempty"`
+	Schedule string `json:"schedule"`
+	// ScheduleConfigured: spec.backup.schedule is set on the addon CR.
+	// False rows exist so "this addon has NO scheduled backups" is
+	// visible — previously unscheduled addons were silently omitted
+	// and the health surface implied full coverage.
+	ScheduleConfigured bool `json:"scheduleConfigured"`
+	// Covered: the chart renders a scheduled backup CronJob for this
+	// addon (schedule set AND the addon's kind/shape is supported).
+	// False = this addon is NOT covered by kuso's scheduled backups;
+	// Detail says why. Coverage gaps are surfaced, not paged on —
+	// Healthy stays true for them so alerting behavior is unchanged.
+	Covered        bool `json:"covered"`
+	CronJobPresent bool `json:"cronJobPresent"`
 	// SecretPresent: the kuso-backup-s3 Secret exists in the CronJob's
 	// namespace. False = every run fails CreateContainerConfigError.
-	SecretPresent bool   `json:"secretPresent"`
-	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
+	SecretPresent  bool   `json:"secretPresent"`
+	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
 	LastScheduleAt string `json:"lastScheduleAt,omitempty"`
-	Healthy       bool   `json:"healthy"`
-	Detail        string `json:"detail,omitempty"`
+	Healthy        bool   `json:"healthy"`
+	Detail         string `json:"detail,omitempty"`
 }
 
 // addonBackupLateGrace: a scheduled run that hasn't succeeded within
@@ -172,9 +200,14 @@ type AddonBackupStatus struct {
 // failure (missing Secret) is caught separately and immediately.
 const addonBackupLateGrace = 6 * time.Hour
 
-// ComputeAddons lists addon CRs with a rendered backup CronJob and
-// derives a per-addon verdict from the CronJob's status + the backup
-// Secret's presence. Addon CRs live in their project's EXECUTION
+// ComputeAddons lists ALL addon CRs and derives a per-addon backup
+// verdict: for scheduled+rendered addons from the CronJob's status +
+// the backup Secret's presence, and for everything else an honest
+// "not covered by scheduled backups" row (Covered=false, Detail says
+// why) — unscheduled addons, kinds with no dump path (clickhouse,
+// meilisearch, rabbitmq, …), HA postgres (CNPG owns backups),
+// external and instance-shared addons. Coverage gaps are Healthy=true
+// so they surface without paging. Addon CRs live in their project's EXECUTION
 // namespace (custom-namespace projects — the koreni pattern), so the
 // listing fans out over home + every project spec.namespace; a
 // home-only list silently missed exactly the projects the check
@@ -223,9 +256,6 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 	var out []AddonBackupStatus
 	for i := range addons {
 		a := &addons[i]
-		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
-			continue
-		}
 		project := a.Labels["kuso.sislelabs.com/project"]
 		ns := execNS[project]
 		if ns == "" {
@@ -235,8 +265,22 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			Addon:     a.Name,
 			Project:   project,
 			Namespace: ns,
-			Schedule:  a.Spec.Backup.Schedule,
+			Kind:      a.Spec.Kind,
 		}
+		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
+			// No schedule → not covered by scheduled backups. This row
+			// used to be silently omitted, which made the health
+			// surface imply coverage it didn't have. Healthy=true: a
+			// coverage gap is a fact to surface, not an alert to page
+			// on (paging every cluster that simply hasn't opted in
+			// would train operators to ignore the real failures).
+			st.Healthy = true
+			st.Detail = uncoveredDetail(a)
+			out = append(out, st)
+			continue
+		}
+		st.Schedule = a.Spec.Backup.Schedule
+		st.ScheduleConfigured = true
 		if !kube.AddonBackupCronJobRendered(a) {
 			// The chart deliberately renders no CronJob for this
 			// shape — nothing to monitor, and paging would be a false
@@ -252,6 +296,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			out = append(out, st)
 			continue
 		}
+		st.Covered = true
 		if p, seen := secretPresent[ns]; seen {
 			if p == nil {
 				complete = false
@@ -316,6 +361,191 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 	return out, complete
 }
 
+// uncoveredDetail explains WHY an addon with no backup schedule is not
+// covered by scheduled backups. The classification reuses the chart's
+// canonical render matrix (kube.AddonBackupCronJobRendered /
+// AddonBackupSuppressedHA) via a probe copy with a synthetic schedule,
+// so this can never drift from what the chart actually renders.
+func uncoveredDetail(a *kube.KusoAddon) string {
+	probe := *a
+	b := kube.KusoBackup{Schedule: "@probe"}
+	if a.Spec.Backup != nil {
+		b = *a.Spec.Backup
+		b.Schedule = "@probe"
+	}
+	probe.Spec.Backup = &b
+	external := a.Spec.External != nil &&
+		(a.Spec.External.SecretName != "" || len(a.Spec.External.SecretKeys) > 0)
+	switch {
+	case kube.AddonBackupCronJobRendered(&probe):
+		return "no backup schedule — not covered by scheduled backups; set spec.backup.schedule to enable " + a.Spec.Kind + " dumps"
+	case kube.AddonBackupSuppressedHA(&probe):
+		return "not covered by kuso scheduled backups (HA postgres — CNPG owns backups); verify CNPG barman backups are configured out-of-band, or this addon has none"
+	case a.Spec.UseInstanceAddon != "":
+		return "instance-shared addon — backups (if any) belong to the instance addon, not this CR"
+	case external:
+		return "external addon — backups are the external provider's responsibility"
+	default:
+		return "kind " + a.Spec.Kind + " has no scheduled-backup support — not covered by scheduled backups"
+	}
+}
+
+// ServiceVolumeBackupStatus is the per-service verdict for services that
+// declare spec.volumes — first-class app-data PVCs (kusoenvironment
+// pvc.yaml) that, unlike addons, have NO scheduled-backup mechanism in
+// any kuso chart today. Before this row existed the backup-health
+// surface enumerated ONLY KusoAddon CRs, so a service writing user
+// uploads to a PVC that was then lost had zero backup AND zero warning:
+// the banner stayed green because it never knew the PVC existed.
+//
+// These rows mirror the addon "honesty" shape (Covered/ScheduleConfigured/
+// Detail) but every row is Covered=false today — there is no mechanism to
+// be covered BY. Healthy=true because an un-backed-up app PVC is a fact to
+// SURFACE, not an alert to page on: paging every service with a volume
+// would train operators to ignore the banner. When/if a volume-backup
+// mechanism ships, Covered flips to true for opted-in services and this
+// shape already carries the fields to report it.
+type ServiceVolumeBackupStatus struct {
+	Service   string `json:"service"`
+	Project   string `json:"project,omitempty"`
+	Namespace string `json:"namespace"`
+	// Volumes are the declared spec.volumes names on the service — the
+	// PVCs that are unprotected. Listed so the operator knows exactly
+	// which disks carry the risk.
+	Volumes []string `json:"volumes"`
+	// VolumeCount is len(Volumes), surfaced separately so a UI can badge
+	// "N unprotected volumes" without walking the slice.
+	VolumeCount int `json:"volumeCount"`
+	// ScheduleConfigured: a backup schedule is configured for this
+	// service's volumes. Always false today (no mechanism, no opt-in
+	// field) — present so the wire shape is stable when a mechanism lands.
+	ScheduleConfigured bool `json:"scheduleConfigured"`
+	// Covered: kuso renders a scheduled backup for these volumes. Always
+	// false today. False = these PVCs are NOT covered by scheduled
+	// backups; Detail says why.
+	Covered bool `json:"covered"`
+	// Healthy stays true (a coverage gap is surfaced, not paged on), so
+	// this addition does NOT change alerting behavior.
+	Healthy bool   `json:"healthy"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+// ComputeServiceVolumes lists ALL KusoService CRs (across home + every
+// project execution namespace, the same fan-out ComputeAddons uses so
+// custom-namespace projects aren't silently skipped) and emits one row
+// per service that declares spec.volumes, reporting that its PVCs are
+// NOT covered by scheduled backups (covered=false). Services with no
+// volumes are omitted — nothing to protect, nothing to report.
+//
+// The second return is false when the evaluation was INCOMPLETE (a list
+// failed): callers that alert must not treat an incomplete sweep as
+// authoritative. Every returned row is Healthy=true, so this never
+// pages; it exists purely to make the coverage gap VISIBLE. This closes
+// the "green banner while service PVC data is silently unprotected" half
+// of the finding even though no backup mechanism ships (see
+// docs note in this file's package doc / the finding: a volume-snapshot
+// path needs a CSI snapshot class that may not exist on k3s+local-path,
+// and an RWO tar-to-S3 sidecar can't co-attach a PVC the app pod holds —
+// so the mechanism is deferred, and visibility is the important half).
+func ComputeServiceVolumes(ctx context.Context, kc *kube.Client, namespace string) ([]ServiceVolumeBackupStatus, bool) {
+	// Only the Dynamic client is needed (KusoService / KusoProject LISTs);
+	// unlike ComputeAddons this never reads a core Secret, so we don't gate
+	// on Clientset — that let a Dynamic-only client (and the test fake)
+	// still enumerate volumes.
+	if kc == nil || kc.Dynamic == nil {
+		return nil, true
+	}
+	complete := true
+	execNS := map[string]string{}
+	namespaces := []string{namespace}
+	seenNS := map[string]bool{namespace: true}
+	if projects, perr := kc.ListKusoProjects(ctx, namespace); perr == nil {
+		for i := range projects {
+			pns := projects[i].Spec.Namespace
+			if pns == "" {
+				continue
+			}
+			execNS[projects[i].Name] = pns
+			if !seenNS[pns] {
+				seenNS[pns] = true
+				namespaces = append(namespaces, pns)
+			}
+		}
+	} else {
+		complete = false
+	}
+
+	var services []kube.KusoService
+	for _, ns := range namespaces {
+		list, err := kc.ListKusoServices(ctx, ns)
+		if err != nil {
+			complete = false
+			continue
+		}
+		services = append(services, list...)
+	}
+
+	var out []ServiceVolumeBackupStatus
+	for i := range services {
+		s := &services[i]
+		if len(s.Spec.Volumes) == 0 {
+			continue
+		}
+		project := s.Spec.Project
+		if project == "" {
+			project = s.Labels["kuso.sislelabs.com/project"]
+		}
+		ns := execNS[project]
+		if ns == "" {
+			ns = s.Namespace
+		}
+		names := make([]string, 0, len(s.Spec.Volumes))
+		for _, v := range s.Spec.Volumes {
+			names = append(names, v.Name)
+		}
+		out = append(out, ServiceVolumeBackupStatus{
+			Service:     s.Name,
+			Project:     project,
+			Namespace:   ns,
+			Volumes:     names,
+			VolumeCount: len(names),
+			// No schedule field on KusoService, no mechanism in any chart.
+			ScheduleConfigured: false,
+			Covered:            false,
+			// A coverage gap is surfaced, not paged on.
+			Healthy: true,
+			Detail:  serviceVolumesUncoveredDetail(names),
+		})
+	}
+	return out, complete
+}
+
+// serviceVolumesUncoveredDetail states the honest coverage gap for a
+// service's app-data PVCs: there is no scheduled-backup mechanism for
+// service volumes today, so the data on these disks is not backed up by
+// kuso and a node/PVC loss loses it.
+func serviceVolumesUncoveredDetail(volumes []string) string {
+	list := strings.Join(volumes, ", ")
+	return "service volume(s) [" + list + "] have no scheduled backup — " +
+		"kuso does not back up service PVCs (only addon datastores); this app-data " +
+		"disk is NOT protected. Back it up out-of-band, or store durable data in a " +
+		"backed-up addon (postgres/s3) instead of a raw volume."
+}
+
+// ServiceVolumesHealthy is true when every service-volume row is healthy
+// — vacuously true today because every row is Healthy=true by design
+// (coverage gaps surface, they don't page). Present so the endpoint's
+// aggregate shape mirrors AddonsHealthy and a future mechanism that can
+// go UNhealthy has a hook.
+func ServiceVolumesHealthy(vols []ServiceVolumeBackupStatus) bool {
+	for i := range vols {
+		if !vols[i].Healthy {
+			return false
+		}
+	}
+	return true
+}
+
 // AddonsHealthy is true when every configured addon backup is healthy
 // (vacuously true with none configured).
 func AddonsHealthy(addons []AddonBackupStatus) bool {
@@ -346,13 +576,20 @@ func AddonsWorstSeverity(addons []AddonBackupStatus) string {
 // the settings page still learns their control-plane DB stopped being
 // backed up. Edge-triggered (not per-tick) so it doesn't spam. Leader-
 // gated by the caller (lives in the kube-singletons block).
+// DefaultInterval is the check cadence when Watcher.Interval is unset
+// (backup is hourly; 15m is responsive enough without hammering the
+// apiserver). Exported so main.go can register backuphealth in the
+// serverstate liveness registry at the cadence it beats. main.go leaves
+// Interval unset, so this is the effective interval.
+const DefaultInterval = 15 * time.Minute
+
 type Watcher struct {
 	Kube      *kube.Client
 	Notify    *notify.Dispatcher
 	Namespace string
 	Logger    *slog.Logger
-	// Interval between checks. Zero → 15m (backup is hourly; 15m is
-	// responsive enough without hammering the apiserver).
+	// Interval between checks. Zero → DefaultInterval (backup is hourly;
+	// 15m is responsive enough without hammering the apiserver).
 	Interval time.Duration
 
 	// lastState is the comma-joined SET of unhealthy subsystems last
@@ -402,7 +639,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 	interval := w.Interval
 	if interval <= 0 {
-		interval = 15 * time.Minute
+		interval = DefaultInterval
 	}
 	// Initial delay so a fresh boot doesn't alert before the first
 	// backup CronJob has had a chance to run.
@@ -415,6 +652,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-t.C:
 		}
 		w.tick(ctx)
+		serverstate.LoopHeartbeat(serverstate.LoopBackupHealth)
 		t.Reset(interval)
 	}
 }

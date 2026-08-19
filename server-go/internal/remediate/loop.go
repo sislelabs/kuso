@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"kuso/server/internal/reconcilehealth"
+	"kuso/server/internal/serverstate"
 )
 
 // Loop runs unattended auto-remediation on an interval.
@@ -77,6 +78,10 @@ func (l *Loop) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			l.tick(ctx)
+			// Heartbeat every pass — even when Enabled() is false and
+			// l.tick early-returns. The loop is alive either way; liveness
+			// tracks the goroutine, not whether auto-remediation is on.
+			serverstate.LoopHeartbeat(serverstate.LoopAutoRemediate)
 		}
 	}
 }

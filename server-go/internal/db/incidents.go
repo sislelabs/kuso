@@ -21,6 +21,14 @@ const (
 	IncidentResolved         = "resolved"
 	IncidentRejected         = "rejected"
 	IncidentDropped          = "dropped"
+	// IncidentTimedOut is the terminal state the reaper
+	// (incidents.Manager.Run) applies to an incident stuck in
+	// "investigating" past the agent timeout — the agent Job crashed or
+	// vanished before posting findings. Terminal (stamps closedAt) so
+	// the incident leaves the open set: the MaxConcurrent slot frees and
+	// the next matching event respawns an agent instead of attaching to
+	// a corpse forever.
+	IncidentTimedOut = "timed_out"
 )
 
 // IncidentOpenStates are the non-terminal states — an incident in any of
@@ -188,10 +196,37 @@ func (d *DB) ListIncidents(ctx context.Context, limit int, state string) ([]Inci
 	return out, rows.Err()
 }
 
+// StaleInvestigatingIncidents returns incidents still in "investigating"
+// whose createdAt is before `cutoff`. Anchored on createdAt, NOT
+// updatedAt: the attach path appends feedback (bumping updatedAt) every
+// time the underlying event recurs, so a crash-looping pod would keep a
+// dead incident's updatedAt eternally fresh — exactly the jam the reaper
+// exists to clear. The investigate Job is spawned once at creation, so
+// its whole lifetime is bounded from createdAt.
+func (d *DB) StaleInvestigatingIncidents(ctx context.Context, cutoff time.Time) ([]Incident, error) {
+	rows, err := d.QueryContext(ctx, `
+SELECT `+incidentCols+` FROM "Incident"
+WHERE "state" = $1 AND "createdAt" < $2
+ORDER BY "createdAt" ASC`, IncidentInvestigating, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		in, err := scanIncident(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
 // SetIncidentState transitions an incident, stamping closedAt when moving
 // to a terminal state. Returns ErrIncidentNotFound if the id is gone.
 func (d *DB) SetIncidentState(ctx context.Context, id, state string) error {
-	terminal := state == IncidentResolved || state == IncidentRejected || state == IncidentDropped
+	terminal := state == IncidentResolved || state == IncidentRejected || state == IncidentDropped || state == IncidentTimedOut
 	q := `UPDATE "Incident" SET "state"=$2, "updatedAt"=now()`
 	if terminal {
 		q += `, "closedAt"=now()`

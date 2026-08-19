@@ -30,7 +30,13 @@ import (
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
+
+// HeartbeatInterval is the watcher's tick cadence (matches New's default
+// Interval), exported so main.go can register the health watcher in the
+// serverstate liveness registry at the interval it beats.
+const HeartbeatInterval = 60 * time.Second
 
 // Watcher polls cluster state every Interval and emits notify events.
 // Construct via New, run via Run in a goroutine.
@@ -56,7 +62,7 @@ func New(k *kube.Client, ns string, n *notify.Dispatcher, logger *slog.Logger) *
 		Namespace:   ns,
 		Notify:      n,
 		Logger:      logger,
-		Interval:    60 * time.Second,
+		Interval:    HeartbeatInterval,
 		DiskWarnPct: 85,
 		fired:       map[string]bool{},
 	}
@@ -74,6 +80,9 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			w.tick(ctx)
+			// Liveness heartbeat: the loop completed an iteration. A no-op
+			// unless registered (leader-gated in startSingletons).
+			serverstate.LoopHeartbeat(serverstate.LoopHealth)
 		}
 	}
 }

@@ -14,7 +14,14 @@ import (
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/releaserun"
+	"kuso/server/internal/serverstate"
 )
+
+// DefaultTickInterval is the watcher's tick cadence when Watcher.Tick is
+// unset. Exported so main.go can register imagerelease in the serverstate
+// liveness registry at the cadence it beats. main.go leaves Tick unset, so
+// this is the effective interval.
+const DefaultTickInterval = 15 * time.Second
 
 // Runner is the release-Job runner (releaserun.Runner satisfies it).
 type Runner interface {
@@ -37,7 +44,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 	tick := w.Tick
 	if tick <= 0 {
-		tick = 15 * time.Second
+		tick = DefaultTickInterval
 	}
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -49,6 +56,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			if err := w.reconcileOnce(ctx); err != nil {
 				w.Logger.Error("imagerelease reconcile", "err", err)
 			}
+			serverstate.LoopHeartbeat(serverstate.LoopImageRelease)
 		}
 	}
 }

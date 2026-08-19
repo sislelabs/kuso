@@ -84,7 +84,9 @@ func main() {
 	activatorMode := flag.Bool("activator", envOr("KUSO_ACTIVATOR", "") == "true", "run as the scale-to-zero activator proxy")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: parseLogLevel(os.Getenv("KUSO_LOG_LEVEL")),
+	}))
 	slog.SetDefault(logger)
 
 	if *activatorMode {
@@ -724,6 +726,34 @@ func main() {
 
 		startSingletons := func(workCtx context.Context) {
 			leaderActive.Store(true)
+			// Liveness registry for THIS lease's ticking loops (runs-poller,
+			// errorscan, health, instancepg). Each is registered next to its
+			// own start guard below with the SAME "register only when it will
+			// run+beat" discipline the cluster-singletons lease uses: the
+			// registration lives inside the KUSO_*_DISABLED guard, so a
+			// disabled loop is never enrolled and can't false-fail /healthz.
+			// Drop only THIS lease's loops on cancel — a blanket
+			// UnregisterLoops() would strand the sibling cluster-singletons
+			// lease's loops in the shared process-global registry.
+			//
+			// EXCLUSIONS (registered by neither this closure nor liveness):
+			//   - platformharden.Run — NOT a loop. It applies hardening once
+			//     and returns, so it can't stamp a fixed-interval heartbeat;
+			//     enrolling it would guarantee a false "stuck" the moment it
+			//     finishes. Correctly left out.
+			//   - updaterSvc.Run + the one-shot boot migrations
+			//     (log-partition, shared-env-keys, subscribed-addons),
+			//     preview/finalizer/daily cleanup — out of this remediation's
+			//     scope; left as-is.
+			go func() {
+				<-workCtx.Done()
+				serverstate.UnregisterLoop(
+					serverstate.LoopRunsPoller,
+					serverstate.LoopErrorScan,
+					serverstate.LoopHealth,
+					serverstate.LoopInstancePG,
+				)
+			}()
 			// Updater poll loop: leader-only. Every replica used to run
 			// it, so an N-replica deploy made N GitHub calls per tick
 			// against one shared rate limit and raced N operator-
@@ -798,6 +828,11 @@ func main() {
 				}).Run(workCtx)
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
+				// Register in the liveness registry only inside the same guard
+				// that starts it — the same "register only if it will run+beat"
+				// discipline the cluster-singleton loops use. health.New always
+				// sets Interval=HeartbeatInterval, so registration + beat agree.
+				serverstate.RegisterLoop(serverstate.LoopHealth, health.HeartbeatInterval)
 				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
 			}
 			// Build controller moved out of startSingletons. It
@@ -864,10 +899,11 @@ func main() {
 				}()
 			}
 			if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
+				serverstate.RegisterLoop(serverstate.LoopErrorScan, errorscan.HeartbeatInterval)
 				go (&errorscan.Scanner{
 					DB:        database,
 					Logger:    logger,
-					Interval:  30 * time.Second,
+					Interval:  errorscan.HeartbeatInterval,
 					BatchSize: 500,
 				}).Run(workCtx)
 			}
@@ -878,9 +914,10 @@ func main() {
 			// "this run failed with <msg>" without relying on raw
 			// kube. Leader-gated by living inside startSingletons.
 			if runSvc != nil && os.Getenv("KUSO_RUNS_POLLER_DISABLED") != "true" {
+				serverstate.RegisterLoop(serverstate.LoopRunsPoller, runs.HeartbeatInterval)
 				go (&runs.Poller{
 					Svc:      runSvc,
-					Interval: 5 * time.Second,
+					Interval: runs.HeartbeatInterval,
 					Logger:   logger.With("component", "runs-poller"),
 				}).Run(workCtx)
 			}
@@ -890,6 +927,7 @@ func main() {
 			// the addon-CR read informs the same managed-addon state for
 			// every replica, so the worker only needs to run once.
 			if os.Getenv("KUSO_INSTANCEPG_DISABLED") != "true" && instancePGSvc != nil {
+				serverstate.RegisterLoop(serverstate.LoopInstancePG, instancepg.HeartbeatInterval)
 				go instancePGSvc.Run(workCtx, 0)
 			}
 		}
@@ -1156,10 +1194,54 @@ func main() {
 	// branch above.
 	if kubeClient != nil {
 		startKubeSingletons := func(workCtx context.Context) {
+			// Liveness heartbeat registry. Each singleton loop below stamps
+			// a beat once per iteration (serverstate.LoopHeartbeat inside the
+			// loop body); we register it here with the interval it actually
+			// beats at so the /healthz + /readyz probes can derive per-loop
+			// staleness thresholds. Registration is what makes the registry
+			// leader-aware: only THIS lease-holder registers loops, so a
+			// non-leader pod's probes never gate on loop health. On lease
+			// loss (workCtx cancel) we UnregisterLoops so a former tenure's
+			// stale beat can't linger. Loops that are event-driven or that
+			// tick too rarely to be a fixed-interval liveness signal are
+			// EXCLUDED — noted at their construction below.
+			//
+			// Conditionally-started loops (scaledown, logship) are registered
+			// only when actually started, next to their guards — registering
+			// a loop that never runs would false-flag it as permanently
+			// stuck.
+			// Drop only THIS lease's loops on cancel. A blanket
+			// UnregisterLoops() would also strand the sibling
+			// kuso-server-singletons lease's loops (runs-poller, errorscan,
+			// health, instancepg) which register into the same process-global
+			// registry. LoopScaledown is listed unconditionally —
+			// UnregisterLoop ignores names that were never registered (the
+			// KUSO_SCALEDOWN_DISABLED case), so it is safe either way.
+			go func() {
+				<-workCtx.Done()
+				serverstate.UnregisterLoop(
+					serverstate.LoopNodeMetrics,
+					serverstate.LoopProjectMetrics,
+					serverstate.LoopNodeWatch,
+					serverstate.LoopScaledown,
+					serverstate.LoopImageRelease,
+					serverstate.LoopPkgUpdates,
+					serverstate.LoopCronWatch,
+					serverstate.LoopLogship,
+					serverstate.LoopAlerts,
+					serverstate.LoopBackupHealth,
+					serverstate.LoopIncidents,
+					serverstate.LoopAutoRemediate,
+				)
+			}()
+
+			serverstate.RegisterLoop(serverstate.LoopNodeMetrics, nodemetrics.SampleInterval)
 			sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
 			go sampler.Run(workCtx)
+			serverstate.RegisterLoop(serverstate.LoopProjectMetrics, projectmetrics.SampleInterval)
 			projectSampler := &projectmetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "projectmetrics")}
 			go projectSampler.Run(workCtx)
+			serverstate.RegisterLoop(serverstate.LoopNodeWatch, nodewatch.DefaultTickInterval)
 			watcher := &nodewatch.Watcher{
 				Kube:   kubeClient,
 				Notify: notifyDisp,
@@ -1171,6 +1253,22 @@ func main() {
 			// of no traffic; the activator (--activator mode) wakes them
 			// on the next request. Leader-gated so only one replica
 			// scales things. See docs/design/SCALE_TO_ZERO.md.
+			// Register ONLY when scaledown will actually run: its Run()
+			// early-returns (WITHOUT ever stamping a heartbeat) when
+			// KUSO_SCALEDOWN_DISABLED=true. Registering it unconditionally
+			// meant a disabled scaledown was measured from registeredAt
+			// forever → ~10min after each leader election /healthz 503'd →
+			// kubelet restart → lease churn → a permanent control-plane
+			// restart loop (strictly worse than the wedged-loop bug this
+			// registry was built to catch). Mirror logship's guarded
+			// registration: gate RegisterLoop on the SAME condition that
+			// gates whether the loop does work. We still always start the
+			// goroutine so flipping the env var + restarting is all it
+			// takes — the Run() self-noops when disabled, it just isn't
+			// enrolled in liveness.
+			if os.Getenv("KUSO_SCALEDOWN_DISABLED") != "true" {
+				serverstate.RegisterLoop(serverstate.LoopScaledown, scaledown.DefaultTickInterval)
+			}
 			go (&scaledown.Watcher{
 				Kube:      kubeClient,
 				Namespace: *namespace,
@@ -1188,6 +1286,7 @@ func main() {
 			// over a fragile hand-rolled event. The withheld image + logger.Warn below
 			// are the load-bearing failure signal; wire Notify once a shared event
 			// helper exists.
+			serverstate.RegisterLoop(serverstate.LoopImageRelease, imagerelease.DefaultTickInterval)
 			go (&imagerelease.Watcher{
 				Kube:      kubeClient,
 				Namespace: *namespace,
@@ -1205,6 +1304,7 @@ func main() {
 				Notify: notifyDisp,
 				Logger: logger.With("component", "pkgupdates"),
 			}
+			serverstate.RegisterLoop(serverstate.LoopPkgUpdates, pkgupdates.HeartbeatInterval)
 			go pkgWatcher.Run(workCtx)
 			// Cron failure detector — watches Job objects labeled
 			// kuso.sislelabs.com/cron and dispatches the per-cron
@@ -1217,17 +1317,21 @@ func main() {
 				Logger:  logger.With("component", "cronwatch"),
 				BaseURL: os.Getenv("KUSO_PUBLIC_URL"),
 			}
+			serverstate.RegisterLoop(serverstate.LoopCronWatch, cronwatch.DefaultTickInterval)
 			go cwatcher.Run(workCtx)
 			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
+				serverstate.RegisterLoop(serverstate.LoopLogship, logship.HeartbeatInterval)
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
 				go ls.Run(workCtx)
 			}
+			serverstate.RegisterLoop(serverstate.LoopAlerts, alerts.HeartbeatInterval)
 			ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
 			go ae.Run(workCtx)
 			// Control-plane backup health watcher: fires a one-shot
 			// notify event on the healthy↔unhealthy edge so a silently-
 			// stopped (or never-configured) kuso-DB backup doesn't stay
 			// invisible until restore time.
+			serverstate.RegisterLoop(serverstate.LoopBackupHealth, backuphealth.DefaultInterval)
 			go (&backuphealth.Watcher{
 				Kube:      kubeClient,
 				Notify:    notifyDisp,
@@ -1249,6 +1353,18 @@ func main() {
 				v := os.Getenv("KUSO_AUTO_REMEDIATE")
 				return v == "1" || strings.EqualFold(v, "true")
 			}
+			// Incident reaper: transitions incidents stuck in
+			// "investigating" past the agent timeout to the terminal
+			// timed_out state. Without it, an agent Job that crashed
+			// before posting findings held a MaxConcurrent slot forever
+			// and every future matching event attached to the corpse
+			// instead of respawning — three corpses silently turned the
+			// incident system off. Leader-gated like the other
+			// singletons so multi-replica installs don't double-reap
+			// (the transition is idempotent anyway).
+			serverstate.RegisterLoop(serverstate.LoopIncidents, incidents.HeartbeatInterval)
+			go incidentMgr.Run(workCtx)
+			serverstate.RegisterLoop(serverstate.LoopAutoRemediate, 5*time.Minute)
 			rhScanner := &reconcilehealth.Scanner{Kube: kubeClient}
 			rhRemediator := &remediate.Remediator{Kube: kubeClient, Audit: auditSvc}
 			remediateLoop := remediate.NewScannerLoop(
@@ -1663,6 +1779,22 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseLogLevel maps KUSO_LOG_LEVEL onto a slog.Level. Unset or
+// unrecognized values fall back to Info rather than erroring — a typo
+// in an env var must not change what the server logs by surprise.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // redactDSN returns the DSN with the password (between `:` and `@` in

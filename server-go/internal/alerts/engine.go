@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -17,9 +18,28 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
 
 const tickInterval = 1 * time.Minute
+
+// HeartbeatInterval is tickInterval, exported so main.go can register the
+// engine in the serverstate liveness registry at the cadence it actually
+// beats. Kept in lockstep with tickInterval.
+const HeartbeatInterval = tickInterval
+
+// ruleEvalTimeout bounds one rule's evaluation (perf W8). A log-match
+// rule against a bloated LogLine table (or a wedged Postgres) must not
+// eat the whole tick — 15s is generous for any healthy query and short
+// enough that a pathological rule can't push the tick past its
+// interval on its own.
+const ruleEvalTimeout = 15 * time.Second
+
+// evalWorkers bounds concurrent rule evaluations per tick. Rules are
+// independent (throttle state is keyed by rule ID), so evaluating a
+// handful in parallel keeps one slow rule from starving the rest while
+// still capping DB/apiserver fan-out.
+const evalWorkers = 4
 
 type Engine struct {
 	// DB holds alert rules + node metrics — main kuso.db.
@@ -34,7 +54,32 @@ type Engine struct {
 	Kube   *kube.Client
 	Notify *notify.Dispatcher
 	Logger *slog.Logger
+
+	// lastFired is the in-memory throttle fallback keyed by rule ID.
+	// The DB row (LastFiredAt via MarkAlertFired) is the durable
+	// record, but if that write fails during a DB blip the rule would
+	// otherwise re-fire every tick — the exact moment the operator is
+	// already drowning in pages. Bounded by lastFiredMaxEntries.
+	// mu makes the map safe for the concurrent rule workers below —
+	// every access goes through lastFiredMem/recordFiredMem/dropFiredMem.
+	mu        sync.Mutex
+	lastFired map[string]time.Time
+
+	// evalTimeout / workers override ruleEvalTimeout / evalWorkers in
+	// tests. Zero values mean the defaults.
+	evalTimeout time.Duration
+	workers     int
+
+	// evaluateFn is a test seam for the per-rule evaluation; nil means
+	// e.evaluate. Lets concurrency/timeout tests inject slow or
+	// blocking evaluations without a DB.
+	evaluateFn func(ctx context.Context, r *db.AlertRule, now time.Time) (bool, string, error)
 }
+
+// lastFiredMaxEntries bounds the in-memory throttle map. Rule counts
+// are tiny in practice; the cap only guards against a pathological
+// churn of rule IDs growing the map without bound.
+const lastFiredMaxEntries = 1024
 
 func New(d *db.DB, ld *db.LogDB, k *kube.Client, n *notify.Dispatcher, logger *slog.Logger) *Engine {
 	if logger == nil {
@@ -60,6 +105,7 @@ func (e *Engine) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			e.tick(ctx)
+			serverstate.LoopHeartbeat(serverstate.LoopAlerts)
 		}
 	}
 }
@@ -73,36 +119,153 @@ func (e *Engine) tick(ctx context.Context) {
 		return
 	}
 	now := time.Now().UTC()
+	runnable := make([]db.AlertRule, 0, len(rules))
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
-		// Throttle: skip if we recently fired.
-		if r.LastFiredAt != nil && now.Sub(*r.LastFiredAt) < time.Duration(r.ThrottleSeconds)*time.Second {
+		// Throttle: skip if we recently fired. The in-memory stamp
+		// covers the window where MarkAlertFired failed and the DB
+		// row still carries the stale (or nil) LastFiredAt.
+		last := r.LastFiredAt
+		if mem, ok := e.lastFiredMem(r.ID); ok && (last == nil || mem.After(*last)) {
+			last = &mem
+		}
+		if last != nil && now.Sub(*last) < time.Duration(r.ThrottleSeconds)*time.Second {
 			continue
 		}
-		fired, body, err := e.evaluate(ctx, &r, now)
-		if err != nil {
-			e.Logger.Warn("alert evaluate", "rule", r.Name, "err", err)
-			continue
-		}
-		if !fired {
-			continue
-		}
-		ev := notify.Event{
-			Type:     notify.EventAlertFired,
-			Title:    fmt.Sprintf("⚠ Alert: %s", r.Name),
-			Body:     body,
-			Project:  r.Project,
-			Service:  r.Service,
-			Severity: r.Severity,
-			Extra:    map[string]string{"rule_id": r.ID, "kind": r.Kind},
-		}
-		e.Notify.Emit(ev)
-		stampCtx, sc := context.WithTimeout(ctx, 5*time.Second)
-		_ = e.DB.MarkAlertFired(stampCtx, r.ID, now)
-		sc()
+		runnable = append(runnable, r)
 	}
+	e.evalRules(ctx, runnable, now)
+}
+
+// evalRules evaluates the runnable rules with bounded concurrency and
+// a per-rule timeout (perf W8). Rules used to evaluate sequentially
+// inside the 1-minute tick, so ONE pathological log-match rule (regex
+// against a hot LogLine table) could push the tick past its interval
+// and delay every other rule. Rules are mutually independent — the
+// only shared state is the lastFired fallback map (mutex-guarded), the
+// DB pool, and the notify dispatcher (both concurrency-safe) — so a
+// small worker pool is safe. Blocks until every rule finishes, so
+// ticks still never overlap.
+func (e *Engine) evalRules(ctx context.Context, rules []db.AlertRule, now time.Time) {
+	workers := e.workers
+	if workers <= 0 {
+		workers = evalWorkers
+	}
+	timeout := e.evalTimeout
+	if timeout <= 0 {
+		timeout = ruleEvalTimeout
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i := range rules {
+		r := rules[i]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ruleCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			e.evalOne(ruleCtx, &r, now)
+		}()
+	}
+	wg.Wait()
+}
+
+// evalOne evaluates a single rule and handles the fire path: emit the
+// notify event, stamp LastFiredAt, fall back to the in-memory throttle
+// stamp when the DB write fails. ctx is already bounded by the
+// per-rule timeout; a rule that blows its budget surfaces as an
+// evaluate error (context deadline) and is logged like any other
+// broken rule.
+func (e *Engine) evalOne(ctx context.Context, r *db.AlertRule, now time.Time) {
+	// evalFn is the rule-evaluation func (test seam or the real
+	// e.evaluate) — plain Go dispatch, nothing dynamic.
+	evalFn := e.evaluateFn
+	if evalFn == nil {
+		evalFn = e.evaluate
+	}
+	fired, body, err := evalFn(ctx, r, now)
+	if err != nil {
+		e.Logger.Warn("alert evaluate", "rule", r.Name, "err", err)
+		return
+	}
+	if !fired {
+		return
+	}
+	ev := notify.Event{
+		Type:     notify.EventAlertFired,
+		Title:    fmt.Sprintf("⚠ Alert: %s", r.Name),
+		Body:     body,
+		Project:  r.Project,
+		Service:  r.Service,
+		Severity: r.Severity,
+		Extra:    map[string]string{"rule_id": r.ID, "kind": r.Kind},
+	}
+	e.Notify.Emit(ev)
+	stampCtx, sc := context.WithTimeout(ctx, 5*time.Second)
+	err = e.DB.MarkAlertFired(stampCtx, r.ID, now)
+	sc()
+	if err != nil {
+		// A swallowed MarkAlertFired error meant a DB blip re-fired
+		// the alert every minute. Hold the stamp in memory until a
+		// later write lands; the DB stays authoritative once it
+		// does (operators backdate/clear LastFiredAt to force a
+		// re-fire, and the fallback must not shadow that).
+		e.Logger.Warn("alert mark fired — throttling on in-memory fallback until the stamp lands",
+			"rule", r.Name, "err", err)
+		e.recordFiredMem(r.ID, now)
+	} else {
+		e.dropFiredMem(r.ID)
+	}
+}
+
+// lastFiredMem returns the in-memory last-fired stamp for a rule.
+func (e *Engine) lastFiredMem(ruleID string) (time.Time, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, ok := e.lastFired[ruleID]
+	return t, ok
+}
+
+// dropFiredMem removes the fallback stamp once the durable DB stamp
+// has landed — from then on LastFiredAt rules alone.
+func (e *Engine) dropFiredMem(ruleID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.lastFired, ruleID)
+}
+
+// recordFiredMem stamps the in-memory fallback. When the map would
+// exceed its bound, entries older than 24h go first (any realistic
+// throttle window has long expired); if that isn't enough, the oldest
+// entry is evicted so the map stays bounded no matter what.
+func (e *Engine) recordFiredMem(ruleID string, t time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastFired == nil {
+		e.lastFired = make(map[string]time.Time)
+	}
+	if _, exists := e.lastFired[ruleID]; !exists && len(e.lastFired) >= lastFiredMaxEntries {
+		cutoff := t.Add(-24 * time.Hour)
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range e.lastFired {
+			if v.Before(cutoff) {
+				delete(e.lastFired, k)
+				continue
+			}
+			if oldestKey == "" || v.Before(oldest) {
+				oldestKey, oldest = k, v
+			}
+		}
+		if len(e.lastFired) >= lastFiredMaxEntries && oldestKey != "" {
+			delete(e.lastFired, oldestKey)
+		}
+	}
+	e.lastFired[ruleID] = t
 }
 
 // evaluate dispatches on rule kind. Returns (fired, body, err).
