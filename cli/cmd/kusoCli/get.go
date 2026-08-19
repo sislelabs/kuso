@@ -28,6 +28,11 @@ func checkRespErr(resp *resty.Response, err error) error {
 	}
 	if resp.StatusCode() >= 300 {
 		body := string(resp.Body())
+		// The server speaks the JSON error envelope {"error": "...",
+		// "code": "..."} — surface just the message, never raw JSON
+		// braces on the terminal. Non-JSON bodies (older servers,
+		// proxies) pass through untouched.
+		body = errEnvelopeMessage(body)
 		if body == "" {
 			body = resp.Status()
 		}
@@ -38,6 +43,23 @@ func checkRespErr(resp *resty.Response, err error) error {
 		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), body)
 	}
 	return nil
+}
+
+// errEnvelopeMessage extracts the "error" field from a JSON error
+// envelope body. Returns the input unchanged when it isn't an envelope
+// (backward compat with pre-envelope servers).
+func errEnvelopeMessage(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, "{") {
+		return body
+	}
+	var env struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(trimmed), &env) == nil && env.Error != "" {
+		return env.Error
+	}
+	return body
 }
 
 // getCmd is the agent-friendly read entrypoint. v0.2 surfaces:
@@ -186,15 +208,20 @@ var getEnvsCmd = &cobra.Command{
 			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"NAME", "SERVICE", "KIND", "BRANCH", "HOST"})
+			// STATE is the server's unified per-env rollup (status.state:
+			// running/crashlooping/build_failed/...) — empty cell against
+			// pre-rollup servers.
+			t.SetHeader([]string{"NAME", "SERVICE", "KIND", "BRANCH", "HOST", "STATE"})
 			for _, e := range items {
 				spec := mapAt(e, "spec")
+				status := mapAt(e, "status")
 				t.Append([]string{
 					resourceName(e),
 					stripPrefix(asString(spec["service"]), args[0]+"-"),
 					asString(spec["kind"]),
 					asString(spec["branch"]),
 					asString(spec["host"]),
+					asString(status["state"]),
 				})
 			}
 			t.Render()

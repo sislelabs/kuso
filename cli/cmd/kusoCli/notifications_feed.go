@@ -63,11 +63,8 @@ are mutually exclusive with each other and with the list:
 		switch {
 		case notifFeedUnreadCount:
 			resp, err := api.NotificationFeedUnreadCount()
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return err
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			if outputFormat == "json" {
 				fmt.Println(string(resp.Body()))
@@ -84,22 +81,16 @@ are mutually exclusive with each other and with the list:
 
 		case notifFeedReadAll:
 			resp, err := api.NotificationFeedReadAll()
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return err
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			fmt.Println("Marked all feed events read.")
 			return nil
 
 		case notifFeedClear:
 			resp, err := api.NotificationFeedClear()
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return err
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			fmt.Println("Cleared the notification feed.")
 			return nil
@@ -107,11 +98,8 @@ are mutually exclusive with each other and with the list:
 
 		// Default: list.
 		resp, err := api.NotificationFeed(notifFeedLimit, notifFeedUnread)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -170,11 +158,8 @@ their project memberships. Read-only — no unread/read-all/clear.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.NotificationMyFeed(notifMyFeedLimit)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -229,11 +214,8 @@ numbers only reflect external webhook health.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.NotificationOutboxStats()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))

@@ -49,11 +49,8 @@ context for the same cluster the kuso server is talking to.`,
 		path := fmt.Sprintf("/api/projects/%s/services/%s/pods?env=%s&reason=shell",
 			args[0], args[1], shellEnv)
 		resp, err := api.RawGet(path)
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("pod lookup: %d %s", resp.StatusCode(), string(resp.Body()))
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("pod lookup: %w", err)
 		}
 		var info struct {
 			Namespace string `json:"namespace"`

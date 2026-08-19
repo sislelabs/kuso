@@ -101,11 +101,8 @@ var instanceConfigSetCmd = &cobra.Command{
 			settings[key] = val
 		}
 		setResp, err := api.SetInstanceConfig(settings)
-		if err != nil {
+		if err := checkRespErr(setResp, err); err != nil {
 			return fmt.Errorf("set instance config: %w", err)
-		}
-		if setResp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", setResp.StatusCode(), string(setResp.Body()))
 		}
 		fmt.Printf("instance config updated (%d key(s))\n", len(args))
 		return nil
@@ -172,11 +169,8 @@ func runSettingsSet(path string, args []string) error {
 		return fmt.Errorf("encode settings: %w", err)
 	}
 	putResp, err := api.RawPut(path, body, "application/json")
-	if err != nil {
+	if err := checkRespErr(putResp, err); err != nil {
 		return fmt.Errorf("put settings: %w", err)
-	}
-	if putResp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", putResp.StatusCode(), string(putResp.Body()))
 	}
 	fmt.Printf("settings updated (%d key(s))\n", len(args))
 	return nil

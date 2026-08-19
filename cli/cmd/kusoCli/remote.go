@@ -54,11 +54,19 @@ var remoteSelectCmd = &cobra.Command{
 	},
 }
 
+var remoteDeleteYes bool
+
 var remoteDeleteCmd = &cobra.Command{
 	Use:     "delete [name]",
 	Aliases: []string{"rm", "del"},
 	Args:    cobra.MaximumNArgs(1),
 	Short:   "Remove an instance from the local config",
+	Long: `Remove a saved instance entry from the local ~/.kuso config. If it is
+the active instance, no instance is selected afterwards — commands fail
+until you 'kuso remote select' another or re-add this one with
+'kuso remote add' + 'kuso login'.
+
+Prompts for confirmation unless --yes.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := ""
 		if len(args) == 1 {
@@ -70,6 +78,10 @@ var remoteDeleteCmd = &cobra.Command{
 		if name == "" {
 			return fmt.Errorf("no instance selected")
 		}
+		if err := confirmDestructive(remoteDeleteYes,
+			fmt.Sprintf("Remove instance %q from the local config?", name)); err != nil {
+			return err
+		}
 		return deleteRemote(name)
 	},
 }
@@ -77,6 +89,7 @@ var remoteDeleteCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(remoteCmd)
 	remoteCmd.AddCommand(remoteCreateCmd, remoteSelectCmd, remoteDeleteCmd)
+	remoteDeleteCmd.Flags().BoolVarP(&remoteDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 }
 
 // printRemotes renders the instance table. Active + auth columns use

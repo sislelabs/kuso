@@ -30,11 +30,8 @@ against 'kuso env list' to find names that are referenced but unset.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetDetectedEnv(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("detected env: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 
 		if outputFormat == "json" {

@@ -62,11 +62,8 @@ var projectCreateCmd = &cobra.Command{
 			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: projectCreateInstallationID}
 		}
 		resp, err := api.CreateProject(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s created\n", args[0])
 		return nil
@@ -153,11 +150,8 @@ installation use --github-installation-clear (sets installationId to 0).`,
 			}
 		}
 		resp, err := api.UpdateProject(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("update: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s updated\n", args[0])
 		return nil
@@ -199,11 +193,8 @@ with SASL auth failures.`,
 			return err
 		}
 		resp, err := api.DeleteProjectOpts(args[0], kusoApi.DeleteProjectOptions{PurgeData: projectDeletePurgeData})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		suffix := ""
 		if projectDeletePurgeData {
@@ -226,11 +217,8 @@ var projectDescribeCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetProject(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("get: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data map[string]any
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
@@ -358,11 +346,8 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
 	resp, err := api.AddService(args[0], req)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("add service: %w", err)
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	fmt.Printf("service %s/%s added\n", args[0], args[1])
 	return nil
@@ -406,11 +391,8 @@ var serviceDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteService(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service %s/%s deleted\n", args[0], args[1])
 		return nil
@@ -456,11 +438,8 @@ resource names are immutable, so the operation has real cost:
 			fmt.Sprintf("/api/projects/%s/services/%s/rename",
 				url.PathEscape(project), url.PathEscape(oldName)),
 			body, "application/json")
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("rename service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service renamed: %s/%s → %s/%s\n", project, oldName, project, newName)
 		return nil
@@ -646,11 +625,8 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			// the one field we never round-trip: we only send it when the
 			// user supplies one.
 			cur, err := api.GetService(args[0], args[1])
-			if err != nil {
+			if err := checkRespErr(cur, err); err != nil {
 				return fmt.Errorf("fetch current service spec: %w", err)
-			}
-			if cur.StatusCode() >= 300 {
-				return fmt.Errorf("fetch current service spec: server returned %d: %s", cur.StatusCode(), string(cur.Body()))
 			}
 			var curWire struct {
 				Spec struct {
@@ -712,11 +688,8 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			// fetch-then-patch sequence — otherwise we'd silently reset
 			// the untouched sub-field to its zero value.
 			cur, err := api.GetService(args[0], args[1])
-			if err != nil {
+			if err := checkRespErr(cur, err); err != nil {
 				return fmt.Errorf("fetch current service spec: %w", err)
-			}
-			if cur.StatusCode() >= 300 {
-				return fmt.Errorf("fetch current service spec: server returned %d: %s", cur.StatusCode(), string(cur.Body()))
 			}
 			var curWire struct {
 				Spec struct {
@@ -761,11 +734,8 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			req.SecurityContext = sc
 		}
 		resp, err := api.PatchService(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("patch service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service %s/%s updated\n", args[0], args[1])
 		return nil
@@ -850,11 +820,8 @@ var addonAddCmd = &cobra.Command{
 			TLS:     addonAddTLS,
 		}
 		resp, err := api.AddAddon(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add addon: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s (%s) added\n", args[0], args[1], addonAddKind)
 		return nil
@@ -870,12 +837,8 @@ type subscribableAddonsShape struct {
 
 func readSubscribedAddons(project, service string) (*subscribableAddonsShape, error) {
 	resp, err := api.GetSubscribedAddons(project, service)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return nil, fmt.Errorf("read subscribed addons: %w", err)
-	}
-	if resp.StatusCode() >= 300 {
-		return nil, fmt.Errorf("read subscribed addons: server returned %d: %s",
-			resp.StatusCode(), string(resp.Body()))
 	}
 	var out subscribableAddonsShape
 	if err := json.Unmarshal(resp.Body(), &out); err != nil {
@@ -960,11 +923,8 @@ var addonSubscribeCmd = &cobra.Command{
 			}
 		}
 		resp, err := api.SetSubscribedAddons(project, service, next)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("subscribed %s/%s — now subscribed to: %s\n", project, service, strings.Join(next, ", "))
 		fmt.Fprintln(os.Stderr, "note: this rolls the service's pod(s) to mount the new connection secret(s).")
@@ -996,11 +956,8 @@ var addonUnsubscribeCmd = &cobra.Command{
 			}
 		}
 		resp, err := api.SetSubscribedAddons(project, service, next)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("unsubscribed %s/%s — now subscribed to: %s\n", project, service,
 			strings.Join(next, ", "))
@@ -1025,11 +982,8 @@ var addonDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteAddon(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete addon: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s deleted\n", args[0], args[1])
 		return nil
@@ -1075,11 +1029,8 @@ managed Redis (Upstash / ElastiCache).`,
 			},
 		}
 		resp, err := api.AddAddon(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("connect external addon: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s connected to existing secret %q\n", args[0], args[1], addonExtSecret)
 		return nil
@@ -1095,11 +1046,8 @@ var addonResyncExternalCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ResyncExternalAddon(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("resync: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s conn secret refreshed\n", args[0], args[1])
 		return nil
@@ -1145,11 +1093,8 @@ role on the shared server, then writes the per-project DSN into
 			req.Kind = "postgres"
 		}
 		resp, err := api.AddAddon(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("connect instance addon: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s provisioned on instance addon %q\n", args[0], args[1], addonInstName)
 		return nil
@@ -1165,11 +1110,8 @@ var addonResyncInstanceCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ResyncInstanceAddon(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("resync: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s re-provisioned\n", args[0], args[1])
 		return nil
@@ -1191,11 +1133,8 @@ via the local trust unix socket.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.RepairAddonPassword(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("repair: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s password resynced\n", args[0], args[1])
 		return nil
@@ -1225,11 +1164,8 @@ var envDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteEnvironment(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete env: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("env %s/%s deleted\n", args[0], args[1])
 		return nil

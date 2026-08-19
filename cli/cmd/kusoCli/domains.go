@@ -61,11 +61,8 @@ var domainsListCmd = &cobra.Command{
 		// service-level spec.domains involved).
 		if domainsEnv != "" {
 			resp, err := api.GetEnvironment(project, envCRName(project, service, domainsEnv))
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("get environment: %w", err)
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			var env struct {
 				Spec struct {
@@ -92,11 +89,8 @@ var domainsListCmd = &cobra.Command{
 		}
 
 		resp, err := api.GetService(project, service)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("get service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var svc struct {
 			Spec struct {
@@ -182,11 +176,8 @@ lifts the ~50 certs/week LE ceiling for many-tenant platforms:
 					"drop --env to set a plaintext host at the service level")
 			}
 			resp, err := api.AddEnvDomain(project, service, domainsEnv, host, domainsAddTLSSecret)
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("add env domain: %w", err)
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			fmt.Printf("bound %s to %s/%s env=%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service, domainsEnv)
 			return nil
@@ -194,11 +185,8 @@ lifts the ~50 certs/week LE ceiling for many-tenant platforms:
 
 		req := kusoApi.AddDomainRequest{Host: host, TLS: !domainsAddNoTLS, TLSSecret: domainsAddTLSSecret}
 		resp, err := api.AddDomain(project, service, req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add domain: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("bound %s to %s/%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service)
 		return nil
@@ -235,11 +223,8 @@ var domainsRemoveCmd = &cobra.Command{
 
 		if domainsEnv != "" {
 			resp, err := api.RemoveEnvDomain(project, service, domainsEnv, host)
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("remove env domain: %w", err)
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			fmt.Printf("unbound %s from %s/%s env=%s\n", host, project, service, domainsEnv)
 			return nil

@@ -3,7 +3,11 @@
 
 package kusoApi
 
-import "github.com/go-resty/resty/v2"
+import (
+	"fmt"
+
+	"github.com/go-resty/resty/v2"
+)
 
 type CreateBuildRequest struct {
 	Branch string `json:"branch,omitempty"`
@@ -16,6 +20,25 @@ type CreateBuildRequest struct {
 
 func (k *KusoClient) ListBuilds(project, service string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds")
+}
+
+// ListBuildsPage is ListBuilds with offset paging. limit <= 0 and
+// offset <= 0 are omitted (server returns the full legacy response
+// then). When the returned window was cut, the response carries
+// X-Kuso-Truncated: true and X-Kuso-Next-Offset: <n> — pass that as
+// offset for the next page. The body stays a bare []BuildSummary
+// either way.
+func (k *KusoClient) ListBuildsPage(project, service string, limit, offset int) (*resty.Response, error) {
+	path := "/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds"
+	sep := "?"
+	if limit > 0 {
+		path += fmt.Sprintf("%slimit=%d", sep, limit)
+		sep = "&"
+	}
+	if offset > 0 {
+		path += fmt.Sprintf("%soffset=%d", sep, offset)
+	}
+	return k.client.Get(path)
 }
 
 func (k *KusoClient) CreateBuild(project, service string, req CreateBuildRequest) (*resty.Response, error) {

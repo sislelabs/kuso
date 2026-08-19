@@ -107,11 +107,8 @@ var userCreateCmd = &cobra.Command{
 			LastName:  userCreateLastName,
 			RoleID:    userCreateRoleID,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create user: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data map[string]any
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
@@ -136,11 +133,8 @@ var userDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteUser(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete user: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("user %s deleted\n", args[0])
 		return nil
@@ -159,11 +153,8 @@ var userSetPasswordCmd = &cobra.Command{
 			return fmt.Errorf("--password is required")
 		}
 		resp, err := api.SetUserPassword(args[0], userSetPassword)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("set password: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("password updated for user %s\n", args[0])
 		return nil
@@ -184,11 +175,8 @@ var userRoleCmd = &cobra.Command{
 			return fmt.Errorf("invalid --role %q (want admin|editor|viewer, or '' to clear)", userRoleValue)
 		}
 		resp, err := api.SetUserInstanceRole(args[0], kusoApi.SetUserInstanceRoleRequest{Role: userRoleValue})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("set instance role: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		role := userRoleValue
 		if role == "" {

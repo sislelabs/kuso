@@ -51,6 +51,22 @@ var sweepGuardedCommands = []struct {
 	{"shared-secret unset", sharedSecretUnsetCmd, []string{"recoverable"}},
 	{"instance secret unset", instanceSecretUnsetCmd, []string{"recoverable"}},
 	{"group member rm", groupMemberRemoveCmd, []string{"lose"}},
+
+	// Second escape wave (2026-08): found by the discovery sweep below —
+	// the hardcoded list had let these ship unguarded.
+	//
+	//	instance-config podsize delete — cluster-wide preset removal
+	//	instance-config runpack delete — cluster-wide runpack removal
+	//	node label rm                  — placements pinned to the label
+	//	                                 stop scheduling on the node
+	//	remote delete                  — active-instance config removal
+	{"instance-config podsize delete", instanceConfigPodSizeDeleteCmd, []string{"recoverable"}},
+	{"instance-config runpack delete", instanceConfigRunpackDeleteCmd, []string{"recoverable"}},
+	{"node label rm", nodeLabelRmCmd, []string{"placement"}},
+	{"remote delete", remoteDeleteCmd, []string{"config"}},
+	{"instance-addon unregister", instanceAddonUnregisterCmd, []string{"recoverable"}},
+	{"instance-pg disable", instancePGDisableCmd, []string{"data lost"}},
+	{"addon public-tcp disable", addonPublicTCPDisableCmd, []string{"cut off"}},
 }
 
 func TestSweepGuardedCommands_ExposeYesFlag(t *testing.T) {
@@ -111,5 +127,63 @@ func TestSweepGuardedCommands_AbortNonInteractively(t *testing.T) {
 		if !strings.Contains(err.Error(), "--yes") {
 			t.Errorf("refusal should mention --yes, got: %v", err)
 		}
+	}
+}
+
+// TestDestructiveVerbCommands_Discovery walks the actual command tree
+// instead of trusting a hardcoded list — the hardcoded sweep above let
+// four destructive commands (podsize/runpack delete, node label rm,
+// remote delete) ship unguarded because nobody added them. Any runnable
+// command whose name or alias is a destructive verb must register
+// --yes/-y (the confirmDestructive contract), so the NEXT escape fails
+// CI instead of shipping.
+//
+// Commands registered at Execute() time (version, redeploy, build
+// rollback/cancel) aren't reachable from a bare rootCmd walk in tests;
+// everything init()-registered is. If a genuinely non-destructive
+// command trips this (e.g. a read-only `rm` alias), add it to exempt
+// with a comment saying why.
+func TestDestructiveVerbCommands_Discovery(t *testing.T) {
+	destructiveNames := map[string]bool{
+		"delete": true, "delete-project": true, "remove": true, "rm": true,
+		"del": true, "prune": true, "reset": true, "revoke": true,
+		"unset": true, "purge": true,
+	}
+	exempt := map[string]bool{
+		// none currently
+	}
+
+	seen := 0
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+		if c.RunE == nil && c.Run == nil {
+			return
+		}
+		hit := destructiveNames[c.Name()]
+		for _, a := range c.Aliases {
+			if destructiveNames[a] {
+				hit = true
+			}
+		}
+		if !hit || exempt[c.CommandPath()] {
+			return
+		}
+		seen++
+		f := c.Flags().Lookup("yes")
+		if f == nil {
+			t.Errorf("%s: destructive-verb command without --yes — wire it through confirmDestructive and register --yes/-y", c.CommandPath())
+			return
+		}
+		if f.Shorthand != "y" {
+			t.Errorf("%s: --yes shorthand = %q, want %q", c.CommandPath(), f.Shorthand, "y")
+		}
+	}
+	walk(rootCmd)
+
+	if seen < 20 {
+		t.Errorf("discovery walk found only %d destructive-verb commands — the walk itself is probably broken", seen)
 	}
 }

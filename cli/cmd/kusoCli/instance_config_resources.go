@@ -158,14 +158,26 @@ var instanceConfigPodSizeEditCmd = &cobra.Command{
 	},
 }
 
+var podSizeDeleteYes bool
+
 var instanceConfigPodSizeDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a pod-size preset",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Delete a pod-size preset (instance-wide)",
+	Long: `Delete a pod-size preset. This is instance-wide: the preset disappears
+for every project and its definition is not recoverable — recreate it
+with 'kuso instance-config podsize create' if you need it back. Services
+already sized from it keep their current resources.
+
+Prompts for confirmation unless --yes.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(podSizeDeleteYes,
+			fmt.Sprintf("Delete pod-size preset %s? This is instance-wide and the preset is not recoverable.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeletePodSize(args[0])
 		if err := checkRespErr(resp, err); err != nil {
@@ -216,14 +228,24 @@ var instanceConfigRunpackListCmd = &cobra.Command{
 	},
 }
 
+var runpackDeleteYes bool
+
 var instanceConfigRunpackDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a runpack",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Delete a runpack (instance-wide)",
+	Long: `Delete a runpack. This is instance-wide: runs referencing it stop
+resolving and the runpack definition is not recoverable from the CLI.
+
+Prompts for confirmation unless --yes.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(runpackDeleteYes,
+			fmt.Sprintf("Delete runpack %s? This is instance-wide and the runpack is not recoverable.", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteRunpack(args[0])
 		if err := checkRespErr(resp, err); err != nil {
@@ -264,10 +286,12 @@ func init() {
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeCreateCmd)
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeEditCmd)
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeDeleteCmd)
+	instanceConfigPodSizeDeleteCmd.Flags().BoolVarP(&podSizeDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	instanceConfigCmd.AddCommand(instanceConfigRunpackCmd)
 	instanceConfigRunpackCmd.AddCommand(instanceConfigRunpackListCmd)
 	instanceConfigRunpackCmd.AddCommand(instanceConfigRunpackDeleteCmd)
+	instanceConfigRunpackDeleteCmd.Flags().BoolVarP(&runpackDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	for _, c := range []*cobra.Command{instanceConfigPodSizeCreateCmd, instanceConfigPodSizeEditCmd} {
 		c.Flags().StringVar(&podSizeName, "name", "", "preset name")

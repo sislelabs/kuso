@@ -39,11 +39,8 @@ Prompts for confirmation unless --yes.`,
 			return err
 		}
 		resp, err := api.StopService(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("stop service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service %s/%s stopped — pinned to 0 replicas, won't wake on traffic. Run 'kuso project service start' to restore.\n", args[0], args[1])
 		return nil
@@ -63,11 +60,8 @@ pods come up on the next reconcile.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.StartService(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("start service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service %s/%s started.\n", args[0], args[1])
 		return nil
@@ -97,11 +91,8 @@ Prompts for confirmation unless --yes.`,
 			return err
 		}
 		resp, err := api.StopProject(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("stop project: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s stopped — every service pinned to 0 replicas, won't wake on traffic. Run 'kuso project start' to restore.\n", args[0])
 		return nil
@@ -121,11 +112,8 @@ come up on the next reconcile.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.StartProject(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("start project: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s started.\n", args[0])
 		return nil

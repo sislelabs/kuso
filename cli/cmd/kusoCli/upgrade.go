@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -57,21 +58,15 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		// the cached value, which can be up to 6h stale on long-
 		// running instances. Useful right after `make ship` when the
 		// user wants the cluster to see the new release immediately.
-		var resp interface {
-			StatusCode() int
-			Body() []byte
-		}
+		var resp *resty.Response
 		var err error
 		if upgradeRefresh {
 			resp, err = api.RawPost("/api/system/version/refresh", nil, "application/json")
 		} else {
 			resp, err = api.RawGet("/api/system/version")
 		}
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("version check: %d %s", resp.StatusCode(), string(resp.Body()))
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("version check: %w", err)
 		}
 		var v struct {
 			Current     string `json:"current"`
@@ -113,11 +108,8 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 			bodyBytes, _ = json.Marshal(map[string]string{"version": upgradeVersion})
 		}
 		startResp, err := api.RawPost("/api/system/update", bodyBytes, "application/json")
-		if err != nil {
-			return err
-		}
-		if startResp.StatusCode() >= 300 {
-			return fmt.Errorf("start update: %d %s", startResp.StatusCode(), string(startResp.Body()))
+		if err := checkRespErr(startResp, err); err != nil {
+			return fmt.Errorf("start update: %w", err)
 		}
 		var startBody struct {
 			Job string `json:"job"`

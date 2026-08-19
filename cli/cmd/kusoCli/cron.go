@@ -39,11 +39,8 @@ func splitCmd(s string) []string {
 // Returns "" (no error) when the cron exists but carries no image.
 func currentProjectCronImage(project, name string) (repo, tag string, err error) {
 	resp, err := api.ListCrons(project)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return "", "", err
-	}
-	if resp.StatusCode() >= 300 {
-		return "", "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	var items []struct {
 		Metadata struct {
@@ -100,11 +97,8 @@ var cronListCmd = &cobra.Command{
 		} else {
 			r, err = api.ListCrons(args[0])
 		}
-		if err != nil {
+		if err := checkRespErr(r, err); err != nil {
 			return err
-		}
-		if r.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", r.StatusCode(), string(r.Body()))
 		}
 		var items []map[string]any
 		if err := json.Unmarshal(r.Body(), &items); err != nil {
@@ -163,11 +157,8 @@ var cronAddCommand = &cobra.Command{
 			ConcurrencyPolicy: cronAddConcurrencyPolicy,
 		}
 		resp, err := api.AddCron(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s created\n", args[1], cronAddName)
 		return nil
@@ -194,11 +185,8 @@ var cronDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteCron(args[0], args[1], args[2])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s deleted\n", args[1], args[2])
 		return nil
@@ -214,11 +202,8 @@ var cronSyncCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.SyncCron(args[0], args[1], args[2])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s synced\n", args[1], args[2])
 		return nil
@@ -270,11 +255,8 @@ Use ` + "`kuso cron edit`" + ` for project-scoped (http / command) crons.`,
 			req.PinImage = &v
 		}
 		resp, err := api.UpdateCron(args[0], args[1], args[2], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s updated\n", args[1], args[2])
 		return nil
@@ -319,11 +301,8 @@ var cronAddHTTPCmd = &cobra.Command{
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
 		resp, err := api.AddProjectCron(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s (http) created\n", args[0], pCronName)
 		return nil
@@ -354,11 +333,8 @@ var cronAddCommandCmd = &cobra.Command{
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
 		resp, err := api.AddProjectCron(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s (command) created\n", args[0], pCronName)
 		return nil
@@ -437,11 +413,8 @@ add roundtrip via the per-service path.`,
 			req.ConcurrencyPolicy = &v
 		}
 		resp, err := api.UpdateProjectCron(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s updated\n", args[0], args[1])
 		return nil
@@ -467,11 +440,8 @@ var cronProjectDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteProjectCron(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("cron %s/%s deleted\n", args[0], args[1])
 		return nil

@@ -44,11 +44,8 @@ use ` + "`kuso project export`" + ` (emits kuso.yaml).`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ExportProject(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("export: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		body := resp.Body()
 		if exportOutFile == "" || exportOutFile == "-" {

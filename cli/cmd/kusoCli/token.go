@@ -54,11 +54,8 @@ var tokenCreateCmd = &cobra.Command{
 			Name:      tokenCreateName,
 			ExpiresAt: exp.Format(time.RFC3339),
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data struct {
 			Name      string `json:"name"`
@@ -138,11 +135,8 @@ var tokenRevokeCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteToken(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("token %s revoked\n", args[0])
 		return nil

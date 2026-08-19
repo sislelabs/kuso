@@ -41,11 +41,8 @@ var incidentListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListIncidents()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		// Server wraps the list as {"incidents": [...]} (matches the web
 		// client + the other list endpoints' envelope shape).
@@ -230,11 +227,8 @@ pipe straight to kubectl instead, use --print-kubectl.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.PutIncidentAgentCCCredentials(string(clean))
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("Claude Code credentials uploaded (from %s).\n", src)
 		return nil

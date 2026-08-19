@@ -174,11 +174,8 @@ var restoreStatusCmd = &cobra.Command{
 		}
 		path := "/api/admin/restore/" + args[0]
 		resp, err := api.RawGet(path)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("status: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("status %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Println(string(resp.Body()))
 		return nil
@@ -312,11 +309,8 @@ server-side on subsequent saves if omitted.`,
 			return fmt.Errorf("encode settings: %w", err)
 		}
 		putResp, err := api.RawPut("/api/admin/backup-settings", raw, "application/json")
-		if err != nil {
+		if err := checkRespErr(putResp, err); err != nil {
 			return fmt.Errorf("put backup settings: %w", err)
-		}
-		if putResp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", putResp.StatusCode(), string(putResp.Body()))
 		}
 		fmt.Println("backup settings updated")
 		return nil

@@ -53,11 +53,8 @@ var runCmd = &cobra.Command{
 			TimeoutSeconds: runTimeoutSeconds,
 		}
 		resp, err := api.CreateRun(project, service, req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create run: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		// Server returns the full KusoRun CR; pluck name + phase.
 		var data struct {
@@ -95,11 +92,8 @@ func streamRunUntilDone(project, service, runName string) error {
 	var lastLineCount int
 	for {
 		resp, err := api.GetRun(project, runName)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("get run: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("get run: server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data struct {
 			Metadata struct {
@@ -149,11 +143,8 @@ func fetchRunLines(project, service, runName string, lines int) ([]string, error
 	path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
 		project, service, "run%3A"+runName, lines)
 	resp, err := api.RawGet(path)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode() >= 300 {
-		return nil, fmt.Errorf("get logs: %d", resp.StatusCode())
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, fmt.Errorf("get logs: %w", err)
 	}
 	var data struct {
 		Lines []struct {
@@ -199,11 +190,8 @@ var runCancelCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.CancelRun(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("cancel run: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("run %s/%s cancelled\n", args[0], args[1])
 		return nil
@@ -228,11 +216,8 @@ var runDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteRun(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete run: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("run %s/%s deleted\n", args[0], args[1])
 		return nil

@@ -35,11 +35,8 @@ var sshKeyListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListSSHKeys()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -106,11 +103,8 @@ it into a remote authorized_keys.`,
 			req.PrivateKey = string(priv)
 		}
 		resp, err := api.CreateSSHKey(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))

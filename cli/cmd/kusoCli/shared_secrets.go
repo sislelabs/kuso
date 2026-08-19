@@ -71,11 +71,8 @@ var sharedSecretListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListSharedSecrets(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var body struct {
 			Keys []string `json:"keys"`
@@ -184,11 +181,8 @@ var sharedSecretUnsetCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.UnsetSharedSecret(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var body struct {
 			Rolled int `json:"rolled"`

@@ -81,11 +81,8 @@ on first use; replays return 410.`,
 			NodeName:   nodeTokenName,
 			TTLSeconds: ttl,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -140,11 +137,8 @@ var nodePendingCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListPendingNodeBootstrapTokens()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -244,11 +238,8 @@ var nodeListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListNodes()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -318,21 +309,26 @@ var nodeLabelSetCmd = &cobra.Command{
 			current[k] = v
 		}
 		resp, err := api.SetNodeLabels(name, kusoApi.SetNodeLabelsRequest{Labels: current})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("Labels updated on %s: %s\n", name, formatLabels(current))
 		return nil
 	},
 }
 
+var nodeLabelRmYes bool
+
 var nodeLabelRmCmd = &cobra.Command{
 	Use:     "rm <name> <key> [key...]",
 	Aliases: []string{"remove", "unset"},
 	Short:   "Remove kuso labels from a node.",
+	Long: `Remove kuso placement labels from a node. Any service, addon, or cron
+whose placement pins to a removed label can no longer schedule onto this
+node — its pods go Pending on the next roll until the label is restored
+or the placement is changed.
+
+Prompts for confirmation unless --yes.`,
 	Example: `  kuso node label rm worker-2 gpu
   kuso node label rm worker-2 region`,
 	Args: cobra.MinimumNArgs(2),
@@ -341,6 +337,11 @@ var nodeLabelRmCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		name := args[0]
+		if err := confirmDestructive(nodeLabelRmYes,
+			fmt.Sprintf("Remove label(s) %s from node %s? Placements pinned to them stop scheduling here.",
+				strings.Join(args[1:], ", "), name)); err != nil {
+			return err
+		}
 		current, err := currentNodeLabels(name)
 		if err != nil {
 			return err
@@ -352,11 +353,8 @@ var nodeLabelRmCmd = &cobra.Command{
 			delete(current, k)
 		}
 		resp, err := api.SetNodeLabels(name, kusoApi.SetNodeLabelsRequest{Labels: current})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("Labels updated on %s: %s\n", name, formatLabels(current))
 		return nil
@@ -418,11 +416,8 @@ join' with the same flags.`,
 			NodeCredentials: creds,
 			SSHKeyID:        nodeSSHKeyID,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -547,11 +542,8 @@ control-plane node.`,
 			req.Credentials = &creds
 		}
 		resp, err := api.RemoveNode(name, req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var out struct {
 			Removed      string `json:"removed"`
@@ -576,11 +568,8 @@ var nodeUpdatesCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.NodeUpdates()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -665,11 +654,8 @@ var nodeHistoryCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.NodeHistory(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -721,11 +707,8 @@ drowning in stale completion artifacts.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.CleanupCompleted()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -757,11 +740,8 @@ drowning in stale completion artifacts.`,
 // replace).
 func currentNodeLabels(name string) (map[string]string, error) {
 	resp, err := api.ListNodes()
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return nil, err
-	}
-	if resp.StatusCode() >= 300 {
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	var nodes []kusoApi.NodeSummary
 	if err := json.Unmarshal(resp.Body(), &nodes); err != nil {
@@ -857,6 +837,7 @@ func init() {
 	nodeCmd.AddCommand(nodeLabelCmd)
 	nodeLabelCmd.AddCommand(nodeLabelSetCmd)
 	nodeLabelCmd.AddCommand(nodeLabelRmCmd)
+	nodeLabelRmCmd.Flags().BoolVarP(&nodeLabelRmYes, "yes", "y", false, "skip the confirmation prompt")
 
 	// Shared SSH connection flags for validate/join/remove.
 	for _, c := range []*cobra.Command{nodeValidateCmd, nodeJoinCmd, nodeRemoveCmd} {

@@ -51,11 +51,8 @@ cost rates; without them you still see CPU/memory usage.`,
 
 func runUsageCluster() error {
 	resp, err := api.Usage(usageDays)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return err
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	if outputFormat == "json" {
 		fmt.Println(string(resp.Body()))
@@ -94,11 +91,8 @@ func runUsageCluster() error {
 
 func runUsageProjects() error {
 	resp, err := api.ProjectUsage(usageDays)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return err
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	if outputFormat == "json" {
 		fmt.Println(string(resp.Body()))

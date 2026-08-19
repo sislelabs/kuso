@@ -103,11 +103,8 @@ configured — disable the existing one first.`,
 			StorageSize: provisionStorageSize,
 		}
 		resp, err := api.ProvisionInstancePG(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Println("provisioning started — kuso will install Postgres on the cluster")
 		if !provisionWait {
@@ -136,16 +133,15 @@ Refuses when an on-cluster managed PG already exists — run
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ConfigureExternalInstancePG(kusoApi.ConfigureExternalInstancePGRequest{DSN: args[0]})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Println("external Postgres registered — projects can now use --use-instance-addon pg")
 		return nil
 	},
 }
+
+var instancePGDisableYes bool
 
 var instancePGDisableCmd = &cobra.Command{
 	Use:     "disable",
@@ -162,12 +158,13 @@ projects so you know what to migrate before tearing down.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.DisableInstancePG()
-		if err != nil {
+		if err := confirmDestructive(instancePGDisableYes,
+			"Disable the cluster Postgres? In managed mode this deletes the StatefulSet and ALL ITS DATA."); err != nil {
 			return err
 		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		resp, err := api.DisableInstancePG()
+		if err := checkRespErr(resp, err); err != nil {
+			return err
 		}
 		fmt.Println("cluster Postgres disabled")
 		return nil
@@ -177,11 +174,8 @@ projects so you know what to migrate before tearing down.`,
 // readInstancePGStatus is shared by `status` + the --wait poll loop.
 func readInstancePGStatus() (*instancePGStatusResp, error) {
 	resp, err := api.GetInstancePG()
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return nil, err
-	}
-	if resp.StatusCode() >= 300 {
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	var st instancePGStatusResp
 	if err := json.Unmarshal(resp.Body(), &st); err != nil {
@@ -282,4 +276,5 @@ func init() {
 	instancePGCmd.AddCommand(instancePGExternalCmd)
 
 	instancePGCmd.AddCommand(instancePGDisableCmd)
+	instancePGDisableCmd.Flags().BoolVarP(&instancePGDisableYes, "yes", "y", false, "skip the confirmation prompt")
 }

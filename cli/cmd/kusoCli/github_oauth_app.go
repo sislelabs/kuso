@@ -340,12 +340,8 @@ func saveOauthCreds(project, service, prefix, clientID, clientSecret string) err
 
 	// Read current env list.
 	current, err := api.GetEnv(project, service)
-	if err != nil {
+	if err := checkRespErr(current, err); err != nil {
 		return fmt.Errorf("read current env: %w", err)
-	}
-	if current.StatusCode() >= 300 {
-		return fmt.Errorf("read current env: server returned %d: %s",
-			current.StatusCode(), string(current.Body()))
 	}
 	var existing struct {
 		EnvVars []map[string]any `json:"envVars"`
@@ -374,24 +370,16 @@ func saveOauthCreds(project, service, prefix, clientID, clientSecret string) err
 		out = append(out, v)
 	}
 	resp, err := api.SetEnv(project, service, kusoApi.SetEnvRequest{EnvVars: out})
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("set %s: %w", idKey, err)
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("set %s: server returned %d: %s",
-			idKey, resp.StatusCode(), string(resp.Body()))
 	}
 
 	sresp, err := api.SetSecret(project, service, kusoApi.SetSecretRequest{
 		Key:   secretKey,
 		Value: clientSecret,
 	})
-	if err != nil {
+	if err := checkRespErr(sresp, err); err != nil {
 		return fmt.Errorf("set %s: %w", secretKey, err)
-	}
-	if sresp.StatusCode() >= 300 {
-		return fmt.Errorf("set %s: server returned %d: %s",
-			secretKey, sresp.StatusCode(), string(sresp.Body()))
 	}
 
 	fmt.Println()

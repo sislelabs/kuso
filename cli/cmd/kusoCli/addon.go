@@ -52,11 +52,8 @@ var addonPublicTCPEnableCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.EnablePublicTCP(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("enable public-tcp: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var out struct {
 			Port int `json:"port"`
@@ -70,21 +67,30 @@ var addonPublicTCPEnableCmd = &cobra.Command{
 	},
 }
 
+var addonPublicTCPDisableYes bool
+
 var addonPublicTCPDisableCmd = &cobra.Command{
 	Use:     "disable <project> <addon>",
 	Aliases: []string{"rm", "remove"},
 	Short:   "Free the addon's public TCP port and remove the route (admin only)",
-	Args:    cobra.ExactArgs(2),
+	Long: `Free the addon's public TCP port and remove the Traefik route. External
+clients connected through the endpoint are cut off immediately, and a
+later re-enable may allocate a DIFFERENT port — external connection
+strings pointing at the old one break.
+
+Prompts for confirmation unless --yes.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.DisablePublicTCP(args[0], args[1])
-		if err != nil {
-			return fmt.Errorf("disable public-tcp: %w", err)
+		if err := confirmDestructive(addonPublicTCPDisableYes,
+			fmt.Sprintf("Remove the public TCP endpoint from %s/%s? External clients are cut off and a re-enable may use a different port.", args[0], args[1])); err != nil {
+			return err
 		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		resp, err := api.DisablePublicTCP(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("disable public-tcp: %w", err)
 		}
 		fmt.Printf("public TCP endpoint removed from %s/%s\n", args[0], args[1])
 		return nil
@@ -112,11 +118,8 @@ boundary as reading env values or opening a shell. --keys lists keys only
 		// --keys: viewer-gated keys-only listing, never fetches values.
 		if addonSecretKeysOnly {
 			resp, err := api.AddonSecretKeys(project, addon)
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("addon secret keys: %w", err)
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			var out struct {
 				Keys []string `json:"keys"`
@@ -261,11 +264,8 @@ redeploy or restart them after the flip.`,
 			return fmt.Errorf("pass at least one of --version --size --storage-size --database --ha --tls")
 		}
 		resp, err := api.UpdateAddon(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("update addon: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("addon %s/%s updated\n", args[0], args[1])
 		return nil
@@ -278,6 +278,7 @@ func init() {
 	projectAddonCmd.AddCommand(addonPublicTCPCmd)
 	addonPublicTCPCmd.AddCommand(addonPublicTCPEnableCmd)
 	addonPublicTCPCmd.AddCommand(addonPublicTCPDisableCmd)
+	addonPublicTCPDisableCmd.Flags().BoolVarP(&addonPublicTCPDisableYes, "yes", "y", false, "skip the confirmation prompt")
 
 	projectAddonCmd.AddCommand(addonSecretCmd)
 	addonSecretCmd.Flags().BoolVar(&addonSecretReveal, "reveal", false, "print plaintext values (admin only)")

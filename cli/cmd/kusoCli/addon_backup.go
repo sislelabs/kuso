@@ -33,11 +33,8 @@ var addonBackupListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListAddonBackups(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var items []map[string]any
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
@@ -106,11 +103,8 @@ The target addon must already exist + be the same engine as the source.`,
 		}
 		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm}
 		resp, err := api.RestoreAddonBackup(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var body struct {
 			Job string `json:"job"`
@@ -158,11 +152,8 @@ credential. Editor role required.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.DownloadAddonBackup(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("download: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		// --file is user-chosen and used verbatim (incl. any path they
 		// typed). The server-derived Content-Disposition name is NOT
@@ -258,11 +249,8 @@ This requires admin S3 credentials configured at /settings/backups
 			return fmt.Errorf("pass --schedule and/or --retention")
 		}
 		resp, err := api.UpdateAddon(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if req.Backup.Schedule != nil && *req.Backup.Schedule == "" {
 			fmt.Printf("backup schedule disabled on %s/%s\n", args[0], args[1])
@@ -287,11 +275,8 @@ var addonBackupUnscheduleCmd = &cobra.Command{
 			Backup: &kusoApi.UpdateAddonBackup{Schedule: &empty},
 		}
 		resp, err := api.UpdateAddon(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("backup schedule disabled on %s/%s\n", args[0], args[1])
 		return nil

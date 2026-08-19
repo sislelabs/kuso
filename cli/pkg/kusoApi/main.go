@@ -36,7 +36,7 @@ type KusoClient struct {
 
 // Sentinel errors callers check via errors.Is.
 var (
-	ErrNotConfigured   = errors.New("kuso CLI not configured: run `kuso login` first")
+	ErrNotConfigured   = errors.New("kuso is not configured — run `kuso login <instance-url>` first")
 	ErrUnauthenticated = errors.New("not authenticated: run `kuso login`")
 )
 
@@ -87,6 +87,20 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 		}
 	}
 	rc := resty.New().SetBaseURL(k.baseURL).SetTimeout(timeout)
+	// Central not-configured gate. Execute() always constructs the
+	// client — even with no saved instance — so a fresh install used to
+	// surface resty's raw `Get "/api/projects": unsupported protocol
+	// scheme ""` on every command. Every one of the ~216 typed methods
+	// funnels through this resty client, so one request middleware
+	// covers them all: empty base URL → ErrNotConfigured (resty unwraps
+	// its internal retry wrapper before returning, so errors.Is still
+	// matches the sentinel).
+	rc.OnBeforeRequest(func(_ *resty.Client, _ *resty.Request) error {
+		if strings.TrimSpace(k.baseURL) == "" {
+			return ErrNotConfigured
+		}
+		return nil
+	})
 	// Fresh installs default to LE *staging* certs — the browser warns
 	// and Go's http.Client outright rejects. We honor KUSO_INSECURE=1
 	// so the same `kuso login …` shown in the install footer actually

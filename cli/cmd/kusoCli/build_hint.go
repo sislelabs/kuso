@@ -72,11 +72,8 @@ a specific one.`,
 			wantID = args[2]
 		}
 		resp, err := api.ListBuilds(project, service)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list builds: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var items []buildWhyRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {

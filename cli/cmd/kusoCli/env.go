@@ -194,11 +194,8 @@ var envSetCmd = &cobra.Command{
 				}
 				val := kv[eq+1:]
 				resp, err := api.SetEnvVar(project, service, kv[:eq], kusoApi.SetEnvVarRequest{SecretValue: &val})
-				if err != nil {
+				if err := checkRespErr(resp, err); err != nil {
 					return err
-				}
-				if resp.StatusCode() >= 300 {
-					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 				}
 			}
 			fmt.Printf("set %d secret env var(s) on %s/%s [managed-secret]\n", len(kvs), project, service)
@@ -215,11 +212,8 @@ var envSetCmd = &cobra.Command{
 					return fmt.Errorf("argument %q is not KEY=VALUE", kv)
 				}
 				resp, err := api.SetEnvScopedVar(project, service, envScopeFlag, kv[:eq], kusoApi.EnvVarRequest{Value: kv[eq+1:]})
-				if err != nil {
+				if err := checkRespErr(resp, err); err != nil {
 					return err
-				}
-				if resp.StatusCode() >= 300 {
-					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 				}
 			}
 			fmt.Printf("set %d env override(s) on %s/%s [env=%s]\n", len(kvs), project, service, envScopeFlag)
@@ -243,11 +237,8 @@ var envSetCmd = &cobra.Command{
 				Value: kv[eq+1:],
 				Auto:  true,
 			})
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return err
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 		}
 		fmt.Printf("set %d env var(s) on %s/%s\n", len(kvs), project, service)
@@ -473,11 +464,8 @@ var secretUnsetCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.UnsetSecret(args[0], args[1], args[2], secretEnvFlag)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("secret %s unset on %s/%s [%s]\n", args[2], args[0], args[1], scope)
 		return nil
@@ -497,12 +485,8 @@ type subscriptionShape struct {
 
 func readSubscription(project, service string) (*subscriptionShape, error) {
 	resp, err := api.GetSharedEnvKeys(project, service)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return nil, fmt.Errorf("read current subscription: %w", err)
-	}
-	if resp.StatusCode() >= 300 {
-		return nil, fmt.Errorf("read current subscription: server returned %d: %s",
-			resp.StatusCode(), string(resp.Body()))
 	}
 	var out subscriptionShape
 	if err := json.Unmarshal(resp.Body(), &out); err != nil {
@@ -544,11 +528,8 @@ Examples:
 			}
 		}
 		resp, err := api.SetSharedEnvKeys(project, service, baseline)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		// Report the server's authoritative resulting subscription, not the
 		// locally-computed intent — so a silent revert (or a server-side
@@ -597,11 +578,8 @@ var envUnshareCmd = &cobra.Command{
 			}
 		}
 		resp, err := api.SetSharedEnvKeys(project, service, next)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("unsubscribed %s/%s — now subscribed to %d shared key(s)\n", project, service, serverSharedKeyCount(resp.Body(), len(next)))
 		return nil

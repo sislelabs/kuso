@@ -48,11 +48,8 @@ var alertListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListAlerts()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var rules []map[string]any
 		if err := json.Unmarshal(resp.Body(), &rules); err != nil {
@@ -121,11 +118,8 @@ var alertAddLogMatchCmd = &cobra.Command{
 			ThrottleSeconds: throttleSec,
 		}
 		resp, err := api.CreateAlert(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("alert %q created\n", alertAddName)
 		return nil
@@ -174,11 +168,8 @@ var alertAddNodePressureCmd = &cobra.Command{
 			ThrottleSeconds: throttleSec,
 		}
 		resp, err := api.CreateAlert(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("alert %q created\n", alertAddName)
 		return nil
@@ -206,11 +197,8 @@ var alertDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteAlert(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("alert %s deleted\n", args[0])
 		return nil

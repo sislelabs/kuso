@@ -128,7 +128,22 @@ var statusCmd = &cobra.Command{
 					desired, _ := r["desired"].(float64)
 					replicaInfo = fmt.Sprintf("%d/%d", int(ready), int(desired))
 				}
-				fmt.Printf("  %s  %-10s replicas=%s\n", e.Spec.Kind, phase, replicaInfo)
+				// Unified rollup (server-derived status.state) — the single
+				// "is my app up?" answer. Appended (not replacing phase) so
+				// existing output-parsing scripts keep their columns; absent
+				// on pre-rollup servers, in which case the line is unchanged.
+				state, _ := e.Status["state"].(string)
+				stateCol := ""
+				if state != "" {
+					stateCol = "  state=" + state
+				}
+				fmt.Printf("  %s  %-10s replicas=%s%s\n", e.Spec.Kind, phase, replicaInfo, stateCol)
+				// Surface the human reason for any not-plain-running state
+				// (crashloop detail, "release hook failed; last green still
+				// serving", ...). Quiet when healthy to keep the screen calm.
+				if detail, _ := e.Status["stateDetail"].(string); detail != "" && state != "" && state != "running" {
+					fmt.Printf("    %s\n", detail)
+				}
 				if url != "" {
 					fmt.Printf("    %s\n", url)
 				}

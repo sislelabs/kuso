@@ -30,11 +30,8 @@ var instanceSecretListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListInstanceSecrets()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var body struct {
 			Keys []string `json:"keys"`
@@ -73,11 +70,8 @@ var instanceSecretSetCmd = &cobra.Command{
 		}
 		req := kusoApi.SetSharedSecretRequest{Key: args[0][:eq], Value: args[0][eq+1:]}
 		resp, err := api.SetInstanceSecret(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("instance secret %s set\n", req.Key)
 		return nil
@@ -105,11 +99,8 @@ var instanceSecretUnsetCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.UnsetInstanceSecret(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("instance secret %s removed\n", args[0])
 		return nil

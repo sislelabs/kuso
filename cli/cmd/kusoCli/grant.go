@@ -94,11 +94,8 @@ var projectGrantAddCmd = &cobra.Command{
 			GroupID: grantGroup,
 			Role:    grantRole,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add grant: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		who := grantUser
 		if who == "" {
@@ -123,11 +120,8 @@ var projectGrantRemoveCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.RemoveGrant(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("remove grant: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("grant %s removed from %s\n", args[1], args[0])
 		return nil

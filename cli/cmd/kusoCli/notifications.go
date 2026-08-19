@@ -47,11 +47,8 @@ var notificationsListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListNotifications()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		items, err := unwrapNotifications(resp.Body())
 		if err != nil {
@@ -94,11 +91,8 @@ var notificationsGetCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetNotification(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		one, err := unwrapNotification(resp.Body())
 		if err != nil {
@@ -158,11 +152,8 @@ var notificationsCreateCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.CreateNotification(body)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		one, err := unwrapNotification(resp.Body())
 		if err != nil {
@@ -183,11 +174,8 @@ var notificationsUpdateCmd = &cobra.Command{
 		}
 		// Pull existing so unspecified flags retain their value.
 		resp, err := api.GetNotification(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		existing, err := unwrapNotification(resp.Body())
 		if err != nil {
@@ -253,11 +241,8 @@ var notificationsUpdateCmd = &cobra.Command{
 			body.Config = cfg
 		}
 		resp2, err := api.UpdateNotification(args[0], body)
-		if err != nil {
+		if err := checkRespErr(resp2, err); err != nil {
 			return err
-		}
-		if resp2.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp2.StatusCode(), string(resp2.Body()))
 		}
 		fmt.Printf("notification %s updated\n", args[0])
 		return nil
@@ -284,11 +269,8 @@ var notificationsDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteNotification(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("notification %s deleted\n", args[0])
 		return nil
@@ -338,11 +320,8 @@ func setEnabled(id string, on bool) error {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
 	resp, err := api.GetNotification(id)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return err
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	one, err := unwrapNotification(resp.Body())
 	if err != nil {
@@ -371,11 +350,8 @@ func setEnabled(id string, on bool) error {
 		}
 	}
 	resp2, err := api.UpdateNotification(id, body)
-	if err != nil {
+	if err := checkRespErr(resp2, err); err != nil {
 		return err
-	}
-	if resp2.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp2.StatusCode(), string(resp2.Body()))
 	}
 	state := "enabled"
 	if !on {

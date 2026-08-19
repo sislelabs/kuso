@@ -88,11 +88,8 @@ var groupCreateCmd = &cobra.Command{
 			Name:        groupCreateName,
 			Description: groupCreateDescription,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create group: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data map[string]any
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
@@ -117,11 +114,8 @@ var groupDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteGroup(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete group: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("group %s deleted\n", args[0])
 		return nil
@@ -178,11 +172,8 @@ var groupMemberAddCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.AddGroupMember(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add member: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("user %s added to group %s\n", args[1], args[0])
 		return nil
@@ -211,11 +202,8 @@ var groupMemberRemoveCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.RemoveGroupMember(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("remove member: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("user %s removed from group %s\n", args[1], args[0])
 		return nil
@@ -236,11 +224,8 @@ var groupRoleCmd = &cobra.Command{
 			return fmt.Errorf("invalid --role %q (want admin|editor|viewer, or '' to clear)", groupRoleValue)
 		}
 		resp, err := api.SetGroupInstanceRole(args[0], kusoApi.SetGroupInstanceRoleRequest{Role: groupRoleValue})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("set instance role: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		role := groupRoleValue
 		if role == "" {

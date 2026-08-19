@@ -267,11 +267,8 @@ func runConnect(project, addon string, doExec bool) error {
 	// lacks the permission.
 	resp, err := api.RawGet(fmt.Sprintf("/api/projects/%s/addons/%s/secret",
 		url.PathEscape(project), url.PathEscape(addon)))
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("fetch addon secret: %w", err)
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("addon secret: %d %s", resp.StatusCode(), string(resp.Body()))
 	}
 	secret, err := decodeAddonSecret(resp.Body())
 	if err != nil {

@@ -26,9 +26,10 @@ import (
 func escPath(s string) string { return url.PathEscape(s) }
 
 var (
-	serviceErrorsSince string
-	serviceErrorsLimit int
-	servicePodsEnv     string
+	serviceErrorsSince  string
+	serviceErrorsLimit  int
+	serviceErrorsOffset int
+	servicePodsEnv      string
 )
 
 // runServiceErrors is shared by the top-level and project-scoped
@@ -45,10 +46,21 @@ func runServiceErrors(cmd *cobra.Command, args []string) error {
 	}
 	if serviceErrorsLimit > 0 {
 		path += sep + fmt.Sprintf("limit=%d", serviceErrorsLimit)
+		sep = "&"
+	}
+	if serviceErrorsOffset > 0 {
+		path += sep + fmt.Sprintf("offset=%d", serviceErrorsOffset)
 	}
 	resp, err := api.RawGet(path)
 	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("list errors: %w", err)
+	}
+	// Truncation signal (X-Kuso-Truncated header). Stderr so `-o json`
+	// stdout stays machine-parseable.
+	if resp.Header().Get("X-Kuso-Truncated") == "true" {
+		if next := resp.Header().Get("X-Kuso-Next-Offset"); next != "" {
+			fmt.Fprintf(os.Stderr, "note: result truncated — more error groups exist; continue with --offset %s\n", next)
+		}
 	}
 	// Server returns []db.ErrorGroup (fingerprint, message, count,
 	// firstSeen, lastSeen, sampleLine, sampleEnv, samplePod). Decode as
@@ -146,6 +158,7 @@ func newServiceErrorsCmd() *cobra.Command {
 	c.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	c.Flags().StringVar(&serviceErrorsSince, "since", "", "lookback window (e.g. 6h, 24h; max 30d, server default 24h)")
 	c.Flags().IntVar(&serviceErrorsLimit, "limit", 0, "max groups to return (1-200, server default 50)")
+	c.Flags().IntVar(&serviceErrorsOffset, "offset", 0, "groups to skip (from X-Kuso-Next-Offset when a page was truncated)")
 	return c
 }
 

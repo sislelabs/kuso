@@ -42,11 +42,8 @@ var environmentDomainAddCmd = &cobra.Command{
 		}
 		project, service, env, host := args[0], args[1], args[2], args[3]
 		resp, err := api.AddEnvDomain(project, service, env, host, envDomainAddTLSSecret)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add env domain: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("added %s to %s/%s env %s\n", host, project, service, env)
 		return nil
@@ -83,11 +80,8 @@ var environmentDomainRmCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.RemoveEnvDomain(project, service, env, host)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("remove env domain: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("removed %s from %s/%s env %s\n", host, project, service, env)
 		return nil
@@ -125,11 +119,8 @@ reconciles, and re-adding one later re-requests its certificate
 			return err
 		}
 		resp, err := api.SetEnvDomains(project, service, env, hosts)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("set env domains: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("set %d host(s) on %s/%s env %s\n", len(hosts), project, service, env)
 		return nil

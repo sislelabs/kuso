@@ -150,11 +150,8 @@ var githubRefreshCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.RefreshInstallations()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Println("installations refreshed")
 		return nil
@@ -286,11 +283,8 @@ func runGithubConfigure(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 	resp, err := api.RawPost("/api/github/configure", payload, "application/json")
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("configure failed: %d %s", resp.StatusCode(), string(resp.Body()))
+	if err := checkRespErr(resp, err); err != nil {
+		return fmt.Errorf("configure failed: %w", err)
 	}
 	fmt.Println("GitHub App credentials saved.")
 

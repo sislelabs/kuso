@@ -64,11 +64,8 @@ any issues, grouped by severity. Read-only — nothing is changed. Use
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ReconcileHealth()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(resp.Body()))
@@ -133,11 +130,8 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 			return err
 		}
 		resp, err := api.Remediate(resource, healthFixAction)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var out struct {
 			Resource string `json:"resource"`

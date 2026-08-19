@@ -130,11 +130,8 @@ var envGroupCreateCmd = &cobra.Command{
 		}
 		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy}
 		resp, err := api.CreateEnvGroup(args[0], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create env-group: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("env-group %s/%s created (addons default to fresh; --share-addon to reuse prod)\n", args[0], args[1])
 		return nil
@@ -155,11 +152,8 @@ var envGroupDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteEnvGroup(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete env-group: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("env-group %s/%s deleted\n", args[0], args[1])
 		return nil

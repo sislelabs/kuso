@@ -115,11 +115,8 @@ var buildTriggerCmd = &cobra.Command{
 			DryRun: buildTriggerDryRun,
 		}
 		resp, err := api.CreateBuild(args[0], args[1], req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("trigger build: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		// Server returns the BuildSummary wire shape (flat
 		// {id,serviceName,branch,commitSha,imageTag,status}), NOT the
@@ -146,6 +143,11 @@ var buildTriggerCmd = &cobra.Command{
 	},
 }
 
+var (
+	buildListLimit  int
+	buildListOffset int
+)
+
 var buildListCmd = &cobra.Command{
 	Use:     "list <project> <service>",
 	Aliases: []string{"ls"},
@@ -155,9 +157,16 @@ var buildListCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.ListBuilds(args[0], args[1])
+		resp, err := api.ListBuildsPage(args[0], args[1], buildListLimit, buildListOffset)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list builds: %w", err)
+		}
+		// Truncation signal (X-Kuso-Truncated header). Stderr so
+		// `-o json` stdout stays machine-parseable.
+		if resp.Header().Get("X-Kuso-Truncated") == "true" {
+			if next := resp.Header().Get("X-Kuso-Next-Offset"); next != "" {
+				fmt.Fprintf(os.Stderr, "note: result truncated — more builds exist; continue with --offset %s\n", next)
+			}
 		}
 		// Server returns []BuildSummary (flat wire shape). The old code
 		// decoded as []KusoBuild and printed an empty table because
@@ -334,6 +343,8 @@ func init() {
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	buildListCmd.Flags().IntVar(&buildListLimit, "limit", 0, "max builds to return (0 = full list)")
+	buildListCmd.Flags().IntVar(&buildListOffset, "offset", 0, "builds to skip (from X-Kuso-Next-Offset when a page was truncated)")
 
 	// `kuso build latest <project>` — the newest build per service in a
 	// project. Server returns a map keyed by service short-name →
@@ -419,11 +430,8 @@ staging would silently roll PRODUCTION back.`,
 				return fmt.Errorf("not logged in; run 'kuso login' first")
 			}
 			resp, err := api.RollbackBuild(args[0], args[1], args[2], buildRollbackEnv)
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return err
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			target := buildRollbackEnv
 			if target == "" {
@@ -448,11 +456,8 @@ staging would silently roll PRODUCTION back.`,
 				return fmt.Errorf("not logged in; run 'kuso login' first")
 			}
 			resp, err := api.CancelBuild(args[0], args[1], args[2])
-			if err != nil {
+			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("cancel build: %w", err)
-			}
-			if resp.StatusCode() >= 300 {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
 			fmt.Printf("build %s cancelled\n", args[2])
 			return nil
@@ -471,10 +476,14 @@ staging would silently roll PRODUCTION back.`,
 	// EVERY flag that RunE reads — it reads buildTriggerDryRun and
 	// buildTriggerFollow too. Binding only branch/ref made
 	// `kuso redeploy p api --follow` fail with "unknown flag" despite
-	// the two commands being documented as equivalent.
+	// the two commands being documented as equivalent. The flags must
+	// also MATCH trigger's registrations: an earlier revision dropped
+	// the -f shorthand and described --follow as "stream build logs",
+	// which the shared RunE has never done (it polls to a terminal
+	// state) — keep shorthand + help text identical to trigger's.
 	redeployCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to deploy")
 	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")
 	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "resolve the ref and print what would build, without creating a build")
-	redeployCmd.Flags().BoolVar(&buildTriggerFollow, "follow", false, "stream build logs until the build finishes")
+	redeployCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
 	rootCmd.AddCommand(redeployCmd)
 }

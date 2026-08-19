@@ -53,11 +53,8 @@ var runEnvironmentAdd = func(cmd *cobra.Command, args []string) error {
 		Addons:       environmentAddAddons,
 	}
 	resp, err := api.AddEnvironment(args[0], args[1], req)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("add environment: %w", err)
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	var data map[string]any
 	_ = json.Unmarshal(resp.Body(), &data)
@@ -131,11 +128,8 @@ var environmentDeleteCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.DeleteEnvironment(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete env: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("environment %s/%s deleted\n", args[0], args[1])
 		return nil

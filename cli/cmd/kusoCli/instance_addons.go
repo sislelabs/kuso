@@ -33,11 +33,8 @@ var instanceAddonListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListInstanceAddons()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var body struct {
 			Addons []struct {
@@ -81,32 +78,37 @@ have CREATE DATABASE + CREATE ROLE privileges.`,
 		}
 		req := kusoApi.RegisterInstanceAddonRequest{Name: args[0], DSN: args[1]}
 		resp, err := api.RegisterInstanceAddon(req)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("instance addon %q registered\n", args[0])
 		return nil
 	},
 }
 
+var instanceAddonUnregisterYes bool
+
 var instanceAddonUnregisterCmd = &cobra.Command{
 	Use:     "unregister <name>",
 	Aliases: []string{"rm", "delete"},
 	Short:   "Unregister a shared database server",
-	Args:    cobra.ExactArgs(1),
+	Long: `Unregister a shared database server from this instance. Projects can no
+longer attach to it via --use-instance-addon; the stored admin DSN is
+discarded and is not recoverable — re-register to use it again.
+
+Prompts for confirmation unless --yes.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.UnregisterInstanceAddon(args[0])
-		if err != nil {
+		if err := confirmDestructive(instanceAddonUnregisterYes,
+			fmt.Sprintf("Unregister shared addon %q? Its stored admin DSN is discarded and not recoverable.", args[0])); err != nil {
 			return err
 		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		resp, err := api.UnregisterInstanceAddon(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return err
 		}
 		fmt.Printf("instance addon %q unregistered\n", args[0])
 		return nil
@@ -119,4 +121,5 @@ func init() {
 	instanceAddonListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	instanceAddonCmd.AddCommand(instanceAddonRegisterCmd)
 	instanceAddonCmd.AddCommand(instanceAddonUnregisterCmd)
+	instanceAddonUnregisterCmd.Flags().BoolVarP(&instanceAddonUnregisterYes, "yes", "y", false, "skip the confirmation prompt")
 }

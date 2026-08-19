@@ -26,6 +26,7 @@ var (
 	auditApp   string
 	auditPhase string
 	auditLimit int
+	auditAfter int64
 )
 
 var auditCmd = &cobra.Command{
@@ -66,13 +67,18 @@ a deploy phase (default "production").`,
 			}
 			r, err = api.ListAuditForApp(project, phase, service, auditLimit)
 		} else {
-			r, err = api.ListAudit(project, auditLimit)
+			r, err = api.ListAudit(project, auditLimit, auditAfter)
 		}
-		if err != nil {
+		if err := checkRespErr(r, err); err != nil {
 			return err
 		}
-		if r.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", r.StatusCode(), string(r.Body()))
+		// Truncation signal (X-Kuso-Truncated header): tell the user the
+		// page was cut and how to continue. Stderr so `-o json` stdout
+		// stays machine-parseable.
+		if r.Header().Get("X-Kuso-Truncated") == "true" {
+			if next := r.Header().Get("X-Kuso-Next-After"); next != "" {
+				fmt.Fprintf(os.Stderr, "note: result truncated — older entries exist; continue with --after %s\n", next)
+			}
 		}
 		if outputFormat == "json" {
 			fmt.Println(string(r.Body()))
@@ -109,6 +115,7 @@ func init() {
 	auditCmd.Flags().StringVar(&auditApp, "app", "", "scope to a project or project/service (empty = instance-wide, admin only)")
 	auditCmd.Flags().StringVar(&auditPhase, "phase", "", "deploy phase for a per-service read (default production)")
 	auditCmd.Flags().IntVar(&auditLimit, "limit", 0, "max rows (default 100 server-side, max 1000)")
+	auditCmd.Flags().Int64Var(&auditAfter, "after", 0, "keyset cursor: only rows older than this id (from X-Kuso-Next-After / the last row's id)")
 	auditCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	rootCmd.AddCommand(auditCmd)
 }

@@ -89,11 +89,8 @@ log lines until ^C — same surface as the web UI's Logs tab.`,
 		path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
 			args[0], args[1], url.QueryEscape(envSelector), logsLines)
 		resp, err := api.RawGet(path)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return err
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data struct {
 			Lines []struct {

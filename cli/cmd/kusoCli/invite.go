@@ -60,11 +60,8 @@ var inviteCreateCmd = &cobra.Command{
 			MaxUses:      inviteCreateMaxUses,
 			Note:         inviteCreateNote,
 		})
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create invite: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data struct {
 			Invite map[string]any `json:"invite"`
@@ -133,11 +130,8 @@ var inviteRevokeCmd = &cobra.Command{
 			return err
 		}
 		resp, err := api.RevokeInvite(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("revoke invite: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("invite %s revoked\n", args[0])
 		return nil

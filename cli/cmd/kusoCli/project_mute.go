@@ -26,11 +26,8 @@ Error-severity alerts still page through — a mute silences chatter, not
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.MuteProjectNotifications(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("mute: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s notifications muted (bell feed still records events)\n", args[0])
 		return nil
@@ -46,11 +43,8 @@ var projectUnmuteCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.UnmuteProjectNotifications(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("unmute: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s notifications unmuted\n", args[0])
 		return nil
@@ -66,11 +60,8 @@ var projectMutesCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListMutedProjects()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list mutes: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var mutes []struct {
 			Project   string `json:"project"`
@@ -107,11 +98,8 @@ var projectMuteStatusCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetProjectNotificationMute(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("mute status: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var st struct {
 			Muted bool   `json:"muted"`

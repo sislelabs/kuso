@@ -42,14 +42,20 @@ type AuditResponse struct {
 // ListAudit returns audit rows. With project set, the call is project-
 // scoped (Viewer is enough); empty project asks for the cross-project
 // instance-wide view (admin-only). limit <= 0 leaves it to the server
-// default (100). Response: AuditResponse.
-func (k *KusoClient) ListAudit(project string, limit int) (*resty.Response, error) {
+// default (100). after > 0 keyset-pages: only rows with id < after are
+// returned (both scopes). Response: AuditResponse; when the page was
+// cut the response also carries X-Kuso-Truncated: true and
+// X-Kuso-Next-After: <id> — pass that id as `after` for the next page.
+func (k *KusoClient) ListAudit(project string, limit int, after int64) (*resty.Response, error) {
 	q := url.Values{}
 	if project != "" {
 		q.Set("project", project)
 	}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
+	}
+	if after > 0 {
+		q.Set("after", strconv.FormatInt(after, 10))
 	}
 	path := "/api/audit"
 	if enc := q.Encode(); enc != "" {
