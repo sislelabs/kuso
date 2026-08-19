@@ -1,5 +1,15 @@
 # Frontend build-time environment variables
 
+> **Scope: this doc is about NON-SECRET, public values** (`NEXT_PUBLIC_*`,
+> `VITE_*`, …) that a framework inlines into the browser bundle. **Secrets are a
+> different rule entirely** — as of v0.23.0 kuso withholds `secretKeyRef`-sourced
+> env vars from the build so they can't be baked into image layers, so a build
+> step that reads a secret gets an empty value. If you need a secret at build
+> time see [Build-time secrets](#build-time-secrets) below. If you need a
+> non-secret *constant* only at build time (not in runtime env), use the
+> service `buildArgs` map (v0.23.1+). The sentinel-substitution technique in this
+> doc is specifically for public values the browser must see.
+
 Some frontend frameworks **inline environment variables into the
 browser bundle at build time** rather than reading them at runtime.
 This breaks the kuso "build once, deploy to many envs" model unless
@@ -140,3 +150,65 @@ directory (`dist/`, `build/`, `out/`) instead of `.next/`.
 above). Whatever you put there gets shipped to every browser that
 loads your site. Use server-side env vars + a Next.js API route /
 SvelteKit endpoint / etc. that proxies the call from the server.
+
+<a id="build-time-secrets"></a>
+### Build-time secrets (v0.23.0+)
+
+kuso **withholds `secretKeyRef`-sourced env vars from the build.**
+Rationale: build-time values persist in the published image — as
+`--build-arg` values recoverable via `docker history`, or as `ENV`
+layers in a nixpacks-generated Dockerfile — so anyone with registry
+read access could recover them. To close that leak, secret-sourced
+vars (`kuso secret set`, addon-conn secrets, any `valueFrom.secretKeyRef`)
+are simply not present during the build. A build step that reads one
+gets an **empty value**, and the build log prints a WARNING:
+`secret-sourced build env vars are no longer passed as build-args`.
+
+**If your build genuinely needs a secret, pick by build strategy:**
+
+| Strategy | How to get a secret at build time |
+|----------|-----------------------------------|
+| `dockerfile` | BuildKit **secret mount** — the value is mounted for one RUN and never lands in a layer: `RUN --mount=type=secret,id=DATABASE_URL DATABASE_URL="$(cat /run/secrets/DATABASE_URL)" ./build-step`. Migrate any `ARG <SECRET>` usage to this. |
+| `nixpacks` / `static` | **No build-time escape hatch** (these bake env into layers). Move the work to **runtime**. |
+
+**The common case — DB migrations.** Don't run `prisma migrate deploy`
+(or any migrate) in the build script; it needs a live `DATABASE_URL`
+which is now empty. Move it to a **release hook** (`kuso.yml`
+`services[].release: { command: [...] }`), which runs post-build /
+pre-promote with the runtime secrets and last-green semantics — a
+failed migration blocks the promotion instead of half-deploying.
+Keep schema-only steps (`prisma generate` — reads the schema file, no
+DB connection) in the build; they're unaffected.
+
+```yaml
+# kuso.yml — migrations run as a release hook, not in the build
+services:
+  - name: web
+    runtime: nixpacks
+    release:
+      command: ['npx', 'prisma', 'migrate', 'deploy']
+# and in the repo: build script is `prisma generate && next build`
+# (NOT `prisma generate && prisma migrate deploy && next build`)
+```
+
+### Non-secret build-time constants: `buildArgs` (v0.23.1+)
+
+For a value you need at **build time** that is **not a secret** and is
+**not** part of the app's runtime env (a build toggle, a version
+string, a public feature flag), use the service `buildArgs` map:
+
+```yaml
+services:
+  - name: web
+    buildArgs:
+      BUILD_PROFILE: production
+      SENTRY_RELEASE: v1.4.2
+```
+
+`buildArgs` flows to `--build-arg` (dockerfile) and build-time `ENV`
+(nixpacks). It accepts **plain literals only** — a `secretKeyRef` can
+never be routed through it (the server drops any secret-shaped value),
+so it's safe to persist in image layers by design. Don't put secrets
+here; use a release hook or a `--mount=type=secret` RUN for those.
+This is distinct from `env` (runtime) and from `publicEnv` (the
+browser-inlined sentinel mechanism described above).

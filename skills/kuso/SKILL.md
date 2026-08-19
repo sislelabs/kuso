@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.22.21**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.23.1**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
@@ -106,6 +106,17 @@ works on either. Prefer MCP when it covers the task (the confirm gates
 and read-only mode are real guardrails); fall back to the CLI for
 everything else.
 
+**Parsing failures (v0.23.0+):** every API error is a uniform JSON envelope
+`{"error":"<human message>","code":"<machine code>"}` (`not_found`, `conflict`,
+`bad_request`, `forbidden`, `unauthorized`, `rate_limited`, `internal`, …). The
+CLI and MCP already unwrap it to the human message; when you hit the API raw with
+`kuso api`, branch on `.code` and show `.error`. A 409 conflict passes the real
+reason through (`"addon foo/bar already exists"`), not a bare status. Large list
+endpoints (`build list`, `audit`, `service errors`) signal truncation via response
+headers (`X-Kuso-Truncated`, `X-Kuso-Next-Offset`/`X-Kuso-Next-After`) — a capped
+result is not silently "everything"; page with the matching `--limit`/`--offset`/
+`--after` flags. `kuso api -i` shows the headers.
+
 ## Imperative path (recommended) — create everything via subcommands
 
 ```bash
@@ -200,18 +211,16 @@ kuso environment domain add papelito web staging staging.papelito.bg
 
 ## Release hooks (v0.16+) — migrations the right way
 
-The footgun this replaces: people stuff `migrate up && exec /app/api` into the API's entrypoint. With ≥2 replicas, both pods race the migration; with a long migration, the readiness probe fails before it finishes and the deploy thrashes.
+The footgun this replaces: people stuff `migrate up && exec /app/api` into the API's entrypoint. With ≥2 replicas, both pods race the migration; with a long migration, the readiness probe fails before it finishes and the deploy thrashes. **Second footgun (v0.23.0+):** migrations in the *build script* (`prisma migrate deploy && next build`) now break — build-time secrets are withheld, so the migrate step gets an empty `DATABASE_URL`. The release hook is the correct home either way. Keep `prisma generate` (schema-only, no DB) in the build; move `migrate deploy` here.
 
 `spec.release.command` runs as a **separate Job against the NEW build's image** before the image tag is promoted to the env. On non-zero exit, the build is marked `release-failed`, the image is NOT promoted, and existing pods keep running on the previous image. A `build.failed` notify event fires.
 
-There is no CLI flag for the release block — set it via `kuso.yml`'s `services[].release` (then `kuso apply`), or PATCH:
+There is no dedicated CLI flag for the release block — set it via `kuso.yml`'s `services[].release` (then `kuso apply`), or PATCH the service. The `kuso api` escape hatch is the cleanest PATCH path (auth handled for you):
 
 ```bash
-# Set the release hook
-curl -X PATCH -H "Authorization: Bearer $(awk '{print $2}' ~/.kuso/credentials.yaml)" \
-  -H "Content-Type: application/json" \
-  -d '{"release":{"command":["./bin/migrate"],"timeoutSeconds":600}}' \
-  https://kuso.example.com/api/projects/tickero/services/api
+# Set the release hook (kuso api injects the bearer token; no raw curl needed)
+kuso api PATCH projects/tickero/services/api \
+  --data '{"release":{"command":["npx","prisma","migrate","deploy"],"timeoutSeconds":600}}'
 
 # Trigger a build — the release Job fires automatically before promote
 kuso build trigger tickero api
@@ -383,6 +392,60 @@ committed spec** — `STRIPE_SECRET_KEY`, `RESEND_API_KEY`, `OPENAI_API_KEY`,
 webhook signing secrets. Several project scaffolds' CLAUDE.md hard-rules mandate
 exactly this. Decision: value must stay out of the rendered spec, or a project
 CLAUDE.md says so → `secret set`; everything else → `env set`.
+
+### Build-time vs runtime: secrets are NOT available during the build (v0.23.0+)
+
+**The rule:** a `secret set` / addon-conn / any `secretKeyRef`-sourced value is
+available to your app **at runtime only**, never during the image build. As of
+v0.23.0 kuso deliberately **withholds** secret-sourced env vars from the build so
+they can't be baked into published image layers (where anyone with registry read
+could recover them via `docker history`). This closed a real credential-leak; the
+tradeoff is that a build step which reads a secret now gets an **empty value**.
+
+Concretely, the next build of an affected app fails (or silently bakes wrong
+config) with **nothing obviously pointing at the cause** except a WARNING line in
+the build log: `secret-sourced build env vars are no longer passed as build-args`.
+
+**What breaks, and the fix:**
+
+- **`prisma migrate deploy` (or any DB-connecting step) in the build script.**
+  It needs a live `DATABASE_URL`, now empty at build time. Fix: move it to a
+  **release hook** (`kuso.yml` `release: { command: [...] }`, or PATCH the service)
+  — it then runs post-build, pre-promote, WITH runtime secrets and last-green
+  semantics (a failed migration blocks promotion instead of half-deploying). See
+  "Release hooks". Keep schema-only steps like `prisma generate` in the build —
+  they read the schema file, no DB connection, so they're unaffected.
+- **A Dockerfile that does `ARG DATABASE_URL` and consumes it at build time.**
+  For `dockerfile` builds only, secrets are still reachable at build time via a
+  **BuildKit secret mount** — but not as a build-arg. Migrate:
+  `RUN --mount=type=secret,id=DATABASE_URL   DATABASE_URL="$(cat /run/secrets/DATABASE_URL)" your-build-step`
+  The value exists only for that RUN, never in a layer.
+- **`nixpacks` / `static` builds needing a secret at build time.** No mount escape
+  hatch exists (nixpacks bakes build env into layers). The value is withheld
+  entirely — consume it at **runtime** instead (release hook + the env mounts the
+  deployed pod already gets).
+
+**Non-secret build-time values are unaffected.** Plain `env set` literals still
+flow to the build (as `--build-arg` for dockerfile, `ENV` for nixpacks), and the
+`NEXT_PUBLIC_*`-style build-time-inlining problem has its own mechanism
+(`publicEnv` sentinels — see docs/FRONTEND_BUILD_TIME_ENVS.md). Only
+`secretKeyRef`-sourced values are withheld.
+
+**Dedicated non-secret build-time channel: `buildArgs` (v0.23.1+).** When you want
+a value available at build time that is NOT part of the app's runtime env, set it
+as a service `buildArgs` entry (a plain `KEY: value` map in `kuso.yml`'s
+`services[].buildArgs`, or PATCH `{"buildArgs":{...}}`). It flows to both dockerfile
+builds (as `--build-arg`) and nixpacks builds (as build-time `ENV`), and — unlike
+runtime env — is the *explicit* build-time-constant channel. It can only hold plain
+literals: a `secretKeyRef` can never be routed through `buildArgs` (the server drops
+any secret-shaped value defensively), so it is safe to persist in image layers by
+design. Use it for build-time toggles/versions/public config; never for secrets
+(those go to a release hook or `--mount=type=secret`).
+
+**Agent playbook when a build newly fails after an upgrade:** check the build log
+for the `secret-sourced build env vars` WARNING; if present, the app was relying
+on a build-time secret. Move the offending step to a release hook (DB/migration
+work) or a `--mount=type=secret` RUN (dockerfile build-time need), then re-trigger.
 
 ### Addon connection secrets — auto-injected, but mind the key NAMES
 
@@ -615,6 +678,11 @@ secrets, no DB/Redis/NATS conns. Previews respect subscriptions too.
 # Where am I? What's running?
 kuso get projects [-o json]                     # all projects
 kuso status <project>                           # rollup: services, URLs, replicas, latest build
+#   Each env shows a single derived state= (v0.23.0+): running | degraded |
+#   crashlooping | deploying | building | build_failed | release_failed |
+#   sleeping | stopped | no_image. This is the one-field answer to "is my app
+#   up?" — a failed latest build with the last-green image still serving reads
+#   `running` with a note, NOT a false alarm. Also on `kuso get envs` (STATE column).
 kuso get services <project> [-o json]           # service specs
 kuso get addons <project> [-o json]             # addons + connection-secret names
 kuso service pods <project> <service> [--env <e>]   # pods backing an env
@@ -767,6 +835,7 @@ What can go wrong, in rough order of frequency (start with `kuso build why`):
 7. **`release-failed` → new pods never come up** → the release hook (migration) blocked promote BY DESIGN; the env keeps its last GREEN image. `kuso build why` + fix the migration + re-trigger.
 8. **`InvalidImageName` / pod image `:latest`** → the env's `spec.image` is empty (never promoted). Causes: a release-failed build (see #7), or a recreated preview env whose terminal build didn't re-promote (self-heals on v0.17.25+). Fix: re-trigger the build.
 9. **Exit 127 right at container start (marketplace-style images)** → image drops root itself (setpriv/gosu) but kuso strips capabilities. Fix: `--cap-add SETUID --cap-add SETGID --allow-privilege-escalation on` (see "Marketplace").
+10. **Build fails/mis-builds reading a secret at BUILD time (v0.23.0+)** → secret-sourced env vars are withheld from the build (anti-leak); build log shows `secret-sourced build env vars are no longer passed as build-args`. Typical culprit: `prisma migrate deploy` in the build script (→ move to a release hook), or a Dockerfile `ARG <secret>` (→ `RUN --mount=type=secret,id=<KEY>`). See "Build-time vs runtime" under Env vars & secrets.
 
 ## Debugging a misbehaving service — the standard playbook
 
