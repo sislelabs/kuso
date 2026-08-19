@@ -591,6 +591,24 @@ for k in $KUSO_BUILDENV_KEYS; do
     NIXPACKS_*) export "${k}=${kv}"; echo "  export ${k}" ;;
   esac
 done
+# BuildArgs: the explicit non-secret build-time value channel (KUSO_BA_<KEY>).
+# Same --env forwarding + same RESERVED guard so a build-arg can't clobber a
+# reserved KUSO_*/runtime-only var. Values are user-authored plain strings
+# (never secretKeyRef-sourced), so baking them is intentional. Precedence:
+# BuildArgs are appended AFTER buildEnv literals, so if a key exists in both,
+# BuildArgs wins for nixpacks (last --env/ENV wins) — BuildArgs is the
+# explicit build-arg channel, so it should override an incidental buildEnv
+# collision.
+for k in $KUSO_BUILDARG_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  kv="$(printenv "KUSO_BA_${k}")"
+  set -- "$@" --env "${k}=${kv}"
+  case "$k" in
+    NIXPACKS_*) export "${k}=${kv}"; echo "  export ${k}" ;;
+  esac
+done
 nixpacks build . --out . "$@"
 
 # ENV lines to inject after the FROM line. Toolchain hints (EXTRA_ENVS,
@@ -614,6 +632,19 @@ for k in $KUSO_BUILDENV_KEYS; do
   esac
   # value from KUSO_BE_<key>; printf the literal so no re-evaluation.
   v="$(printenv "KUSO_BE_${k}")"
+  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
+done
+# BuildArgs (KUSO_BUILDARG_KEYS): the explicit non-secret build-time value
+# channel, injected as permanent ENV lines exactly like the literal buildEnv
+# vars above. These are user-authored plain strings (never secret-sourced, see
+# buildArgsContainerVars), so baking them into image layers is the intent.
+# Emitted AFTER the buildEnv block so on a key collision the BuildArgs ENV line
+# is the later one and wins (matching the --env precedence above).
+for k in $KUSO_BUILDARG_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  v="$(printenv "KUSO_BA_${k}")"
   ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
 done
 if [ -n "$ENV_BLOCK" ]; then
@@ -644,6 +675,12 @@ grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
 	// build step that needs a secret at build time isn't supported under
 	// nixpacks; runtime pods still get it via the deployment's envFrom.
 	env = append(env, buildEnvContainerVars(b)...)
+	// BuildArgs are the EXPLICIT non-secret build-time value channel. They
+	// bake into the generated Dockerfile as ENV lines just like literal
+	// buildEnv — safe because BuildArgs values are user-authored plain
+	// strings that can never be secretKeyRef-sourced (see
+	// buildArgsContainerVars).
+	env = append(env, buildArgsContainerVars(b)...)
 	return corev1.Container{
 		Name:            "nixpacks-plan",
 		Image:           image,
@@ -692,6 +729,66 @@ func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 	}
 	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDENV_KEYS", Value: strings.Join(keys, " ")})
 	return out
+}
+
+// buildArgsContainerVars turns b.Spec.BuildArgs into container env vars:
+// KUSO_BUILDARG_KEYS (space-separated key list) + one KUSO_BA_<KEY> per entry.
+// This is the EXPLICIT, non-secret build-time value channel — distinct from
+// BuildEnv (the service's runtime env, filtered for build). BuildArgs is a
+// plain map[string]string of values the user authored directly in the service
+// spec; it CANNOT carry a secretKeyRef by construction (the API never writes a
+// valueFrom into it), so its values are always safe to persist into the image
+// as build-args / baked ENV — which is the whole point.
+//
+// SECURITY (belt-and-suspenders): even though BuildArgs is a plain map, we
+// still defensively drop any value that builds.IsBuildEnvSecretRef reports
+// true. Nothing routes a kuso-secret-ref:// through BuildArgs today, but if a
+// future codepath ever did, that value would otherwise persist in the pushed
+// image's config/history (build-arg) or as a permanent ENV layer (nixpacks) —
+// exactly the leak the BuildEnv split closes. The guard keeps the two channels
+// impossible to cross accidentally: a ref-shaped value here is dropped, never
+// emitted as a literal build-arg.
+//
+// Keys are validated with envKeyRE (non-identifiers dropped, defense-in-depth
+// at the render boundary — the server also validates on write) and sorted for
+// deterministic output.
+func buildArgsContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
+	if b == nil || len(b.Spec.BuildArgs) == 0 {
+		return nil
+	}
+	var out []corev1.EnvVar
+	var keys []string
+	for _, k := range sortedBuildArgsKeys(b) {
+		v := b.Spec.BuildArgs[k]
+		// Defensive: a plain BuildArgs value can't be a secret ref by
+		// construction, but drop one if it ever is (see doc above).
+		if builds.IsBuildEnvSecretRef(v) {
+			continue
+		}
+		keys = append(keys, k)
+		out = append(out, corev1.EnvVar{Name: "KUSO_BA_" + k, Value: v})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDARG_KEYS", Value: strings.Join(keys, " ")})
+	return out
+}
+
+// sortedBuildArgsKeys returns the identifier-valid BuildArgs keys in stable
+// order. Mirrors sortedBuildEnvKeys — the identifier check is defense-in-depth
+// at the render boundary (keys are interpolated into KUSO_BA_<key> shell var
+// names and Dockerfile ENV lines / build-arg flags); the server validates on
+// write via validateBuildArgs.
+func sortedBuildArgsKeys(b *kube.KusoBuild) []string {
+	names := make([]string, 0, len(b.Spec.BuildArgs))
+	for k := range b.Spec.BuildArgs {
+		if envKeyRE.MatchString(k) {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // buildEnvSecretContainerVars turns b.Spec.BuildEnv's kuso-secret-ref://
@@ -967,6 +1064,26 @@ for k in $KUSO_BUILDENV_KEYS; do
   set -- "$@" --opt "build-arg:${k}=$(printenv "KUSO_BE_${k}")"
 done
 
+# BuildArgs (KUSO_BUILDARG_KEYS): the EXPLICIT non-secret build-time value
+# channel. Forwarded as --opt build-arg exactly like the literal buildEnv loop
+# above, and — unlike secret-sourced buildEnv — these ARE meant to persist in
+# the image (they are non-secret build-time constants; a build-arg the
+# Dockerfile doesn't declare ARG for is a harmless buildkit no-op). Values come
+# from KUSO_BA_<KEY> via printenv (kubelet-escaped, never interpolated into the
+# script), so no shell-injection regardless of value contents. Same RESERVED
+# guard so a build-arg can't clobber a reserved KUSO_*/runtime-only var.
+# Appended AFTER the buildEnv build-args, so on a key collision the BuildArgs
+# value is the later --opt build-arg and wins (buildkit takes the last one) —
+# BuildArgs is the explicit build-arg channel, so it should override an
+# incidental buildEnv collision. Key NAMES only in the log (non-secret, but
+# kept consistent with the buildEnv logging).
+for k in $KUSO_BUILDARG_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  set -- "$@" --opt "build-arg:${k}=$(printenv "KUSO_BA_${k}")"
+done
+
 # Secret-sourced build env (KUSO_BUILDENV_SECRET_KEYS) must NEVER flow as a
 # build-arg — buildkit records consumed build-arg values in the pushed
 # image's config/history, so registry read access would recover live addon
@@ -985,6 +1102,7 @@ done
 echo "==> buildkit: daemon=$BUILDKIT_HOST"
 echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX dryRun=${DRY_RUN:-0}"
 echo "==> buildkit: build-arg keys=${KUSO_BUILDENV_KEYS:-<none>}"
+echo "==> buildkit: explicit build-arg keys=${KUSO_BUILDARG_KEYS:-<none>}"
 echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 
 for i in $(seq 1 30); do
@@ -1050,6 +1168,20 @@ exec buildctl \
 	// env (kubelet-escaped; never shell-parsed) with the key list in
 	// KUSO_BUILDENV_KEYS — same mechanism as the nixpacks-plan container.
 	envs = append(envs, buildEnvContainerVars(b)...)
+	// BuildArgs: the explicit non-secret build-time value channel. Forwarded
+	// as KUSO_BA_<KEY> container env for ALL buildkit strategies (dockerfile,
+	// nixpacks, static). For dockerfile the script turns each into a `--opt
+	// build-arg`; for nixpacks the nixpacks-plan container already baked them
+	// as ENV so buildkit needs nothing further, but carrying the vars here is
+	// harmless (buildkit only forwards build-args the script emits, and the
+	// dockerfile-only loop is gated on the generated .nixpacks/Dockerfile
+	// path). BuildArgs values are user-authored plain strings that can never
+	// be secret-sourced (see buildArgsContainerVars), so — unlike buildEnv —
+	// there is no secret channel to split off. They ARE meant to persist in
+	// the image (non-secret build-time constants); that's the whole point.
+	if strategy == "dockerfile" {
+		envs = append(envs, buildArgsContainerVars(b)...)
+	}
 	// Secret-sourced build env is forwarded ONLY for user-authored
 	// Dockerfiles, and only as buildkit secret mounts — a consumed build-arg
 	// persists in the pushed image's config/history, which is exactly the

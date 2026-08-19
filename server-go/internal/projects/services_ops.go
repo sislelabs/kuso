@@ -211,6 +211,26 @@ func validateServiceImageSpec(s *ServiceImageSpec) error {
 	return validateImageRef("image.tag", s.Tag)
 }
 
+// validateBuildArgs checks the service's BuildArgs keys are POSIX env-var
+// identifiers. BuildArgs is the explicit non-secret build-time value channel:
+// each key becomes a KUSO_BA_<KEY> container env var, a `--opt build-arg:KEY=`
+// flag (dockerfile), and an `ENV KEY VALUE` line in the generated Dockerfile
+// (nixpacks). A non-identifier key would either be silently dropped at the
+// render boundary (buildArgsContainerVars re-validates via envKeyRE) or, worse,
+// be a malformed-ENV / shell-var vector — so we reject it at the API boundary
+// with a clean 400 rather than let the value vanish between write and build.
+// Mirrors how buildEnv keys are validated in builds.buildEnvFromVars. Values
+// are NOT validated (they are free-form build-time constants; the kubelet
+// escapes them and the render never shell-parses them). Nil/empty is fine.
+func validateBuildArgs(args map[string]string) error {
+	for k := range args {
+		if !envNameValid(k) {
+			return fmt.Errorf("%w: buildArg key %q must be a POSIX env-var identifier ([A-Za-z_][A-Za-z0-9_]*)", ErrInvalid, k)
+		}
+	}
+	return nil
+}
+
 // ListServices returns every service in the project, label-filtered.
 func (s *Service) ListServices(ctx context.Context, project string) ([]kube.KusoService, error) {
 	return s.listServicesForProject(ctx, project)
@@ -296,6 +316,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		return nil, err
 	}
 	if err := validateServiceImageSpec(req.Image); err != nil {
+		return nil, err
+	}
+	if err := validateBuildArgs(req.BuildArgs); err != nil {
 		return nil, err
 	}
 	proj, err := s.Get(ctx, project)
@@ -2149,6 +2172,15 @@ func (s *Service) RevertService(ctx context.Context, project, service string, ra
 func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
 	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	// BuildArgs keys must be POSIX identifiers (they become KUSO_BA_<KEY>
+	// container vars + `--opt build-arg:KEY=` / `ENV KEY VALUE` at render).
+	// Reject a bad key at the API boundary rather than silently dropping it
+	// at render (buildArgsContainerVars re-validates as defense-in-depth).
+	if req.BuildArgs != nil {
+		if err := validateBuildArgs(*req.BuildArgs); err != nil {
+			return nil, err
+		}
 	}
 
 	mu := s.lockService(project, service)

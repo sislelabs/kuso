@@ -733,6 +733,214 @@ func TestNixpacksBuildEnvFlagsAreWordSplitSafe(t *testing.T) {
 	}
 }
 
+// TestBuildArgsContainerVars verifies the EXPLICIT non-secret build-time value
+// channel: BuildArgs entries emit KUSO_BA_<KEY> vars + a KUSO_BUILDARG_KEYS
+// list, non-identifier keys are dropped at the render boundary, and — as a
+// belt-and-suspenders guard — a secret-ref-shaped value is skipped (nothing
+// routes a ref through BuildArgs today, but if it ever did the value would
+// otherwise persist in the image).
+func TestBuildArgsContainerVars(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		BuildArgs: map[string]string{
+			"APP_VERSION": "1.4.2",
+			"BUILD_FLAG":  "on",
+			"BAD-KEY":     "dropped", // non-identifier → dropped
+			"BAD$(x)":     "evil",    // non-identifier → dropped
+			// Defensive guard: a ref-shaped value must never be emitted as a
+			// literal build-arg even though BuildArgs can't legitimately hold one.
+			"SNEAKY": builds.BuildEnvSecretRef("foo-db-conn", "DATABASE_URL"),
+		},
+	}}
+	vars := buildArgsContainerVars(b)
+	got := map[string]string{}
+	for _, e := range vars {
+		got[e.Name] = e.Value
+	}
+	if got["KUSO_BA_APP_VERSION"] != "1.4.2" {
+		t.Errorf("APP_VERSION not passed: %q", got["KUSO_BA_APP_VERSION"])
+	}
+	if got["KUSO_BA_BUILD_FLAG"] != "on" {
+		t.Errorf("BUILD_FLAG not passed: %q", got["KUSO_BA_BUILD_FLAG"])
+	}
+	if _, bad := got["KUSO_BA_BAD-KEY"]; bad {
+		t.Error("non-identifier key BAD-KEY must be dropped")
+	}
+	if _, bad := got["KUSO_BA_BAD$(x)"]; bad {
+		t.Error("malicious key must be dropped")
+	}
+	if _, leaked := got["KUSO_BA_SNEAKY"]; leaked {
+		t.Error("secret-ref-shaped value must be dropped, never emitted as a literal build-arg")
+	}
+	if keys := got["KUSO_BUILDARG_KEYS"]; keys != "APP_VERSION BUILD_FLAG" {
+		t.Errorf("KUSO_BUILDARG_KEYS = %q, want sorted identifier keys only", keys)
+	}
+}
+
+// TestBuildArgsContainerVarsEmpty: no BuildArgs → no KUSO_BA_* / KUSO_BUILDARG_KEYS.
+func TestBuildArgsContainerVarsEmpty(t *testing.T) {
+	if vars := buildArgsContainerVars(&kube.KusoBuild{}); vars != nil {
+		t.Errorf("empty BuildArgs must emit no vars, got %+v", vars)
+	}
+	// All keys invalid → still nil (no empty KUSO_BUILDARG_KEYS).
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{BuildArgs: map[string]string{"BAD-KEY": "x"}}}
+	if vars := buildArgsContainerVars(b); vars != nil {
+		t.Errorf("all-invalid BuildArgs must emit no vars, got %+v", vars)
+	}
+}
+
+// TestBuildkitContainerInjectsBuildArgsChannel: the dockerfile buildkit
+// container must carry the KUSO_BA_* vars and the script must forward
+// KUSO_BUILDARG_KEYS as --opt build-arg (the explicit non-secret channel), with
+// the same RESERVED guard as the buildEnv loop.
+func TestBuildkitContainerInjectsBuildArgsChannel(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy:  "dockerfile",
+		BuildArgs: map[string]string{"APP_VERSION": "1.4.2"},
+		Image:     &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	var saw bool
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BA_APP_VERSION" && e.Value == "1.4.2" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Error("buildkit container missing KUSO_BA_APP_VERSION")
+	}
+	script := c.Args[0]
+	if !strings.Contains(script, "KUSO_BUILDARG_KEYS") {
+		t.Error("buildkit script does not consume KUSO_BUILDARG_KEYS")
+	}
+	if !strings.Contains(script, `build-arg:${k}=$(printenv "KUSO_BA_${k}")`) {
+		t.Error("buildkit script does not forward KUSO_BUILDARG_KEYS as --opt build-arg")
+	}
+	// The RESERVED guard must gate the KUSO_BUILDARG_KEYS loop too.
+	if !strings.Contains(script, "for k in $KUSO_BUILDARG_KEYS") {
+		t.Error("buildkit script missing the KUSO_BUILDARG_KEYS loop")
+	}
+}
+
+// TestNixpacksPlanInjectsBuildArgsChannel: the nixpacks-plan container carries
+// the KUSO_BA_* vars, and the generated-Dockerfile ENV injection + the nixpacks
+// --env forwarding both consume KUSO_BUILDARG_KEYS.
+func TestNixpacksPlanInjectsBuildArgsChannel(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy:  "nixpacks",
+		BuildArgs: map[string]string{"APP_VERSION": "1.4.2"},
+	}}
+	c := renderNixpacksPlanContainer(b)
+	var saw bool
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BA_APP_VERSION" && e.Value == "1.4.2" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Error("nixpacks-plan container missing KUSO_BA_APP_VERSION")
+	}
+	script := c.Args[0]
+	if !strings.Contains(script, "for k in $KUSO_BUILDARG_KEYS") {
+		t.Error("nixpacks script does not consume KUSO_BUILDARG_KEYS")
+	}
+	// Must inject them as ENV lines in the generated Dockerfile (build-time env).
+	if !strings.Contains(script, `v="$(printenv "KUSO_BA_${k}")"`) {
+		t.Error("nixpacks script does not read KUSO_BA_<key> for the ENV block")
+	}
+	if !strings.Contains(script, `ENV ${k} ${v}`) {
+		t.Error("nixpacks script does not emit ENV lines")
+	}
+}
+
+// TestBuildArgsReservedKeyDropped: a BuildArg whose key collides with a
+// RESERVED KUSO_*/runtime-only var must be filtered by the same `case
+// " $RESERVED " in` guard the buildEnv loops use — it reaches the container as
+// a KUSO_BA_* var (the guard lives in the shell, matching buildEnv), but the
+// shell loops skip it so it never becomes a build-arg / ENV line. Assert the
+// guard is present in both scripts guarding the KUSO_BUILDARG loop.
+func TestBuildArgsReservedKeyGuarded(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy:  "dockerfile",
+		BuildArgs: map[string]string{"NODE_ENV": "production", "APP_VERSION": "1.0"},
+		Image:     &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	dfScript := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	// Locate the KUSO_BUILDARG loop and confirm a RESERVED guard precedes the
+	// build-arg emission within it.
+	idx := strings.Index(dfScript, "for k in $KUSO_BUILDARG_KEYS")
+	if idx < 0 {
+		t.Fatal("KUSO_BUILDARG_KEYS loop missing from buildkit script")
+	}
+	loop := dfScript[idx:]
+	if !strings.Contains(loop[:strings.Index(loop, "done")], `case " $RESERVED " in`) {
+		t.Error("KUSO_BUILDARG_KEYS build-arg loop missing the RESERVED guard")
+	}
+
+	nxScript := renderNixpacksPlanContainer(&kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy:  "nixpacks",
+		BuildArgs: map[string]string{"NODE_ENV": "production", "APP_VERSION": "1.0"},
+	}}).Args[0]
+	// Both the --env loop and the ENV-block loop over KUSO_BUILDARG_KEYS must
+	// carry the RESERVED guard.
+	for _, occ := range allIndexes(nxScript, "for k in $KUSO_BUILDARG_KEYS") {
+		seg := nxScript[occ:]
+		end := strings.Index(seg, "done")
+		if end < 0 || !strings.Contains(seg[:end], `case " $RESERVED " in`) {
+			t.Error("a KUSO_BUILDARG_KEYS loop in the nixpacks script is missing the RESERVED guard")
+		}
+	}
+}
+
+// TestBuildArgsRoundTrip verifies the full spec.BuildArgs → KusoBuild.Spec.
+// BuildArgs → container-var flow for the value channel: a KusoBuild carrying
+// BuildArgs (as builds.Create mirrors from the service) renders the KUSO_BA_*
+// container vars for both dockerfile and nixpacks strategies.
+func TestBuildArgsRoundTrip(t *testing.T) {
+	for _, strategy := range []string{"dockerfile", "nixpacks"} {
+		b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+			Strategy:  strategy,
+			BuildArgs: map[string]string{"APP_VERSION": "9.9.9"},
+			Image:     &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+		}}
+		var c corev1.Container
+		if strategy == "nixpacks" {
+			c = renderNixpacksPlanContainer(b)
+		} else {
+			c = renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+		}
+		var val string
+		var keys string
+		for _, e := range c.Env {
+			switch e.Name {
+			case "KUSO_BA_APP_VERSION":
+				val = e.Value
+			case "KUSO_BUILDARG_KEYS":
+				keys = e.Value
+			}
+		}
+		if val != "9.9.9" {
+			t.Errorf("%s: KUSO_BA_APP_VERSION = %q, want round-tripped value", strategy, val)
+		}
+		if keys != "APP_VERSION" {
+			t.Errorf("%s: KUSO_BUILDARG_KEYS = %q", strategy, keys)
+		}
+	}
+}
+
+// allIndexes returns every start index of sub in s (non-overlapping).
+func allIndexes(s, sub string) []int {
+	var out []int
+	off := 0
+	for {
+		i := strings.Index(s[off:], sub)
+		if i < 0 {
+			return out
+		}
+		out = append(out, off+i)
+		off += i + len(sub)
+	}
+}
+
 // TestRenderJobGitLabPrivateRepo covers the GitLab clone path: a repo on a
 // GitLab host with a stored token secret must render a private clone that
 // mounts KUSO_GIT_TOKEN and uses GitLab's oauth2:<tok> auth form (not

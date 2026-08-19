@@ -259,3 +259,59 @@ func TestAddService_ValidatesEnvVarNames(t *testing.T) {
 		t.Fatalf("want ErrInvalid for malformed env name at create, got %v", err)
 	}
 }
+
+// TestValidateBuildArgs is the unit test for the BuildArgs key validator.
+// Keys must be POSIX env-var identifiers (they become KUSO_BA_<KEY> shell vars
+// + `--opt build-arg:KEY=` / `ENV KEY VALUE` at render), so a non-identifier
+// key must be rejected at the API rather than silently dropped at render.
+func TestValidateBuildArgs(t *testing.T) {
+	t.Parallel()
+	if err := validateBuildArgs(map[string]string{"APP_VERSION": "1.0", "_X": "y"}); err != nil {
+		t.Errorf("valid identifier keys must pass, got %v", err)
+	}
+	if err := validateBuildArgs(nil); err != nil {
+		t.Errorf("nil BuildArgs must pass, got %v", err)
+	}
+	for _, bad := range []string{"BAD-KEY", "1LEADING", "has space", "BAD$(x)", "a.b"} {
+		if err := validateBuildArgs(map[string]string{bad: "v"}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("key %q must be rejected with ErrInvalid, got %v", bad, err)
+		}
+	}
+}
+
+// TestAddService_ValidatesBuildArgKeys: a malformed BuildArgs key is rejected
+// at create, not silently dropped at render.
+func TestAddService_ValidatesBuildArgKeys(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+	}))
+
+	_, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:      "web",
+		Runtime:   "dockerfile",
+		BuildArgs: map[string]string{"BAD-KEY": "x"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("want ErrInvalid for malformed buildArg key at create, got %v", err)
+	}
+}
+
+// TestPatchService_ValidatesBuildArgKeys: same guard on the patch path.
+func TestPatchService_ValidatesBuildArgKeys(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+	}))
+	if _, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "web",
+		Runtime: "dockerfile",
+	}); err != nil {
+		t.Fatalf("seed AddService: %v", err)
+	}
+	bad := map[string]string{"BAD-KEY": "x"}
+	_, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{BuildArgs: &bad})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("want ErrInvalid for malformed buildArg key at patch, got %v", err)
+	}
+}

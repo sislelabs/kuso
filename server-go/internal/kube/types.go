@@ -299,8 +299,19 @@ type KusoServiceSpec struct {
 	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
 	Static          *KusoStaticSpec      `json:"static,omitempty"`
 	Buildpacks      *KusoBuildpacksSpec  `json:"buildpacks,omitempty"`
-	// BuildArgs are passed to the image build as --build-arg KEY=VAL —
-	// true build-time constants, identical across every environment.
+	// BuildArgs is the supported NON-SECRET build-time value channel. Each
+	// KEY=VALUE is passed to the image build (dockerfile: `--build-arg
+	// KEY=VAL` consumed by a matching `ARG KEY`; nixpacks: injected as an
+	// `ENV KEY VALUE` line in the generated Dockerfile) — true build-time
+	// constants, identical across every environment. Distinct from EnvVars,
+	// which are the service's RUNTIME env (only literal, non-secret EnvVars
+	// additionally reach the build via BuildEnv). BuildArgs values are plain
+	// user-authored strings: a secretKeyRef can NEVER be expressed here (the
+	// API only writes a string map, never a valueFrom), so these values are
+	// safe to persist in the published image. Keys must be POSIX env-var
+	// identifiers (validated on write); a secret-ref-shaped value is defensively
+	// dropped at render. Static/buildpacks strategies do not consume BuildArgs
+	// (buildpacks has its own project-descriptor arg mechanism).
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 	// PublicEnv names env vars baked as sentinels at build and
 	// substituted at pod start (build-once-run-anywhere for inlined
@@ -962,10 +973,17 @@ type KusoBuildSpec struct {
 	// them only via buildkit secret mounts (RUN --mount=type=secret) so they
 	// never land in image layers. See builds.BuildEnvSecretRef.
 	BuildEnv map[string]string `json:"buildEnv,omitempty"`
-	// BuildArgs are passed to the build as --build-arg KEY=VAL. Unlike
-	// BuildEnv (which bakes ENV lines), these are dockerfile ARG inputs —
-	// build-time constants identical across envs. Mirrored from the
-	// service's BuildArgs by builds.Create.
+	// BuildArgs is the supported NON-SECRET build-time value channel,
+	// mirrored verbatim from the service's BuildArgs by builds.Create. The
+	// buildcontroller renders each entry as a KUSO_BA_<KEY> container env var
+	// plus a KUSO_BUILDARG_KEYS list; the buildkit script forwards them as
+	// `--opt build-arg:KEY=VAL` (dockerfile) and the nixpacks-plan script
+	// bakes them as `ENV KEY VALUE` (nixpacks). Unlike secret-sourced BuildEnv
+	// (kuso-secret-ref://, forwarded only as non-persisting buildkit secret
+	// mounts), BuildArgs values ARE meant to persist in the image — they are
+	// non-secret build-time constants by construction (a secretKeyRef can't be
+	// expressed in this plain string map). A secret-ref-shaped value is
+	// defensively dropped at render (see buildArgsContainerVars).
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 	// PublicEnv names vars baked as __KUSO_RUNTIME_<KEY>__ sentinels at
 	// build and substituted at pod start. Mirrored from the service.
