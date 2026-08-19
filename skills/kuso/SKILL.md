@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.22.19**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.22.21**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
@@ -96,7 +96,10 @@ auth/permission layers, so they see the same truth:
   `set_env`, `set_secret`, `run`, `manage_addon`, `add_service`,
   `bootstrap_project`, `update_project`. Every mutating tool requires
   `confirm=true`, and `--read-only` refuses all of them — worth running
-  when you only mean to investigate.
+  when you only mean to investigate. Auth: `KUSO_URL`/`KUSO_TOKEN` env
+  vars win when set; otherwise `kuso-mcp` reuses the CLI's
+  `~/.kuso/credentials.yaml` + `currentInstance`, so a logged-in `kuso`
+  CLI needs no extra token plumbing.
 
 The full loop — deploy → inspect → debug → query the DB → roll back —
 works on either. Prefer MCP when it covers the task (the confirm gates
@@ -435,7 +438,7 @@ migration tool), the addon must be explicitly exposed. It is **off by default**.
 ```bash
 kuso project addon public-tcp enable <project> <addon>    # admin-only
 #   → "addon <project>/<addon> exposed on public TCP port <PORT>"
-kuso project addon public-tcp disable <project> <addon>   # frees the port
+kuso project addon public-tcp disable <project> <addon> --yes   # frees the port (prompts without --yes)
 ```
 
 - **The port is server-allocated from a fixed pool** (`KUSO_TCP_PROXY_PORTS`).
@@ -497,7 +500,7 @@ enable it:
 kuso project addon public-tcp enable <project> <addon>   # note the port it prints
 kuso get addons <project> -o json                        # → spec.publicTCP.{enabled,port}
 # ... do the external work ...
-kuso project addon public-tcp disable <project> <addon>  # ALWAYS close it after
+kuso project addon public-tcp disable <project> <addon> --yes  # ALWAYS close it after
 ```
 
 Treat it like a firewall hole: open it deliberately, say why, close it when

@@ -66,6 +66,31 @@ func TestGetJSONReturnsAPIError(t *testing.T) {
 	if !strings.Contains(apiErr.Body, "bad token") {
 		t.Errorf("Body missing payload: %q", apiErr.Body)
 	}
+	// Error() must surface the envelope's message, not raw JSON braces.
+	if !strings.Contains(apiErr.Error(), "bad token") || strings.Contains(apiErr.Error(), `{"error"`) {
+		t.Errorf("Error() should unwrap the envelope: %q", apiErr.Error())
+	}
+}
+
+func TestAPIErrorEnvelopeUnwrap(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`{"error":"service not found","code":"not_found"}`, "service not found"},
+		{"plain text body", "plain text body"},
+		{`{"message":"no error field"}`, `{"message":"no error field"}`},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		e := &APIError{Status: 404, Path: "/api/x", Body: tc.body}
+		if got := errEnvelopeMessage(e.Body); got != tc.want {
+			t.Errorf("errEnvelopeMessage(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+		if tc.want != "" && !strings.Contains(e.Error(), tc.want) {
+			t.Errorf("Error() = %q, want it to contain %q", e.Error(), tc.want)
+		}
+	}
 }
 
 func TestPostJSONReadOnlyRefused(t *testing.T) {

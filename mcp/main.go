@@ -4,7 +4,9 @@
 // Code, Cursor, Claude Desktop) drive a kuso PaaS instance: list and
 // describe apps, deploy, troubleshoot, manage secrets, etc.
 //
-// The server reads KUSO_URL and KUSO_TOKEN from the environment. Pass
+// The server reads KUSO_URL and KUSO_TOKEN from the environment; when
+// either is unset it falls back to the kuso CLI's ~/.kuso/kuso.yaml +
+// credentials.yaml (respecting the CLI's currentInstance). Pass
 // --read-only to disable mutating tools.
 package main
 

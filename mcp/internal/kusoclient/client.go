@@ -44,8 +44,34 @@ type APIError struct {
 	Body   string
 }
 
+// errBodyLimit caps how much of a server error body is surfaced in an
+// error string. Validation errors can run long (multi-field kuso.yaml
+// diagnostics), and the actionable part is often past the first couple
+// hundred characters — so keep this generous. The full body is always
+// available on APIError.Body.
+const errBodyLimit = 2000
+
 func (e *APIError) Error() string {
-	return fmt.Sprintf("kuso server %s returned %d: %s", e.Path, e.Status, truncate(e.Body, 200))
+	return fmt.Sprintf("kuso server %s returned %d: %s", e.Path, e.Status, truncate(errEnvelopeMessage(e.Body), errBodyLimit))
+}
+
+// errEnvelopeMessage extracts the "error" field from the server's JSON
+// error envelope ({"error": "...", "code": "..."}) so tool results show
+// the message instead of raw JSON. Non-envelope bodies (older servers,
+// proxies) are returned unchanged; the raw body always stays on
+// APIError.Body.
+func errEnvelopeMessage(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, "{") {
+		return body
+	}
+	var env struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(trimmed), &env) == nil && env.Error != "" {
+		return env.Error
+	}
+	return body
 }
 
 // GetJSON issues a GET against the kuso server and decodes the JSON response

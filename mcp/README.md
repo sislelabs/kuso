@@ -6,7 +6,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It 
 
 ## Run
 
-Set environment variables, then build and run:
+Build and run:
 
 ```bash
 export KUSO_URL=https://kuso.example.com
@@ -16,30 +16,16 @@ make build
 ./bin/kuso-mcp --read-only     # disables mutating tools
 ```
 
+Env vars win when set. When either is missing, kuso-mcp falls back to
+the kuso CLI's config: the URL comes from `~/.kuso/kuso.yaml` (the
+`currentInstance`, or the sole configured instance) and the token from
+`~/.kuso/credentials.yaml` (written by `kuso login`). So on a machine
+with a logged-in `kuso` CLI you can skip the env vars entirely; set
+`KUSO_URL` to pick a non-current instance from a multi-instance config.
+
 The server speaks MCP over stdio. Wire it up in your client by pointing at the `kuso-mcp` binary.
 
 ### Claude Code config (example)
-
-```json
-{
-  "mcpServers": {
-    "kuso": {
-      "command": "/path/to/kuso-mcp",
-      "env": {
-        "KUSO_URL": "https://kuso.example.com",
-        "KUSO_TOKEN": "..."
-      }
-    }
-  }
-}
-```
-
-**Read-only mode.** `--read-only` refuses every mutating tool (apply,
-build, rollback, set_env, set_secret, run, manage_addon, …) while
-leaving the whole read surface — including `sql_query`, which the server
-runs in a read-only transaction — available. Pass it via `args`; it is
-NOT settable through `env`, so the copy-paste block above starts in
-read-write mode:
 
 ```json
 {
@@ -56,9 +42,19 @@ read-write mode:
 }
 ```
 
-Worth defaulting to when the agent's job is to investigate rather than
-to ship. Note the kuso token's own permissions still apply on top —
-read-only mode narrows what the *tools* will do, not what the token can.
+(The `env` block is optional if the machine has a logged-in `kuso` CLI —
+see the credentials fallback above.)
+
+**Read-only mode.** The example starts in `--read-only` on purpose: it
+refuses every mutating tool (apply, build, rollback, set_env,
+set_secret, run, manage_addon, …) while leaving the whole read surface —
+including `sql_query`, which the server runs in a read-only
+transaction — available. That's the right default when the agent's job
+is to investigate rather than to ship. To grant write access, remove
+`"args": ["--read-only"]`. The flag lives in `args`; it is NOT settable
+through `env`. Note the kuso token's own permissions still apply on
+top — read-only mode narrows what the *tools* will do, not what the
+token can.
 
 ## Tool surface
 
@@ -97,7 +93,7 @@ mcp/
 ├── go.mod
 ├── Makefile
 ├── internal/
-│   ├── config/           # KUSO_URL / KUSO_TOKEN / --read-only
+│   ├── config/           # KUSO_URL / KUSO_TOKEN (+ ~/.kuso fallback) / --read-only
 │   ├── kusoclient/       # HTTP client for the kuso server REST API
 │   └── tools/            # MCP tool implementations
 └── README.md
