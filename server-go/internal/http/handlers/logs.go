@@ -55,10 +55,10 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, logs.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "environment not found")
 		default:
 			h.Logger.Error("tail logs", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}

@@ -68,11 +68,11 @@ type setSharedSecretBody struct {
 func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	var body setSharedSecretBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "key required")
 		return
 	}
 	ctx, cancel := projectSecretsCtx(r)
@@ -111,9 +111,7 @@ func (h *ProjectSecretsHandler) fail(w http.ResponseWriter, op string, err error
 		// 409 + structured body so the CLI can render a helpful
 		// "X already set on service <svc> as service-scoped; unset
 		// it or pass --force" message instead of just "conflict".
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":    err.Error(),
-			"code":     "shadowed",
+		writeErrExtra(w, http.StatusConflict, err.Error(), "shadowed", map[string]any{
 			"key":      shadow.Key,
 			"scope":    shadow.Scope,
 			"services": shadow.Services,
@@ -122,11 +120,11 @@ func (h *ProjectSecretsHandler) fail(w http.ResponseWriter, op string, err error
 	}
 	switch {
 	case errors.Is(err, projectsecrets.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, projectsecrets.ErrNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, projectsecrets.ErrNotFound, "secret"))
 	default:
 		h.Logger.Error("project secrets handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

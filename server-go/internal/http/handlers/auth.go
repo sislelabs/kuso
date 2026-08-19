@@ -86,11 +86,11 @@ type loginResponse struct {
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Username == "" || req.Password == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
@@ -111,15 +111,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		// Constant-time miss branch so user-enumeration timing is
 		// uninformative. The dummy is bcrypt of "" at cost 10.
 		_ = auth.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if !user.IsActive {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if err := auth.VerifyPassword(user.Password, req.Password); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
@@ -162,7 +162,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.Logger.Error("auth: sign jwt", "err", err, "user", user.ID)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -212,7 +212,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	resp := map[string]any{

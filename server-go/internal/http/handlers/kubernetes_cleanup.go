@@ -92,7 +92,7 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 		}
 		return nil
 	}); err != nil {
-		http.Error(w, "list jobs: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "list jobs: "+err.Error())
 		return
 	}
 
@@ -135,7 +135,7 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 		}
 		return nil
 	}); err != nil {
-		http.Error(w, "list pods: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "list pods: "+err.Error())
 		return
 	}
 

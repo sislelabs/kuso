@@ -36,11 +36,11 @@ import (
 func requirePerm(w http.ResponseWriter, r *http.Request, want auth.Permission) bool {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}
 	if !auth.Has(claims.Permissions, want) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}
 	return true
@@ -99,7 +99,7 @@ func requireProjectAccess(
 ) bool {
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}
 	// Admins see everything.
@@ -114,21 +114,21 @@ func requireProjectAccess(
 		// site so the operator notices in production.
 		slog.Default().Error("requireProjectAccess called with nil DB — failing closed",
 			"project", project, "user", claims.UserID)
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}
 	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
 	if err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}
 	role := auth.ProjectRoleFor(tenancy, project)
 	if role == "" {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}
 	if !roleAtLeast(role, minRole) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}
 	return true
@@ -187,8 +187,10 @@ func maskEnvValues(in []projects.EnvVar) []projects.EnvVar {
 }
 
 // envMaskSentinel is what editors see instead of a secret value. Chosen
-// so it's visibly a mask, not a plausible real value.
-const envMaskSentinel = "••••••••"
+// so it's visibly a mask, not a plausible real value. Alias of the
+// shared projects.EnvMaskSentinel — one constant across packages, so the
+// read-path mask and every write-path sentinel guard can never diverge.
+const envMaskSentinel = projects.EnvMaskSentinel
 
 // roleAtLeast returns true when have grants at least the want level.
 // admin > editor > viewer.

@@ -21,13 +21,13 @@ func (h *KubernetesHandler) NodeUpdates(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "node updates unavailable: no kube client", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "node updates unavailable: no kube client")
 		return
 	}
 	pw := &pkgupdates.Watcher{Kube: h.Kube}
 	advisories, err := pw.List(r.Context())
 	if err != nil {
-		http.Error(w, "list node updates: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "list node updates: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": advisories})
@@ -42,7 +42,7 @@ func (h *KubernetesHandler) ApplyNodeUpdates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "node updates unavailable: no kube client", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "node updates unavailable: no kube client")
 		return
 	}
 	node := chi.URLParam(r, "name")
@@ -56,11 +56,11 @@ func (h *KubernetesHandler) ApplyNodeUpdates(w http.ResponseWriter, r *http.Requ
 	err := pw.Apply(r.Context(), node, body.AllowReboot)
 	switch {
 	case errors.Is(err, pkgupdates.ErrNothingToDo):
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, pkgupdates.ErrAlreadyRunning):
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case err != nil:
-		http.Error(w, "apply updates: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "apply updates: "+err.Error())
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "node": node, "allowReboot": body.AllowReboot})
 	}

@@ -10,12 +10,23 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// fakeDeleter records what the sweep tried to untag.
-type fakeDeleter struct{ deleted []string }
+// fakeDeleter records what the sweep tried to untag. digests optionally
+// maps "repo:tag" → manifest digest so tests can model tags that share
+// one manifest (the digest-vs-tag protection); a tag absent from the
+// map resolves to "" (tag doesn't exist), which is a valid registry
+// answer and never an error.
+type fakeDeleter struct {
+	deleted []string
+	digests map[string]string
+}
 
 func (f *fakeDeleter) DeleteImageTag(_ context.Context, repo, tag string) error {
 	f.deleted = append(f.deleted, repo+":"+tag)
 	return nil
+}
+
+func (f *fakeDeleter) ResolveTagDigest(_ context.Context, repo, tag string) (string, error) {
+	return f.digests[repo+":"+tag], nil
 }
 
 // TestSweepImagesPastWindow_ProtectsCronImages is the regression for the

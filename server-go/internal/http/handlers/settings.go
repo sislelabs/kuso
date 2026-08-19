@@ -58,7 +58,7 @@ func (h *SettingsHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	out, err := h.DB.GetSessionSettings(ctx)
 	if err != nil {
 		h.Logger.Error("settings: get session", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -72,7 +72,7 @@ func (h *SettingsHandler) PutSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var in db.SessionSettings
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	// When expiry is on, the TTL must be a sane positive bounded value.
@@ -80,11 +80,11 @@ func (h *SettingsHandler) PutSession(w http.ResponseWriter, r *http.Request) {
 	// a stale/zero value in that case.)
 	if !in.NeverExpire {
 		if in.TTLSeconds < 60 {
-			http.Error(w, "ttlSeconds must be at least 60 (or enable neverExpire)", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "ttlSeconds must be at least 60 (or enable neverExpire)")
 			return
 		}
 		if in.TTLSeconds > maxSessionTTLSeconds {
-			http.Error(w, "ttlSeconds capped at 1 year — enable neverExpire for longer", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "ttlSeconds capped at 1 year — enable neverExpire for longer")
 			return
 		}
 	}
@@ -96,7 +96,7 @@ func (h *SettingsHandler) PutSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.DB.SetSessionSettings(ctx, in, updatedBy); err != nil {
 		h.Logger.Error("settings: put session", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, in)
@@ -112,7 +112,7 @@ func (h *SettingsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	out, err := h.DB.GetBuildSettings(ctx)
 	if err != nil {
 		h.Logger.Error("settings: get build", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -127,18 +127,18 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	var in db.BuildSettings
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	// Validate concurrency cap. 0 disables the cap which is risky
 	// on a small box but legitimate on a beefy one — accept and
 	// document in the UI.
 	if in.MaxConcurrent < 0 {
-		http.Error(w, "maxConcurrent must be >= 0", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "maxConcurrent must be >= 0")
 		return
 	}
 	if in.MaxConcurrent > 32 {
-		http.Error(w, "maxConcurrent capped at 32 — open an issue if you need more", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "maxConcurrent capped at 32 — open an issue if you need more")
 		return
 	}
 	for name, q := range map[string]string{
@@ -151,7 +151,7 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if _, err := resource.ParseQuantity(q); err != nil {
-			http.Error(w, name+": invalid quantity ("+err.Error()+")", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, name+": invalid quantity ("+err.Error()+")")
 			return
 		}
 	}
@@ -163,7 +163,7 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.DB.SetBuildSettings(ctx, in, updatedBy); err != nil {
 		h.Logger.Error("settings: put build", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if h.OnBuildSettingsChange != nil {

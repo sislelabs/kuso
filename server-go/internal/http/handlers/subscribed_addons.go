@@ -32,7 +32,7 @@ func (h *ProjectsHandler) SetSubscribedAddons(w http.ResponseWriter, r *http.Req
 		Addons []string `json:"addons"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Addons == nil {

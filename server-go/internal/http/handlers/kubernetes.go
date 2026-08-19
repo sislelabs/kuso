@@ -126,12 +126,12 @@ func (h *KubernetesHandler) requireEnvAccess(
 	if h.Kube == nil || h.DB == nil {
 		// No kube + no DB = either a misconfigured server or a test
 		// stub. Both should fail closed.
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "environment not found")
 		return false
 	}
 	envCR, err := h.Kube.GetKusoEnvironment(ctx, h.Namespace, envName)
 	if err != nil || envCR == nil || envCR.Spec.Project == "" {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "environment not found")
 		return false
 	}
 	return requireProjectAccess(ctx, w, h.DB, envCR.Spec.Project, role)

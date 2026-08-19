@@ -183,19 +183,19 @@ func (s *wsSink) Write(f logs.Frame) error {
 func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	jwtTok := extractWSBearer(r)
 	if jwtTok == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	claims, err := h.Issuer.Verify(jwtTok)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	// Revocation: Verify only checks signature + expiry. On the public
 	// router (no auth middleware) we must consult the revocation hook
 	// ourselves, else a revoked token still streams logs until expiry.
 	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	h.Issuer.ResolvePermissions(r.Context(), claims)
@@ -208,7 +208,7 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		tenancy, terr := h.DB.ListUserTenancyCached(tenancyCtx, claims.UserID)
 		tenancyCancel()
 		if terr != nil || auth.ProjectRoleFor(tenancy, project) == "" {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeErr(w, http.StatusForbidden, "forbidden")
 			return
 		}
 	}
@@ -218,7 +218,7 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	// kube apiserver under log requests. Admins also pay the cost —
 	// otherwise an admin tab-storm produces the same outage.
 	if !h.acquireWSSlot(claims.UserID) {
-		http.Error(w, "too many concurrent log streams", http.StatusTooManyRequests)
+		writeErr(w, http.StatusTooManyRequests, "too many concurrent log streams")
 		return
 	}
 	defer h.releaseWSSlot(claims.UserID)

@@ -59,7 +59,7 @@ func (h *InstancePGHandler) ProvisionManaged(w http.ResponseWriter, r *http.Requ
 	var req instancepg.ProvisionManagedRequest
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 			return
 		}
 	}
@@ -81,7 +81,7 @@ func (h *InstancePGHandler) ConfigureExternal(w http.ResponseWriter, r *http.Req
 	}
 	var req instancepg.ConfigureExternalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if err := h.Svc.ConfigureExternal(r.Context(), req); err != nil {
@@ -113,13 +113,13 @@ func (h *InstancePGHandler) Disable(w http.ResponseWriter, r *http.Request) {
 func (h *InstancePGHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, instancepg.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, instancepg.ErrConflict):
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, instancepg.ErrNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, instancepg.ErrNotFound, kindFromOp(op)))
 	default:
 		slog.Default().Error("instance-pg handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

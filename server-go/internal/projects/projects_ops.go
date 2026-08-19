@@ -96,6 +96,12 @@ var reservedRouteNames = map[string]bool{
 	"logs":     true,
 	"settings": true,
 	"invite":   true,
+	// "summary" is reserved for the API, not the SPA: GET
+	// /api/projects/summary is the batched dashboard rollup, and chi
+	// resolves static segments before {project} params — a project
+	// named "summary" would have its describe endpoint permanently
+	// shadowed by the rollup route.
+	"summary": true,
 }
 
 // rfc1123Label is the constraint kube enforces on a resource name (a
@@ -694,26 +700,18 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 // listServicesForProject filters by label rather than relying on
 // spec.project so we use indexed lookups. Routes through the project's
 // execution namespace.
+//
+// Goes through the cached typed-list helper (ListKusoServicesByLabels →
+// kube/crds.go list[T]) — this sits on the per-dashboard-card Describe
+// hot path, and the raw Dynamic.Resource().List it used to issue was
+// the one remaining live apiserver LIST per Describe while the project
+// + env lists were already informer-served.
 func (s *Service) listServicesForProject(ctx context.Context, project string) ([]kube.KusoService, error) {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector(map[string]string{labelProject: project}),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]kube.KusoService, 0, len(raw.Items))
-	for i := range raw.Items {
-		var svc kube.KusoService
-		if err := decodeInto(&raw.Items[i], &svc); err != nil {
-			return nil, err
-		}
-		out = append(out, svc)
-	}
-	return out, nil
+	return s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{labelProject: project})
 }
 
 func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kube.KusoEnvironment, error) {
@@ -737,11 +735,17 @@ func (s *Service) listEnvsForProjectWithServices(ctx context.Context, project st
 	if err != nil {
 		return nil, err
 	}
+	// One informer-served builds list per call (NOT per env) feeds the
+	// unified state rollup — see state.go for the derivation contract.
+	buildsBySvc := s.buildsByService(ctx, ns, project)
 	out := make([]kube.KusoEnvironment, 0, len(raw))
 	for i := range raw {
 		e := raw[i]
 		populateDerivedStatus(&e)
 		s.populateLiveStatus(ctx, ns, &e, svcByName)
+		// After populateLiveStatus so the replica counts it stored on
+		// status.replicas are reused instead of re-fetched.
+		s.populateRollupState(&e, buildsBySvc)
 		out = append(out, e)
 	}
 	return out, nil

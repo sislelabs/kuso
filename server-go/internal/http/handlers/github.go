@@ -197,7 +197,7 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 // button.
 func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "github not configured")
 		return
 	}
 	var body struct {
@@ -206,11 +206,11 @@ func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) 
 		Repo           string `json:"repo"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Owner == "" || body.Repo == "" {
-		http.Error(w, "owner + repo required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "owner + repo required")
 		return
 	}
 	if body.InstallationID == 0 && h.Cache != nil {
@@ -245,7 +245,7 @@ func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) 
 // fast path to pre-check checkboxes.
 func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "github not configured")
 		return
 	}
 	var body struct {
@@ -256,11 +256,11 @@ func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
 		Path           string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.InstallationID == 0 || body.Owner == "" || body.Repo == "" || body.Branch == "" {
-		http.Error(w, "installationId, owner, repo, branch required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "installationId, owner, repo, branch required")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -268,7 +268,7 @@ func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Client.ScanAddons(ctx, body.InstallationID, body.Owner, body.Repo, body.Branch, body.Path)
 	if err != nil {
 		h.Logger.Error("github: scan addons", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"suggestions": out})
@@ -280,24 +280,24 @@ func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
 // Returns 204 on success — GitHub doesn't care about body contents.
 func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	if h.Cfg == nil || h.Cfg.WebhookSecret == "" {
-		http.Error(w, "webhook not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "webhook not configured")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 5<<20)) // 5 MiB ceiling
 	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	sig := r.Header.Get("X-Hub-Signature-256")
 	if !github.VerifySignature(h.Cfg.WebhookSecret, body, sig) {
 		// Use 400 (not 401) to match the TS server, and to keep our
 		// error surface generic — GitHub retries on 5xx but not 4xx.
-		http.Error(w, "invalid signature", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid signature")
 		return
 	}
 	event := r.Header.Get("X-GitHub-Event")
 	if event == "" {
-		http.Error(w, "missing event", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing event")
 		return
 	}
 	deliveryID := r.Header.Get("X-GitHub-Delivery")
@@ -319,7 +319,7 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	// so legitimate bursts catch up after the bucket refills.
 	if !h.allowInstallation(installID) {
 		h.Logger.Warn("github webhook rate limited", "installation", installID, "event", event)
-		http.Error(w, "rate limit", http.StatusTooManyRequests)
+		writeErr(w, http.StatusTooManyRequests, "rate limit")
 		return
 	}
 	// Replay-protection. GitHub retries failed deliveries reusing
@@ -485,7 +485,7 @@ func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request
 	out, err := h.Cache.List(ctx)
 	if err != nil {
 		h.Logger.Error("github: list installations", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	type wireInstall struct {
@@ -516,7 +516,7 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
 	if h.Cache == nil {
@@ -529,10 +529,10 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "installation not found")
 		default:
 			h.Logger.Error("github: installation repos", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -542,14 +542,14 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 // RefreshInstallations forces a cache refresh from GitHub.
 func (h *GithubHandler) RefreshInstallations(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil || h.Cache == nil {
-		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "github not configured")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if err := h.Client.RefreshInstallations(ctx, h.Cache); err != nil {
 		h.Logger.Error("github: refresh", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -564,17 +564,17 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Client == nil {
-		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "github not configured")
 		return
 	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
 	branch := r.URL.Query().Get("branch")
 	if branch == "" {
-		http.Error(w, "branch query param required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "branch query param required")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -582,7 +582,7 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Client.ListRepoTree(ctx, id, chi.URLParam(r, "owner"), chi.URLParam(r, "repo"), branch, r.URL.Query().Get("path"))
 	if err != nil {
 		h.Logger.Error("github: repo tree", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -591,7 +591,7 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 // DetectRuntime auto-detects runtime + port from a service's repo+path.
 func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "github not configured")
 		return
 	}
 	var body struct {
@@ -602,11 +602,11 @@ func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
 		Path           string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.InstallationID == 0 || body.Owner == "" || body.Repo == "" || body.Branch == "" {
-		http.Error(w, "installationId, owner, repo, branch required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "installationId, owner, repo, branch required")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -614,7 +614,7 @@ func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Client.DetectRuntime(ctx, body.InstallationID, body.Owner, body.Repo, body.Branch, body.Path)
 	if err != nil {
 		h.Logger.Error("github: detect runtime", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

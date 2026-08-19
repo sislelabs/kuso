@@ -954,11 +954,13 @@ type KusoBuildSpec struct {
 	// for strategy=dockerfile builds. Empty = "Dockerfile". Mirrored from
 	// KusoServiceSpec.Dockerfile by builds.Create.
 	Dockerfile string `json:"dockerfile,omitempty"`
-	// BuildEnv carries the service's env vars resolved to literals, baked
-	// into the image at build time (ENV-after-FROM). Set by builds.Create
-	// from the service's EnvVars (secretKeyRefs resolved server-side). Apps
-	// that read env during `npm run build` (Prisma, Next.js NEXT_PUBLIC_*)
-	// need this. Values are baked into image layers (in-cluster registry).
+	// BuildEnv carries the service's env vars for build time. Literal values
+	// pass through verbatim (apps that read env during `npm run build` —
+	// Prisma, Next.js NEXT_PUBLIC_* — need this). secretKeyRef-sourced vars
+	// are stamped as kuso-secret-ref://<secret>/<key> references, never
+	// plaintext: the CR must not persist secrets, and dockerfile builds get
+	// them only via buildkit secret mounts (RUN --mount=type=secret) so they
+	// never land in image layers. See builds.BuildEnvSecretRef.
 	BuildEnv map[string]string `json:"buildEnv,omitempty"`
 	// BuildArgs are passed to the build as --build-arg KEY=VAL. Unlike
 	// BuildEnv (which bakes ENV lines), these are dockerfile ARG inputs —

@@ -79,7 +79,7 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: downloading a database dump (which contains secret-bearing rows) requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: downloading a database dump (which contains secret-bearing rows) requires the admin role")
 		return
 	}
 
@@ -87,11 +87,11 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	// (where the -conn Secret lives) — see ownedAddon in backups.go.
 	cr, ns, err := h.ownedAddon(ctx, project, addon)
 	if errors.Is(err, addons.ErrNotFound) {
-		http.Error(w, fmt.Sprintf("addon %s/%s not found", project, addon), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("addon %s/%s not found", project, addon))
 		return
 	}
 	if err != nil {
-		http.Error(w, "resolve addon: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "resolve addon: "+err.Error())
 		return
 	}
 	releaseName := cr.Name
@@ -103,9 +103,10 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	case "s3", "minio":
 		h.downloadS3(ctx, w, project, addon, ns, releaseName, stamp)
 	default:
-		http.Error(w,
-			fmt.Sprintf("direct download not supported for %s addons (postgres and s3 only)", cr.Spec.Kind),
-			http.StatusBadRequest)
+		writeErr(w,
+
+			http.StatusBadRequest, fmt.Sprintf("direct download not supported for %s addons (postgres and s3 only)", cr.Spec.Kind))
+
 	}
 }
 
@@ -118,7 +119,7 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
 	dsn, err := h.addonDSN(ctx, ns, releaseName)
 	if err != nil {
-		http.Error(w, "backup unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: "+err.Error())
 		return
 	}
 
@@ -132,12 +133,12 @@ func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWr
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		http.Error(w, "pg_dump pipe: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "pg_dump pipe: "+err.Error())
 		return
 	}
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
-		http.Error(w, "pg_dump start: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "pg_dump start: "+err.Error())
 		return
 	}
 	gz := gzip.NewWriter(w)
@@ -167,7 +168,7 @@ func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWr
 func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
 	cli, bucket, err := h.addonS3Client(ctx, ns, releaseName)
 	if err != nil {
-		http.Error(w, "backup unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: "+err.Error())
 		return
 	}
 

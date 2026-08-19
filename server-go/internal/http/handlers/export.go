@@ -89,7 +89,7 @@ type exportManifest struct {
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	if project == "" {
-		http.Error(w, "missing project", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing project")
 		return
 	}
 	// Export tars the WHOLE project including resolved secret values +
@@ -104,11 +104,11 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: exporting a project (which includes secret values) requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: exporting a project (which includes secret values) requires the admin role")
 		return
 	}
 	if h.Projects == nil || h.Addons == nil || h.Kube == nil {
-		http.Error(w, "export not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "export not wired")
 		return
 	}
 
@@ -118,17 +118,17 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	desc, err := h.Projects.Describe(ctx, project)
 	if err != nil {
 		if err == projects.ErrNotFound {
-			http.Error(w, "project not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "project not found")
 			return
 		}
 		h.Logger.Error("export: describe", "project", project, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	addonList, err := h.Addons.List(ctx, project)
 	if err != nil {
 		h.Logger.Error("export: list addons", "project", project, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -331,7 +331,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Projects == nil || h.Kube == nil {
-		http.Error(w, "import not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "import not wired")
 		return
 	}
 	// Long deadline — recreating ~20 CRs across the operator's
@@ -351,7 +351,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	gz, err := gzip.NewReader(body)
 	if err != nil {
-		http.Error(w, "expected gzip-compressed tar (Export output)", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "expected gzip-compressed tar (Export output)")
 		return
 	}
 	defer gz.Close()
@@ -378,14 +378,14 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			// client error — treating it like EOF would silently import
 			// a partial project.
 			if lr.N <= 0 {
-				http.Error(w, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20), http.StatusRequestEntityTooLarge)
+				writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20))
 				return
 			}
-			http.Error(w, fmt.Sprintf("malformed tar: %v", err), http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("malformed tar: %v", err))
 			return
 		}
 		if entries++; entries > maxImportEntries {
-			http.Error(w, fmt.Sprintf("archive has more than %d entries", maxImportEntries), http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("archive has more than %d entries", maxImportEntries))
 			return
 		}
 		if hdr.Typeflag != tar.TypeReg {
@@ -395,16 +395,16 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 		// allocation, or a header claiming terabytes OOMs the server
 		// without a single payload byte.
 		if hdr.Size < 0 || hdr.Size > maxImportEntryBytes {
-			http.Error(w, fmt.Sprintf("tar entry %s exceeds %d MiB", hdr.Name, maxImportEntryBytes>>20), http.StatusRequestEntityTooLarge)
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("tar entry %s exceeds %d MiB", hdr.Name, maxImportEntryBytes>>20))
 			return
 		}
 		buf := make([]byte, hdr.Size)
 		if _, err := io.ReadFull(tr, buf); err != nil {
 			if lr.N <= 0 {
-				http.Error(w, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20), http.StatusRequestEntityTooLarge)
+				writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20))
 				return
 			}
-			http.Error(w, fmt.Sprintf("tar read %s: %v", hdr.Name, err), http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("tar read %s: %v", hdr.Name, err))
 			return
 		}
 		files[hdr.Name] = buf
@@ -412,31 +412,31 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	rawManifest, ok := files["manifest.json"]
 	if !ok {
-		http.Error(w, "manifest.json missing — is this a kuso export tarball?", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "manifest.json missing — is this a kuso export tarball?")
 		return
 	}
 	var manifest exportManifest
 	if err := json.Unmarshal(rawManifest, &manifest); err != nil {
-		http.Error(w, fmt.Sprintf("manifest decode: %v", err), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("manifest decode: %v", err))
 		return
 	}
 	if manifest.Schema != 1 {
-		http.Error(w, fmt.Sprintf("unsupported export schema %d (this kuso supports schema 1)", manifest.Schema), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("unsupported export schema %d (this kuso supports schema 1)", manifest.Schema))
 		return
 	}
 	if manifest.Project == "" {
-		http.Error(w, "manifest has no project name", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "manifest has no project name")
 		return
 	}
 
 	rawProject, ok := files["project.json"]
 	if !ok {
-		http.Error(w, "project.json missing from tarball", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "project.json missing from tarball")
 		return
 	}
 	var proj kube.KusoProject
 	if err := json.Unmarshal(rawProject, &proj); err != nil {
-		http.Error(w, fmt.Sprintf("project decode: %v", err), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("project decode: %v", err))
 		return
 	}
 
@@ -448,14 +448,14 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	switch policy {
 	case "error", "rename", "overwrite":
 	default:
-		http.Error(w, "policy must be one of: error, rename, overwrite", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "policy must be one of: error, rename, overwrite")
 		return
 	}
 	// Conflict detection.
 	if existing, err := h.Projects.Get(ctx, desiredName); err == nil && existing != nil {
 		switch policy {
 		case "error":
-			http.Error(w, fmt.Sprintf("project %q already exists; pass ?policy=rename or ?policy=overwrite", desiredName), http.StatusConflict)
+			writeErr(w, http.StatusConflict, fmt.Sprintf("project %q already exists; pass ?policy=rename or ?policy=overwrite", desiredName))
 			return
 		case "rename":
 			desiredName = fmt.Sprintf("%s-imported-%s", proj.Name, time.Now().UTC().Format("20060102-1504"))
@@ -473,7 +473,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			// there the name becomes free for an UNRELATED project,
 			// and stale grants would silently re-attach to it.
 			if err := h.Kube.DeleteKusoProject(ctx, h.Namespace, desiredName); err != nil && !apierrors.IsNotFound(err) {
-				http.Error(w, fmt.Sprintf("overwrite: delete existing project: %v", err), http.StatusInternalServerError)
+				writeErr(w, http.StatusInternalServerError, fmt.Sprintf("overwrite: delete existing project: %v", err))
 				return
 			}
 			// Give the operator a beat to finalise the helm uninstall.
@@ -499,7 +499,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	// Phase 1: project.
 	stripServerMeta(&proj.ObjectMeta)
 	if _, err := h.Kube.CreateKusoProject(ctx, h.Namespace, &proj); err != nil {
-		http.Error(w, fmt.Sprintf("create project: %v", err), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, fmt.Sprintf("create project: %v", err))
 		return
 	}
 

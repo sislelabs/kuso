@@ -65,7 +65,7 @@ func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
 	events, err := h.Kube.Clientset.CoreV1().Events(ns).List(ctx, metav1.ListOptions{Limit: 200})
 	if err != nil {
 		h.Logger.Error("list events", "ns", ns, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Sort newest first by lastTimestamp (fall back to eventTime).
@@ -101,7 +101,7 @@ func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Reques
 	scs, err := h.Kube.Clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		h.Logger.Error("list storage classes", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	clusterCachePut("storage-classes", scs.Items)
@@ -127,7 +127,7 @@ func (h *KubernetesHandler) Domains(w http.ResponseWriter, r *http.Request) {
 	ings, err := h.Kube.Clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		h.Logger.Error("list ingresses", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	domains := map[string]struct{}{}

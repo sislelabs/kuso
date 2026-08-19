@@ -46,7 +46,7 @@ func (h *TokensAdminHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.ListAllTokens(ctx)
 	if err != nil {
 		h.Logger.Error("list all tokens", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	out := make([]map[string]any, 0, len(rows))
@@ -76,7 +76,7 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		ExpiresAt string `json:"expiresAt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	// SECURITY (SEC-3): admin-issued tokens bake the target user's
@@ -95,7 +95,7 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		var err error
 		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
 		if err != nil {
-			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "expiresAt must be RFC3339 or empty for never-expires")
 			return
 		}
 		if expiresAt.After(maxExpiry) {
@@ -108,10 +108,10 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "user not found")
 		default:
 			h.Logger.Error("find user", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -130,7 +130,7 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	id, err := randomID()
 	if err != nil {
 		h.Logger.Error("token id", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Pin the JWT jti to the Token row id so Delete can revoke the exact
@@ -143,7 +143,7 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	jwt, err := h.Issuer.SignWithExpiry(tokenClaims, expiresAt)
 	if err != nil {
 		h.Logger.Error("sign token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	row := &db.Token{
@@ -157,7 +157,7 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	row.Name.String = req.Name
 	if err := h.DB.CreateToken(ctx, row); err != nil {
 		h.Logger.Error("create token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -174,10 +174,10 @@ func (h *TokensAdminHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.DeleteToken(ctx, chi.URLParam(r, "id")); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "token not found")
 		default:
 			h.Logger.Error("delete token", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}

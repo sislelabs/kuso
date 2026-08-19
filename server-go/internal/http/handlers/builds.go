@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -394,11 +395,27 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 // advanced since the archive snapshot). CRs are inherently newest, so
 // they sort to the top; archived-only records follow, ordered by the
 // archive's createdAt DESC.
+//
+// Pagination + truncation signal (agent-use W4): the wire shape is a
+// bare JSON array and MUST stay that way, so "was this cut?" is
+// signalled out-of-band:
+//
+//	?limit=N&offset=M         — window over the assembled newest-first list
+//	X-Kuso-Truncated: true    — rows exist beyond the returned window
+//	X-Kuso-Next-Offset: <n>   — pass as ?offset= for the next page
+//
+// No ?limit= keeps the legacy full response (no truncation headers).
+// Depth is bounded either way: the archive backfill reads at most the
+// newest 100 archived rows (db.buildRecordCap), the same bound the
+// un-paginated response always had — offset paging cannot reach older
+// history than live CRs + that cap.
 func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
+	limitQ, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offsetQ, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
@@ -430,7 +447,34 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stampQueuePositions(ctx, h.Svc, out)
+	out, truncated, next := paginateBuildSummaries(out, limitQ, offsetQ)
+	if truncated {
+		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(next))
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// paginateBuildSummaries windows the assembled newest-first build list.
+// limit<=0 means "no windowing" (the legacy full response); a negative
+// offset is treated as 0. truncated reports whether rows exist beyond
+// the returned window; next is the offset of the first row NOT
+// returned (only meaningful when truncated). Kept as a pure function
+// so the windowing contract is unit-testable without handler wiring.
+func paginateBuildSummaries(out []buildSummary, limit, offset int) (page []buildSummary, truncated bool, next int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(out) && offset > 0 {
+		return []buildSummary{}, false, 0
+	}
+	if limit <= 0 {
+		return out[offset:], false, 0
+	}
+	end := offset + limit
+	if end >= len(out) {
+		return out[offset:], false, 0
+	}
+	return out[offset:end], true, end
 }
 
 // recordToSummary maps an archived db.BuildRecord to the same wire shape
@@ -460,7 +504,7 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// branch with synthetic ref.
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 			return
 		}
 	}
@@ -490,15 +534,15 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *BuildsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, builds.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, builds.ErrNotFound, "build"))
 	case errors.Is(err, builds.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, builds.ErrConflict):
 		// Pass the conflict message through so the UI can show
 		// "build already in flight" instead of a bare 409.
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		h.Logger.Error("builds handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

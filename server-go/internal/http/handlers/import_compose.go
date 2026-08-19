@@ -51,20 +51,20 @@ type ComposeResponse struct {
 func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "read body")
 		return
 	}
 	if len(body) >= 1<<20 {
-		http.Error(w, "compose file too large (>1MiB)", http.StatusRequestEntityTooLarge)
+		writeErr(w, http.StatusRequestEntityTooLarge, "compose file too large (>1MiB)")
 		return
 	}
 	var req ComposeRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Compose == "" {
-		http.Error(w, "compose is required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "compose is required")
 		return
 	}
 
@@ -75,7 +75,7 @@ func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// A parse failure is the user's malformed compose file, not a
 		// server fault — surface the reason at 400.
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	projectName := req.Project
@@ -86,7 +86,7 @@ func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	yamlOut, err := doc.Marshal()
 	if err != nil {
 		h.Logger.Error("import compose: marshal", "err", err)
-		http.Error(w, "render kuso.yaml failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "render kuso.yaml failed")
 		return
 	}
 

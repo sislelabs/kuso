@@ -38,7 +38,7 @@ func (h *ProjectsHandler) SetSharedEnvKeys(w http.ResponseWriter, r *http.Reques
 		Keys []string `json:"keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	// json.Decode leaves Keys == nil when the field is missing, which

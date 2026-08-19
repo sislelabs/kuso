@@ -70,17 +70,17 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var body createAlertBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Name == "" || body.Kind == "" {
-		http.Error(w, "name and kind required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name and kind required")
 		return
 	}
 	switch body.Kind {
 	case db.AlertKindLogMatch, db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
 	default:
-		http.Error(w, "kind must be one of log_match|node_cpu|node_mem|node_disk", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "kind must be one of log_match|node_cpu|node_mem|node_disk")
 		return
 	}
 	// Normalize severity to the canonical info|warn|error set. This
@@ -98,7 +98,7 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	case "error", "critical", "crit":
 		body.Severity = "error"
 	default:
-		http.Error(w, "severity must be one of info|warn|error", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "severity must be one of info|warn|error")
 		return
 	}
 	if body.WindowSeconds <= 0 {
@@ -166,11 +166,11 @@ func (h *AlertsHandler) toggle(w http.ResponseWriter, r *http.Request, on bool) 
 
 func (h *AlertsHandler) fail(w http.ResponseWriter, op string, err error) {
 	if errors.Is(err, db.ErrAlertNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, db.ErrAlertNotFound, "alert"))
 		return
 	}
 	h.Logger.Error("alerts handler", "op", op, "err", err)
-	http.Error(w, "internal", http.StatusInternalServerError)
+	writeErr(w, http.StatusInternalServerError, "internal")
 }
 
 // randomID16 — duplicated from ssh_keys.go to avoid an import dance.

@@ -114,6 +114,22 @@ func (c *Client) GetKusoService(ctx context.Context, namespace, name string) (*K
 	return get[KusoService](ctx, c, GVRServices, namespace, name)
 }
 
+// ListKusoServicesByLabels returns KusoService CRs in namespace matching
+// the supplied label pairs. Mirrors ListKusoAddonsByLabels /
+// ListKusoEnvironmentsByLabels: the selector is encoded through
+// kube.LabelSelector and routes through the cached typed-list helper,
+// so a warm informer serves this as a client-side slice filter instead
+// of a live apiserver LIST. Used by the per-project service rollup on
+// the dashboard Describe hot path. NOT for destructive cascades:
+// delete-path enumerations (DeleteEnvGroup, deleteEnvironment reclaim)
+// deliberately issue live Dynamic LISTs — informer lag or a degraded
+// cache would silently skip children and orphan PVCs/credentials.
+func (c *Client) ListKusoServicesByLabels(ctx context.Context, namespace string, labels map[string]string) ([]KusoService, error) {
+	return list[KusoService](ctx, c, GVRServices, namespace, metav1.ListOptions{
+		LabelSelector: LabelSelector(labels),
+	})
+}
+
 // ListKusoEnvironments returns all KusoEnvironment CRs in namespace.
 func (c *Client) ListKusoEnvironments(ctx context.Context, namespace string) ([]KusoEnvironment, error) {
 	return list[KusoEnvironment](ctx, c, GVREnvironments, namespace, metav1.ListOptions{})

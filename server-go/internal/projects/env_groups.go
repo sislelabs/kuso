@@ -795,7 +795,19 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 		return err
 	}
 
-	selector := fmt.Sprintf("%s=%s,%s=%s", labelProject, project, labelEnv, name)
+	// DESTRUCTIVE-CASCADE ENUMERATION — every LIST below goes to the LIVE
+	// apiserver (raw dynamic client), never the informer cache. A resource
+	// created seconds before the delete may not be in the cache yet (watch
+	// lag), and a cold/degraded informer can return empty-but-ok — either
+	// way the cascade would "succeed" while silently skipping children,
+	// orphaning StatefulSets/PVCs/live credentials: the exact leak class
+	// fixed in v0.21.6/v0.21.7. The perf win of a cached read on a delete
+	// path is negligible; correctness dominates. READ/describe paths keep
+	// the cached ListKuso*ByLabels helpers.
+	selector := kube.LabelSelector(map[string]string{
+		labelProject: project,
+		labelEnv:     name,
+	})
 
 	// Envs first. A LIST failure here means we can't even enumerate what
 	// to tear down — returning success would silently orphan the group's
@@ -803,15 +815,13 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	// (individual per-resource deletes below stay fatal-on-error, matching
 	// the pre-existing cascade contract; only the previously-swallowed
 	// LIST errors are being fixed).
-	envList, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		labelProject: project,
-		labelEnv:     name,
-	})
+	envList, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return fmt.Errorf("list envs for group %s: %w", name, err)
 	}
-	for i := range envList {
-		n := envList[i].Name
+	for i := range envList.Items {
+		n := envList.Items[i].GetName()
 		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete env %s: %w", n, err)
 		}
@@ -823,12 +833,10 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if err != nil {
 		return fmt.Errorf("list services for group %s: %w", name, err)
 	}
-	if svcList != nil {
-		for i := range svcList.Items {
-			n := svcList.Items[i].GetName()
-			if err := s.Kube.DeleteKusoService(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("delete service %s: %w", n, err)
-			}
+	for i := range svcList.Items {
+		n := svcList.Items[i].GetName()
+		if err := s.Kube.DeleteKusoService(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete service %s: %w", n, err)
 		}
 	}
 
@@ -843,29 +851,27 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	// leave live credentials + DBs orphaned on the shared server, so they
 	// are collected and surfaced instead of `_ =`-swallowed.
 	var cleanupErrs []error
-	if addonList != nil {
-		for i := range addonList.Items {
-			n := addonList.Items[i].GetName()
-			// Instance-shared addons (spec.useInstanceAddon) back a per-project
-			// DB + login role + <addon>-conn secret on a shared server that
-			// DeleteKusoAddon does NOT reclaim (the CR alone owns none of it).
-			// Drop those side effects BEFORE deleting the CR — CleanupInstanceAddon
-			// reads the CR's spec.useInstanceAddon to resolve which shared server
-			// to drop the DB on, so it must run while the CR still exists.
-			if inst, _, _ := unstructured.NestedString(addonList.Items[i].Object, "spec", "useInstanceAddon"); inst != "" && s.CleanupInstanceAddon != nil {
-				short := strings.TrimPrefix(n, project+"-")
-				if short == "" {
-					short = n
-				}
-				if cerr := s.CleanupInstanceAddon(ctx, project, short); cerr != nil {
-					slog.Warn("env-group delete: instance addon cleanup failed; DB/role/conn-secret may be orphaned on the shared server",
-						"project", project, "group", name, "ns", ns, "kind", "InstanceAddon", "name", short, "err", cerr)
-					cleanupErrs = append(cleanupErrs, fmt.Errorf("instance addon cleanup %s: %w", short, cerr))
-				}
+	for i := range addonList.Items {
+		n := addonList.Items[i].GetName()
+		// Instance-shared addons (spec.useInstanceAddon) back a per-project
+		// DB + login role + <addon>-conn secret on a shared server that
+		// DeleteKusoAddon does NOT reclaim (the CR alone owns none of it).
+		// Drop those side effects BEFORE deleting the CR — CleanupInstanceAddon
+		// reads the CR's spec.useInstanceAddon to resolve which shared server
+		// to drop the DB on, so it must run while the CR still exists.
+		if inst, _, _ := unstructured.NestedString(addonList.Items[i].Object, "spec", "useInstanceAddon"); inst != "" && s.CleanupInstanceAddon != nil {
+			short := strings.TrimPrefix(n, project+"-")
+			if short == "" {
+				short = n
 			}
-			if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("delete addon %s: %w", n, err)
+			if cerr := s.CleanupInstanceAddon(ctx, project, short); cerr != nil {
+				slog.Warn("env-group delete: instance addon cleanup failed; DB/role/conn-secret may be orphaned on the shared server",
+					"project", project, "group", name, "ns", ns, "kind", "InstanceAddon", "name", short, "err", cerr)
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("instance addon cleanup %s: %w", short, cerr))
 			}
+		}
+		if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete addon %s: %w", n, err)
 		}
 	}
 

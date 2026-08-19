@@ -92,6 +92,74 @@ func TestIncidentLifecycle(t *testing.T) {
 	}
 }
 
+// TestIncidentTimedOutReaping covers the reaper's DB contract (H6): a
+// stuck "investigating" incident is found by StaleInvestigatingIncidents,
+// and moving it to timed_out is TERMINAL — closedAt stamped, target no
+// longer open, MaxConcurrent slot released.
+func TestIncidentTimedOutReaping(t *testing.T) {
+	d := openTestDB(t) // skips without KUSO_TEST_PG_DSN
+	ctx := context.Background()
+
+	in := Incident{
+		ID: "inc-reap", EventType: "pod.crashed", Project: "p", Service: "s",
+		TargetKey: "pod.crashed|p|s", State: IncidentInvestigating,
+		Title: "crashed and the agent died", Severity: "error",
+		ContextPack: json.RawMessage(`{}`), AgentToken: "tok",
+	}
+	if err := d.CreateIncident(ctx, in); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// A cutoff in the past does NOT match the just-created incident.
+	stale, err := d.StaleInvestigatingIncidents(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("stale (past cutoff): %v", err)
+	}
+	for _, s := range stale {
+		if s.ID == "inc-reap" {
+			t.Error("fresh incident matched a past cutoff — timeout window is inverted")
+		}
+	}
+
+	// A future cutoff matches it (simulates the incident aging past the
+	// timeout without sleeping in the test).
+	stale, err = d.StaleInvestigatingIncidents(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("stale (future cutoff): %v", err)
+	}
+	found := false
+	for _, s := range stale {
+		if s.ID == "inc-reap" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("stuck investigating incident not returned by StaleInvestigatingIncidents")
+	}
+
+	// timed_out is terminal: closedAt stamped, slot released.
+	if err := d.SetIncidentState(ctx, "inc-reap", IncidentTimedOut); err != nil {
+		t.Fatalf("timeout transition: %v", err)
+	}
+	cur, _ := d.GetIncident(ctx, "inc-reap")
+	if cur.State != IncidentTimedOut || cur.ClosedAt == nil {
+		t.Errorf("state=%q closedAt=%v, want timed_out + stamped closedAt", cur.State, cur.ClosedAt)
+	}
+	if _, err := d.OpenIncidentForTarget(ctx, in.TargetKey); err != ErrIncidentNotFound {
+		t.Errorf("timed-out incident must not be open for its target, got %v", err)
+	}
+	if n, _ := d.CountOpenIncidents(ctx); n != 0 {
+		t.Errorf("open count after timeout = %d, want 0 (slot must be released)", n)
+	}
+	// And it no longer matches the stale query (idempotence).
+	stale, _ = d.StaleInvestigatingIncidents(ctx, time.Now().Add(time.Hour))
+	for _, s := range stale {
+		if s.ID == "inc-reap" {
+			t.Error("timed-out incident still returned as stale")
+		}
+	}
+}
+
 func TestIncidentNotFound(t *testing.T) {
 	d := openTestDB(t)
 	if _, err := d.GetIncident(context.Background(), "nope"); err != ErrIncidentNotFound {

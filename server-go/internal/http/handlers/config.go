@@ -72,14 +72,19 @@ func (h *ConfigHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 // UpdateSettings replaces the Kuso CR spec from the body's "settings" key.
 func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.Cfg.Features().AdminDisabled {
-		http.Error(w, "admin disabled", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "admin disabled")
 		return
 	}
 	var body struct {
 		Settings map[string]any `json:"settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Settings == nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		// err may be nil here (valid JSON, missing settings key).
+		msg := "bad request: settings object required"
+		if err != nil {
+			msg = "bad request: " + err.Error()
+		}
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	ctx, cancel := cfgCtx(r)
@@ -87,12 +92,12 @@ func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if err := h.Cfg.UpdateSettings(ctx, body.Settings); err != nil {
 		switch {
 		case errors.Is(err, config.ErrAdminDisabled):
-			http.Error(w, "admin disabled", http.StatusForbidden)
+			writeErr(w, http.StatusForbidden, "admin disabled")
 		case errors.Is(err, config.ErrNotFound):
-			http.Error(w, "kuso CR not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "kuso CR not found")
 		default:
 			h.Logger.Error("config: update", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -155,7 +160,7 @@ func (h *ConfigHandler) ListRunpacks(w http.ResponseWriter, r *http.Request) {
 	out, err := h.DB.ListRunpacks(ctx)
 	if err != nil {
 		h.Logger.Error("list runpacks", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -167,11 +172,11 @@ func (h *ConfigHandler) DeleteRunpack(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.DeleteRunpack(ctx, chi.URLParam(r, "id")); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "runpack not found")
 			return
 		}
 		h.Logger.Error("delete runpack", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -184,7 +189,7 @@ func (h *ConfigHandler) ListPodSizes(w http.ResponseWriter, r *http.Request) {
 	out, err := h.DB.ListPodSizes(ctx)
 	if err != nil {
 		h.Logger.Error("list pod sizes", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -194,14 +199,14 @@ func (h *ConfigHandler) ListPodSizes(w http.ResponseWriter, r *http.Request) {
 func (h *ConfigHandler) CreatePodSize(w http.ResponseWriter, r *http.Request) {
 	var p db.PodSize
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if p.ID == "" {
 		id, err := randomID()
 		if err != nil {
 			h.Logger.Error("create pod size: id", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		p.ID = id
@@ -210,7 +215,7 @@ func (h *ConfigHandler) CreatePodSize(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.CreatePodSize(ctx, &p); err != nil {
 		h.Logger.Error("create pod size", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusCreated, p)
@@ -220,7 +225,7 @@ func (h *ConfigHandler) CreatePodSize(w http.ResponseWriter, r *http.Request) {
 func (h *ConfigHandler) UpdatePodSize(w http.ResponseWriter, r *http.Request) {
 	var p db.PodSize
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	p.ID = chi.URLParam(r, "id")
@@ -228,11 +233,11 @@ func (h *ConfigHandler) UpdatePodSize(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.UpdatePodSize(ctx, &p); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "pod size not found")
 			return
 		}
 		h.Logger.Error("update pod size", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -244,11 +249,11 @@ func (h *ConfigHandler) DeletePodSize(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.DeletePodSize(ctx, chi.URLParam(r, "id")); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "pod size not found")
 			return
 		}
 		h.Logger.Error("delete pod size", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

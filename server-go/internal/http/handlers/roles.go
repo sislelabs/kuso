@@ -66,7 +66,7 @@ func (h *RolesHandler) ListWithPermissions(w http.ResponseWriter, r *http.Reques
 	out, err := h.DB.ListRolesWithPermissions(ctx)
 	if err != nil {
 		h.Logger.Error("list roles", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	rs := make([]map[string]any, 0, len(out))
@@ -100,7 +100,7 @@ func rejectReservedPerms(w http.ResponseWriter, perms []db.PermissionInput) bool
 		pairs = append(pairs, [2]string{p.Resource, p.Action})
 	}
 	if bad := auth.ValidateRolePermissions(pairs); bad != "" {
-		http.Error(w, "forbidden: a custom role may not grant the instance-level permission "+bad, http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: a custom role may not grant the instance-level permission "+bad)
 		return false
 	}
 	return true
@@ -112,7 +112,7 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	if !rejectReservedPerms(w, req.Permissions) {
@@ -121,14 +121,14 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	id, err := randomID()
 	if err != nil {
 		h.Logger.Error("create role: id", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	if err := h.DB.CreateRole(ctx, id, req.Name, req.Description, req.Permissions); err != nil {
 		h.Logger.Error("create role", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if h.Audit != nil {
@@ -151,7 +151,7 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	if !rejectReservedPerms(w, req.Permissions) {
@@ -163,10 +163,10 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.UpdateRole(ctx, id, req.Name, req.Description, req.Permissions); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "role not found")
 		default:
 			h.Logger.Error("update role", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -212,10 +212,10 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.DeleteRole(ctx, id); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "role not found")
 		default:
 			h.Logger.Error("delete role", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}

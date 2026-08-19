@@ -129,11 +129,11 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 	}
 	var body setInstanceRoleBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if !validInstanceRole(body.Role) {
-		http.Error(w, "invalid role (want admin|editor|viewer or empty)", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty)")
 		return
 	}
 	ctx, cancel := grantsCtx(r)
@@ -141,11 +141,11 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 	userID := chi.URLParam(r, "userId")
 	if err := h.DB.SetUserInstanceRole(ctx, userID, body.Role); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "user not found")
 			return
 		}
 		h.Logger.Error("set user instance role", "user", userID, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Role change → reissue the user's tokens with the new perm set.
@@ -166,11 +166,11 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 	}
 	var body setInstanceRoleBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if !validInstanceRole(body.Role) {
-		http.Error(w, "invalid role (want admin|editor|viewer or empty)", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty)")
 		return
 	}
 	ctx, cancel := grantsCtx(r)
@@ -180,17 +180,17 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 	cur, err := h.DB.GetGroupTenancy(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "group not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "group not found")
 			return
 		}
 		h.Logger.Error("get group tenancy", "group", groupID, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	cur.InstanceRole = body.Role
 	if err := h.DB.SetGroupTenancy(ctx, groupID, *cur); err != nil {
 		h.Logger.Error("set group instance role", "group", groupID, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.instance-role.update", actingUserID(r)); err != nil {
@@ -214,7 +214,7 @@ func (h *GrantsHandler) ListGrants(w http.ResponseWriter, r *http.Request) {
 	grants, err := h.DB.ListProjectGrants(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.Logger.Error("list project grants", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if grants == nil {
@@ -237,15 +237,15 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	var body addGrantBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if (body.UserID == "") == (body.GroupID == "") {
-		http.Error(w, "exactly one of userId / groupId required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "exactly one of userId / groupId required")
 		return
 	}
 	if !validProjectRole(body.Role) {
-		http.Error(w, "invalid role (want admin|editor|viewer or empty to inherit)", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty to inherit)")
 		return
 	}
 	ctx, cancel := grantsCtx(r)
@@ -254,7 +254,7 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 	id, err := h.DB.AddProjectGrant(ctx, project, body.UserID, body.GroupID, body.Role)
 	if err != nil {
 		h.Logger.Error("add project grant", "project", project, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.invalidateGrantee(ctx, body.UserID, body.GroupID, "project.grant.add", actingUserID(r))
@@ -287,11 +287,11 @@ func (h *GrantsHandler) RemoveGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.DB.RemoveProjectGrant(ctx, grantID); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "grant not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "grant not found")
 			return
 		}
 		h.Logger.Error("remove project grant", "grant", grantID, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.invalidateGrantee(ctx, userID, groupID, "project.grant.remove", actingUserID(r))

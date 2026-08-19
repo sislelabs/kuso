@@ -58,7 +58,7 @@ func (h *SSHKeysHandler) List(w http.ResponseWriter, r *http.Request) {
 	keys, err := h.DB.ListSSHKeys(ctx)
 	if err != nil {
 		h.Logger.Error("list ssh keys", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, keys)
@@ -80,11 +80,11 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		PrivateKey string `json:"privateKey,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if strings.TrimSpace(body.Name) == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
@@ -94,7 +94,7 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		kp, err := nodejoin.GenerateEd25519("kuso@" + id)
 		if err != nil {
 			h.Logger.Error("generate ssh key", "err", err)
-			http.Error(w, "key generation failed", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "key generation failed")
 			return
 		}
 		row.PublicKey = kp.PublicKey
@@ -102,12 +102,12 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		row.Fingerprint = kp.Fingerprint
 	} else {
 		if body.PublicKey == "" || body.PrivateKey == "" {
-			http.Error(w, "either generate=true or both publicKey + privateKey required", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "either generate=true or both publicKey + privateKey required")
 			return
 		}
 		fp, err := nodejoin.FingerprintOf(body.PublicKey)
 		if err != nil {
-			http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "invalid public key: "+err.Error())
 			return
 		}
 		row.PublicKey = strings.TrimSpace(body.PublicKey)
@@ -119,7 +119,7 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.CreateSSHKey(ctx, row); err != nil {
 		h.Logger.Error("insert ssh key", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Fingerprint only — never row.PublicKey / row.PrivateKey.
@@ -145,11 +145,11 @@ func (h *SSHKeysHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.DB.DeleteSSHKey(ctx, id); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "SSH key not found")
 			return
 		}
 		h.Logger.Error("delete ssh key", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.auditKey(ctx, "ssh-key.delete", fmt.Sprintf(

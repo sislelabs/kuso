@@ -107,7 +107,7 @@ func (h *InstanceSecretsHandler) ListAddonNames(w http.ResponseWriter, r *http.R
 	// project-scoped perm no longer present in the JWT, so it would now
 	// 403 everyone — wrong for a names-only picker.
 	if _, ok := auth.ClaimsFromContext(r.Context()); !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := instanceSecretsCtx(r)
@@ -141,7 +141,7 @@ func (h *InstanceSecretsHandler) RegisterAddon(w http.ResponseWriter, r *http.Re
 	}
 	var body registerInstanceAddonBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := instanceSecretsCtx(r)
@@ -204,11 +204,11 @@ func (h *InstanceSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	var body setInstanceSecretBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "key required")
 		return
 	}
 	ctx, cancel := instanceSecretsCtx(r)
@@ -241,9 +241,9 @@ func (h *InstanceSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 
 func (h *InstanceSecretsHandler) fail(w http.ResponseWriter, op string, err error) {
 	if errors.Is(err, instancesecrets.ErrInvalid) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	h.Logger.Error("instance secrets handler", "op", op, "err", err)
-	http.Error(w, "internal", http.StatusInternalServerError)
+	writeErr(w, http.StatusInternalServerError, "internal")
 }

@@ -322,6 +322,12 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// this, 100 PRs/day × occasional missed close-webhook = compounding
 	// orphan StatefulSets + PVCs forever. Per-addon failures don't abort
 	// the cascade, but they are collected — see cleanupFail above.
+	// DESTRUCTIVE-CASCADE ENUMERATION — both branches issue a LIVE LIST
+	// (raw dynamic client), never the informer cache: an addon created
+	// seconds before the delete may not have reached the cache yet, and a
+	// cold/degraded informer returns empty-but-ok — either silently skips
+	// the reclaim and orphans a StatefulSet+PVC+live credentials (the
+	// v0.21.6/v0.21.7 leak class). Cached helpers stay on READ paths only.
 	var deletedCloneAddons []string
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
 		selector := kube.LabelSelector(map[string]string{

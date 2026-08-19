@@ -39,12 +39,12 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"kuso/server/internal/kube"
 	"golang.org/x/sync/singleflight"
+	"kuso/server/internal/kube"
 )
 
 // podMetricsGVR is the aggregated-API resource we read.

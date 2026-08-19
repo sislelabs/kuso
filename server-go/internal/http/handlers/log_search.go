@@ -69,7 +69,7 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		return
 	}
 	if h.LogDB == nil {
-		http.Error(w, "log search storage not configured", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "log search storage not configured")
 		return
 	}
 	rows, err := h.LogDB.SearchLogs(ctx, db.SearchLogsRequest{
@@ -86,7 +86,7 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		// implementation details of the search engine and a probe vector
 		// for an attacker who wants to fingerprint the server.
 		h.Logger.Error("log search", "err", err)
-		http.Error(w, "search failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

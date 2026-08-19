@@ -30,8 +30,20 @@ const manifestV2Accept = "application/vnd.docker.distribution.manifest.v2+json"
 // ImageDeleter unties an image tag from a registry. Exported so main.go
 // can wire it into the Poller; an interface so the sweep is testable
 // without a live registry.
+//
+// ResolveTagDigest exists because deletion is DIGEST-scoped while
+// protection used to be TAG-scoped: the registry v2 API can only DELETE
+// manifests by digest, and deleting a digest removes it for EVERY tag
+// that points at it. Two byte-identical builds (same commit rebuilt, a
+// retagged rollback) share one digest — so untagging an aged-out,
+// unprotected tag could kill the manifest a protected live tag depended
+// on → ImagePullBackOff on the next pod restart. The sweep uses
+// ResolveTagDigest to protect by digest, not tag string.
 type ImageDeleter interface {
 	DeleteImageTag(ctx context.Context, repo, tag string) error
+	// ResolveTagDigest returns the manifest digest a tag points at, or
+	// "" (nil error) when the tag doesn't exist.
+	ResolveTagDigest(ctx context.Context, repo, tag string) (string, error)
 }
 
 // NewInClusterImageDeleter returns an ImageDeleter for the default
@@ -90,6 +102,13 @@ func (c *registryClient) DeleteImageTag(ctx context.Context, repo, tag string) e
 	default:
 		return fmt.Errorf("registry delete %s@%s: status %d", repo, digest, resp.StatusCode)
 	}
+}
+
+// ResolveTagDigest implements ImageDeleter — the sweep uses it to map
+// protected tags (live env + cron images) to their manifest digests so
+// it never deletes a manifest a protected tag shares.
+func (c *registryClient) ResolveTagDigest(ctx context.Context, repo, tag string) (string, error) {
+	return c.manifestDigest(ctx, repo, tag)
 }
 
 // manifestDigest does a HEAD on the tagged manifest and returns the

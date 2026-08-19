@@ -53,20 +53,20 @@ func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var req groupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	id, err := randomID()
 	if err != nil {
 		h.Logger.Error("create group: id", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.CreateGroup(ctx, id, req.Name, req.Description); err != nil {
 		h.Logger.Error("create group", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": req.Name, "description": req.Description})
@@ -78,7 +78,7 @@ func (h *GroupsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	var req groupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	ctx, cancel := groupsCtx(r)
@@ -86,10 +86,10 @@ func (h *GroupsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.UpdateGroup(ctx, chi.URLParam(r, "id"), req.Name, req.Description); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "group not found")
 		default:
 			h.Logger.Error("update group", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -107,11 +107,11 @@ func (h *GroupsHandler) GetTenancy(w http.ResponseWriter, r *http.Request) {
 	t, err := h.DB.GetGroupTenancy(ctx, chi.URLParam(r, "id"))
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "group not found")
 			return
 		}
 		h.Logger.Error("get tenancy", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -125,18 +125,18 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 	}
 	var req db.GroupTenancy
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.SetGroupTenancy(ctx, chi.URLParam(r, "id"), req); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "group not found")
 			return
 		}
 		h.Logger.Error("put tenancy", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Tenancy edit changes effective permissions for every member of
@@ -166,7 +166,7 @@ func (h *GroupsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	members, err := h.DB.ListGroupMembers(ctx, chi.URLParam(r, "id"))
 	if err != nil {
 		h.Logger.Error("list group members", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": members})
@@ -182,7 +182,7 @@ func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := h.DB.AddUserToGroup(ctx, chi.URLParam(r, "userId"), chi.URLParam(r, "id")); err != nil {
 		h.Logger.Error("add group member", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -200,7 +200,7 @@ func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
 	if err := h.DB.RemoveUserFromGroup(ctx, userID, groupID); err != nil {
 		h.Logger.Error("remove group member", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// User just lost whatever access this group conferred — kill
@@ -231,10 +231,10 @@ func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.DeleteGroup(ctx, groupID); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "group not found")
 		default:
 			h.Logger.Error("delete group", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}

@@ -131,11 +131,11 @@ func (h *GithubConfigureHandler) Configure(w http.ResponseWriter, r *http.Reques
 	}
 	var body configureRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if err := body.validate(); err != nil {
-		http.Error(w, "invalid: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid: "+err.Error())
 		return
 	}
 
@@ -251,7 +251,7 @@ func (h *GithubConfigureHandler) fail(w http.ResponseWriter, op string, err erro
 	// Operators read the structured slog; clients get a generic 500
 	// so kube error strings don't leak namespace / RBAC structure.
 	h.Logger.Error("github configure", "op", op, "err", err)
-	http.Error(w, "internal", http.StatusInternalServerError)
+	writeErr(w, http.StatusInternalServerError, "internal")
 }
 
 func actorName(ctx context.Context) string {

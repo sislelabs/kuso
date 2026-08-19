@@ -54,7 +54,7 @@ func (h *UpdaterHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 // than blocking the UI.
 func (h *UpdaterHandler) RefreshVersion(w http.ResponseWriter, r *http.Request) {
 	if h.Svc == nil {
-		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "updater unavailable")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -83,7 +83,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Svc == nil {
-		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "updater unavailable")
 		return
 	}
 	var body struct {
@@ -99,7 +99,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	jobName, err := h.Svc.StartUpdate(ctx, target)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"job": jobName})
@@ -107,7 +107,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *UpdaterHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	if h.Svc == nil {
-		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "updater unavailable")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)

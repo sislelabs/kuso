@@ -12,12 +12,12 @@ func TestRewriteSecretName(t *testing.T) {
 	t.Parallel()
 	rm := map[string]string{"src": "dst"}
 	cases := map[string]string{
-		"src-pg-conn":       "dst-pg-conn",
-		"src-shared":        "dst-shared",
-		"src-web-secrets":   "dst-web-secrets",
-		"src":               "dst",
-		"other-pg-conn":     "other-pg-conn", // untouched
-		"source-thing":      "source-thing",  // "src" is not a prefix of "source-"
+		"src-pg-conn":     "dst-pg-conn",
+		"src-shared":      "dst-shared",
+		"src-web-secrets": "dst-web-secrets",
+		"src":             "dst",
+		"other-pg-conn":   "other-pg-conn", // untouched
+		"source-thing":    "source-thing",  // "src" is not a prefix of "source-"
 	}
 	for in, want := range cases {
 		if got := rewriteSecretName(in, rm); got != want {

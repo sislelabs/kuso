@@ -2611,11 +2611,21 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	return updated, nil
 }
 
+// EnvMaskSentinel is the single source of truth for the placeholder
+// that replaces secret values on every read path a caller without
+// secrets:read sees (env vars, notification credentials, revision
+// snapshots, config-as-code export). Every WRITE path must treat this
+// exact string as "not a real value" — either refusing it or resolving
+// it back to the stored value — so a read-modify-write client can never
+// clobber a credential with the mask. Exported (and referenced from
+// handlers + spec) precisely so a cosmetic edit here cannot silently
+// diverge from the write-path guards: there is only one constant.
+const EnvMaskSentinel = "••••••••"
+
 // revisionMaskSentinel replaces secret values in recorded Revision
-// snapshots. Must stay visually identical to the handlers package's
-// envMaskSentinel so the History UI renders one consistent mask
-// regardless of which layer did the redacting.
-const revisionMaskSentinel = "••••••••"
+// snapshots. Alias of EnvMaskSentinel so the History UI renders one
+// consistent mask regardless of which layer did the redacting.
+const revisionMaskSentinel = EnvMaskSentinel
 
 // envSelector matches every KusoEnvironment owned by (project,
 // service-short-name). Real env CRs label `kuso.sislelabs.com/service`

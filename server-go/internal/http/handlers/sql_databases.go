@@ -24,7 +24,7 @@ func (h *BackupsHandler) SQLDatabases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the SQL browser requires the admin role")
 		return
 	}
 	conn, err := h.pgConn(ctx, project, addon, "")
@@ -36,7 +36,7 @@ func (h *BackupsHandler) SQLDatabases(w http.ResponseWriter, r *http.Request) {
 	rows, err := conn.QueryContext(ctx,
 		`SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -44,7 +44,7 @@ func (h *BackupsHandler) SQLDatabases(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var n string
 		if err := rows.Scan(&n); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			writeErr(w, http.StatusBadGateway, err.Error())
 			return
 		}
 		names = append(names, n)

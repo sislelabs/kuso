@@ -51,7 +51,7 @@ func userID(r *http.Request) (string, bool) {
 func (h *UserPrefsHandler) List(w http.ResponseWriter, r *http.Request) {
 	uid, ok := userID(r)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := userPrefsCtx(r)
@@ -73,17 +73,17 @@ type setPrefRequest struct {
 func (h *UserPrefsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	uid, ok := userID(r)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	project := strings.TrimSpace(chi.URLParam(r, "project"))
 	if project == "" {
-		http.Error(w, "project required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "project required")
 		return
 	}
 	var req setPrefRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	// Trim the folder label; an all-whitespace label collapses to "no
@@ -102,12 +102,12 @@ func (h *UserPrefsHandler) Set(w http.ResponseWriter, r *http.Request) {
 func (h *UserPrefsHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	uid, ok := userID(r)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	project := strings.TrimSpace(chi.URLParam(r, "project"))
 	if project == "" {
-		http.Error(w, "project required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "project required")
 		return
 	}
 	ctx, cancel := userPrefsCtx(r)
@@ -130,18 +130,18 @@ type renameFolderRequest struct {
 func (h *UserPrefsHandler) RenameFolder(w http.ResponseWriter, r *http.Request) {
 	uid, ok := userID(r)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	var req renameFolderRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.From = strings.TrimSpace(req.From)
 	req.To = strings.TrimSpace(req.To)
 	if req.From == "" {
-		http.Error(w, "from required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "from required")
 		return
 	}
 	ctx, cancel := userPrefsCtx(r)
@@ -158,5 +158,5 @@ func (h *UserPrefsHandler) fail(w http.ResponseWriter, op string, err error) {
 	if h.Logger != nil {
 		h.Logger.Error("userprefs: "+op, "err", err)
 	}
-	http.Error(w, "internal error", http.StatusInternalServerError)
+	writeErr(w, http.StatusInternalServerError, "internal error")
 }

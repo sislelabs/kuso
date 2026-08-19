@@ -64,7 +64,7 @@ func (h *ReconcileHealthHandler) Report(w http.ResponseWriter, r *http.Request) 
 	rep, err := h.Scanner.Scan(ctx, h.namespace())
 	if err != nil {
 		h.Logger.Error("reconcile-health scan", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
@@ -92,11 +92,11 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 	}
 	var body remediateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Resource == "" {
-		http.Error(w, "resource is required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "resource is required")
 		return
 	}
 
@@ -110,7 +110,7 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 	rep, err := h.Scanner.Scan(ctx, h.namespace())
 	if err != nil {
 		h.Logger.Error("reconcile-health scan (remediate)", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	var iss *reconcilehealth.Issue
@@ -123,7 +123,7 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 	if iss == nil {
 		// No outstanding issue for this resource — it's already healthy, or
 		// the name was wrong. Surface as 404 so the UI can refresh the list.
-		http.Error(w, "no outstanding reconcile-health issue for that resource", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no outstanding reconcile-health issue for that resource")
 		return
 	}
 
@@ -133,7 +133,7 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 	if body.Action != "" {
 		act := reconcilehealth.Action(body.Action)
 		if act != reconcilehealth.ActionOrphanRecreate && act != reconcilehealth.ActionForceReconcile {
-			http.Error(w, "unknown remediation action", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "unknown remediation action")
 			return
 		}
 		iss.Action = act
@@ -143,7 +143,7 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 	res, err := h.Remediator.Apply(ctx, *iss, user, false /*operator-initiated, not auto*/)
 	if err != nil {
 		h.Logger.Error("reconcile-health remediate", "resource", body.Resource, "action", iss.Action, "err", err)
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -119,7 +119,7 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := h.dsnForPgTools()
 	if dsn == "" {
-		http.Error(w, "backup unavailable: no DSN resolved (kuso-postgres-conn Secret missing?)", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: no DSN resolved (kuso-postgres-conn Secret missing?)")
 		return
 	}
 	timeout := 5 * time.Minute
@@ -142,12 +142,12 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		http.Error(w, "pg_dump pipe: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "pg_dump pipe: "+err.Error())
 		return
 	}
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
-		http.Error(w, "pg_dump start: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "pg_dump start: "+err.Error())
 		return
 	}
 	gz := gzip.NewWriter(w)
@@ -178,7 +178,7 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "restore unavailable: no kube client", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "restore unavailable: no kube client")
 		return
 	}
 	// Cluster-wide rate limit: 5 burst, 1/hour refill. Without this,
@@ -186,19 +186,19 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// dump Secrets that leak etcd until either they hit the Job's
 	// TTL (7 days for failed) or an admin manually cleans up.
 	if !h.takeRestoreToken() {
-		http.Error(w, "restore rate limit exceeded — wait a few minutes between restores",
-			http.StatusTooManyRequests)
+		writeErr(w, http.StatusTooManyRequests, "restore rate limit exceeded — wait a few minutes between restores")
+
 		return
 	}
 	// 10 GB hard cap on the upload — nobody's metadata DB is that
 	// big and the cap stops a runaway client.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<30))
 	if err != nil {
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
 	if len(body) < 32 {
-		http.Error(w, "empty or truncated dump", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "empty or truncated dump")
 		return
 	}
 	// Secret data caps out near 1 MiB on most kubelets. For large
@@ -206,9 +206,10 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// kuso-postgres; we surface a clear error rather than fail in
 	// confusing ways.
 	if len(body) > 900*1024 {
-		http.Error(w,
-			"dump exceeds 900 KiB — for larger dumps run pg_restore directly against kuso-postgres (see docs/BACKUP_RESTORE.md)",
-			http.StatusRequestEntityTooLarge)
+		writeErr(w,
+
+			http.StatusRequestEntityTooLarge, "dump exceeds 900 KiB — for larger dumps run pg_restore directly against kuso-postgres (see docs/BACKUP_RESTORE.md)")
+
 		return
 	}
 
@@ -221,7 +222,7 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.createRestoreSecret(ctx, secretName, body); err != nil {
 		h.Logger.Error("restore: create secret", "err", err)
-		http.Error(w, "create secret: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "create secret: "+err.Error())
 		return
 	}
 	if err := h.createRestoreJob(ctx, jobName, secretName); err != nil {
@@ -236,7 +237,7 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			h.Logger.Warn("restore: cleanup data secret after job-create failure", "secret", secretName, "err", cerr)
 		}
 		h.Logger.Error("restore: create job", "err", err)
-		http.Error(w, "create job: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "create job: "+err.Error())
 		return
 	}
 
@@ -255,12 +256,12 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "restore unavailable: no kube client", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "restore unavailable: no kube client")
 		return
 	}
 	jobName := chi.URLParam(r, "jobName")
 	if !strings.HasPrefix(jobName, "kuso-restore-") {
-		http.Error(w, "bad job name", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad job name")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -269,10 +270,10 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 	job, err := h.Kube.Clientset.BatchV1().Jobs(h.Namespace).Get(ctx, jobName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			http.Error(w, "job not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "job not found")
 			return
 		}
-		http.Error(w, "get job: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "get job: "+err.Error())
 		return
 	}
 	phase := "Running"

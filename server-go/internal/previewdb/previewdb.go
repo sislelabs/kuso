@@ -32,7 +32,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
@@ -306,19 +305,19 @@ func (c *Cloner) ResumePendingSeeds(ctx context.Context) []string {
 		return nil
 	}
 	// Cluster-wide list: clones live in each project's namespace
-	// (KusoProject.spec.namespace), not only the home namespace.
-	ul, err := c.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	// (KusoProject.spec.namespace), not only the home namespace. Routed
+	// through the cached typed-list helper — the addon informer is
+	// cluster-wide (the shared factory watches all namespaces), so a
+	// warm cache serves this from memory instead of a cluster-wide
+	// apiserver LIST on every leader acquisition.
+	addons, err := c.Kube.ListKusoAddons(ctx, metav1.NamespaceAll)
 	if err != nil {
 		c.Logger.Warn("seed resume: list addons", "err", err)
 		return nil
 	}
 	var resumed []string
-	for i := range ul.Items {
-		var a kube.KusoAddon
-		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(ul.Items[i].Object, &a); derr != nil {
-			c.Logger.Warn("seed resume: decode addon", "name", ul.Items[i].GetName(), "err", derr)
-			continue
-		}
+	for i := range addons {
+		a := addons[i]
 		sourceFQN := a.Annotations[seedPendingAnnotation]
 		if sourceFQN == "" {
 			continue

@@ -108,12 +108,12 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 		TTLSeconds int               `json:"ttlSeconds"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	for k := range body.Labels {
 		if k == "" {
-			http.Error(w, "label key cannot be empty", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "label key cannot be empty")
 			return
 		}
 	}
@@ -130,7 +130,7 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 	jti, err := nodejoin.GenerateJTI()
 	if err != nil {
 		h.Logger.Error("nodejoin: generate jti", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	createdBy := ""
@@ -146,7 +146,7 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 		CreatedBy: createdBy,
 	}); err != nil {
 		h.Logger.Error("mint bootstrap token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	publicURL := publicBaseURL(r)
@@ -193,7 +193,7 @@ func (h *NodeBootstrapHandler) ListPending(w http.ResponseWriter, r *http.Reques
 	rows, err := h.DB.ListPendingNodeBootstrapTokens(r.Context())
 	if err != nil {
 		h.Logger.Error("list pending bootstrap tokens", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	out := make([]map[string]any, 0, len(rows))
@@ -222,20 +222,20 @@ func (h *NodeBootstrapHandler) RevokeToken(w http.ResponseWriter, r *http.Reques
 	}
 	jtiHash := chiURLParam(r, "jti")
 	if jtiHash == "" {
-		http.Error(w, "missing jti", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing jti")
 		return
 	}
 	if err := h.DB.RevokeNodeBootstrapToken(r.Context(), jtiHash); err != nil {
 		if errors.Is(err, db.ErrTokenNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "token not found")
 			return
 		}
 		if errors.Is(err, db.ErrTokenAmbiguous) {
-			http.Error(w, "prefix matches multiple tokens — supply more characters", http.StatusConflict)
+			writeErr(w, http.StatusConflict, "prefix matches multiple tokens — supply more characters")
 			return
 		}
 		h.Logger.Error("revoke bootstrap token", "err", err, "jtiHash", jtiHash)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if h.Audit != nil {
@@ -276,20 +276,20 @@ func safePrefix(s string) string {
 func (h *NodeBootstrapHandler) ServeScript(w http.ResponseWriter, r *http.Request) {
 	jti := strings.TrimSpace(r.URL.Query().Get("token"))
 	if jti == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing token")
 		return
 	}
 	if _, err := h.DB.PeekNodeBootstrapToken(r.Context(), jti); err != nil {
 		switch {
 		case errors.Is(err, db.ErrTokenNotFound):
-			http.Error(w, "token not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "token not found")
 		case errors.Is(err, db.ErrTokenConsumed),
 			errors.Is(err, db.ErrTokenExpired),
 			errors.Is(err, db.ErrTokenRevoked):
-			http.Error(w, err.Error(), http.StatusGone)
+			writeErr(w, http.StatusGone, err.Error())
 		default:
 			h.Logger.Error("peek bootstrap token", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -299,7 +299,7 @@ func (h *NodeBootstrapHandler) ServeScript(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		h.Logger.Error("render bootstrap script", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
@@ -323,12 +323,12 @@ func (h *NodeBootstrapHandler) ServeScript(w http.ResponseWriter, r *http.Reques
 func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Request) {
 	var req nodejoin.RegisterRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	jti := strings.TrimSpace(req.Token)
 	if jti == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing token")
 		return
 	}
 	fromIP := clientIP(r)
@@ -336,14 +336,14 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrTokenNotFound):
-			http.Error(w, "token not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "token not found")
 		case errors.Is(err, db.ErrTokenConsumed),
 			errors.Is(err, db.ErrTokenExpired),
 			errors.Is(err, db.ErrTokenRevoked):
-			http.Error(w, err.Error(), http.StatusGone)
+			writeErr(w, http.StatusGone, err.Error())
 		default:
 			h.Logger.Error("consume bootstrap token", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 		}
 		return
 	}
@@ -351,12 +351,12 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 	k3sToken, err := nodejoin.ReadServerToken()
 	if err != nil {
 		h.Logger.Error("nodejoin: read k3s token", "err", err)
-		http.Error(w, "control plane unavailable", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "control plane unavailable")
 		return
 	}
 	k3sURL := controlPlaneJoinURL()
 	if k3sURL == "" {
-		http.Error(w, "control-plane URL not configured (set KUSO_K3S_URL)", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "control-plane URL not configured (set KUSO_K3S_URL)")
 		return
 	}
 

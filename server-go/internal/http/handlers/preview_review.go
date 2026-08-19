@@ -86,12 +86,12 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	token := strings.TrimSpace(chi.URLParam(r, "token"))
 	if len(token) < 32 {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "review not found")
 		return
 	}
 	review, err := h.DB.GetPreviewReviewByToken(ctx, token)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "review not found")
 		return
 	}
 	view := PublicReviewerView{
@@ -172,7 +172,7 @@ func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 	token := strings.TrimSpace(chi.URLParam(r, "token"))
 	if len(token) < 32 {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "review not found")
 		return
 	}
 	var body struct {
@@ -181,7 +181,7 @@ func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Reque
 		Reviewer string `json:"reviewer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	reviewer := strings.TrimSpace(body.Reviewer)
@@ -206,16 +206,16 @@ func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Reque
 	if err := h.DB.SetPreviewReviewDecision(ctx, token, body.Decision, comment, reviewer); err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "review not found")
 		case errors.Is(err, db.ErrReviewClosed):
-			http.Error(w, "review is closed", http.StatusConflict)
+			writeErr(w, http.StatusConflict, "review is closed")
 		case errors.Is(err, db.ErrInvalidDecision):
-			http.Error(w, "invalid decision", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "invalid decision")
 		default:
 			// Unexpected DB error — log server-side, never leak the SQL
 			// text to this unauthenticated caller.
 			slog.Default().Error("preview review: set decision", "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal error")
 		}
 		return
 	}

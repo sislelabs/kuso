@@ -39,7 +39,7 @@ func (h *MarketplaceHandler) List(w http.ResponseWriter, r *http.Request) {
 	apps, err := marketplace.Catalog()
 	if err != nil {
 		h.log().Error("marketplace catalog", "err", err)
-		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "catalog unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"apps": apps})
@@ -48,11 +48,11 @@ func (h *MarketplaceHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *MarketplaceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	e, err := marketplace.GetEntry(chi.URLParam(r, "app"))
 	if errors.Is(err, marketplace.ErrNotFound) {
-		http.Error(w, "app not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "app not found")
 		return
 	}
 	if err != nil {
-		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "catalog unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, e.Manifest)
@@ -61,15 +61,15 @@ func (h *MarketplaceHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *MarketplaceHandler) Icon(w http.ResponseWriter, r *http.Request) {
 	e, err := marketplace.GetEntry(chi.URLParam(r, "app"))
 	if errors.Is(err, marketplace.ErrNotFound) {
-		http.Error(w, "no icon", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no icon")
 		return
 	}
 	if err != nil {
-		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "catalog unavailable")
 		return
 	}
 	if len(e.Icon) == 0 {
-		http.Error(w, "no icon", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no icon")
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -98,40 +98,40 @@ type MarketplaceRenderResponse struct {
 func (h *MarketplaceHandler) Render(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "read body")
 		return
 	}
 	var req MarketplaceRenderRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Project == "" {
-		http.Error(w, "project is required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
 	e, err := marketplace.GetEntry(chi.URLParam(r, "app"))
 	if errors.Is(err, marketplace.ErrNotFound) {
-		http.Error(w, "app not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "app not found")
 		return
 	}
 	if err != nil {
-		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "catalog unavailable")
 		return
 	}
 	f, notes, err := marketplace.RenderTemplate(e.Manifest, e.TemplateYAML, req.Project, req.Answers)
 	if errors.Is(err, marketplace.ErrRender) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
 		h.log().Error("marketplace render", "app", e.Manifest.Name, "err", err)
-		http.Error(w, "render failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "render failed")
 		return
 	}
 	out, err := marketplace.MarshalFile(f)
 	if err != nil {
-		http.Error(w, "render kuso.yaml failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "render kuso.yaml failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, MarketplaceRenderResponse{

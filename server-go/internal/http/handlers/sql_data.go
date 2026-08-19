@@ -364,7 +364,7 @@ func (h *BackupsHandler) sqlBrowserGate(ctx context.Context, w http.ResponseWrit
 		return false
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the data browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the data browser requires the admin role")
 		return false
 	}
 	return true
@@ -382,11 +382,11 @@ func (h *BackupsHandler) dataGuard(w http.ResponseWriter, r *http.Request, schem
 		return nil, colSet{}, false
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the data browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the data browser requires the admin role")
 		return nil, colSet{}, false
 	}
 	if schema == "" || table == "" {
-		http.Error(w, "schema and table required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "schema and table required")
 		return nil, colSet{}, false
 	}
 	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
@@ -397,18 +397,18 @@ func (h *BackupsHandler) dataGuard(w http.ResponseWriter, r *http.Request, schem
 	exists, err := tableExists(ctx, conn, schema, table)
 	if err != nil {
 		conn.Close()
-		http.Error(w, "introspect: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "introspect: "+err.Error())
 		return nil, colSet{}, false
 	}
 	if !exists {
 		conn.Close()
-		http.Error(w, "no such table", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no such table")
 		return nil, colSet{}, false
 	}
 	cols, err := loadColumns(ctx, conn, schema, table)
 	if err != nil {
 		conn.Close()
-		http.Error(w, "columns: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
 		return nil, colSet{}, false
 	}
 	names := make([]string, len(cols.Columns))
@@ -429,11 +429,11 @@ func (h *BackupsHandler) SQLColumns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the data browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the data browser requires the admin role")
 		return
 	}
 	if schema == "" || table == "" {
-		http.Error(w, "schema and table required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "schema and table required")
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -442,12 +442,12 @@ func (h *BackupsHandler) SQLColumns(w http.ResponseWriter, r *http.Request) {
 	// ClickHouse: introspect via system.columns instead of the pg path.
 	if info, isCH, cerr := h.clickhouseConnInfo(cctx, project, addon); cerr == nil && isCH {
 		if exists, _ := h.clickhouseTableExists(cctx, info, schema, table); !exists {
-			http.Error(w, "no such table", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "no such table")
 			return
 		}
 		resp, err := h.clickhouseColumns(cctx, info, schema, table)
 		if err != nil {
-			http.Error(w, "columns: "+err.Error(), http.StatusBadGateway)
+			writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -461,12 +461,12 @@ func (h *BackupsHandler) SQLColumns(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	if exists, _ := tableExists(cctx, conn, schema, table); !exists {
-		http.Error(w, "no such table", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no such table")
 		return
 	}
 	resp, err := loadColumns(cctx, conn, schema, table)
 	if err != nil {
-		http.Error(w, "columns: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -497,11 +497,11 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 	}
 	if info, isCH, cerr := h.clickhouseConnInfo(cctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); cerr == nil && isCH {
 		if schema == "" || table == "" {
-			http.Error(w, "schema and table required", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "schema and table required")
 			return
 		}
 		if exists, _ := h.clickhouseTableExists(cctx, info, schema, table); !exists {
-			http.Error(w, "no such table", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "no such table")
 			return
 		}
 		limit := parseIntDefault(q.Get("limit"), 100)
@@ -516,7 +516,7 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 		if orderBy != "" {
 			cols, cerr2 := h.clickhouseColumns(cctx, info, schema, table)
 			if cerr2 != nil {
-				http.Error(w, "columns: "+cerr2.Error(), http.StatusBadGateway)
+				writeErr(w, http.StatusBadGateway, "columns: "+cerr2.Error())
 				return
 			}
 			known := false
@@ -527,14 +527,14 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !known {
-				http.Error(w, "unknown orderBy column", http.StatusBadRequest)
+				writeErr(w, http.StatusBadRequest, "unknown orderBy column")
 				return
 			}
 		}
 		start := time.Now()
 		out, err := h.clickhouseRows(cctx, info, schema, table, orderBy, q.Get("dir"), limit, offset)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		out.Elapsed = time.Since(start).Round(time.Millisecond).String()
@@ -560,7 +560,7 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 	}
 	orderBy := q.Get("orderBy")
 	if orderBy != "" && !cs.has(orderBy) {
-		http.Error(w, "unknown orderBy column", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "unknown orderBy column")
 		return
 	}
 
@@ -569,12 +569,12 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 	// *sql.DB may hand them to different pooled conns, dropping the timeout).
 	pinned, err := conn.Conn(cctx)
 	if err != nil {
-		http.Error(w, "conn: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "conn: "+err.Error())
 		return
 	}
 	defer pinned.Close()
 	if _, err := pinned.ExecContext(cctx, "SET statement_timeout = '10s'"); err != nil {
-		http.Error(w, "set timeout: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "set timeout: "+err.Error())
 		return
 	}
 
@@ -582,7 +582,7 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 	selSQL, args := buildSelect(schema, table, orderBy, q.Get("dir"), limit+1, offset)
 	rows, err := pinned.QueryContext(cctx, selSQL, args...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -640,7 +640,7 @@ type writeRowRequest struct {
 func (h *BackupsHandler) rejectIfClickHouseWrite(ctx context.Context, w http.ResponseWriter, r *http.Request) bool {
 	_, isCH, err := h.clickhouseConnInfo(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 	if err == nil && isCH {
-		http.Error(w, "the data browser is read-only for ClickHouse addons (row edits map to async ALTER mutations, not transactional writes) — use the SQL query runner for DDL", http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, "the data browser is read-only for ClickHouse addons (row edits map to async ALTER mutations, not transactional writes) — use the SQL query runner for DDL")
 		return true
 	}
 	return false
@@ -650,7 +650,7 @@ func (h *BackupsHandler) rejectIfClickHouseWrite(ctx context.Context, w http.Res
 func (h *BackupsHandler) SQLInsertRow(w http.ResponseWriter, r *http.Request) {
 	var req writeRowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -665,24 +665,24 @@ func (h *BackupsHandler) SQLInsertRow(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	if bad := validateWriteIdentifiers(cs, req.Values); bad != "" {
-		http.Error(w, "unknown column: "+bad, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "unknown column: "+bad)
 		return
 	}
 	q, args, err := buildInsert(req.Schema, req.Table, req.Values)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	row, cols, err := queryOneRow(cctx, conn, q, args)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	if row == nil {
 		// INSERT … RETURNING * returned nothing (e.g. an INSTEAD OF trigger
 		// on a view swallowed it). The write may not have landed; don't
 		// report a phantom success.
-		http.Error(w, "insert returned no row", http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, "insert returned no row")
 		return
 	}
 	h.auditWrite(cctx, r, "insert", req.Schema, req.Table, req.Values)
@@ -693,7 +693,7 @@ func (h *BackupsHandler) SQLInsertRow(w http.ResponseWriter, r *http.Request) {
 func (h *BackupsHandler) SQLUpdateRow(w http.ResponseWriter, r *http.Request) {
 	var req writeRowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -708,25 +708,25 @@ func (h *BackupsHandler) SQLUpdateRow(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	if !cs.pkComplete(req.PK) {
-		http.Error(w, "update requires the table's full primary key (table may have no PK)", http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, "update requires the table's full primary key (table may have no PK)")
 		return
 	}
 	if bad := validateWriteIdentifiers(cs, req.Set, req.PK); bad != "" {
-		http.Error(w, "unknown column: "+bad, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "unknown column: "+bad)
 		return
 	}
 	q, args, err := buildUpdate(req.Schema, req.Table, req.Set, req.PK)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	row, cols, err := queryOneRow(cctx, conn, q, args)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	if row == nil {
-		http.Error(w, "no row matched the primary key", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no row matched the primary key")
 		return
 	}
 	h.auditWrite(cctx, r, "update", req.Schema, req.Table, req.PK)
@@ -737,7 +737,7 @@ func (h *BackupsHandler) SQLUpdateRow(w http.ResponseWriter, r *http.Request) {
 func (h *BackupsHandler) SQLDeleteRow(w http.ResponseWriter, r *http.Request) {
 	var req writeRowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -752,33 +752,33 @@ func (h *BackupsHandler) SQLDeleteRow(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	if !cs.pkComplete(req.PK) {
-		http.Error(w, "delete requires the table's full primary key (table may have no PK)", http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, "delete requires the table's full primary key (table may have no PK)")
 		return
 	}
 	if bad := validateWriteIdentifiers(cs, req.PK); bad != "" {
-		http.Error(w, "unknown column: "+bad, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "unknown column: "+bad)
 		return
 	}
 	q, args, err := buildDelete(req.Schema, req.Table, req.PK)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	res, err := conn.ExecContext(cctx, q, args...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		http.Error(w, "no row matched the primary key", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "no row matched the primary key")
 		return
 	}
 	if n > 1 {
 		// Should be impossible (PK is unique) but never report success on a
 		// multi-row delete — surfaces a schema surprise instead of silently
 		// nuking rows.
-		http.Error(w, "refusing: delete affected more than one row", http.StatusConflict)
+		writeErr(w, http.StatusConflict, "refusing: delete affected more than one row")
 		return
 	}
 	h.auditWrite(cctx, r, "delete", req.Schema, req.Table, req.PK)

@@ -84,7 +84,7 @@ func (h *IncidentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.ListIncidents(ctx, limit, r.URL.Query().Get("state"))
 	if err != nil {
 		h.log().Error("incidents: list", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if rows == nil {
@@ -102,12 +102,12 @@ func (h *IncidentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	in, err := h.DB.GetIncident(ctx, chi.URLParam(r, "id"))
 	if errors.Is(err, db.ErrIncidentNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "incident not found")
 		return
 	}
 	if err != nil {
 		h.log().Error("incidents: get", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, in)
@@ -156,7 +156,7 @@ func (h *IncidentsHandler) Feedback(w http.ResponseWriter, r *http.Request) {
 
 	var body feedbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 
@@ -164,30 +164,30 @@ func (h *IncidentsHandler) Feedback(w http.ResponseWriter, r *http.Request) {
 	// consistently rather than each discovering it independently.
 	if _, err := h.DB.GetIncident(ctx, id); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.log().Error("incidents: feedback load", "err", err, "id", id)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
 	switch resolveFeedbackAction(body.Decision) {
 	case feedbackGo:
 		if h.Manager == nil {
-			http.Error(w, "incident agent not configured", http.StatusServiceUnavailable)
+			writeErr(w, http.StatusServiceUnavailable, "incident agent not configured")
 			return
 		}
 		if err := h.Manager.SpawnImplementFor(ctx, id); err != nil {
 			h.log().Error("incidents: spawn implement", "err", err, "id", id)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		h.audit(ctx, r, "incident.approve", id, "operator approved → implementing")
 	case feedbackReject:
 		if err := h.DB.SetIncidentState(ctx, id, db.IncidentRejected); err != nil {
 			h.log().Error("incidents: reject", "err", err, "id", id)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		h.audit(ctx, r, "incident.reject", id, "operator rejected incident")
@@ -195,7 +195,7 @@ func (h *IncidentsHandler) Feedback(w http.ResponseWriter, r *http.Request) {
 		fb := db.IncidentFeedback{At: time.Now().UTC(), Text: body.Text}
 		if err := h.DB.AppendIncidentFeedback(ctx, id, fb); err != nil {
 			h.log().Error("incidents: append feedback", "err", err, "id", id)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		// TODO(incident-agent): re-spawn the investigate Job with the
@@ -217,11 +217,11 @@ func (h *IncidentsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.DB.SetIncidentState(ctx, id, db.IncidentResolved); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.log().Error("incidents: resolve", "err", err, "id", id)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.audit(ctx, r, "incident.resolve", id, "incident resolved")
@@ -242,16 +242,16 @@ func (h *IncidentsHandler) Thread(w http.ResponseWriter, r *http.Request) {
 		Thread string `json:"thread"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Thread == "" {
-		http.Error(w, "thread required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "thread required")
 		return
 	}
 	if err := h.DB.SetIncidentThread(ctx, id, req.Thread); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.log().Error("incidents: set thread", "err", err, "id", id)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -289,16 +289,16 @@ func incidentTokenAuth(r *http.Request, in db.Incident) bool {
 func (h *IncidentsHandler) loadIncidentForAgent(w http.ResponseWriter, r *http.Request, ctx context.Context) (db.Incident, bool) {
 	in, err := h.DB.GetIncident(ctx, chi.URLParam(r, "id"))
 	if errors.Is(err, db.ErrIncidentNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "incident not found")
 		return db.Incident{}, false
 	}
 	if err != nil {
 		h.log().Error("incidents: agent load", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return db.Incident{}, false
 	}
 	if !incidentTokenAuth(r, in) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return db.Incident{}, false
 	}
 	return in, true
@@ -323,27 +323,27 @@ func (h *IncidentsHandler) Findings(w http.ResponseWriter, r *http.Request) {
 	// Job (e.g. re-run after the operator already resolved/rejected) must
 	// not re-open a closed incident or clobber a pr_open one.
 	if in.State != db.IncidentInvestigating {
-		http.Error(w, "incident is not investigating (state="+in.State+")", http.StatusConflict)
+		writeErr(w, http.StatusConflict, "incident is not investigating (state="+in.State+")")
 		return
 	}
 
 	var body findingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if strings.TrimSpace(body.Findings) == "" {
-		http.Error(w, "findings required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "findings required")
 		return
 	}
 
 	if err := h.DB.SetIncidentFindings(ctx, in.ID, body.Findings, db.IncidentAwaitingFeedback); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.log().Error("incidents: set findings", "err", err, "id", in.ID)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.auditFor(ctx, in, "incident.findings", "agent posted findings")
@@ -386,13 +386,13 @@ func (h *IncidentsHandler) PR(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only an implementing incident accepts a PR report.
 	if in.State != db.IncidentImplementing {
-		http.Error(w, "incident is not implementing (state="+in.State+")", http.StatusConflict)
+		writeErr(w, http.StatusConflict, "incident is not implementing (state="+in.State+")")
 		return
 	}
 
 	var body prRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 
@@ -414,17 +414,17 @@ func (h *IncidentsHandler) PR(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "resolved": true})
 			return
 		}
-		http.Error(w, "prUrl or note required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "prUrl or note required")
 		return
 	}
 
 	if err := h.DB.SetIncidentPR(ctx, in.ID, body.PRUrl, body.PRNumber); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.log().Error("incidents: set pr", "err", err, "id", in.ID)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.auditFor(ctx, in, "incident.pr", "agent opened PR "+body.PRUrl)

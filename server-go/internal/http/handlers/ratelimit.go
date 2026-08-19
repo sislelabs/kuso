@@ -95,7 +95,7 @@ func withRateLimit(next http.HandlerFunc) http.HandlerFunc {
 				seconds = 1
 			}
 			w.Header().Set("Retry-After", itoaShort(seconds))
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			writeErr(w, http.StatusTooManyRequests, "too many requests")
 			return
 		}
 		next(w, r)

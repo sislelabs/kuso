@@ -34,6 +34,17 @@ func auditCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // teammate should be able to see audit rows for projects they can
 // already deploy to. Without it, the call asks for the cross-project
 // (instance-wide) view, which stays admin-only.
+//
+// Pagination is keyset on id: ?limit=N (clamped 1–1000, default 100)
+// plus ?after=<id> to fetch rows older than that id — both scopes
+// support it. Truncation signal (agent-use W4): when the page was cut
+// (older rows exist), the response carries
+//
+//	X-Kuso-Truncated: true
+//	X-Kuso-Next-After: <id of the oldest returned row>
+//
+// pass that id as ?after= for the next page. The JSON envelope shape
+// ({"audit","count","limit"}) is wire-stable and unchanged.
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	project := r.URL.Query().Get("project")
@@ -54,27 +65,32 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	var (
 		rows  []audit.Entry
 		count int
+		more  bool
 		err   error
 	)
 	if project != "" {
-		rows, count, err = h.Svc.GetForProject(ctx, project, after, limit)
+		rows, count, more, err = h.Svc.GetForProject(ctx, project, after, limit)
 	} else {
-		rows, count, err = h.Svc.Get(ctx, limit)
+		rows, count, more, err = h.Svc.Get(ctx, after, limit)
 	}
 	if err != nil {
 		h.Logger.Error("list audit", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if rows == nil {
 		rows = []audit.Entry{}
+	}
+	if more && len(rows) > 0 {
+		setTruncationHeaders(w, headerNextAfter, strconv.FormatInt(rows[len(rows)-1].ID, 10))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": rows, "count": count, "limit": effectiveLimit(limit)})
 }
 
 // ListForApp gates on Viewer of the {pipeline} project — pipeline is
 // the v0.2 project label, so a project member viewing their own
-// service's history is a normal flow.
+// service's history is a normal flow. Sets the same X-Kuso-Truncated /
+// X-Kuso-Next-After headers as List when the page was cut.
 func (h *AuditHandler) ListForApp(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	pipeline := chi.URLParam(r, "pipeline")
@@ -83,14 +99,17 @@ func (h *AuditHandler) ListForApp(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, pipeline, db.ProjectRoleViewer) {
 		return
 	}
-	rows, count, err := h.Svc.GetForApp(ctx, pipeline, chi.URLParam(r, "phase"), chi.URLParam(r, "app"), limit)
+	rows, count, more, err := h.Svc.GetForApp(ctx, pipeline, chi.URLParam(r, "phase"), chi.URLParam(r, "app"), limit)
 	if err != nil {
 		h.Logger.Error("list audit for app", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if rows == nil {
 		rows = []audit.Entry{}
+	}
+	if more && len(rows) > 0 {
+		setTruncationHeaders(w, headerNextAfter, strconv.FormatInt(rows[len(rows)-1].ID, 10))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": rows, "count": count, "limit": effectiveLimit(limit)})
 }

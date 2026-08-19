@@ -38,10 +38,10 @@ func TestRestoreScriptForKind(t *testing.T) {
 // is still overwriting the source in place and MUST confirm.
 func TestInPlaceRestoreNeedsConfirm(t *testing.T) {
 	cases := []struct {
-		name                          string
-		srcName, destName, destAddon  string
-		confirm                       string
-		want                          bool
+		name                         string
+		srcName, destName, destAddon string
+		confirm                      string
+		want                         bool
 	}{
 		{"in-place no confirm", "myproj-pg", "myproj-pg", "pg", "", true},
 		{"in-place wrong confirm", "myproj-pg", "myproj-pg", "pg", "nope", true},

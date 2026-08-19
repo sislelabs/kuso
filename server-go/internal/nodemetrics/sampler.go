@@ -31,6 +31,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
 
 const (
@@ -77,6 +78,11 @@ func (s *Sampler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.tick(ctx)
+			// Liveness heartbeat: the loop completed an iteration. A
+			// wedged sampler stops stamping and the leader's probes flag
+			// it (readyz drains, healthz eventually restarts). See
+			// serverstate.RegisterLoop / main.go.
+			serverstate.LoopHeartbeat(serverstate.LoopNodeMetrics)
 		}
 	}
 }

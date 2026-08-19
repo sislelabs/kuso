@@ -270,6 +270,21 @@ func TestDescribe_RollsUpAll(t *testing.T) {
 	if len(got.Environments) != 2 {
 		t.Errorf("envs: got %d, want 2", len(got.Environments))
 	}
+	// The unified state rollup must ride the describe path (and thus
+	// /api/projects/{p} + the /summary batch that reuses Describe).
+	// The fake wires no Clientset and no image was ever stamped, so
+	// the derivable state here is no_image — the point is the wire
+	// field EXISTS, not which state a richer fixture would produce
+	// (state_test.go pins the machine itself).
+	for _, e := range got.Environments {
+		state, _ := e.Status["state"].(string)
+		if state != stateNoImage {
+			t.Errorf("env %s: status.state = %q, want %q", e.Name, state, stateNoImage)
+		}
+		if detail, _ := e.Status["stateDetail"].(string); detail == "" {
+			t.Errorf("env %s: status.stateDetail missing", e.Name)
+		}
+	}
 }
 
 func TestDescribe_NotFound(t *testing.T) {

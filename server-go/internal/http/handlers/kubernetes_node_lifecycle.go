@@ -32,7 +32,7 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "kube client not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "kube client not wired")
 		return
 	}
 	var body struct {
@@ -42,24 +42,24 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 		Name     string            `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	creds, err := h.resolveCreds(r.Context(), body.Credentials, body.SSHKeyID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	body.Credentials = creds
 	token, err := nodejoin.ReadServerToken()
 	if err != nil {
 		h.Logger.Error("read k3s token", "err", err)
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	k3sURL := controlPlaneJoinURL()
 	if k3sURL == "" {
-		http.Error(w, "could not derive control-plane URL — set KUSO_K3S_URL=https://<host>:6443 on the kuso-server deployment", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "could not derive control-plane URL — set KUSO_K3S_URL=https://<host>:6443 on the kuso-server deployment")
 		return
 	}
 	// 3-minute ceiling for the whole flow. Reachability probe + apt
@@ -105,17 +105,17 @@ func (h *KubernetesHandler) ValidateNode(w http.ResponseWriter, r *http.Request)
 		SSHKeyID string `json:"sshKeyId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	creds, err := h.resolveCreds(r.Context(), body.Credentials, body.SSHKeyID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	k3sURL := controlPlaneJoinURL()
 	if k3sURL == "" {
-		http.Error(w, "could not derive control-plane URL", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "could not derive control-plane URL")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -123,7 +123,7 @@ func (h *KubernetesHandler) ValidateNode(w http.ResponseWriter, r *http.Request)
 	res, err := nodejoin.Validate(ctx, creds, k3sURL)
 	if err != nil {
 		h.Logger.Error("validate node", "err", err)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -161,11 +161,11 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 	}
 	name := chiURLParam(r, "name")
 	if name == "" {
-		http.Error(w, "missing node name", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing node name")
 		return
 	}
 	if h.Kube == nil || h.Kube.Clientset == nil {
-		http.Error(w, "kube client not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "kube client not wired")
 		return
 	}
 	// Refuse to remove the control plane — we'd kill ourselves. This
@@ -173,7 +173,7 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 	// override.
 	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
-		http.Error(w, "node not found: "+err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "node not found: "+err.Error())
 		return
 	}
 	if _, isCP := live.Labels["node-role.kubernetes.io/control-plane"]; isCP {
@@ -185,11 +185,11 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 			LabelSelector: "node-role.kubernetes.io/control-plane",
 		})
 		if lerr != nil {
-			http.Error(w, "preflight: "+lerr.Error(), http.StatusBadGateway)
+			writeErr(w, http.StatusBadGateway, "preflight: "+lerr.Error())
 			return
 		}
 		if len(nodes.Items) <= 1 {
-			http.Error(w, "refusing to remove the last control-plane node — would leave the cluster headless", http.StatusForbidden)
+			writeErr(w, http.StatusForbidden, "refusing to remove the last control-plane node — would leave the cluster headless")
 			return
 		}
 	}
@@ -211,11 +211,11 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 	// loop is enough for a 2-3 node home cluster. Force=true skips
 	// pods that won't evict gracefully.
 	if err := drainNode(ctx, h.Kube, name, body.Force); err != nil && !body.Force {
-		http.Error(w, "drain failed: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "drain failed: "+err.Error())
 		return
 	}
 	if err := h.Kube.Clientset.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
-		http.Error(w, "delete node: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "delete node: "+err.Error())
 		return
 	}
 	// Best-effort: also clean up the host so the VM isn't left in a
@@ -252,14 +252,14 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	}
 	name := chiURLParam(r, "name")
 	if name == "" {
-		http.Error(w, "missing node name", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing node name")
 		return
 	}
 	var body struct {
 		Labels map[string]string `json:"labels"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Labels == nil {
@@ -267,7 +267,7 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	}
 	for k := range body.Labels {
 		if k == "" {
-			http.Error(w, "label key cannot be empty", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "label key cannot be empty")
 			return
 		}
 	}
@@ -280,7 +280,7 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		h.Logger.Error("get node for label put", "node", name, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -301,14 +301,15 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	}
 	labelPatch, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": desired}})
 	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.Logger.Error("marshal node label patch", "node", name, "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if _, err := h.Kube.Clientset.CoreV1().Nodes().Patch(
 		ctx, name, "application/merge-patch+json", labelPatch, metav1.PatchOptions{},
 	); err != nil {
 		h.Logger.Error("patch node labels", "node", name, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 

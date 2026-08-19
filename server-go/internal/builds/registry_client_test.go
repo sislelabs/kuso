@@ -68,6 +68,30 @@ func TestRegistryClient_DeleteImageTag(t *testing.T) {
 	})
 }
 
+// TestRegistryClient_ResolveTagDigest: the sweep's digest-protection
+// path — an existing tag yields its Docker-Content-Digest, a missing
+// tag yields "" with nil error.
+func TestRegistryClient_ResolveTagDigest(t *testing.T) {
+	const digest = "sha256:cafebabe"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && r.URL.Path == "/v2/proj/web/manifests/live" {
+			w.Header().Set("Docker-Content-Digest", digest)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newRegistryClient(strings.TrimPrefix(srv.URL, "http://"))
+	if got, err := c.ResolveTagDigest(context.Background(), "proj/web", "live"); err != nil || got != digest {
+		t.Errorf("ResolveTagDigest(live) = %q, %v; want %q, nil", got, err, digest)
+	}
+	if got, err := c.ResolveTagDigest(context.Background(), "proj/web", "gone"); err != nil || got != "" {
+		t.Errorf("ResolveTagDigest(gone) = %q, %v; want \"\", nil", got, err)
+	}
+}
+
 // TestNewInClusterImageDeleter_NilForEmptyHost: external-registry
 // clusters (no in-cluster host) get a nil deleter so the sweep
 // self-disables.

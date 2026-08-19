@@ -303,8 +303,64 @@ func SweepImagesPastWindow(
 	}
 
 	targets := imagesToUntag(byKey, keep, protected)
+
+	// Digest-level protection. The tag-string check above is necessary
+	// but NOT sufficient: registry deletion is by manifest DIGEST, and
+	// deleting a digest removes it for every tag pointing at it. Two
+	// byte-identical builds (same commit rebuilt, a retag) share one
+	// digest, so untagging an aged-out unprotected tag could kill the
+	// manifest a protected live tag (env or cron image) depends on —
+	// the next pod restart is then an unrecoverable ImagePullBackOff.
+	// Resolve every protected tag's digest (only for repos that
+	// actually have untag targets) and refuse to delete any manifest
+	// whose digest a protected tag references. Fail CLOSED on resolve
+	// errors, matching the env/cron list behaviour above: a skipped
+	// sweep is recoverable, an over-eager one is not.
+	reposWithTargets := map[string]bool{}
+	for _, t := range targets {
+		reposWithTargets[t.repo] = true
+	}
+	protectedDigests := map[string]bool{} // "<repo>@<digest>"
+	for pt := range protected {
+		idx := strings.LastIndex(pt, ":")
+		if idx < 0 {
+			continue
+		}
+		repo, tag := pt[:idx], pt[idx+1:]
+		if !reposWithTargets[repo] {
+			continue
+		}
+		dg, derr := del.ResolveTagDigest(ctx, repo, tag)
+		if derr != nil {
+			return 0, fmt.Errorf("image-sweep resolve protected digest %s: %w", pt, derr)
+		}
+		if dg != "" {
+			protectedDigests[repo+"@"+dg] = true
+		}
+	}
+
 	deleted := 0
 	for _, t := range targets {
+		if len(protectedDigests) > 0 {
+			dg, derr := del.ResolveTagDigest(ctx, t.repo, t.tag)
+			if derr != nil {
+				// Can't prove this manifest isn't shared with a
+				// protected tag → skip it (fail closed, per-target).
+				if logFn != nil {
+					logFn("image-sweep: resolve target digest", "repo", t.repo, "tag", t.tag, "err", derr)
+				}
+				continue
+			}
+			if dg != "" && protectedDigests[t.repo+"@"+dg] {
+				// Shares a manifest with a live env/cron tag. Leave the
+				// tag AND its DB record alone — the image still exists,
+				// so rollback to this build remains valid.
+				if logFn != nil {
+					logFn("image-sweep: tag shares digest with a protected image — skipped", "repo", t.repo, "tag", t.tag, "digest", dg)
+				}
+				continue
+			}
+		}
 		if err := del.DeleteImageTag(ctx, t.repo, t.tag); err != nil {
 			if logFn != nil {
 				logFn("image-sweep: delete tag", "repo", t.repo, "tag", t.tag, "err", err)

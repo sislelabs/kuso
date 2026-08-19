@@ -117,7 +117,7 @@ func (h *AdminHandler) CountUsers(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) Profile(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := adminCtx(r)
@@ -217,16 +217,16 @@ type createTokenResponse struct {
 func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	var req createTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Name == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
 	// SECURITY: a personal token bakes the user's CURRENT instance
@@ -250,7 +250,7 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		var err error
 		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
 		if err != nil {
-			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "expiresAt must be RFC3339 or empty for never-expires")
 			return
 		}
 		// Clamp any requested expiry past the cap down to the cap.
@@ -262,7 +262,7 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 	id, err := newID()
 	if err != nil {
 		h.Logger.Error("token id", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -285,7 +285,7 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 	jwt, serr := h.Issuer.SignWithExpiry(tokenClaims, expiresAt)
 	if serr != nil {
 		h.Logger.Error("sign token", "err", serr)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -318,7 +318,7 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) ListMyTokens(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := adminCtx(r)
@@ -345,7 +345,7 @@ func (h *AdminHandler) ListMyTokens(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) DeleteMyToken(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := adminCtx(r)
@@ -353,7 +353,7 @@ func (h *AdminHandler) DeleteMyToken(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.DeleteUserToken(ctx, claims.UserID, chi.URLParam(r, "id")); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "token not found")
 		default:
 			h.fail(w, "delete token", err)
 		}
@@ -387,10 +387,10 @@ func summariseUsers(in []db.UserSummary) []map[string]any {
 func (h *AdminHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, db.ErrNotFound, kindFromOp(op)))
 	default:
 		h.Logger.Error("admin handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }
 

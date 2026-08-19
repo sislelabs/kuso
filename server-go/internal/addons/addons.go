@@ -58,9 +58,16 @@ func (s *Service) NamespaceFor(ctx context.Context, project string) string {
 	return s.nsFor(ctx, project)
 }
 
-// AddonFQN returns the CR name for an addon. Mirrors the unexported
-// addonCRName helper; exported for handlers (port-forward) that need
-// to look up an addon's Service by name.
+// AddonFQN returns the CR name for an addon.
+//
+// SECURITY WARNING: this is a pure string mapping with NO ownership
+// check — CRName tolerates pre-qualified input, so with overlapping
+// project names ("foo" vs "foo-bar") AddonFQN("foo", "foo-bar-pg")
+// returns foo-bar's CR name. NEVER use it to resolve a resource on an
+// authorization-gated path; fetch through GetOwned instead (it verifies
+// the fetched CR's spec.project and yields cr.Name). The web-UI proxy
+// and port-forward handlers both used to resolve through this and were
+// cross-tenant exploitable for exactly that reason.
 func (s *Service) AddonFQN(project, addon string) string {
 	return addonCRName(project, addon)
 }

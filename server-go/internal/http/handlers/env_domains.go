@@ -22,7 +22,7 @@ func (h *ProjectsHandler) SetEnvDomains(w http.ResponseWriter, r *http.Request) 
 		Hosts []string `json:"hosts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Hosts == nil {
@@ -53,7 +53,7 @@ func (h *ProjectsHandler) AddEnvDomain(w http.ResponseWriter, r *http.Request) {
 		TLSSecret string `json:"tlsSecret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -94,7 +94,7 @@ func (h *ProjectsHandler) RemoveEnvDomain(w http.ResponseWriter, r *http.Request
 func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.SetEnvVarRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -108,9 +108,10 @@ func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request
 	// masked value ("••••••••") back would clobber the real value; refuse
 	// the sentinel rather than persist it.
 	if wire.Value == envMaskSentinel {
-		http.Error(w,
-			fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", chi.URLParam(r, "name")),
-			http.StatusBadRequest)
+		writeErr(w,
+
+			http.StatusBadRequest, fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", chi.URLParam(r, "name")))
+
 		return
 	}
 	req := projects.SetEnvVarRequest{Value: wire.Value}

@@ -19,12 +19,13 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Kube == nil {
-		http.Error(w, "backup health unavailable: no kube client", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "backup health unavailable: no kube client")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	addons, addonsComplete := backuphealth.ComputeAddons(ctx, h.Kube, h.Namespace)
+	volumes, volumesComplete := backuphealth.ComputeServiceVolumes(ctx, h.Kube, h.Namespace)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"backup":     backuphealth.Compute(ctx, h.Kube, h.Namespace),
 		"registryGC": backuphealth.RegistryGC(ctx, h.Kube, h.Namespace),
@@ -36,5 +37,14 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 		"addonBackups":         addons,
 		"addonBackupsHealthy":  backuphealth.AddonsHealthy(addons),
 		"addonBackupsComplete": addonsComplete,
+		// Per-service app-data PVC coverage. Additive: services that
+		// declare spec.volumes render RWO PVCs (kusoenvironment pvc.yaml)
+		// that NO kuso chart backs up. Before these rows the banner stayed
+		// green while that data was silently unprotected. Every row is
+		// covered=false + healthy=true (a coverage gap is surfaced, not
+		// paged on). serviceVolumesComplete=false → a list failed mid-sweep.
+		"serviceVolumes":         volumes,
+		"serviceVolumesHealthy":  backuphealth.ServiceVolumesHealthy(volumes),
+		"serviceVolumesComplete": volumesComplete,
 	})
 }

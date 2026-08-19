@@ -61,11 +61,11 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Username == "" || req.Email == "" || req.Password == "" {
-		http.Error(w, "username, email, password required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "username, email, password required")
 		return
 	}
 	hash, err := auth.HashPassword(req.Password, 0)
@@ -141,7 +141,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	var req updateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := usersCtx(r)
@@ -155,7 +155,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// change their own role through a different, intentional path; a
 	// user:write-only principal editing themselves here is the risk.
 	if (req.RoleID != nil || req.IsActive != nil) && userID == actingUserID(r) {
-		http.Error(w, "forbidden: cannot change your own role or active status", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: cannot change your own role or active status")
 		return
 	}
 	if err := h.DB.UpdateUser(ctx, userID, db.UpdateUserInput{
@@ -212,7 +212,7 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Password == "" {
-		http.Error(w, "password required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "password required")
 		return
 	}
 	hash, err := auth.HashPassword(body.Password, 0)
@@ -241,12 +241,12 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 func (h *UsersHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	var req updateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	// Profile edits MUST NOT touch role or active flag — those are
@@ -270,7 +270,7 @@ func (h *UsersHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	var body struct {
@@ -279,7 +279,7 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
 		body.CurrentPassword == "" || len(body.NewPassword) < 8 {
-		http.Error(w, "currentPassword and newPassword (>=8 chars) required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "currentPassword and newPassword (>=8 chars) required")
 		return
 	}
 	ctx, cancel := usersCtx(r)
@@ -290,7 +290,7 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := auth.VerifyPassword(u.Password, body.CurrentPassword); err != nil {
-		http.Error(w, "current password incorrect", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	hash, err := auth.HashPassword(body.NewPassword, 0)
@@ -322,16 +322,16 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 func (h *UsersHandler) UpdateMyAvatar(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad form")
 		return
 	}
 	file, _, err := r.FormFile("avatar")
 	if err != nil {
-		http.Error(w, "missing avatar field", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing avatar field")
 		return
 	}
 	defer file.Close()
@@ -348,7 +348,7 @@ func (h *UsersHandler) UpdateMyAvatar(w http.ResponseWriter, r *http.Request) {
 	// quirk. http.DetectContentType reads the first 512 bytes.
 	mime := http.DetectContentType(data)
 	if !isAllowedAvatarMIME(mime) {
-		http.Error(w, "avatar must be PNG, JPEG, GIF, or WEBP", http.StatusUnsupportedMediaType)
+		writeErr(w, http.StatusUnsupportedMediaType, "avatar must be PNG, JPEG, GIF, or WEBP")
 		return
 	}
 	dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
@@ -395,9 +395,9 @@ func userResponse(u *db.User) map[string]any {
 func (h *UsersHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, db.ErrNotFound, "user"))
 	default:
 		h.Logger.Error("users handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

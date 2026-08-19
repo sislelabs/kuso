@@ -30,6 +30,14 @@ func (h *ErrorsHandler) Mount(r chi.Router) {
 //
 //	?since=24h   — lookback window. Default 24h, max 30d.
 //	?limit=50    — max groups returned (1–200, default 50).
+//	?offset=0    — groups to skip (offset paging, newest-first order).
+//
+// Truncation signal (agent-use W4): the wire shape is a bare JSON
+// array and MUST stay that way, so a cut response is signalled via
+// headers instead — X-Kuso-Truncated: true plus X-Kuso-Next-Offset
+// with the ?offset= value for the next page. Detection is exact (the
+// DB read over-fetches one group past the limit), not a full-page
+// guess. Absent headers mean the response is complete.
 func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -53,11 +61,22 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	groups, err := h.DB.ListErrorGroups(ctx, project, service, since, limit)
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	// +1 over-fetch: one extra group past the limit proves truncation.
+	groups, err := h.DB.ListErrorGroups(ctx, project, service, since, limit+1, offset)
 	if err != nil {
 		h.Logger.Error("errors: list", "err", err, "project", project, "service", service)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
+	}
+	if len(groups) > limit {
+		groups = groups[:limit]
+		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(offset+limit))
 	}
 	writeJSON(w, http.StatusOK, groups)
 }

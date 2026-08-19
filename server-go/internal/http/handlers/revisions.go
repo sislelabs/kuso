@@ -189,7 +189,7 @@ func redactSnapshotValue(v any) any {
 // forward again. No special-case state to keep in sync.
 func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request) {
 	if h.DB == nil {
-		http.Error(w, "revisions disabled", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "revisions disabled")
 		return
 	}
 	// No JWT-perm pre-gate here: in role-system v2 services:write is a
@@ -227,7 +227,7 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "service"})
 	case "addon":
 		if h.AddonReverter == nil {
-			http.Error(w, "addon revert unavailable", http.StatusServiceUnavailable)
+			writeErr(w, http.StatusServiceUnavailable, "addon revert unavailable")
 			return
 		}
 		var snap struct {
@@ -243,7 +243,7 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "addon"})
 	default:
-		http.Error(w, "revert: only kind=service and kind=addon are supported", http.StatusNotImplemented)
+		writeErr(w, http.StatusNotImplemented, "revert: only kind=service and kind=addon are supported")
 	}
 }
 

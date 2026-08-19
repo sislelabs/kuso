@@ -56,7 +56,7 @@ type podMetricRow struct {
 func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 	envName := chi.URLParam(r, "env")
 	if envName == "" {
-		http.Error(w, "missing env", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing env")
 		return
 	}
 	ctx, cancel := kubeCtx(r)
@@ -148,7 +148,7 @@ type projectMetricsResponse struct {
 func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	if project == "" {
-		http.Error(w, "missing project", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing project")
 		return
 	}
 	ctx, cancel := kubeCtx(r)
@@ -235,7 +235,7 @@ type timeseriesResponse struct {
 func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request) {
 	envName := chi.URLParam(r, "env")
 	if envName == "" {
-		http.Error(w, "missing env", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing env")
 		return
 	}
 	tsCtx, tsCancel := kubeCtx(r)
@@ -253,7 +253,7 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	}
 	dur, err := time.ParseDuration(rangeStr)
 	if err != nil || dur <= 0 || dur > 30*24*time.Hour {
-		http.Error(w, "bad range", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad range")
 		return
 	}
 	end := time.Now().UTC()

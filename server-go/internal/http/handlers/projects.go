@@ -239,6 +239,12 @@ type FirstBuildTrigger interface {
 func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects", h.List)
 	r.Post("/api/projects", h.Create)
+	// Batched dashboard rollup: describe + metrics for every project the
+	// caller can access, in ONE request. Replaces the web dashboard's
+	// 2-requests-per-card fan-out (a describe + a metrics poll per
+	// project). Static segment, so chi resolves it ahead of {project};
+	// "summary" is a reserved project name (see projects.reservedRouteNames).
+	r.Get("/api/projects/summary", h.Summary)
 	r.Get("/api/projects/{project}", h.Describe)
 	r.Patch("/api/projects/{project}", h.Update)
 	r.Delete("/api/projects/{project}", h.Delete)
@@ -483,6 +489,41 @@ func redactServiceRepoIfNeeded(ctx context.Context, dbConn *db.DB, project strin
 	svc.Spec.Repo = redactRepoRefCreds(svc.Spec.Repo)
 }
 
+// filterProjectsForCaller applies the /api/projects tenancy filter to a
+// full CR list: non-admins only see projects they have a
+// ProjectMembership on; admins (settings:admin) bypass with the full
+// list. Pending users get an empty slice — they're auth'd but invisible
+// to the rest of the system. Shared by List and Summary so the batched
+// dashboard endpoint can never disclose more than the list it batches.
+//
+// On a tenancy-resolution error the response is already written (500)
+// and ok=false is returned — fail CLOSED: skipping the filter would
+// hand a non-admin the full project list (names + specs). A 500 is
+// honest and retryable; the silent full-list disclosure is neither.
+func (h *ProjectsHandler) filterProjectsForCaller(ctx context.Context, w http.ResponseWriter, all []kube.KusoProject) ([]kube.KusoProject, bool) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || auth.Has(claims.Permissions, auth.PermSettingsAdmin) || h.DB == nil {
+		return all, true
+	}
+	tenancy, terr := h.DB.ListUserTenancyCached(ctx, claims.UserID)
+	if terr != nil {
+		h.Logger.Error("list projects: tenancy filter unavailable", "user", claims.UserID, "err", terr)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return nil, false
+	}
+	allowed := map[string]struct{}{}
+	for _, m := range tenancy.ProjectMemberships {
+		allowed[m.Project] = struct{}{}
+	}
+	filtered := all[:0]
+	for _, p := range all {
+		if _, ok := allowed[p.Name]; ok {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, true
+}
+
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
@@ -491,34 +532,9 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list projects", err)
 		return
 	}
-	// Tenancy filter: non-admins only see projects they have a
-	// ProjectMembership on. Admins (settings:admin) bypass with the
-	// full list. Pending users get an empty array — they're auth'd
-	// but invisible to the rest of the system.
-	if claims, ok := auth.ClaimsFromContext(ctx); ok && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
-		if h.DB != nil {
-			tenancy, terr := h.DB.ListUserTenancyCached(ctx, claims.UserID)
-			if terr != nil {
-				// Fail CLOSED: skipping the filter on a tenancy error
-				// would hand a non-admin the full project list (names +
-				// specs). A 500 is honest and retryable; the silent
-				// full-list disclosure is neither.
-				h.Logger.Error("list projects: tenancy filter unavailable", "user", claims.UserID, "err", terr)
-				http.Error(w, "internal", http.StatusInternalServerError)
-				return
-			}
-			allowed := map[string]struct{}{}
-			for _, m := range tenancy.ProjectMemberships {
-				allowed[m.Project] = struct{}{}
-			}
-			filtered := out[:0]
-			for _, p := range out {
-				if _, ok := allowed[p.Name]; ok {
-					filtered = append(filtered, p)
-				}
-			}
-			out = filtered
-		}
+	out, ok := h.filterProjectsForCaller(ctx, w, out)
+	if !ok {
+		return
 	}
 	// Strip repo-URL credentials per project (the gate differs per
 	// project: a caller can be admin on one and viewer on another).
@@ -539,16 +555,16 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// working on wiring that has no PermissionResolver installed.
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if !auth.HasAny(claims.Permissions, auth.PermProjectsCreate, auth.PermSettingsAdmin) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	var wire apiv1.CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -606,13 +622,127 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// projectSummaryItem is one dashboard card's worth of data in the
+// batched GET /api/projects/summary response. Project/Services/
+// Environments carry the exact same shape (and the same enrich + mask +
+// redact treatment) as GET /api/projects/{project}; Metrics is the same
+// rollup GET /api/projects/{project}/metrics returns, so clients can
+// swap N describe + N metrics requests for one array without new types.
+type projectSummaryItem struct {
+	Project      *kube.KusoProject      `json:"project"`
+	Services     []kube.KusoService     `json:"services"`
+	Environments []kube.KusoEnvironment `json:"environments"`
+	Metrics      projectMetricsResponse `json:"metrics"`
+}
+
+// Summary is GET /api/projects/summary — the batched projects-dashboard
+// endpoint. One item per project the caller can access (same tenancy
+// filter as List, same fail-closed contract). Per-project describes ride
+// the informer-cached CR lists and the metrics rollup rides the shared
+// singleflight+TTL pod-metrics cache (metrics_cache.go), so the whole
+// response costs roughly ONE describe + one metrics fetch per involved
+// namespace — not 2N HTTP round-trips from the browser.
+func (h *ProjectsHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	// Bigger budget than the single-project 5s projectCtx: the loop
+	// below touches every accessible project. Describes are cache-served
+	// so this is generous, not load-bearing.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	all, err := h.Svc.List(ctx)
+	if err != nil {
+		h.fail(w, "projects summary", err)
+		return
+	}
+	visible, ok := h.filterProjectsForCaller(ctx, w, all)
+	if !ok {
+		return
+	}
+	items := make([]projectSummaryItem, 0, len(visible))
+	for i := range visible {
+		name := visible[i].Name
+		d, derr := h.Svc.Describe(ctx, name)
+		if derr != nil || d == nil {
+			// Best-effort per card: one broken project must not blank the
+			// whole dashboard. The card renders name-only (same as a
+			// failed per-card describe today); the miss is logged so it
+			// doesn't hide.
+			h.Logger.Warn("projects summary: describe failed; card degraded",
+				"project", name, "err", derr)
+			items = append(items, projectSummaryItem{
+				Project: &visible[i],
+				Metrics: projectMetricsResponse{Project: name},
+			})
+			continue
+		}
+		// Same serialization treatment as the Describe handler: surface
+		// managed-secret keys BEFORE masking, then mask env values and
+		// strip repo credentials for callers without secrets:read.
+		enrichServicesWithManagedSecretKeys(ctx, h.Svc, name, d.Services)
+		enrichEnvsWithManagedSecretKeys(ctx, h.Svc, name, d.Environments)
+		maskServicesEnvIfNeeded(ctx, h.DB, name, d.Services)
+		maskEnvsIfNeeded(ctx, h.DB, name, d.Environments)
+		redactProjectRepoIfNeeded(ctx, h.DB, d.Project)
+		redactServicesRepoIfNeeded(ctx, h.DB, name, d.Services)
+		ns := visible[i].Spec.Namespace
+		if ns == "" {
+			ns = h.Namespace
+		}
+		items = append(items, projectSummaryItem{
+			Project:      d.Project,
+			Services:     d.Services,
+			Environments: d.Environments,
+			Metrics:      h.summaryMetrics(ctx, name, ns, d.Environments),
+		})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// summaryMetrics computes the per-project CPU/mem rollup for the summary
+// endpoint from the envs the describe already fetched — same semantics
+// as KubernetesHandler.ProjectMetrics (production env-group only, so
+// previews coming and going don't jitter the card numbers) and the same
+// cached namespace-wide pod-metrics fetch, so a dashboard poll costs one
+// upstream metrics-server query per namespace, not one per project.
+func (h *ProjectsHandler) summaryMetrics(ctx context.Context, project, ns string, envs []kube.KusoEnvironment) projectMetricsResponse {
+	out := projectMetricsResponse{Project: project}
+	// Scope to the PRODUCTION env-GROUP via the env label. spec.kind=
+	// "production" is also set on staging clones, so keying on it would
+	// inflate the prod card with clone metrics (mirrors ProjectMetrics).
+	prod := make(map[string]struct{})
+	for i := range envs {
+		if envs[i].Labels[kube.LabelEnv] == "production" {
+			prod[envs[i].Name] = struct{}{}
+		}
+	}
+	out.Envs = len(prod)
+	if len(prod) == 0 || h.Kube == nil {
+		return out
+	}
+	items, ok := listPodMetricsCached(ctx, h.Kube, ns)
+	if !ok {
+		// metrics-server missing or transient outage — zeros, the card
+		// renders its "—" state. Same graceful fall-through as the
+		// per-project metrics endpoint.
+		return out
+	}
+	for i := range items {
+		if _, mine := prod[podMetricsInstance(items[i])]; !mine {
+			continue
+		}
+		if sumPodMetricsUsage(items[i], &out.CPUm, &out.MemBytes) {
+			out.Pods++
+		}
+	}
+	return out
+}
+
 // Update is PATCH /api/projects/{project}. Body is a partial spec —
 // see projects.UpdateProjectRequest. Pointer fields distinguish unset
 // from set-to-zero so callers can explicitly toggle previews.enabled.
 func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.UpdateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -720,7 +850,7 @@ func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.CreateServiceRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -737,10 +867,36 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if out != nil {
 		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
-	h.triggerFirstBuild(ctx, project, out)
+	firstBuild := h.triggerFirstBuild(ctx, project, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
-	writeJSON(w, http.StatusCreated, out)
+	// Additive envelope: same KusoService fields as before, plus an
+	// optional firstBuild block so the caller learns whether the
+	// auto-triggered first build actually started (previously the
+	// failure was server-log-only and the 201 carried no signal).
+	if out == nil {
+		// Preserve the pre-envelope "null" body for a nil service.
+		writeJSON(w, http.StatusCreated, out)
+		return
+	}
+	writeJSON(w, http.StatusCreated, createServiceResponse{
+		KusoService: out,
+		FirstBuild:  firstBuild,
+	})
+}
+
+// createServiceResponse embeds the created service (inlined in JSON —
+// wire-compatible with the pre-envelope response) and adds the
+// optional first-build outcome. firstBuild is absent entirely when
+// there was nothing to build (image/worker runtime, no repo).
+type createServiceResponse struct {
+	*kube.KusoService
+	FirstBuild *firstBuildResult `json:"firstBuild,omitempty"`
+}
+
+type firstBuildResult struct {
+	Triggered bool   `json:"triggered"`
+	Error     string `json:"error,omitempty"`
 }
 
 // triggerFirstBuild kicks the initial build for a newly created
@@ -756,30 +912,30 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 // same "nothing to build from" condition expressed on the CR.
 //
 // Best-effort by design: the service is already created and the 201 has
-// to reflect that. A build that fails to start is logged, not surfaced
-// as a creation failure — the user can retry with `kuso build trigger`.
-func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string, svc *kube.KusoService) {
+// to reflect that. A build that fails to start is logged AND surfaced
+// on the create response's firstBuild field — the user can retry with
+// `kuso build trigger`. Returns nil when there was nothing to build.
+func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string, svc *kube.KusoService) *firstBuildResult {
 	if h.FirstBuildTrigger == nil || svc == nil {
-		return
+		return nil
 	}
 	switch svc.Spec.Runtime {
 	case "image", "worker":
-		return
+		return nil
 	}
 	if svc.Spec.Repo == nil || svc.Spec.Repo.URL == "" {
-		return
+		return nil
 	}
-	branch := ""
-	if svc.Spec.Repo != nil {
-		branch = svc.Spec.Repo.DefaultBranch
-	}
+	branch := svc.Spec.Repo.DefaultBranch
 	short := shortServiceName(project, svc.Name)
 	if err := h.FirstBuildTrigger.CreateForService(ctx, project, short, branch); err != nil {
 		if h.Logger != nil {
 			h.Logger.Warn("first build for new service did not start (service was created; retry with `kuso build trigger`)",
 				"project", project, "service", short, "branch", branch, "err", err)
 		}
+		return &firstBuildResult{Triggered: false, Error: err.Error()}
 	}
+	return &firstBuildResult{Triggered: true}
 }
 
 func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
@@ -815,7 +971,7 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 // can't wipe out another project.
 func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	if h.Reconciler == nil {
-		http.Error(w, "config-as-code disabled (kube unavailable)", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "config-as-code disabled (kube unavailable)")
 		return
 	}
 	// 1 MiB hard cap. io.LimitReader honours r.Context() so a slow-
@@ -823,20 +979,20 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	// — the read unwinds the moment the context fires.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "read body")
 		return
 	}
 	if len(body) >= 1<<20 {
-		http.Error(w, "kuso.yml too large (>1MiB)", http.StatusRequestEntityTooLarge)
+		writeErr(w, http.StatusRequestEntityTooLarge, "kuso.yml too large (>1MiB)")
 		return
 	}
 	f, err := spec.Parse(body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if f.Project != chi.URLParam(r, "project") {
-		http.Error(w, "project name in YAML doesn't match URL", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "project name in YAML doesn't match URL")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -848,7 +1004,7 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	plan, err := spec.PlanFor(ctx, h.Kube, h.Namespace, f)
 	if err != nil {
 		h.Logger.Error("apply: plan", "err", err)
-		http.Error(w, "plan failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "plan failed")
 		return
 	}
 	if r.URL.Query().Get("dryRun") == "1" {
@@ -865,7 +1021,7 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	res, err := h.Reconciler.Apply(ctx, plan, f, opts)
 	if err != nil {
 		h.Logger.Error("apply: execute", "err", err)
-		http.Error(w, "apply failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "apply failed")
 		return
 	}
 	h.Logger.Info("apply", "project", f.Project, "plan", plan.Summary(), "errs", len(res.Errors))
@@ -876,7 +1032,7 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 // GET /api/projects/{project}/spec
 func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	if h.Reconciler == nil {
-		http.Error(w, "config-as-code disabled (kube unavailable)", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "config-as-code disabled (kube unavailable)")
 		return
 	}
 	project := chi.URLParam(r, "project")
@@ -888,7 +1044,7 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	f, err := spec.Export(ctx, h.Kube, h.Namespace, project)
 	if err != nil {
 		h.Logger.Error("spec export", "project", project, "err", err)
-		http.Error(w, "export failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "export failed")
 		return
 	}
 	// Mask literal env VALUES for callers who can't read secrets — the
@@ -923,7 +1079,7 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := yaml.Marshal(f)
 	if err != nil {
-		http.Error(w, "marshal failed", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "marshal failed")
 		return
 	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
@@ -936,7 +1092,7 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	var req projects.PatchServiceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -963,7 +1119,7 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.AddDomainRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -1014,7 +1170,7 @@ func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.SetEnvVarRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -1031,9 +1187,10 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	// would echo the sentinel back here and clobber the real value. Refuse
 	// the literal sentinel rather than persist it.
 	if wire.Value == envMaskSentinel || (wire.SecretValue != nil && *wire.SecretValue == envMaskSentinel) {
-		http.Error(w,
-			fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", name),
-			http.StatusBadRequest)
+		writeErr(w,
+
+			http.StatusBadRequest, fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", name))
+
 		return
 	}
 	// Unified "one secret primitive" write: the server decides storage.
@@ -1122,7 +1279,7 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 		NewName string `json:"newName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewName == "" {
-		http.Error(w, "newName required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "newName required")
 		return
 	}
 	// Rename can take a few seconds (helm-operator reconciles two
@@ -1247,7 +1404,7 @@ func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request)
 func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.SetEnvRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -1268,9 +1425,10 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	// patched.
 	for _, v := range envVars {
 		if v.Value == envMaskSentinel {
-			http.Error(w,
-				fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; omit the key to leave it unchanged or supply a real value", v.Name),
-				http.StatusBadRequest)
+			writeErr(w,
+
+				http.StatusBadRequest, fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; omit the key to leave it unchanged or supply a real value", v.Name))
+
 			return
 		}
 	}
@@ -1496,7 +1654,7 @@ func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Reques
 func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request) {
 	var req projects.CreateEnvRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := projectCtx(r)
@@ -1594,7 +1752,7 @@ func (h *ProjectsHandler) CreateEnvGroup(w http.ResponseWriter, r *http.Request)
 	}
 	var body projects.CreateEnvGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	out, err := h.Svc.CreateEnvGroup(ctx, project, body)
@@ -1618,7 +1776,7 @@ func (h *ProjectsHandler) DeleteEnvGroup(w http.ResponseWriter, r *http.Request)
 	}
 	name := chi.URLParam(r, "name")
 	if r.URL.Query().Get("confirm") != name {
-		http.Error(w, "env-group delete requires ?confirm=<name> to acknowledge data loss", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "env-group delete requires ?confirm=<name> to acknowledge data loss")
 		return
 	}
 	if err := h.Svc.DeleteEnvGroup(ctx, project, name); err != nil {
@@ -1641,7 +1799,7 @@ func (h *ProjectsHandler) SetEnvGroupServiceBranch(w http.ResponseWriter, r *htt
 		Branch string `json:"branch"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if err := h.Svc.SetServiceBranchInEnv(ctx,
@@ -1661,19 +1819,19 @@ func (h *ProjectsHandler) SetEnvGroupServiceBranch(w http.ResponseWriter, r *htt
 func (h *ProjectsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, projects.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, projects.ErrNotFound, kindFromOp(op)))
 	case errors.Is(err, projects.ErrConflict):
 		// Pass the wrapped message through so the UI shows
 		// "env "staging" already exists" instead of bare "conflict".
 		// Same pattern addons.fail uses.
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, projects.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, projects.ErrCompositeVarRef):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		h.Logger.Error("projects handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }
 

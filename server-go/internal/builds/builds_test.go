@@ -1202,12 +1202,15 @@ func TestShouldRunRelease_SkipsPreview(t *testing.T) {
 }
 
 // TestBuildEnvFromVars resolves a service's env vars to build-time KEY=VALUE
-// literals: literal Values pass through; secretKeyRef vars are resolved via the
-// injected secret lookup; unresolvable refs and reserved/kuso-managed keys are
-// omitted. This is what populates KusoBuild.spec.buildEnv so the build job can
-// bake build-time env (Prisma DATABASE_URL, Next NEXT_PUBLIC_*) into the image.
+// entries: literal Values pass through; secretKeyRef vars become
+// kuso-secret-ref:// references (the lookup only proves existence — the
+// plaintext must never be stamped, it would persist into published image
+// layers as build-args / ENV lines and be recoverable via registry read);
+// unresolvable refs and reserved/kuso-managed keys are omitted. This is what
+// populates KusoBuild.spec.buildEnv.
 func TestBuildEnvFromVars(t *testing.T) {
 	t.Parallel()
+	const plaintext = "postgres://u:p@foo-db-pooler:6432/foo_db?sslmode=disable"
 	vars := []kube.KusoEnvVar{
 		{Name: "NEXT_PUBLIC_APP_URL", Value: "https://web.foo.example.com"},
 		{Name: "DATABASE_URL", ValueFrom: map[string]any{
@@ -1221,7 +1224,7 @@ func TestBuildEnvFromVars(t *testing.T) {
 	// secret lookup: only foo-db-conn/DATABASE_URL resolves.
 	lookup := func(secret, key string) (string, bool) {
 		if secret == "foo-db-conn" && key == "DATABASE_URL" {
-			return "postgres://u:p@foo-db-pooler:6432/foo_db?sslmode=disable", true
+			return plaintext, true
 		}
 		return "", false
 	}
@@ -1230,14 +1233,70 @@ func TestBuildEnvFromVars(t *testing.T) {
 	if got["NEXT_PUBLIC_APP_URL"] != "https://web.foo.example.com" {
 		t.Errorf("literal not passed through: %q", got["NEXT_PUBLIC_APP_URL"])
 	}
-	if got["DATABASE_URL"] != "postgres://u:p@foo-db-pooler:6432/foo_db?sslmode=disable" {
-		t.Errorf("secretKeyRef not resolved: %q", got["DATABASE_URL"])
+	if got["DATABASE_URL"] != "kuso-secret-ref://foo-db-conn/DATABASE_URL" {
+		t.Errorf("secretKeyRef must stamp a secret ref, got %q", got["DATABASE_URL"])
+	}
+	// SECURITY regression: the resolved plaintext must not appear in ANY
+	// stamped value — spec.buildEnv persists on the CR and its literal
+	// entries persist into the published image.
+	for k, v := range got {
+		if strings.Contains(v, plaintext) {
+			t.Errorf("plaintext secret leaked into buildEnv[%s] = %q", k, v)
+		}
 	}
 	if _, ok := got["MISSING_REF"]; ok {
 		t.Errorf("unresolvable ref should be omitted, got %q", got["MISSING_REF"])
 	}
 	if _, ok := got["PORT"]; ok {
 		t.Errorf("reserved key PORT must be omitted from build env")
+	}
+}
+
+// TestBuildEnvSecretRefRoundTrip pins the kuso-secret-ref:// wire format the
+// buildcontroller parses back into a secretKeyRef env mount. Malformed refs
+// must fail parsing (and get dropped) — a ref-shaped value must never
+// degrade into a literal build arg.
+func TestBuildEnvSecretRefRoundTrip(t *testing.T) {
+	t.Parallel()
+	ref := BuildEnvSecretRef("foo-db-conn", "DATABASE_URL")
+	if ref != "kuso-secret-ref://foo-db-conn/DATABASE_URL" {
+		t.Fatalf("ref format changed: %q", ref)
+	}
+	secret, key, ok := ParseBuildEnvSecretRef(ref)
+	if !ok || secret != "foo-db-conn" || key != "DATABASE_URL" {
+		t.Errorf("round-trip failed: %q %q %v", secret, key, ok)
+	}
+	if !IsBuildEnvSecretRef(ref) {
+		t.Error("IsBuildEnvSecretRef must recognise a formatted ref")
+	}
+
+	// Invalid segments must refuse to format at all.
+	if got := BuildEnvSecretRef("Bad_Secret", "KEY"); got != "" {
+		t.Errorf("invalid secret name must not format: %q", got)
+	}
+	if got := BuildEnvSecretRef("ok-secret", "bad key"); got != "" {
+		t.Errorf("invalid key must not format: %q", got)
+	}
+
+	// Malformed refs must not parse.
+	for _, bad := range []string{
+		"postgres://u:p@h/db",                    // ordinary literal
+		"kuso-secret-ref://",                     // empty
+		"kuso-secret-ref://no-slash",             // missing key
+		"kuso-secret-ref:///KEY",                 // empty secret
+		"kuso-secret-ref://name/",                // empty key
+		"kuso-secret-ref://Bad_Name/KEY",         // secret name charset
+		"kuso-secret-ref://name/bad key",         // key charset
+		"kuso-secret-ref://name/K/EY",            // slash in key
+	} {
+		if _, _, ok := ParseBuildEnvSecretRef(bad); ok {
+			t.Errorf("malformed ref parsed: %q", bad)
+		}
+	}
+	// Prefix-carrying junk still IDENTIFIES as a ref (so callers drop it
+	// instead of treating it as a literal).
+	if !IsBuildEnvSecretRef("kuso-secret-ref://junk") {
+		t.Error("prefix-carrying junk must identify as a ref")
 	}
 }
 
@@ -1524,10 +1583,12 @@ func mkSecret(t *testing.T, s *Service, name, key, val string) {
 	}
 }
 
-// TestCreate_ProductionBuildBakesServiceEnv confirms the un-changed
-// production path: a production build DOES resolve the service's
-// secretKeyRef env into spec.BuildEnv (Prisma/Next need it).
-func TestCreate_ProductionBuildBakesServiceEnv(t *testing.T) {
+// TestCreate_ProductionBuildStampsServiceEnv covers the production path: a
+// production build carries the service's secretKeyRef env into spec.BuildEnv
+// as a kuso-secret-ref:// reference — NEVER the resolved plaintext, which
+// would persist on the CR and into published image layers (registry-read
+// recoverable). Literals pass verbatim.
+func TestCreate_ProductionBuildStampsServiceEnv(t *testing.T) {
 	t.Parallel()
 	const ref = "abcdef0123456789abcdef0123456789abcdef01"
 	s := fakeService(t,
@@ -1540,8 +1601,13 @@ func TestCreate_ProductionBuildBakesServiceEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if got.Spec.BuildEnv["DATABASE_URL"] != "postgres://PROD-SECRET/db" {
-		t.Errorf("production build must bake resolved service secret; got %q", got.Spec.BuildEnv["DATABASE_URL"])
+	if got.Spec.BuildEnv["DATABASE_URL"] != BuildEnvSecretRef("alpha-db-conn", "url") {
+		t.Errorf("production build must stamp a secret ref; got %q", got.Spec.BuildEnv["DATABASE_URL"])
+	}
+	for k, v := range got.Spec.BuildEnv {
+		if strings.Contains(v, "PROD-SECRET") {
+			t.Fatalf("plaintext secret stamped onto the CR in BuildEnv[%s]=%q", k, v)
+		}
 	}
 	if got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"] != "https://api.prod.example" {
 		t.Errorf("production build literal env: %q", got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"])
@@ -1577,12 +1643,17 @@ func TestCreate_PreviewBuildDoesNotBakeProductionSecret(t *testing.T) {
 		t.Fatalf("get build: %v", err)
 	}
 	for k, v := range got.Spec.BuildEnv {
-		if strings.Contains(v, "PROD-SECRET") {
-			t.Fatalf("preview build leaked a production secret value in BuildEnv[%s]=%q", k, v)
+		// Neither secret's PLAINTEXT may ever land on the CR — and the
+		// production secret must not even be referenced.
+		if strings.Contains(v, "PROD-SECRET") || strings.Contains(v, "PREVIEW-CLONE") {
+			t.Fatalf("plaintext secret value in BuildEnv[%s]=%q", k, v)
+		}
+		if strings.Contains(v, "alpha-db-conn") {
+			t.Fatalf("preview build references the production secret in BuildEnv[%s]=%q", k, v)
 		}
 	}
-	if got.Spec.BuildEnv["DATABASE_URL"] != "postgres://PREVIEW-CLONE/db" {
-		t.Errorf("preview build must bake the per-PR clone creds; got %q", got.Spec.BuildEnv["DATABASE_URL"])
+	if got.Spec.BuildEnv["DATABASE_URL"] != BuildEnvSecretRef("alpha-db-pr-7-conn", "url") {
+		t.Errorf("preview build must reference the per-PR clone secret; got %q", got.Spec.BuildEnv["DATABASE_URL"])
 	}
 	// Preview literal (host-rewritten) value comes from the preview env.
 	if got.Spec.BuildEnv["NEXT_PUBLIC_API_URL"] != "https://web-pr-7.preview.example" {

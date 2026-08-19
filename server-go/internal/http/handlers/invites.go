@@ -92,16 +92,16 @@ type createInviteResponse struct {
 func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok || !auth.Has(claims.Permissions, auth.PermUserWrite) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	var req createInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.MaxUses < 0 {
-		http.Error(w, "maxUses must be >= 0", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "maxUses must be >= 0")
 		return
 	}
 	if req.MaxUses == 0 {
@@ -111,14 +111,14 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// expires" link is a public registration page in disguise — gate
 	// it explicitly so an admin doesn't trip into open signup.
 	if req.MaxUses > 1 && req.ExpiresIn == "" {
-		http.Error(w, "multi-use invites require expiresIn", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "multi-use invites require expiresIn")
 		return
 	}
 	var expiresAt *time.Time
 	if req.ExpiresIn != "" {
 		d, err := time.ParseDuration(req.ExpiresIn)
 		if err != nil || d <= 0 {
-			http.Error(w, "expiresIn: invalid duration", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "expiresIn: invalid duration")
 			return
 		}
 		t := time.Now().Add(d)
@@ -134,10 +134,11 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.GroupID != "" {
 		if _, err := h.DB.GetGroup(ctx, req.GroupID); err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				http.Error(w, "group not found", http.StatusBadRequest)
+				writeErr(w, http.StatusBadRequest, "group not found")
 				return
 			}
-			http.Error(w, "internal", http.StatusInternalServerError)
+			h.Logger.Error("create invite: validate group", "group", req.GroupID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		groupID = &req.GroupID
@@ -153,7 +154,7 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			ir := req.InstanceRole
 			instanceRole = &ir
 		default:
-			http.Error(w, "instanceRole: must be admin, editor, or viewer", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "instanceRole: must be admin, editor, or viewer")
 			return
 		}
 	}
@@ -167,13 +168,13 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	id, err := randomID()
 	if err != nil {
 		h.Logger.Error("invite: id", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	token, err := generateInviteToken()
 	if err != nil {
 		h.Logger.Error("invite: token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if err := h.DB.CreateInvite(ctx, db.CreateInviteInput{
@@ -187,13 +188,13 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Note:         note,
 	}); err != nil {
 		h.Logger.Error("create invite", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	inv, err := h.DB.FindInviteByToken(ctx, token)
 	if err != nil {
 		h.Logger.Error("re-read invite", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusCreated, createInviteResponse{
@@ -246,7 +247,7 @@ func generateInviteToken() (string, error) {
 func (h *InvitesHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok || !auth.Has(claims.Permissions, auth.PermUserWrite) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	ctx, cancel := invCtx(r)
@@ -254,7 +255,7 @@ func (h *InvitesHandler) List(w http.ResponseWriter, r *http.Request) {
 	invs, err := h.DB.ListInvites(ctx)
 	if err != nil {
 		h.Logger.Error("list invites", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Annotate each row with the public URL so the admin doesn't have
@@ -275,7 +276,7 @@ func (h *InvitesHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *InvitesHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok || !auth.Has(claims.Permissions, auth.PermUserWrite) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	ctx, cancel := invCtx(r)
@@ -283,11 +284,11 @@ func (h *InvitesHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.DB.RevokeInvite(ctx, id); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "invite not found")
 			return
 		}
 		h.Logger.Error("revoke invite", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -315,23 +316,23 @@ func (h *InvitesHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	inv, err := h.DB.FindInviteByToken(ctx, token)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "invite not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "invite not found")
 			return
 		}
 		h.Logger.Error("lookup invite", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if inv.RevokedAt.Valid {
-		http.Error(w, "invite has been revoked", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite has been revoked")
 		return
 	}
 	if inv.ExpiresAt.Valid && inv.ExpiresAt.Time.Before(time.Now()) {
-		http.Error(w, "invite has expired", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite has expired")
 		return
 	}
 	if inv.UsedCount >= inv.MaxUses {
-		http.Error(w, "invite usage cap reached", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite usage cap reached")
 		return
 	}
 	out := inviteSummary{
@@ -379,19 +380,19 @@ type redeemLocalResponse struct {
 func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 	var req redeemLocalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Token == "" || req.Username == "" || req.Password == "" || req.Email == "" {
-		http.Error(w, "token, username, email, password are required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "token, username, email, password are required")
 		return
 	}
 	if len(req.Password) < 8 {
-		http.Error(w, "password must be ≥ 8 chars", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "password must be ≥ 8 chars")
 		return
 	}
 	if !validUsername(req.Username) {
-		http.Error(w, "username: lowercase letters/digits/underscore/hyphen, ≤32 chars", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "username: lowercase letters/digits/underscore/hyphen, ≤32 chars")
 		return
 	}
 	ctx, cancel := invCtx(r)
@@ -402,18 +403,18 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 	// index inside the redemption transaction below — a race past
 	// this check rolls the whole redemption back, seat included.
 	if _, err := h.DB.FindUserByUsername(ctx, req.Username); err == nil {
-		http.Error(w, "username already taken", http.StatusConflict)
+		writeErr(w, http.StatusConflict, "username already taken")
 		return
 	}
 	if _, err := h.DB.FindUserByEmail(ctx, req.Email); err == nil {
-		http.Error(w, "email already in use", http.StatusConflict)
+		writeErr(w, http.StatusConflict, "email already in use")
 		return
 	}
 
 	hash, err := auth.HashPassword(req.Password, 0)
 	if err != nil {
 		h.Logger.Error("invite: hash password", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 
@@ -436,7 +437,7 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 	jwt, err := h.signFor(ctx, id, "local")
 	if err != nil {
 		h.Logger.Error("invite: sign jwt", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, redeemLocalResponse{AccessToken: jwt})
@@ -450,7 +451,7 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 func (h *InvitesHandler) RedeemOAuthStart(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		http.Error(w, "token query param required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "token query param required")
 		return
 	}
 	// Validate the invite before kicking the OAuth round-trip so the
@@ -460,15 +461,16 @@ func (h *InvitesHandler) RedeemOAuthStart(w http.ResponseWriter, r *http.Request
 	inv, err := h.DB.FindInviteByToken(ctx, token)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			http.Error(w, "invite not found", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "invite not found")
 			return
 		}
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.Logger.Error("invite oauth: find by token", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if inv.RevokedAt.Valid || (inv.ExpiresAt.Valid && inv.ExpiresAt.Time.Before(time.Now())) ||
 		inv.UsedCount >= inv.MaxUses {
-		http.Error(w, "invite is no longer redeemable", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite is no longer redeemable")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -528,16 +530,16 @@ func (h *InvitesHandler) signFor(ctx context.Context, userID, strategy string) (
 func (h *InvitesHandler) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		http.Error(w, "invite not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "invite not found")
 	case errors.Is(err, db.ErrInviteRevoked):
-		http.Error(w, "invite has been revoked", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite has been revoked")
 	case errors.Is(err, db.ErrInviteExpired):
-		http.Error(w, "invite has expired", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite has expired")
 	case errors.Is(err, db.ErrInviteExhausted):
-		http.Error(w, "invite usage cap reached", http.StatusGone)
+		writeErr(w, http.StatusGone, "invite usage cap reached")
 	default:
 		h.Logger.Error("invite redeem", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }
 

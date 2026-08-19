@@ -103,13 +103,13 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 	daily, err := h.DB.CostRollup(ctx, days)
 	if err != nil {
 		h.logErr("usage: cost rollup", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	totals, err := h.DB.CostTotals(ctx, days)
 	if err != nil {
 		h.logErr("usage: cost totals", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	rates := readRates(h.Cfg)
@@ -167,13 +167,13 @@ func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
 	daily, err := h.DB.ProjectCostRollup(ctx, days)
 	if err != nil {
 		h.logErr("usage: project rollup", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	totals, err := h.DB.ProjectCostTotals(ctx, days)
 	if err != nil {
 		h.logErr("usage: project totals", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	rates := readRates(h.Cfg)

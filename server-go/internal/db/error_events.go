@@ -55,14 +55,23 @@ func (d *DB) InsertErrorEvent(ctx context.Context, e ErrorEvent) error {
 }
 
 // ListErrorGroups returns aggregated groups for (project, service)
-// within the lookback window. Newest-first by lastSeen.
+// within the lookback window. Newest-first by lastSeen. offset skips
+// that many groups (offset paging for the errors endpoint); negative
+// offsets are treated as 0.
 //
 // The aggregation runs server-side to keep the wire payload small;
 // a chatty 1000-error-per-minute service would otherwise return
 // 60k rows for a 1-hour view.
-func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since time.Time, limit int) ([]ErrorGroup, error) {
-	if limit <= 0 || limit > 200 {
+//
+// The limit clamp allows up to 201 (not 200): the HTTP handler
+// over-fetches one row past its own 200-cap to detect truncation
+// exactly instead of guessing from a full page.
+func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since time.Time, limit, offset int) ([]ErrorGroup, error) {
+	if limit <= 0 || limit > 201 {
 		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := d.QueryContext(ctx, `
 		SELECT fingerprint,
@@ -89,8 +98,8 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since
 		WHERE project = $1 AND service = $2 AND ts >= $3
 		GROUP BY project, service, fingerprint
 		ORDER BY last_seen DESC
-		LIMIT $4`,
-		project, service, since.UTC(), limit,
+		LIMIT $4 OFFSET $5`,
+		project, service, since.UTC(), limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ListErrorGroups: %w", err)

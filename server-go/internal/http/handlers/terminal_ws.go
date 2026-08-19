@@ -66,12 +66,12 @@ func (h *TerminalWSHandler) Mount(r chi.Router) {
 func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	jwtTok := extractWSBearer(r)
 	if jwtTok == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	claims, err := h.Issuer.Verify(jwtTok)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	// Revocation: Verify only checks signature + expiry. This handler is
@@ -79,7 +79,7 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	// revocation hook ourselves — otherwise a logged-out / deactivated
 	// admin's unexpired token still opens a shell. Fails closed.
 	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	h.Issuer.ResolvePermissions(r.Context(), claims)
@@ -102,12 +102,12 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	// the same way as callerCanReadSecrets — so the three secret-bearing
 	// surfaces stay consistent.
 	if !callerHasProjectPerm(r.Context(), h.DB, project, auth.PermShellExec) {
-		http.Error(w, "forbidden: shell access requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: shell access requires the admin role")
 		return
 	}
 
 	if !h.acquireSlot(claims.UserID) {
-		http.Error(w, "too many concurrent shell sessions", http.StatusTooManyRequests)
+		writeErr(w, http.StatusTooManyRequests, "too many concurrent shell sessions")
 		return
 	}
 	defer h.releaseSlot(claims.UserID)
@@ -122,12 +122,12 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	podList, err := h.Svc.ListPods(rctx, project, service, env)
 	rcancel()
 	if err != nil || podList == nil || len(podList.Pods) == 0 {
-		http.Error(w, "no running pods for this service", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "no running pods for this service")
 		return
 	}
 	pod := pickPod(podList.Pods, q.Get("pod"))
 	if pod == nil {
-		http.Error(w, "requested pod not found or not ready", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "requested pod not found or not ready")
 		return
 	}
 	container := q.Get("container")

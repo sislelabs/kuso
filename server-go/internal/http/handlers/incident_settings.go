@@ -81,7 +81,7 @@ func (h *IncidentAgentSettingsHandler) Get(w http.ResponseWriter, r *http.Reques
 	cfg, err := h.DB.GetIncidentAgentConfig(ctx)
 	if err != nil {
 		h.log().Error("incident-settings: get config", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	status := h.computeStatus(ctx)
@@ -145,21 +145,21 @@ func (h *IncidentAgentSettingsHandler) Put(w http.ResponseWriter, r *http.Reques
 
 	var in db.IncidentAgentConfig
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	// Validate the numeric knobs (0 = "disabled" is legal for both).
 	if in.MaxConcurrent < 0 || in.MaxConcurrent > 50 {
-		http.Error(w, "maxConcurrent must be 0..50", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "maxConcurrent must be 0..50")
 		return
 	}
 	if in.CooldownHours < 0 || in.CooldownHours > 168 {
-		http.Error(w, "cooldownHours must be 0..168", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "cooldownHours must be 0..168")
 		return
 	}
 	if err := h.DB.SetIncidentAgentConfig(ctx, in, userOf(r)); err != nil {
 		h.log().Error("incident-settings: put config", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if h.OnConfigChange != nil {
@@ -180,7 +180,7 @@ func (h *IncidentAgentSettingsHandler) PutCCCredentials(w http.ResponseWriter, r
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Credentials) == "" {
-		http.Error(w, "credentials required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "credentials required")
 		return
 	}
 	// Validate the shape so we never store garbage that just makes every
@@ -191,12 +191,12 @@ func (h *IncidentAgentSettingsHandler) PutCCCredentials(w http.ResponseWriter, r
 		} `json:"claudeAiOauth"`
 	}
 	if err := json.Unmarshal([]byte(body.Credentials), &probe); err != nil || probe.ClaudeAiOauth.AccessToken == "" {
-		http.Error(w, "not a valid Claude Code credentials blob (need claudeAiOauth.accessToken)", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "not a valid Claude Code credentials blob (need claudeAiOauth.accessToken)")
 		return
 	}
 	if err := h.upsertSecret(ctx, ccSecretName, map[string][]byte{ccSecretKey: []byte(body.Credentials)}); err != nil {
 		h.log().Error("incident-settings: write cc secret", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -218,7 +218,7 @@ func (h *IncidentAgentSettingsHandler) PutDiscord(w http.ResponseWriter, r *http
 		ChannelID    string `json:"channelId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 
@@ -238,14 +238,14 @@ func (h *IncidentAgentSettingsHandler) PutDiscord(w http.ResponseWriter, r *http
 	if len(secData) > 0 {
 		if err := h.upsertSecret(ctx, botSecretName, secData); err != nil {
 			h.log().Error("incident-settings: write bot secret", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 	}
 	if body.ChannelID != "" {
 		if err := h.upsertConfigMap(ctx, botConfigName, map[string]string{channelConfigKey: body.ChannelID}); err != nil {
 			h.log().Error("incident-settings: write bot configmap", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 	}

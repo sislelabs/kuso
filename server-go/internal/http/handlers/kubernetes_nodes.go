@@ -36,7 +36,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 	nodeList, err := h.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		h.Logger.Error("list nodes", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Pod count per node — served from the shared Pod informer
@@ -71,12 +71,12 @@ func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.DB == nil {
-		http.Error(w, "metrics history not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "metrics history not wired")
 		return
 	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
-		http.Error(w, "node name required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "node name required")
 		return
 	}
 	// `since` defaults to 7 days; cap any user-supplied window at 7d
@@ -92,7 +92,7 @@ func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) 
 	rows, err := h.DB.ListNodeMetrics(ctx, name, time.Now().Add(-time.Duration(hours)*time.Hour))
 	if err != nil {
 		h.Logger.Error("node history", "node", name, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

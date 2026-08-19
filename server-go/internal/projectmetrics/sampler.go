@@ -26,6 +26,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
 
 const (
@@ -70,6 +71,7 @@ func (s *Sampler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.tick(ctx)
+			serverstate.LoopHeartbeat(serverstate.LoopProjectMetrics)
 		}
 	}
 }

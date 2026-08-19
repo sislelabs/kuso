@@ -246,7 +246,7 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: reading addon connection values requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: reading addon connection values requires the admin role")
 		return
 	}
 	addon := chi.URLParam(r, "addon")
@@ -336,7 +336,7 @@ func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.CreateAddonRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := addonsCtx(r)
@@ -374,7 +374,7 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var wire apiv1.UpdateAddonRequest
 	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := addonsCtx(r)
@@ -396,7 +396,7 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Placement(w http.ResponseWriter, r *http.Request) {
 	var body kube.KusoPlacement
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := addonsCtx(r)
@@ -434,7 +434,7 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// makes the user type the addon name into a confirm field;
 	// CLI / API callers pass it explicitly.
 	if r.URL.Query().Get("confirm") != addon {
-		http.Error(w, "addon delete requires ?confirm=<addon-name> to acknowledge data loss", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "addon delete requires ?confirm=<addon-name> to acknowledge data loss")
 		return
 	}
 	if err := h.Svc.Delete(ctx, project, addon); err != nil {
@@ -462,16 +462,16 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, addons.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, addons.ErrNotFound, "addon"))
 	case errors.Is(err, addons.ErrConflict):
 		// Pass the wrapped error through so the UI can show
 		// "addon kuso-hello-go/postgres already exists" instead of
 		// a bare "409 Conflict" toast.
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, addons.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		h.Logger.Error("addons handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }
