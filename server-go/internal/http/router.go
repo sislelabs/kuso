@@ -702,9 +702,24 @@ func hasSessionCookie(r *http.Request) bool {
 	return err == nil && c.Value != ""
 }
 
+// hasBearerAuth reports whether the request carries a bearer token that
+// the auth middleware will ACTUALLY use to authenticate.
+//
+// This MUST stay byte-for-byte in agreement with auth.bearerToken's
+// header branch. It previously used EqualFold plus a bare length check,
+// while bearerToken uses a case-SENSITIVE HasPrefix and rejects an
+// empty/whitespace token. That divergence was a CSRF bypass: headers
+// like "bearer x", "BEARER x" or "Bearer \t" satisfied this function
+// (so the CSRF origin check was skipped) but NOT bearerToken (so the
+// request authenticated via the victim's session cookie instead).
+// Keep the two in lockstep — see TestHasBearerAuthMatchesBearerToken.
 func hasBearerAuth(r *http.Request) bool {
+	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
-	return len(h) > len("Bearer ") && strings.EqualFold(h[:len("Bearer ")], "Bearer ")
+	if !strings.HasPrefix(h, prefix) {
+		return false
+	}
+	return strings.TrimSpace(h[len(prefix):]) != ""
 }
 
 func sameOriginHeaderAllowed(r *http.Request) bool {

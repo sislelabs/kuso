@@ -234,6 +234,12 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	// instead of timing out.
 	if strings.HasPrefix(env, "run:") {
 		runName := strings.TrimPrefix(env, "run:")
+		// Tenancy gate — same rationale as the build: branch above.
+		// Run output carries the service's full resolved env, so a
+		// cross-project read is at least as damaging. Fail closed.
+		if !s.runBelongsToProject(ctx, ns, runName, project) {
+			return env, ErrNotFound
+		}
 		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: "kuso.sislelabs.com/run=" + runName,
 		})
@@ -650,7 +656,11 @@ func (s *Service) buildBelongsToProject(ctx context.Context, ns, buildName, proj
 	if project == "" || buildName == "" {
 		return false
 	}
-	if s.Kube != nil {
+	// Dynamic (not just Kube) must be non-nil: GetKusoBuild goes through
+	// the dynamic client, so a Client with only a Clientset set — the
+	// shape the archive-oracle path is documented to support — would nil
+	// -deref here instead of falling through to the archive below.
+	if s.Kube != nil && s.Kube.Dynamic != nil {
 		if b, err := s.Kube.GetKusoBuild(ctx, ns, buildName); err == nil && b != nil {
 			// Spec present and mismatched → definitively someone else's.
 			// Spec empty (legacy CR / decode gap) falls through to the
@@ -666,4 +676,28 @@ func (s *Service) buildBelongsToProject(ctx context.Context, ns, buildName, proj
 		}
 	}
 	return false
+}
+
+// runBelongsToProject reports whether a caller authorized on `project`
+// may read logs for `runName`. Same contract and rationale as
+// buildBelongsToProject above: run pods execute migrations and one-off
+// tasks with the service's full resolved env, so their output is at
+// least as sensitive as a build's.
+//
+// Fail-closed by construction — a run whose CR can't be read, or whose
+// spec.project doesn't name this project, is denied. Unlike builds
+// there is no archive fallback (run pods are GC'd with their Job and
+// nothing persists their logs), so the CR is the only source of truth.
+func (s *Service) runBelongsToProject(ctx context.Context, ns, runName, project string) bool {
+	// Dynamic must be non-nil — GetKusoRun goes through the dynamic
+	// client. No archive fallback exists for runs, so an unusable client
+	// means ownership is unprovable, which denies.
+	if project == "" || runName == "" || s.Kube == nil || s.Kube.Dynamic == nil {
+		return false
+	}
+	r, err := s.Kube.GetKusoRun(ctx, ns, runName)
+	if err != nil || r == nil {
+		return false
+	}
+	return r.Spec.Project == project
 }

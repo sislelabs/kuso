@@ -84,7 +84,15 @@ metadata:
   name: kuso-prometheus
 rules:
   - apiGroups: [""]
-    resources: [services, endpoints, pods, nodes, nodes/proxy, namespaces]
+    # nodes/proxy is deliberately NOT granted. It proxies to the kubelet
+    # API, which reaches exec/run on any node — a cluster-wide privilege
+    # escalation primitive, and one that would undo the care taken in
+    # server-go.yaml to keep pods/exec namespace-scoped rather than
+    # cluster-wide. Both scrape jobs below use `role: pod` service
+    # discovery and scrape pod endpoints directly, so nothing here needs
+    # it. Do not re-add it to make a node-level exporter work: scrape
+    # that exporter as a pod (role: pod) instead.
+    resources: [services, endpoints, pods, nodes, namespaces]
     verbs: [get, list, watch]
 ---
 apiVersion: v1

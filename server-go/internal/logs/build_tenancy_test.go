@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	kubefake "k8s.io/client-go/kubernetes/fake"
+
+	"kuso/server/internal/kube"
 )
 
 // fakeBuildLogs is a BuildLogReader whose archive rows are keyed by
@@ -124,5 +128,78 @@ func TestGetBuildLogIsProjectScoped(t *testing.T) {
 	}
 	if got, _ := archive.GetBuildLog(context.Background(), "victim", "victim-api-abc123"); got == "" {
 		t.Error("owner must still be able to read their own archived tail")
+	}
+}
+
+// --- Call-site regression guards -------------------------------------
+//
+// The guard function above was always correct. The bug was that the REST
+// Tail path never CALLED it, while the streaming WS path did — so a
+// viewer authorized on project A could read project B's build output via
+//
+//	GET /api/projects/A/services/x/logs?env=build:<B's build>
+//
+// These tests pin the call sites, not the predicate, because that is
+// where the divergence lived. Kube is nil so the archive row is the sole
+// ownership oracle; a Tail that skipped the check would fall through to
+// the pod lookup / archive fetch and return content instead of erroring.
+
+func TestTail_BuildEnv_DeniesForeignProject(t *testing.T) {
+	s := &Service{BuildLogs: fakeBuildLogs{
+		owner: map[string]string{"victim-api-abc123": "victim"},
+		logs:  map[string]string{"victim-api-abc123": "SECRET build output\n"},
+	}}
+
+	_, _, err := s.Tail(context.Background(), "attacker", "api", "build:victim-api-abc123", 100)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Tail(project=attacker, env=build:victim-...) err = %v, want ErrNotFound "+
+			"— a foreign build's logs must not be readable cross-project", err)
+	}
+}
+
+func TestTail_BuildEnv_AllowsOwningProject(t *testing.T) {
+	// A kube client with no pods: tailBuildPods finds nothing and Tail
+	// falls through to the archived tail, which is the path this test
+	// asserts. (tailBuildPods dereferences s.Kube unconditionally, so a
+	// nil Kube would panic before reaching the fallback.)
+	s := &Service{
+		Kube: &kube.Client{Clientset: kubefake.NewSimpleClientset()},
+		BuildLogs: fakeBuildLogs{
+			owner: map[string]string{"victim-api-abc123": "victim"},
+			logs:  map[string]string{"victim-api-abc123": "line one\nline two\n"},
+		},
+	}
+
+	out, _, err := s.Tail(context.Background(), "victim", "api", "build:victim-api-abc123", 100)
+	if err != nil {
+		t.Fatalf("Tail for the OWNING project err = %v, want nil (the fix must not break the legitimate read)", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("Tail for the owning project returned no lines; the archive fallback should have served them")
+	}
+}
+
+// The run: branch had the identical gap — and unlike builds, NEITHER the
+// REST nor the WS path checked ownership. Run pods execute migrations and
+// one-off tasks with the service's full resolved env, so their output is
+// at least as sensitive as a build's. Kube is nil here, which is itself
+// the denial path: runBelongsToProject cannot prove ownership without a
+// readable KusoRun CR, and fails closed.
+func TestTail_RunEnv_FailsClosedWithoutOwnershipProof(t *testing.T) {
+	s := &Service{}
+
+	_, _, err := s.Tail(context.Background(), "attacker", "api", "run:victim-api-migrate", 100)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Tail(env=run:...) err = %v, want ErrNotFound when ownership can't be proven", err)
+	}
+}
+
+func TestRunBelongsToProject_FailsClosedOnNilKube(t *testing.T) {
+	s := &Service{}
+	if s.runBelongsToProject(context.Background(), "kuso", "victim-api-migrate", "attacker") {
+		t.Error("runBelongsToProject with no kube client returned true; must fail closed")
+	}
+	if s.runBelongsToProject(context.Background(), "kuso", "", "victim") {
+		t.Error("runBelongsToProject with empty run name returned true; must fail closed")
 	}
 }

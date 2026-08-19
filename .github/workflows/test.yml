@@ -1,0 +1,145 @@
+# Test workflow — the merge gate.
+#
+# Until this existed, `release.yml` was the ONLY workflow: releases were
+# cut without ever running `go test`. Every correctness guard in this
+# repo (the env-literal field-drop test, the destructive-op sweep, the
+# CLI output-format test, the tenancy ownership tests) was one unreviewed
+# commit away from silently regressing.
+#
+# The Postgres service matters as much as the test step. 15 test files
+# gate on KUSO_TEST_PG_DSN and t.Skip() without it, so a naive
+# `go test ./...` reports green while ~14% of tests — including the
+# repository layer, migrations, and the DB-backed rate limiter — never
+# run at all. Setting the DSN here makes CI exercise them for real.
+
+name: test
+
+on:
+  # Tags are included so cutting a release re-runs the gate; shipping
+  # should never be the first time these tests run.
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+
+# A newer push to the same branch/PR makes an in-flight run obsolete.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kuso
+          POSTGRES_PASSWORD: kuso
+          POSTGRES_DB: kuso_test
+        ports:
+          - 5432:5432
+        # Without the health check the test step can start before
+        # Postgres accepts connections, and the DSN-gated tests fail
+        # on connection-refused rather than running.
+        options: >-
+          --health-cmd "pg_isready -U kuso -d kuso_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # go.work pins 1.26.0; setup-go reads it so CI and the
+          # workspace can't drift.
+          go-version-file: go.work
+          cache: true
+
+      # The repo root is NOT itself a Go module — it's a go.work
+      # workspace — so `go build ./...` from here fails with
+      # "directory prefix . does not contain modules listed in
+      # go.work". Iterate the workspace's modules instead, read
+      # straight from go.work so a newly added module is covered
+      # without editing this file.
+      - name: go build
+        run: |
+          set -euo pipefail
+          for m in $(go list -m -f '{{.Dir}}'); do
+            echo "::group::build $m"
+            (cd "$m" && go build ./...)
+            echo "::endgroup::"
+          done
+
+      - name: go vet
+        run: |
+          set -euo pipefail
+          for m in $(go list -m -f '{{.Dir}}'); do
+            echo "::group::vet $m"
+            (cd "$m" && go vet ./...)
+            echo "::endgroup::"
+          done
+
+      - name: go test
+        env:
+          # 15 test files t.Skip() without this. Setting it is what
+          # makes CI actually exercise the repository layer,
+          # migrations, and the DB-backed login rate limiter.
+          KUSO_TEST_PG_DSN: postgres://kuso:kuso@localhost:5432/kuso_test?sslmode=disable
+        # -race catches the concurrency bugs this codebase is most
+        # exposed to (leader handover, informer callbacks, the build
+        # in-flight map). Slower, but this is the only gate.
+        #
+        # -p 1 is REQUIRED, not a tuning knob. The DSN-gated tests all
+        # point at one database and truncate tables in t.Cleanup, so
+        # packages running concurrently clobber each other's rows —
+        # producing foreign-key violations and spurious 403s that look
+        # like product bugs but are pure cross-package contamination.
+        # Verified locally: with -p 1 the suite is 47/47 green; without
+        # it, 4 tests fail non-deterministically. If this gets slow,
+        # give each package its own database rather than dropping -p 1.
+        run: |
+          set -euo pipefail
+          for m in $(go list -m -f '{{.Dir}}'); do
+            echo "::group::test $m"
+            (cd "$m" && go test -race -p 1 ./...)
+            echo "::endgroup::"
+          done
+
+  web:
+    name: web typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: build
+        # The static export is embedded into the server binary at
+        # release time, so a broken web build breaks the release.
+        run: pnpm build

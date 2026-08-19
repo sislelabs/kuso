@@ -98,6 +98,17 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	// recourse short of switching to --follow.
 	if strings.HasPrefix(env, "build:") {
 		buildName := strings.TrimPrefix(env, "build:")
+		// Tenancy gate — the SAME check the streaming WS path does
+		// (stream.go). Without it a viewer authorized on project A
+		// could pass build:<B's build> and read project B's build
+		// output (clone lines, Dockerfile RUN output, build args).
+		// Namespace scoping is NOT sufficient: projects without a
+		// custom spec.namespace share the home namespace, which is
+		// the default install shape. Fail closed to ErrNotFound so
+		// we don't leak whether the build exists.
+		if !s.buildBelongsToProject(ctx, ns, buildName, project) {
+			return nil, env, ErrNotFound
+		}
 		out, err := s.tailBuildPods(ctx, ns, buildName, lines)
 		if err == nil && len(out) > 0 {
 			return out, env, nil
@@ -122,6 +133,11 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	// shows "log output no longer available" rather than 404.
 	if strings.HasPrefix(env, "run:") {
 		runName := strings.TrimPrefix(env, "run:")
+		// Tenancy gate — see the build: branch above. Run output
+		// carries the service's full resolved env. Fail closed.
+		if !s.runBelongsToProject(ctx, ns, runName, project) {
+			return nil, env, ErrNotFound
+		}
 		out, err := s.tailRunPods(ctx, ns, runName, lines)
 		if err == nil {
 			return out, env, nil

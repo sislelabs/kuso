@@ -92,3 +92,66 @@ func TestMaxBodyBytes_ImportRouteExempt(t *testing.T) {
 		t.Errorf("import route 16 MiB+1: status = %d, want 413", rr.Code)
 	}
 }
+
+// TestHasBearerAuth_MatchesMiddlewareAuth locks the CSRF skip predicate
+// to the credential the auth middleware actually uses.
+//
+// Regression guard. hasBearerAuth used to accept a case-INSENSITIVE
+// prefix (EqualFold) plus a bare length check, while auth.bearerToken
+// requires a case-sensitive "Bearer " and a non-empty token. Headers in
+// that gap ("bearer x", "BEARER x", "Bearer \t") skipped the CSRF origin
+// check but did NOT authenticate via the header — so the request rode
+// the victim's session cookie instead. That is a CSRF bypass.
+//
+// The invariant: hasBearerAuth(r) may be true ONLY when the header alone
+// authenticates. If a future edit re-introduces a mismatch, this fails.
+func TestHasBearerAuth_MatchesMiddlewareAuth(t *testing.T) {
+	t.Parallel()
+
+	iss, err := auth.NewIssuer("test-secret", 0)
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	// A handler that only runs when the bearer middleware accepted the
+	// request; the middleware 401s otherwise.
+	var authed bool
+	chain := iss.Middleware()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		authed = true
+	}))
+
+	tok, err := iss.Sign(auth.Claims{UserID: "u1", Username: "u", Role: "admin"})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	headers := []string{
+		"Bearer " + tok, // canonical — authenticates, may skip CSRF
+		"bearer " + tok, // lowercase scheme
+		"BEARER " + tok, // uppercase scheme
+		"BeArEr " + tok, // mixed case
+		"Bearer ",       // empty token
+		"Bearer  ",      // whitespace-only token
+		"Bearer \t",     // tab-only token
+		"Basic " + tok,  // wrong scheme
+		"",              // absent
+	}
+
+	for _, h := range headers {
+		req := httptest.NewRequest(http.MethodPost, "/api/anything", nil)
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+
+		skipsCSRF := hasBearerAuth(req)
+
+		authed = false
+		iss.ResolvePermissions(req.Context(), nil) // no-op; keeps ctx shape honest
+		chain.ServeHTTP(httptest.NewRecorder(), req)
+		headerAuthenticates := authed
+
+		if skipsCSRF && !headerAuthenticates {
+			t.Errorf("Authorization=%q: skips CSRF check but does NOT authenticate via the header "+
+				"— the request would fall back to the session cookie (CSRF bypass)", h)
+		}
+	}
+}

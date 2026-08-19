@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -67,6 +68,40 @@ import (
 	"kuso/server/internal/updater"
 	"kuso/server/internal/version"
 )
+
+// goSafe starts fn in a goroutine with a panic guard.
+//
+// Every background loop here runs in its own goroutine, and an
+// unrecovered panic in ANY goroutine kills the whole process — not just
+// that loop. chimw.Recoverer only covers HTTP handler goroutines, so
+// before this a nil-map or index panic in, say, the nodewatch tick took
+// the entire API server down with it. With the default replicas: 1 that
+// is a full control-plane outage until the kubelet restarts the pod.
+//
+// Recovering here deliberately does NOT restart the loop: a panicking
+// loop would most likely panic again immediately, and a hot restart loop
+// is worse than a stopped one. Instead the loop stays down and stops
+// heartbeating, which the serverstate liveness registry already surfaces
+// (/healthz goes unhealthy on a stale beat → the kubelet restarts the
+// pod on a clean slate). The panic is logged with its stack first so the
+// cause is recoverable from logs.
+//
+// name must match the serverstate loop name where one exists, so a
+// logged panic can be tied to the heartbeat that subsequently goes
+// stale.
+func goSafe(logger *slog.Logger, name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if logger != nil {
+					logger.Error("background loop panicked; loop stopped (heartbeat will go stale)",
+						"loop", name, "panic", r, "stack", string(debug.Stack()))
+				}
+			}
+		}()
+		fn()
+	}()
+}
 
 func main() {
 	addr := flag.String("addr", envOr("KUSO_HTTP_ADDR", ":3000"), "HTTP listen address")
@@ -325,7 +360,7 @@ func main() {
 	// into the Discord embed footer ("distill · v0.11.3"). Done once
 	// at boot since version is a build-time constant.
 	notify.SetVersion(version.Version())
-	go notifyDisp.Run(ctx)
+	goSafe(logger, "notify", func() { notifyDisp.Run(ctx) })
 	// Outbox worker pool — drains the NotificationOutbox table with
 	// exponential backoff. The dispatcher's Emit path enqueues one
 	// row per matching channel; workers compete via FOR UPDATE SKIP
@@ -760,7 +795,7 @@ func main() {
 			// Deployment patches. The updater's HTTP surface still works
 			// on every replica — only this loop is gated.
 			if updaterSvc != nil {
-				go updaterSvc.Run(workCtx)
+				goSafe(logger, "updater", func() { updaterSvc.Run(workCtx) })
 			}
 			// Just became leader: sweep every in-flight KusoBuild once so a
 			// build created during the ~15s lease transfer (when both the
@@ -833,7 +868,7 @@ func main() {
 				// discipline the cluster-singleton loops use. health.New always
 				// sets Interval=HeartbeatInterval, so registration + beat agree.
 				serverstate.RegisterLoop(serverstate.LoopHealth, health.HeartbeatInterval)
-				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
+				goSafe(logger, "health", func() { health.New(kc, *namespace, notifyDisp, logger).Run(workCtx) })
 			}
 			// Build controller moved out of startSingletons. It
 			// installs informer handlers at boot (one-shot, gated
@@ -869,7 +904,7 @@ func main() {
 				}()
 			}
 			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
-				go platformharden.Run(workCtx, kc, logger)
+				goSafe(logger, "platformharden", func() { platformharden.Run(workCtx, kc, logger) })
 			}
 			// Per-service shared-secret subscription migration
 			// (v0.16.11). Seeds spec.sharedEnvKeys for any service
@@ -928,7 +963,7 @@ func main() {
 			// every replica, so the worker only needs to run once.
 			if os.Getenv("KUSO_INSTANCEPG_DISABLED") != "true" && instancePGSvc != nil {
 				serverstate.RegisterLoop(serverstate.LoopInstancePG, instancepg.HeartbeatInterval)
-				go instancePGSvc.Run(workCtx, 0)
+				goSafe(logger, "instancepg", func() { instancePGSvc.Run(workCtx, 0) })
 			}
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
@@ -1237,17 +1272,17 @@ func main() {
 
 			serverstate.RegisterLoop(serverstate.LoopNodeMetrics, nodemetrics.SampleInterval)
 			sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
-			go sampler.Run(workCtx)
+			goSafe(logger, "nodemetrics", func() { sampler.Run(workCtx) })
 			serverstate.RegisterLoop(serverstate.LoopProjectMetrics, projectmetrics.SampleInterval)
 			projectSampler := &projectmetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "projectmetrics")}
-			go projectSampler.Run(workCtx)
+			goSafe(logger, "projectmetrics", func() { projectSampler.Run(workCtx) })
 			serverstate.RegisterLoop(serverstate.LoopNodeWatch, nodewatch.DefaultTickInterval)
 			watcher := &nodewatch.Watcher{
 				Kube:   kubeClient,
 				Notify: notifyDisp,
 				Logger: logger.With("component", "nodewatch"),
 			}
-			go watcher.Run(workCtx)
+			goSafe(logger, "nodewatch", func() { watcher.Run(workCtx) })
 			// Scale-to-zero scale-down half: sleeps idle sleep-enabled
 			// services (Deployment → 0 replicas) after sleep.afterMinutes
 			// of no traffic; the activator (--activator mode) wakes them
@@ -1305,7 +1340,7 @@ func main() {
 				Logger: logger.With("component", "pkgupdates"),
 			}
 			serverstate.RegisterLoop(serverstate.LoopPkgUpdates, pkgupdates.HeartbeatInterval)
-			go pkgWatcher.Run(workCtx)
+			goSafe(logger, "pkgupdates", func() { pkgWatcher.Run(workCtx) })
 			// Cron failure detector — watches Job objects labeled
 			// kuso.sislelabs.com/cron and dispatches the per-cron
 			// onFailure webhook + a notify event on failure. Cluster-
@@ -1318,15 +1353,15 @@ func main() {
 				BaseURL: os.Getenv("KUSO_PUBLIC_URL"),
 			}
 			serverstate.RegisterLoop(serverstate.LoopCronWatch, cronwatch.DefaultTickInterval)
-			go cwatcher.Run(workCtx)
+			goSafe(logger, "cronwatch", func() { cwatcher.Run(workCtx) })
 			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
 				serverstate.RegisterLoop(serverstate.LoopLogship, logship.HeartbeatInterval)
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
-				go ls.Run(workCtx)
+				goSafe(logger, "logship", func() { ls.Run(workCtx) })
 			}
 			serverstate.RegisterLoop(serverstate.LoopAlerts, alerts.HeartbeatInterval)
 			ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
-			go ae.Run(workCtx)
+			goSafe(logger, "alerts", func() { ae.Run(workCtx) })
 			// Control-plane backup health watcher: fires a one-shot
 			// notify event on the healthy↔unhealthy edge so a silently-
 			// stopped (or never-configured) kuso-DB backup doesn't stay
@@ -1363,14 +1398,14 @@ func main() {
 			// singletons so multi-replica installs don't double-reap
 			// (the transition is idempotent anyway).
 			serverstate.RegisterLoop(serverstate.LoopIncidents, incidents.HeartbeatInterval)
-			go incidentMgr.Run(workCtx)
+			goSafe(logger, "incidents", func() { incidentMgr.Run(workCtx) })
 			serverstate.RegisterLoop(serverstate.LoopAutoRemediate, 5*time.Minute)
 			rhScanner := &reconcilehealth.Scanner{Kube: kubeClient}
 			rhRemediator := &remediate.Remediator{Kube: kubeClient, Audit: auditSvc}
 			remediateLoop := remediate.NewScannerLoop(
 				rhScanner, rhRemediator, *namespace, 5*time.Minute,
 				autoRemediateEnabled, logger.With("component", "auto-remediate"))
-			go remediateLoop.Run(workCtx)
+			goSafe(logger, "remediate", func() { remediateLoop.Run(workCtx) })
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
 			startKubeSingletons(ctx)

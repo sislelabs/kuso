@@ -75,7 +75,12 @@ func TestWaitForJob_FailedIsError(t *testing.T) {
 }
 
 func TestWaitForJob_TimesOut(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel(): this test mutates the package-level
+	// snapshotPollInterval/snapshotPollTimeout knobs, which the other
+	// waitForJob tests read concurrently. Running it in parallel is a
+	// genuine data race (caught by `go test -race`), not a false
+	// positive — the race detector flagged it against
+	// TestWaitForJob_ContextCancelled, which mutates the same globals.
 	// A job that never reaches a terminal condition must surface a timeout
 	// error, NOT return nil — otherwise the migration would proceed against an
 	// unfinished snapshot. Shrink the poll bounds so the test is fast.
@@ -103,7 +108,8 @@ func TestWaitForJob_MissingJobIsError(t *testing.T) {
 }
 
 func TestWaitForJob_ContextCancelled(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel() — mutates the package-level snapshotPollInterval.
+	// See TestWaitForJob_TimesOut above.
 	oldInterval := snapshotPollInterval
 	snapshotPollInterval = 50 * time.Millisecond
 	defer func() { snapshotPollInterval = oldInterval }()
