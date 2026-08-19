@@ -70,7 +70,7 @@ func (h *RunsHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req runs.CreateRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := runsCtx(r)
@@ -86,7 +86,7 @@ func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: triggering a run requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: triggering a run requires the admin role")
 		return
 	}
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims != nil {
@@ -182,13 +182,13 @@ func (h *RunsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *RunsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, runs.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, runs.ErrNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, runs.ErrNotFound, "run"))
 	case errors.Is(err, runs.ErrConflict):
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		h.Logger.Error("runs handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

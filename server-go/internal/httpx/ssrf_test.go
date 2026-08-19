@@ -2,6 +2,10 @@ package httpx
 
 import (
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -157,5 +161,120 @@ func TestSSRFSafeTransport_NoProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
 	if tr := SSRFSafeTransport(); tr.Proxy != nil {
 		t.Fatal("SSRFSafeTransport.Proxy must be nil — a proxy defeats the reserved-IP dial guard")
+	}
+}
+
+// End-to-end: a request through the transport at a loopback listener
+// must fail at the DIAL guard, not reach the server. This exercises the
+// full resolve→validate→pinned-dial path, not just IsReservedIP.
+func TestSSRFSafeTransport_RefusesLoopbackDial(t *testing.T) {
+	t.Setenv("KUSO_ALLOW_PRIVATE_OUTBOUND", "")
+	t.Setenv("KUSO_BLOCK_CIDRS", "")
+
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer srv.Close()
+
+	c := &http.Client{Transport: SSRFSafeTransport()}
+	resp, err := c.Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("GET to loopback succeeded — the dial guard is not applied")
+	}
+	if !strings.Contains(err.Error(), "reserved address") {
+		t.Errorf("error = %v, want the reserved-address refusal", err)
+	}
+	if hit {
+		t.Error("request reached the loopback server despite the guard")
+	}
+}
+
+// SSRFSafeNoRedirectClient must refuse EVERY redirect — a 302 hop gets
+// its own DNS resolution, so following it hands an attacker-controlled
+// low-TTL domain a fresh check-to-dial window per hop. Webhook POST
+// delivery has no legitimate redirect use.
+func TestSSRFSafeNoRedirectClient_RefusesAllRedirects(t *testing.T) {
+	c := SSRFSafeNoRedirectClient(0)
+	if c.CheckRedirect == nil {
+		t.Fatal("no CheckRedirect installed")
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://public.example.com/hook", nil)
+	via := []*http.Request{httptest.NewRequest(http.MethodPost, "https://origin.example.com/", nil)}
+	if err := c.CheckRedirect(req, via); err == nil {
+		t.Error("redirect to a public host was followed — this client must refuse all redirects")
+	}
+}
+
+// SSRFSafeClient follows redirects but must re-apply the policy on
+// every hop: scheme allowlist, localhost / reserved-IP refusal, cap.
+func TestSSRFSafeClient_RedirectPolicy(t *testing.T) {
+	t.Setenv("KUSO_ALLOW_PRIVATE_OUTBOUND", "")
+	t.Setenv("KUSO_BLOCK_CIDRS", "")
+
+	c := SSRFSafeClient(0)
+	if c.CheckRedirect == nil {
+		t.Fatal("no CheckRedirect installed")
+	}
+	oneHop := []*http.Request{httptest.NewRequest(http.MethodGet, "https://origin.example.com/", nil)}
+
+	cases := []struct {
+		name    string
+		target  string
+		via     []*http.Request
+		wantErr bool
+	}{
+		{"public-hop-allowed", "https://api.example.com/v1", oneHop, false},
+		{"imds-refused", "http://169.254.169.254/latest/meta-data/", oneHop, true},
+		{"loopback-refused", "http://127.0.0.1:8080/", oneHop, true},
+		{"rfc1918-refused", "http://10.96.0.1/", oneHop, true},
+		{"localhost-refused", "http://localhost/", oneHop, true},
+		{"scheme-refused", "ftp://files.example.com/", oneHop, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			err := c.CheckRedirect(req, tc.via)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("CheckRedirect(%s) err = %v, wantErr %v", tc.target, err, tc.wantErr)
+			}
+		})
+	}
+
+	// Hop cap: the sixth redirect must refuse even a public target.
+	var via []*http.Request
+	for i := 0; i < maxRedirects; i++ {
+		via = append(via, httptest.NewRequest(http.MethodGet, "https://hop.example.com/", nil))
+	}
+	if err := c.CheckRedirect(httptest.NewRequest(http.MethodGet, "https://api.example.com/", nil), via); err == nil {
+		t.Errorf("redirect chain past %d hops was followed", maxRedirects)
+	}
+}
+
+// ValidateRedirectTarget is the per-hop shape check.
+func TestValidateRedirectTarget(t *testing.T) {
+	t.Setenv("KUSO_ALLOW_PRIVATE_OUTBOUND", "")
+	t.Setenv("KUSO_BLOCK_CIDRS", "")
+
+	cases := []struct {
+		raw     string
+		wantErr bool
+	}{
+		{"https://api.example.com/path", false},
+		{"http://api.example.com/path", false},
+		{"ftp://api.example.com/", true},
+		{"file:///etc/passwd", true},
+		{"http://LOCALHOST/", true},
+		{"http://169.254.169.254/", true},
+		{"https://[::1]/", true},
+		{"http://192.168.1.10/", true},
+	}
+	for _, tc := range cases {
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.raw, err)
+		}
+		if got := ValidateRedirectTarget(u); (got != nil) != tc.wantErr {
+			t.Errorf("ValidateRedirectTarget(%q) = %v, wantErr %v", tc.raw, got, tc.wantErr)
+		}
 	}
 }

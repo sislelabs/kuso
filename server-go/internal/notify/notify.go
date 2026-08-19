@@ -269,24 +269,16 @@ func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
 		logger:  logger,
 		ch:      make(chan Event, queueSize),
 		baseCtx: context.Background(),
-		client: &http.Client{
-			Timeout: 8 * time.Second,
-			// SSRF-safe transport: rejects connections to link-local,
-			// loopback, and private (RFC1918 + RFC4193) ranges. A
-			// user with notification:write could otherwise point a
-			// webhook at 169.254.169.254 (cloud metadata service)
-			// or 10.0.0.0/8 (in-cluster apiserver / addon DBs) and
-			// exfiltrate data through the redirect/error response.
-			Transport: ssrfSafeTransport(),
-		},
+		// SSRF-safe, redirect-refusing client. The dial guard rejects
+		// link-local, loopback, and private (RFC1918 + RFC4193)
+		// ranges — a user with notification:write could otherwise
+		// point a webhook at 169.254.169.254 (cloud metadata) or
+		// 10.0.0.0/8 (in-cluster apiserver / addon DBs). Redirects
+		// are refused outright: a 302 hop gets its own DNS
+		// resolution, and webhook POST delivery has no legitimate
+		// redirect use.
+		client: httpx.SSRFSafeNoRedirectClient(8 * time.Second),
 	}
-}
-
-// ssrfSafeTransport delegates to the shared httpx helper. Notify and
-// the Coolify importer both need the same dialer guard; one
-// implementation, two consumers.
-func ssrfSafeTransport() *http.Transport {
-	return httpx.SSRFSafeTransport()
 }
 
 // (isReservedIP / isAllowPrivateIPs / blockCIDRs moved to

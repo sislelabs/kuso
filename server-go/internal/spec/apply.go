@@ -17,7 +17,11 @@ import (
 
 // projectsReconciler is the slice of projects.Service that Apply
 // uses. A narrow interface so the reconciler is unit-testable.
+// GetService backs the mask-sentinel resolution: an applied spec that
+// round-trips the masked export needs the live CR to recover the real
+// stored values.
 type projectsReconciler interface {
+	GetService(ctx context.Context, project, service string) (*kube.KusoService, error)
 	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
 	PatchService(ctx context.Context, project, service string, req projects.PatchServiceRequest) (*kube.KusoService, error)
 	DeleteService(ctx context.Context, project, service string) error
@@ -141,7 +145,30 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 		}
 	}
 
+	// Mask-sentinel guard for the config-as-code round-trip. GET /spec
+	// masks literal env values ("••••••••") for callers without
+	// secrets:read, and every hand-written env write path refuses the
+	// sentinel — this declarative loop is the one remaining
+	// read-modify-write client, so without a guard an editor applying
+	// the masked export would write the literal mask over every secret.
+	// Semantics (apply is declarative full-replace, so a masked value
+	// almost always means "keep what's there"):
+	//   - update: each sentinel value is RESOLVED against the service's
+	//     stored literal for that key; a sentinel with no stored literal
+	//     to keep fails the service's env step (nothing is written for
+	//     that service, so the stored env survives intact).
+	//   - create: there is nothing stored to keep — the whole create is
+	//     refused with an error naming the offending keys.
+	skippedCreate := map[string]bool{}
 	for _, name := range plan.ServicesToCreate {
+		if keys := maskedEnvKeys(desiredSvcs[name].Env); len(keys) > 0 {
+			skippedCreate[name] = true
+			out.Errors = append(out.Errors, StepError{
+				Resource: "service:" + name, Op: "create",
+				Message: fmt.Sprintf("env %s: value is the masked placeholder %q — a new service has no stored value to keep; supply the real value or remove the key", strings.Join(keys, ", "), projects.EnvMaskSentinel),
+			})
+			continue
+		}
 		req := serviceCreateReq(desiredSvcs[name])
 		if _, err := r.Projects.AddService(ctx, f.Project, req); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "create", Message: err.Error()})
@@ -157,7 +184,13 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 		// mapToEnvVars(nil) returns an empty slice and SetEnv applies
 		// that as a full replace (svc.Spec.EnvVars = []), so omitting
 		// env: clears existing vars rather than leaving them stale.
-		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
+		envVars := mapToEnvVars(desiredSvcs[name].Env)
+		if err := r.resolveMaskedEnv(ctx, f.Project, name, envVars); err != nil {
+			// Refuse the WHOLE env write, not just the masked key: env
+			// apply is a full replace, so a partial write would delete
+			// the very key whose value we couldn't recover.
+			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
+		} else if err := r.Projects.SetEnvPending(ctx, f.Project, name, envVars); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
@@ -168,7 +201,7 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 	}
 
 	for _, name := range plan.ServicesToCreate {
-		if len(desiredSvcs[name].Env) == 0 {
+		if skippedCreate[name] || len(desiredSvcs[name].Env) == 0 {
 			continue
 		}
 		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
@@ -183,6 +216,9 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 	// Generated values live in the Secret, NOT the CR's cleartext env — so
 	// they survive the declarative env full-replace above untouched.
 	for _, name := range append(append([]string{}, plan.ServicesToCreate...), plan.ServicesToUpdate...) {
+		if skippedCreate[name] {
+			continue // create was refused (masked env) — nothing to attach to
+		}
 		r.generateSecrets(ctx, f.Project, name, desiredSvcs[name], opts, out)
 	}
 
@@ -416,6 +452,69 @@ func addonBackupUpdateReq(a AddonSpec) addons.UpdateAddonRequest {
 			RetentionDays: &retention,
 		},
 	}
+}
+
+// maskedEnvKeys returns (sorted) the env keys whose literal value is
+// the mask sentinel the export path emits for callers without
+// secrets:read. Generated entries never carry a literal, so they can't
+// be masked.
+func maskedEnvKeys(in map[string]EnvValue) []string {
+	var keys []string
+	for k, v := range in {
+		if !v.IsGenerated() && v.Value == projects.EnvMaskSentinel {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// resolveMaskedEnv rewrites, in place, every sentinel value in vars to
+// the service's currently-stored literal for that key ("masked means
+// keep existing"). Only cleartext spec.envVars literals qualify — the
+// export only ever masks those, so a sentinel against a key with no
+// stored literal (removed, secretRef-backed, or plain wrong) is an
+// error naming the keys, instructing the caller to supply the real
+// value or drop the key. Returns nil when vars carry no sentinel.
+func (r *Reconciler) resolveMaskedEnv(ctx context.Context, project, service string, vars []projects.EnvVar) error {
+	masked := false
+	for i := range vars {
+		if vars[i].Value == projects.EnvMaskSentinel {
+			masked = true
+			break
+		}
+	}
+	if !masked {
+		return nil
+	}
+	cur, err := r.Projects.GetService(ctx, project, service)
+	if err != nil {
+		return fmt.Errorf("resolve masked env values against stored service: %w", err)
+	}
+	stored := map[string]string{}
+	if cur != nil {
+		for _, ev := range cur.Spec.EnvVars {
+			if ev.Value != "" && ev.ValueFrom == nil {
+				stored[ev.Name] = ev.Value
+			}
+		}
+	}
+	var unresolved []string
+	for i := range vars {
+		if vars[i].Value != projects.EnvMaskSentinel {
+			continue
+		}
+		if v, ok := stored[vars[i].Name]; ok {
+			vars[i].Value = v
+			continue
+		}
+		unresolved = append(unresolved, vars[i].Name)
+	}
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		return fmt.Errorf("env %s: value is the masked placeholder %q with no stored value to keep — supply the real value or remove the key", strings.Join(unresolved, ", "), projects.EnvMaskSentinel)
+	}
+	return nil
 }
 
 // mapToEnvVars converts the desired env map into the projects wire

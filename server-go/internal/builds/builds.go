@@ -104,10 +104,19 @@ const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
 // reconcile. Keys are namespaced under kuso.sislelabs.com/build-* so
 // they don't collide with anything else that ends up on the object.
 const (
-	annPhase        = "kuso.sislelabs.com/build-phase"
-	annCompletedAt  = "kuso.sislelabs.com/build-completed-at"
+	// AnnBuildPhase / AnnBuildCompletedAt / AnnBuildMessage are EXPORTED
+	// because the buildcontroller's give-up path must stamp the exact
+	// terminal contract markFailed writes (toBuildSummary reads these keys
+	// to render a FAILED row). Hardcoding the strings there let the two
+	// sites drift silently; a rename here now breaks the compile instead.
+	AnnBuildPhase       = "kuso.sislelabs.com/build-phase"
+	AnnBuildCompletedAt = "kuso.sislelabs.com/build-completed-at"
+	AnnBuildMessage     = "kuso.sislelabs.com/build-message"
+
+	annPhase        = AnnBuildPhase
+	annCompletedAt  = AnnBuildCompletedAt
 	annStartedAt    = "kuso.sislelabs.com/build-started-at"
-	annMessage      = "kuso.sislelabs.com/build-message"
+	annMessage      = AnnBuildMessage
 	annSupersededBy = "kuso.sislelabs.com/superseded-by"
 	// annPromoteHold carries the atomic same-repo promotion gate's
 	// hold reason (see promotion_group.go). Presence also signals "my
@@ -134,12 +143,42 @@ const (
 	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
 )
 
+// LabelBuildState is the terminal-state marker label on a KusoBuild CR.
+// Its ABSENCE means "in-flight": admission's active-build check treats a
+// CR without it as occupying the service's build slot, the poller keeps
+// observing it, and retention sweeps (SweepFinishedBuilds /
+// CapBuildsPerService select build-state=done) cannot delete it. EVERY
+// terminal path — markSucceeded, markFailed, Cancel, release-failed, and
+// buildcontroller.giveUp — must stamp LabelBuildState=BuildStateDone
+// alongside spec.done=true, or the service's build queue wedges forever
+// behind a phantom in-flight build.
+const (
+	LabelBuildState = "kuso.sislelabs.com/build-state"
+	BuildStateDone  = "done"
+)
+
 // buildPhase returns the kuso-tracked phase annotation.
 func buildPhase(b *kube.KusoBuild) string {
 	if b == nil {
 		return ""
 	}
 	return b.Annotations[annPhase]
+}
+
+// Phase is the exported reader for a build CR's kuso-tracked phase.
+// The phase lives on an annotation (helm-operator owns .status and
+// rewrites it every reconcile — see the const block above), so any
+// consumer that holds a KusoBuild and wants its phase must come
+// through here rather than poking .status or hardcoding the
+// annotation key. Values: "queued", "pending", "running",
+// "succeeded", "failed", "cancelled", "release-failed"; "" for CRs
+// that predate phase tracking.
+//
+// Added for the projects describe-path service-state rollup, which
+// lists build CRs via the informer and needs the phase without
+// re-implementing the annotation contract.
+func Phase(b *kube.KusoBuild) string {
+	return buildPhase(b)
 }
 
 // Service handles the build domain. Construct via New.
@@ -948,12 +987,14 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		BuildArgs: svcCR.Spec.BuildArgs,
 		PublicEnv: svcCR.Spec.PublicEnv,
 	}
-	// Build-time env: resolve env vars to literals (reading referenced
-	// secrets) and stamp them onto the CR so the build job can bake them
-	// into the image. Apps that read env at build (Prisma generate needs
-	// DATABASE_URL, Next.js compiles NEXT_PUBLIC_* and validates env)
-	// require this. Unresolvable refs are omitted, not fatal.
-	// NOTE: these values bake into image layers in the in-cluster registry.
+	// Build-time env: stamp env vars onto the CR so the build job can use
+	// them. Literals pass verbatim (baked as build args / ENV — apps that
+	// read env at build, e.g. Next.js NEXT_PUBLIC_*, require this);
+	// secret-sourced vars are stamped as kuso-secret-ref:// references that
+	// the buildcontroller exposes only via non-persisting buildkit secret
+	// mounts — plaintext secrets must never land on the CR or in image
+	// layers (registry-read recoverable). Unresolvable refs are omitted,
+	// not fatal.
 	//
 	// SECURITY (HIGH-2): for a PREVIEW build we must not resolve the parent
 	// service's PRODUCTION env — that would bake the live production
@@ -962,7 +1003,8 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// filtering + per-PR PG-clone secret swaps). Instead we resolve from
 	// the preview KusoEnvironment's OWN env vars, whose secretKeyRefs
 	// already point at the per-PR clone secrets. A preview thus gets its
-	// own preview DB creds (or nothing) baked in — never production's.
+	// own preview DB creds (or nothing) exposed to the build — never
+	// production's.
 	buildEnvVars := svcCR.Spec.EnvVars
 	if req.PreviewEnv != "" {
 		if penv, perr := s.Kube.GetKusoEnvironment(ctx, ns, req.PreviewEnv); perr == nil && penv != nil {

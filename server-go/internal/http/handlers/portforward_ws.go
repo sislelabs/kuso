@@ -77,31 +77,31 @@ func (h *PortForwardWSHandler) Mount(r chi.Router) {
 func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Request) {
 	jwtTok := extractWSBearer(r)
 	if jwtTok == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	claims, err := h.Issuer.Verify(jwtTok)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	// Revocation: Verify only checks signature + expiry. On the public
 	// router (no auth middleware) we must consult the revocation hook
 	// ourselves, else a revoked token still tunnels to a DB until expiry.
 	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// Admin-only: a port-forward to a database is a strictly
 	// elevated capability — not even the deployer role gets one.
 	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
-		http.Error(w, "forbidden: addon port-forward requires settings:admin", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: addon port-forward requires settings:admin")
 		return
 	}
 
 	if !h.acquireSlot(claims.UserID) {
-		http.Error(w, "too many concurrent port-forward sessions", http.StatusTooManyRequests)
+		writeErr(w, http.StatusTooManyRequests, "too many concurrent port-forward sessions")
 		return
 	}
 	defer h.releaseSlot(claims.UserID)
@@ -111,12 +111,20 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 
 	// Resolve the addon's Service: pick the Ready pod + targetPort.
 	rctx, rcancel := context.WithTimeout(r.Context(), 10*time.Second)
-	ns, podName, port, err := h.resolveAddonTarget(rctx, project, addon)
+	ns, podName, port, ownerProject, err := h.resolveAddonTarget(rctx, project, addon)
 	rcancel()
 	if err != nil {
-		// 503: a missing/unhealthy addon is "not available right now",
-		// not a 4xx client error.
-		http.Error(w, "addon target not available: "+err.Error(), http.StatusServiceUnavailable)
+		// An addon that doesn't exist under this project — including a
+		// pre-qualified name that resolves a SIBLING project's CR (the
+		// GetOwned ownership check) — is a 404, same as any missing
+		// resource, so existence isn't leaked.
+		if errors.Is(err, addons.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		// 503: a present-but-unhealthy addon is "not available right
+		// now", not a 4xx client error.
+		writeErr(w, http.StatusServiceUnavailable, "addon target not available: "+err.Error())
 		return
 	}
 
@@ -135,7 +143,11 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 			User:     claims.Username,
 			Severity: "warn",
 			Action:   "addon.portforward",
-			Pipeline: project,
+			// Audit the RESOLVED CR's owner project, not the caller-
+			// supplied URL param — this is the most privileged data-access
+			// path in the product and its trail must not be forgeable by
+			// naming games in the URL.
+			Pipeline: ownerProject,
 			App:      addon,
 			Resource: "kuspod",
 			Message:  fmt.Sprintf("port-forward opened to pod %s on :%d", podName, port),
@@ -198,16 +210,34 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 // container target port for an addon. The Service for an addon is
 // named after the addon CR (e.g. "distill-db"); we read its selector
 // + first port and list pods matching.
-func (h *PortForwardWSHandler) resolveAddonTarget(ctx context.Context, project, addon string) (ns, podName string, port int32, err error) {
+//
+// Ownership: the addon CR is fetched via GetOwned, which verifies the
+// resolved CR's spec.project matches the URL's project. A raw
+// AddonFQN/CRName lookup tolerates pre-qualified names, so with
+// overlapping project names ("foo" vs "foo-bar") a caller on foo
+// passing addon="foo-bar-pg" would otherwise tunnel straight into
+// foo-bar's database. The returned ownerProject is the CR's actual
+// owner (for the audit trail), never the caller-supplied URL param.
+func (h *PortForwardWSHandler) resolveAddonTarget(ctx context.Context, project, addon string) (ns, podName string, port int32, ownerProject string, err error) {
+	cr, err := h.Svc.GetOwned(ctx, project, addon)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	ownerProject = cr.Spec.Project
+	if ownerProject == "" {
+		// Older CRs predate spec.project; GetOwned verified the project
+		// label instead, so the URL project is the confirmed owner.
+		ownerProject = project
+	}
 	ns = h.Svc.NamespaceFor(ctx, project)
-	fqn := h.Svc.AddonFQN(project, addon)
+	fqn := cr.Name
 
 	svc, err := h.Kube.Clientset.CoreV1().Services(ns).Get(ctx, fqn, metav1.GetOptions{})
 	if err != nil {
-		return "", "", 0, fmt.Errorf("get service %s/%s: %w", ns, fqn, err)
+		return "", "", 0, "", fmt.Errorf("get service %s/%s: %w", ns, fqn, err)
 	}
 	if len(svc.Spec.Ports) == 0 {
-		return "", "", 0, fmt.Errorf("service %s has no ports", fqn)
+		return "", "", 0, "", fmt.Errorf("service %s has no ports", fqn)
 	}
 	// targetPort is what the pod listens on; that's the port-forward
 	// target. When it's a name (e.g. "postgres") we need to resolve
@@ -215,12 +245,12 @@ func (h *PortForwardWSHandler) resolveAddonTarget(ctx context.Context, project, 
 	// that lookup at the same time as picking the pod.
 	tp := svc.Spec.Ports[0].TargetPort
 	if len(svc.Spec.Selector) == 0 {
-		return "", "", 0, fmt.Errorf("service %s has no selector (headless?) — cannot resolve a pod", fqn)
+		return "", "", 0, "", fmt.Errorf("service %s has no selector (headless?) — cannot resolve a pod", fqn)
 	}
 	sel := labelSelector(svc.Spec.Selector)
 	pods, err := h.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
 	if err != nil {
-		return "", "", 0, fmt.Errorf("list pods %s: %w", sel, err)
+		return "", "", 0, "", fmt.Errorf("list pods %s: %w", sel, err)
 	}
 	var chosen *corev1.Pod
 	for i := range pods.Items {
@@ -234,13 +264,13 @@ func (h *PortForwardWSHandler) resolveAddonTarget(ctx context.Context, project, 
 		}
 	}
 	if chosen == nil {
-		return "", "", 0, fmt.Errorf("no Ready pod for service %s", fqn)
+		return "", "", 0, "", fmt.Errorf("no Ready pod for service %s", fqn)
 	}
 	resolved, err := resolveTargetPort(chosen, tp)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", 0, "", err
 	}
-	return ns, chosen.Name, resolved, nil
+	return ns, chosen.Name, resolved, ownerProject, nil
 }
 
 // openPortForwardStreams opens a single TCP-equivalent stream pair on

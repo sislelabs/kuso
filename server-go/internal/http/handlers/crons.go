@@ -55,7 +55,7 @@ func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var req crons.CreateProjectCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad json")
 		return
 	}
 	out, err := h.Svc.AddProject(ctx, project, req)
@@ -78,7 +78,7 @@ func (h *CronsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var req crons.UpdateProjectCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad json")
 		return
 	}
 	out, err := h.Svc.UpdateProject(ctx, project, name, req)
@@ -169,7 +169,7 @@ func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	var req crons.CreateCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := cronsCtx(r)
@@ -185,7 +185,7 @@ func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	// otherwise `printenv` past the env-value + shell restrictions).
 	// Require the same secrets:read (admin) boundary here.
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: creating a service cron requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: creating a service cron requires the admin role")
 		return
 	}
 	out, err := h.Svc.Add(ctx, project, chi.URLParam(r, "service"), req)
@@ -199,7 +199,7 @@ func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req crons.UpdateCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := cronsCtx(r)
@@ -213,7 +213,7 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// same secret-bearing arbitrary-exec surface as Add, so it carries
 	// the same admin gate the run + pod-shell endpoints use.
 	if !callerCanReadSecrets(ctx, h.DB, project) {
-		http.Error(w, "forbidden: editing a service cron requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: editing a service cron requires the admin role")
 		return
 	}
 	out, err := h.Svc.Update(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "name"), req)
@@ -240,15 +240,15 @@ func (h *CronsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, crons.ErrNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, crons.ErrNotFound, "cron"))
 	case errors.Is(err, crons.ErrConflict):
 		// Pass the wrapped error through so the UI shows
 		// "cron foo/bar already exists" not bare "409 Conflict".
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, crons.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		h.Logger.Error("crons handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

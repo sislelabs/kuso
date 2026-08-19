@@ -50,42 +50,134 @@ func TestAuditLogAndReadbacks(t *testing.T) {
 	s.Log(ctx, Entry{Action: "addon.sql_write", Pipeline: "proj-a", Phase: "production", App: "worker", Message: "update"})
 	s.Log(ctx, Entry{Action: "deploy", Pipeline: "proj-b", Phase: "production", App: "api", Message: "rolled"})
 
-	// Get — newest first, all rows.
-	all, total, err := s.Get(ctx, 100)
+	// Get — newest first, all rows. A page that holds everything must
+	// NOT claim truncation.
+	all, total, more, err := s.Get(ctx, 0, 100)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if total != 3 || len(all) != 3 {
 		t.Fatalf("Get total=%d len=%d, want 3/3", total, len(all))
 	}
+	if more {
+		t.Error("Get: complete result claimed more=true")
+	}
 	if all[0].Message != "rolled" {
 		t.Errorf("Get newest-first wrong: %q", all[0].Message)
 	}
 
+	// Get — truncated page + keyset continuation (instance-wide scope
+	// gained ?after= alongside the truncation signal).
+	page1, _, more, err := s.Get(ctx, 0, 2)
+	if err != nil {
+		t.Fatalf("Get limited: %v", err)
+	}
+	if len(page1) != 2 || !more {
+		t.Fatalf("Get limit=2 over 3 rows: len=%d more=%v, want 2/true", len(page1), more)
+	}
+	rest, _, more, err := s.Get(ctx, page1[1].ID, 2)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if len(rest) != 1 || more {
+		t.Errorf("Get final page: len=%d more=%v, want 1/false", len(rest), more)
+	}
+	if rest[0].ID >= page1[1].ID {
+		t.Errorf("keyset page not older: %d >= %d", rest[0].ID, page1[1].ID)
+	}
+
+	// Exact-boundary honesty: limit == remaining rows must NOT claim
+	// truncation (the +1 over-fetch makes this exact, not a full-page
+	// heuristic).
+	exact, _, more, err := s.Get(ctx, 0, 3)
+	if err != nil {
+		t.Fatalf("Get exact: %v", err)
+	}
+	if len(exact) != 3 || more {
+		t.Errorf("Get limit==rows: len=%d more=%v, want 3/false", len(exact), more)
+	}
+
 	// GetForProject — filter + keyset pagination.
-	pa, paTotal, err := s.GetForProject(ctx, "proj-a", 0, 100)
+	pa, paTotal, paMore, err := s.GetForProject(ctx, "proj-a", 0, 100)
 	if err != nil {
 		t.Fatalf("GetForProject: %v", err)
 	}
-	if paTotal != 2 || len(pa) != 2 {
-		t.Fatalf("GetForProject proj-a total=%d len=%d, want 2/2", paTotal, len(pa))
+	if paTotal != 2 || len(pa) != 2 || paMore {
+		t.Fatalf("GetForProject proj-a total=%d len=%d more=%v, want 2/2/false", paTotal, len(pa), paMore)
+	}
+	// Truncated first page flags more=true.
+	paCut, _, paCutMore, err := s.GetForProject(ctx, "proj-a", 0, 1)
+	if err != nil {
+		t.Fatalf("GetForProject limited: %v", err)
+	}
+	if len(paCut) != 1 || !paCutMore {
+		t.Fatalf("GetForProject limit=1 over 2 rows: len=%d more=%v, want 1/true", len(paCut), paCutMore)
 	}
 	// after=<newest id> should return the older row only.
-	page2, _, err := s.GetForProject(ctx, "proj-a", pa[0].ID, 100)
+	page2, _, page2More, err := s.GetForProject(ctx, "proj-a", pa[0].ID, 100)
 	if err != nil {
 		t.Fatalf("GetForProject after: %v", err)
 	}
 	if len(page2) != 1 || page2[0].ID != pa[1].ID {
 		t.Errorf("keyset page2 wrong: %+v", page2)
 	}
+	if page2More {
+		t.Error("GetForProject final page claimed more=true")
+	}
 
 	// GetForApp — pipeline+phase+app.
-	web, webTotal, err := s.GetForApp(ctx, "proj-a", "production", "web", 100)
+	web, webTotal, webMore, err := s.GetForApp(ctx, "proj-a", "production", "web", 100)
 	if err != nil {
 		t.Fatalf("GetForApp: %v", err)
 	}
 	if webTotal != 1 || len(web) != 1 || web[0].App != "web" {
 		t.Fatalf("GetForApp web total=%d len=%d, want 1/1 app=web", webTotal, len(web))
+	}
+	if webMore {
+		t.Error("GetForApp complete result claimed more=true")
+	}
+}
+
+// Audit must default ON with a retention cap sized for a platform doing
+// destructive ops. No DB needed — New skips the trim goroutine on nil.
+func TestAuditDefaults(t *testing.T) {
+	t.Setenv("KUSO_AUDIT", "")
+	t.Setenv("KUSO_AUDIT_LIMIT", "")
+
+	s := New(context.Background(), nil)
+	if !s.Enabled {
+		t.Error("audit must be enabled by default (opt-out via KUSO_AUDIT=false)")
+	}
+	if s.MaxBackups != 10000 {
+		t.Errorf("default retention cap = %d, want 10000", s.MaxBackups)
+	}
+}
+
+func TestAuditOptOut(t *testing.T) {
+	t.Setenv("KUSO_AUDIT", "false")
+	if s := New(context.Background(), nil); s.Enabled {
+		t.Error("KUSO_AUDIT=false must disable audit")
+	}
+	// Legacy explicit opt-in still enables.
+	t.Setenv("KUSO_AUDIT", "true")
+	if s := New(context.Background(), nil); !s.Enabled {
+		t.Error("KUSO_AUDIT=true must enable audit")
+	}
+}
+
+func TestAuditLimitEnv(t *testing.T) {
+	t.Setenv("KUSO_AUDIT", "")
+	t.Setenv("KUSO_AUDIT_LIMIT", "250")
+	if s := New(context.Background(), nil); s.MaxBackups != 250 {
+		t.Errorf("KUSO_AUDIT_LIMIT=250 → MaxBackups=%d, want 250", s.MaxBackups)
+	}
+	// Garbage / non-positive values fall back to the default (fail
+	// safe: never uncap the table).
+	for _, bad := range []string{"0", "-5", "nope"} {
+		t.Setenv("KUSO_AUDIT_LIMIT", bad)
+		if s := New(context.Background(), nil); s.MaxBackups != 10000 {
+			t.Errorf("KUSO_AUDIT_LIMIT=%q → MaxBackups=%d, want default 10000", bad, s.MaxBackups)
+		}
 	}
 }
 
@@ -100,7 +192,7 @@ func TestAuditTrim(t *testing.T) {
 	if err := s.trim(ctx); err != nil {
 		t.Fatalf("trim: %v", err)
 	}
-	_, total, err := s.Get(ctx, 100)
+	_, total, _, err := s.Get(ctx, 0, 100)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

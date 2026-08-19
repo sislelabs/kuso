@@ -50,6 +50,18 @@ func NewWithTransport(baseURL, token string, t http.RoundTripper) *Client {
 	if t != nil {
 		c.Transport = t
 	}
+	return NewWithHTTPClient(baseURL, token, c)
+}
+
+// NewWithHTTPClient hands in a fully-built client. Server-side callers
+// use it to attach redirect policy (CheckRedirect re-validating each
+// hop) on top of the SSRF-safe transport — NewWithTransport can only
+// pin the dialer, so a redirect-policy-bearing client must come in
+// whole. The caller owns the timeout.
+func NewWithHTTPClient(baseURL, token string, c *http.Client) *Client {
+	if c == nil {
+		c = &http.Client{Timeout: 30 * time.Second}
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,

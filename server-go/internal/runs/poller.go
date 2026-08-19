@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/serverstate"
 )
 
 // Annotation keys mirror the conventions used in
@@ -38,6 +39,12 @@ const (
 	annRunCompletedAt = "kuso.sislelabs.com/run-completed-at"
 	annRunMessage     = "kuso.sislelabs.com/run-message"
 )
+
+// HeartbeatInterval is the poller's default tick cadence, exported so
+// main.go can register runs-poller in the serverstate liveness registry
+// at the interval it beats. main.go sets Poller.Interval to this same
+// value, and Run falls back to it when Interval is unset.
+const HeartbeatInterval = 5 * time.Second
 
 // Poller ticks every Interval, scans every namespace kuso-server
 // owns for in-flight KusoRun CRs (phase != terminal), and reconciles
@@ -57,7 +64,7 @@ func (p *Poller) Run(ctx context.Context) error {
 	}
 	interval := p.Interval
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = HeartbeatInterval
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -74,6 +81,11 @@ func (p *Poller) Run(ctx context.Context) error {
 			if err := p.tick(ctx); err != nil {
 				p.logger().Warn("runs poller: tick", "err", err)
 			}
+			// Liveness heartbeat: the loop completed an iteration. Stamped
+			// even on a tick that logged an error — the goroutine is alive,
+			// which is what liveness tracks. A no-op unless this loop was
+			// registered (leader-gated in main.go's startSingletons).
+			serverstate.LoopHeartbeat(serverstate.LoopRunsPoller)
 		}
 	}
 }

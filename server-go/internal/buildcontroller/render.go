@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -598,6 +599,9 @@ nixpacks build . --out . "$@"
 # escaping — values never pass through shell parsing, so no injection
 # risk) with the key list in KUSO_BUILDENV_KEYS. We use Dockerfile's
 # space-form (ENV KEY VALUE) so values with '='/':'/'/'/spaces are fine.
+# KUSO_BUILDENV_KEYS carries LITERAL vars only: these ENV lines are
+# permanent image layers, so secret-sourced vars are never present here
+# (see buildEnvSecretContainerVars).
 ENV_BLOCK=""
 for env_pair in $EXTRA_ENVS; do
   k="${env_pair%%=*}"; v="${env_pair#*=}"
@@ -632,6 +636,13 @@ grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
 		{Name: "REPO_PATH", Value: path},
 		{Name: "USE_CACHE", Value: useCache},
 	}
+	// LITERAL build env only. Secret-sourced vars are deliberately absent
+	// from this pod: everything handed to the nixpacks flow ends up as an
+	// `ENV` line in the generated Dockerfile — a permanent, registry-
+	// readable image layer — and the generated RUN steps can't opt into
+	// buildkit secret mounts the way a user-authored Dockerfile can. A
+	// build step that needs a secret at build time isn't supported under
+	// nixpacks; runtime pods still get it via the deployment's envFrom.
 	env = append(env, buildEnvContainerVars(b)...)
 	return corev1.Container{
 		Name:            "nixpacks-plan",
@@ -651,34 +662,110 @@ grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
 // re-validate here as defense-in-depth at the render boundary.
 var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// buildEnvContainerVars turns b.Spec.BuildEnv into container env vars:
-// KUSO_BUILDENV_KEYS (space-separated key list) + one KUSO_BE_<KEY> per
-// entry. Values flow as kubelet-managed env (no shell escaping needed). Keys
-// failing the identifier check are dropped.
+// buildEnvContainerVars turns b.Spec.BuildEnv's LITERAL entries into
+// container env vars: KUSO_BUILDENV_KEYS (space-separated key list) + one
+// KUSO_BE_<KEY> per entry. Values flow as kubelet-managed env (no shell
+// escaping needed). Keys failing the identifier check are dropped.
+//
+// SECURITY: kuso-secret-ref:// values are EXCLUDED here — everything in
+// KUSO_BUILDENV_KEYS ends up persisted in the published image (build-arg
+// values are recoverable from the image config/history; nixpacks bakes ENV
+// lines), so secret-sourced vars must only ever travel through
+// buildEnvSecretContainerVars. A prefix-carrying value that fails to parse
+// is dropped entirely, never demoted to a literal.
 func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 	if b == nil || len(b.Spec.BuildEnv) == 0 {
 		return nil
 	}
 	var out []corev1.EnvVar
 	var keys []string
-	// stable order for deterministic rendering (tests).
-	names := make([]string, 0, len(b.Spec.BuildEnv))
-	for k := range b.Spec.BuildEnv {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, k := range names {
-		if !envKeyRE.MatchString(k) {
+	for _, k := range sortedBuildEnvKeys(b) {
+		v := b.Spec.BuildEnv[k]
+		if builds.IsBuildEnvSecretRef(v) {
 			continue
 		}
 		keys = append(keys, k)
-		out = append(out, corev1.EnvVar{Name: "KUSO_BE_" + k, Value: b.Spec.BuildEnv[k]})
+		out = append(out, corev1.EnvVar{Name: "KUSO_BE_" + k, Value: v})
 	}
 	if len(keys) == 0 {
 		return nil
 	}
 	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDENV_KEYS", Value: strings.Join(keys, " ")})
 	return out
+}
+
+// buildEnvSecretContainerVars turns b.Spec.BuildEnv's kuso-secret-ref://
+// entries into secretKeyRef env mounts (KUSO_BE_<KEY>, value resolved by the
+// kubelet at pod start — plaintext never touches the CR or the rendered Job)
+// plus the KUSO_BUILDENV_SECRET_KEYS list the buildkit script forwards as
+// `--secret id=<KEY>,env=KUSO_BE_<KEY>`. Malformed refs are dropped.
+func buildEnvSecretContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
+	if b == nil || len(b.Spec.BuildEnv) == 0 {
+		return nil
+	}
+	var out []corev1.EnvVar
+	var keys []string
+	for _, k := range sortedBuildEnvKeys(b) {
+		secret, key, ok := builds.ParseBuildEnvSecretRef(b.Spec.BuildEnv[k])
+		if !ok {
+			continue
+		}
+		keys = append(keys, k)
+		out = append(out, corev1.EnvVar{
+			Name: "KUSO_BE_" + k,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+					Key:                  key,
+					// Optional: a secret deleted between trigger and Job
+					// start (builds can queue) degrades to "var omitted" —
+					// same as the trigger-time omit-on-unresolvable rule —
+					// instead of wedging the pod in CreateContainerConfigError.
+					Optional: ptrTrue(),
+				},
+			},
+		})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDENV_SECRET_KEYS", Value: strings.Join(keys, " ")})
+	return out
+}
+
+// buildEnvWithheldKeyNames returns the space-joined NAMES of secret-sourced
+// buildEnv keys (sorted; never values, never the refs themselves). Used to
+// surface a WARNING in the build log for strategies that withhold secrets
+// from the pod entirely (nixpacks/static) — the withholding itself is
+// correct (see buildEnvSecretContainerVars), but silently building without
+// a var the user configured is a debugging trap without the signal.
+func buildEnvWithheldKeyNames(b *kube.KusoBuild) string {
+	if b == nil || len(b.Spec.BuildEnv) == 0 {
+		return ""
+	}
+	var keys []string
+	for _, k := range sortedBuildEnvKeys(b) {
+		if builds.IsBuildEnvSecretRef(b.Spec.BuildEnv[k]) {
+			keys = append(keys, k)
+		}
+	}
+	return strings.Join(keys, " ")
+}
+
+// sortedBuildEnvKeys returns the identifier-valid buildEnv keys in stable
+// order (deterministic rendering; tests). The identifier check is
+// defense-in-depth at the render boundary — keys are interpolated into shell
+// var names and Dockerfile ENV lines (server already validates via
+// builds.buildEnvFromVars).
+func sortedBuildEnvKeys(b *kube.KusoBuild) []string {
+	names := make([]string, 0, len(b.Spec.BuildEnv))
+	for k := range b.Spec.BuildEnv {
+		if envKeyRE.MatchString(k) {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // renderStaticPlanContainer runs the optional buildCmd in a builder
@@ -849,6 +936,22 @@ BUILDKIT_HOST=$BUILDKIT_ADDR
 # production makes the install skip devDeps). Mirrors builds.reservedBuildEnvKeys.
 RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
 
+# Loud, up-front signal that secret-sourced build env no longer flows as
+# build-args / baked ENV (the security fix that stops credentials persisting
+# in registry-readable image layers). Without this, a Dockerfile still using
+# 'ARG DATABASE_URL' builds "successfully" with an empty value and nothing in
+# the log points at the cause. Key NAMES only — never values.
+if [ -n "${KUSO_BUILDENV_SECRET_KEYS:-}" ]; then
+  echo "WARNING: secret-sourced build env vars are no longer passed as build-args: ${KUSO_BUILDENV_SECRET_KEYS}"
+  echo "WARNING: a Dockerfile 'ARG <KEY>' for any of these keys now receives an EMPTY value."
+  echo "WARNING: migrate to a BuildKit secret mount instead: RUN --mount=type=secret,id=<KEY> ... (value readable at /run/secrets/<KEY> for that RUN only)."
+fi
+if [ -n "${KUSO_BUILDENV_WITHHELD_KEYS:-}" ]; then
+  echo "WARNING: secret-sourced build env vars are WITHHELD from this build: ${KUSO_BUILDENV_WITHHELD_KEYS}"
+  echo "WARNING: nixpacks/static builds bake all build-time env into permanent image layers, so secret values are never available at build time."
+  echo "WARNING: consume these vars at RUNTIME instead — the deployed pods still receive them via the environment's secret mounts."
+fi
+
 # Build-args from the service's build-time env (KUSO_BE_<KEY> container vars).
 # Each becomes --opt build-arg:KEY=VALUE; the Dockerfile consumes the ones it
 # declares ARG for, the rest are ignored by buildkit. Accumulate into the
@@ -864,9 +967,25 @@ for k in $KUSO_BUILDENV_KEYS; do
   set -- "$@" --opt "build-arg:${k}=$(printenv "KUSO_BE_${k}")"
 done
 
+# Secret-sourced build env (KUSO_BUILDENV_SECRET_KEYS) must NEVER flow as a
+# build-arg — buildkit records consumed build-arg values in the pushed
+# image's config/history, so registry read access would recover live addon
+# credentials. Forwarded as buildkit secrets instead (value read client-side
+# from the KUSO_BE_<KEY> env the kubelet mounted): the Dockerfile opts in
+# with "RUN --mount=type=secret,id=<KEY>" (file at /run/secrets/<KEY>, or
+# ",env=<KEY>" on frontends >= 1.10) and the value exists only for that RUN
+# instruction — never in a layer. Unrequested secret ids are ignored.
+for k in $KUSO_BUILDENV_SECRET_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  set -- "$@" --secret "id=${k},env=KUSO_BE_${k}"
+done
+
 echo "==> buildkit: daemon=$BUILDKIT_HOST"
 echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX dryRun=${DRY_RUN:-0}"
 echo "==> buildkit: build-arg keys=${KUSO_BUILDENV_KEYS:-<none>}"
+echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 
 for i in $(seq 1 30); do
   if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
@@ -924,14 +1043,31 @@ exec buildctl \
 	}
 	// Build-time env for RAW Dockerfile builds. nixpacks/static generate a
 	// Dockerfile kuso edits to inject ENV lines; a raw Dockerfile we don't
-	// own, so we pass each buildEnv key as a `--opt build-arg` instead. The
-	// Dockerfile opts in by declaring `ARG <KEY>` (kutiq does:
-	// `ARG DATABASE_URL` → `ENV DATABASE_URL=${DATABASE_URL}`). A build-arg
+	// own, so we pass each LITERAL buildEnv key as a `--opt build-arg`
+	// instead. The Dockerfile opts in by declaring `ARG <KEY>`. A build-arg
 	// the Dockerfile doesn't declare is a harmless no-op in buildkit, so
 	// passing all keys is safe. Values arrive as KUSO_BE_<KEY> container
 	// env (kubelet-escaped; never shell-parsed) with the key list in
 	// KUSO_BUILDENV_KEYS — same mechanism as the nixpacks-plan container.
 	envs = append(envs, buildEnvContainerVars(b)...)
+	// Secret-sourced build env is forwarded ONLY for user-authored
+	// Dockerfiles, and only as buildkit secret mounts — a consumed build-arg
+	// persists in the pushed image's config/history, which is exactly the
+	// credential leak this split exists to close. A Dockerfile that used to
+	// read `ARG DATABASE_URL` must migrate to
+	// `RUN --mount=type=secret,id=DATABASE_URL ...`. nixpacks/static build
+	// kuso-generated Dockerfiles that can't opt into secret mounts, so for
+	// those strategies the secret values are withheld from the pod entirely
+	// (runtime env still arrives via the deployment's envFrom).
+	if strategy == "dockerfile" {
+		envs = append(envs, buildEnvSecretContainerVars(b)...)
+	} else if withheld := buildEnvWithheldKeyNames(b); withheld != "" {
+		// nixpacks/static withhold secret-sourced vars from the pod
+		// entirely; hand the script the key NAMES (never values or refs)
+		// so the build log carries a visible WARNING explaining why a
+		// build step that reads one of these sees nothing.
+		envs = append(envs, corev1.EnvVar{Name: "KUSO_BUILDENV_WITHHELD_KEYS", Value: withheld})
+	}
 
 	mounts := []corev1.VolumeMount{
 		{Name: "workspace", MountPath: "/workspace"},
@@ -974,7 +1110,7 @@ exec buildctl \
 }
 
 // shellQuote single-quotes a string for safe embedding in a /bin/sh
-// command line. Embedded single quotes get the standard '\'' escape.
+// command line. Embedded single quotes get the standard '\” escape.
 //
 // The kuso-server boundary validates repo URLs and branches before
 // stamping the CR (builds.ValidateRepoURL / builds.ValidateGitRef) —

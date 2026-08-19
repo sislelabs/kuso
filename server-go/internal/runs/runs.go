@@ -265,8 +265,27 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 	return out, nil
 }
 
+// runOwnedByProject reports whether a fetched run CR actually belongs
+// to project. Run CR names are semi-predictable ("<project>-<service>-
+// <ts>"), so a caller authorized for one project could name another
+// project's run directly. Get/Cancel/Delete fetch by the raw {run}
+// name with no derivation, so only the fetched CR's spec.project (or,
+// for older CRs, its project label) can prove ownership. Mirrors
+// addonOwnedByProject / cronOwnedByProject.
+func runOwnedByProject(r *kube.KusoRun, project string) bool {
+	if r == nil {
+		return false
+	}
+	if r.Spec.Project != "" {
+		return r.Spec.Project == project
+	}
+	return r.Labels[kube.LabelProject] == project
+}
+
 // Get returns one KusoRun by name. NotFound surfaces ErrNotFound
-// so the handler layer can map to 404 cleanly.
+// so the handler layer can map to 404 cleanly. A run that exists but
+// belongs to another project returns ErrNotFound too — same as a
+// missing run, so cross-tenant existence isn't leaked.
 func (s *Service) Get(ctx context.Context, project, name string) (*kube.KusoRun, error) {
 	ns := s.nsFor(ctx, project)
 	r, err := s.Kube.GetKusoRun(ctx, ns, name)
@@ -275,6 +294,9 @@ func (s *Service) Get(ctx context.Context, project, name string) (*kube.KusoRun,
 			return nil, fmt.Errorf("%w: run %s", ErrNotFound, name)
 		}
 		return nil, fmt.Errorf("get run: %w", err)
+	}
+	if !runOwnedByProject(r, project) {
+		return nil, fmt.Errorf("%w: run %s", ErrNotFound, name)
 	}
 	return r, nil
 }
@@ -293,6 +315,12 @@ func (s *Service) Cancel(ctx context.Context, project, name string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("get run: %w", err)
+	}
+	// Ownership guard: run names are semi-predictable, so verify the
+	// fetched CR actually belongs to this project before cancelling.
+	// 404 on mismatch (no existence leak).
+	if !runOwnedByProject(r, project) {
+		return fmt.Errorf("%w: run %s", ErrNotFound, name)
 	}
 	phase := r.Annotations["kuso.sislelabs.com/run-phase"]
 	switch phase {

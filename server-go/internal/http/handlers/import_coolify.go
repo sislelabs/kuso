@@ -88,15 +88,15 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 	var req PreviewRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "decode: "+err.Error())
 		return
 	}
 	if req.BaseURL == "" || req.Token == "" {
-		http.Error(w, "baseUrl and token required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "baseUrl and token required")
 		return
 	}
 	if u, err := url.Parse(req.BaseURL); err != nil || u.Scheme == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		http.Error(w, "baseUrl must be http(s)://...", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "baseUrl must be http(s)://...")
 		return
 	}
 
@@ -107,10 +107,12 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	// (catches http://10.96.0.1 = kube apiserver,
 	// http://169.254.169.254 = cloud metadata). Admin-only doesn't
 	// excuse it — admins should still not be able to pivot kuso's
-	// SA token toward the kube API via SSRF. Operators on
-	// fully-internal Coolify installs can opt in via
+	// SA token toward the kube API via SSRF. The client also
+	// re-validates every redirect hop, so a public Coolify URL that
+	// 302s toward an internal target is refused before the dial.
+	// Operators on fully-internal Coolify installs can opt in via
 	// KUSO_ALLOW_PRIVATE_OUTBOUND=true.
-	c := coolify.NewWithTransport(req.BaseURL, req.Token, httpx.SSRFSafeTransport())
+	c := coolify.NewWithHTTPClient(req.BaseURL, req.Token, httpx.SSRFSafeClient(30*time.Second))
 	inv, err := coolify.Snapshot(ctx, c)
 	if err != nil {
 		// Surface as 502 so the SPA can show "couldn't reach Coolify"
@@ -122,13 +124,13 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		// 502. Detailed error stays in slog; the wire response is
 		// generic.
 		if errors.Is(err, context.DeadlineExceeded) {
-			http.Error(w, "coolify request timed out", http.StatusGatewayTimeout)
+			writeErr(w, http.StatusGatewayTimeout, "coolify request timed out")
 			return
 		}
 		if h.Logger != nil {
 			h.Logger.Warn("coolify snapshot", "err", err)
 		}
-		http.Error(w, "couldn't reach Coolify (check server logs for detail)", http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "couldn't reach Coolify (check server logs for detail)")
 		return
 	}
 	resp := PreviewResponse{
@@ -177,24 +179,24 @@ func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Migration == nil {
-		http.Error(w, "commit endpoint not configured (kube unavailable)", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "commit endpoint not configured (kube unavailable)")
 		return
 	}
 	var req CommitRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "decode: "+err.Error())
 		return
 	}
 	if req.BaseURL == "" || req.Token == "" {
-		http.Error(w, "baseUrl and token required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "baseUrl and token required")
 		return
 	}
 	if u, err := url.Parse(req.BaseURL); err != nil || u.Scheme == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		http.Error(w, "baseUrl must be http(s)://...", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "baseUrl must be http(s)://...")
 		return
 	}
 	if len(req.UUIDs) == 0 {
-		http.Error(w, "select at least one resource to import", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "select at least one resource to import")
 		return
 	}
 	// Cap selection: a Coolify with thousands of resources shouldn't
@@ -202,7 +204,7 @@ func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	// commits if the user really wants everything.
 	const maxSelection = 500
 	if len(req.UUIDs) > maxSelection {
-		http.Error(w, fmt.Sprintf("too many resources selected (max %d)", maxSelection), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("too many resources selected (max %d)", maxSelection))
 		return
 	}
 
@@ -213,17 +215,17 @@ func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
-	c := coolify.NewWithTransport(req.BaseURL, req.Token, httpx.SSRFSafeTransport())
+	c := coolify.NewWithHTTPClient(req.BaseURL, req.Token, httpx.SSRFSafeClient(30*time.Second))
 	inv, err := coolify.Snapshot(ctx, c)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			http.Error(w, "coolify request timed out", http.StatusGatewayTimeout)
+			writeErr(w, http.StatusGatewayTimeout, "coolify request timed out")
 			return
 		}
 		if h.Logger != nil {
 			h.Logger.Warn("coolify commit snapshot", "err", err)
 		}
-		http.Error(w, "couldn't reach Coolify (check server logs for detail)", http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "couldn't reach Coolify (check server logs for detail)")
 		return
 	}
 

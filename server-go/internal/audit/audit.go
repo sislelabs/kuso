@@ -1,12 +1,15 @@
 // Package audit owns the Audit table writes + reads.
 //
-// Audit is opt-in via KUSO_AUDIT=true; when disabled, every method is a
-// silent no-op so handler call sites don't need a guard.
+// Audit is ON by default — a platform doing destructive ops needs a
+// trail unless the operator explicitly opts out via KUSO_AUDIT=false.
+// When disabled, every method is a silent no-op so handler call sites
+// don't need a guard.
 package audit
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"sync"
@@ -27,17 +30,22 @@ type Service struct {
 	mu sync.Mutex // guards the periodic trim() call
 }
 
-// New constructs a Service. KUSO_AUDIT=true enables, KUSO_AUDIT_LIMIT
-// sets the row cap (default 1000), KUSO_AUDIT_TRIM_TIMEOUT overrides
-// the per-tick context bound (default 60s — long enough for Postgres
-// trim during an autovacuum pause on a 1M-row table).
+// New constructs a Service. Enabled by default; KUSO_AUDIT=false opts
+// out. KUSO_AUDIT_LIMIT sets the row cap (default 10000 — destructive
+// ops on a busy install burn through 1000 rows in days, which made the
+// trail useless exactly when an incident needed it), and
+// KUSO_AUDIT_TRIM_TIMEOUT overrides the per-tick context bound
+// (default 60s — long enough for Postgres trim during an autovacuum
+// pause on a 1M-row table). Unparseable or non-positive KUSO_AUDIT_LIMIT
+// falls back to the default rather than disabling the cap (fail safe,
+// not open — mirrors logship's resolveRateCap).
 //
 // When enabled, New also starts the singleton trim ticker bound to
 // ctx. Pass context.Background() in tests where you don't need
 // shutdown semantics.
 func New(ctx context.Context, d *db.DB) *Service {
-	enabled := os.Getenv("KUSO_AUDIT") == "true"
-	limit := 1000
+	enabled := os.Getenv("KUSO_AUDIT") != "false"
+	limit := 10000
 	if v := os.Getenv("KUSO_AUDIT_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
@@ -69,7 +77,7 @@ func (s *Service) runTrimLoop(ctx context.Context, perTickTimeout time.Duration)
 		case <-t.C:
 			tickCtx, cancel := context.WithTimeout(ctx, perTickTimeout)
 			if err := s.trim(tickCtx); err != nil {
-				fmt.Fprintf(os.Stderr, "audit: trim failed: %v\n", err)
+				slog.Error("audit: trim failed", "err", err)
 			}
 			cancel()
 		}
@@ -117,43 +125,58 @@ INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipelin
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		now, e.Severity, e.Action, e.Namespace, e.Phase, e.App, e.Pipeline, e.Resource, e.Message, e.User, now, now,
 	); err != nil {
-		// Logging an audit row must never affect the call site — log the
-		// failure to stderr-shaped slog and move on.
-		fmt.Fprintf(os.Stderr, "audit: log failed: %v\n", err)
+		// Logging an audit row must never affect the call site — log
+		// the failure and move on.
+		slog.Error("audit: log failed", "err", err)
 		return
 	}
 	// Trim runs on the singleton ticker started by New.
 }
 
-// Get returns the newest `limit` rows.
-func (s *Service) Get(ctx context.Context, limit int) ([]Entry, int, error) {
+// Get returns the newest `limit` rows. Pagination is keyset on id:
+// pass after=<id> to fetch the page older than that id (0 = newest
+// page). `more` reports whether older rows exist beyond the returned
+// page — determined by over-fetching one row, so it's exact, not a
+// full-page heuristic.
+func (s *Service) Get(ctx context.Context, after int64, limit int) (entries []Entry, total int, more bool, err error) {
 	if s == nil || !s.Enabled {
-		return nil, 0, nil
+		return nil, 0, false, nil
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.DB.QueryContext(ctx, `
+	q := `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" ORDER BY id DESC LIMIT $1`, limit)
+FROM "Audit"`
+	args := []any{}
+	if after > 0 {
+		args = append(args, after)
+		q += fmt.Sprintf(" WHERE id < $%d", len(args))
+	}
+	args = append(args, limit+1) // +1 row detects truncation
+	q += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args))
+	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("audit: get: %w", err)
+		return nil, 0, false, fmt.Errorf("audit: get: %w", err)
 	}
 	defer rows.Close()
 	var out []Entry
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	var total int
+	if len(out) > limit {
+		more = true
+		out = out[:limit]
+	}
 	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM "Audit"`).Scan(&total)
-	return out, total, nil
+	return out, total, more, nil
 }
 
 // GetForProject returns audit rows filtered by project. The Audit
@@ -162,10 +185,12 @@ FROM "Audit" ORDER BY id DESC LIMIT $1`, limit)
 // container" semantics, so a single column is fine.
 //
 // Pagination is keyset on id: pass after=<id> to fetch the page
-// older than that id. limit is clamped [1, 1000].
-func (s *Service) GetForProject(ctx context.Context, project string, after int64, limit int) ([]Entry, int, error) {
+// older than that id. limit is clamped [1, 1000]. `more` reports
+// whether older rows exist beyond the returned page (exact —
+// determined by over-fetching one row).
+func (s *Service) GetForProject(ctx context.Context, project string, after int64, limit int) (entries []Entry, total int, more bool, err error) {
 	if s == nil || !s.Enabled {
-		return nil, 0, nil
+		return nil, 0, false, nil
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 100
@@ -181,36 +206,41 @@ FROM "Audit" WHERE pipeline = $1`
 		args = append(args, after)
 		q += fmt.Sprintf(" AND id < $%d", len(args))
 	}
-	args = append(args, limit)
+	args = append(args, limit+1) // +1 row detects truncation
 	q += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args))
 
 	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("audit: get for project: %w", err)
+		return nil, 0, false, fmt.Errorf("audit: get for project: %w", err)
 	}
 	defer rows.Close()
 	var out []Entry
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	var total int
+	if len(out) > limit {
+		more = true
+		out = out[:limit]
+	}
 	_ = s.DB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1`,
 		project).Scan(&total)
-	return out, total, nil
+	return out, total, more, nil
 }
 
 // GetForApp returns the newest rows filtered by pipeline+phase+app.
-func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, limit int) ([]Entry, int, error) {
+// `more` reports whether older rows exist beyond the returned page
+// (exact — determined by over-fetching one row).
+func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, limit int) (entries []Entry, total int, more bool, err error) {
 	if s == nil || !s.Enabled {
-		return nil, 0, nil
+		return nil, 0, false, nil
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 100
@@ -218,27 +248,30 @@ func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, li
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3
-ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit)
+ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit+1) // +1 row detects truncation
 	if err != nil {
-		return nil, 0, fmt.Errorf("audit: get app: %w", err)
+		return nil, 0, false, fmt.Errorf("audit: get app: %w", err)
 	}
 	defer rows.Close()
 	var out []Entry
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	var total int
+	if len(out) > limit {
+		more = true
+		out = out[:limit]
+	}
 	_ = s.DB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3`,
 		pipeline, phase, app).Scan(&total)
-	return out, total, nil
+	return out, total, more, nil
 }
 
 // trim caps the table at MaxBackups rows. Returns nil when another
@@ -274,7 +307,7 @@ WHERE id <= (
 	// leader-elected loop for one DELETE per 5min isn't worth it.
 	// Best-effort: a prune failure here doesn't fail the audit trim.
 	if _, err := s.DB.PruneRevisions(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "audit: prune revisions failed: %v\n", err)
+		slog.Warn("audit: prune revisions failed", "err", err)
 	}
 	return nil
 }

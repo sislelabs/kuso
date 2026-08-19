@@ -350,6 +350,16 @@ type fakeProjects struct {
 	patched []projectsPatchCall
 	deleted []string
 	envSet  []projectsEnvCall
+	// existing backs GetService for the mask-sentinel resolution tests:
+	// service name → live CR. Names absent from the map return an error.
+	existing map[string]*kube.KusoService
+}
+
+func (f *fakeProjects) GetService(_ context.Context, _, service string) (*kube.KusoService, error) {
+	if svc, ok := f.existing[service]; ok {
+		return svc, nil
+	}
+	return nil, errNotFoundFake
 }
 
 func (f *fakeProjects) AddService(_ context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error) {

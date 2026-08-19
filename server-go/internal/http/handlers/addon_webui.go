@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -91,20 +92,34 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the addon CR — we need the kind to map to a UI port
 	// and to confirm webUI is enabled on this instance.
-	ns := h.Svc.NamespaceFor(ctx, project)
-	fqn := h.Svc.AddonFQN(project, addon)
-	cr, err := h.Svc.Kube.GetKusoAddon(ctx, ns, fqn)
+	//
+	// Ownership: MUST go through GetOwned, never a raw AddonFQN/CRName
+	// fetch. CRName tolerates pre-qualified input, so with overlapping
+	// project names ("foo" vs "foo-bar") a foo-authorized viewer passing
+	// addon="foo-bar-pg" would resolve foo-bar's CR and get proxied into
+	// its web console (see the bug-class comment on addonOwnedByProject).
+	// GetOwned verifies the fetched CR's spec.project and returns the
+	// same ErrNotFound as a missing addon, so existence isn't leaked.
+	cr, err := h.Svc.GetOwned(ctx, project, addon)
 	if err != nil {
-		http.Error(w, "addon not found: "+err.Error(), http.StatusNotFound)
+		if errors.Is(err, addons.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadGateway, "resolve addon: "+err.Error())
 		return
 	}
+	ns := h.Svc.NamespaceFor(ctx, project)
+	// The upstream Service is named after the CR we actually resolved —
+	// not a string re-derivation of the URL params.
+	fqn := cr.Name
 	if cr.Spec.WebUI == nil || !cr.Spec.WebUI.Enabled {
-		http.Error(w, "webUI is not enabled on this addon", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "webUI is not enabled on this addon")
 		return
 	}
 	port := addonWebUIPort(cr.Spec.Kind)
 	if port == 0 {
-		http.Error(w, fmt.Sprintf("kind %q has no known web UI port", cr.Spec.Kind), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("kind %q has no known web UI port", cr.Spec.Kind))
 		return
 	}
 
@@ -133,7 +148,7 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		h.Logger.Warn("addon webui proxy error",
 			"project", project, "addon", addon, "target", target.Host, "err", perr)
-		http.Error(rw, "upstream addon unavailable", http.StatusBadGateway)
+		writeErr(rw, http.StatusBadGateway, "upstream addon unavailable")
 	}
 	// Default Director rewrites Host header to the target — necessary
 	// for upstreams that use Host for SPA route detection (mailpit

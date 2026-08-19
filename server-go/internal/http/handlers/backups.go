@@ -27,8 +27,8 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
-	"kuso/server/internal/backup"
 	"kuso/server/internal/auth"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/db"
 	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
@@ -74,10 +74,10 @@ func (h *BackupsHandler) ownedAddon(ctx context.Context, project, addon string) 
 // (or other-project-owned) addon is a 404, anything else a 502.
 func writeAddonErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, addons.ErrNotFound) {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
-	http.Error(w, err.Error(), http.StatusBadGateway)
+	writeErr(w, http.StatusBadGateway, err.Error())
 }
 
 const backupSecretName = "kuso-backup-s3"
@@ -131,7 +131,7 @@ func (h *BackupsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.Logger.Error("backup: get secret", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	out := BackupSettings{
@@ -150,18 +150,18 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	var req BackupSettings
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Bucket == "" || req.Endpoint == "" || req.AccessKeyID == "" {
-		http.Error(w, "bucket, endpoint, accessKeyId required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bucket, endpoint, accessKeyId required")
 		return
 	}
 	// Endpoint goes verbatim into the backup Job's S3 client. Same
 	// SSRF surface as the notification webhook URL — IMDS, RFC1918,
 	// .svc DNS would all succeed against an admin-set endpoint.
 	if err := validateWebhookURL(req.Endpoint); err != nil {
-		http.Error(w, "endpoint: "+err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "endpoint: "+err.Error())
 		return
 	}
 	ctx, cancel := backupCtx(r)
@@ -186,7 +186,7 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		data["secretAccessKey"] = existing.Data["secretAccessKey"]
 	}
 	if len(data["secretAccessKey"]) == 0 {
-		http.Error(w, "secretAccessKey required on first save", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "secretAccessKey required on first save")
 		return
 	}
 
@@ -203,7 +203,7 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		_, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Create(ctx, sec, metav1.CreateOptions{})
 		if err != nil {
 			h.Logger.Error("backup: create secret", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 	} else {
@@ -211,7 +211,7 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		_, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Update(ctx, sec, metav1.UpdateOptions{})
 		if err != nil {
 			h.Logger.Error("backup: update secret", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 	}
@@ -246,19 +246,26 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ownership: resolve through ownedAddon (GetOwned) rather than a raw
+	// CRName() — CRName tolerates pre-qualified input, so a same-project
+	// short/FQN alias could otherwise list a sibling addon's backup keys.
+	// The FQN below is derived from the verified CR's name, never the raw
+	// caller input. Data-revealing paths (Download/Restore/SQL) already do
+	// this; List must too so the file's invariant holds on every path.
+	cr, _, err := h.ownedAddon(ctx, project, addon)
+	if err != nil {
+		writeAddonErr(w, err)
+		return
+	}
+
 	cli, bucket, err := h.s3Client(ctx)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	// CronJob uploads to s3://bucket/<project>/<addon-fqn>/<ts>.sql.gz
-	// where <addon-fqn> = the helm release name = "<project>-<short>".
-	// Callers pass either the FQN (UI / canvas use metadata.name) or
-	// the short name (CLI ergonomic flow). Normalise to FQN so the
-	// prefix matches what the cronjob actually wrote — and so a
-	// caller that passes the short name doesn't list zero objects
-	// because of a project-prefix mismatch.
-	addonFQN := addons.CRName(project, addon)
+	// where <addon-fqn> = the helm release name = the CR's metadata.name.
+	addonFQN := cr.Name
 	prefix := project + "/" + addonFQN + "/"
 	out, err := cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -266,7 +273,7 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.Logger.Error("backup: list", "err", err)
-		http.Error(w, "list failed: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
 		return
 	}
 	items := make([]BackupObject, 0, len(out.Contents))
@@ -316,7 +323,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	addon := chi.URLParam(r, "addon")
 	var req RestoreRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "key required")
 		return
 	}
 	ctx, cancel := backupCtx(r)
@@ -337,14 +344,14 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// keeps the gate sound if a future refactor makes the URL param
 	// optional (HasPrefix("foo", "/") is true for any leading slash).
 	if project == "" || !strings.HasPrefix(req.Key, project+"/") {
-		http.Error(w, "key must live under this project's prefix", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "key must live under this project's prefix")
 		return
 	}
 	// `..` traversal escapes the project prefix. The S3 SDK doesn't
 	// decode percent-encoding and neither does `aws s3 cp` in the
 	// Job, so a literal `..` is the only shape we need to reject.
 	if strings.Contains(req.Key, "..") || strings.ContainsRune(req.Key, '\x00') {
-		http.Error(w, "invalid key", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid key")
 		return
 	}
 
@@ -381,10 +388,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		// streamed).
 		if srcCR.Spec.Kind != "" && destCR.Spec.Kind != "" &&
 			srcCR.Spec.Kind != destCR.Spec.Kind {
-			http.Error(w,
-				fmt.Sprintf("kind mismatch: source addon %q is %s, destination %q is %s",
-					addon, srcCR.Spec.Kind, destAddon, destCR.Spec.Kind),
-				http.StatusBadRequest)
+			writeErr(w,
+
+				http.StatusBadRequest, fmt.Sprintf("kind mismatch: source addon %q is %s, destination %q is %s",
+					addon, srcCR.Spec.Kind, destAddon, destCR.Spec.Kind))
+
 			return
 		}
 	}
@@ -402,9 +410,10 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// GENUINELY DISTINCT sibling addon leaves the source untouched, so it's
 	// exempt.
 	if inPlaceRestoreNeedsConfirm(srcCR.Name, destCR.Name, destAddon, req.Confirm) {
-		http.Error(w,
-			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
-			http.StatusBadRequest)
+		writeErr(w,
+
+			http.StatusBadRequest, "in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")")
+
 		return
 	}
 	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
@@ -421,11 +430,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if ns != h.Namespace {
 		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
 			if errors.Is(err, addons.ErrNotFound) {
-				http.Error(w, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)", http.StatusPreconditionFailed)
+				writeErr(w, http.StatusPreconditionFailed, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)")
 				return
 			}
 			h.Logger.Error("backup: mirror s3 secret into project ns", "err", err, "ns", ns)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "internal")
 			return
 		}
 	}
@@ -437,7 +446,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// are already validated equal above when restoring into a sibling.)
 	restoreShell, err := restoreScriptForKind(destCR.Spec.Kind)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env()...)
@@ -486,7 +495,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	// Audit: destructive cross-DB write. Logged regardless of
@@ -653,14 +662,17 @@ func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, erro
 	// The endpoint is admin-supplied and validateWebhookURL only blocks IP
 	// literals — a hostname that RESOLVES to a private/metadata address (IMDS
 	// 169.254.169.254, RFC1918, .svc) would otherwise be reachable on the
-	// AWS SDK's default transport. Dial through the SSRF-safe transport, which
-	// resolves the host, rejects reserved-range IPs, and re-dials the resolved
-	// IP (defeating DNS rebinding between check and dial). Same guard the
-	// notification/coolify-import outbound clients use.
+	// AWS SDK's default transport. Dial through the SSRF-safe client, which
+	// resolves the host, rejects reserved-range IPs, dials only the
+	// validated IP (defeating DNS rebinding between check and dial), and
+	// re-validates every redirect hop (S3 region moves redirect, so
+	// refusing outright would break legitimate endpoints). Same guard the
+	// notification/coolify-import outbound clients use. Timeout 0: the
+	// SDK bounds each request with ctx.
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(akid, skey, "")),
-		awsconfig.WithHTTPClient(&http.Client{Transport: httpx.SSRFSafeTransport()}),
+		awsconfig.WithHTTPClient(httpx.SSRFSafeClient(0)),
 	)
 	if err != nil {
 		return nil, "", err
@@ -840,7 +852,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the SQL browser requires the admin role")
 		return
 	}
 
@@ -852,7 +864,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 			 WHERE database NOT IN ('system','INFORMATION_SCHEMA','information_schema')
 			 ORDER BY database, name`)
 		if err != nil {
-			http.Error(w, "query: "+err.Error(), http.StatusBadGateway)
+			writeErr(w, http.StatusBadGateway, "query: "+err.Error())
 			return
 		}
 		type row struct {
@@ -884,7 +896,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 		ORDER BY table_schema, table_name
 	`)
 	if err != nil {
-		http.Error(w, "query: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "query: "+err.Error())
 		return
 	}
 	defer rows.Close()
@@ -974,11 +986,11 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 
 	var req SQLQueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if req.Query == "" {
-		http.Error(w, "query required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "query required")
 		return
 	}
 	limit := req.Limit
@@ -995,7 +1007,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !callerCanRunSQL(ctx, h.DB, project) {
-		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "forbidden: the SQL browser requires the admin role")
 		return
 	}
 
@@ -1004,14 +1016,14 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	// interface with readonly mode + a CH-specific builtin denylist.
 	if info, isCH, cerr := h.clickhouseConnInfo(ctx, project, addon); cerr == nil && isCH {
 		if reason := blockedClickHouseBuiltin(req.Query); reason != "" {
-			http.Error(w, "query rejected: "+reason, http.StatusForbidden)
+			writeErr(w, http.StatusForbidden, "query rejected: "+reason)
 			return
 		}
 		h.auditSQLQuery(ctx, r, project, addon, req.Query)
 		start := time.Now()
 		out, status, err := h.runClickHouseQuery(ctx, info, req.Query, limit)
 		if err != nil {
-			http.Error(w, err.Error(), status)
+			writeErr(w, status, err.Error())
 			return
 		}
 		out.Elapsed = time.Since(start).Round(time.Millisecond).String()
@@ -1025,7 +1037,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	// server (superuser DB user, or grants the operator forgot). Cheap
 	// substring scan; defence-in-depth on top of role privileges.
 	if reason := blockedSQLBuiltin(req.Query); reason != "" {
-		http.Error(w, "query rejected: "+reason, http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "query rejected: "+reason)
 		return
 	}
 	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
@@ -1040,12 +1052,12 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	// it inside this transaction — no need to parse the SQL ourselves.
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		http.Error(w, "begin: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "begin: "+err.Error())
 		return
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
-		http.Error(w, "set timeout: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "set timeout: "+err.Error())
 		return
 	}
 
@@ -1053,14 +1065,14 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	h.auditSQLQuery(ctx, r, project, addon, req.Query)
 	rows, err := tx.QueryContext(ctx, req.Query)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		http.Error(w, "columns: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
 		return
 	}
 	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit)}

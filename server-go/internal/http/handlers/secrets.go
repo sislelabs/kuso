@@ -82,7 +82,7 @@ type setSecretRequest struct {
 func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	var req setSecretRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	ctx, cancel := secretsCtx(r)
@@ -145,9 +145,7 @@ func (h *SecretsHandler) fail(w http.ResponseWriter, op string, err error) {
 		// 409 + structured body so the CLI can render a helpful
 		// "this will override project-shared X; pass --force to
 		// proceed" message instead of just "conflict".
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": err.Error(),
-			"code":  "shadowed",
+		writeErrExtra(w, http.StatusConflict, err.Error(), "shadowed", map[string]any{
 			"key":   shadow.Key,
 			"scope": shadow.Scope,
 		})
@@ -155,11 +153,11 @@ func (h *SecretsHandler) fail(w http.ResponseWriter, op string, err error) {
 	}
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, secrets.ErrNotFound, "secret"))
 	case errors.Is(err, secrets.ErrInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		h.Logger.Error("secrets handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }

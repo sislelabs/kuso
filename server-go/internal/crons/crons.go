@@ -73,6 +73,41 @@ func CRName(project, service, short string) string {
 	return fmt.Sprintf("%s-%s-%s", project, svcShort, short)
 }
 
+// cronOwnedByProject reports whether a fetched cron CR actually belongs
+// to project. CRName tolerates a pre-qualified name, so with overlapping
+// project names ("foo" vs "foo-bar") a foo-authorized caller passing a
+// name like "foo-bar-svc-nightly" resolves to foo-bar's CR — the string
+// layer cannot disambiguate; only the fetched CR's spec.project (or, for
+// older CRs, its project label) can. Mirrors addonOwnedByProject.
+func cronOwnedByProject(c *kube.KusoCron, project string) bool {
+	if c == nil {
+		return false
+	}
+	if c.Spec.Project != "" {
+		return c.Spec.Project == project
+	}
+	return c.Labels["kuso.sislelabs.com/project"] == project
+}
+
+// getOwned fetches the cron CR named fqn and verifies it belongs to
+// project. A CR that exists under the resolved name but is owned by
+// another project returns ErrNotFound — same as a missing CR, so
+// existence isn't leaked. Every get/mutate/delete path that resolves a
+// user-supplied cron name MUST gate on this before acting.
+func (s *Service) getOwned(ctx context.Context, ns, project, fqn string) (*kube.KusoCron, error) {
+	c, err := s.Kube.GetKusoCron(ctx, ns, fqn)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
+		return nil, fmt.Errorf("get cron: %w", err)
+	}
+	if !cronOwnedByProject(c, project) {
+		return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+	}
+	return c, nil
+}
+
 // CreateCronRequest is the body of POST /api/projects/:p/services/:s/crons.
 type CreateCronRequest struct {
 	Name     string   `json:"name"`
@@ -302,14 +337,7 @@ func (s *Service) ListForService(ctx context.Context, project, service string) (
 func (s *Service) Get(ctx context.Context, project, service, name string) (*kube.KusoCron, error) {
 	ns := s.nsFor(ctx, project)
 	fqn := CRName(project, service, name)
-	c, err := s.Kube.GetKusoCron(ctx, ns, fqn)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
-		}
-		return nil, fmt.Errorf("get cron: %w", err)
-	}
-	return c, nil
+	return s.getOwned(ctx, ns, project, fqn)
 }
 
 func (s *Service) Add(ctx context.Context, project, service string, req CreateCronRequest) (*kube.KusoCron, error) {
@@ -493,6 +521,12 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		}
 	}
 	updated, err := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		// Ownership guard, re-checked on every optimistic-concurrency
+		// retry: CRName tolerates a pre-qualified name so a foo-authorized
+		// caller can resolve foo-bar's cron. See cronOwnedByProject.
+		if !cronOwnedByProject(cr, project) {
+			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
 		if req.Schedule != nil {
 			cr.Spec.Schedule = *req.Schedule
 		}
@@ -559,6 +593,12 @@ func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN s
 func (s *Service) SyncFromService(ctx context.Context, project, service, name string) (*kube.KusoCron, error) {
 	ns := s.nsFor(ctx, project)
 	fqn := CRName(project, service, name)
+	// Verify ownership up front so a cross-project caller gets a clean
+	// 404 (no existence leak) instead of leaking through the production-
+	// env resolution below. The update closure re-checks on retry.
+	if _, err := s.getOwned(ctx, ns, project, fqn); err != nil {
+		return nil, err
+	}
 	serviceFQN := service
 	if !strings.HasPrefix(service, project+"-") {
 		serviceFQN = project + "-" + service
@@ -571,6 +611,9 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		return nil, err
 	}
 	updated, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		if !cronOwnedByProject(cr, project) {
+			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
 		cr.Spec.Image = image
 		cr.Spec.EnvFromSecrets = envFromSecrets
 		cr.Spec.Placement = placement
@@ -586,8 +629,16 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 }
 
 func (s *Service) Delete(ctx context.Context, project, service, name string) error {
+	ns := s.nsFor(ctx, project)
 	fqn := CRName(project, service, name)
-	if err := s.Kube.DeleteKusoCron(ctx, s.nsFor(ctx, project), fqn); err != nil {
+	// Verify ownership before deleting — CRName tolerates a pre-qualified
+	// name, so without this a foo-authorized caller could delete
+	// foo-bar's cron. getOwned returns ErrNotFound (no existence leak)
+	// on a cross-project mismatch.
+	if _, err := s.getOwned(ctx, ns, project, fqn); err != nil {
+		return err
+	}
+	if err := s.Kube.DeleteKusoCron(ctx, ns, fqn); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}
@@ -681,6 +732,11 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		}
 	}
 	updated, err := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		// Ownership guard — fqn = "<project>-<name>" is derived by raw
+		// concatenation and collides under overlapping project names.
+		if !cronOwnedByProject(cr, project) {
+			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
 		if req.Schedule != nil {
 			cr.Spec.Schedule = *req.Schedule
 		}
@@ -736,8 +792,14 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 // "<project>-<short>" (no service segment). Used by the canvas
 // "Delete cron" right-click action and by the project Crons tab.
 func (s *Service) DeleteProject(ctx context.Context, project, name string) error {
+	ns := s.nsFor(ctx, project)
 	fqn := project + "-" + name
-	if err := s.Kube.DeleteKusoCron(ctx, s.nsFor(ctx, project), fqn); err != nil {
+	// Verify ownership before deleting — fqn is raw concatenation and
+	// collides under overlapping project names. 404 on mismatch.
+	if _, err := s.getOwned(ctx, ns, project, fqn); err != nil {
+		return err
+	}
+	if err := s.Kube.DeleteKusoCron(ctx, ns, fqn); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}

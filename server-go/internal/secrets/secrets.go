@@ -106,6 +106,67 @@ var (
 	ErrInvalid  = errors.New("secrets: invalid")
 )
 
+// serviceCRName resolves the KusoService CR name for (project, service).
+// It tolerates a pre-qualified service name (already prefixed with
+// "<project>-") the same way projects.serviceCRName does — so the
+// ownership check below is the ONLY thing standing between a caller and
+// a sibling project's Secret when project names overlap.
+func serviceCRName(project, service string) string {
+	if strings.HasPrefix(service, project+"-") {
+		return service
+	}
+	return project + "-" + service
+}
+
+// serviceOwnedByProject reports whether a fetched KusoService CR
+// actually belongs to project. Mirrors projects.serviceOwnedByProject:
+// the Secret name is derived by raw concatenation of (project, service),
+// so with overlapping project names ("foo" vs "foo-bar") a foo-authorized
+// caller passing service="bar-svc" resolves to the CR/Secret name
+// "foo-bar-svc" which collides with project "foo-bar"'s service "svc".
+// Only the fetched CR's spec.project (or, for older CRs, its project
+// label) can disambiguate.
+func serviceOwnedByProject(svc *kube.KusoService, project string) bool {
+	if svc == nil {
+		return false
+	}
+	if svc.Spec.Project != "" {
+		return svc.Spec.Project == project
+	}
+	return svc.Labels[kube.LabelProject] == project
+}
+
+// requireOwnedService verifies that {service} exists AND belongs to
+// {project} before any Secret name derived from (project, service) is
+// read, written, or deleted. Returns ErrNotFound — same as a missing
+// service — on both absence and cross-project ownership mismatch, so a
+// caller can't probe another project's service names via the Secret API.
+//
+// This is the security invariant the per-service Secret routes depend
+// on: the Secret name is <project>-<service>-secrets built by raw
+// concatenation, which collides across overlapping project names. The
+// real ownership fact lives on the KusoService CR, so we check it there.
+func (s *Service) requireOwnedService(ctx context.Context, project, service string) error {
+	// No kube client (e.g. a Service built without CR access in a unit
+	// test) → nothing to verify against; the caller is responsible for
+	// wiring one in production. Fail closed only when we CAN check.
+	if s == nil || s.Kube == nil {
+		return nil
+	}
+	ns := s.nsFor(ctx, project)
+	svc, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, service))
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+		}
+		return fmt.Errorf("get service %s/%s: %w", project, service, err)
+	}
+	if !serviceOwnedByProject(svc, project) {
+		return fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+	}
+	return nil
+}
+
 // Name returns the per-scope Secret name. env=="" produces the
 // service-scoped shared name, otherwise the env-scoped name. Delegates
 // to the kube package so the naming + env-name sanitization has a
@@ -120,6 +181,9 @@ func Name(project, service, env string) string {
 // ListKeys returns the keys (NOT values) stored in the secret for the
 // given scope, or nil if the secret doesn't exist yet.
 func (s *Service) ListKeys(ctx context.Context, project, service, env string) ([]string, error) {
+	if err := s.requireOwnedService(ctx, project, service); err != nil {
+		return nil, err
+	}
 	sec, err := s.read(ctx, s.nsFor(ctx, project), Name(project, service, env))
 	if err != nil {
 		return nil, err
@@ -224,6 +288,9 @@ func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, va
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
+	if err := s.requireOwnedService(ctx, project, service); err != nil {
+		return err
+	}
 	ns := s.nsFor(ctx, project)
 	if !opts.Force {
 		shadow, _ := CheckServiceSetShadow(ctx, s.Kube, project, ns, key)
@@ -265,6 +332,9 @@ func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, va
 func (s *Service) UnsetKey(ctx context.Context, project, service, env, key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
+	}
+	if err := s.requireOwnedService(ctx, project, service); err != nil {
+		return err
 	}
 	// Same per-(project, service) serialization as SetKey — the
 	// remove→detach→bumpRev sequence is symmetric and racing it

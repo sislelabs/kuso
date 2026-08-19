@@ -110,7 +110,7 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 func (h *NotificationsHandler) ListMutedProjects(w http.ResponseWriter, r *http.Request) {
 	mutes, err := h.DB.ListProjectNotificationMutes(r.Context())
 	if err != nil {
-		http.Error(w, "list muted projects: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "list muted projects: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, mutes)
@@ -127,7 +127,7 @@ func (h *NotificationsHandler) GetProjectMute(w http.ResponseWriter, r *http.Req
 	}
 	mutes, err := h.DB.ListProjectNotificationMutes(ctx)
 	if err != nil {
-		http.Error(w, "read mute state: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "read mute state: "+err.Error())
 		return
 	}
 	out := map[string]any{"muted": false}
@@ -151,11 +151,11 @@ func (h *NotificationsHandler) MuteProject(w http.ResponseWriter, r *http.Reques
 	if h.ProjectExists != nil {
 		exists, err := h.ProjectExists(ctx, project)
 		if err != nil {
-			http.Error(w, "verify project: "+err.Error(), http.StatusInternalServerError)
+			writeErr(w, http.StatusInternalServerError, "verify project: "+err.Error())
 			return
 		}
 		if !exists {
-			http.Error(w, "no such project", http.StatusNotFound)
+			writeErr(w, http.StatusNotFound, "no such project")
 			return
 		}
 	}
@@ -164,7 +164,7 @@ func (h *NotificationsHandler) MuteProject(w http.ResponseWriter, r *http.Reques
 		by = claims.UserID
 	}
 	if err := h.DB.SetProjectNotificationMute(ctx, project, by); err != nil {
-		http.Error(w, "mute project: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "mute project: "+err.Error())
 		return
 	}
 	if h.Notify != nil {
@@ -181,7 +181,7 @@ func (h *NotificationsHandler) UnmuteProject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.DB.ClearProjectNotificationMute(ctx, project); err != nil {
-		http.Error(w, "unmute project: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "unmute project: "+err.Error())
 		return
 	}
 	if h.Notify != nil {
@@ -200,7 +200,7 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	limit := 50
@@ -345,7 +345,7 @@ func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Notify == nil {
-		http.Error(w, "notify dispatcher not wired", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "notify dispatcher not wired")
 		return
 	}
 	// Test sends bypass the event-whitelist filter — otherwise a
@@ -359,7 +359,7 @@ func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
 		Severity: "info",
 	}); err != nil {
 		h.Logger.Error("notify test", "name", n.Name, "err", err)
-		http.Error(w, "test send failed: "+err.Error(), http.StatusBadGateway)
+		writeErr(w, http.StatusBadGateway, "test send failed: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -380,6 +380,9 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []db.Notification{}
 	}
+	for i := range out {
+		out[i] = maskNotificationConfig(out[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": out})
 }
 
@@ -391,7 +394,8 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "find", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": out})
+	masked := maskNotificationConfig(*out)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": masked})
 }
 
 type notifBody struct {
@@ -406,19 +410,25 @@ type notifBody struct {
 func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Name == "" || body.Type == "" {
-		http.Error(w, "name and type required", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "name and type required")
 		return
 	}
 	if !validNotificationType(body.Type) {
-		http.Error(w, "type must be "+notificationTypeList, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "type must be "+notificationTypeList)
+		return
+	}
+	// A sentinel on create has no stored value to fall back to —
+	// storing it literally would make the mask the credential.
+	if configHasMaskSentinel(body.Config) {
+		writeErr(w, http.StatusBadRequest, "config contains masked placeholder values — supply the real credential")
 		return
 	}
 	if err := validateNotificationConfig(body.Type, body.Config); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	id, err := randomID()
@@ -439,30 +449,45 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": n, "message": "Notification created successfully"})
+	masked := maskNotificationConfig(*n)
+	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": masked, "message": "Notification created successfully"})
 }
 
 func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
 	if body.Type != "" && !validNotificationType(body.Type) {
-		http.Error(w, "type must be "+notificationTypeList, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "type must be "+notificationTypeList)
 		return
-	}
-	if body.Type != "" && body.Config != nil {
-		if err := validateNotificationConfig(body.Type, body.Config); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
 	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	existing, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
 	if err != nil {
 		h.fail(w, "find", err)
+		return
+	}
+	if body.Config != nil {
+		// GET returns credential fields masked, so a read-modify-write
+		// from the UI echoes the sentinel back. Resolve sentinels to
+		// the stored values BEFORE validating — otherwise saving an
+		// unrelated field clobbers the real credential with the mask
+		// (or fails URL validation on the sentinel string).
+		body.Config = resolveMaskedConfig(body.Config, existing.Config)
+	}
+	// Validate the EFFECTIVE (type, config) pair — the pair that will be
+	// stored — regardless of which of the two fields the body carries. A
+	// PUT with only `type` used to skip validation entirely, switching
+	// the channel type over a stored config that was never validated for
+	// it (e.g. telegram → webhook reusing an un-SSRF-checked URL field).
+	if err := validateNotificationConfig(
+		effectiveNotifType(&body, existing),
+		effectiveNotifConfig(&body, existing),
+	); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// Apply partial: only overwrite supplied fields.
@@ -489,7 +514,8 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": existing, "message": "Notification updated successfully"})
+	masked := maskNotificationConfig(*existing)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": masked, "message": "Notification updated successfully"})
 }
 
 func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -508,10 +534,10 @@ func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *NotificationsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, notFoundMsg(err, db.ErrNotFound, kindFromOp(op)))
 	default:
 		h.Logger.Error("notifications handler", "op", op, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "internal")
 	}
 }
 
@@ -563,6 +589,99 @@ func validateNotificationConfig(typ string, cfg map[string]any) error {
 		return fmt.Errorf("unsupported notification type %q", typ)
 	}
 	return nil
+}
+
+// isSecretNotifConfigKey reports whether a config key carries a
+// credential for the given channel type. Webhook URLs count: Slack /
+// Discord / Mattermost webhook URLs embed the secret in the path, so
+// the URL IS the credential. The generic match is deliberately
+// conservative — anything credential-shaped (token/password/secret/
+// key/auth) masks, because a leaked mask on a benign field costs a
+// re-type while a missed credential field is a HIGH.
+func isSecretNotifConfigKey(typ, key string) bool {
+	k := strings.ToLower(key)
+	switch typ {
+	case "discord", "webhook", "slack", "mattermost":
+		if k == "url" || strings.HasSuffix(k, "url") {
+			return true
+		}
+	}
+	for _, marker := range []string{"token", "password", "secret", "apikey", "api_key", "credential", "auth"} {
+		if strings.Contains(k, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskNotificationConfig returns a copy with credential-bearing config
+// values replaced by envMaskSentinel — the same sentinel the env-var
+// masking uses, so the UI's read-modify-write contract is uniform.
+// The map is copied; the caller's (and any cache's) view is untouched.
+func maskNotificationConfig(n db.Notification) db.Notification {
+	if n.Config == nil {
+		return n
+	}
+	cfg := make(map[string]any, len(n.Config))
+	for k, v := range n.Config {
+		if s, ok := v.(string); ok && s != "" && isSecretNotifConfigKey(n.Type, k) {
+			cfg[k] = envMaskSentinel
+			continue
+		}
+		cfg[k] = v
+	}
+	n.Config = cfg
+	return n
+}
+
+// resolveMaskedConfig replaces sentinel values in an incoming config
+// with the stored values, so the mask a client read back never
+// overwrites a real credential. A sentinel with no stored counterpart
+// is dropped — validation then reports the missing required field
+// instead of the literal mask becoming the credential.
+func resolveMaskedConfig(incoming, stored map[string]any) map[string]any {
+	out := make(map[string]any, len(incoming))
+	for k, v := range incoming {
+		if s, ok := v.(string); ok && s == envMaskSentinel {
+			if prev, ok := stored[k]; ok {
+				out[k] = prev
+			}
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// effectiveNotifType returns the channel type an update will store:
+// the body's when supplied, else the existing one. Mirrors the partial-
+// update application below so validation always sees the stored pair.
+func effectiveNotifType(body *notifBody, existing *db.Notification) string {
+	if body.Type != "" {
+		return body.Type
+	}
+	return existing.Type
+}
+
+// effectiveNotifConfig returns the config an update will store: the
+// body's (sentinel-resolved) when supplied, else the existing one.
+func effectiveNotifConfig(body *notifBody, existing *db.Notification) map[string]any {
+	if body.Config != nil {
+		return body.Config
+	}
+	return existing.Config
+}
+
+// configHasMaskSentinel reports whether any config value is the mask
+// sentinel — only meaningful on create, where there's nothing stored
+// to resolve it against.
+func configHasMaskSentinel(cfg map[string]any) bool {
+	for _, v := range cfg {
+		if s, ok := v.(string); ok && s == envMaskSentinel {
+			return true
+		}
+	}
+	return false
 }
 
 // validateWebhookURL guards against SSRF-via-notification: an

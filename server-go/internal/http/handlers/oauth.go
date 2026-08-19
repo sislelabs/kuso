@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -105,7 +106,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !verifyStateCookie(r) {
-		http.Error(w, "state mismatch", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "state mismatch")
 		return
 	}
 	// Single-use enforcement — replay protection. ConsumeOAuthState
@@ -115,13 +116,13 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 	{
 		state := r.URL.Query().Get("state")
 		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
-			http.Error(w, "state already used or expired", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "state already used or expired")
 			return
 		}
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "missing code", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing code")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -189,19 +190,19 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !verifyStateCookie(r) {
-		http.Error(w, "state mismatch", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "state mismatch")
 		return
 	}
 	{
 		state := r.URL.Query().Get("state")
 		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
-			http.Error(w, "state already used or expired", http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, "state already used or expired")
 			return
 		}
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "missing code", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "missing code")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -290,9 +291,12 @@ func (h *OAuthHandler) loginAndIssue(ctx context.Context, prof *auth.OAuthProfil
 		// already existed.
 		//
 		// PromoteUserToAdminIfNoAdmin is the core: if the cluster has
-		// zero admin-group members, the current user becomes admin. So
-		// the first person to log in to a fresh install always gets
-		// admin, regardless of which version they're on when they do.
+		// zero admin-group members AND the promotion gate allows it
+		// (no password-seeded admin, or explicit
+		// KUSO_OAUTH_BOOTSTRAP_ADMIN opt-in), the current user
+		// becomes admin — so an OAuth-only fresh install still works,
+		// but the first stranger through an open-signup IdP can't
+		// silently claim an instance that already has a seeded admin.
 		if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
 			h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
 		}
@@ -451,27 +455,49 @@ func (h *OAuthHandler) mayAutoLink(ctx context.Context, existing *db.User, prof 
 // in this order:
 //
 //  1. Disaster recovery: if no admin group member exists in the whole
-//     cluster, promote this user to admin. Covers two cases —
-//     (a) first OAuth login on a fresh install (admin group exists
-//     empty after EnsureAdminGroup, no seed admin user), and
-//     (b) the seed admin was deleted and someone needs to take over.
+//     cluster AND the promotion gate allows it (see
+//     oauthBootstrapPromotionAllowed), promote this user to admin.
+//     Covers two cases — (a) first OAuth login on an OAuth-only fresh
+//     install (admin group exists empty after EnsureAdminGroup, no
+//     seed admin user), and (b) the seed admin was deleted and someone
+//     needs to take over (opt in via KUSO_OAUTH_BOOTSTRAP_ADMIN=true).
 //  2. Otherwise drop them in the pending group so an admin can grant
 //     access without them stumbling around the UI.
 //
 // Idempotent: re-running just re-attaches to whichever group they
 // already belong to (INSERT OR IGNORE on the pivot).
 func (h *OAuthHandler) bootstrapOrPending(ctx context.Context, userID string) error {
+	if allowed, reason := h.oauthBootstrapPromotionAllowed(ctx); !allowed {
+		// Only log when the user actually has nowhere to land —
+		// bootstrapOrPending runs on EVERY non-invite login, so an
+		// unconditional warn would spam the log for established users.
+		if groups, gerr := h.DB.UserGroupNames(ctx, userID); gerr == nil && len(groups) > 0 {
+			return nil
+		}
+		h.Logger.Warn("oauth: admin auto-promotion gated — new user goes to pending",
+			"user", userID, "reason", reason,
+			"hint", "set KUSO_OAUTH_BOOTSTRAP_ADMIN=true to allow the first OAuth sign-in to claim instance admin")
+		return h.attachPendingIfGroupless(ctx, userID)
+	}
 	promoted, err := h.DB.PromoteUserToAdminIfNoAdmin(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if promoted {
-		h.Logger.Info("oauth: promoted to admin (no other admins)", "user", userID)
+		// Loud by design: this grants full instance admin to whoever
+		// signed in — the operator must be able to spot it in logs.
+		h.Logger.Warn("oauth: PROMOTED USER TO INSTANCE ADMIN — no other admin existed (first-install/disaster-recovery bootstrap)",
+			"user", userID)
 		return nil
 	}
-	// Don't pile users into pending if they're already in any group
-	// — that includes existing admins, project members, and even
-	// users who were already pending (no point inserting twice).
+	return h.attachPendingIfGroupless(ctx, userID)
+}
+
+// attachPendingIfGroupless drops a group-less user into the pending
+// group so an admin can grant access without them stumbling around
+// the UI. Users already in any group — existing admins, project
+// members, already-pending — are left alone.
+func (h *OAuthHandler) attachPendingIfGroupless(ctx context.Context, userID string) error {
 	groups, gerr := h.DB.UserGroupNames(ctx, userID)
 	if gerr == nil && len(groups) > 0 {
 		return nil
@@ -484,6 +510,43 @@ func (h *OAuthHandler) bootstrapOrPending(ctx context.Context, userID string) er
 		return err
 	}
 	return h.DB.AddUserToGroup(ctx, userID, gid)
+}
+
+// oauthBootstrapPromotionAllowed is the gate on the first-OAuth-user-
+// becomes-admin path. The unrestricted form was a race: on an install
+// with OAuth configured against an open-signup provider, whoever
+// signed in first won instance admin even though the operator already
+// held a password-seeded admin account. Policy:
+//
+//   - KUSO_OAUTH_BOOTSTRAP_ADMIN=true|1  → always allowed (explicit
+//     opt-in; the disaster-recovery path when the seed admin is gone).
+//   - KUSO_OAUTH_BOOTSTRAP_ADMIN=false|0 → never allowed.
+//   - unset → allowed ONLY when no password-seeded admin path exists
+//     (no active local 'admin' user with a human-usable password) —
+//     the OAuth-only fresh install, where gating would brick first
+//     login. A stub-hash 'admin' is an OAuth-created account, not a
+//     password path, so it doesn't gate.
+//
+// Fails closed: if the seed-admin lookup errors for any reason other
+// than not-found, promotion is denied rather than guessed.
+func (h *OAuthHandler) oauthBootstrapPromotionAllowed(ctx context.Context) (bool, string) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KUSO_OAUTH_BOOTSTRAP_ADMIN"))) {
+	case "true", "1":
+		return true, ""
+	case "false", "0":
+		return false, "KUSO_OAUTH_BOOTSTRAP_ADMIN=false"
+	}
+	seed, err := h.DB.FindUserByUsername(ctx, "admin")
+	if errors.Is(err, db.ErrNotFound) {
+		return true, ""
+	}
+	if err != nil {
+		return false, "seed-admin lookup failed: " + err.Error()
+	}
+	if seed.Provider.Valid && seed.Provider.String == "local" && seed.IsActive && !auth.IsStubPasswordHash(seed.Password) {
+		return false, "password-seeded admin account exists — log in with it to grant roles"
+	}
+	return true, ""
 }
 
 // containsStr is a local copy of the helper in auth.go to avoid the
@@ -499,7 +562,7 @@ func containsStr(haystack []string, s string) bool {
 
 func (h *OAuthHandler) fail(w http.ResponseWriter, op string, err error) {
 	h.Logger.Error("oauth handler", "op", op, "err", err)
-	http.Error(w, "internal", http.StatusInternalServerError)
+	writeErr(w, http.StatusInternalServerError, "internal")
 }
 
 // failLogin maps the login-flow sentinels onto HTTP statuses. Disabled
@@ -511,10 +574,10 @@ func (h *OAuthHandler) failLogin(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, errOAuthAccountDisabled):
 		h.Logger.Warn("oauth: login rejected — account disabled", "op", op, "err", err)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, errOAuthAccountConflict):
 		h.Logger.Warn("oauth: login rejected — account collision", "op", op, "err", err)
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		h.fail(w, op, err)
 	}
@@ -532,7 +595,7 @@ func (h *OAuthHandler) failLogin(w http.ResponseWriter, op string, err error) {
 func (h *OAuthHandler) requireOAuthDB(w http.ResponseWriter) bool {
 	if h.DB == nil {
 		h.Logger.Error("oauth refused: no DB wired — OAuthState single-use enforcement unavailable")
-		http.Error(w, "oauth unavailable", http.StatusServiceUnavailable)
+		writeErr(w, http.StatusServiceUnavailable, "oauth unavailable")
 		return false
 	}
 	return true

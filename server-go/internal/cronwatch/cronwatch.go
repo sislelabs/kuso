@@ -44,6 +44,7 @@ import (
 	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/serverstate"
 )
 
 // Config tunes the loop. Zero values fall back to defaults.
@@ -55,9 +56,15 @@ type Config struct {
 	HTTPTimeout time.Duration
 }
 
+// DefaultTickInterval is the watcher's tick cadence when Config.Tick is
+// unset. Exported so main.go can register cronwatch in the serverstate
+// liveness registry at the cadence it beats. main.go constructs the
+// Watcher with the zero-value Config, so this is the effective interval.
+const DefaultTickInterval = 30 * time.Second
+
 func (c Config) tick() time.Duration {
 	if c.Tick <= 0 {
-		return 30 * time.Second
+		return DefaultTickInterval
 	}
 	return c.Tick
 }
@@ -132,6 +139,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			w.tick(ctx)
+			serverstate.LoopHeartbeat(serverstate.LoopCronWatch)
 		}
 	}
 }
@@ -305,13 +313,12 @@ func (w *Watcher) httpClient() *http.Client {
 // apiserver / addon DBs). The httpx transport resolves the host,
 // rejects reserved/private IPs, and re-dials the resolved IP so a DNS
 // rebind between check and dial can't slip through — string validation
-// of the stored URL alone is rebinding-racy. Mirrors the notify
+// of the stored URL alone is rebinding-racy. Redirects are refused
+// outright (a 302 hop gets its own DNS resolution and webhook POST
+// delivery has no legitimate redirect use). Mirrors the notify
 // dispatcher's client construction.
 func newWebhookClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: httpx.SSRFSafeTransport(),
-	}
+	return httpx.SSRFSafeNoRedirectClient(timeout)
 }
 
 // validateWebhookURLFn is an overridable seam so the dispatch tests

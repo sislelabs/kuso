@@ -21,6 +21,12 @@ import (
 // fakeService builds a *Service backed by typed-fake clientset (for
 // Secret ops) and dynamic-fake (for KusoEnvironment patches). The two
 // fakes share no state, so the env-CR side has to be seeded explicitly.
+//
+// Every distinct (project, service) referenced by the seeded envs gets
+// an owning KusoService CR seeded automatically, so requireOwnedService
+// passes on the happy path. Cross-tenant tests seed their victim service
+// under the REAL owner and then call with the attacker project — the
+// ownership check rejects that even though the Secret exists.
 func fakeService(t *testing.T, envSeeds ...envSeed) *Service {
 	t.Helper()
 	cs := fake.NewSimpleClientset()
@@ -28,7 +34,9 @@ func fakeService(t *testing.T, envSeeds ...envSeed) *Service {
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		kube.GVREnvironments: "KusoEnvironmentList",
+		kube.GVRServices:     "KusoServiceList",
 	})
+	seededSvc := map[string]bool{}
 	for _, e := range envSeeds {
 		u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(e.env)
 		if err != nil {
@@ -41,12 +49,56 @@ func fakeService(t *testing.T, envSeeds ...envSeed) *Service {
 		if err := dyn.Tracker().Create(kube.GVREnvironments, obj, "kuso"); err != nil {
 			t.Fatalf("seed env: %v", err)
 		}
+		// Auto-seed the owning KusoService derived from the env's labels.
+		proj := e.env.Labels[kube.LabelProject]
+		svc := e.env.Labels[kube.LabelService]
+		key := proj + "/" + svc
+		if proj != "" && svc != "" && !seededSvc[key] {
+			seedServiceInto(t, dyn, proj, svc)
+			seededSvc[key] = true
+		}
 	}
 	return &Service{Kube: &kube.Client{Clientset: cs, Dynamic: dyn}, Namespace: "kuso"}
 }
 
+// seedServiceInto registers a KusoService CR named "<project>-<service>"
+// owned by project into the dynamic tracker.
+func seedServiceInto(t *testing.T, dyn *dynamicfake.FakeDynamicClient, project, service string) {
+	t.Helper()
+	svc := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				kube.LabelProject: project,
+				kube.LabelService: service,
+			},
+		},
+		Spec: kube.KusoServiceSpec{Project: project},
+	}
+	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(svc)
+	if err != nil {
+		t.Fatalf("encode service: %v", err)
+	}
+	obj := &unstructured.Unstructured{Object: u}
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: kube.GVRServices.Group, Version: kube.GVRServices.Version, Kind: "KusoService",
+	})
+	if err := dyn.Tracker().Create(kube.GVRServices, obj, "kuso"); err != nil {
+		t.Fatalf("seed service: %v", err)
+	}
+}
+
 type envSeed struct {
 	env *kube.KusoEnvironment
+}
+
+// seedService seeds an owning KusoService onto an already-built fake
+// Service, for tests that don't seed any env (so no service is
+// auto-derived) but still exercise a guarded secret op.
+func seedService(t *testing.T, s *Service, project, service string) {
+	t.Helper()
+	seedServiceInto(t, s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient), project, service)
 }
 
 func seedEnv(name, project, service, kind string, envFromSecrets []string) envSeed {
@@ -244,6 +296,7 @@ func TestUnsetKey_MissingKey(t *testing.T) {
 func TestListKeys_EmptySecret(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t)
+	seedService(t, s, "alpha", "web")
 	keys, err := s.ListKeys(context.Background(), "alpha", "web", "")
 	if err != nil {
 		t.Fatalf("ListKeys: %v", err)
@@ -377,6 +430,7 @@ func TestJSONPointerEscape(t *testing.T) {
 func TestMarkGenerated_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := fakeService(t)
+	seedService(t, s, "alpha", "web")
 	// The shared Secret must exist before we can annotate it.
 	if err := s.SetKey(ctx, "alpha", "web", "", "PAYLOAD_SECRET", "deadbeef"); err != nil {
 		t.Fatalf("SetKey: %v", err)
@@ -397,6 +451,52 @@ func TestMarkGenerated_RoundTrip(t *testing.T) {
 	}
 	if _, ok := kinds["OPENAI_API_KEY"]; ok {
 		t.Fatal("hand-set secret must not be reported as generated")
+	}
+}
+
+// TestOwnershipGuard_CrossTenant proves that a caller authorized for
+// project "foo" cannot read, write, or delete the secrets of a service
+// that resolves to the SAME Secret name but is owned by project
+// "foo-bar" (name collision: foo + service "bar-svc" == foo-bar +
+// service "svc" == "foo-bar-svc-secrets"). Even though the victim's
+// Secret and service CR exist, the guard returns ErrNotFound so
+// existence is never leaked.
+func TestOwnershipGuard_CrossTenant(t *testing.T) {
+	ctx := context.Background()
+	// Victim: project "foo-bar", service "svc" — Secret name foo-bar-svc-secrets.
+	s := fakeService(t, seedEnv("foo-bar-svc-production", "foo-bar", "svc", "production", nil))
+	// Seed the victim's live shared secret.
+	if err := s.SetKey(ctx, "foo-bar", "svc", "", "VICTIM_KEY", "sensitive"); err != nil {
+		t.Fatalf("seed victim secret: %v", err)
+	}
+
+	// Attacker is authorized for project "foo" and passes service
+	// "bar-svc", which concatenates to the SAME Secret name.
+	if _, err := s.ListKeys(ctx, "foo", "bar-svc", ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-tenant ListKeys: want ErrNotFound, got %v", err)
+	}
+	if err := s.SetKeyOpts(ctx, "foo", "bar-svc", "", "POISON", "x", SetOptions{Force: true}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-tenant SetKey: want ErrNotFound, got %v", err)
+	}
+	if err := s.UnsetKey(ctx, "foo", "bar-svc", "", "VICTIM_KEY"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-tenant UnsetKey: want ErrNotFound, got %v", err)
+	}
+
+	// The victim's Secret must be untouched: VICTIM_KEY present, no POISON.
+	sec, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(ctx, "foo-bar-svc-secrets", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("victim secret gone: %v", err)
+	}
+	if string(sec.Data["VICTIM_KEY"]) != "sensitive" {
+		t.Errorf("VICTIM_KEY mutated: %q", sec.Data["VICTIM_KEY"])
+	}
+	if _, ok := sec.Data["POISON"]; ok {
+		t.Error("attacker POISON key landed in victim secret")
+	}
+
+	// Same-project happy path still works for the real owner.
+	if _, err := s.ListKeys(ctx, "foo-bar", "svc", ""); err != nil {
+		t.Errorf("owner ListKeys: %v", err)
 	}
 }
 
