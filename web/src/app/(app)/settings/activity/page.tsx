@@ -109,7 +109,7 @@ export default function ActivityPage() {
           ))}
         </div>
       ) : query.isError ? (
-        <div className="rounded-md border border-red-500/40 bg-red-500/5 p-4 text-sm text-red-300">
+        <div className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           {(query.error as Error).message.includes("403")
             ? "Set a project filter to see audit entries — instance-wide audit requires admin."
             : `Failed to load audit log: ${(query.error as Error).message}`}
@@ -142,9 +142,9 @@ export default function ActivityPage() {
                     <span
                       className={
                         r.severity === "error"
-                          ? "text-red-300"
+                          ? "text-[var(--error)]"
                           : r.severity === "warning"
-                            ? "text-amber-300"
+                            ? "text-[var(--warning)]"
                             : "text-[var(--text-primary)]"
                       }
                     >

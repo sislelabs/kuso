@@ -10,6 +10,7 @@ import { api } from "@/lib/api-client";
 import { Globe, Plus, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 // /settings/instance-secrets — instance-wide env vars. Admin-only.
 // Every service in every project gets these mounted via envFromSecrets
@@ -59,7 +60,7 @@ export default function InstanceSecretsPage() {
   if (!isAdmin) {
     return (
       <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
           Instance-wide secrets are admin-only.
         </p>
       </div>
@@ -120,9 +121,11 @@ export default function InstanceSecretsPage() {
         {list.isPending ? (
           <Skeleton className="h-16 w-full" />
         ) : visibleKeys.length === 0 ? (
-          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-8 text-center text-[12px] text-[var(--text-tertiary)]">
-            No instance secrets yet. Add one below.
-          </p>
+          <EmptyState
+            title="No instance secrets yet"
+            description="Add one below."
+            className="px-3 py-8"
+          />
         ) : (
           <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
             {visibleKeys.map((k) => (
@@ -137,7 +140,7 @@ export default function InstanceSecretsPage() {
                   type="button"
                   onClick={() => setPendingDelete(k)}
                   disabled={unset.isPending}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
                   aria-label={`Delete ${k}`}
                 >
                   <Trash2 className="h-3.5 w-3.5" />

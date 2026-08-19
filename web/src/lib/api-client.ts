@@ -3,20 +3,27 @@ import { env } from "./env";
 export class ApiError extends Error {
   status: number;
   body: unknown;
+  // Machine-readable code from the server's JSON error envelope
+  // {"error": "...", "code": "not_found"|"conflict"|...}. Undefined
+  // for older servers / non-envelope bodies.
+  code?: string;
   constructor(status: number, body: unknown, message: string) {
-    // Prefer the response body when it carries a useful string —
-    // the server returns "addon foo/bar already exists" (text) on
-    // 409, and surfacing that beats a bare "409 Conflict". JSON
-    // objects with .error or .message are also unwrapped. Falls
-    // back to the raw status text when nothing better is there.
+    // The server's canonical error shape is the JSON envelope
+    // {error, code} (writeErr). The other tiers stay for backward
+    // compat: plain-text bodies from older servers / proxies, and
+    // {message} from upstream shapes. Falls back to the raw status
+    // text when nothing better is there.
     const friendly =
-      (typeof body === "string" && body.trim() !== "" && body.trim()) ||
       (body && typeof body === "object" && "error" in body && typeof (body as { error: unknown }).error === "string" && (body as { error: string }).error) ||
+      (typeof body === "string" && body.trim() !== "" && body.trim()) ||
       (body && typeof body === "object" && "message" in body && typeof (body as { message: unknown }).message === "string" && (body as { message: string }).message) ||
       message;
     super(friendly as string);
     this.status = status;
     this.body = body;
+    if (body && typeof body === "object" && "code" in body && typeof (body as { code: unknown }).code === "string") {
+      this.code = (body as { code: string }).code;
+    }
   }
 }
 

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   getProject,
+  getProjectsSummary,
   listAddons,
   listEnvironments,
   listEnvGroups,
@@ -11,6 +12,7 @@ import {
 } from "./api";
 
 export const projectsQueryKey = ["projects"] as const;
+export const projectsSummaryQueryKey = ["projects", "summary"] as const;
 export const projectQueryKey = (name: string) => ["projects", name] as const;
 export const servicesQueryKey = (project: string) =>
   ["projects", project, "services"] as const;
@@ -43,6 +45,24 @@ export function useEnvGroups(project: string) {
 
 export function useProjects() {
   return useQuery({ queryKey: projectsQueryKey, queryFn: listProjects });
+}
+
+// useProjectsSummary drives the projects dashboard with ONE request:
+// describe rollup + metrics for every accessible project, replacing the
+// old per-card describe + per-card metrics useQueries fan-out (2N
+// requests for N projects, every poll cycle, per open tab). Polls every
+// 30s — metrics-server emits new samples every 15s so 30s gives
+// near-fresh data without hammering the API — and only while the tab is
+// visible (refetchIntervalInBackground: false), matching the polling
+// discipline of the queries it replaces.
+export function useProjectsSummary() {
+  return useQuery({
+    queryKey: projectsSummaryQueryKey,
+    queryFn: getProjectsSummary,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    staleTime: 25_000,
+  });
 }
 
 export function useProject(name: string) {

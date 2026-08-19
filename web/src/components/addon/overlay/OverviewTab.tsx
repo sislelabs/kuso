@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { LoadingState } from "@/components/ui/loading-state";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
 // helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
@@ -94,9 +95,9 @@ export function OverviewTab({
             to view connection details — your role doesn&apos;t carry it.
           </p>
         ) : conn.isPending ? (
-          <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">loading…</p>
+          <LoadingState kind="inline" className="px-3 py-3" />
         ) : conn.isError ? (
-          <p className="px-3 py-3 font-mono text-[11px] text-amber-400">
+          <p className="px-3 py-3 font-mono text-[11px] text-[var(--warning)]">
             {conn.error instanceof Error ? conn.error.message : "load failed"}
           </p>
         ) : Object.keys(conn.data?.values ?? {}).length === 0 ? (

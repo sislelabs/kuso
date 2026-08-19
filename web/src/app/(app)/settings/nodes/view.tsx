@@ -189,7 +189,7 @@ export function NodesView() {
   if (!isAdmin) {
     return (
       <div className="mx-auto max-w-4xl p-6 lg:p-8">
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
           Cluster nodes are admin-only. Ask a team admin to enable it for you.
         </p>
       </div>
@@ -256,7 +256,7 @@ export function NodesView() {
           <Skeleton className="h-32 w-full" />
         </div>
       ) : nodes.isError ? (
-        <p className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400">
+        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           Failed to load nodes: {nodes.error?.message}
         </p>
       ) : (
@@ -352,7 +352,7 @@ function NodeCard({
       className={cn(
         "rounded-md border bg-[var(--bg-secondary)] p-4 transition-colors",
         isDirty
-          ? "border-amber-500/30 bg-amber-500/[0.02]"
+          ? "border-[var(--warning)]/30 bg-[var(--warning-subtle)]"
           : "border-[var(--border-subtle)]"
       )}
     >
@@ -375,16 +375,16 @@ function NodeCard({
             {node.zone && <span>zone {node.zone}</span>}
             {node.unreachable ? (
               <span
-                className="rounded bg-red-500/10 px-1.5 py-0.5 text-red-400"
+                className="rounded bg-[var(--error-subtle)] px-1.5 py-0.5 text-[var(--error)]"
                 title="kuso has cordoned this node because it has been NotReady past the threshold. Will auto-uncordon when the node recovers."
               >
                 unreachable
               </span>
             ) : !node.schedulable ? (
-              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">cordoned</span>
+              <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">cordoned</span>
             ) : null}
             {isDirty && (
-              <span className="ml-auto rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">
+              <span className="ml-auto rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">
                 unsaved
               </span>
             )}
@@ -459,7 +459,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   const checked = advisory.checkedAt ? relativeTime(advisory.checkedAt) : "—";
   if (advisory.count === 0) {
     return (
-      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-emerald-400/80">
+      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--success)]">
         <Package className="h-3 w-3" /> up to date
         <span className="text-[var(--text-tertiary)]">· checked {checked}</span>
         {phase === "done" && advisory.apply.at && (
@@ -471,7 +471,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   // In-flight apply banner — shown while a patch/reboot is running.
   if (inFlight) {
     return (
-      <div className="mt-3 flex items-center gap-1.5 rounded-md border border-sky-500/20 bg-sky-500/[0.04] px-3 py-2 text-[11px] text-sky-300">
+      <div className="mt-3 flex items-center gap-1.5 rounded-md border border-[var(--info)]/20 bg-[var(--info-subtle)] px-3 py-2 text-[11px] text-[var(--info)]">
         <RotateCcw className="h-3.5 w-3.5 shrink-0 animate-spin" />
         {phase === "rebooting"
           ? "Patched — rebooting node to finish…"
@@ -485,15 +485,15 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
     );
   }
   return (
-    <div className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/[0.03] px-3 py-2">
+    <div className="mt-3 rounded-md border border-[var(--warning)]/20 bg-[var(--warning-subtle)] px-3 py-2">
       <div className="flex items-center gap-2 text-[11px]">
-        <Package className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-        <span className="font-medium text-amber-300">
+        <Package className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
+        <span className="font-medium text-[var(--warning)]">
           {advisory.count} package update{advisory.count === 1 ? "" : "s"} available
         </span>
         {advisory.rebootRequired && (
           <span
-            className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-300"
+            className="inline-flex items-center gap-1 rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
             title="A host reboot is required to fully apply these updates."
           >
             <RotateCcw className="h-2.5 w-2.5" /> reboot needed
@@ -518,7 +518,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
         </ul>
       )}
       {phase === "failed" && (
-        <p className="mt-1.5 truncate font-mono text-[10px] text-red-400" title={advisory.apply.log}>
+        <p className="mt-1.5 truncate font-mono text-[10px] text-[var(--error)]" title={advisory.apply.log}>
           last apply failed: {advisory.apply.log || "see server logs"}
         </p>
       )}
@@ -527,7 +527,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
           type="button"
           onClick={() => setConfirmOpen(true)}
           disabled={apply.isPending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-2.5 text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/25 disabled:opacity-50"
         >
           <Package className="h-3 w-3" /> Apply updates
         </button>
@@ -542,7 +542,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
               <span className="font-mono">{advisory.node}</span>.
             </p>
             {advisory.rebootRequired && (
-              <p className="text-amber-300">
+              <p className="text-[var(--warning)]">
                 These updates require a <strong>reboot</strong>. Confirming will patch and then
                 reboot the node — workloads on it restart, and if this is the control-plane node
                 the kuso UI will briefly disconnect until it comes back.
@@ -669,7 +669,7 @@ function Chip({ label, onRemove }: { label: Label; onRemove: () => void }) {
         type="button"
         onClick={onRemove}
         aria-label={`Remove ${label.key}`}
-        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-primary)] hover:text-red-400 group-hover:opacity-100"
+        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-primary)] hover:text-[var(--error)] group-hover:opacity-100"
       >
         <X className="h-2.5 w-2.5" />
       </button>
@@ -758,7 +758,7 @@ function DraftEditor({
       <button
         type="button"
         onClick={onCancel}
-        className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)]/50 hover:text-red-400"
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)]/50 hover:text-[var(--error)]"
         title="Cancel (Esc)"
         aria-label="Cancel"
       >
@@ -958,7 +958,7 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
       <button
         type="button"
         onClick={() => setConfirming(true)}
-        className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+        className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
         aria-label={`Remove ${node.name}`}
         title="Cordon, drain, and delete this node"
       >
@@ -967,14 +967,14 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
     );
   }
   return (
-    <div className="inline-flex items-center gap-1 rounded border border-red-500/30 bg-red-500/5 px-1.5 py-0.5">
-      <span className="font-mono text-[10px] text-red-400">remove?</span>
+    <div className="inline-flex items-center gap-1 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-1.5 py-0.5">
+      <span className="font-mono text-[10px] text-[var(--error)]">remove?</span>
       <Button
         size="sm"
         variant="ghost"
         onClick={() => remove.mutate()}
         disabled={remove.isPending}
-        className="h-5 px-1 text-[10px] text-red-400 hover:bg-red-500/20"
+        className="h-5 px-1 text-[10px] text-[var(--error)] hover:bg-[var(--error-subtle)]"
       >
         {remove.isPending ? "…" : "yes"}
       </Button>
@@ -1307,7 +1307,7 @@ function AddNodeModal({
                     />
                     <span className="w-24 shrink-0 text-[var(--text-secondary)]">{c.label}</span>
                     <span
-                      className={cn(c.ok ? "text-[var(--text-secondary)]" : "text-red-400")}
+                      className={cn(c.ok ? "text-[var(--text-secondary)]" : "text-[var(--error)]")}
                     >
                       {c.detail}
                     </span>
@@ -1730,7 +1730,7 @@ function NodeHistoryModal({
           {history.isPending ? (
             <Skeleton className="h-40 w-full" />
           ) : history.isError ? (
-            <p className="font-mono text-[11px] text-red-400">
+            <p className="font-mono text-[11px] text-[var(--error)]">
               Failed to load history: {history.error?.message}
             </p>
           ) : samples.length === 0 ? (
@@ -2016,8 +2016,8 @@ function PendingBootstrapTokensCard() {
   const tokens = pending.data?.tokens ?? [];
   if (tokens.length === 0) return null;
   return (
-    <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
-      <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-amber-400">
+    <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3">
+      <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--warning)]">
         Pending bootstrap tokens · {tokens.length}
       </p>
       <ul className="space-y-1.5">

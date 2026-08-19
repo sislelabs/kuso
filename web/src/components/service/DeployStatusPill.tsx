@@ -9,7 +9,42 @@ export type DeployStatus =
   | "stopped"
   | "failed"
   | "crashed"
+  | "degraded"
   | "unknown";
+
+// Maps the server-derived env.status.state (the unified rollup from
+// server-go/internal/projects/state.go) onto the existing visual
+// vocabulary. null = state absent/unrecognised (old server) — callers
+// fall back to their client-side heuristics.
+export function deployStatusFromServerState(
+  state?: string
+): DeployStatus | null {
+  switch (state) {
+    case "running":
+      return "active";
+    case "degraded":
+      return "degraded";
+    case "crashlooping":
+      return "crashed";
+    case "deploying":
+      return "deploying";
+    case "building":
+      return "building";
+    case "build_failed":
+    case "release_failed":
+      return "failed";
+    case "sleeping":
+      return "sleeping";
+    case "stopped":
+      return "stopped";
+    case "no_image":
+      return "awaiting";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
 
 const styles: Record<DeployStatus, string> = {
   // Building/deploying ride the dedicated --building hue (yellow)
@@ -37,6 +72,10 @@ const styles: Record<DeployStatus, string> = {
     "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
   crashed:
     "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
+  // Degraded — partially up (some replicas ready). Warning hue, not
+  // error red: traffic is still being served.
+  degraded:
+    "bg-[var(--warning-subtle)] text-[var(--warning)] border-[var(--warning)]/30",
   unknown:
     "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]",
 };

@@ -114,7 +114,7 @@ function Stepper({ current, hasGitHub }: { current: Step; hasGitHub: boolean }) 
             className={cn(
               "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-mono",
               s.done
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-[var(--success)]"
                 : s.id === current
                   ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--accent)]"
                   : "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
@@ -169,7 +169,7 @@ function Step1InstallGitHub({
           <Skeleton className="h-8 w-40" />
         ) : ready ? (
           <>
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 font-mono text-[11px] text-emerald-300">
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 font-mono text-[11px] text-[var(--success)]">
               <CheckCircle2 className="h-3 w-3" />
               {installations.length} installation{installations.length === 1 ? "" : "s"} found
             </span>
@@ -421,7 +421,7 @@ function Step3Deploy({ project }: { project: string }) {
   return (
     <div>
       <div className="flex items-start gap-3">
-        <CheckCircle2 className="mt-1 h-5 w-5 text-emerald-400" />
+        <CheckCircle2 className="mt-1 h-5 w-5 text-[var(--success)]" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight">
             Project <span className="font-mono">{project}</span> is live

@@ -5,7 +5,10 @@ import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink, MoreHorizontal, Square } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
-import { type DeployStatus } from "@/components/service/DeployStatusPill";
+import {
+  deployStatusFromServerState,
+  type DeployStatus,
+} from "@/components/service/DeployStatusPill";
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
@@ -52,6 +55,16 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
     return "building";
   }
   if (buildStatus === "deploying") return "deploying";
+
+  // Server-derived unified rollup (env.status.state) wins over the
+  // client-side heuristics below — it folds in pod-level truth
+  // (crashloops, degraded replica counts) the client can't see from
+  // the env CR alone. The in-flight-build check stays above because
+  // the canvas polls builds at a faster cadence than the describe
+  // payload refreshes. Absent state (older server) falls through to
+  // the legacy derivation unchanged.
+  const server = deployStatusFromServerState(env?.status?.state);
+  if (server) return server;
 
   if (env?.status?.ready) return "active";
 
@@ -184,6 +197,10 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
     <div
       data-node-context
       onContextMenu={data.__onContext}
+      // Native tooltip carries the server rollup's human reason
+      // ("release hook failed; last green build still serving") so the
+      // border colour is explainable without opening the overlay.
+      title={data.env?.status?.stateDetail || undefined}
       className={cn(
         // Fixed height (5 × 24px grid units = 120px). Footer packs
         // replicas + build line on one row, so we don't need the
@@ -195,7 +212,10 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         (status === "building" || status === "deploying") &&
           "border-[var(--building)]/70 animate-pulse",
         status === "active" && "border-emerald-500/60",
-        status === "failed" && "border-red-500/60",
+        (status === "failed" || status === "crashed") && "border-red-500/60",
+        // Degraded — partially serving. Warning hue (not red): traffic
+        // still flows, but not at full replica count.
+        status === "degraded" && "border-[var(--warning)]/60",
         // Awaiting first build — sky/informational, distinct from both
         // green (running) and red (broken).
         status === "awaiting" && "border-sky-500/50",
@@ -203,7 +223,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         // Stopped — dimmed like sleeping but with a slate border so it
         // reads as an explicit "off", not a low-traffic doze.
         status === "stopped" && "opacity-60 border-slate-500/50",
-        !["building", "deploying", "active", "awaiting", "failed", "sleeping", "stopped"].includes(status) &&
+        !["building", "deploying", "active", "awaiting", "failed", "crashed", "degraded", "sleeping", "stopped"].includes(status) &&
           "border-[var(--border-strong)]",
         // Keyboard focus ring — outline (not border) so it stacks on
         // top of the status colour without overriding it.

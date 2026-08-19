@@ -38,7 +38,7 @@ export default function IncidentAgentPage() {
   if (q.isPending) return <Skeleton className="m-6 h-96" />;
   if (q.isError)
     return (
-      <p className="m-6 font-mono text-sm text-red-400">
+      <p className="m-6 font-mono text-sm text-[var(--error)]">
         {q.error instanceof Error ? q.error.message : "failed to load"}
       </p>
     );
@@ -120,7 +120,7 @@ function MonitoredProjectsSection({
           {!agentEnabled && (
             <>
               {" "}
-              <span className="text-amber-400">
+              <span className="text-[var(--warning)]">
                 The agent is currently disabled above, so nothing fires regardless.
               </span>
             </>
@@ -245,7 +245,7 @@ function ConfigSection({
       <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle className="flex items-center gap-2 text-sm">
           {draft.enabled ? (
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
+            <ShieldCheck className="h-4 w-4 text-[var(--success)]" />
           ) : (
             <AlertTriangle className="h-4 w-4 text-[var(--text-tertiary)]" />
           )}
@@ -253,7 +253,7 @@ function ConfigSection({
             className={cn(
               "rounded-full px-2 py-0.5 text-[11px] font-medium",
               draft.enabled
-                ? "bg-emerald-500/10 text-emerald-400"
+                ? "bg-emerald-500/10 text-[var(--success)]"
                 : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
             )}
           >
@@ -542,8 +542,8 @@ function StatusLine({ ok, okText, badText }: { ok: boolean; okText: string; badT
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
         ok
-          ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
-          : "border-amber-500/20 bg-amber-500/5 text-amber-400",
+          ? "border-emerald-500/20 bg-emerald-500/5 text-[var(--success)]"
+          : "border-[var(--warning)]/20 bg-[var(--warning-subtle)] text-[var(--warning)]",
       )}
     >
       <span>{ok ? "✓" : "⚠"}</span>

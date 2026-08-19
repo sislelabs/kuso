@@ -47,20 +47,20 @@ const SEVERITY_META: Record<
   critical: {
     label: "Critical",
     icon: AlertCircle,
-    pill: "bg-red-500/10 text-red-400 border-red-500/30",
-    border: "border-red-500/30",
+    pill: "bg-[var(--error-subtle)] text-[var(--error)] border-[var(--error)]/30",
+    border: "border-[var(--error)]/30",
   },
   warning: {
     label: "Warning",
     icon: AlertTriangle,
-    pill: "bg-amber-500/10 text-amber-400 border-amber-500/30",
-    border: "border-amber-500/30",
+    pill: "bg-[var(--warning-subtle)] text-[var(--warning)] border-[var(--warning)]/30",
+    border: "border-[var(--warning)]/30",
   },
   info: {
     label: "Info",
     icon: Info,
-    pill: "bg-sky-500/10 text-sky-400 border-sky-500/30",
-    border: "border-sky-500/30",
+    pill: "bg-[var(--info-subtle)] text-[var(--info)] border-[var(--info)]/30",
+    border: "border-[var(--info)]/30",
   },
 };
 
@@ -101,7 +101,7 @@ export default function HealthPage() {
           <Skeleton className="h-16 w-full" />
         </div>
       ) : isError ? (
-        <p className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-300">
+        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           Couldn&apos;t load reconcile health:{" "}
           {error instanceof Error ? error.message : "unknown error"}
         </p>
@@ -134,8 +134,8 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
               className={cn(
                 "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
                 hasIssues
-                  ? "bg-amber-500/10 text-amber-400"
-                  : "bg-emerald-500/10 text-emerald-400"
+                  ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
+                  : "bg-emerald-500/10 text-[var(--success)]"
               )}
             >
               <ShieldCheck className="h-5 w-5" />
@@ -162,8 +162,8 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
 
       {!hasIssues ? (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-8 text-center">
-          <ShieldCheck className="mx-auto h-8 w-8 text-emerald-400" />
-          <p className="mt-3 text-sm font-medium text-emerald-200">
+          <ShieldCheck className="mx-auto h-8 w-8 text-[var(--success)]" />
+          <p className="mt-3 text-sm font-medium text-[var(--success)]">
             ✓ All {report.scanned} resources reconciling cleanly.
           </p>
         </div>
@@ -353,7 +353,7 @@ function CopyableCommand({ command }: { command: string }) {
         aria-label="Copy command"
         className="inline-flex shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
-        {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
     </div>
   );

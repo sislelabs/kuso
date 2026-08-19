@@ -5,6 +5,8 @@ import { useMarketplace, type MarketplaceApp } from "@/features/marketplace";
 import { DeployDialog } from "@/components/marketplace/DeployDialog";
 import { env } from "@/lib/env";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 export default function MarketplacePage() {
   const { data: apps = [], isLoading } = useMarketplace();
@@ -44,7 +46,17 @@ export default function MarketplacePage() {
       </div>
 
       {isLoading ? (
-        <p className="mt-6 text-sm text-[var(--text-tertiary)]">Loading…</p>
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <LoadingState kind="card" />
+          <LoadingState kind="card" />
+          <LoadingState kind="card" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          title="No apps match"
+          description="Try a different search or category."
+          className="mt-6 p-8"
+        />
       ) : (
         <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((a) => (

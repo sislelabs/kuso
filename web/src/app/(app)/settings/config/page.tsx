@@ -104,7 +104,7 @@ export default function ClusterConfigPage() {
       </header>
 
       {!canEdit && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 font-mono text-[10px] text-amber-400">
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 font-mono text-[10px] text-[var(--warning)]">
           You don&apos;t have <span className="text-[var(--text-secondary)]">settings:admin</span>.
           The form is read-only.
         </p>
@@ -159,7 +159,7 @@ export default function ClusterConfigPage() {
             className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)] disabled:opacity-50"
           />
           {rawError && (
-            <p className="mt-2 font-mono text-[10px] text-red-400">parse error: {rawError}</p>
+            <p className="mt-2 font-mono text-[10px] text-[var(--error)]">parse error: {rawError}</p>
           )}
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">

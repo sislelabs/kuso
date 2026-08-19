@@ -178,6 +178,25 @@ export interface KusoEnvironment {
     url?: string;
     lastDeployedAt?: string;
     phase?: string;
+    // Unified per-env service-state rollup, server-derived on the
+    // describe path (server-go/internal/projects/state.go). One
+    // answer to "is my app up?" — build + deployment + pod health
+    // folded into a single value. stateDetail is the short human
+    // reason ("release hook failed; last green build still serving").
+    state?:
+      | "running"
+      | "degraded"
+      | "crashlooping"
+      | "deploying"
+      | "building"
+      | "build_failed"
+      | "release_failed"
+      | "sleeping"
+      | "stopped"
+      | "no_image"
+      | "unknown"
+      | (string & {});
+    stateDetail?: string;
     [k: string]: unknown;
   };
 }

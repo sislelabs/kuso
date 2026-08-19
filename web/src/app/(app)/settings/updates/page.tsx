@@ -124,15 +124,15 @@ export default function UpdatesPage() {
           v.needsUpdate
             ? v.canAutoUpgrade
               ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
-              : "border-amber-500/30 bg-amber-500/5"
+              : "border-[var(--warning)]/30 bg-[var(--warning-subtle)]"
             : "border-emerald-500/30 bg-emerald-500/5"
         )}
       >
         <div className="flex items-start gap-3">
           {v.needsUpdate ? (
-            <AlertTriangle className={cn("h-5 w-5 shrink-0", v.canAutoUpgrade ? "text-[var(--accent)]" : "text-amber-400")} />
+            <AlertTriangle className={cn("h-5 w-5 shrink-0", v.canAutoUpgrade ? "text-[var(--accent)]" : "text-[var(--warning)]")} />
           ) : (
-            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--success)]" />
           )}
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold">
@@ -153,10 +153,10 @@ export default function UpdatesPage() {
               )}
             </div>
             {v.blockedReason && (
-              <p className="mt-2 text-[11px] text-amber-400">{v.blockedReason}</p>
+              <p className="mt-2 text-[11px] text-[var(--warning)]">{v.blockedReason}</p>
             )}
             {v.lastCheckError && (
-              <p className="mt-2 text-[11px] text-red-400">poll error: {v.lastCheckError}</p>
+              <p className="mt-2 text-[11px] text-[var(--error)]">poll error: {v.lastCheckError}</p>
             )}
           </div>
           {v.needsUpdate && v.canAutoUpgrade && canUpdate && (
@@ -222,7 +222,7 @@ export default function UpdatesPage() {
         </section>
       )}
       {status.data?.phase === "failed" && (
-        <section className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-[11px] text-red-400">
+        <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 text-[11px] text-[var(--error)]">
           Last upgrade failed: {status.data.message || "(no message)"}
         </section>
       )}

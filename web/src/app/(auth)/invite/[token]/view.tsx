@@ -17,6 +17,7 @@ import { sessionQueryKey } from "@/features/auth/hooks";
 import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/loading-state";
 import { Github } from "lucide-react";
 import { toast } from "sonner";
 
@@ -120,7 +121,7 @@ export function InviteRedeemView() {
   // until window is available, so we show the spinner once and let
   // the next render kick off the lookup.
   if (!token) {
-    return <p className="text-sm text-[var(--text-tertiary)]">Loading…</p>;
+    return <LoadingState kind="card" />;
   }
 
   if (error) {
@@ -136,7 +137,7 @@ export function InviteRedeemView() {
   }
 
   if (!summary) {
-    return <p className="text-sm text-[var(--text-tertiary)]">Loading invitation…</p>;
+    return <LoadingState kind="inline" label="loading invitation…" />;
   }
 
   const expiresIn = summary.expiresAt

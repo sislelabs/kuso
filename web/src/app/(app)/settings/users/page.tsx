@@ -12,6 +12,7 @@ import { Users as UsersIcon, Plus, Trash2, KeyRound, X, Link2, Copy, Check } fro
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 interface UserRow {
   id: string;
@@ -57,7 +58,7 @@ export default function UsersPage() {
       </header>
 
       {!canWrite && (
-        <p className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 font-mono text-[10px] text-amber-400">
+        <p className="mb-4 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 font-mono text-[10px] text-[var(--warning)]">
           You don&apos;t have <span className="text-[var(--text-secondary)]">user:write</span>.
           The page is read-only.
         </p>
@@ -165,9 +166,11 @@ function InvitesSection() {
       {list.isPending ? (
         <Skeleton className="h-24 rounded-md" />
       ) : items.length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-xs text-[var(--text-tertiary)]">
-          No invites yet.
-        </p>
+        <EmptyState
+          title="No invites yet"
+          description="Mint an invite link to bring a teammate onto this instance."
+          className="p-6"
+        />
       ) : (
         <ul className="space-y-2">
           {items.map((inv) => (
@@ -237,7 +240,7 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
               className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               {copied ? (
-                <Check className="h-3 w-3 text-emerald-500" />
+                <Check className="h-3 w-3 text-[var(--success)]" />
               ) : (
                 <Copy className="h-3 w-3" />
               )}
@@ -246,7 +249,7 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
           <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
             <span className={cn(
               "rounded px-1.5 py-0.5",
-              dead ? "bg-[var(--bg-tertiary)]" : "bg-emerald-500/10 text-emerald-400"
+              dead ? "bg-[var(--bg-tertiary)]" : "bg-emerald-500/10 text-[var(--success)]"
             )}>
               {status}
             </span>

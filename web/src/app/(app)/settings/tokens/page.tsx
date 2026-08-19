@@ -156,7 +156,7 @@ export default function TokensPage() {
               </div>
             )}
             {preset === "Never" && (
-              <p className="mt-2 text-[10px] text-amber-400">
+              <p className="mt-2 text-[10px] text-[var(--warning)]">
                 ⚠ Non-expiring tokens stay valid until you manually revoke. Use sparingly —
                 rotate when a laptop is lost.
               </p>
@@ -182,7 +182,7 @@ export default function TokensPage() {
               {issued.token}
             </code>
             <Button variant="outline" size="sm" type="button" onClick={() => copy(issued.token)}>
-              {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+              {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
@@ -225,7 +225,7 @@ export default function TokensPage() {
                     {t.name}
                     {isInfinite(t.expiresAt) && (
                       <span
-                        className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-400"
+                        className="inline-flex items-center gap-0.5 rounded bg-[var(--warning-subtle)] px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
                         title="Never expires"
                       >
                         <InfinityIcon className="h-2 w-2" />

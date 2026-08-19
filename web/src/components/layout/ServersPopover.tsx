@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Server } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { LoadingState } from "@/components/ui/loading-state";
 import { api } from "@/lib/api-client";
 import { useCan, Perms } from "@/features/auth";
 import { cn } from "@/lib/utils";
@@ -95,9 +96,9 @@ export function ServersPopover() {
         </header>
         <div className="max-h-72 overflow-y-auto">
           {nodes.isPending ? (
-            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">Loading…</p>
+            <LoadingState kind="inline" className="px-3 py-4" />
           ) : nodes.isError ? (
-            <p className="px-3 py-4 text-xs text-red-400">
+            <p className="px-3 py-4 text-xs text-[var(--error)]">
               Failed to load nodes: {nodes.error?.message}
             </p>
           ) : list.length === 0 ? (

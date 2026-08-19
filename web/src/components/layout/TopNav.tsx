@@ -24,6 +24,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
+import { LoadingState } from "@/components/ui/loading-state";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { useSession, useSignOut, useCan, Perms } from "@/features/auth";
 import { useProjects, useEnvGroups } from "@/features/projects";
@@ -577,9 +578,9 @@ function NotificationsButton() {
         </header>
         <div className="max-h-96 overflow-y-auto">
           {feed.isPending ? (
-            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">Loading…</p>
+            <LoadingState kind="inline" className="px-3 py-4" />
           ) : feed.isError ? (
-            <p className="px-3 py-4 text-xs text-red-400">
+            <p className="px-3 py-4 text-xs text-[var(--error)]">
               {feed.error instanceof Error ? feed.error.message : "Failed to load"}
             </p>
           ) : (feed.data ?? []).length === 0 ? (

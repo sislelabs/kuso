@@ -39,9 +39,9 @@ interface ComposeResponse {
 }
 
 const ACTION_META: Record<NoteAction, { label: string; cls: string; icon: React.ReactNode }> = {
-  service: { label: "service", cls: "text-emerald-300", icon: <CheckCircle2 className="h-3 w-3" /> },
-  addon: { label: "addon", cls: "text-sky-300", icon: <Database className="h-3 w-3" /> },
-  flag: { label: "flag", cls: "text-amber-300", icon: <AlertTriangle className="h-3 w-3" /> },
+  service: { label: "service", cls: "text-[var(--success)]", icon: <CheckCircle2 className="h-3 w-3" /> },
+  addon: { label: "addon", cls: "text-[var(--info)]", icon: <Database className="h-3 w-3" /> },
+  flag: { label: "flag", cls: "text-[var(--warning)]", icon: <AlertTriangle className="h-3 w-3" /> },
   skip: { label: "skip", cls: "text-[var(--text-tertiary)]", icon: <Ban className="h-3 w-3" /> },
 };
 
@@ -179,7 +179,7 @@ export default function ImportComposePage() {
           </Button>
         </div>
         {preview.isError && (
-          <p className="rounded-md border border-red-500/40 bg-red-500/5 p-2 text-[12px] text-red-300">
+          <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
             {preview.error.message}
           </p>
         )}
@@ -223,7 +223,7 @@ function ResultView({
       </header>
 
       {data.flagged && (
-        <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[12px] text-amber-200">
+        <p className="flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Some services need attention before they&apos;ll deploy (⚠ rows below) —
@@ -268,7 +268,7 @@ function ResultView({
 
       <div className="flex items-center justify-end gap-3">
         {applied && (
-          <span className="flex items-center gap-1 text-[12px] text-emerald-300">
+          <span className="flex items-center gap-1 text-[12px] text-[var(--success)]">
             <CheckCircle2 className="h-3.5 w-3.5" /> applied
           </span>
         )}

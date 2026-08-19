@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -47,6 +47,12 @@ export default function NewProjectPage() {
   // envs on their first PR.
   const [previewsEnabled, setPreviewsEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Inline validation for the name field — shown under the input and
+  // marked via aria-invalid, instead of a toast that auto-dismisses
+  // before the user finds the offending field. Toasts stay reserved
+  // for server-side failures.
+  const [nameError, setNameError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Post-login draft restore. If the user was mid-create when their
   // session expired (-> /login -> bounced back here), repopulate the
@@ -81,13 +87,20 @@ export default function NewProjectPage() {
     e.preventDefault();
     const trimmed = name.trim();
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(trimmed)) {
-      toast.error("Name: lowercase letters, digits, and dashes; ≤ 63 chars");
+      setNameError(
+        trimmed
+          ? "Lowercase letters, digits, and dashes only; must start/end with a letter or digit; ≤ 63 chars."
+          : "Project name is required."
+      );
+      nameInputRef.current?.focus();
       return;
     }
     if (RESERVED_NAMES.has(trimmed)) {
-      toast.error(`"${trimmed}" is reserved — it collides with an app route. Pick another name.`);
+      setNameError(`"${trimmed}" is reserved — it collides with an app route. Pick another name.`);
+      nameInputRef.current?.focus();
       return;
     }
+    setNameError(null);
     setSubmitting(true);
     try {
       await create.mutateAsync({
@@ -151,13 +164,23 @@ export default function NewProjectPage() {
         <div className="space-y-4 px-4 py-4">
           <Field label="Name" hint="lowercase, dashes; used as the slug">
             <Input
+              ref={nameInputRef}
               name="name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameError(null);
+              }}
               placeholder="my-product"
+              aria-invalid={nameError ? true : undefined}
               className="h-8 font-mono text-[13px]"
               autoFocus
             />
+            {nameError && (
+              <p role="alert" className="mt-1 text-[11px] text-[var(--error)]">
+                {nameError}
+              </p>
+            )}
           </Field>
           <Field label="Description" hint="optional; shown on the projects list">
             <Input

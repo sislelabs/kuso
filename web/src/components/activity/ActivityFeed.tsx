@@ -4,6 +4,7 @@ import { useAudit, type AuditEntry } from "@/features/activity";
 import { relativeTime } from "@/lib/format";
 import { Activity, Clock, AlertTriangle, Info, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/ui/loading-state";
 
 function severityIcon(s?: string) {
   const x = (s ?? "").toLowerCase();
@@ -36,11 +37,11 @@ export function ActivityFeed({ filter }: { filter?: (e: AuditEntry) => boolean }
   const { data, isPending, isError, error } = useAudit(200);
 
   if (isPending) {
-    return <p className="text-sm text-[var(--text-tertiary)]">loading…</p>;
+    return <LoadingState kind="list" />;
   }
   if (isError) {
     return (
-      <p className="text-sm text-red-500">
+      <p className="text-sm text-[var(--error)]">
         Failed to load activity: {error?.message}
       </p>
     );

@@ -11,6 +11,38 @@ export async function listProjects(): Promise<KusoProject[]> {
   return api<KusoProject[]>("/api/projects");
 }
 
+// ProjectSummaryMetrics mirrors the server's projectMetricsResponse
+// (kubernetes_env_metrics.go) — the per-project CPU/RAM rollup shown on
+// the dashboard cards.
+export interface ProjectSummaryMetrics {
+  project: string;
+  cpuMillicores: number;
+  memBytes: number;
+  pods: number;
+  envs: number;
+}
+
+// ProjectSummaryItem mirrors the server's projectSummaryItem: the same
+// payload as GET /api/projects/{name} (describe) plus the metrics
+// rollup, one item per project the caller can access. `addons` is not
+// currently populated by the server (parity with describe) but kept
+// optional so consumers can read it uniformly.
+export interface ProjectSummaryItem {
+  project: KusoProject;
+  services: KusoService[];
+  environments: KusoEnvironment[];
+  metrics: ProjectSummaryMetrics;
+  addons?: KusoAddon[];
+}
+
+// getProjectsSummary is the batched dashboard fetch: ONE request
+// replaces the old per-card describe + per-card metrics fan-out (2N
+// requests for N projects). The server enforces the same tenancy filter
+// as /api/projects, so the items are exactly the caller's cards.
+export async function getProjectsSummary(): Promise<ProjectSummaryItem[]> {
+  return api<ProjectSummaryItem[]>("/api/projects/summary");
+}
+
 export async function getProject(name: string): Promise<{
   project: KusoProject;
   services: KusoService[];

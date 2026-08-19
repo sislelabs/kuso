@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { EmptyState } from "@/components/shared/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type NotifKind =
@@ -210,10 +211,12 @@ export default function NotificationsPage() {
       {list.isPending ? (
         <Skeleton className="h-32 w-full rounded-md" />
       ) : (list.data ?? []).length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-8 text-center text-sm text-[var(--text-tertiary)]">
-          No notification channels yet. Click <span className="font-mono">+ New channel</span>{" "}
-          to add a Discord webhook.
-        </p>
+        <EmptyState
+          icon={<Bell className="h-5 w-5" />}
+          title="No notification channels yet"
+          description="Click + New channel to add a Discord webhook."
+          className="p-8"
+        />
       ) : (
         <ul className="space-y-2">
           {(list.data ?? []).map((n) => (
@@ -318,17 +321,17 @@ function OutboxHealth() {
 
   if (dead > 0) {
     return (
-      <div className="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
+      <div className="mb-3 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] px-3 py-2 text-[12px] text-[var(--error)]">
         <div className="flex items-start gap-2">
           <AlertTriangle className="mt-[1px] h-4 w-4 shrink-0" />
           <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
+            <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--error)]">
               webhook delivery: dead-letter
             </div>
             <div className="mt-0.5 font-mono text-[11px] leading-snug">
               {dead} delivery{dead === 1 ? "" : "ies"} past retry cap.
               Inspect the rows with{" "}
-              <code className="rounded bg-black/30 px-1">
+              <code className="rounded bg-[var(--bg-tertiary)] px-1">
                 SELECT * FROM &quot;NotificationOutbox&quot; WHERE &quot;deliveredAt&quot;
                 IS NULL AND &quot;attempts&quot; &gt;= 10
               </code>{" "}
@@ -341,7 +344,7 @@ function OutboxHealth() {
     );
   }
   return (
-    <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-mono text-[11px] text-amber-200">
+    <div className="mb-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-[11px] text-[var(--warning)]">
       {pending} webhook deliver{pending === 1 ? "y" : "ies"} pending retry.
       Transient — Slack throttling or a brief webhook outage usually clears
       within a few minutes.

@@ -191,7 +191,7 @@ export default function ImportPage() {
           </Button>
         </div>
         {preview.isError && (
-          <p className="rounded-md border border-red-500/40 bg-red-500/5 p-2 text-[12px] text-red-300">
+          <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
             {preview.error.message}
           </p>
         )}
@@ -298,9 +298,9 @@ function PreviewTable({
                     <span
                       className={
                         action === "migrate"
-                          ? "rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300"
+                          ? "rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-[var(--success)]"
                           : action === "flag"
-                            ? "rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
+                            ? "rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--warning)]"
                             : "rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]"
                       }
                     >
@@ -327,7 +327,7 @@ function PreviewTable({
       </div>
 
       {commitError && (
-        <p className="mt-3 rounded-md border border-red-500/40 bg-red-500/5 p-2 text-[12px] text-red-300">
+        <p className="mt-3 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
           {commitError}
         </p>
       )}
@@ -345,14 +345,14 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
       className={
         ok
           ? "mt-4 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-4"
-          : "mt-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-4"
+          : "mt-4 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-4"
       }
     >
       <header className="flex items-start gap-2">
         {ok ? (
-          <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
+          <CheckCircle2 className="mt-0.5 h-4 w-4 text-[var(--success)]" />
         ) : (
-          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-400" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--warning)]" />
         )}
         <div>
           <div className="text-[12px] font-semibold">
@@ -366,7 +366,7 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
       {(result.skipped.length > 0 || result.errors.length > 0) && (
         <ul className="mt-3 space-y-1 font-mono text-[11px]">
           {result.errors.map((d, i) => (
-            <li key={`e-${i}`} className="text-red-300">
+            <li key={`e-${i}`} className="text-[var(--error)]">
               ✗ {d.kind} {d.name} — {d.reason}
             </li>
           ))}

@@ -1,11 +1,13 @@
 export {
   useProjects,
+  useProjectsSummary,
   useProject,
   useServices,
   useEnvironments,
   useEnvGroups,
   useAddons,
   projectsQueryKey,
+  projectsSummaryQueryKey,
   projectQueryKey,
   servicesQueryKey,
   envsQueryKey,
@@ -14,6 +16,7 @@ export {
 } from "./hooks";
 export {
   listProjects,
+  getProjectsSummary,
   getProject,
   listServices,
   listEnvironments,
@@ -55,6 +58,8 @@ export {
   listMutedProjects,
 } from "./api";
 export type {
+  ProjectSummaryItem,
+  ProjectSummaryMetrics,
   ProjectNotificationMute,
   BackupObject,
   SQLTable,

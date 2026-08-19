@@ -25,9 +25,9 @@ export default function AppError({
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center p-8">
-      <div className="w-full max-w-md rounded-md border border-red-500/40 bg-[var(--bg-elevated)] p-6 text-center shadow-[var(--shadow-lg)]">
+      <div className="w-full max-w-md rounded-md border border-[var(--error)]/40 bg-[var(--bg-elevated)] p-6 text-center shadow-[var(--shadow-lg)]">
         <div className="mb-3 flex items-center justify-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-red-400" />
+          <AlertTriangle className="h-4 w-4 text-[var(--error)]" />
           <p className="font-mono text-[11px] uppercase tracking-widest text-[var(--text-tertiary)]">
             something broke
           </p>

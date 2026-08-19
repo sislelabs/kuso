@@ -84,7 +84,7 @@ export function ProjectSettingsView() {
   if (project.isError) {
     return (
       <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400">
+        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           {project.error?.message}
         </p>
       </div>
@@ -371,12 +371,12 @@ export function ProjectSettingsView() {
       {isProjectAdmin && (
       <section className="space-y-3">
         <header className="flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-red-400" />
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-red-400">
+          <AlertTriangle className="h-4 w-4 text-[var(--error)]" />
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--error)]">
             danger zone
           </h2>
         </header>
-        <div className="space-y-3 rounded-md border border-red-500/30 bg-red-500/5 p-4">
+        <div className="space-y-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4">
           <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
             Deleting this project also deletes all services, environments, addons, and pods. This
             action cannot be undone.

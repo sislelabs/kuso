@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
@@ -121,7 +122,7 @@ export function ProjectDetailView() {
     return (
       <div className="p-6 lg:p-8">
         <Card>
-          <CardContent className="p-6 text-sm text-red-500">
+          <CardContent className="p-6 text-sm text-[var(--error)]">
             Failed to load project: {project.error?.message}
           </CardContent>
         </Card>
@@ -304,14 +305,16 @@ export function ProjectDetailView() {
               >
                 + Add service
               </a>
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => setAddAddonOpen(true)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-transparent px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-secondary)]"
+                className="h-8 rounded-md text-xs"
               >
                 <Database className="h-3.5 w-3.5" />
                 Add addon
-              </button>
+              </Button>
             </div>
           }
         />
@@ -399,7 +402,7 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
   const isPreview = env.startsWith("pr-") || env.startsWith("preview-");
   const cls = isPreview
     ? "border-blue-500/30 bg-blue-500/5 text-blue-200"
-    : "border-amber-500/30 bg-amber-500/5 text-amber-200";
+    : "border-[var(--warning)]/30 bg-[var(--warning-subtle)] text-[var(--warning)]";
   const label = isPreview ? "preview env" : "non-production env";
   return (
     <div className={`shrink-0 border-b ${cls}`}>

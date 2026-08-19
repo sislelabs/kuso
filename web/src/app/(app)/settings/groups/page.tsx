@@ -6,6 +6,7 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
 import { Users, Plus, X, Save, ShieldCheck, Check, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -371,7 +372,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
 
       {/* Roster — one row per member with an inline remove. */}
       {members.isPending ? (
-        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">Loading members…</p>
+        <LoadingState kind="inline" className="px-3 py-2.5" label="loading members…" />
       ) : roster.length === 0 ? (
         <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
           No members yet. Add a user below.
@@ -394,7 +395,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
                 disabled={remove.isPending}
                 aria-label={`Remove ${m.username}`}
                 title={`Remove ${m.username} from group`}
-                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--error)]"
               >
                 <X className="h-3 w-3" />
               </button>

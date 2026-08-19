@@ -10,6 +10,7 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
+import { deployStatusFromServerState } from "@/components/service/DeployStatusPill";
 import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "./overlay/ServiceVariablesPanel";
 import { ServiceMetricsPanel } from "./overlay/ServiceMetricsPanel";
@@ -17,8 +18,25 @@ import { ServiceCronsPanel } from "./overlay/ServiceCronsPanel";
 import { ServiceRunsPanel } from "./overlay/ServiceRunsPanel";
 import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
-import { ServiceTerminalPanel } from "./overlay/ServiceTerminalPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
+import dynamic from "next/dynamic";
+import { LoadingState } from "@/components/ui/loading-state";
+
+// @xterm/xterm (+ its fit addon and stylesheet) is one of the heaviest
+// deps in the bundle and only matters once the user opens the Terminal
+// tab. Static import dragged it into the first-load JS of every route
+// that renders ServiceOverlay (the whole project view). next/dynamic
+// with ssr:false splits it into its own lazy chunk — same pattern as
+// ProjectCanvas in app/(app)/projects/[project]/view.tsx (and xterm,
+// like ReactFlow, touches browser globals that break the static-export
+// prerender pass anyway).
+const ServiceTerminalPanel = dynamic(
+  () => import("./overlay/ServiceTerminalPanel").then((m) => m.ServiceTerminalPanel),
+  {
+    ssr: false,
+    loading: () => <LoadingState kind="card" className="m-5" />,
+  },
+);
 import { FailureBanner } from "./overlay/FailureBanner";
 import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
 import { Check, Copy, ExternalLink, X, Pencil } from "lucide-react";
@@ -482,8 +500,18 @@ export function ServiceOverlay({
   // rolling through StatusDot; the drift chip stays purely
   // diagnostic.
   const rollingNow = !!drift.data?.rolloutPending;
-  const status =
-    phase === "building" || phase === "deploying"
+  // Server-derived unified rollup (env.status.state) wins when
+  // present — it folds build + deployment + pod health into one
+  // answer (crashloops and degraded replica counts are invisible to
+  // the legacy phase chain below). "rolling" stays a client-side
+  // overlay on top of a healthy state since drift is fetched here.
+  const serverState = deployStatusFromServerState(env?.status?.state);
+  const stateDetail = env?.status?.stateDetail;
+  const status = serverState
+    ? serverState === "active" && rollingNow
+      ? "rolling"
+      : serverState
+    : phase === "building" || phase === "deploying"
       ? "building"
       : ready && rollingNow
         ? "rolling"
@@ -546,7 +574,7 @@ export function ServiceOverlay({
                       {service || ""}
                     </h2>
                   )}
-                  <StatusDot status={status} />
+                  <StatusDot status={status} detail={stateDetail} />
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
                   <span className="font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
@@ -650,7 +678,7 @@ export function ServiceOverlay({
                     <HeaderRollbackChip
                       project={project}
                       service={service}
-                      envFailed={status === "failed"}
+                      envFailed={status === "failed" || status === "crashed"}
                       env={envParam}
                     />
                   ) : null}
@@ -1181,19 +1209,25 @@ function relativeAge(iso: string): string {
   return `${days}d ago`;
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({ status, detail }: { status: string; detail?: string }) {
   const map: Record<string, { dot: string; pulse: boolean; label: string }> = {
     active:    { dot: "bg-emerald-400", pulse: false, label: "Active" },
     rolling:   { dot: "bg-blue-400",    pulse: true,  label: "Rolling" },
     building:  { dot: "bg-amber-400",   pulse: true,  label: "Building" },
+    deploying: { dot: "bg-amber-400",   pulse: true,  label: "Deploying" },
     failed:    { dot: "bg-red-400",     pulse: false, label: "Failed" },
+    // Server-rollup states (env.status.state → deployStatusFromServerState).
+    crashed:   { dot: "bg-red-400",     pulse: true,  label: "Crashlooping" },
+    degraded:  { dot: "bg-[var(--warning)]", pulse: false, label: "Degraded" },
+    awaiting:  { dot: "bg-sky-400",     pulse: false, label: "Awaiting first build" },
+    stopped:   { dot: "bg-slate-400",   pulse: false, label: "Stopped" },
     sleeping:  { dot: "bg-slate-400",   pulse: false, label: "Sleeping" },
     unknown:   { dot: "bg-[var(--text-tertiary)]/50", pulse: false, label: "Idle" },
   };
   const m = map[status] ?? map.unknown;
   return (
     <span
-      title={m.label}
+      title={detail || m.label}
       className="relative inline-flex h-2 w-2 shrink-0 items-center justify-center"
     >
       {m.pulse && (

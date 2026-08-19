@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 // /settings/alerts — manage alert rules. Engine evaluates them on a
 // 1-min ticker server-side and fires through the existing notify
@@ -72,14 +73,16 @@ export default function AlertsPage() {
           {list.isPending ? (
             <Skeleton className="h-24 w-full" />
           ) : list.isError ? (
-            <p className="font-mono text-[11px] text-red-400">
+            <p className="font-mono text-[11px] text-[var(--error)]">
               Failed to load: {list.error instanceof Error ? list.error.message : "unknown"}
             </p>
           ) : (list.data ?? []).length === 0 ? (
-            <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
-              No rules yet. Click <span className="font-mono">+ Log match</span> or{" "}
-              <span className="font-mono">+ Node pressure</span> to add one.
-            </p>
+            <EmptyState
+              icon={<Bell className="h-5 w-5" />}
+              title="No rules yet"
+              description="Click + Log match or + Node pressure to add one."
+              className="px-3 py-6"
+            />
           ) : (
             <ul className="divide-y divide-[var(--border-subtle)]">
               {(list.data ?? []).map((r) => (
@@ -149,7 +152,7 @@ function RuleRow({
         </div>
         <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">{detail}</p>
         {rule.lastFiredAt && (
-          <p className="font-mono text-[10px] text-amber-400">
+          <p className="font-mono text-[10px] text-[var(--warning)]">
             last fired {relativeTime(rule.lastFiredAt)}
           </p>
         )}
@@ -164,8 +167,8 @@ function RuleRow({
         enabled
       </label>
       {confirming ? (
-        <div className="inline-flex items-center gap-1 rounded border border-red-500/30 bg-red-500/5 px-1.5 py-0.5">
-          <Button size="sm" variant="ghost" onClick={onDelete} className="h-5 px-1 text-[10px] text-red-400">
+        <div className="inline-flex items-center gap-1 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-1.5 py-0.5">
+          <Button size="sm" variant="ghost" onClick={onDelete} className="h-5 px-1 text-[10px] text-[var(--error)]">
             yes
           </Button>
           <Button
@@ -181,7 +184,7 @@ function RuleRow({
         <button
           type="button"
           onClick={() => setConfirming(true)}
-          className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+          className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

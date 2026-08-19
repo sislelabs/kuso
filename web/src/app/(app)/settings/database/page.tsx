@@ -93,7 +93,7 @@ export default function DatabasePage() {
   if (!isAdmin) {
     return (
       <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
           Cluster database configuration is admin-only.
         </p>
       </div>
@@ -111,7 +111,7 @@ export default function DatabasePage() {
 
       {status.isPending && <Skeleton className="h-40 w-full rounded-md" />}
       {status.isError && (
-        <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400">
+        <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           {(status.error as Error)?.message ?? "Failed to load cluster database status."}
         </div>
       )}
@@ -228,10 +228,10 @@ function NotConfiguredCard({
 function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => void }) {
   const phaseColor =
     status.phase === "ready"
-      ? "text-emerald-400"
+      ? "text-[var(--success)]"
       : status.phase === "failed" || status.phase === "unhealthy"
-        ? "text-red-400"
-        : "text-amber-400";
+        ? "text-[var(--error)]"
+        : "text-[var(--warning)]";
   const PhaseIcon =
     status.phase === "ready"
       ? CheckCircle2
@@ -251,12 +251,12 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
         </span>
       </div>
       {status.phase === "provisioning" && (
-        <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[12px] text-amber-300">
+        <p className="mt-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[12px] text-[var(--warning)]">
           Helm-installing the Postgres chart. Usually ready in 30–90 seconds — this page polls every 5s.
         </p>
       )}
       {status.phase === "failed" && status.lastError && (
-        <p className="mt-3 rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-[11px] leading-snug text-red-300">
+        <p className="mt-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] leading-snug text-[var(--error)]">
           {status.lastError}
         </p>
       )}
@@ -270,7 +270,7 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
         <Field name="projects connected" value={String(status.projectsUsing)} />
       </dl>
       <div className="mt-4 flex justify-end">
-        <Button variant="outline" size="sm" onClick={onDisable} className="gap-1.5 text-red-400 hover:text-red-300">
+        <Button variant="outline" size="sm" onClick={onDisable} className="gap-1.5 text-[var(--error)]">
           <Trash2 className="h-3 w-3" />
           Disable + delete
         </Button>
@@ -287,7 +287,7 @@ function ExternalCard({ status, onDisable }: { status: Status; onDisable: () => 
           <Cloud className="h-4 w-4 text-[var(--text-secondary)]" />
           <h2 className="text-sm font-semibold tracking-tight">External Postgres</h2>
         </div>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-emerald-400">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--success)]">
           <CheckCircle2 className="h-3 w-3" />
           connected
         </span>
@@ -592,7 +592,7 @@ function AdditionalServers() {
                 type="button"
                 onClick={() => setPendingUnregister(a.name)}
                 disabled={unregister.isPending}
-                className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
                 aria-label={`Unregister ${a.name}`}
               >
                 <Trash2 className="h-3.5 w-3.5" />

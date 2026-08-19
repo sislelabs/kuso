@@ -22,8 +22,8 @@ interface BackupHealthResp {
 
 function HealthBanner({ title, h }: { title: string; h: HealthEntry }) {
   const tone = h.healthy
-    ? "border-green-500/30 bg-green-500/5 text-green-300/90"
-    : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    ? "border-green-500/30 bg-green-500/5 text-[var(--success)]"
+    : "border-[var(--warning)]/40 bg-[var(--warning-subtle)] text-[var(--warning)]";
   const Icon = h.healthy ? ShieldCheck : ShieldAlert;
   return (
     <div className={`flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] leading-relaxed ${tone}`}>
@@ -59,7 +59,7 @@ function MaintenanceHealthBanners() {
   // failure so an operator investigates instead of assuming green.
   if (health.isError || !health.data) {
     return (
-      <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-300">
+      <div className="mb-6 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 text-[12px] text-[var(--warning)]">
         Couldn&apos;t load backup / registry-GC health
         {health.error instanceof Error ? `: ${health.error.message}` : ""}. Backup
         status is unknown — check the control plane.
@@ -189,7 +189,7 @@ export default function BackupSettingsPage() {
             <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
               {settings.data?.hasSecret ? (
                 <span className="inline-flex items-center gap-1">
-                  <Check className="h-3 w-3 text-emerald-400" /> configured
+                  <Check className="h-3 w-3 text-[var(--success)]" /> configured
                 </span>
               ) : (
                 "not configured"

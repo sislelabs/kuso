@@ -73,6 +73,25 @@ export function AddServiceView() {
   const [submitting, setSubmitting] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
 
+  // Per-field validation errors, shown inline under the field (with
+  // aria-invalid on the input) instead of a fire-and-forget toast.
+  // Toasts stay reserved for server-side failures. Keys map to the
+  // fields this form can reject client-side.
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    image?: string;
+    repo?: string;
+    fromService?: string;
+  }>({});
+  const clearFieldError = (key: keyof typeof fieldErrors) =>
+    setFieldErrors((prev) => (prev[key] ? { ...prev, [key]: undefined } : prev));
+  // Refs so submit can focus the first invalid field. The two name
+  // inputs (image mode vs repo mode) are in exclusive branches, so
+  // one ref safely serves both.
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const repoSearchRef = useRef<HTMLInputElement>(null);
+
   const allRepos = useMemo(() => {
     return (installs.data ?? []).flatMap((inst) =>
       inst.repositories.map((r) => ({ installationId: inst.id, repo: r, owner: inst.accountLogin }))
@@ -135,24 +154,34 @@ export function AddServiceView() {
   }, [picked]);
 
   const onAdd = async () => {
+    // Client-side validation → inline per-field errors + focus the
+    // first invalid field (in visual order). No toasts here — those
+    // auto-dismiss and never mark the field, which is how users ended
+    // up staring at a form that "does nothing".
+    const errs: typeof fieldErrors = {};
     if (!name.trim()) {
-      toast.error("Service name required");
-      return;
-    }
-    if (!slug) {
-      toast.error("Service name needs at least one letter or digit");
-      return;
+      errs.name = "Service name is required.";
+    } else if (!slug) {
+      errs.name = "Name needs at least one letter or digit.";
     }
     if (source === "repo" && !picked) {
-      toast.error("Pick a repo first");
-      return;
+      errs.repo = "Pick a repository to continue.";
     }
     if (source === "image" && !imageRepo.trim()) {
-      toast.error("Image repository required, e.g. ghcr.io/owner/app");
-      return;
+      errs.image = "Image repository is required — e.g. ghcr.io/owner/app.";
     }
     if (source === "repo" && runtime === "worker" && !fromService) {
-      toast.error("Pick the service whose image this worker runs");
+      errs.fromService = "Pick the service whose image this worker runs.";
+    }
+    setFieldErrors(errs);
+    if (Object.keys(errs).some((k) => errs[k as keyof typeof errs])) {
+      // Focus follows visual order: repo picker sits above the name
+      // field in repo mode; in image mode name comes before image.
+      if (errs.repo) repoSearchRef.current?.focus();
+      else if (errs.name) nameInputRef.current?.focus();
+      else if (errs.image) imageInputRef.current?.focus();
+      // fromService is a button group — its inline error is announced
+      // via role="alert"; there's no text input to focus.
       return;
     }
     setSubmitting(true);
@@ -199,10 +228,39 @@ export function AddServiceView() {
           github: { installationId: picked!.installationId },
         };
       }
-      await api(`/api/projects/${encodeURIComponent(project)}/services`, {
+      const created = await api(`/api/projects/${encodeURIComponent(project)}/services`, {
         method: "POST",
         body,
       });
+
+      // The server may report the outcome of the first build it
+      // triggered on our behalf via an optional `firstBuild` field on
+      // the 201. Typed loosely + guarded so this is a no-op on servers
+      // that don't send it yet (older kuso versions).
+      const firstBuild =
+        created && typeof created === "object"
+          ? ((created as Record<string, unknown>).firstBuild as
+              | { triggered?: boolean; error?: string }
+              | undefined)
+          : undefined;
+      if (firstBuild?.error) {
+        toast.warning(
+          `Service created, but the first build failed to start: ${firstBuild.error} — trigger a build from the service page.`,
+          { duration: Infinity, closeButton: true },
+        );
+        router.replace(`/projects/${encodeURIComponent(project)}`);
+        return;
+      }
+      if (firstBuild?.triggered) {
+        // Server already kicked the build — don't double-trigger below.
+        toast.success(
+          source === "repo" && picked
+            ? `Service ${name} added — building from ${picked.repo.defaultBranch}`
+            : `Service ${name} added — first build started`,
+        );
+        router.replace(`/projects/${encodeURIComponent(project)}`);
+        return;
+      }
 
       // Kick the first build. AddService creates the CR + production env
       // but does NOT build — without this the service sits at 0/0 until
@@ -274,7 +332,10 @@ export function AddServiceView() {
         <div className="flex gap-2 px-4 py-3">
           <button
             type="button"
-            onClick={() => setSource("repo")}
+            onClick={() => {
+              setSource("repo");
+              setFieldErrors({});
+            }}
             className={
               "flex flex-1 flex-col gap-1 rounded-md border px-3 py-2 text-left transition-colors " +
               (source === "repo"
@@ -292,7 +353,10 @@ export function AddServiceView() {
           </button>
           <button
             type="button"
-            onClick={() => setSource("image")}
+            onClick={() => {
+              setSource("image");
+              setFieldErrors({});
+            }}
             className={
               "flex flex-1 flex-col gap-1 rounded-md border px-3 py-2 text-left transition-colors " +
               (source === "image"
@@ -318,11 +382,20 @@ export function AddServiceView() {
           </div>
           <div className="space-y-3 px-4 py-3">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="name" hint={slug ? `url slug: ${slug}` : "letters / digits / spaces / hyphens"}>
+              <Field
+                label="name"
+                hint={slug ? `url slug: ${slug}` : "letters / digits / spaces / hyphens"}
+                error={fieldErrors.name}
+              >
                 <Input
+                  ref={nameInputRef}
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    clearFieldError("name");
+                  }}
                   placeholder="My API"
+                  aria-invalid={fieldErrors.name ? true : undefined}
                   className="h-8 text-[12px]"
                 />
               </Field>
@@ -336,11 +409,20 @@ export function AddServiceView() {
                 />
               </Field>
             </div>
-            <Field label="image" hint="full registry path; e.g. ghcr.io/owner/app">
+            <Field
+              label="image"
+              hint="full registry path; e.g. ghcr.io/owner/app"
+              error={fieldErrors.image}
+            >
               <Input
+                ref={imageInputRef}
                 value={imageRepo}
-                onChange={(e) => setImageRepo(e.target.value)}
+                onChange={(e) => {
+                  setImageRepo(e.target.value);
+                  clearFieldError("image");
+                }}
                 placeholder="ghcr.io/owner/app"
+                aria-invalid={fieldErrors.image ? true : undefined}
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
@@ -411,11 +493,18 @@ export function AddServiceView() {
             </div>
           ) : !picked ? (
             <div className="space-y-2">
+              {fieldErrors.repo && (
+                <p role="alert" className="text-[11px] text-[var(--error)]">
+                  {fieldErrors.repo}
+                </p>
+              )}
               <Input
+                ref={repoSearchRef}
                 type="search"
                 value={repoQuery}
                 onChange={(e) => setRepoQuery(e.target.value)}
                 placeholder={`Filter ${allRepos.length} repositories…`}
+                aria-invalid={fieldErrors.repo ? true : undefined}
                 className="h-8 font-mono text-[12px]"
                 autoFocus
               />
@@ -429,7 +518,10 @@ export function AddServiceView() {
                     <li key={`${installationId}/${repo.fullName}`}>
                       <button
                         type="button"
-                        onClick={() => setPicked({ installationId, repo })}
+                        onClick={() => {
+                          setPicked({ installationId, repo });
+                          clearFieldError("repo");
+                        }}
                         className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-[12px] hover:bg-[var(--bg-tertiary)]"
                       >
                         <span className="flex items-center gap-2 truncate">
@@ -494,10 +586,16 @@ export function AddServiceView() {
                     ? `url slug: ${slug}`
                     : "letters / digits / spaces / hyphens"
                 }
+                error={fieldErrors.name}
               >
                 <Input
+                  ref={nameInputRef}
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    clearFieldError("name");
+                  }}
+                  aria-invalid={fieldErrors.name ? true : undefined}
                   className="h-8 text-[12px]"
                 />
               </Field>
@@ -556,6 +654,7 @@ export function AddServiceView() {
               <Field
                 label="runs image of"
                 hint="sibling service whose built image this worker reuses"
+                error={fieldErrors.fromService}
               >
                 {workerSources.length === 0 ? (
                   <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -568,7 +667,10 @@ export function AddServiceView() {
                       <button
                         key={s}
                         type="button"
-                        onClick={() => setFromService(s)}
+                        onClick={() => {
+                          setFromService(s);
+                          clearFieldError("fromService");
+                        }}
                         className={
                           "rounded px-2 py-1 font-mono text-[11px] " +
                           (fromService === s
@@ -633,10 +735,12 @@ export function AddServiceView() {
 function Field({
   label,
   hint,
+  error,
   children,
 }: {
   label: string;
   hint?: string;
+  error?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -645,7 +749,13 @@ function Field({
         {label}
       </div>
       {children}
-      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
+      {error ? (
+        <div role="alert" className="text-[11px] text-[var(--error)]">
+          {error}
+        </div>
+      ) : (
+        hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>
+      )}
     </div>
   );
 }

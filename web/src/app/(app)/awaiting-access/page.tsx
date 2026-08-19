@@ -16,9 +16,9 @@ export default function AwaitingAccessPage() {
 
   return (
     <div className="mx-auto max-w-lg p-8 lg:p-12">
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-6">
+      <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-6">
         <div className="flex items-start gap-3">
-          <ShieldAlert className="h-5 w-5 shrink-0 text-amber-400" />
+          <ShieldAlert className="h-5 w-5 shrink-0 text-[var(--warning)]" />
           <div>
             <h1 className="font-heading text-base font-semibold tracking-tight">
               Awaiting access

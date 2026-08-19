@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useProjects, useStopProject, useStartProject } from "@/features/projects";
+import {
+  useProjects,
+  useProjectsSummary,
+  useStopProject,
+  useStartProject,
+  type ProjectSummaryItem,
+} from "@/features/projects";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useInstallations } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
@@ -20,9 +26,7 @@ import {
 import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
 import { relativeTime, stripRepoCredentials } from "@/lib/format";
 import { isProductionGroup } from "@/lib/env-group";
-import { useQueries } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
-import type { KusoEnvironment, KusoService, KusoAddon } from "@/types/projects";
+import type { KusoEnvironment, KusoService } from "@/types/projects";
 
 // ProjectsPage is the landing dashboard listing every project. Each
 // row is a thin card showing the name, repo, base domain, and a small
@@ -192,17 +196,6 @@ function Row({
   );
 }
 
-// ProjectMetricsResp matches the server's projectMetricsResponse JSON
-// shape (kubernetes_env_metrics.go). Kept inline rather than a feature
-// module — this is the only consumer.
-interface ProjectMetricsResp {
-  project: string;
-  cpuMillicores: number;
-  memBytes: number;
-  pods: number;
-  envs: number;
-}
-
 // formatMillicores collapses millicores to a tight string: "142m" up to
 // 999m, then "1.4" cores. Drops trailing zeros so "1.0" reads as "1".
 function formatMillicores(m: number): string {
@@ -327,21 +320,14 @@ function repoWebURL(raw?: string): string | null {
   return `https://${s}`;
 }
 
-interface DescribeResp {
-  project: { metadata: { name: string }; spec?: { baseDomain?: string } };
-  services: KusoService[];
-  environments: KusoEnvironment[];
-  addons?: KusoAddon[];
-}
-
-// ProjectsGrid fans out a /api/projects/{name} fetch per card so each
-// shows live counts (services up, total services, addons). Listing
-// already returns the project specs, but Describe is the only call
-// that bundles services + envs in one round-trip — cheaper than
-// per-card fetches that paginate them separately.
-//
-// Use useQueries (not N useQuery hooks) so the rules-of-hooks
-// invariant holds when projects come and go.
+// ProjectsGrid reads ONE batched /api/projects/summary fetch for every
+// card's live counts (services up, total services, addons) AND the
+// CPU/RAM rollup. This used to be a useQueries fan-out of one describe
+// + one metrics request PER card — 2N HTTP requests per poll cycle for
+// N projects. The server bundles the same describe payload + the same
+// metrics rollup per project (informer-cached CR lists + the shared
+// singleflight/TTL pod-metrics cache), so one request per poll now
+// carries the whole dashboard.
 function ProjectsGrid({
   projects,
 }: {
@@ -393,33 +379,25 @@ function ProjectsGrid({
         .filter((f): f is string => !!f)
     )
   ).sort((a, b) => a.localeCompare(b));
-  const queries = useQueries({
-    queries: projects.map((p) => ({
-      queryKey: ["projects", p.metadata.name, "describe-summary"],
-      queryFn: () => api<DescribeResp>(`/api/projects/${encodeURIComponent(p.metadata.name)}`),
-      staleTime: 15_000,
-    })),
-  });
-  // Per-project CPU/RAM rollup, polled every 30s. metrics-server
-  // emits new samples every 15s so 30s gives near-fresh data without
-  // hammering the API. Failures fall through to empty values — the
-  // server already returns 200 + zeros on metrics-server outage so we
-  // shouldn't see errors in practice, but guard anyway.
-  const metricQueries = useQueries({
-    queries: projects.map((p) => ({
-      queryKey: ["projects", p.metadata.name, "metrics-rollup"],
-      queryFn: () =>
-        api<ProjectMetricsResp>(`/api/projects/${encodeURIComponent(p.metadata.name)}/metrics`),
-      refetchInterval: 30_000,
-      staleTime: 25_000,
-    })),
-  });
-  // Stable fingerprints of the two query arrays: change only when a query
-  // resolves new data (dataUpdatedAt advances), not on every render. Used
-  // as the cards-memo deps so a metrics poll that returns identical data
-  // doesn't rebuild all N cards.
-  const queriesFingerprint = queries.map((q) => q.dataUpdatedAt).join(",");
-  const metricsFingerprint = metricQueries.map((q) => q.dataUpdatedAt).join(",");
+  // ONE batched query for every card's describe rollup + metrics.
+  // 30s poll, foreground-only — same cadence and polling discipline as
+  // the per-card queries this replaces (see useProjectsSummary).
+  // Failures fall through to summary-less cards (name/repo/domain from
+  // the project list still render), matching how a failed per-card
+  // describe rendered before.
+  const summaryQuery = useProjectsSummary();
+  // Index by project name once per resolved response. Memoised on
+  // dataUpdatedAt (not the data ref) so a poll that returns identical
+  // data — react-query still hands back a new array — doesn't produce a
+  // new Map and rebuild all N cards below.
+  const summaryByName = useMemo(() => {
+    const m = new Map<string, ProjectSummaryItem>();
+    for (const item of summaryQuery.data ?? []) {
+      m.set(item.project.metadata.name, item);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryQuery.dataUpdatedAt]);
   // Build one rendered <li> per project, tagged with its star/folder
   // state so we can group them into sections below without recomputing
   // the per-card data (which is indexed off the queries arrays by
@@ -431,7 +409,7 @@ function ProjectsGrid({
   // one project's data changed. At 50 projects that's a lot of wasted
   // reconciliation. Keyed on the query/pref inputs so it only rebuilds
   // when the underlying data actually moves.
-  const cards = useMemo(() => projects.map((p, i) => {
+  const cards = useMemo(() => projects.map((p) => {
         const name = p.metadata.name;
         const pref = prefs.get(name);
         const starred = pref?.starred ?? false;
@@ -439,7 +417,7 @@ function ProjectsGrid({
         const created = p.metadata.creationTimestamp
           ? relativeTime(p.metadata.creationTimestamp)
           : null;
-        const summary = queries[i]?.data;
+        const summary = summaryByName.get(name);
         const services = summary?.services ?? [];
         const environments = summary?.environments ?? [];
         // Display domain, in priority order:
@@ -547,7 +525,7 @@ function ProjectsGrid({
           );
           return pick(anyWithDomain);
         })();
-        const metrics = metricQueries[i]?.data;
+        const metrics = summary?.metrics;
         const node = (
           <li
             key={p.metadata.uid ?? name}
@@ -889,7 +867,7 @@ function ProjectsGrid({
                       pod metrics. Skipped for offline projects so the
                       card doesn't render a misleading "0m · 0 MiB"
                       that could be confused with "metrics-server down".
-                      30s poll handled by the parent useQueries. */}
+                      30s poll handled by the grid's summary query. */}
                   {metrics && metrics.pods > 0 && (
                     <>
                       <span
@@ -921,11 +899,9 @@ function ProjectsGrid({
         );
         return { name, starred, folder, node };
       }),
-    // useQueries returns a fresh array wrapper every render even when no
-    // data changed, so depending on `queries`/`metricQueries` directly
-    // would defeat the memo. Fingerprint on the per-query dataUpdatedAt
-    // (changes only when a query actually resolves new data) + prefs, so
-    // a 30s metrics tick that returns identical data is a no-op rebuild.
+    // summaryByName is memoised on the summary query's dataUpdatedAt
+    // (changes only when the poll actually resolves new data) + prefs,
+    // so a 30s tick that returns identical data is a no-op rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       projects,
@@ -933,8 +909,7 @@ function ProjectsGrid({
       // query's dataUpdatedAt, so its ref is stable across renders and only
       // changes when the pref data actually moves. Listing it here is safe.
       prefs,
-      queriesFingerprint,
-      metricsFingerprint,
+      summaryByName,
       canManage,
       canStopProjects,
       // NOTE: setPref/stopProject/startProject are intentionally NOT in the

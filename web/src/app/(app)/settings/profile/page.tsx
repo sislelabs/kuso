@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
 import { Save, KeyRound } from "lucide-react";
 
@@ -32,7 +33,7 @@ export default function ProfilePageWithBoundary() {
     <ErrorBoundary
       fallback={
         <div className="mx-auto max-w-2xl p-6 lg:p-8">
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm">
+          <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm">
             <p className="font-medium text-[var(--text-primary)]">Something broke on the profile page</p>
             <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
               An unexpected error happened while rendering. Try reloading; if it keeps failing,
@@ -128,8 +129,8 @@ function ProfilePage() {
   // an in-page state the user sees a real, contextual message.
   if (profile.isPending) {
     return (
-      <div className="mx-auto max-w-2xl p-6 text-sm text-[var(--text-tertiary)] lg:p-8">
-        Loading…
+      <div className="mx-auto max-w-2xl p-6 lg:p-8">
+        <LoadingState kind="list" />
       </div>
     );
   }

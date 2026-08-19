@@ -113,7 +113,7 @@ export default function UsagePage() {
           <Skeleton className="h-72 w-full" />
         </div>
       ) : byProject.isError ? (
-        <p className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-300">
+        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
           Couldn&apos;t load usage:{" "}
           {byProject.error instanceof Error ? byProject.error.message : "unknown error"}
         </p>
@@ -129,11 +129,11 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
   return (
     <div className="space-y-6">
       {ratesUnset && (
-        <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-200">
+        <div className="flex items-start gap-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <div className="font-semibold">Cost rates not configured</div>
-            <div className="mt-1 text-[12px] text-amber-200/80">
+            <div className="mt-1 text-[12px] text-[var(--warning)]">
               Usage curves and share-of-cluster render, but no dollar figures.
               Set <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
               <code className="font-mono">spec.cost.memGBPerHour</code> on the

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useCan, Perms } from "@/features/auth";
+import { LoadingState } from "@/components/ui/loading-state";
 
 interface DbStats {
   writeCount: number;
@@ -56,9 +57,9 @@ export function DbHealthTile() {
         </span>
       </header>
 
-      {isPending && <p className="text-xs text-[var(--text-tertiary)]">Loading…</p>}
+      {isPending && <LoadingState kind="inline" />}
       {isError && (
-        <p className="text-xs text-red-400">Failed to load db stats.</p>
+        <p className="text-xs text-[var(--error)]">Failed to load db stats.</p>
       )}
       {data && (
         <dl className="grid grid-cols-3 gap-3 text-sm">
@@ -72,7 +73,7 @@ export function DbHealthTile() {
         </dl>
       )}
       {busy > 0 && (
-        <p className="mt-3 text-xs text-amber-400">
+        <p className="mt-3 text-xs text-[var(--warning)]">
           {busy} write{busy === 1 ? "" : "s"} hit the busy timeout. Sustained
           contention indicates the single-writer SQLite is saturated.
         </p>
@@ -88,7 +89,7 @@ function Stat({ label, value, warn }: { label: string; value: string; warn?: boo
         {label}
       </dt>
       <dd
-        className={`mt-1 font-mono text-base ${warn ? "text-amber-400" : ""}`}
+        className={`mt-1 font-mono text-base ${warn ? "text-[var(--warning)]" : ""}`}
       >
         {value}
       </dd>

@@ -13,6 +13,7 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -81,7 +82,7 @@ export default function GithubSettingsPageWithBoundary() {
     <ErrorBoundary
       fallback={
         <div className="mx-auto max-w-3xl p-6 lg:p-8">
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm">
+          <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm">
             <p className="font-medium text-[var(--text-primary)]">
               Something broke on the GitHub setup page
             </p>
@@ -225,8 +226,8 @@ function GithubSettingsPage() {
 
   if (status.isPending) {
     return (
-      <div className="mx-auto max-w-3xl p-6 text-sm text-[var(--text-tertiary)] lg:p-8">
-        Loading…
+      <div className="mx-auto max-w-3xl p-6 lg:p-8">
+        <LoadingState kind="list" />
       </div>
     );
   }
@@ -433,7 +434,7 @@ function ConfiguredPanel({
       <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-500" />
+            <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--success)]" />
             <div className="flex-1">
               <p className="text-sm font-medium text-[var(--text-primary)]">
                 GitHub App is configured
@@ -586,7 +587,7 @@ function ConfiguredPanel({
             )}
           </p>
         ) : (
-          <p className="text-amber-300/90">
+          <p className="text-[var(--warning)]">
             No webhook delivery has reached kuso yet. Push to a connected repo (or check the
             deliveries tab below) — if pushes never arrive, kuso&apos;s public URL may be
             unreachable from GitHub or the webhook secret drifted.
@@ -727,16 +728,16 @@ function CopyChip({ value }: { value: string }) {
       className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       aria-label="Copy"
     >
-      {copied ? <Check className="h-2.5 w-2.5 text-emerald-400" /> : <Copy className="h-2.5 w-2.5" />}
+      {copied ? <Check className="h-2.5 w-2.5 text-[var(--success)]" /> : <Copy className="h-2.5 w-2.5" />}
     </button>
   );
 }
 
 function RestartingPanel() {
   return (
-    <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+    <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4">
       <div className="flex items-start gap-3">
-        <RotateCw className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-amber-500" />
+        <RotateCw className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-[var(--warning)]" />
         <div className="flex-1">
           <p className="text-sm font-medium text-[var(--text-primary)]">
             kuso-server is restarting…
