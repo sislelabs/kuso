@@ -20,7 +20,7 @@
 # Two containers so no tooling is installed at runtime (the pod runs
 # as uid 999 with all capabilities dropped — apt-get/installers can't
 # work, and shouldn't):
-#   initContainer dump   (postgres:16-bookworm)  pg_dump | gzip → emptyDir
+#   initContainer dump   (postgres:16-bookworm)  pg_dump → gzip → emptyDir (validated before handoff)
 #   container    upload  (amazon/aws-cli)        aws s3 cp ← emptyDir
 #
 # Restore is documented in docs/runbooks/restore-postgres.md and is
@@ -72,9 +72,10 @@ spec:
               # shared emptyDir — no runtime package installs (the pod
               # runs non-root with all caps dropped; apt-get can't work).
               image: postgres:16-bookworm
-              command: ["/bin/bash", "-eu", "-c"]
+              command: ["/bin/bash", "-c"]
               args:
                 - |
+                  set -euo pipefail
                   # Opt-in gate: without a complete kuso-postgres-backup
                   # Secret this is a documented no-op (exit 0), not a
                   # failure. The backup-health banner keeps nagging the
@@ -86,28 +87,72 @@ spec:
                   fi
 
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  RAW="/backup/kuso-${TS}.sql"
                   DUMP="/backup/kuso-${TS}.sql.gz"
 
+                  # Dump to a plain file FIRST, no pipeline. The old
+                  # `pg_dump | gzip > $DUMP` shape (under bash -eu, NO
+                  # pipefail) meant a failing pg_dump still left gzip
+                  # exiting 0: the Job went green and a tiny valid-gzip
+                  # garbage artifact OVERWROTE the retention slot — within
+                  # a day/week every good backup was destroyed while
+                  # backup-health stayed green (it counts Job success).
+                  # With a plain redirect, `set -e` makes a pg_dump
+                  # failure abort right here — before meta.env exists —
+                  # so the upload container no-ops and the prior good
+                  # backup in the slot survives.
                   echo "dumping kuso DB → $DUMP"
                   pg_dump --format=plain --no-owner --no-privileges \
                     --quote-all-identifiers \
-                    "$KUSO_DB_DSN" | gzip -9 > "$DUMP"
+                    "$KUSO_DB_DSN" > "$RAW"
+                  gzip -9 "$RAW" # produces $DUMP, removes $RAW
 
                   SIZE=$(stat -c%s "$DUMP")
                   echo "dump size: $SIZE bytes"
 
+                  # Sanity floor: the control-plane DB always carries the
+                  # full kuso schema (users, builds, audit, settings, …),
+                  # so even a fresh install's dump never gzips down to a
+                  # few hundred bytes — but a failed/truncated dump does
+                  # (pg_dump's preamble alone gzips to ~300 bytes). An
+                  # implausibly small artifact is garbage: refuse to hand
+                  # it to the upload container so the Job fails visibly
+                  # and the retention slots keep the last good backup.
+                  MIN_BYTES=4096
+                  if [ "$SIZE" -lt "$MIN_BYTES" ]; then
+                    echo "ERROR: dump implausibly small (${SIZE} bytes < ${MIN_BYTES} floor) — refusing to upload" >&2
+                    exit 1
+                  fi
+                  # Integrity: the archive must decompress cleanly end to
+                  # end before we let it near a retention slot.
+                  gzip -t "$DUMP"
+
                   # Hand off to the upload container. Retention slot keys
                   # are computed HERE so dump + upload agree on the hour
                   # even if the pod straddles a boundary between containers.
-                  cat > /backup/meta.env <<META
-                  TS=$TS
-                  HOUR=$(date -u +%H)
-                  DOW=$(date -u +%u)
-                  DOM=$(date -u +%d)
-                  MONTH=$(date -u +%m)
-                  SIZE=$SIZE
-                  DUMP=$DUMP
-                  META
+                  #
+                  # Built with explicit echo redirects, NOT a heredoc: this
+                  # script is embedded in a YAML block scalar, and a heredoc's
+                  # closing delimiter only terminates when it sits at the
+                  # shell's column 0. YAML strips the block's common leading
+                  # indent, so an indented `META` terminator lands at column 0
+                  # ONLY as long as every line shares the exact same indent —
+                  # a brittle coupling. If the closing token ever drifts (or a
+                  # non-spec YAML tool processes this), the literal delimiter
+                  # gets captured into meta.env, the upload container sources
+                  # it, hits `META: command not found`, and exits 127 under
+                  # `set -e` BEFORE any `aws s3 cp` — zero bytes to S3, every
+                  # run, silently. Echo redirects have no terminator and no
+                  # indentation dependency, so that whole failure class is gone.
+                  {
+                    echo "TS=$TS"
+                    echo "HOUR=$(date -u +%H)"
+                    echo "DOW=$(date -u +%u)"
+                    echo "DOM=$(date -u +%d)"
+                    echo "MONTH=$(date -u +%m)"
+                    echo "SIZE=$SIZE"
+                    echo "DUMP=$DUMP"
+                  } > /backup/meta.env
               env:
                 # DSN of the kuso DB — same Secret kuso-server consumes,
                 # so credential rotation flows through automatically.

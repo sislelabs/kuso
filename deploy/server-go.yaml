@@ -8,12 +8,23 @@
 # exec verbs. The home `kuso` ns gets the binding via the bootstrap
 # step below; each new project ns gets one via EnsureNamespace.
 #
-# An RCE on kuso-server can still list every Secret in the cluster
-# (read-only is required for the informer to function), but can no
-# longer mutate Secrets in kube-system or any other ns the operator
-# hasn't explicitly given us. pods/exec is similarly limited to
-# managed namespaces — the addon-password-repair path only ever
-# touches postgres addon pods that live there.
+# Honest post-RCE blast radius of this ServiceAccount (keep this list
+# accurate when editing rules below — do not overclaim):
+#   - READ every Secret in the cluster (required for the shared
+#     informer to see addon conn Secrets in any project namespace).
+#   - patch/delete any NODE (cordon/uncordon by nodewatch, label
+#     editing, `kuso node remove` — inherently cluster-scoped verbs).
+#   - delete any pod cluster-wide (drain/cleanup paths).
+#   - patch/update FIVE named platform deployments in any namespace
+#     (traefik, kuso-operator-controller-manager, cert-manager,
+#     cert-manager-webhook, cert-manager-cainjector) — see the
+#     resourceNames-scoped apps rule below.
+#   - full workload mutation (Secrets writes, pods/exec, jobs/cronjobs,
+#     serviceaccounts, deployments/statefulsets patch) ONLY inside
+#     managed namespaces (home `kuso` + per-project namespaces) via
+#     the kuso-server-managed-ns Role bindings.
+# It can NOT create/patch workloads, Jobs, or ServiceAccounts in
+# kube-system or any other namespace kuso doesn't manage.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -62,15 +73,15 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, list, watch]
-  # serviceaccounts: the in-process buildcontroller (since v0.10, commit
-  # be66c12) creates one ServiceAccount per build Job to gate the build
-  # pod's identity for admission webhooks (Kyverno/OPA/PSA). The retired
-  # helm-operator chart used to handle SA creation transparently; with
-  # that gone, kuso-server itself needs the verb or every build fails at
-  # ensureJob with "serviceaccounts is forbidden".
+  # serviceaccounts: read-only at cluster scope. The buildcontroller
+  # creates one ServiceAccount per build Job (to gate the build pod's
+  # identity for admission webhooks) but build Jobs only ever run in
+  # managed namespaces, so the WRITE verbs live on the namespace-scoped
+  # kuso-server-managed-ns Role below — a compromised server cannot
+  # mint ServiceAccounts in kube-system.
   - apiGroups: [""]
     resources: [serviceaccounts]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch, delete]
@@ -90,6 +101,13 @@ rules:
     # whole project-delete fails after the CRs are already gone.
     resources: [persistentvolumeclaims]
     verbs: [get, list, watch, create, delete]
+  # nodes: patch + delete are genuinely needed CLUSTER-WIDE — nodes are
+  # cluster-scoped objects, there is no narrower scope to grant. patch
+  # backs nodewatch's auto-cordon/uncordon of NotReady nodes and the
+  # labels editor (kuso.sislelabs.com/* placement labels); delete backs
+  # `kuso node remove`. This is real post-RCE blast radius (a
+  # compromised server can cordon or delete any node) and is accepted:
+  # a node-managing control plane cannot function without it.
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch, patch, delete]
@@ -105,12 +123,44 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get, list]
+  # apps: read-only at cluster scope (status rollups + the shared
+  # Deployment informer need to see workloads everywhere). Mutation
+  # (patch/update for restarts, sleep/wake scaling, image rolls) lives
+  # on the namespace-scoped kuso-server-managed-ns Role below, plus the
+  # resourceNames-scoped exception right after this rule.
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
-    verbs: [get, list, watch, patch, update]
+    verbs: [get, list, watch]
+  # The ONE set of deployments kuso-server must mutate OUTSIDE managed
+  # namespaces: the platform components it hardens (resource floors +
+  # probes, internal/platformharden) and the operator image roll /
+  # rollback (internal/updater). These live in fixed non-kuso
+  # namespaces (traefik, kuso-operator-system, cert-manager) that
+  # EnsureNamespace does not manage, so they're scoped by resourceNames
+  # instead. Caveat, stated honestly: resourceNames are not
+  # namespace-qualified, so this grants patch/update on any deployment
+  # bearing one of these five names in ANY namespace — a far smaller
+  # surface than the previous blanket cluster-wide grant, but not zero.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames:
+      - traefik
+      - kuso-operator-controller-manager
+      - cert-manager
+      - cert-manager-webhook
+      - cert-manager-cainjector
+    verbs: [patch, update]
+  # batch: read-only at cluster scope. Every Job/CronJob kuso-server
+  # creates or deletes (build Jobs, backup + restore Jobs, updater Jobs,
+  # preview-DB clones, run executions, incident agents, stale-Job
+  # cleanup) lives in a managed namespace, so the write verbs are on the
+  # kuso-server-managed-ns Role below. Side effect, by design: the
+  # admin "cleanup" sweep can no longer delete finished Jobs in
+  # namespaces kuso doesn't manage (those now surface as per-item
+  # errors) — kuso has no business reaping other operators' Jobs.
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch]
   # Leader election. Singleton background workers (build poller,
   # alert engine, nodewatch, daily cleanup) contest a Lease lock so
   # exactly one kuso-server pod runs them at a time. Without these
@@ -269,6 +319,16 @@ subjects:
 # project namespaces; the bootstrap RoleBinding below covers the home
 # `kuso` ns. The ClusterRole template is referenced by RoleBinding (not
 # Role) so we keep one canonical definition.
+#
+# UPGRADE CAVEAT: whenever a release ADDS rules to this ClusterRole,
+# the self-updater cannot apply the change — Kubernetes privilege-
+# escalation prevention rejects a subject updating a (Cluster)Role to
+# include permissions it doesn't hold cluster-wide, and kuso-server
+# deliberately holds these verbs only per-namespace. The updater
+# reports "applying-manifests — partial" and a cluster-admin must
+# re-apply this manifest once:
+#   kubectl apply -f deploy/server-go.yaml
+# (Same one-time step the pods/portforward addition needed.)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -301,6 +361,42 @@ rules:
   - apiGroups: [""]
     resources: [services]
     verbs: [get, list]
+  # serviceaccounts: the in-process buildcontroller creates one
+  # ServiceAccount per build Job to gate the build pod's identity for
+  # admission webhooks (Kyverno/OPA/PSA); the updater bundle re-applies
+  # the platform SAs in the home ns. Build Jobs and platform SAs only
+  # exist in managed namespaces, so the write verbs live here — NOT on
+  # the cluster-wide role (an RCE must not be able to mint SAs in
+  # kube-system).
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [create, update, patch, delete]
+  # apps mutation: rollout-restart + sleep/wake scaling of service
+  # deployments (activator, scaledown), image stamps, addon
+  # StatefulSet nudges, and `kubectl set image deployment/kuso-server`
+  # from the updater Job. All targets live in managed namespaces; the
+  # only out-of-namespace exception is the resourceNames-scoped
+  # platform-deployment rule on the cluster role above.
+  # statefulsets delete: remediate.orphanRecreate deletes an addon's
+  # orphaned StatefulSet (owner-ref GC churn / helm-upgrade-wedge class)
+  # so the operator recreates it cleanly — a managed-ns addon workload,
+  # so delete is scoped here, not cluster-wide. UPGRADE CAVEAT: adding a
+  # verb to this managed-ns Role can't be self-applied (the server can't
+  # escalate its own RBAC); it needs a one-time `kubectl apply` of this
+  # manifest, same as the pods/portforward addition.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [patch, update]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [delete]
+  # batch mutation: build Jobs (buildcontroller), backup/restore Jobs,
+  # updater Jobs, preview-DB clone Jobs, run executions, incident-agent
+  # Jobs, and the stale-Job cleanup sweep. Everything kuso creates runs
+  # in a managed namespace.
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [create, update, patch, delete]
 ---
 # Bootstrap binding for the home `kuso` namespace. New project
 # namespaces get their RoleBinding created by EnsureNamespace.
@@ -530,12 +626,21 @@ spec:
               exec:
                 command: ["/bin/sh", "-c", "sleep 15"]
           # Liveness checks the process is up — /healthz is cheap and
-          # never touches DB. Readiness checks dependencies via /readyz
-          # (Postgres ping + kube informer cache synced) so the LB
-          # drains a pod whose DB connection is broken instead of
-          # silently 5xx-ing every request. Tolerant config absorbs
-          # noisy-neighbor CPU starvation without killing the pod:
-          # 3min liveness grace, 1min readiness grace.
+          # never touches DB. The one exception: a LEADER whose build
+          # poller heartbeat has been silent > 5min reports 503, so a
+          # hard-wedged singleton loop gets restarted and releases the
+          # lease (readiness failure alone drains the LB but never
+          # restarts a pod — a wedged replicas=1 leader used to hold
+          # the lease forever). With period 30s x failureThreshold 6
+          # the restart lands ~3min after /healthz starts failing,
+          # ~8min after the poller's last beat — a briefly-slow tick
+          # can never trip it. Readiness checks dependencies via
+          # /readyz (Postgres ping + kube informer cache synced +
+          # poller beat < 30s stale) so the LB drains a pod whose DB
+          # connection is broken instead of silently 5xx-ing every
+          # request. Tolerant config absorbs noisy-neighbor CPU
+          # starvation without killing the pod: 3min liveness grace,
+          # 1min readiness grace.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 15
