@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.23.1] — 2026-08-19
+
+### ✨ Features
+- Feat(builds): wire Spec.BuildArgs into dockerfile + nixpacks as the non-secret build-time channel ([ccf73dd](https://github.com/sislelabs/kuso/commit/ccf73dd979284cfb8f768ee3ccec88cbcacd305a))
+
+### 📝 Docs
+- Docs(skill): teach the build-time secret model, buildArgs, service state, and the JSON error envelope ([6c0f67c](https://github.com/sislelabs/kuso/commit/6c0f67c331a0a136c62ca0e20517b781abaa705b))
+
 ## [0.23.0] — 2026-08-19
 
 ### Other
@@ -397,17 +405,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: changelog archive rotation from v0.18.123 ship ([9ff286c](https://github.com/sislelabs/kuso/commit/9ff286ca6747d19b25a5551ef6e1f51143be2ecc))
-
-## [0.18.123] — 2026-07-07
-
-### ✨ Features
-- Feat: expose addon tls (postgres wire TLS) on the API, CLI, and kuso.yml ([b47a73d](https://github.com/sislelabs/kuso/commit/b47a73d352555aee5e425ebe285c2e16093b8665))
-- Feat(server): ClickHouse data browser (read-only) for the SQL surface (#10) ([0e2e815](https://github.com/sislelabs/kuso/commit/0e2e8154f3550f5ae60866b45006252e85a1ecc2))
-- Feat(server): SQL query runner supports clickhouse addons (#9) ([235e023](https://github.com/sislelabs/kuso/commit/235e0239cdcae4b627722aa3e4394d0e998c2a77))
-- Feat(cli): kuso db connect support for clickhouse addons (#8) ([392f711](https://github.com/sislelabs/kuso/commit/392f711d45d2072009fb5cd8a09e69048648873b))
-
-### 🐛 Bug Fixes
-- Fix(server): preview DB clones carry spec.tls from the source addon ([1a62df7](https://github.com/sislelabs/kuso/commit/1a62df7f0f196146f16b123863dd038e7e380993))
 
 
 ---

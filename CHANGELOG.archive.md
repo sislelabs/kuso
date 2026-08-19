@@ -2,6 +2,17 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.123] — 2026-07-07
+
+### ✨ Features
+- Feat: expose addon tls (postgres wire TLS) on the API, CLI, and kuso.yml ([b47a73d](https://github.com/sislelabs/kuso/commit/b47a73d352555aee5e425ebe285c2e16093b8665))
+- Feat(server): ClickHouse data browser (read-only) for the SQL surface (#10) ([0e2e815](https://github.com/sislelabs/kuso/commit/0e2e8154f3550f5ae60866b45006252e85a1ecc2))
+- Feat(server): SQL query runner supports clickhouse addons (#9) ([235e023](https://github.com/sislelabs/kuso/commit/235e0239cdcae4b627722aa3e4394d0e998c2a77))
+- Feat(cli): kuso db connect support for clickhouse addons (#8) ([392f711](https://github.com/sislelabs/kuso/commit/392f711d45d2072009fb5cd8a09e69048648873b))
+
+### 🐛 Bug Fixes
+- Fix(server): preview DB clones carry spec.tls from the source addon ([1a62df7](https://github.com/sislelabs/kuso/commit/1a62df7f0f196146f16b123863dd038e7e380993))
+
 ## [0.18.122] — 2026-07-05
 
 ### Other
