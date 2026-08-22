@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.23.2] — 2026-08-22
+
+### 🐛 Bug Fixes
+- Fix: add a root .dockerignore so make ship stops failing on node_modules ([a207b48](https://github.com/sislelabs/kuso/commit/a207b48995f2a2291942979c151ba572eecf884c))
+- Fix: let the logs panel scroll back to the start of the archive ([0e13968](https://github.com/sislelabs/kuso/commit/0e1396895ff86e591d52265a93efc8271f31cf39))
+- Fix: make the 7d/30d range pickers actually query 7d/30d ([781740d](https://github.com/sislelabs/kuso/commit/781740d01df011a1dc9c7934a1289c45be9d8bca))
+- Fix: close cross-project log reads, CSRF bypass, and add a CI test gate ([28af5f1](https://github.com/sislelabs/kuso/commit/28af5f14e9d5518be122086145a60acb69913acf))
+
 ## [0.23.1] — 2026-08-19
 
 ### ✨ Features
@@ -397,14 +405,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(release): commit CHANGELOG.archive.md rotation with the version bump ([21a2554](https://github.com/sislelabs/kuso/commit/21a255457326092319181738a527e03ce3100525))
-
-## [0.18.124] — 2026-07-07
-
-### 🐛 Bug Fixes
-- Fix(server): stop the image sweep bricking envs + stabilize envFromSecrets order ([dbb4060](https://github.com/sislelabs/kuso/commit/dbb4060e0f9489578bc50e7ac4c3168b2ff20263))
-
-### 🧹 Chores
-- Chore: changelog archive rotation from v0.18.123 ship ([9ff286c](https://github.com/sislelabs/kuso/commit/9ff286ca6747d19b25a5551ef6e1f51143be2ecc))
 
 
 ---

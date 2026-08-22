@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.124] — 2026-07-07
+
+### 🐛 Bug Fixes
+- Fix(server): stop the image sweep bricking envs + stabilize envFromSecrets order ([dbb4060](https://github.com/sislelabs/kuso/commit/dbb4060e0f9489578bc50e7ac4c3168b2ff20263))
+
+### 🧹 Chores
+- Chore: changelog archive rotation from v0.18.123 ship ([9ff286c](https://github.com/sislelabs/kuso/commit/9ff286ca6747d19b25a5551ef6e1f51143be2ecc))
+
 ## [0.18.123] — 2026-07-07
 
 ### ✨ Features
