@@ -85,14 +85,24 @@ func (d *LogDB) insertLogLinesChunk(ctx context.Context, chunk []LogLine) error 
 	return nil
 }
 
+// MaxLogSearchLimit caps a single page of log search results.
+const MaxLogSearchLimit = 500
+
+// ClampLogLimit normalises a caller-supplied page size. Exported so the
+// HTTP layer can distinguish a full page from a short one (and so emit
+// a paging cursor) without duplicating the clamp and drifting from it.
+func ClampLogLimit(limit int) int {
+	if limit <= 0 || limit > MaxLogSearchLimit {
+		return MaxLogSearchLimit
+	}
+	return limit
+}
+
 // SearchLogs runs the search using LIKE filters. Returns newest-first.
 // FTS5 is gone in v0.9 — the wire shape and call sites stay the same,
 // the query path is just simpler.
 func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLine, error) {
-	limit := req.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
+	limit := ClampLogLimit(req.Limit)
 	q := strings.TrimSpace(req.Query)
 	var sqlStr strings.Builder
 	args := []any{}
@@ -133,6 +143,11 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 		n++
 		fmt.Fprintf(&sqlStr, ` AND ts < $%d`, n)
 		args = append(args, req.Until.UTC())
+	}
+	if req.BeforeID > 0 {
+		n++
+		fmt.Fprintf(&sqlStr, ` AND id < $%d`, n)
+		args = append(args, req.BeforeID)
 	}
 	n++
 	fmt.Fprintf(&sqlStr, ` ORDER BY id DESC LIMIT $%d`, n)

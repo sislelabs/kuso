@@ -61,6 +61,9 @@ func (h *LogSearchHandler) SearchProject(w http.ResponseWriter, r *http.Request)
 func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, project, service string) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	// beforeId is the keyset cursor for scrolling back past the first
+	// page. Garbage parses to 0, which just means "newest page".
+	beforeID, _ := strconv.ParseInt(q.Get("beforeId"), 10, 64)
 	since := parseTs(q.Get("since"))
 	until := parseTs(q.Get("until"))
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -73,13 +76,14 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		return
 	}
 	rows, err := h.LogDB.SearchLogs(ctx, db.SearchLogsRequest{
-		Project: project,
-		Service: service,
-		Env:     q.Get("env"),
-		Query:   q.Get("q"),
-		Since:   since,
-		Until:   until,
-		Limit:   limit,
+		Project:  project,
+		Service:  service,
+		Env:      q.Get("env"),
+		Query:    q.Get("q"),
+		Since:    since,
+		Until:    until,
+		Limit:    limit,
+		BeforeID: beforeID,
 	})
 	if err != nil {
 		// Don't leak FTS5 grammar errors back to the caller — those are
@@ -89,12 +93,20 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		writeErr(w, http.StatusInternalServerError, "search failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	// nextBeforeId is the cursor for the following (older) page. A short
+	// page means we hit the end of the archive, so the cursor is omitted
+	// and the client stops asking. Rows are newest-first, so the oldest
+	// id is the last element.
+	resp := map[string]any{
 		"project": project,
 		"service": service,
 		"q":       q.Get("q"),
 		"lines":   rows,
-	})
+	}
+	if len(rows) > 0 && len(rows) == db.ClampLogLimit(limit) {
+		resp["nextBeforeId"] = rows[len(rows)-1].ID
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // parseTs accepts RFC3339 or "1700000000" (unix). Returns zero on

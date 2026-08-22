@@ -28,4 +28,10 @@ type SearchLogsRequest struct {
 	Since   time.Time // inclusive; zero = no lower bound
 	Until   time.Time // exclusive; zero = no upper bound
 	Limit   int
+	// BeforeID is a keyset cursor: return only rows older than this id.
+	// Zero means "start at the newest". Paging on the primary key
+	// rather than OFFSET keeps pages stable while the shipper inserts
+	// at the head — with OFFSET, every new line shifts the window and
+	// the reader sees duplicated or skipped lines as they scroll back.
+	BeforeID int64
 }

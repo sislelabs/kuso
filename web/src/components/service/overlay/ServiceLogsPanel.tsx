@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UIEvent } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,10 +18,15 @@ interface Props {
   service: string;
 }
 
-// ServiceLogsPanel — full-text search over the FTS5-backed log
-// archive populated by the kuso-server logship goroutine. Default
-// view shows the latest 200 lines from the last hour with no
-// query; typing in the search box switches to an FTS5 MATCH query.
+// Lines fetched per page. The server clamps at 500; 200 keeps the
+// first paint fast and each scroll-back step cheap.
+const PAGE_SIZE = 200;
+
+// ServiceLogsPanel — search over the Postgres log archive populated
+// by the kuso-server logship goroutine. Default view shows the latest
+// page from the last hour with no query; typing in the search box adds
+// a case-insensitive substring filter (FTS5 was dropped in v0.9).
+// Scrolling to the top pages further back, to the start of retention.
 //
 // Time-range picker is two preset chips ("1h", "6h", "24h", "7d")
 // plus custom RFC3339 inputs hidden behind a toggle. Indie SaaS
@@ -79,18 +85,32 @@ export function ServiceLogsPanel({ project, service }: Props) {
     return new Date(Date.now() - ms).toISOString();
   }, [committed.since]);
 
-  const search = useQuery<LogSearchResponse>({
+  // Paged newest-first. Scrolling to the top of the viewport fetches
+  // the next older page, so the archive is reachable back to the start
+  // of retention instead of stopping at the first 200 lines.
+  const search = useInfiniteQuery<LogSearchResponse>({
     queryKey: ["log-search", project, service, committed.q, committed.env, committed.since],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       searchServiceLogs(project, service, {
         q: committed.q || undefined,
         env: committed.env || undefined,
         since: sinceISO,
-        limit: 200,
+        limit: PAGE_SIZE,
+        beforeId: pageParam as number | undefined,
       }),
-    refetchInterval: committed.q === "" ? 10_000 : false, // live tail when no query
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.nextBeforeId,
+    // Only the newest page live-tails, and only while untouched: a
+    // background refetch of every loaded page would re-request the
+    // whole scrollback every 10s.
+    refetchInterval: committed.q === "" ? 10_000 : false,
     staleTime: 5_000,
   });
+
+  const lines = useMemo(
+    () => (search.data?.pages ?? []).flatMap((p) => p.lines),
+    [search.data]
+  );
 
   const apply = () => setCommitted({ q, env, since });
 
@@ -100,7 +120,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
         <div>
           <h3 className="font-mono text-sm font-medium">Logs</h3>
           <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
-            Searchable archive (FTS5). 14d retention. Polls every 10s when no query is set — for true streaming, use the Deployments tab.
+            Searchable archive, 7d retention. Substring match, case-insensitive. Polls every 10s when no query is set — for true streaming, use the Deployments tab.
           </p>
         </div>
       </header>
@@ -118,7 +138,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder='FTS5 — "fatal error" OR oom*'
+            placeholder="Search log text — fatal error"
             className="h-8 pl-7 font-mono text-[12px]"
           />
           {q && (
@@ -178,20 +198,40 @@ export function ServiceLogsPanel({ project, service }: Props) {
         <p className="font-mono text-[11px] text-red-400">
           Failed to load: {search.error instanceof Error ? search.error.message : "unknown"}
         </p>
-      ) : (search.data?.lines ?? []).length === 0 ? (
+      ) : lines.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-8 text-center text-[12px] text-[var(--text-tertiary)]">
           {committed.q
             ? `No matches for ${committed.q} in the last ${committed.since}.`
             : `No log lines from this service in the last ${committed.since}.`}
         </p>
       ) : (
-        <LogList lines={search.data!.lines} highlight={committed.q} />
+        <LogList
+          lines={lines}
+          highlight={committed.q}
+          hasMore={!!search.hasNextPage}
+          loadingMore={search.isFetchingNextPage}
+          onLoadMore={() => {
+            if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage();
+          }}
+        />
       )}
     </div>
   );
 }
 
-function LogList({ lines, highlight }: { lines: LogLine[]; highlight: string }) {
+function LogList({
+  lines,
+  highlight,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  lines: LogLine[];
+  highlight: string;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   // Reverse — server returns newest-first; humans tail-follow oldest-first.
   const ordered = useMemo(() => [...lines].reverse(), [lines]);
 
@@ -221,22 +261,57 @@ function LogList({ lines, highlight }: { lines: LogLine[]; highlight: string }) 
   // and the user is already near the bottom (don't yank if they're
   // reading old lines).
   const [stickToBottom, setStickToBottom] = useState(true);
+  const elRef = useRef<HTMLDivElement | null>(null);
+  // Height before an older page prepends, so we can restore the reader's
+  // position afterwards. Without this the browser keeps scrollTop while
+  // content grows above it, and the viewport jumps backwards on every
+  // page load.
+  const restoreRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!stickToBottom) return;
-    const el = document.getElementById("kuso-log-list");
-    if (el) el.scrollTop = el.scrollHeight;
+    const el = elRef.current;
+    if (!el) return;
+    if (restoreRef.current !== null) {
+      el.scrollTop = el.scrollHeight - restoreRef.current;
+      restoreRef.current = null;
+      return;
+    }
+    if (stickToBottom) el.scrollTop = el.scrollHeight;
   }, [ordered, stickToBottom]);
+
+  const onScroll = useCallback(
+    (e: UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget;
+      setStickToBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      if (el.scrollTop < 80 && hasMore && !loadingMore) {
+        restoreRef.current = el.scrollHeight;
+        onLoadMore();
+      }
+    },
+    [hasMore, loadingMore, onLoadMore]
+  );
 
   return (
     <div
       id="kuso-log-list"
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        setStickToBottom(nearBottom);
-      }}
+      ref={elRef}
+      onScroll={onScroll}
       className="h-[28rem] overflow-x-hidden overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] font-mono text-[11px] leading-snug"
     >
+      {hasMore ? (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          className="w-full py-2 text-center text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] disabled:opacity-60"
+        >
+          {loadingMore ? "Loading older lines…" : "Load older lines"}
+        </button>
+      ) : (
+        <p className="py-2 text-center text-[10px] text-[var(--text-tertiary)]">
+          Start of the log archive for this range.
+        </p>
+      )}
       <table className="w-full table-fixed">
         <tbody>
           {grouped.map(({ line: l, isContinuation }) => (

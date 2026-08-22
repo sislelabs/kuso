@@ -526,12 +526,22 @@ export interface LogSearchResponse {
   service: string;
   q: string;
   lines: LogLine[];
+  // Cursor for the next (older) page. Absent once the archive is
+  // exhausted, which is how the reader knows to stop paging.
+  nextBeforeId?: number;
 }
 
 export async function searchServiceLogs(
   project: string,
   service: string,
-  params: { q?: string; env?: string; since?: string; until?: string; limit?: number }
+  params: {
+    q?: string;
+    env?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+    beforeId?: number;
+  }
 ): Promise<LogSearchResponse> {
   const sp = new URLSearchParams();
   if (params.q) sp.set("q", params.q);
@@ -539,6 +549,7 @@ export async function searchServiceLogs(
   if (params.since) sp.set("since", params.since);
   if (params.until) sp.set("until", params.until);
   if (params.limit) sp.set("limit", String(params.limit));
+  if (params.beforeId) sp.set("beforeId", String(params.beforeId));
   const query = sp.toString();
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs/search${query ? "?" + query : ""}`
