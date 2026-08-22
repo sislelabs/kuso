@@ -46,14 +46,21 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
+	// A bad `since` is rejected rather than silently defaulted. The old
+	// code swallowed the parse error, so the UI's "7d"/"30d" options —
+	// which time.ParseDuration cannot parse — quietly queried 24h while
+	// the panel still rendered "0 error groups in last 7d".
 	since := time.Now().Add(-24 * time.Hour)
 	if v := r.URL.Query().Get("since"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			if d > 30*24*time.Hour {
-				d = 30 * 24 * time.Hour
-			}
-			since = time.Now().Add(-d)
+		d, err := parseRangeDuration(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad since")
+			return
 		}
+		if d > 30*24*time.Hour {
+			d = 30 * 24 * time.Hour
+		}
+		since = time.Now().Add(-d)
 	}
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {

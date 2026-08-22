@@ -70,8 +70,8 @@ export function ServiceErrorsPanel({ project, service }: Props) {
       ) : (errors.data?.length ?? 0) === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
           No errors detected in the last {since}. The scanner watches pod logs for
-          ERROR / Exception / panic / Traceback patterns; quiet here usually means
-          the service is healthy.
+          ERROR / Exception / panic / Traceback patterns, so errors logged in another
+          shape won&apos;t appear here. Log retention is 7 days.
         </p>
       ) : (
         <ul className="space-y-2">

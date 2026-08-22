@@ -242,8 +242,8 @@ export interface ErrorGroup {
 }
 
 // listErrors fetches the current error groups for a service. `since`
-// is a Go-flavoured duration string ("24h", "7d"); the server caps
-// it at 30d.
+// accepts Go duration units plus `d`/`w` ("24h", "7d"); the server
+// caps it at 30d and 400s on anything it cannot parse.
 export async function listErrors(
   project: string,
   service: string,

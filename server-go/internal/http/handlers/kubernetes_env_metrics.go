@@ -251,8 +251,8 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	if stepStr == "" {
 		stepStr = pickStep(rangeStr)
 	}
-	dur, err := time.ParseDuration(rangeStr)
-	if err != nil || dur <= 0 || dur > 30*24*time.Hour {
+	dur, err := parseRangeDuration(rangeStr)
+	if err != nil || dur > 30*24*time.Hour {
 		writeErr(w, http.StatusBadRequest, "bad range")
 		return
 	}
@@ -268,19 +268,25 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	prefix := h.Namespace + "-" + envName
 	matcher := escapePromLabel(prefix) + ".*@kubernetes"
 
+	// The rate window scales with the step. A fixed [1m] window at the
+	// 1h step a 7d range uses would sample one minute per hour, so most
+	// points land between scrapes and the panel reads as a flat zero
+	// line despite Prometheus holding the data.
+	win := rateWindow(stepStr)
+
 	queries := map[string]string{
 		// requests/s — sum across all status codes & methods
 		"requests": fmt.Sprintf(
-			`sum(rate(traefik_service_requests_total{service=~"%s"}[1m]))`, matcher),
+			`sum(rate(traefik_service_requests_total{service=~"%s"}[%s]))`, matcher, win),
 		// 5xx error rate as a fraction of all requests
 		"errors": fmt.Sprintf(
-			`(sum(rate(traefik_service_requests_total{service=~"%s",code=~"5.."}[1m])) or vector(0)) `+
-				`/ clamp_min(sum(rate(traefik_service_requests_total{service=~"%s"}[1m])), 1)`,
-			matcher, matcher),
+			`(sum(rate(traefik_service_requests_total{service=~"%s",code=~"5.."}[%s])) or vector(0)) `+
+				`/ clamp_min(sum(rate(traefik_service_requests_total{service=~"%s"}[%s])), 1)`,
+			matcher, win, matcher, win),
 		// p95 latency in ms
 		"p95ms": fmt.Sprintf(
-			`1000 * histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"%s"}[5m])))`,
-			matcher),
+			`1000 * histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"%s"}[%s])))`,
+			matcher, win),
 	}
 
 	out := timeseriesResponse{
@@ -311,7 +317,7 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 // resulting series has roughly 60–240 points. Saves the client from
 // having to compute this and keeps PromQL responses small.
 func pickStep(rangeStr string) string {
-	d, err := time.ParseDuration(rangeStr)
+	d, err := parseRangeDuration(rangeStr)
 	if err != nil {
 		return "30s"
 	}
