@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.126] — 2026-07-08
+
+### ✨ Features
+- Feat(web): show a cron's resolved runtime + add Sync image (#11) ([2964e30](https://github.com/sislelabs/kuso/commit/2964e30c171d4f0c169cb042e8b3ac1a175d7040))
+
 ## [0.18.125] — 2026-07-08
 
 ### ✨ Features
