@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.23.5] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: load env values up front so every var row is editable ([1ce8e75](https://github.com/sislelabs/kuso/commit/1ce8e75bae4704f7759496ff95dac0e53742e40e))
+
 ## [0.23.4] — 2026-08-24
 
 ### 🐛 Bug Fixes
@@ -396,12 +401,6 @@ messages on every release. The format is loosely based on
 - Fix: platform-review findings (security, DX, scalability, UX) ([c57102e](https://github.com/sislelabs/kuso/commit/c57102e219fdfe9baf472399a458e97b3894e2db))
 - Fix(builds): cancel builds for deleted/force-pushed refs instead of paging ([238ed88](https://github.com/sislelabs/kuso/commit/238ed8804480a9aaae25e8d28dec0e3ff1b07cf7))
 - Fix(server): archived build records carry a real FinishedAt ([53ae4e4](https://github.com/sislelabs/kuso/commit/53ae4e401e933c058695e1478cdaed5d3741b341))
-
-## [0.18.127] — 2026-07-09
-
-### 🐛 Bug Fixes
-- Fix: canvas latest-build badge survives the 24h build-CR retention sweep ([ed1e356](https://github.com/sislelabs/kuso/commit/ed1e3561056c5a2baafcfb6d8e4a7baf15114bd4))
-- Fix(server): addon-event env refresh no longer re-leaks shared secrets ([1663bb7](https://github.com/sislelabs/kuso/commit/1663bb7d4c272a218eb420777c0be2562a152aa1))
 
 
 ---
