@@ -68,10 +68,18 @@ export function EnvVarsEditor({
   const qc = useQueryClient();
   // reveal drives the ?reveal=true env read: the server resolves every
   // value (managed secrets + addon/shared secretKeyRefs) to plaintext,
-  // admin-only. Flipped on the first time the user clicks the eye on a
-  // secret-backed row whose value isn't loaded yet. A non-admin flipping
-  // it still gets masked values back (server-gated), so it's harmless.
-  const [reveal, setReveal] = useState(false);
+  // admin-only. A non-admin still gets masked values back (server-gated),
+  // so asking for it is always safe.
+  //
+  // ON BY DEFAULT. The server stores nearly every var in the managed
+  // secret, so a lazy reveal meant almost every row loaded blank and
+  // rendered "••••• (type to set a new value)" — including plain config
+  // like STRONG_MODEL=gpt-5.1. Rows looked read-only, values couldn't be
+  // seen, and editing one meant retyping it from memory. Loading the real
+  // values up front makes every row identical and directly editable; the
+  // per-row eye then just toggles masking of a value the editor already
+  // holds, which is what the icon reads as.
+  const [reveal, setReveal] = useState(true);
   const env = useServiceEnv(project, service, reveal);
   // The save runs as per-key upserts/deletes (see applyPending), not a
   // single mutation, so we drive the saving/error UI from local state
@@ -710,12 +718,17 @@ export function EnvVarsEditor({
                 placeholder={
                   r.fromSecret
                     ? "→ secret ref (use 🔗 to change)"
-                    : r.secretBacked
+                    : // Only a genuinely EMPTY secret-backed row needs the
+                      // "type to set" hint. With reveal on, a stored value is
+                      // already in the field, so showing that hint everywhere
+                      // made every row look blank and read-only.
+                      r.secretBacked && r.value === ""
                       ? "••••• (type to set a new value)"
                       : "value or ${{ ref }}"
                 }
-                // Secret-backed values arrive blank/masked — show them only
-                // when revealed (eye), otherwise as a password field.
+                // Values are masked by default and unmasked per row via the
+                // eye. The editor already holds the plaintext (reveal read),
+                // so this is display-only — no refetch needed to unmask.
                 type={r.visible || r.fromSecret ? "text" : "password"}
                 value={r.value}
                 onChange={(e) => update(i, { value: e.target.value })}
