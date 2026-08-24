@@ -111,6 +111,52 @@ func IsBuildEnvSecretRef(v string) bool {
 	return strings.HasPrefix(v, buildEnvSecretRefPrefix)
 }
 
+// ---- sensitive literal detection -----------------------------------------
+//
+// SECURITY: the kuso-secret-ref:// machinery above protects secretKeyRef-
+// sourced vars (addon conn strings), but it classifies on TRANSPORT, not on
+// sensitivity. A user who types a credential straight into the value field —
+// `kuso env set svc OPENAI_API_KEY=sk-...` — produces a LITERAL, and literals
+// are baked into the published image. That is how a live OpenAI key, two
+// OAuth client secrets, a webhook secret and an R2 access key ended up as
+// plaintext `ENV` lines in a shipped image layer.
+//
+// There is no way to tell a secret from a config value by transport alone, so
+// we fall back to the key NAME. This is a heuristic: it cannot be exact, and
+// it deliberately errs toward withholding. A withheld var that the build
+// actually needed produces a build-time failure the user can see and fix (move
+// it to buildArgs); a baked secret is silent and permanent. Prefer the loud
+// failure.
+//
+// NEXT_PUBLIC_* is the explicit carve-out: the Next.js convention is that
+// these are inlined into the CLIENT bundle at build time, so they are public
+// by definition AND required at build time. Withholding them would break every
+// Next.js build for no security gain — a NEXT_PUBLIC_ value is already served
+// to every browser.
+// A bare "*_KEY" suffix is deliberately NOT matched: GOOD_KEY, SORT_KEY,
+// CACHE_KEY and IDEMPOTENCY_KEY are ordinary config, and withholding them
+// would break builds for no gain. Only KEY preceded by a credential-ish
+// qualifier (API/ACCESS/SECRET/PRIVATE/SIGNING/ENCRYPTION/…) counts.
+var sensitiveBuildEnvRE = regexp.MustCompile(
+	`(?i)(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|` +
+		`(API|APP|ACCESS|PRIVATE|PUBLISHABLE|SIGNING|ENCRYPTION|MASTER|CLIENT|SERVICE)_?KEY|` +
+		`APIKEY|^KEY$|DSN|SALT|CERT|SIGNING|AUTH$)`,
+)
+
+// IsSensitiveBuildEnvKey reports whether a literal env-var KEY looks like a
+// credential and must therefore never be injected into a build (where it would
+// persist in the published image). Exported so the HTTP/CLI layers can warn at
+// write time using exactly the same rule the build path enforces.
+//
+// NEXT_PUBLIC_-prefixed keys are always build-safe: Next.js inlines them into
+// the client bundle, so they are public by construction.
+func IsSensitiveBuildEnvKey(name string) bool {
+	if strings.HasPrefix(name, "NEXT_PUBLIC_") {
+		return false
+	}
+	return sensitiveBuildEnvRE.MatchString(name)
+}
+
 // secretLookup returns the literal value of a secret key, or false if absent.
 type secretLookup func(secret, key string) (string, bool)
 
@@ -127,6 +173,16 @@ func buildEnvFromVars(vars []kube.KusoEnvVar, lookup secretLookup) map[string]st
 			continue
 		}
 		if v.Value != "" {
+			// A user-typed LITERAL whose key looks like a credential is
+			// withheld from the build: literals bake into the published
+			// image (nixpacks ENV layer / docker build-arg history), so a
+			// secret set as a plain value would persist there forever. The
+			// secretKeyRef path below is the only channel that can carry a
+			// secret into a build safely. Runtime pods are unaffected —
+			// they read the value from the deployment's envFrom.
+			if IsSensitiveBuildEnvKey(v.Name) {
+				continue
+			}
 			out[v.Name] = v.Value
 			continue
 		}

@@ -721,6 +721,13 @@ func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 		if builds.IsBuildEnvSecretRef(v) {
 			continue
 		}
+		// Defense-in-depth: the server drops credential-looking literals when
+		// it stamps spec.buildEnv, but a CR written before that guard existed
+		// (or by hand) can still carry one. Re-check at the render boundary —
+		// this is the last point before the value becomes an image layer.
+		if builds.IsSensitiveBuildEnvKey(k) {
+			continue
+		}
 		keys = append(keys, k)
 		out = append(out, corev1.EnvVar{Name: "KUSO_BE_" + k, Value: v})
 	}

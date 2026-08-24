@@ -1332,6 +1332,104 @@ func TestBuildEnvFromVars_DropsRuntimeOnlyKeys(t *testing.T) {
 	}
 }
 
+// TestBuildEnvFromVars_WithholdsSensitiveLiterals is the regression test for
+// the "live credentials baked into the published image" bug. The
+// kuso-secret-ref:// split protects secretKeyRef-sourced vars, but it
+// classifies on TRANSPORT: a user who types a credential straight into the
+// value field produces a LITERAL, and literals become `ENV` lines in the
+// nixpacks Dockerfile / build-arg history — a permanent, readable image layer.
+//
+// The keys below are the exact set found baked into a shipped
+// ticketeer/jira-mudira image: an OpenAI key, two OAuth client secrets, a
+// webhook secret, an R2 access key and the placeholder AUTH_SECRET.
+func TestBuildEnvFromVars_WithholdsSensitiveLiterals(t *testing.T) {
+	t.Parallel()
+	vars := []kube.KusoEnvVar{
+		{Name: "OPENAI_API_KEY", Value: "sk-proj-live"},
+		{Name: "AUTH_GITHUB_SECRET", Value: "ghs-live"},
+		{Name: "AUTH_GOOGLE_SECRET", Value: "GOCSPX-live"},
+		{Name: "GITHUB_WEBHOOK_SECRET", Value: "whsec-live"},
+		{Name: "R2_SECRET_ACCESS_KEY", Value: "r2-live"},
+		{Name: "R2_ACCESS_KEY_ID", Value: "r2-id"},
+		{Name: "AUTH_SECRET", Value: "dev-placeholder"},
+		{Name: "CLAUDE_CODE_TOKEN", Value: "tok-live"},
+		{Name: "DB_PASSWORD", Value: "hunter2"},
+		{Name: "SENTRY_DSN", Value: "https://x@sentry.io/1"},
+		{Name: "SESSION_SALT", Value: "salty"},
+		{Name: "TLS_CERT", Value: "-----BEGIN"},
+	}
+	got := buildEnvFromVars(vars, func(string, string) (string, bool) { return "", false })
+	for _, k := range []string{
+		"OPENAI_API_KEY", "AUTH_GITHUB_SECRET", "AUTH_GOOGLE_SECRET",
+		"GITHUB_WEBHOOK_SECRET", "R2_SECRET_ACCESS_KEY", "R2_ACCESS_KEY_ID",
+		"AUTH_SECRET", "CLAUDE_CODE_TOKEN", "DB_PASSWORD", "SENTRY_DSN",
+		"SESSION_SALT", "TLS_CERT",
+	} {
+		if v, ok := got[k]; ok {
+			t.Errorf("sensitive literal %q must never reach build env (would bake into the image), got %q", k, v)
+		}
+	}
+	if len(got) != 0 {
+		t.Errorf("expected every sensitive literal withheld; got %v", got)
+	}
+}
+
+// TestBuildEnvFromVars_KeepsBuildSafeLiterals pins the other half of the
+// heuristic: withholding must not swallow ordinary build-time config. A
+// false positive here breaks real builds, so the carve-outs matter as much
+// as the matches. NEXT_PUBLIC_* is always build-safe — Next.js inlines those
+// into the client bundle, so they are public by construction and required at
+// build time.
+func TestBuildEnvFromVars_KeepsBuildSafeLiterals(t *testing.T) {
+	t.Parallel()
+	vars := []kube.KusoEnvVar{
+		{Name: "NEXT_PUBLIC_APP_URL", Value: "https://example.com"},
+		{Name: "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", Value: "pk_live_x"},
+		{Name: "NEXT_PUBLIC_SENTRY_DSN", Value: "https://x@sentry.io/1"},
+		{Name: "R2_BUCKET_NAME", Value: "bucket"},
+		{Name: "R2_REGION", Value: "auto"},
+		{Name: "AUTH_URL", Value: "https://example.com"},
+		{Name: "NIXPACKS_NODE_VERSION", Value: "22"},
+	}
+	got := buildEnvFromVars(vars, func(string, string) (string, bool) { return "", false })
+	for _, k := range []string{
+		"NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+		"NEXT_PUBLIC_SENTRY_DSN", "R2_BUCKET_NAME", "R2_REGION",
+		"AUTH_URL", "NIXPACKS_NODE_VERSION",
+	} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("build-safe literal %q must survive; got %v", k, got)
+		}
+	}
+}
+
+// TestIsSensitiveBuildEnvKey pins the heuristic itself, including the
+// NEXT_PUBLIC_ carve-out that keeps Next.js builds working.
+func TestIsSensitiveBuildEnvKey(t *testing.T) {
+	t.Parallel()
+	sensitive := []string{
+		"OPENAI_API_KEY", "APIKEY", "STRIPE_SECRET_KEY", "MY_TOKEN",
+		"PASSWORD", "DB_PASSWD", "AWS_ACCESS_KEY_ID", "PRIVATE_KEY",
+		"GCP_CREDENTIAL", "DATABASE_DSN", "HMAC_SALT", "TLS_CERT",
+		"JWT_SIGNING_KEY", "AUTH", "KEY",
+	}
+	for _, k := range sensitive {
+		if !IsSensitiveBuildEnvKey(k) {
+			t.Errorf("%q must be treated as sensitive", k)
+		}
+	}
+	safe := []string{
+		"NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_API_KEY", "NEXT_PUBLIC_SECRET_SAUCE",
+		"PORT", "R2_BUCKET_NAME", "NODE_VERSION", "APP_URL", "KEYCLOAK_URL",
+		"MONKEY", "TURKEY",
+	}
+	for _, k := range safe {
+		if IsSensitiveBuildEnvKey(k) {
+			t.Errorf("%q must NOT be treated as sensitive (false positive breaks builds)", k)
+		}
+	}
+}
+
 // TestBuildEnvFromVars_RejectsMaliciousKeys guards against shell/command
 // injection: build env keys are rendered into an `ENV <key> <value>` line in
 // the build job's shell, so a key with shell metacharacters could execute.

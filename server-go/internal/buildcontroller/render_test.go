@@ -425,6 +425,36 @@ func TestBuildEnvContainerVars(t *testing.T) {
 	}
 }
 
+// TestBuildEnvContainerVars_DropsSensitiveLiterals covers the render-boundary
+// half of the baked-credentials fix. The server drops credential-looking
+// literals when it stamps spec.buildEnv, but a KusoBuild CR written before
+// that guard existed — or by hand — can still carry one. This is the last
+// point before the value becomes a permanent image layer, so it must be
+// dropped here too.
+func TestBuildEnvContainerVars_DropsSensitiveLiterals(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		BuildEnv: map[string]string{
+			"OPENAI_API_KEY":       "sk-proj-live",
+			"AUTH_GITHUB_SECRET":   "ghs-live",
+			"R2_SECRET_ACCESS_KEY": "r2-live",
+			"NEXT_PUBLIC_APP_URL":  "https://x.example.com", // build-safe, survives
+			"R2_BUCKET_NAME":       "bucket",                // build-safe, survives
+		},
+	}}
+	got := map[string]string{}
+	for _, e := range buildEnvContainerVars(b) {
+		got[e.Name] = e.Value
+	}
+	for _, k := range []string{"OPENAI_API_KEY", "AUTH_GITHUB_SECRET", "R2_SECRET_ACCESS_KEY"} {
+		if v, leaked := got["KUSO_BE_"+k]; leaked {
+			t.Errorf("sensitive literal %q must be dropped at the render boundary, got %q", k, v)
+		}
+	}
+	if keys := got["KUSO_BUILDENV_KEYS"]; keys != "NEXT_PUBLIC_APP_URL R2_BUCKET_NAME" {
+		t.Errorf("KUSO_BUILDENV_KEYS = %q, want only the build-safe keys", keys)
+	}
+}
+
 // TestBuildEnvSecretContainerVars: kuso-secret-ref:// entries render as
 // kubelet secretKeyRef env mounts (no plaintext anywhere in the Job) plus
 // the KUSO_BUILDENV_SECRET_KEYS list the buildkit script turns into
