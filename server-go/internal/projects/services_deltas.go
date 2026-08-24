@@ -445,20 +445,68 @@ func (s *Service) clearCREnvVarIfPresent(ctx context.Context, ns, project, servi
 			break
 		}
 	}
-	if !present {
-		return nil
+	if present {
+		if _, err = s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+			out := svc.Spec.EnvVars[:0]
+			for _, e := range svc.Spec.EnvVars {
+				if e.Name != name {
+					out = append(out, e)
+				}
+			}
+			svc.Spec.EnvVars = out
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
-	_, err = s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
-		out := svc.Spec.EnvVars[:0]
-		for _, e := range svc.Spec.EnvVars {
-			if e.Name != name {
-				out = append(out, e)
+	// The env CRs carry their OWN copy of spec.envVars (propagated from the
+	// service), and the Deployment renders those as inline `env` — which
+	// Kubernetes gives precedence over the envFrom-mounted managed Secret.
+	// Clearing only the service CR therefore left a stale literal shadowing
+	// the new secret value: `kuso env set` reported success, `env list`
+	// showed the new value, and the pod kept serving the OLD one until
+	// someone hand-patched the env CR. Always sweep the envs, even when the
+	// service CR was already clean (the desync survives on its own).
+	return s.clearEnvCREnvVar(ctx, ns, project, service, name)
+}
+
+// clearEnvCREnvVar drops a literal/ref named `name` from every owned
+// KusoEnvironment of a service, so an envFrom-mounted managed-secret value
+// of the same name is the only source left. Best-effort per env: one env
+// failing must not strand the others.
+func (s *Service) clearEnvCREnvVar(ctx context.Context, ns, project, service, name string) error {
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs to clear %s: %w", name, err)
+	}
+	for _, e := range envs {
+		has := false
+		for _, ev := range e.Spec.EnvVars {
+			if ev.Name == name {
+				has = true
+				break
 			}
 		}
-		svc.Spec.EnvVars = out
-		return nil
-	})
-	return err
+		if !has {
+			continue
+		}
+		if _, err := s.updateOwnedEnvWithRetry(ctx, ns, project, e.Name, func(env *kube.KusoEnvironment) error {
+			out := env.Spec.EnvVars[:0]
+			for _, ev := range env.Spec.EnvVars {
+				if ev.Name != name {
+					out = append(out, ev)
+				}
+			}
+			env.Spec.EnvVars = out
+			return nil
+		}); err != nil {
+			return fmt.Errorf("clear %s from env %s: %w", name, e.Name, err)
+		}
+	}
+	return nil
 }
 
 // UnsetEnvVar removes a single env var by name. ErrNotFound when the

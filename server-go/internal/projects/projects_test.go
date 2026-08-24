@@ -92,6 +92,30 @@ func seedEnv(project, service, kind, branch, name string) seed {
 	})
 }
 
+// seedEnvWithVars is seedEnv plus a pre-populated spec.envVars, for tests
+// that need an env CR already carrying literals (e.g. the shadowed-literal
+// desync where a CR literal overrides the managed Secret).
+func seedEnvWithVars(project, service, kind, branch, name string, vars ...kube.KusoEnvVar) seed {
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", name, &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				labelProject: project,
+				labelService: service,
+				labelEnv:     kind,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: project,
+			Service: serviceCRName(project, service),
+			Kind:    kind,
+			Branch:  branch,
+			EnvVars: vars,
+		},
+	})
+}
+
 func typedSeed(gvr schema.GroupVersionResource, kind, name string, obj any) seed {
 	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {

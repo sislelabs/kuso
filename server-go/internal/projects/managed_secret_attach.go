@@ -120,10 +120,78 @@ func (s *Service) HealManagedSecretMounts(ctx context.Context, logger *slog.Logg
 				}
 				continue
 			}
+			// Second half of the heal: a literal on an env CR SHADOWS the
+			// managed Secret (inline `env` beats `envFrom`), so a key
+			// present in both served its stale CR value while `env list`
+			// reported the new one. Writes clear this going forward; this
+			// sweep fixes services already desynced.
+			if n, cerr := s.clearShadowedEnvLiterals(ctx, ns, project, svcShort, secretName); cerr != nil {
+				if logger != nil {
+					logger.Warn("managed-secret heal: clear shadowed literals failed",
+						"project", project, "service", svcShort, "err", cerr)
+				}
+			} else if n > 0 && logger != nil {
+				logger.Info("managed-secret heal: cleared shadowing env literals",
+					"project", project, "service", svcShort, "keys", n)
+			}
 			healed++
 		}
 	}
 	if logger != nil && healed > 0 {
 		logger.Info("managed-secret heal: swept services with managed secrets", "services", healed)
 	}
+}
+
+// clearShadowedEnvLiterals removes env-CR literals whose name also exists as
+// a key in the service's managed Secret. Such a literal wins over the
+// envFrom mount, so the pod serves the OLD value while the API reports the
+// new one — the desync that made a GitHub OAuth secret rotation silently
+// no-op. Only plain literals are cleared: a valueFrom entry is an explicit
+// wiring the user chose, not an accident of a superseded write.
+// Returns how many keys were cleared.
+func (s *Service) clearShadowedEnvLiterals(ctx context.Context, ns, project, service, secretName string) (int, error) {
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil || len(sec.Data) == 0 {
+		return 0, nil
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
+	})
+	if err != nil {
+		return 0, err
+	}
+	cleared := 0
+	for i := range envs {
+		var shadowed []string
+		for _, ev := range envs[i].Spec.EnvVars {
+			if ev.ValueFrom != nil {
+				continue // explicit wiring — leave alone
+			}
+			if _, inSecret := sec.Data[ev.Name]; inSecret {
+				shadowed = append(shadowed, ev.Name)
+			}
+		}
+		if len(shadowed) == 0 {
+			continue
+		}
+		drop := make(map[string]bool, len(shadowed))
+		for _, n := range shadowed {
+			drop[n] = true
+		}
+		if _, uerr := s.updateOwnedEnvWithRetry(ctx, ns, project, envs[i].Name, func(env *kube.KusoEnvironment) error {
+			out := env.Spec.EnvVars[:0]
+			for _, ev := range env.Spec.EnvVars {
+				if ev.ValueFrom != nil || !drop[ev.Name] {
+					out = append(out, ev)
+				}
+			}
+			env.Spec.EnvVars = out
+			return nil
+		}); uerr != nil {
+			return cleared, fmt.Errorf("clear shadowed literals on env %s: %w", envs[i].Name, uerr)
+		}
+		cleared += len(shadowed)
+	}
+	return cleared, nil
 }
