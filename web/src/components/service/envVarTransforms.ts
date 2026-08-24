@@ -65,6 +65,11 @@ export interface Row {
   // save refuses rather than silently dropping the secret. Undefined for
   // rows the user added in this session.
   origName?: string;
+  // addon is set for a row whose value comes from an addon's conn Secret
+  // (source="addon-secret"). Display-only: it labels the row's origin. The
+  // row saves like any other — as a normal service var that overrides the
+  // addon's envFrom mount — so nothing about the write path branches on it.
+  addon?: string;
 }
 
 // rid mints a fresh id for a Row. Math.random is fine — these
@@ -134,6 +139,22 @@ export function toRow(
   // managed-secret row type any more — it's just a value row whose real
   // value is secret-backed (masked until revealed), edited + saved like
   // any other via the unified auto write.
+  // Addon-supplied key (DATABASE_URL, POSTGRES_*, S3 creds, …). Fully
+  // editable like any other row: the save writes a normal service var of
+  // the same name, which takes precedence over the addon's envFrom mount.
+  // `addon` is kept only so the row can show where the value comes from.
+  if (v.source === "addon-secret") {
+    return {
+      id: rid(),
+      name: v.name ?? "",
+      value: v.value ?? "", // populated on a reveal read; blank otherwise
+      fromSecret: false,
+      secretBacked: true,
+      visible: false,
+      addon: v.addon,
+      origName: v.name ?? "",
+    };
+  }
   if (v.source === "managed-secret") {
     return {
       id: rid(),

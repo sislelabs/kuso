@@ -181,6 +181,11 @@ type EnvVar struct {
 	// a spec.envVars entry) so the editor renders it as an editable secret
 	// value. Empty for normal entries.
 	Source string `json:"source,omitempty"`
+	// Addon names the addon supplying this key when Source="addon-secret".
+	// The value lives in that addon's helm-owned <addon>-conn Secret; an
+	// edit writes a normal service var of the same name, which takes
+	// precedence over the envFrom mount.
+	Addon string `json:"addon,omitempty"`
 }
 
 type ServiceScale struct {

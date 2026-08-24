@@ -101,3 +101,69 @@ func TestGetEnv_SurfacesManagedSecretKeys(t *testing.T) {
 		t.Errorf("existing literal NODE_ENV missing from GetEnv output")
 	}
 }
+
+// TestMergeAddonSecretKeys_SurfacesAndOverrides pins the addon-var contract.
+// Addon conn keys reach the pod via an envFrom mount with no spec.envVars
+// entry, so they were invisible in the editor — users went looking for
+// DATABASE_URL and found nothing. They must surface as addon-secret rows,
+// AND stop surfacing once the user overrides one (an override is a normal
+// spec.envVars entry of the same name, which k8s gives precedence over
+// envFrom, so the addon Secret is never written).
+func TestMergeAddonSecretKeys_SurfacesAndOverrides(t *testing.T) {
+	keys := []string{"DATABASE_URL", "POSTGRES_PASSWORD", "POOLER_URL"}
+
+	// Nothing set yet: every addon key surfaces, tagged with its addon.
+	got := mergeAddonSecretKeys(nil, "proj-db-conn", "db", keys)
+	if len(got) != 3 {
+		t.Fatalf("want 3 surfaced addon keys, got %d (%v)", len(got), got)
+	}
+	for _, e := range got {
+		if e.Source != addonSecretSource {
+			t.Errorf("%s: Source = %q, want %q", e.Name, e.Source, addonSecretSource)
+		}
+		if e.Addon != "db" {
+			t.Errorf("%s: Addon = %q, want \"db\"", e.Name, e.Addon)
+		}
+		if e.Value != "" {
+			t.Errorf("%s: Value must stay blank (caller resolves/masks), got %q", e.Name, e.Value)
+		}
+	}
+
+	// User overrode DATABASE_URL: a real spec.envVars literal exists, so the
+	// addon key must NOT be re-surfaced — the row is now a normal var.
+	existing := []kube.KusoEnvVar{{Name: "DATABASE_URL", Value: "postgres://override"}}
+	got = mergeAddonSecretKeys(existing, "proj-db-conn", "db", keys)
+	names := map[string]int{}
+	for _, e := range got {
+		names[e.Name]++
+	}
+	if names["DATABASE_URL"] != 1 {
+		t.Errorf("overridden key must appear exactly once, got %d", names["DATABASE_URL"])
+	}
+	for _, e := range got {
+		if e.Name == "DATABASE_URL" && e.Source == addonSecretSource {
+			t.Error("overridden DATABASE_URL must render as a normal var, not addon-secret")
+		}
+	}
+}
+
+// TestAddonConnSecretNames maps <addon>-conn mounts to their short names and
+// ignores the kuso-managed <svc>-secrets mounts (those are a different path).
+func TestAddonConnSecretNames(t *testing.T) {
+	got := addonConnSecretNames(
+		[]string{"saiton-db-conn", "saiton-sites-conn", "saiton-saiton-secrets", "saiton-saiton-production-secrets"},
+		"saiton",
+	)
+	if len(got) != 2 {
+		t.Fatalf("want 2 addon conn mounts, got %d (%v)", len(got), got)
+	}
+	if got["saiton-db-conn"] != "db" {
+		t.Errorf("saiton-db-conn -> %q, want \"db\"", got["saiton-db-conn"])
+	}
+	if got["saiton-sites-conn"] != "sites" {
+		t.Errorf("saiton-sites-conn -> %q, want \"sites\"", got["saiton-sites-conn"])
+	}
+	if _, bad := got["saiton-saiton-secrets"]; bad {
+		t.Error("managed service secret must not be treated as an addon conn mount")
+	}
+}

@@ -397,7 +397,7 @@ func (s *Service) SetEnvValue(ctx context.Context, project, service, name, value
 func (s *Service) currentEnvVars(svc *kube.KusoService) []EnvVar {
 	out := make([]EnvVar, 0, len(svc.Spec.EnvVars))
 	for _, e := range svc.Spec.EnvVars {
-		out = append(out, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source})
+		out = append(out, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source, Addon: e.Addon})
 	}
 	return out
 }

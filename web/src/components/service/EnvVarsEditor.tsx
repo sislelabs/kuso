@@ -397,6 +397,11 @@ export function EnvVarsEditor({
       // create/change → a per-key {value, auto:true} upsert (server decides
       // storage AND clears any stale prior form of the same name).
       if (r.managed && r.value === baselineValue.get(name)) continue;
+      // Same for an untouched ADDON row: its value came from the addon's
+      // conn Secret, so writing it back would mint a pointless override
+      // that then shadows the addon forever (and goes stale the moment the
+      // addon rotates its credentials). Only an actual edit overrides.
+      if (r.addon && r.value === baselineValue.get(name)) continue;
       valueWrites.push({ name, value: r.value });
     }
     // Every removed row goes through an explicit per-key DELETE — the
@@ -711,6 +716,14 @@ export function EnvVarsEditor({
                 {reservedEnvWarning(r.name) && (
                   <span className="font-mono text-[10px] text-amber-400">
                     {reservedEnvWarning(r.name)}
+                  </span>
+                )}
+                {r.addon && !reservedEnvWarning(r.name) && (
+                  <span
+                    className="font-mono text-[10px] text-[var(--text-tertiary)]"
+                    title={`Supplied by the "${r.addon}" addon. Editing writes a service var that overrides it; delete the row to go back to the addon's value.`}
+                  >
+                    from {r.addon}
                   </span>
                 )}
               </div>

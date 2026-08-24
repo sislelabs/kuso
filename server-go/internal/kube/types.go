@@ -462,6 +462,9 @@ type KusoEnvVar struct {
 	// editable secret value. Never persisted onto the CR (json omitempty
 	// + the reconcile/propagate paths only ever copy Name/Value/ValueFrom).
 	Source string `json:"source,omitempty"`
+	// Addon is the short addon name for Source="addon-secret" entries —
+	// the addon whose conn Secret supplies this key. Read-only hint.
+	Addon string `json:"addon,omitempty"`
 }
 
 type KusoScaleSpec struct {

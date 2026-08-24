@@ -1383,19 +1383,34 @@ func (s *Service) getEnv(ctx context.Context, project, service string, reveal bo
 	// editor + `kuso env list` consume, so enrichment MUST happen here too —
 	// not only on the full-CR read paths. Best-effort (no-op on read error).
 	s.EnrichServiceWithManagedSecretKeys(ctx, project, service, svc)
+	// Addon conn keys (DATABASE_URL, POSTGRES_*, S3 creds, …) reach the pod
+	// through an envFrom mount with no spec.envVars entry, so they were
+	// absent from this list entirely — users looked for DATABASE_URL and
+	// found nothing. Surface them as addon-secret rows; an edit becomes a
+	// normal service var that overrides the mount.
+	addonSecrets := s.EnrichServiceWithAddonSecretKeys(ctx, project, service, svc)
 
 	var ns string
 	var managed map[string]string
+	addonData := map[string]map[string]string{}
 	if reveal {
 		if ns, err = s.namespaceFor(ctx, project); err == nil {
 			// Pre-read the managed secret once for the managed-secret rows.
 			managed = s.readSecretData(ctx, ns, kube.ServiceSecretName(project, service))
+			for secretName := range addonSecrets {
+				addonData[secretName] = s.readSecretData(ctx, ns, secretName)
+			}
 		}
+	}
+	// addon short name -> its conn Secret, so a row can find its own data.
+	addonSecretByShort := map[string]string{}
+	for secretName, short := range addonSecrets {
+		addonSecretByShort[short] = secretName
 	}
 
 	out := make([]EnvVar, 0, len(svc.Spec.EnvVars))
 	for _, e := range svc.Spec.EnvVars {
-		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source}
+		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source, Addon: e.Addon}
 		switch {
 		case !reveal:
 			if ev.ValueFrom != nil {
@@ -1405,6 +1420,11 @@ func (s *Service) getEnv(ctx context.Context, project, service string, reveal bo
 			// Managed-secret row: value lives in <service>-secrets.
 			if v, ok := managed[e.Name]; ok {
 				ev.Value = v
+			}
+		case e.Source == addonSecretSource:
+			// Addon row: value lives in that addon's helm-owned conn Secret.
+			if data := addonData[addonSecretByShort[e.Addon]]; data != nil {
+				ev.Value = data[e.Name]
 			}
 		case ev.ValueFrom != nil:
 			// secretKeyRef (addon/shared wiring): resolve the referenced

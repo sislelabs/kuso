@@ -429,3 +429,37 @@ describe("rowsShallowEqual", () => {
     expect(rowsShallowEqual(a, b)).toBe(true);
   });
 });
+
+// Addon-supplied keys (DATABASE_URL, POSTGRES_*, S3 creds) reach the pod via
+// an <addon>-conn envFrom mount with no spec.envVars entry, so they used to
+// be absent from the editor entirely — users looked for DATABASE_URL and
+// found nothing. They must render as ordinary editable rows, labelled with
+// their origin, never as locked fromSecret refs.
+describe("toRow addon-secret rows", () => {
+  it("renders an addon key as an editable, labelled row", () => {
+    const row = toRow(
+      { name: "DATABASE_URL", value: "postgres://real", source: "addon-secret", addon: "db" },
+      "proj",
+      new Map(),
+      []
+    );
+    expect(row.name).toBe("DATABASE_URL");
+    expect(row.value).toBe("postgres://real");
+    expect(row.addon).toBe("db");
+    // Editable: NOT an opaque ref. secretBacked only drives masking.
+    expect(row.fromSecret).toBe(false);
+    expect(row.secretBacked).toBe(true);
+    expect(row.visible).toBe(false);
+  });
+
+  it("keeps the value blank when the server didn't reveal it", () => {
+    const row = toRow(
+      { name: "POSTGRES_PASSWORD", source: "addon-secret", addon: "db" },
+      "proj",
+      new Map(),
+      []
+    );
+    expect(row.value).toBe("");
+    expect(row.fromSecret).toBe(false);
+  });
+});

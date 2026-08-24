@@ -12,6 +12,20 @@ import (
 // as editable secret values.
 const managedSecretSource = "managed-secret"
 
+// addonSecretSource tags env vars enumerated from an <addon>-conn secret
+// that the pod envFrom-mounts. These keys (DATABASE_URL, POSTGRES_*, S3
+// creds, …) reach the container without any spec.envVars entry, so before
+// this they were invisible in the editor — users went looking for
+// DATABASE_URL and couldn't find it anywhere.
+//
+// The conn Secret is owned + reconciled by the addon's helm release, so it
+// is NOT writable here: a direct patch is reverted on the next reconcile.
+// Editing such a row instead writes a NORMAL service env var of the same
+// name. Kubernetes gives inline `env` precedence over `envFrom`, so the
+// override wins at runtime, the addon Secret stays untouched, and deleting
+// the override falls back to the addon's value.
+const addonSecretSource = "addon-secret"
+
 // mergeManagedSecretKeys returns envVars plus one entry per key in the
 // kuso-managed secret `secretName` that is NOT already represented in
 // envVars — either as a literal named the same, or as a secretKeyRef
@@ -37,6 +51,55 @@ func mergeManagedSecretKeys(envVars []kube.KusoEnvVar, secretName string, secret
 			continue
 		}
 		out = append(out, kube.KusoEnvVar{Name: k, Source: managedSecretSource})
+	}
+	return out
+}
+
+// mergeAddonSecretKeys is mergeManagedSecretKeys for an <addon>-conn mount.
+// Same "skip anything already represented" rule — which is what makes an
+// OVERRIDE work: once the user edits an addon key, a real spec.envVars entry
+// of that name exists, so the key stops being re-surfaced from the addon and
+// renders as the normal var it now is.
+//
+// Added entries carry Source=addon-secret and the addon's short name so the
+// editor can show where the value comes from.
+func mergeAddonSecretKeys(envVars []kube.KusoEnvVar, secretName, addonShort string, secretKeys []string) []kube.KusoEnvVar {
+	if len(secretKeys) == 0 {
+		return envVars
+	}
+	represented := make(map[string]bool, len(envVars))
+	for _, e := range envVars {
+		represented[e.Name] = true
+		if skr := secretKeyRefOf(e); skr != nil && skr.name == secretName {
+			represented[skr.key] = true
+		}
+	}
+	out := envVars
+	for _, k := range secretKeys {
+		if represented[k] {
+			continue
+		}
+		out = append(out, kube.KusoEnvVar{Name: k, Source: addonSecretSource, Addon: addonShort})
+	}
+	return out
+}
+
+// addonConnSecretNames returns the <addon>-conn entries in envFromSecrets
+// paired with the addon short name derived from the secret ("<project>-<addon>
+// -conn" → "<addon>", falling back to trimming just the suffix). These are the
+// mounts managedSecretNamesFor deliberately skips.
+func addonConnSecretNames(envFromSecrets []string, project string) map[string]string {
+	const suffix = "-conn"
+	out := map[string]string{}
+	for _, s := range envFromSecrets {
+		if len(s) <= len(suffix) || s[len(s)-len(suffix):] != suffix {
+			continue
+		}
+		short := s[:len(s)-len(suffix)]
+		if p := project + "-"; len(short) > len(p) && short[:len(p)] == p {
+			short = short[len(p):]
+		}
+		out[s] = short
 	}
 	return out
 }
@@ -83,6 +146,45 @@ func (s *Service) EnrichEnvWithManagedSecretKeys(ctx context.Context, project st
 		}
 		env.Spec.EnvVars = mergeManagedSecretKeys(env.Spec.EnvVars, secretName, keys)
 	}
+	// Addon conn mounts too: their keys reach the pod via envFrom with no
+	// spec.envVars entry, so without this DATABASE_URL & co. are invisible.
+	for secretName, short := range addonConnSecretNames(env.Spec.EnvFromSecrets, project) {
+		keys, err := s.listSecretKeys(ctx, ns, secretName)
+		if err != nil {
+			continue
+		}
+		env.Spec.EnvVars = mergeAddonSecretKeys(env.Spec.EnvVars, secretName, short, keys)
+	}
+}
+
+// EnrichServiceWithAddonSecretKeys surfaces the keys an addon conn Secret
+// injects into this service's pods. The KusoService CR has no
+// envFromSecrets (that lives on the KusoEnvironment), so the mounts are
+// read off the service's production environment — the same set the running
+// pod gets. Returns secretName -> addon short name for the callers that
+// need to resolve values; nil on any read error (best-effort, like the
+// managed-secret enrichment).
+func (s *Service) EnrichServiceWithAddonSecretKeys(ctx context.Context, project, service string, svc *kube.KusoService) map[string]string {
+	if svc == nil || s.Kube == nil || s.Kube.Clientset == nil {
+		return nil
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil
+	}
+	env, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, service, "production"))
+	if err != nil || env == nil {
+		return nil
+	}
+	found := addonConnSecretNames(env.Spec.EnvFromSecrets, project)
+	for secretName, short := range found {
+		keys, err := s.listSecretKeys(ctx, ns, secretName)
+		if err != nil {
+			continue
+		}
+		svc.Spec.EnvVars = mergeAddonSecretKeys(svc.Spec.EnvVars, secretName, short, keys)
+	}
+	return found
 }
 
 // managedSecretNamesFor returns the kuso-managed service-secrets entries

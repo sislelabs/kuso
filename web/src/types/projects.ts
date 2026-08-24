@@ -121,6 +121,13 @@ export interface KusoEnvVar {
   // as an editable secret value (written back via secretValue, never as a
   // literal). Empty/absent for ordinary literal + secretKeyRef entries.
   source?: string;
+  // addon names the addon supplying this key when source="addon-secret".
+  // The value lives in that addon's helm-owned <addon>-conn Secret, which
+  // the operator reconciles — so an edit is written as a NORMAL service var
+  // of the same name instead. Kubernetes gives inline env precedence over
+  // envFrom, so the override wins at runtime and the addon Secret is left
+  // alone; deleting the override falls back to the addon's value.
+  addon?: string;
 }
 
 export interface KusoService {
