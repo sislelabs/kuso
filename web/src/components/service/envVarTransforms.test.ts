@@ -373,9 +373,31 @@ describe("rowDiffLabel", () => {
     expect(
       rowDiffLabel({ ...literalRow("A", "irrelevant"), fromSecret: true })
     ).toBe("<secret>");
+    const label = rowDiffLabel({
+      ...literalRow("B", "retyped-plaintext"),
+      secretBacked: true,
+    });
+    expect(label).not.toContain("retyped-plaintext");
+    expect(label.startsWith("•••••")).toBe(true);
+    // An untouched (blank) secret-backed row stays the bare placeholder —
+    // that's what marks it "not being rewritten" in the diff.
     expect(
-      rowDiffLabel({ ...literalRow("B", "retyped-plaintext"), secretBacked: true })
+      rowDiffLabel({ ...literalRow("B", ""), secretBacked: true })
     ).toBe("•••••");
+  });
+
+  // Regression: rowDiffLabel used to return a CONSTANT "•••••" for every
+  // secret-backed row, so rotating a key (pasting a new secret over an old
+  // one) diffed as identical — the confirm dialog reported "No effective
+  // changes detected" and silently dropped the save.
+  it("distinguishes two different secret values", () => {
+    const a = rowDiffLabel({ ...literalRow("K", "sk-old-key-value"), secretBacked: true });
+    const b = rowDiffLabel({ ...literalRow("K", "sk-new-key-value"), secretBacked: true });
+    expect(a).not.toBe(b);
+    // Same length, different content — the exact rotation case a
+    // length-based label would have missed.
+    expect(a).not.toContain("sk-old");
+    expect(b).not.toContain("sk-new");
   });
 
   it("shows refs verbatim and clips long values", () => {

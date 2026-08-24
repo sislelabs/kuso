@@ -58,6 +58,13 @@ export interface Row {
   // rows the editor CAN represent (plain values, addon refs) — those
   // re-resolve from their edited value.
   origValueFrom?: Record<string, unknown>;
+  // origName is the name this row loaded with, so save() can tell a
+  // RENAME from a fresh row. It matters only for secret-backed rows: a
+  // rename queues a delete of the old key, and if the value was never
+  // revealed there's no plaintext to re-write under the new name — so
+  // save refuses rather than silently dropping the secret. Undefined for
+  // rows the user added in this session.
+  origName?: string;
 }
 
 // rid mints a fresh id for a Row. Math.random is fine — these
@@ -136,13 +143,14 @@ export function toRow(
       secretBacked: true,
       managed: true,
       visible: false,
+      origName: v.name ?? "",
     };
   }
   const ref = addonRefFromValueFrom(v.valueFrom, addonByConn);
   if (ref) {
     // A resolved addon/shared ref. Editable as a ${{ addon.KEY }} value;
     // secret-backed so the eye can reveal the underlying plaintext.
-    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, secretBacked: true, visible: false };
+    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, secretBacked: true, visible: false, origName: v.name ?? "" };
   }
   const fromSecret = !!v.valueFrom;
   // On a reveal read the server populates `value` even for a secretKeyRef
@@ -164,6 +172,7 @@ export function toRow(
     // Stash the opaque valueFrom so save() can re-emit it unchanged —
     // the editor can't render it, but it must not silently delete it.
     origValueFrom: fromSecret ? v.valueFrom : undefined,
+    origName: v.name ?? "",
   };
 }
 
@@ -195,13 +204,36 @@ export function addonRefFromValueFrom(
 //     server may store it as a managed secret and the diff is shoulder-
 //     surfable
 //   - a plain literal → the value, clipped to 60 chars
+// maskDigest is a short, non-reversible fingerprint of a secret value,
+// used only so the diff can tell "changed" from "unchanged" without
+// rendering plaintext. FNV-1a — not cryptographic, and it doesn't need to
+// be: it never leaves the browser and guards a UI comparison, not a
+// security boundary. 6 hex chars is plenty to separate two values a human
+// is looking at side by side.
+function maskDigest(v: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < v.length; i++) {
+    h ^= v.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+}
+
 export function rowDiffLabel(r: Row): string {
   if (r.fromSecret) return "<secret>";
   const val = r.value ?? "";
   if (val.includes("${{")) {
     return val.length > 60 ? val.slice(0, 57) + "…" : val;
   }
-  if (r.secretBacked) return "•••••";
+  // Secret-backed values are never rendered in the diff, but the label
+  // must still CHANGE when the value does — a constant "•••••" made every
+  // rotation (a new API key pasted over an old one) diff as identical, so
+  // the confirm dialog said "No effective changes detected" and dropped
+  // the save. Blank means "untouched, keep stored value"; anything else
+  // gets a stable digest of the content so two different secrets never
+  // collide (same-length keys are exactly the rotation case) while the
+  // plaintext still never reaches the DOM.
+  if (r.secretBacked) return val ? `••••• (${maskDigest(val)})` : "•••••";
   if (val.length > 60) return val.slice(0, 57) + "…";
   return val;
 }

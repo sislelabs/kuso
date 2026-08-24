@@ -330,6 +330,10 @@ export function EnvVarsEditor({
       if (n) baselineValue.set(n, b.value);
     }
     const seen = new Set<string>();
+    // Names present in the CURRENT rows — lets the rename guard below tell
+    // a true rename (old name gone → it'll be deleted) from a row that just
+    // happens to share a name with another still-present row.
+    const present0 = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
     const valueWrites: { name: string; value: string }[] = [];
     for (const r of rows) {
       const name = r.name.trim();
@@ -358,7 +362,26 @@ export function EnvVarsEditor({
       // Empty value: skip. For a brand-new row that's a no-op; for a
       // secret-backed row the user opened but didn't retype, skipping
       // leaves the existing stored value untouched (we don't re-write it).
-      if (r.value === "") continue;
+      //
+      // EXCEPT when a secret-backed row was RENAMED: the old name is in
+      // the deletes channel below, so skipping the write here would drop
+      // the value entirely. We can't carry it over without the plaintext
+      // (a blank row means it was never revealed), so refuse the save and
+      // tell the user to reveal-and-retype rather than silently lose it.
+      if (r.value === "") {
+        const wasRenamed =
+          r.secretBacked &&
+          !!r.origName &&
+          r.origName !== name &&
+          !present0.has(r.origName);
+        if (wasRenamed) {
+          toast.error(
+            `Reveal and re-enter the value for "${name}" — renaming a secret-backed var needs its value retyped.`,
+          );
+          return null;
+        }
+        continue;
+      }
       // Secret-backed value the user didn't change (a reveal populates
       // `value` with the current plaintext, so an unedited revealed row
       // matches its baseline): skip so we don't churn the Secret or
@@ -669,10 +692,12 @@ export function EnvVarsEditor({
                     "h-8 font-mono text-[12px]",
                     reservedEnvWarning(r.name) && "border-amber-500/60",
                   )}
-                  // A ref / secret-backed KEY comes from the server and can't
-                  // be renamed here (a rename would mint a new key, not move
-                  // the value). Brand-new rows are freely editable.
-                  disabled={r.fromSecret || r.secretBacked}
+                  // Opaque secretKeyRef rows can't be renamed — the value is
+                  // a pointer we can't re-key. Managed secret-backed rows CAN
+                  // be: the unified write re-keys them like any other value,
+                  // and greying them out made half the list look inertly
+                  // read-only for no reason.
+                  disabled={r.fromSecret}
                   spellCheck={false}
                 />
                 {reservedEnvWarning(r.name) && (
