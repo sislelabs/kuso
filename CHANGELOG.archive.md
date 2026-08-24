@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.125] — 2026-07-08
+
+### ✨ Features
+- Feat(web): TLS flip control on the addon Settings tab ([cf9733a](https://github.com/sislelabs/kuso/commit/cf9733abc71ba89051a1cf9de76117d006e3fba9))
+
+### 🐛 Bug Fixes
+- Fix(release): commit CHANGELOG.archive.md rotation with the version bump ([21a2554](https://github.com/sislelabs/kuso/commit/21a255457326092319181738a527e03ce3100525))
+
 ## [0.18.124] — 2026-07-07
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.23.3] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: stop baking credential-looking literals into published images ([e7618d4](https://github.com/sislelabs/kuso/commit/e7618d4f5a532886232425b230b450d0ceece1bc))
+
 ## [0.23.2] — 2026-08-22
 
 ### 🐛 Bug Fixes
@@ -397,14 +402,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): show a cron's resolved runtime + add Sync image (#11) ([2964e30](https://github.com/sislelabs/kuso/commit/2964e30c171d4f0c169cb042e8b3ac1a175d7040))
-
-## [0.18.125] — 2026-07-08
-
-### ✨ Features
-- Feat(web): TLS flip control on the addon Settings tab ([cf9733a](https://github.com/sislelabs/kuso/commit/cf9733abc71ba89051a1cf9de76117d006e3fba9))
-
-### 🐛 Bug Fixes
-- Fix(release): commit CHANGELOG.archive.md rotation with the version bump ([21a2554](https://github.com/sislelabs/kuso/commit/21a255457326092319181738a527e03ce3100525))
 
 
 ---
