@@ -2,6 +2,15 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.128] — 2026-07-12
+
+### 🐛 Bug Fixes
+- Fix: close gaps found in adversarial review of the platform-review fixes ([7d5f700](https://github.com/sislelabs/kuso/commit/7d5f700d63b59d98e2ddbf7eacf7bb97715d4fa8))
+- Fix: remaining platform-review findings (reliability, DX) ([cdd7811](https://github.com/sislelabs/kuso/commit/cdd7811f4e5e6c3b68fb1809d23a58ef39c2a1fa))
+- Fix: platform-review findings (security, DX, scalability, UX) ([c57102e](https://github.com/sislelabs/kuso/commit/c57102e219fdfe9baf472399a458e97b3894e2db))
+- Fix(builds): cancel builds for deleted/force-pushed refs instead of paging ([238ed88](https://github.com/sislelabs/kuso/commit/238ed8804480a9aaae25e8d28dec0e3ff1b07cf7))
+- Fix(server): archived build records carry a real FinishedAt ([53ae4e4](https://github.com/sislelabs/kuso/commit/53ae4e401e933c058695e1478cdaed5d3741b341))
+
 ## [0.18.127] — 2026-07-09
 
 ### 🐛 Bug Fixes
