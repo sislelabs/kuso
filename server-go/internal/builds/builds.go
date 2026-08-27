@@ -3062,6 +3062,17 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 					releaseBlocked = true
 					p.logger().Error("pre-deploy snapshot failed — blocking deploy",
 						"env", e.Name, "build", b.Name, "err", serr)
+					// Write the terminal phase. Without this the build falls
+					// through to markSucceeded (whose guard only bails on an
+					// already-terminal phase) and is stamped SUCCEEDED with
+					// spec.done=true — which makes it invisible to
+					// observeNamespace forever. The deploy never happened,
+					// no retry is possible, and the UI shows a green build
+					// while production runs the old image.
+					p.markReleaseFailed(ctx, ns, b, &e, releaserun.Result{
+						Outcome: releaserun.OutcomeFailed,
+						Message: "pre-deploy snapshot failed: " + serr.Error(),
+					})
 					continue
 				}
 				snapKeys = keys
@@ -3070,13 +3081,28 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			}
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
 			if rerr != nil {
-				// Infra error talking to kube — log + skip this env
-				// rather than promoting silently. The next poller
-				// tick will retry. The image is unverified, so block
-				// fromService propagation too.
+				// Infra error talking to kube — do NOT promote: the image
+				// is unverified, so block fromService propagation too.
 				releaseBlocked = true
 				p.logger().Error("release hook run failed (infra error)",
 					"env", e.Name, "build", b.Name, "err", rerr)
+				// Mark it terminal-failed rather than leaving it to fall
+				// through to markSucceeded.
+				//
+				// The old comment here claimed "the next poller tick will
+				// retry". That was never true: control reaches the
+				// releaseBlocked branch below, returns nil, and
+				// markSucceeded then stamps phase=succeeded +
+				// spec.done=true — which observeNamespace skips forever.
+				// A transient apiserver error therefore produced a GREEN
+				// build with production still on the old image and no
+				// retry path at all. Failing loudly is recoverable (the
+				// release Job is keyed per env+tag, so a re-trigger is
+				// idempotent); failing silently-green is not.
+				p.markReleaseFailed(ctx, ns, b, &e, releaserun.Result{
+					Outcome: releaserun.OutcomeFailed,
+					Message: "release hook could not be started (infra error): " + rerr.Error(),
+				})
 				continue
 			}
 			if res.Outcome != releaserun.OutcomeSucceeded {

@@ -1003,12 +1003,16 @@ func TestCursor_RoundRobin(t *testing.T) {
 
 // fakeReleaseRunner is a ReleaseRunner stub that returns a fixed outcome.
 type fakeReleaseRunner struct {
-	outcome releaserun.Outcome
-	calls   int
+	outcome  releaserun.Outcome
+	calls    int
+	infraErr error // non-nil = simulate an apiserver/infra error, not a hook exit
 }
 
 func (f *fakeReleaseRunner) Run(_ context.Context, _ string, _ *kube.KusoEnvironment, _ *kube.KusoImage) (releaserun.Result, error) {
 	f.calls++
+	if f.infraErr != nil {
+		return releaserun.Result{}, f.infraErr
+	}
 	return releaserun.Result{Outcome: f.outcome, JobName: "rel-job"}, nil
 }
 
