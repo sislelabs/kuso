@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"kuso/server/internal/kube"
@@ -38,7 +39,11 @@ import (
 // the previous O(fields × envs) updates), even when several fields
 // flip together.
 type changedFields struct {
-	EnvVars   bool
+	EnvVars bool
+	// Image carries spec.image changes for runtime=image services, which
+	// have no build pipeline to promote the tag for them. Without it a
+	// redeploy was a silent no-op at the pod level.
+	Image     bool
 	Placement bool
 	Volumes   bool
 	Port      bool
@@ -104,8 +109,22 @@ type changedFields struct {
 	SecurityContext bool
 }
 
+// any reports whether any field changed.
+//
+// Reflective rather than a hand-written boolean chain: the chain silently
+// omitted each newly-added field, and a field missing from it makes
+// propagateChangedToEnvs return early — so the propagation that the new
+// field exists to perform never runs, with no error anywhere. That is how
+// the runtime=image redeploy no-op survived. Every field of changedFields
+// is a bool, so reflection over the struct cannot fall behind it.
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext || c.Snapshot || c.PublicEnv
+	v := reflect.ValueOf(c)
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Kind() == reflect.Bool && v.Field(i).Bool() {
+			return true
+		}
+	}
+	return false
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -261,6 +280,28 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Resources {
 				env.Spec.Resources = svc.Spec.Resources
+			}
+			// Image, for runtime=image services only. These skip the build
+			// pipeline entirely (builds.Create refuses them and points the
+			// user at PatchService), so without this propagation a
+			// redeploy wrote the new tag to the SERVICE spec and never
+			// reached any env — the pods kept running the old image and
+			// the drift detector, which doesn't compare image either,
+			// reported everything in sync forever.
+			//
+			// Mirrors the release-hook split AddService/AddEnvironment
+			// already apply: when a release hook must run first, the image
+			// is withheld behind pendingImage so an un-migrated image
+			// never serves. The imagerelease watcher runs the hook and
+			// promotes pendingImage→image.
+			if changed.Image && svc.Spec.Runtime == "image" {
+				if svc.Spec.Image != nil &&
+					svc.Spec.Release != nil && len(svc.Spec.Release.Command) > 0 {
+					env.Spec.PendingImage = svc.Spec.Image
+				} else {
+					env.Spec.Image = svc.Spec.Image
+					env.Spec.PendingImage = nil
+				}
 			}
 			if changed.Port {
 				port := svc.Spec.Port

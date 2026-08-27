@@ -2444,6 +2444,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.SecurityContext = req.SecurityContext
 			securityContextChanged = true
 		}
+		imageChanged := false
 		placementChanged := false
 		if req.Placement != nil {
 			if req.Placement.Clear {
@@ -2490,6 +2491,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			if err := validateServiceImageSpec(req.Image); err != nil {
 				return err
 			}
+			imageChanged = true
 			if strings.TrimSpace(req.Image.Repository) == "" {
 				svc.Spec.Image = nil
 			} else {
@@ -2560,6 +2562,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// Capture which fields changed for the post-update propagation.
 		// Recomputed on every retry attempt — deterministic from req.
 		changed = changedFields{
+			Image:             imageChanged,
 			Placement:         placementChanged,
 			Volumes:           volumesChanged,
 			Port:              portChanged,

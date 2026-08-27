@@ -933,8 +933,11 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	labels := map[string]string{
-		"kuso.sislelabs.com/project":   project,
-		"kuso.sislelabs.com/service":   fqn,
+		"kuso.sislelabs.com/project": project,
+		// Clamped: project (≤40) + "-" + service (≤32) can reach 73, past
+		// kube's 63-byte label ceiling, and the apiserver rejects the
+		// whole Create with a 422 rather than truncating.
+		"kuso.sislelabs.com/service":   clampLabelValue(fqn),
 		"kuso.sislelabs.com/build-ref": shortRef(sha),
 	}
 	annos := map[string]string{}
@@ -3281,6 +3284,25 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 // next build or an explicit sync.
 func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuild, sourceShortName string) error {
 	if b.Spec.Image == nil {
+		return nil
+	}
+	// Only a PRODUCTION-branch build may repoint crons.
+	//
+	// A cron has no branch dimension — it resolves its image from the
+	// project's production env — so without this guard a staging or
+	// feature-branch build repointed every production cron at its own
+	// image. The next scheduled fire then ran production data through
+	// unreviewed code. The sibling promoter
+	// (promoteToFromServiceConsumers) has carried this guard since MED-6;
+	// this one was written without it.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
+	if !promotionBranchMatches(b.Spec.Branch, "", defaultBranch) {
+		p.logger().Info("not repointing crons: build is not on the production branch",
+			"build", b.Name, "branch", b.Spec.Branch, "defaultBranch", defaultBranch)
 		return nil
 	}
 	crons, err := p.Svc.Kube.ListKusoCrons(ctx, ns)
