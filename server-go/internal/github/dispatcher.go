@@ -884,6 +884,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcSharedEnvKeys []string
 	var svcSubscribedAddons []string
 	var svcRelease *kube.KusoReleaseSpec
+	// Remaining service-derived fields the preview env must inherit. See
+	// the literal below for why each matters.
+	var svcInternal, svcPrivateEgress, svcPlatformAPIEgress, svcSnapshotBeforeDeploy bool
+	var svcResources map[string]any
+	var svcVolumes []kube.KusoVolume
+	var svcSecurityContext *kube.KusoSecurityContext
+	var svcHealthcheck *kube.KusoHealthcheck
+	var svcPublicEnv []string
 	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
@@ -905,6 +913,15 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// pod sees.
 		svcSharedEnvKeys = svc.Spec.SharedEnvKeys
 		svcSubscribedAddons = svc.Spec.SubscribedAddons
+		svcInternal = svc.Spec.Internal
+		svcPrivateEgress = svc.Spec.PrivateEgress
+		svcPlatformAPIEgress = svc.Spec.PlatformAPIEgress
+		svcSnapshotBeforeDeploy = svc.Spec.SnapshotBeforeDeploy
+		svcResources = svc.Spec.Resources
+		svcVolumes = svc.Spec.Volumes
+		svcSecurityContext = svc.Spec.SecurityContext
+		svcHealthcheck = svc.Spec.Healthcheck
+		svcPublicEnv = svc.Spec.PublicEnv
 		if svc.Spec.Previews != nil {
 			svcPreviewEnvVars = svc.Spec.Previews.PreviewEnvVars
 		}
@@ -1083,6 +1100,39 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// against the per-PR clone before promote. nil for services
 			// without a release hook (most) — a no-op, unchanged behaviour.
 			Release: svcRelease,
+			// Remaining service-derived fields. These were absent from this
+			// literal, and the kusoenvironment chart renders every one of
+			// them off the env CR alone — so a preview silently ran with
+			// different config from the service that spawned it.
+			//
+			// PrivateEgress is the sharp one: absent, the chart's
+			// `if not .Values.privateEgress` branch fires and the preview
+			// gets PUBLIC INTERNET EGRESS that production denies.
+			// SecurityContext absent crash-loops any image that needs an
+			// added capability (exit 127); PublicEnv absent serves literal
+			// __KUSO_RUNTIME_*__ placeholders to the browser; Resources
+			// absent ignores pod-size limits.
+			//
+			// This does not self-heal: propagate.go only mirrors some of
+			// these inside its changed.EnvVars branch, and every PR resync
+			// replaces spec wholesale (see the Update path below), which
+			// re-erases anything propagation restored.
+			//
+			// Deliberately NOT inherited (the rest of the
+			// serviceDerivedEnvSpecFields list): Stopped, because a
+			// hard-stopped service must not force every new PR preview to
+			// boot dead; Sleep and Placement, because previews carry their
+			// own scale-down lifecycle and scheduling. TestPreviewEnv-
+			// LiteralCoversServiceDerivedFields encodes that split.
+			Internal:             svcInternal,
+			PrivateEgress:        svcPrivateEgress,
+			PlatformAPIEgress:    svcPlatformAPIEgress,
+			Resources:            svcResources,
+			Volumes:              svcVolumes,
+			SecurityContext:      svcSecurityContext,
+			Healthcheck:          svcHealthcheck,
+			PublicEnv:            svcPublicEnv,
+			SnapshotBeforeDeploy: svcSnapshotBeforeDeploy,
 		},
 	}
 
