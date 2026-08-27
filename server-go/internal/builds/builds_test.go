@@ -1501,6 +1501,44 @@ func TestCheckBuild_StuckNoJob(t *testing.T) {
 			t.Fatalf("young build should not be force-failed yet; phase=%q", ph)
 		}
 	})
+
+	// Regression: a QUEUED build has no Job by design — dispatchQueued
+	// promotes it only when the per-service slot frees. It must never be
+	// force-failed by the stuck-timeout no matter how long it waits.
+	// Before the fix, any queue draining slower than the stuck-timeout
+	// red-failed every waiting build with "build job never appeared"
+	// (observed live: scubatony sat 24h19m before being reaped).
+	t.Run("old QUEUED build with no Job is never force-failed", func(t *testing.T) {
+		b := mkBuild("alpha-api-queued", 240, "queued") // 4h, far past stuck-timeout
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		if err := p.checkBuild(context.Background(), "kuso", b); err != nil {
+			t.Fatalf("checkBuild: %v", err)
+		}
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-queued")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph != "queued" {
+			t.Fatalf("queued build must stay queued, got phase=%q", ph)
+		}
+	})
+
+	// The poller's own filter must skip queued builds before they ever
+	// reach checkBuild — guard the outer layer too, not just the inner.
+	t.Run("observeNamespace does not reap a stale queued build", func(t *testing.T) {
+		b := mkBuild("alpha-api-q2", 240, "queued")
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		p.observeNamespace(context.Background(), "kuso")
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-q2")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph == "failed" {
+			t.Fatalf("observeNamespace force-failed a queued build; phase=%q", ph)
+		}
+	})
 }
 
 // TestPromotedAtIsNewer_SameSecondRollbackWins pins the fix for the

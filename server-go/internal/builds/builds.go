@@ -1666,6 +1666,16 @@ func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 		if phase == "succeeded" || phase == "failed" {
 			continue
 		}
+		// A queued build has no Job BY DESIGN — dispatchQueued (below)
+		// promotes it only once the per-service slot frees. Feeding it to
+		// checkBuild sends it down the no-Job branch, where the
+		// stuck-timeout force-FAILS it with "build job never appeared".
+		// Any queue that drains slower than the stuck-timeout therefore
+		// red-failed every waiting build. Queued builds age in the queue,
+		// not against the render deadline.
+		if phase == "queued" {
+			continue
+		}
 		if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
 			p.logger().Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 		}
@@ -2011,6 +2021,14 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 			// with no Job is polled forever and never reaches a terminal
 			// state. See findActiveForService — a non-terminal build counts
 			// as active and serializes the whole service's build queue.
+			// Defence in depth: never force-fail a QUEUED build. It has no
+			// Job because it has not been dispatched yet, so the
+			// stuck-timeout (which measures render latency) does not apply.
+			// observeNamespace already filters these out; this guard keeps
+			// any future caller of checkBuild from re-opening the bug.
+			if buildPhase(b) == "queued" {
+				return nil
+			}
 			if age := buildAge(b); age > buildStuckTimeout() {
 				p.logger().Warn("build force-failed: no Job and CR past stuck-timeout",
 					"build", b.Name, "ns", ns, "age", age.String())
