@@ -186,13 +186,26 @@ func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bo
 	// (provider='local' AND username='admin') is excluded so the
 	// first OAuth login still triggers promotion. Once any non-seed
 	// admin exists — OAuth or local — promotion stops.
+	//
+	// BOTH admin sources must be counted. Instance-admin comes from a
+	// user's group membership OR from User.instanceRole set directly via
+	// PUT /api/users/{userId}/instance-role; ListUserTenancy ranks the two
+	// identically (highest-wins). Counting only group membership meant an
+	// instance administered purely through direct roles had an empty admin
+	// group, so this gate stayed open and bootstrapOrPending — which runs
+	// on EVERY non-invite login — promoted the next stranger the IdP
+	// admitted to instance admin.
 	var n int
 	if err := tx.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM "_UserToUserGroup" m
-JOIN "UserGroup" g ON g.id = m."B"
-JOIN "User" u ON u.id = m."A"
-WHERE g."instanceRole" = 'admin'
-  AND NOT (u.provider = 'local' AND u.username = 'admin')`).Scan(&n); err != nil {
+SELECT
+  (SELECT COUNT(*) FROM "_UserToUserGroup" m
+     JOIN "UserGroup" g ON g.id = m."B"
+     JOIN "User" u ON u.id = m."A"
+    WHERE g."instanceRole" = 'admin'
+      AND NOT (u.provider = 'local' AND u.username = 'admin'))
++ (SELECT COUNT(*) FROM "User" u
+    WHERE u."instanceRole" = 'admin'
+      AND NOT (u.provider = 'local' AND u.username = 'admin'))`).Scan(&n); err != nil {
 		return false, fmt.Errorf("db: promote: count admins: %w", err)
 	}
 	if n > 0 {
