@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 	"kuso/server/internal/runs"
 )
 
@@ -64,7 +66,71 @@ func (h *RunsHandler) List(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list", err)
 		return
 	}
+	maskRunEnvsIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// maskRunEnvIfNeeded blanks literal env values on a KusoRun before it
+// goes out to a caller without secrets:read. Mirrors maskEnvIfNeeded.
+//
+// A run's spec.env is a RESOLVED SNAPSHOT of the production environment's
+// env vars, taken at create time by runs.mergeRunEnv — the same data
+// maskEnvIfNeeded withholds on /envs. Creating a run is deliberately
+// admin-only ("equivalent to a pod shell … an editor could otherwise
+// printenv past the env-value restriction"), but the read side handed the
+// same printenv output back at VIEWER level, no shell required, and the
+// CR persists until GC.
+func maskRunEnvIfNeeded(ctx context.Context, dbConn *db.DB, project string, run *kube.KusoRun) {
+	if run == nil || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	maskKusoRunEnv(run.Spec.Env)
+}
+
+// maskRunEnvsIfNeeded is the slice form for list endpoints.
+func maskRunEnvsIfNeeded(ctx context.Context, dbConn *db.DB, project string, runs []kube.KusoRun) {
+	if len(runs) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	for i := range runs {
+		maskKusoRunEnv(runs[i].Spec.Env)
+	}
+}
+
+// runCredentialRE matches credentials commonly typed inline on a run
+// command line: a URL userinfo section (postgres://user:pw@host) and
+// --flag=value / KEY=value pairs whose key looks secret-ish.
+var runCredentialRE = regexp.MustCompile(
+	`(?i)(//[^/\s:]+:)[^@\s]+(@)` +
+		`|((?:^|\s)(?:--)?[\w.-]*(?:passw(?:or)?d|secret|token|api[_-]?key|access[_-]?key|auth)[\w.-]*[=:\s])\S+`)
+
+// redactRunCommand strips inline credentials from a run's argv before it
+// is written to the audit log.
+//
+// Creating a run is admin-only precisely because it is equivalent to a
+// pod shell. But the audit row it writes is tagged Pipeline: project and
+// GET /api/audit?project=<p> serves project-scoped rows to any VIEWER —
+// so `kuso run -- psql "postgres://app:hunter2@db/app"` handed that
+// password to every viewer. Same privilege inversion the ssh-key and
+// instance-secret audit paths already guard against (see
+// audit_redaction_test.go).
+//
+// The command itself is deliberately still recorded: "who ran DELETE FROM
+// users" is the whole point of auditing runs. Only the credential-shaped
+// parts are replaced.
+func redactRunCommand(cmd string) string {
+	return runCredentialRE.ReplaceAllString(cmd, "${1}${3}"+envMaskSentinel+"${2}")
+}
+
+// maskKusoRunEnv is the KusoRunEnv counterpart of maskKusoEnvVars.
+// valueFrom entries are left alone: they are secret REFERENCES, not
+// values, and the same is true on the env path.
+func maskKusoRunEnv(vars []kube.KusoRunEnv) {
+	for i := range vars {
+		if vars[i].Value != "" {
+			vars[i].Value = envMaskSentinel
+		}
+	}
 }
 
 func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +174,7 @@ func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// "who ran `DELETE FROM users`" forensic walk has the
 		// evidence inline rather than requiring kubectl-archaeology
 		// of long-since-GC'd Job pods.
-		cmd := strings.Join(req.Command, " ")
+		cmd := redactRunCommand(strings.Join(req.Command, " "))
 		if len(cmd) > 512 {
 			cmd = cmd[:512] + "…"
 		}
@@ -137,6 +203,7 @@ func (h *RunsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "get", err)
 		return
 	}
+	maskRunEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 

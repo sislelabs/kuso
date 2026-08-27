@@ -7,6 +7,8 @@
 package builds
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -43,13 +45,40 @@ func ImageTag(ref string) string {
 // (service, ref) tuple so repeated builds of the same commit collapse
 // to one CR (idempotent retry without spawning duplicates).
 func buildCRName(project, service, ref string) string {
-	return fmt.Sprintf("%s-%s-%s", project, service, shortRef(ref))
+	return clampLabelValue(fmt.Sprintf("%s-%s-%s", project, service, shortRef(ref)))
+}
+
+// maxLabelValue is kube's hard ceiling on a label value and on the name
+// segment of most objects. Exceeding it is a 422 from the apiserver, not
+// a truncation.
+const maxLabelValue = 63
+
+// clampLabelValue truncates to kube's 63-byte limit, appending an 8-hex
+// digest of the original so two long values that share a prefix don't
+// collide after truncation.
+//
+// validateProjectName allows 40 chars and serviceNameRE allows 32, so a
+// service FQN can reach 73 — past the ceiling. The build name and the
+// kuso.sislelabs.com/service label were both stamped raw, so the
+// apiserver rejected CreateKusoBuild with a 422 that surfaced as an
+// opaque 500 and the build never ran. Same incident class as the
+// slash-in-branch brick, on the service axis rather than the ref axis.
+func clampLabelValue(v string) string {
+	if len(v) <= maxLabelValue {
+		return v
+	}
+	sum := sha256.Sum256([]byte(v))
+	suffix := "-" + hex.EncodeToString(sum[:])[:8]
+	return v[:maxLabelValue-len(suffix)] + suffix
 }
 
 // shortRef trims a 40-char SHA to its 12-char short form, or
 // slugifies an arbitrary ref string to a kube-name-safe slice
-// (lowercase letters/digits/dashes, ≤32 chars so the full build
-// name stays under 63).
+// (lowercase letters/digits/dashes, ≤32 chars).
+//
+// Capping the ref alone does NOT keep the build name under 63 — project
+// (≤40) + service (≤32) already exceeds it before the ref is appended.
+// buildCRName runs the result through clampLabelValue for that.
 func shortRef(ref string) string {
 	if shaRE.MatchString(ref) {
 		return ref[:12]

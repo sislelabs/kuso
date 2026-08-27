@@ -704,8 +704,10 @@ func main() {
 			// Deployment, so running it on every replica multiplies both.
 			updaterSvc = updater.New(database, kc, *namespace, version.Version(), logger)
 		}
-		go cfgSvc.Run(ctx, 60*time.Second, func(err error) {
-			logger.Warn("config: reload", "err", err)
+		goSafe(logger, "config", func() {
+			cfgSvc.Run(ctx, 60*time.Second, func(err error) {
+				logger.Warn("config: reload", "err", err)
+			})
 		})
 		addonSvc.NSResolver = nsResolver
 
@@ -828,7 +830,7 @@ func main() {
 				serverstate.SetLeading(false)
 			}()
 			if pollerEnabled {
-				go (&builds.Poller{
+				buildPoller := &builds.Poller{
 					Svc: buildSvc,
 					// 5s tick. With BuildKit's warm-cache path
 					// completing in 15-25s, a 30s interval meant
@@ -860,7 +862,8 @@ func main() {
 					// external-registry clusters → sweep self-disables.
 					ImageDeleter: builds.NewInClusterImageDeleter(builds.RegistryHost),
 					ImageRecords: imageRecordsAdapter{database},
-				}).Run(workCtx)
+				}
+				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
 				// Register in the liveness registry only inside the same guard
@@ -895,13 +898,13 @@ func main() {
 			// prune fallback continues to work for installs that
 			// haven't opted in.
 			if os.Getenv("KUSO_LOG_PARTITIONING") == "true" {
-				go func() {
+				goSafe(logger, "log-partition-migration", func() {
 					mctx, mcancel := context.WithTimeout(workCtx, 30*time.Minute)
 					defer mcancel()
 					if err := database.MigrateLogLineToPartitioned(mctx, logger.With("component", "log-partition")); err != nil {
 						logger.Error("log-partition migration failed", "err", err)
 					}
-				}()
+				})
 			}
 			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
 				goSafe(logger, "platformharden", func() { platformharden.Run(workCtx, kc, logger) })
@@ -914,11 +917,11 @@ func main() {
 			// Best-effort: failure on any one service doesn't fail the
 			// migration; we just log and move on.
 			if os.Getenv("KUSO_SHARED_ENV_KEYS_MIGRATION_DISABLED") != "true" {
-				go func() {
+				goSafe(logger, "shared-env-keys-migration", func() {
 					mctx, mcancel := context.WithTimeout(workCtx, 10*time.Minute)
 					defer mcancel()
 					projSvc.MigrateLegacySharedEnvKeys(mctx, logger.With("component", "shared-env-keys-migration"))
-				}()
+				})
 			}
 			// Addon-mount subscription migration (v0.16.23). Seeds
 			// spec.SubscribedAddons for any service still on the
@@ -927,20 +930,22 @@ func main() {
 			// the shared-env-keys one so both fields settle before the
 			// env-CR pod rolls.
 			if os.Getenv("KUSO_SUBSCRIBED_ADDONS_MIGRATION_DISABLED") != "true" {
-				go func() {
+				goSafe(logger, "subscribed-addons-migration", func() {
 					mctx, mcancel := context.WithTimeout(workCtx, 10*time.Minute)
 					defer mcancel()
 					projSvc.MigrateLegacySubscribedAddons(mctx, logger.With("component", "subscribed-addons-migration"))
-				}()
+				})
 			}
 			if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
 				serverstate.RegisterLoop(serverstate.LoopErrorScan, errorscan.HeartbeatInterval)
-				go (&errorscan.Scanner{
-					DB:        database,
-					Logger:    logger,
-					Interval:  errorscan.HeartbeatInterval,
-					BatchSize: 500,
-				}).Run(workCtx)
+				goSafe(logger, "errorscan", func() {
+					(&errorscan.Scanner{
+						DB:        database,
+						Logger:    logger,
+						Interval:  errorscan.HeartbeatInterval,
+						BatchSize: 500,
+					}).Run(workCtx)
+				})
 			}
 			// Runs phase-write poller. Observes Job terminal
 			// transitions and stamps run-phase / completedAt /
@@ -950,11 +955,13 @@ func main() {
 			// kube. Leader-gated by living inside startSingletons.
 			if runSvc != nil && os.Getenv("KUSO_RUNS_POLLER_DISABLED") != "true" {
 				serverstate.RegisterLoop(serverstate.LoopRunsPoller, runs.HeartbeatInterval)
-				go (&runs.Poller{
-					Svc:      runSvc,
-					Interval: runs.HeartbeatInterval,
-					Logger:   logger.With("component", "runs-poller"),
-				}).Run(workCtx)
+				goSafe(logger, "runs-poller", func() {
+					(&runs.Poller{
+						Svc:      runSvc,
+						Interval: runs.HeartbeatInterval,
+						Logger:   logger.With("component", "runs-poller"),
+					}).Run(workCtx)
+				})
 			}
 			// instance-pg reconciler: harvests the cluster PG addon's
 			// conn Secret and writes the admin DSN into instance-secrets.
@@ -1304,11 +1311,13 @@ func main() {
 			if os.Getenv("KUSO_SCALEDOWN_DISABLED") != "true" {
 				serverstate.RegisterLoop(serverstate.LoopScaledown, scaledown.DefaultTickInterval)
 			}
-			go (&scaledown.Watcher{
-				Kube:      kubeClient,
-				Namespace: *namespace,
-				Logger:    logger.With("component", "scaledown"),
-			}).Run(workCtx)
+			goSafe(logger, "scaledown", func() {
+				(&scaledown.Watcher{
+					Kube:      kubeClient,
+					Namespace: *namespace,
+					Logger:    logger.With("component", "scaledown"),
+				}).Run(workCtx)
+			})
 			// Image-path release trigger: runtime=image services skip the build
 			// pipeline, so the build poller never runs their release hook. This
 			// watcher reconciles envs with a withheld spec.pendingImage — runs the
@@ -1322,12 +1331,14 @@ func main() {
 			// are the load-bearing failure signal; wire Notify once a shared event
 			// helper exists.
 			serverstate.RegisterLoop(serverstate.LoopImageRelease, imagerelease.DefaultTickInterval)
-			go (&imagerelease.Watcher{
-				Kube:      kubeClient,
-				Namespace: *namespace,
-				Logger:    logger.With("component", "imagerelease"),
-				Release:   releaserun.New(kubeClient),
-			}).Run(workCtx)
+			goSafe(logger, "imagerelease", func() {
+				(&imagerelease.Watcher{
+					Kube:      kubeClient,
+					Namespace: *namespace,
+					Logger:    logger.With("component", "imagerelease"),
+					Release:   releaserun.New(kubeClient),
+				}).Run(workCtx)
+			})
 			// Host package-update advisory — reads the pkg-probe
 			// DaemonSet's node annotations and notifies (warn, edge-
 			// triggered, restart-safe via the Setting kv) when a node
@@ -1367,12 +1378,14 @@ func main() {
 			// stopped (or never-configured) kuso-DB backup doesn't stay
 			// invisible until restore time.
 			serverstate.RegisterLoop(serverstate.LoopBackupHealth, backuphealth.DefaultInterval)
-			go (&backuphealth.Watcher{
-				Kube:      kubeClient,
-				Notify:    notifyDisp,
-				Namespace: *namespace,
-				Logger:    logger.With("component", "backupwatch"),
-			}).Run(workCtx)
+			goSafe(logger, "backuphealth", func() {
+				(&backuphealth.Watcher{
+					Kube:      kubeClient,
+					Notify:    notifyDisp,
+					Namespace: *namespace,
+					Logger:    logger.With("component", "backupwatch"),
+				}).Run(workCtx)
+			})
 			// Unattended auto-remediation loop. OPT-IN and OFF by
 			// default — the Enabled closure reads the KUSO_AUTO_REMEDIATE
 			// env var (set to "1"/"true" to turn it on). When on, it
@@ -1519,6 +1532,12 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
+	// Deliberately generous: BuildRecord backs the Deployments tab, so
+	// this is history a human reads, not machine chatter. 90 days plus a
+	// per-service floor keeps the table bounded without ever emptying a
+	// quiet service's history.
+	buildRecordDays := envInt("KUSO_BUILD_RECORD_RETENTION_DAYS", 90)
+	buildRecordKeep := envInt("KUSO_BUILD_RECORD_KEEP_PER_SERVICE", 50)
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	tick := func() {
@@ -1563,6 +1582,19 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Warn("daily-cleanup error-events", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup error-events pruned", "rows", n, "days", logDays)
+		}
+		// Archived build summaries. BuildRecord was the only unbounded
+		// table on the deploy path — one row per build, forever, and the
+		// image-retention sweep scans the whole table once per namespace
+		// every 6 minutes. Rows whose imageTag is still set are kept
+		// regardless of age (they are still rollback-able), as are the
+		// newest N per service, so deployment history never empties out.
+		if n, err := database.PruneBuildRecords(c,
+			now.AddDate(0, 0, -buildRecordDays), buildRecordKeep); err != nil {
+			logger.Warn("daily-cleanup build-records", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup build-records pruned",
+				"rows", n, "days", buildRecordDays, "keepPerService", buildRecordKeep)
 		}
 		// Revoked-token rows beyond their natural expiry. The
 		// signature layer rejects expired tokens on its own — once
@@ -1910,8 +1942,14 @@ func (a buildArchiveAdapter) SaveBuildRecord(ctx context.Context, r builds.Build
 type imageRecordsAdapter struct{ d *db.DB }
 
 func (a imageRecordsAdapter) ListArchivedImages(ctx context.Context, _ string) ([]builds.ArchivedImageRecord, error) {
-	// One kuso namespace today; list all archived images and let the
-	// sweep group by project/service.
+	// BuildRecord has no namespace column, so the rows can't be filtered
+	// here — SweepImagesPastWindow scopes them to the swept namespace's
+	// projects instead (see nsProjects there). Returning everything and
+	// filtering namespace-side is what keeps a project in namespace A from
+	// having its live image untagged by a sweep of namespace B.
+	//
+	// This previously carried a "one kuso namespace today" comment, which
+	// stopped being true when per-project namespaces shipped.
 	rows, err := a.d.ListArchivedImages(ctx, "")
 	if err != nil {
 		return nil, err

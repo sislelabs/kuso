@@ -743,7 +743,12 @@ func kusoBuildLabels(b *kube.KusoBuild, buildName string) map[string]string {
 		out["kuso.sislelabs.com/project"] = b.Spec.Project
 	}
 	if b.Spec.Service != "" {
-		out["kuso.sislelabs.com/service"] = b.Spec.Service
+		// Same defensive treatment as build-ref below. The service FQN is
+		// "<project>-<service>", and validateProjectName allows 40 chars
+		// while serviceNameRE allows 32 — so it can reach 73, past kube's
+		// 63-byte label ceiling. Stamped raw, the apiserver rejects the
+		// whole Job create and no build pod ever starts.
+		out["kuso.sislelabs.com/service"] = sanitizeLabelValue(b.Spec.Service)
 	}
 	if b.Spec.Ref != "" {
 		// Defensive: a label VALUE must be alphanumeric plus '-', '_',

@@ -225,13 +225,43 @@ func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, e
 	return out, nil
 }
 
+// listProjectScoped returns only the project's OWN addons, excluding
+// env-scoped clones (preview-pr-N / staging / qa copies minted by
+// previewdb.EnsureEnvAddons). Clones carry the project label too, so
+// plain List returns them — and any PROJECT-WIDE derivation built from
+// that list silently inherits them.
+//
+// That was a live data-loss bug: refreshEnvSecretsFiltered rebuilds
+// every env's envFromSecrets from this list, so a clone conn landed in
+// projectAddonSet, failed the base-name allow-set, and was dropped —
+// while the PRODUCTION conn matched and was kept. Any addon add/delete
+// therefore repointed every staging and preview env at the production
+// database.
+//
+// Use this for anything project-wide. Use List for user-facing reads
+// (the UI legitimately shows clones).
+func (s *Service) listProjectScoped(ctx context.Context, project string) ([]kube.KusoAddon, error) {
+	all, err := s.List(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]kube.KusoAddon, 0, len(all))
+	for _, a := range all {
+		if a.Labels[kube.LabelEnv] != "" {
+			continue // env-scoped clone; belongs to one env, not the project
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 // ConnSecretsForProject returns the list of addon conn-secret names
 // for the project. Called by projects.Service when creating a new env
 // (production or custom) so the env starts with envFromSecrets already
 // pointing at every existing addon — without this, services added
 // after an addon would never get DATABASE_URL/REDIS_URL/etc. injected.
 func (s *Service) ConnSecretsForProject(ctx context.Context, project string) ([]string, error) {
-	addons, err := s.List(ctx, project)
+	addons, err := s.listProjectScoped(ctx, project)
 	if err != nil {
 		return nil, err
 	}
@@ -1108,7 +1138,7 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 // re-injected into every env, leaving pods with an env-var ref to a
 // soon-to-vanish secret (CreateContainerConfigError on the next restart).
 func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
-	addons, err := s.List(ctx, project)
+	addons, err := s.listProjectScoped(ctx, project)
 	if err != nil {
 		return err
 	}
@@ -1205,6 +1235,43 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 		// write landed between our List and Patch.
 		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
 			perEnv := slices.Clone(baseSecrets)
+			// Carry forward this env's OWN env-scoped addon conns.
+			//
+			// baseSecrets is project-scoped by construction (see
+			// listProjectScoped), so an env's private clone conn —
+			// "<project>-<addon>-<scope>-conn", minted by
+			// previewdb.EnsureEnvAddons for a preview/staging env — is
+			// deliberately absent from it. Rebuilding envFromSecrets from
+			// baseSecrets alone therefore DROPS the clone, and the
+			// production conn takes its place: the env silently starts
+			// talking to the production database.
+			//
+			// The dispatcher already honours this invariant when it
+			// re-renders a preview env (it carries EnvFromSecrets over
+			// from the live object); this is the same guarantee for the
+			// addon add/delete path, which walks every env in the project.
+			//
+			// The clone REPLACES its source: an env that has its own
+			// copy of "db" must mount <project>-db-<scope>-conn and NOT
+			// <project>-db-conn. Mounting both is the actual data-loss
+			// shape — kube envFrom is last-source-wins on duplicate keys
+			// (DATABASE_URL, S3_BUCKET, …), so whichever lands last wins
+			// and the env can silently resolve to production.
+			if envScope := live.Labels[kube.LabelEnv]; envScope != "" && envScope != "production" {
+				suffix := "-" + envScope + "-conn"
+				for _, sec := range live.Spec.EnvFromSecrets {
+					if !strings.HasSuffix(sec, suffix) {
+						continue
+					}
+					if !slices.Contains(perEnv, sec) {
+						perEnv = append(perEnv, sec)
+					}
+					// Drop the project-level source this clone replaces:
+					// "<project>-db-staging-conn" shadows "<project>-db-conn".
+					source := strings.TrimSuffix(sec, suffix) + "-conn"
+					perEnv = slices.DeleteFunc(perEnv, func(n string) bool { return n == source })
+				}
+			}
 			// Apply the per-service addon subscription filter when the
 			// env CR carries one. nil = legacy mount-all.
 			if live.Spec.SubscribedAddons != nil {
@@ -1295,11 +1362,52 @@ func filterAddonConnsBySubscription(envFromSecrets, projectAddonConns, subscribe
 			out = append(out, sec)
 			continue
 		}
-		if allow[sec] {
+		// Match the exact name OR an ENV-SCOPED CLONE of a subscribed
+		// addon. A non-production env's own conn is
+		// "<project>-<addon>-<scope>-conn" (tickero-db-staging-conn for
+		// subscribed "db"), which the allow-set — built only from base
+		// names — misses. Without this clause the clone was DROPPED while
+		// the production conn was KEPT, silently repointing every staging
+		// and preview env at the production database on any addon
+		// add/delete in the project.
+		if allow[sec] || connMatchesSubscribedBase(sec, subscribedAddons, project) {
 			out = append(out, sec)
 		}
 	}
 	return out
+}
+
+// connMatchesSubscribedBase reports whether a "<project>-<addon>[-<scope>]-conn"
+// secret is a clone of a SUBSCRIBED base addon. A clone conn inserts an env
+// scope segment before "-conn" (tickero-db-staging-conn), so the exact
+// allow-set (which only has base names) misses it. We check whether, after
+// stripping the project prefix and the "-conn" suffix, the remainder BEGINS
+// with a subscribed addon name followed by "-" (the scope). Prefix-with-dash
+// avoids matching a different addon that merely shares a prefix
+// (e.g. subscribed "db" must not green-light "database-conn").
+//
+// MUST stay behaviourally identical to the copy in internal/projects —
+// TestFilterParity_WithProjectsImplementation locks the two together.
+func connMatchesSubscribedBase(sec string, subscribedAddons []string, project string) bool {
+	inner := strings.TrimSuffix(sec, "-conn")
+	if inner == sec {
+		return false // not a conn secret
+	}
+	if project != "" {
+		inner = strings.TrimPrefix(inner, project+"-")
+	}
+	for _, addon := range subscribedAddons {
+		short := addon
+		if project != "" {
+			short = strings.TrimPrefix(short, project+"-")
+		}
+		// Env-scoped clone: "<addon>-<scope>". Require the dash so "db"
+		// matches "db-staging" but never "database".
+		if strings.HasPrefix(inner, short+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // createAddon is the typed-write wrapper for addons.

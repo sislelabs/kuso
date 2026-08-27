@@ -933,8 +933,11 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	labels := map[string]string{
-		"kuso.sislelabs.com/project":   project,
-		"kuso.sislelabs.com/service":   fqn,
+		"kuso.sislelabs.com/project": project,
+		// Clamped: project (≤40) + "-" + service (≤32) can reach 73, past
+		// kube's 63-byte label ceiling, and the apiserver rejects the
+		// whole Create with a 422 rather than truncating.
+		"kuso.sislelabs.com/service":   clampLabelValue(fqn),
 		"kuso.sislelabs.com/build-ref": shortRef(sha),
 	}
 	annos := map[string]string{}
@@ -1666,6 +1669,16 @@ func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 		if phase == "succeeded" || phase == "failed" {
 			continue
 		}
+		// A queued build has no Job BY DESIGN — dispatchQueued (below)
+		// promotes it only once the per-service slot frees. Feeding it to
+		// checkBuild sends it down the no-Job branch, where the
+		// stuck-timeout force-FAILS it with "build job never appeared".
+		// Any queue that drains slower than the stuck-timeout therefore
+		// red-failed every waiting build. Queued builds age in the queue,
+		// not against the render deadline.
+		if phase == "queued" {
+			continue
+		}
 		if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
 			p.logger().Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 		}
@@ -2011,6 +2024,14 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 			// with no Job is polled forever and never reaches a terminal
 			// state. See findActiveForService — a non-terminal build counts
 			// as active and serializes the whole service's build queue.
+			// Defence in depth: never force-fail a QUEUED build. It has no
+			// Job because it has not been dispatched yet, so the
+			// stuck-timeout (which measures render latency) does not apply.
+			// observeNamespace already filters these out; this guard keeps
+			// any future caller of checkBuild from re-opening the bug.
+			if buildPhase(b) == "queued" {
+				return nil
+			}
 			if age := buildAge(b); age > buildStuckTimeout() {
 				p.logger().Warn("build force-failed: no Job and CR past stuck-timeout",
 					"build", b.Name, "ns", ns, "age", age.String())
@@ -3044,6 +3065,17 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 					releaseBlocked = true
 					p.logger().Error("pre-deploy snapshot failed — blocking deploy",
 						"env", e.Name, "build", b.Name, "err", serr)
+					// Write the terminal phase. Without this the build falls
+					// through to markSucceeded (whose guard only bails on an
+					// already-terminal phase) and is stamped SUCCEEDED with
+					// spec.done=true — which makes it invisible to
+					// observeNamespace forever. The deploy never happened,
+					// no retry is possible, and the UI shows a green build
+					// while production runs the old image.
+					p.markReleaseFailed(ctx, ns, b, &e, releaserun.Result{
+						Outcome: releaserun.OutcomeFailed,
+						Message: "pre-deploy snapshot failed: " + serr.Error(),
+					})
 					continue
 				}
 				snapKeys = keys
@@ -3052,13 +3084,28 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			}
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
 			if rerr != nil {
-				// Infra error talking to kube — log + skip this env
-				// rather than promoting silently. The next poller
-				// tick will retry. The image is unverified, so block
-				// fromService propagation too.
+				// Infra error talking to kube — do NOT promote: the image
+				// is unverified, so block fromService propagation too.
 				releaseBlocked = true
 				p.logger().Error("release hook run failed (infra error)",
 					"env", e.Name, "build", b.Name, "err", rerr)
+				// Mark it terminal-failed rather than leaving it to fall
+				// through to markSucceeded.
+				//
+				// The old comment here claimed "the next poller tick will
+				// retry". That was never true: control reaches the
+				// releaseBlocked branch below, returns nil, and
+				// markSucceeded then stamps phase=succeeded +
+				// spec.done=true — which observeNamespace skips forever.
+				// A transient apiserver error therefore produced a GREEN
+				// build with production still on the old image and no
+				// retry path at all. Failing loudly is recoverable (the
+				// release Job is keyed per env+tag, so a re-trigger is
+				// idempotent); failing silently-green is not.
+				p.markReleaseFailed(ctx, ns, b, &e, releaserun.Result{
+					Outcome: releaserun.OutcomeFailed,
+					Message: "release hook could not be started (infra error): " + rerr.Error(),
+				})
 				continue
 			}
 			if res.Outcome != releaserun.OutcomeSucceeded {
@@ -3237,6 +3284,25 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 // next build or an explicit sync.
 func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuild, sourceShortName string) error {
 	if b.Spec.Image == nil {
+		return nil
+	}
+	// Only a PRODUCTION-branch build may repoint crons.
+	//
+	// A cron has no branch dimension — it resolves its image from the
+	// project's production env — so without this guard a staging or
+	// feature-branch build repointed every production cron at its own
+	// image. The next scheduled fire then ran production data through
+	// unreviewed code. The sibling promoter
+	// (promoteToFromServiceConsumers) has carried this guard since MED-6;
+	// this one was written without it.
+	defaultBranch := "main"
+	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
+	if !promotionBranchMatches(b.Spec.Branch, "", defaultBranch) {
+		p.logger().Info("not repointing crons: build is not on the production branch",
+			"build", b.Name, "branch", b.Spec.Branch, "defaultBranch", defaultBranch)
 		return nil
 	}
 	crons, err := p.Svc.Kube.ListKusoCrons(ctx, ns)
