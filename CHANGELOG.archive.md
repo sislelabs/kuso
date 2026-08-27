@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.19.1] — 2026-07-14
+
+### 🐛 Bug Fixes
+- Fix(operator): addon backup CronJobs degrade gracefully without S3 config ([0bcf53e](https://github.com/sislelabs/kuso/commit/0bcf53e3d8a0cdefdddf21c731d2037ace513ef8))
+
 ## [0.19.0] — 2026-07-14
 
 ### 🐛 Bug Fixes
