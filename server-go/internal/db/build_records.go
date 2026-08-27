@@ -223,6 +223,47 @@ func (d *DB) ClearImageTag(ctx context.Context, project, buildName string) error
 	return nil
 }
 
+// PruneBuildRecords drops archived build summaries older than `before`,
+// EXCEPT any row whose imageTag is still set — those are the rows the
+// image-retention sweep has not yet untagged, i.e. still rollback-able,
+// and dropping one would strand its registry image with no record that it
+// exists.
+//
+// BuildRecord was the only unbounded table on the hot deploy path: every
+// build writes a row, nothing ever removed one, and the image-retention
+// sweep reads the WHOLE table once per namespace every 6 minutes. At
+// 22 projects that is merely wasteful; at 10x it is the first thing to
+// fall over.
+//
+// Keeps the newest `keepPerService` rows per (project, service)
+// regardless of age, so a service that hasn't deployed in months still
+// shows its deployment history.
+func (d *DB) PruneBuildRecords(ctx context.Context, before time.Time, keepPerService int) (int, error) {
+	if keepPerService < 0 {
+		keepPerService = 0
+	}
+	res, err := d.ExecContext(ctx, `
+DELETE FROM "BuildRecord" b
+ WHERE b."createdAt" < $1
+   AND COALESCE(b."imageTag", '') = ''
+   AND b.ctid NOT IN (
+         SELECT ctid FROM (
+           SELECT ctid,
+                  row_number() OVER (
+                    PARTITION BY "project", "service"
+                    ORDER BY "createdAt" DESC
+                  ) AS rn
+             FROM "BuildRecord"
+         ) ranked
+          WHERE rn <= $2
+       )`, before.UTC(), keepPerService)
+	if err != nil {
+		return 0, fmt.Errorf("PruneBuildRecords: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // DeleteBuildRecordsForService removes archived summaries for a service
 // — called on service delete so history doesn't outlive the service.
 // Mirrors DeleteBuildLogsForService.

@@ -1532,6 +1532,12 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
+	// Deliberately generous: BuildRecord backs the Deployments tab, so
+	// this is history a human reads, not machine chatter. 90 days plus a
+	// per-service floor keeps the table bounded without ever emptying a
+	// quiet service's history.
+	buildRecordDays := envInt("KUSO_BUILD_RECORD_RETENTION_DAYS", 90)
+	buildRecordKeep := envInt("KUSO_BUILD_RECORD_KEEP_PER_SERVICE", 50)
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	tick := func() {
@@ -1576,6 +1582,19 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Warn("daily-cleanup error-events", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup error-events pruned", "rows", n, "days", logDays)
+		}
+		// Archived build summaries. BuildRecord was the only unbounded
+		// table on the deploy path — one row per build, forever, and the
+		// image-retention sweep scans the whole table once per namespace
+		// every 6 minutes. Rows whose imageTag is still set are kept
+		// regardless of age (they are still rollback-able), as are the
+		// newest N per service, so deployment history never empties out.
+		if n, err := database.PruneBuildRecords(c,
+			now.AddDate(0, 0, -buildRecordDays), buildRecordKeep); err != nil {
+			logger.Warn("daily-cleanup build-records", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup build-records pruned",
+				"rows", n, "days", buildRecordDays, "keepPerService", buildRecordKeep)
 		}
 		// Revoked-token rows beyond their natural expiry. The
 		// signature layer rejects expired tokens on its own — once
