@@ -230,6 +230,27 @@ func SweepImagesPastWindow(
 			succeeded: true,
 		})
 	}
+	// Projects that actually live in THIS namespace. Archived rows are
+	// keyed by project, and the DB has no namespace column, so this is
+	// what scopes them to the namespace being swept.
+	//
+	// Load-bearing: `protected` below is built from
+	// ListKusoEnvironments(namespace) — namespace-scoped. If archived rows
+	// from OTHER namespaces are merged in, their (project, service) groups
+	// contain no live CRs and nothing protects them, so the sweep untags
+	// images that another namespace is actively running. That is the exact
+	// ImagePullBackOff outage the protection block above exists to prevent.
+	nsProjects := map[string]bool{}
+	for i := range list {
+		nsProjects[list[i].Spec.Project] = true
+	}
+	if envs, eerr := kc.ListKusoEnvironments(ctx, namespace); eerr == nil {
+		for i := range envs {
+			if p := envs[i].Spec.Project; p != "" {
+				nsProjects[p] = true
+			}
+		}
+	}
 	if lister != nil {
 		archived, lerr := lister.ListArchivedImages(ctx, namespace)
 		if lerr != nil {
@@ -237,7 +258,12 @@ func SweepImagesPastWindow(
 				logFn("image-sweep: list archived", "ns", namespace, "err", lerr)
 			}
 		} else {
+			skipped := 0
 			for _, a := range archived {
+				if !nsProjects[a.Project] {
+					skipped++
+					continue // belongs to another namespace; not ours to sweep
+				}
 				add(a.Project, imageRetentionRecord{
 					buildName: a.BuildName,
 					project:   a.Project,
@@ -246,6 +272,10 @@ func SweepImagesPastWindow(
 					createdAt: a.CreatedAt,
 					succeeded: a.Status == "succeeded",
 				})
+			}
+			if skipped > 0 && logFn != nil {
+				logFn("image-sweep: skipped archived rows from other namespaces",
+					"ns", namespace, "skipped", skipped)
 			}
 		}
 	}

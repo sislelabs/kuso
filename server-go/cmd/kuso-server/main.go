@@ -1910,8 +1910,14 @@ func (a buildArchiveAdapter) SaveBuildRecord(ctx context.Context, r builds.Build
 type imageRecordsAdapter struct{ d *db.DB }
 
 func (a imageRecordsAdapter) ListArchivedImages(ctx context.Context, _ string) ([]builds.ArchivedImageRecord, error) {
-	// One kuso namespace today; list all archived images and let the
-	// sweep group by project/service.
+	// BuildRecord has no namespace column, so the rows can't be filtered
+	// here — SweepImagesPastWindow scopes them to the swept namespace's
+	// projects instead (see nsProjects there). Returning everything and
+	// filtering namespace-side is what keeps a project in namespace A from
+	// having its live image untagged by a sweep of namespace B.
+	//
+	// This previously carried a "one kuso namespace today" comment, which
+	// stopped being true when per-project namespaces shipped.
 	rows, err := a.d.ListArchivedImages(ctx, "")
 	if err != nil {
 		return nil, err
