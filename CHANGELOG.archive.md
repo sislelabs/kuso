@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.20.0] — 2026-07-15
+
+### Other
+- Wildcard hosts with pre-provisioned certs (kills the per-tenant LE ceiling) ([5a00b12](https://github.com/sislelabs/kuso/commit/5a00b120b96d0f43361599d107634030e7b0013a))
+- Branch-change propagation + platformApiEgress opt-in ([7010d1b](https://github.com/sislelabs/kuso/commit/7010d1b019a3f6b6eea61108cac9f8b73778761f))
+
 ## [0.19.1] — 2026-07-14
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.1] — 2026-09-01
+
+### 🐛 Bug Fixes
+- Fix(backup): make addon backups actually reach the DB and S3, add per-addon bucket ([c755f71](https://github.com/sislelabs/kuso/commit/c755f710fae27852e0a4509c94a92700acab25a4))
+
 ## [0.25.0] — 2026-08-27
 
 ### Other
@@ -394,12 +399,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Map tlsSecret through the AddDomain + create-service HTTP handlers ([3df5f70](https://github.com/sislelabs/kuso/commit/3df5f703cac20731069fbda591c7c4c50dad99a6))
-
-## [0.20.0] — 2026-07-15
-
-### Other
-- Wildcard hosts with pre-provisioned certs (kills the per-tenant LE ceiling) ([5a00b12](https://github.com/sislelabs/kuso/commit/5a00b120b96d0f43361599d107634030e7b0013a))
-- Branch-change propagation + platformApiEgress opt-in ([7010d1b](https://github.com/sislelabs/kuso/commit/7010d1b019a3f6b6eea61108cac9f8b73778761f))
 
 
 ---
