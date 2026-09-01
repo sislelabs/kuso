@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.20.1] — 2026-07-15
+
+### Other
+- Map tlsSecret through the AddDomain + create-service HTTP handlers ([3df5f70](https://github.com/sislelabs/kuso/commit/3df5f703cac20731069fbda591c7c4c50dad99a6))
+
 ## [0.20.0] — 2026-07-15
 
 ### Other

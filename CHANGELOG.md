@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.2] — 2026-09-01
+
+### 🐛 Bug Fixes
+- Fix(backup): stop the API dropping spec.backup.bucket ([1306118](https://github.com/sislelabs/kuso/commit/1306118c3ca8ecd1f873df091f33e15707cbbbd2))
+
 ## [0.25.1] — 2026-09-01
 
 ### 🐛 Bug Fixes
@@ -394,11 +399,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - DB browser: logical-database picker for multi-DB postgres addons ([713c5f6](https://github.com/sislelabs/kuso/commit/713c5f672c4d0531df4a411ea9ec4a87eb83a1c6))
-
-## [0.20.1] — 2026-07-15
-
-### Other
-- Map tlsSecret through the AddDomain + create-service HTTP handlers ([3df5f70](https://github.com/sislelabs/kuso/commit/3df5f703cac20731069fbda591c7c4c50dad99a6))
 
 
 ---
