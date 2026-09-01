@@ -64,6 +64,7 @@ func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonReq
 		out.Backup = &addons.UpdateBackupPatch{
 			Schedule:      in.Backup.Schedule,
 			RetentionDays: in.Backup.RetentionDays,
+			Bucket:        in.Backup.Bucket,
 		}
 	}
 	if in.Pooler != nil {
