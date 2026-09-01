@@ -72,6 +72,10 @@ type UpdateAddonRequest struct {
 type UpdateAddonBackup struct {
 	Schedule      *string `json:"schedule,omitempty"`
 	RetentionDays *int    `json:"retentionDays,omitempty"`
+	// Bucket overrides the instance-wide backup bucket for this addon.
+	// "" clears the override. Endpoint/region/credentials still come
+	// from the instance backup settings.
+	Bucket *string `json:"bucket,omitempty"`
 }
 
 // AddonPoolerSpec is the opt-in connection-pooler block. Only

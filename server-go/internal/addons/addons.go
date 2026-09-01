@@ -672,7 +672,18 @@ type UpdateAddonRequest struct {
 type UpdateBackupPatch struct {
 	Schedule      *string `json:"schedule,omitempty"`
 	RetentionDays *int    `json:"retentionDays,omitempty"`
+	// Bucket overrides the instance-wide backup bucket for this addon.
+	// "" clears the override (back to the instance bucket). Credentials
+	// and endpoint still come from the kuso-backup-s3 Secret.
+	Bucket *string `json:"bucket,omitempty"`
 }
+
+// s3BucketName matches the subset of S3 bucket naming that every
+// S3-compatible backend accepts: lowercase letters, digits, dots and
+// hyphens, 3..63 chars, starting and ending alphanumeric. Rejecting
+// here means a typo surfaces on the API call instead of as a failing
+// CronJob hours later.
+var s3BucketName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 // AddonPoolerPatch toggles the opt-in PgBouncer pooler. Enabled is a
 // pointer so a nil AddonPoolerPatch and a {Enabled: nil} are both
@@ -813,6 +824,16 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 					return fmt.Errorf("%w: backup retentionDays %d must be 0..3650", ErrInvalid, d)
 				}
 				addon.Spec.Backup.RetentionDays = d
+			}
+			if req.Backup.Bucket != nil {
+				b := strings.TrimSpace(*req.Backup.Bucket)
+				// Empty clears the override — back to the instance-wide
+				// bucket. Anything else must be a plausible bucket name so
+				// a typo fails here rather than as a broken upload later.
+				if b != "" && !s3BucketName.MatchString(b) {
+					return fmt.Errorf("%w: backup bucket %q must be 3-63 chars, lowercase alphanumeric with dots/hyphens", ErrInvalid, b)
+				}
+				addon.Spec.Backup.Bucket = b
 			}
 		}
 		if req.TLS != nil {

@@ -943,6 +943,26 @@ type KusoSecretKeyRef struct {
 type KusoBackup struct {
 	Schedule      string `json:"schedule,omitempty"`
 	RetentionDays int    `json:"retentionDays,omitempty"`
+	// Bucket overrides the instance-wide backup bucket for this addon.
+	// Empty means "use the bucket from the kuso-backup-s3 Secret". The
+	// endpoint/region/credentials always come from that Secret — only
+	// the bucket name is per-addon, so the override needs no extra
+	// credential plumbing and the same IAM principal must be able to
+	// write both. Every read path (list/download/restore/snapshot)
+	// resolves through BackupBucket() so a dump written here is never
+	// listed or restored from the instance bucket.
+	Bucket string `json:"bucket,omitempty"`
+}
+
+// BackupBucket returns the effective bucket for an addon: its own
+// override when set, otherwise the instance-wide fallback. Centralised
+// so list, download, restore, snapshot and the CronJob can never
+// disagree about where an artifact lives.
+func (a *KusoAddon) BackupBucket(instanceBucket string) string {
+	if a != nil && a.Spec.Backup != nil && a.Spec.Backup.Bucket != "" {
+		return a.Spec.Backup.Bucket
+	}
+	return instanceBucket
 }
 
 // ---- KusoBuild -----------------------------------------------------------

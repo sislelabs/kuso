@@ -66,6 +66,17 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	key := fmt.Sprintf("%s/%s/%s.sql.gz", project, release, ts)
 
+	// A per-addon bucket override must apply here too: the snapshot is the
+	// rollback point for a failed migration, and writing it to the instance
+	// bucket while the addon's restores read its own bucket would make the
+	// snapshot unfindable at exactly the moment it's needed. Best-effort —
+	// on lookup failure fall through to the Secret's bucket, which is the
+	// pre-override behaviour.
+	var bucketOverride string
+	if cr, err := a.addons.GetOwned(ctx, project, addon); err == nil {
+		bucketOverride = cr.BackupBucket("")
+	}
+
 	// The snapshot Job sources BUCKET/S3_ENDPOINT/AWS creds from the
 	// cluster-wide kuso-backup-s3 Secret, which SetSettings only ever writes
 	// into the home namespace. For a project with a per-project execution
@@ -131,7 +142,7 @@ echo "==> snapshot done (sha256=${SHA})"
 							snapEnvFromSecret("POSTGRES_USER", release+"-conn", "POSTGRES_USER"),
 							snapEnvFromSecret("POSTGRES_DB", release+"-conn", "POSTGRES_DB"),
 							snapEnvFromSecret("POSTGRES_PASSWORD", release+"-conn", "POSTGRES_PASSWORD"),
-							snapEnvFromSecretOpt("BUCKET", snapshotBackupSecretName, "bucket"),
+							snapshotBucketEnv(bucketOverride),
 							snapEnvFromSecretOpt("S3_ENDPOINT", snapshotBackupSecretName, "endpoint"),
 							snapEnvFromSecretOpt("AWS_ACCESS_KEY_ID", snapshotBackupSecretName, "accessKeyId"),
 							snapEnvFromSecretOpt("AWS_SECRET_ACCESS_KEY", snapshotBackupSecretName, "secretAccessKey"),
@@ -276,4 +287,15 @@ func snapEnvFromSecretOpt(name, secretName, key string) corev1.EnvVar {
 	e := snapEnvFromSecret(name, secretName, key)
 	e.ValueFrom.SecretKeyRef.Optional = &opt
 	return e
+}
+
+// snapshotBucketEnv resolves the snapshot Job's BUCKET: a literal when the
+// addon overrides the bucket, else the optional secretKeyRef that yields
+// the instance-wide value (and an empty string when backups aren't
+// configured, which the script's own guard turns into a clear failure).
+func snapshotBucketEnv(override string) corev1.EnvVar {
+	if override != "" {
+		return corev1.EnvVar{Name: "BUCKET", Value: override}
+	}
+	return snapEnvFromSecretOpt("BUCKET", snapshotBackupSecretName, "bucket")
 }

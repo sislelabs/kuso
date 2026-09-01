@@ -48,11 +48,17 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
+            # Every backup uploads its artifact to S3, so the pod needs
+            # outbound internet. Without this the project NetworkPolicy
+            # blocks the upload and the dump is discarded after a
+            # successful pg_dump/mysqldump/mongodump.
+            kuso.sislelabs.com/network-egress-public: "true"
             kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
@@ -75,6 +81,20 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # Wait for the addon to be reachable before dumping.
+                  # A freshly-created backup pod races kube-router's
+                  # NetworkPolicy programming: for the first few seconds the
+                  # pod IP is not yet in the policy's source ipset, so the
+                  # addon's pod-firewall chain REJECTs the connection and the
+                  # dump dies with "Connection refused" on an addon that is
+                  # perfectly healthy. Retry for up to 60s instead.
+                  for i in $(seq 1 30); do
+                    if nc -z -w2 "${POSTGRES_HOST}" 5432 2>/dev/null; then break; fi
+                    if [ "$i" = "30" ]; then
+                      echo "ERROR: postgres ${POSTGRES_HOST}:5432 unreachable after 60s" >&2; exit 1
+                    fi
+                    sleep 2
+                  done
                   # --clean --if-exists so a restore onto a populated DB
                   # (the pre-deploy-snapshot rollback case) DROPs-then-recreates
                   # instead of aborting on "relation already exists" under the
@@ -168,7 +188,15 @@ spec:
                 # configured") instead of the pod crashing with
                 # CreateContainerConfigError "secret kuso-backup-s3 not
                 # found". Mirrors deploy/postgres-backup.yaml.
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
@@ -304,7 +332,15 @@ spec:
                 # configured") instead of the pod crashing with
                 # CreateContainerConfigError "secret kuso-backup-s3 not
                 # found". Mirrors deploy/postgres-backup.yaml.
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
@@ -343,11 +379,17 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
+            # Every backup uploads its artifact to S3, so the pod needs
+            # outbound internet. Without this the project NetworkPolicy
+            # blocks the upload and the dump is discarded after a
+            # successful pg_dump/mysqldump/mongodump.
+            kuso.sislelabs.com/network-egress-public: "true"
             kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
@@ -370,6 +412,20 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.rdb.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> snapshotting ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # Wait for the addon to be reachable before dumping.
+                  # A freshly-created backup pod races kube-router's
+                  # NetworkPolicy programming: for the first few seconds the
+                  # pod IP is not yet in the policy's source ipset, so the
+                  # addon's pod-firewall chain REJECTs the connection and the
+                  # dump dies with "Connection refused" on an addon that is
+                  # perfectly healthy. Retry for up to 60s instead.
+                  for i in $(seq 1 30); do
+                    if nc -z -w2 "${REDIS_HOST}" 6379 2>/dev/null; then break; fi
+                    if [ "$i" = "30" ]; then
+                      echo "ERROR: redis ${REDIS_HOST}:6379 unreachable after 60s" >&2; exit 1
+                    fi
+                    sleep 2
+                  done
                   redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
                   gzip -c /tmp/dump.rdb > /tmp/dump.rdb.gz
                   SHA=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
@@ -419,7 +475,15 @@ spec:
                 # configured") instead of the pod crashing with
                 # CreateContainerConfigError "secret kuso-backup-s3 not
                 # found". Mirrors deploy/postgres-backup.yaml.
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
@@ -453,11 +517,17 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
+            # Every backup uploads its artifact to S3, so the pod needs
+            # outbound internet. Without this the project NetworkPolicy
+            # blocks the upload and the dump is discarded after a
+            # successful pg_dump/mysqldump/mongodump.
+            kuso.sislelabs.com/network-egress-public: "true"
             kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
@@ -475,6 +545,23 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.archive.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # Wait for the addon to be reachable before dumping.
+                  # A freshly-created backup pod races kube-router's
+                  # NetworkPolicy programming: for the first few seconds the
+                  # pod IP is not yet in the policy's source ipset, so the
+                  # addon's pod-firewall chain REJECTs the connection and the
+                  # dump dies with "Connection refused" on an addon that is
+                  # perfectly healthy. Retry for up to 60s instead.
+                  for i in $(seq 1 30); do
+                    MONGO_HOSTPORT=$(echo "${MONGO_URL}" | sed -E 's#^[^/]*//([^@]*@)?([^/?]+).*#\2#' | cut -d, -f1)
+                    MONGO_H=${MONGO_HOSTPORT%%:*}
+                    MONGO_P=${MONGO_HOSTPORT#*:}; [ "$MONGO_P" = "$MONGO_H" ] && MONGO_P=27017
+                    if nc -z -w2 "${MONGO_H}" "${MONGO_P}" 2>/dev/null; then break; fi
+                    if [ "$i" = "30" ]; then
+                      echo "ERROR: mongodb ${MONGO_HOSTPORT} unreachable after 60s" >&2; exit 1
+                    fi
+                    sleep 2
+                  done
                   mongodump --uri "${MONGO_URL}" --archive --gzip > /tmp/dump.archive.gz
                   SHA=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
                   BYTES=$(wc -c < /tmp/dump.archive.gz | tr -d ' ')
@@ -519,7 +606,15 @@ spec:
                       # today but only connSecretName is the authoritative name.
                       name: {{ include "kusoaddon.connSecretName" . | quote }}
                       key: MONGO_URL
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
@@ -552,11 +647,17 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
+            # Every backup uploads its artifact to S3, so the pod needs
+            # outbound internet. Without this the project NetworkPolicy
+            # blocks the upload and the dump is discarded after a
+            # successful pg_dump/mysqldump/mongodump.
+            kuso.sislelabs.com/network-egress-public: "true"
             kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
@@ -574,6 +675,20 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # Wait for the addon to be reachable before dumping.
+                  # A freshly-created backup pod races kube-router's
+                  # NetworkPolicy programming: for the first few seconds the
+                  # pod IP is not yet in the policy's source ipset, so the
+                  # addon's pod-firewall chain REJECTs the connection and the
+                  # dump dies with "Connection refused" on an addon that is
+                  # perfectly healthy. Retry for up to 60s instead.
+                  for i in $(seq 1 30); do
+                    if nc -z -w2 "${MYSQL_HOST}" 3306 2>/dev/null; then break; fi
+                    if [ "$i" = "30" ]; then
+                      echo "ERROR: mysql ${MYSQL_HOST}:3306 unreachable after 60s" >&2; exit 1
+                    fi
+                    sleep 2
+                  done
                   MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz
                   SHA=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
                   BYTES=$(wc -c < /tmp/dump.sql.gz | tr -d ' ')
@@ -618,7 +733,15 @@ spec:
                     secretKeyRef:
                       name: {{ include "kusoaddon.connSecretName" . | quote }}
                       key: MYSQL_PASSWORD
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
@@ -655,11 +778,17 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
+            # Every backup uploads its artifact to S3, so the pod needs
+            # outbound internet. Without this the project NetworkPolicy
+            # blocks the upload and the dump is discarded after a
+            # successful pg_dump/mysqldump/mongodump.
+            kuso.sislelabs.com/network-egress-public: "true"
             kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: sync
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
@@ -741,7 +870,15 @@ spec:
                 # configured") instead of the pod crashing with
                 # CreateContainerConfigError "secret kuso-backup-s3 not
                 # found". Mirrors deploy/postgres-backup.yaml.
+                {{- /* Per-addon bucket override wins; otherwise fall back to
+                       the instance-wide bucket in the kuso-backup-s3 Secret.
+                       Only the bucket differs — endpoint/region/credentials
+                       below always come from that Secret. */}}
+                {{- if .Values.backup.bucket }}
+                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                {{- end }}
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }

@@ -71,6 +71,11 @@ database: ""
 backup:
   schedule: ""
   retentionDays: 14
+  # Per-addon bucket override. Empty = use the instance-wide bucket from
+  # the kuso-backup-s3 Secret. Endpoint/region/credentials always come
+  # from that Secret, so the same IAM principal must be able to write
+  # to whatever bucket is named here.
+  bucket: ""
 
 # placement: pin the addon's StatefulSet to a subset of nodes. Same
 # shape as the kusoenvironment chart's placement field. Empty =

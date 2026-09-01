@@ -216,6 +216,7 @@ func filenameFromResp(cd string) string {
 var (
 	addonBackupSchedule      string
 	addonBackupRetentionDays int
+	addonBackupBucket        string
 )
 
 var addonBackupScheduleCmd = &cobra.Command{
@@ -227,10 +228,16 @@ stay in S3 — 0 means keep forever (the chart's prune step skips).
 Pass --schedule="" to disable scheduled backups (chart drops the
 CronJob entirely; existing S3 objects stay).
 
+--bucket overrides the instance-wide backup bucket for this addon
+only; pass --bucket="" to clear it. Endpoint, region and credentials
+still come from the instance backup settings, so the configured IAM
+principal must be able to write to the bucket you name.
+
 This requires admin S3 credentials configured at /settings/backups
 (or via PUT /api/admin/backup-settings).`,
 	Example: `  kuso addon-backup schedule hui hui-postgres --schedule "0 3 * * *" --retention 14
-  kuso addon-backup schedule hui hui-postgres --schedule ""`,
+  kuso addon-backup schedule hui hui-postgres --schedule "" 
+  kuso addon-backup schedule hui hui-postgres --bucket hui-backups`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -245,8 +252,12 @@ This requires admin S3 credentials configured at /settings/backups
 			r := addonBackupRetentionDays
 			req.Backup.RetentionDays = &r
 		}
-		if req.Backup.Schedule == nil && req.Backup.RetentionDays == nil {
-			return fmt.Errorf("pass --schedule and/or --retention")
+		if cmd.Flags().Changed("bucket") {
+			b := addonBackupBucket
+			req.Backup.Bucket = &b
+		}
+		if req.Backup.Schedule == nil && req.Backup.RetentionDays == nil && req.Backup.Bucket == nil {
+			return fmt.Errorf("pass --schedule, --retention and/or --bucket")
 		}
 		resp, err := api.UpdateAddon(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -300,5 +311,6 @@ func init() {
 	addonBackupCmd.AddCommand(addonBackupScheduleCmd)
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupSchedule, "schedule", "", "5-field cron expression (UTC); empty disables")
 	addonBackupScheduleCmd.Flags().IntVar(&addonBackupRetentionDays, "retention", 14, "delete S3 objects older than N days; 0 = keep forever")
+	addonBackupScheduleCmd.Flags().StringVar(&addonBackupBucket, "bucket", "", "override the instance-wide backup bucket for this addon; empty clears")
 	addonBackupCmd.AddCommand(addonBackupUnscheduleCmd)
 }

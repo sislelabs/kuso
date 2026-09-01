@@ -263,6 +263,10 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	// Honour a per-addon bucket override — the CronJob writes there, so
+	// listing the instance bucket would report "no backups" for an addon
+	// that is being backed up correctly.
+	bucket = cr.BackupBucket(bucket)
 	// CronJob uploads to s3://bucket/<project>/<addon-fqn>/<ts>.sql.gz
 	// where <addon-fqn> = the helm release name = the CR's metadata.name.
 	addonFQN := cr.Name
@@ -449,7 +453,10 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env()...)
+	// Bucket from the SOURCE addon — the artifact being restored lives
+	// where its own CronJob wrote it, which may not be the destination's
+	// bucket when restoring into a sibling.
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env(srcCR.BackupBucket(""))...)
 
 	one := int32(1)
 	zero := int32(0)
@@ -578,9 +585,20 @@ func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
 }
 
 // restoreS3Env returns the S3 credential env shared by all restore kinds.
-func restoreS3Env() []corev1.EnvVar {
+//
+// bucketOverride is the SOURCE addon's per-addon bucket (empty when it
+// uses the instance-wide one). It must come from the source, not the
+// destination: `--into` restores a sibling from the source's artifact,
+// and the two addons can have different buckets. Getting this backwards
+// makes a restore read from a bucket the dump was never written to,
+// which surfaces as "key not found" mid-incident.
+func restoreS3Env(bucketOverride string) []corev1.EnvVar {
+	bucketEnv := envFromSecret("BUCKET", backupSecretName, "bucket")
+	if bucketOverride != "" {
+		bucketEnv = corev1.EnvVar{Name: "BUCKET", Value: bucketOverride}
+	}
 	return []corev1.EnvVar{
-		envFromSecret("BUCKET", backupSecretName, "bucket"),
+		bucketEnv,
 		envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
 		envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
 		envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
@@ -643,6 +661,13 @@ func (h *BackupsHandler) mirrorBackupSecret(ctx context.Context, ns string) erro
 // s3Client builds an aws-sdk-v2 S3 client from the kuso-backup-s3
 // Secret. Returns ErrNotFound when the secret is missing so the
 // handler can return 503 with a friendly message.
+//
+// The returned bucket is the INSTANCE-wide one. Callers acting on a
+// specific addon must resolve the effective bucket with
+// (*kube.KusoAddon).BackupBucket, so a per-addon override is honoured
+// on read as well as write — otherwise list/download/restore would
+// look in the instance bucket for artifacts the CronJob wrote
+// elsewhere, and silently find nothing.
 func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, error) {
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
