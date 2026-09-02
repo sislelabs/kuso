@@ -36,6 +36,9 @@ func apiv1CreateAddonToDomain(in apiv1.CreateAddonRequest) addons.CreateAddonReq
 		Database:         in.Database,
 		UseInstanceAddon: in.UseInstanceAddon,
 		TLS:              in.TLS,
+		// Dropping this silently created the source Secret but left the addon
+		// non-external — see TestApiv1AddonMappingsCarryExternalCredentials.
+		ExternalCredentials: in.ExternalCredentials,
 	}
 	if in.External != nil {
 		out.External = &kube.KusoAddonExternal{
