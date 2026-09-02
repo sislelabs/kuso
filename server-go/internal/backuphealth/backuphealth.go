@@ -89,12 +89,22 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		s.Indeterminate = true
 	}
 
+	// cronSuccess is the CronJob's own lastSuccessfulTime. Job objects are
+	// deleted by ttlSecondsAfterFinished (1h) long before the next daily
+	// run, so the Job-list scan below finds nothing and would report the
+	// backup permanently stale. Kube maintains this field across that GC,
+	// so it is the durable signal; the Job scan still runs because it also
+	// yields the last FAILURE time, which the CronJob status doesn't carry.
+	var cronSuccess time.Time
 	if cj, err := kc.Clientset.BatchV1().CronJobs(namespace).
 		Get(ctx, cronJobName, metav1.GetOptions{}); err == nil {
 		s.CronJobPresent = true
 		s.Schedule = cj.Spec.Schedule
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			s.Suspended = true
+		}
+		if cj.Status.LastSuccessfulTime != nil {
+			cronSuccess = cj.Status.LastSuccessfulTime.Time
 		}
 	} else if !apierrors.IsNotFound(err) {
 		s.Indeterminate = true
@@ -104,6 +114,11 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		LabelSelector: jobLabel,
 	}); err == nil {
 		success, failure := newestTerminalTimes(jobs.Items)
+		// Prefer whichever success is newer: a surviving Job (fresh, within
+		// its TTL) or the CronJob's lastSuccessfulTime (survives Job GC).
+		if cronSuccess.After(success) {
+			success = cronSuccess
+		}
 		if !success.IsZero() {
 			s.LastSuccessAt = success.UTC().Format(time.RFC3339)
 		}
@@ -111,6 +126,10 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 			s.LastFailureAt = failure.UTC().Format(time.RFC3339)
 		}
 		s.Stale = success.IsZero() || time.Since(success) > StaleAfter
+	} else if !cronSuccess.IsZero() {
+		// Job list unreadable but the CronJob status is enough to judge.
+		s.LastSuccessAt = cronSuccess.UTC().Format(time.RFC3339)
+		s.Stale = time.Since(cronSuccess) > StaleAfter
 	} else {
 		s.Stale = true // fail-safe: can't read → don't claim healthy
 		s.Indeterminate = true
