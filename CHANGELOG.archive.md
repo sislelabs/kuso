@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.15] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(cli): add `cron edit-service` — service crons had no edit path ([71e61a1](https://github.com/sislelabs/kuso/commit/71e61a1744e9988f15dba3c9b294c5a13d004bb4))
+
 ## [0.21.14] — 2026-07-26
 
 ### ✨ Features

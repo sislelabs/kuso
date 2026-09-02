@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.19] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): pull the :latest backup image on every run ([dc2d80b](https://github.com/sislelabs/kuso/commit/dc2d80b32c8ec20ae8c74653b76375a5aa7fa753))
+
 ## [0.25.18] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -345,11 +350,6 @@ messages on every release. The format is loosely based on
 - Fix(netpol): lock down the in-cluster registry to build pods only ([6b40cf8](https://github.com/sislelabs/kuso/commit/6b40cf887fe7c69c0b551330238d913eafc6e22c))
 - Fix(rbac): stop custom roles forging instance-admin permissions ([4401a2b](https://github.com/sislelabs/kuso/commit/4401a2b830b39953aea8516c808023c0867c6e0e))
 - Fix(cli): confirmDestructive fails closed in non-interactive contexts ([2156dae](https://github.com/sislelabs/kuso/commit/2156daef1f4d9d29e4f8d7774d08461ed3cc408e))
-
-## [0.21.15] — 2026-07-26
-
-### 🐛 Bug Fixes
-- Fix(cli): add `cron edit-service` — service crons had no edit path ([71e61a1](https://github.com/sislelabs/kuso/commit/71e61a1744e9988f15dba3c9b294c5a13d004bb4))
 
 
 ---
