@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.5] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): carry externalCredentials through the wire mapping ([8630720](https://github.com/sislelabs/kuso/commit/863072078a9e1f9bec01daaa1543583ce5f79883))
+
 ## [0.25.4] — 2026-09-02
 
 ### ✨ Features
@@ -339,23 +344,6 @@ messages on every release. The format is loosely based on
 - Fix(env): restore spec.kind fallback in delete-guard (review low) ([a44f803](https://github.com/sislelabs/kuso/commit/a44f8031eb60d1a3e1007b12940ae7546d167e9d))
 - Fix(env): stop treating env-group clones as production (spec.kind overload) ([799361b](https://github.com/sislelabs/kuso/commit/799361bf62fc3c26e034c8b51147d6031ff33109))
 - Fix(env-group): clone provisions instance-shared addons (THE crash fix) ([a4ff482](https://github.com/sislelabs/kuso/commit/a4ff4824a2373a7452493d8d130f78c304f42624))
-
-## [0.21.1] — 2026-07-23
-
-### Other
-- Merge: env-secret editor visibility + env-group clone secret fix ([8a0f92e](https://github.com/sislelabs/kuso/commit/8a0f92ebc7bb9dae36a49ce51ce9def5a513240d))
-
-### ✨ Features
-- Feat(env): CLI + web surface for managed-secret env vars ([aadf5ca](https://github.com/sislelabs/kuso/commit/aadf5ca5c4691759a611653e7f2215a65ff26b42))
-- Feat(env): surface <service>-secrets keys as first-class env vars ([5652f99](https://github.com/sislelabs/kuso/commit/5652f99b134b251f44f175b92c157a57908fd5ed))
-
-### 🐛 Bug Fixes
-- Fix(env): release-review highs — clone secret survives churn + no silent delete ([1b721de](https://github.com/sislelabs/kuso/commit/1b721de7c2f2c54de604ea2458503333aaff5f96))
-- Fix(env): enrich GET /env with managed-secret keys + nil-safe guard ([ef5c9cb](https://github.com/sislelabs/kuso/commit/ef5c9cb797a06411a75f61752383274435629556))
-- Fix(env-group): clone carries the service's own managed secrets ([6f66741](https://github.com/sislelabs/kuso/commit/6f66741895c941b7b445661f196c0359a6e0952e))
-
-### 📝 Docs
-- Docs: design for surfacing <service>-secrets keys in env editor ([0829dd8](https://github.com/sislelabs/kuso/commit/0829dd8f318284ba75ab570086a6dd7ae6fb332c))
 
 
 ---
