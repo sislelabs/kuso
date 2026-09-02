@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.7] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(addons): stop a new addon's conn leaking into unsubscribed envs ([eba6a7d](https://github.com/sislelabs/kuso/commit/eba6a7d0cfdf12fad1cd6bda549b7b38bbde26a3))
+
 ## [0.21.6] — 2026-07-25
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.11] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): publish POOLER_* keys for external addons ([c0429ee](https://github.com/sislelabs/kuso/commit/c0429ee894721b6104d6f9ad3921d1b39f298c86))
+
 ## [0.25.10] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -336,11 +341,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(addons,projects): delete-exclude key, clone subscriptions, publicEnv propagation ([52fed6f](https://github.com/sislelabs/kuso/commit/52fed6f9b3c1511e4a51274043c623641160e9d8))
 - Fix(redis-ha,rbac): sentinel readiness probe auth + updater RBAC gaps ([11361aa](https://github.com/sislelabs/kuso/commit/11361aa75ac260618c5730479fa98d89982e6452))
-
-## [0.21.7] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(addons): stop a new addon's conn leaking into unsubscribed envs ([eba6a7d](https://github.com/sislelabs/kuso/commit/eba6a7d0cfdf12fad1cd6bda549b7b38bbde26a3))
 
 
 ---
