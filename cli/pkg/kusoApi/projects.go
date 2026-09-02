@@ -379,6 +379,19 @@ func (k *KusoClient) ResyncExternalAddon(project, addon string) (*resty.Response
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/resync-external")
 }
 
+// ResyncExternalAddonWith merges rotated credentials into the addon's source
+// Secret (only one kuso created) and then re-mirrors it.
+func (k *KusoClient) ResyncExternalAddonWith(project, addon string, credentials map[string]string) (*resty.Response, error) {
+	k.client.SetBody(map[string]any{"credentials": credentials})
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/resync-external")
+}
+
+// AddonPods lists the pods backing an addon (the datastore and any sidecar
+// such as the PgBouncer pooler) with the reason a pod isn't serving.
+func (k *KusoClient) AddonPods(project, addon string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/pods")
+}
+
 // ResyncInstanceAddon re-provisions the per-project DB on a shared
 // instance addon and rotates the password.
 func (k *KusoClient) ResyncInstanceAddon(project, addon string) (*resty.Response, error) {
