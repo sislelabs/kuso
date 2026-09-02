@@ -718,14 +718,10 @@ export function EnvVarsEditor({
                     {reservedEnvWarning(r.name)}
                   </span>
                 )}
-                {r.addon && !reservedEnvWarning(r.name) && (
-                  <span
-                    className="font-mono text-[10px] text-[var(--text-tertiary)]"
-                    title={`Supplied by the "${r.addon}" addon. Editing writes a service var that overrides it; delete the row to go back to the addon's value.`}
-                  >
-                    from {r.addon}
-                  </span>
-                )}
+                {/* The addon origin used to render as a "from <addon>" caption
+                    under every injected row. It repeated down the whole list
+                    and crowded out the keys themselves; the 🔗 affordance and
+                    the row's own tooltip already say where a value comes from. */}
               </div>
               <Input
                 placeholder={

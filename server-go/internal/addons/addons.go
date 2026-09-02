@@ -136,6 +136,13 @@ type CreateAddonRequest struct {
 	// = serve TLS + sslmode=require, for apps that mandate encrypted
 	// DB connections. Ignored for non-postgres / external / instance.
 	TLS string `json:"tls,omitempty"`
+	// ExternalCredentials creates the source Secret that External mirrors,
+	// instead of requiring one to exist already. Without it, connecting a
+	// managed database meant producing a namespace Secret by hand — there
+	// is no kuso verb for that (`kuso secret set` writes a service-scoped
+	// env var), so the documented path ended at raw kubectl. Mutually
+	// exclusive with External.
+	ExternalCredentials map[string]string `json:"externalCredentials,omitempty"`
 }
 
 // CRName builds the addon CR name from a project + a name that may
@@ -393,6 +400,29 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if projectCR != nil {
 		projUID = string(projectCR.UID)
 	}
+	// Resolve externalCredentials into a real Secret BEFORE the CR is built —
+	// spec.external is captured below, and resync-external later reads the
+	// name from there.
+	if len(req.ExternalCredentials) > 0 {
+		if req.External != nil && req.External.SecretName != "" {
+			return nil, fmt.Errorf("%w: external and externalCredentials are mutually exclusive — "+
+				"externalCredentials creates the source Secret, external adopts an existing one", ErrInvalid)
+		}
+		if req.UseInstanceAddon != "" {
+			return nil, fmt.Errorf("%w: externalCredentials and useInstanceAddon are mutually exclusive", ErrInvalid)
+		}
+		if !hasConnectionURL(req.ExternalCredentials) {
+			return nil, fmt.Errorf("%w: externalCredentials needs a connection URL "+
+				"(one of %s) — services read it as the addon's primary DSN",
+				ErrInvalid, strings.Join(connectionURLKeys, ", "))
+		}
+		secretName, err := s.createExternalSecret(ctx, ns, fqn, req.ExternalCredentials)
+		if err != nil {
+			return nil, fmt.Errorf("%w: create external secret: %w", ErrInvalid, err)
+		}
+		req.External = &kube.KusoAddonExternal{SecretName: secretName}
+	}
+
 	owners := kube.ProjectOwnerRefsForChild(project, projUID, ns, s.Namespace)
 	addon := &kube.KusoAddon{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1459,6 +1489,68 @@ func buildEnvFromSecretsPatch(secrets []string) []byte {
 	}
 	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"envFromSecrets": secrets}})
 	return body
+}
+
+// connectionURLKeys are the per-kind primary DSN keys a service reads. At
+// least one must be present for the addon to be usable — a Secret holding
+// only host/user/password leaves every consumer without a connection string.
+var connectionURLKeys = []string{
+	"DATABASE_URL", "REDIS_URL", "VALKEY_URL", "MONGO_URL", "MONGODB_URI",
+	"AMQP_URL", "RABBITMQ_URL", "NATS_URL", "CLICKHOUSE_URL", "KAFKA_BROKERS",
+	"S3_ENDPOINT",
+}
+
+func hasConnectionURL(creds map[string]string) bool {
+	for _, k := range connectionURLKeys {
+		if v, ok := creds[k]; ok && v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// createExternalSecret writes the caller-supplied credentials as the addon's
+// source Secret, named after the addon so it's obvious what owns it. Returns
+// the name for spec.external.secretName, which resync-external later reads.
+//
+// Idempotent: re-adding an addon with the same name overwrites the Secret
+// rather than failing, so a retried create doesn't wedge on a leftover.
+func (s *Service) createExternalSecret(ctx context.Context, ns, addonFQN string, creds map[string]string) (string, error) {
+	name := addonFQN + "-external"
+	data := make(map[string][]byte, len(creds))
+	for k, v := range creds {
+		data[k] = []byte(v)
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"kuso.sislelabs.com/external-source": "true",
+				"kuso.sislelabs.com/addon":           addonFQN,
+			},
+		},
+		Data: data,
+	}
+	if existing, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		existing.Data = data
+		if existing.Labels == nil {
+			existing.Labels = map[string]string{}
+		}
+		for k, v := range sec.Labels {
+			existing.Labels[k] = v
+		}
+		if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return "", fmt.Errorf("update source secret: %w", err)
+		}
+		return name, nil
+	} else if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("preflight source secret: %w", err)
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+		return "", fmt.Errorf("create source secret: %w", err)
+	}
+	return name, nil
 }
 
 // mirrorExternalSecret copies the user-provided Secret's data into a

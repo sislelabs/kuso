@@ -996,6 +996,7 @@ var (
 	addonExtKind   string
 	addonExtSecret string
 	addonExtKeys   []string
+	addonExtCreds  []string
 )
 
 var addonConnectExternalCmd = &cobra.Command{
@@ -1008,11 +1009,34 @@ kube Secret (containing DATABASE_URL / POSTGRES_PASSWORD / etc.) into the
 addon's conn secret, so every service in the project can envFrom: it
 exactly like a native addon.
 
-Use this for managed Postgres (Hetzner Cloud / Neon / RDS / Supabase) or
-managed Redis (Upstash / ElastiCache).`,
+Use this for managed Postgres (Hetzner Cloud / Neon / RDS / Supabase /
+PlanetScale) or managed Redis (Upstash / ElastiCache).
+
+Two ways to supply the credentials:
+
+  --secret NAME   adopt a kube Secret that already exists
+  --set K=V       hand kuso the values and let it create the Secret
+
+Use --set when you have a connection string and nothing else — there is no
+other kuso verb that writes a namespace Secret, so --secret alone means
+producing one out of band. Repeat --set per key; at minimum pass the kind's
+connection URL (DATABASE_URL for postgres, REDIS_URL for redis, ...).
+
+To front an external postgres with the addon's PgBouncer — worth it when the
+provider caps connections — set pooler.externalBackend on the addon after
+creating it:
+
+  kuso api PATCH projects/<p>/addons/<name> --data '{"pooler":{"enabled":true,
+    "externalBackend":true,"host":"<provider-host>","port":5432}}'
+
+The pooler needs POSTGRES_USER and POSTGRES_PASSWORD among the keys above to
+build its userlist.`,
 	Args: cobra.ExactArgs(2),
 	Example: `  kuso project addon connect-external analiz pg --kind postgres --secret hetzner-pg-creds
-  kuso project addon connect-external analiz pg --kind postgres --secret hetzner-pg-creds --key DATABASE_URL --key POSTGRES_HOST`,
+  kuso project addon connect-external analiz pg --kind postgres --secret hetzner-pg-creds --key DATABASE_URL --key POSTGRES_HOST
+  kuso project addon connect-external tickero psdb --kind postgres \
+    --set DATABASE_URL='postgres://user:pw@host.psdb.cloud:5432/db?sslmode=require' \
+    --set POSTGRES_HOST=host.psdb.cloud --set POSTGRES_USER=user --set POSTGRES_PASSWORD=pw`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -1020,19 +1044,44 @@ managed Redis (Upstash / ElastiCache).`,
 		if !contains(supportedAddonKinds, addonExtKind) {
 			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
 		}
+		if addonExtSecret == "" && len(addonExtCreds) == 0 {
+			return fmt.Errorf("pass --secret to adopt an existing Secret, or --set K=V to have kuso create one")
+		}
+		if addonExtSecret != "" && len(addonExtCreds) > 0 {
+			return fmt.Errorf("--secret and --set are mutually exclusive: --secret adopts an existing Secret, --set creates one")
+		}
+
+		creds := map[string]string{}
+		for _, kv := range addonExtCreds {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				return fmt.Errorf("--set %q is not KEY=VALUE", kv)
+			}
+			creds[k] = v
+		}
+
 		req := kusoApi.CreateAddonRequest{
 			Name: args[1],
 			Kind: addonExtKind,
-			External: &kusoApi.AddonExternalRequest{
+		}
+		if addonExtSecret != "" {
+			req.External = &kusoApi.AddonExternalRequest{
 				SecretName: addonExtSecret,
 				SecretKeys: addonExtKeys,
-			},
+			}
+		} else {
+			req.ExternalCredentials = creds
 		}
 		resp, err := api.AddAddon(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("connect external addon: %w", err)
 		}
-		fmt.Printf("addon %s/%s connected to existing secret %q\n", args[0], args[1], addonExtSecret)
+		if addonExtSecret != "" {
+			fmt.Printf("addon %s/%s connected to existing secret %q\n", args[0], args[1], addonExtSecret)
+		} else {
+			fmt.Printf("addon %s/%s connected — created secret %q from %d key(s)\n",
+				args[0], args[1], args[0]+"-"+args[1]+"-external", len(creds))
+		}
 		return nil
 	},
 }
@@ -1313,8 +1362,9 @@ func init() {
 
 	projectAddonCmd.AddCommand(addonConnectExternalCmd)
 	addonConnectExternalCmd.Flags().StringVar(&addonExtKind, "kind", "", "addon kind (required: postgres, redis, ...)")
-	addonConnectExternalCmd.Flags().StringVar(&addonExtSecret, "secret", "", "name of an existing kube Secret to mirror as the addon's conn secret (required)")
+	addonConnectExternalCmd.Flags().StringVar(&addonExtSecret, "secret", "", "name of an existing kube Secret to mirror as the addon's conn secret (or use --set)")
 	addonConnectExternalCmd.Flags().StringSliceVar(&addonExtKeys, "key", nil, "optional key allowlist; repeat or comma-separate. Empty = mirror every key")
+	addonConnectExternalCmd.Flags().StringArrayVar(&addonExtCreds, "set", nil, "KEY=VALUE credential for a Secret kuso creates; repeat per key. Must include the kind's connection URL (DATABASE_URL, REDIS_URL, ...)")
 	_ = addonConnectExternalCmd.MarkFlagRequired("kind")
 	_ = addonConnectExternalCmd.MarkFlagRequired("secret")
 
