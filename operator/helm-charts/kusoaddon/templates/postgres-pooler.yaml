@@ -100,6 +100,14 @@ spec:
       labels:
         {{- include "kusoaddon.labels" . | nindent 8 }}
         kuso.sislelabs.com/component: pooler
+        {{- if $externalPooled }}
+        # The backend is outside the cluster. The project's default-deny
+        # egress only opens for pods carrying this label; without it PgBouncer
+        # listens fine but can never open a server connection, and every
+        # client dies with query_wait_timeout. In-cluster poolers stay locked
+        # down — they only talk to the addon Service.
+        kuso.sislelabs.com/network-egress-public: "true"
+        {{- end }}
     spec:
       # kuso-platform priority: the kubelet evicts a workload pod
       # before this pooler when a node goes hot. Matches the addon
