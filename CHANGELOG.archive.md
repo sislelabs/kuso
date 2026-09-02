@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.11] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(cli): rollback env targeting, FTS docs, dead flags, paging ([7af8495](https://github.com/sislelabs/kuso/commit/7af849502e433aae19ff16bc977bfd90263ff622))
+
 ## [0.21.10] — 2026-07-25
 
 ### 🐛 Bug Fixes

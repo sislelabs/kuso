@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.15] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): wait-for-addons is soft for app pods, strict for the release Job ([ff74149](https://github.com/sislelabs/kuso/commit/ff74149e1016b004f89614c942f67ead2ebc7efc))
+
 ## [0.25.14] — 2026-09-02
 
 ### ✨ Features
@@ -342,11 +347,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): repoint crons at the new image on every deploy ([6359ed7](https://github.com/sislelabs/kuso/commit/6359ed7530a5247a9381a2f53ca66e27b00c0b8f))
-
-## [0.21.11] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(cli): rollback env targeting, FTS docs, dead flags, paging ([7af8495](https://github.com/sislelabs/kuso/commit/7af849502e433aae19ff16bc977bfd90263ff622))
 
 
 ---
