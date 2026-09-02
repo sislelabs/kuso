@@ -1440,7 +1440,11 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
 				}
 			}
-			live.Spec.EnvFromSecrets = perEnv
+			// The env's own clones go LAST: envFrom is last-source-wins and every
+			// postgres addon publishes the same keys, so an alphabetical list let
+			// "psdb" beat "db-staging" and pointed staging's DIRECT_URL at
+			// production. See kube.CloneConnsLast.
+			live.Spec.EnvFromSecrets = kube.CloneConnsLast(perEnv, live.Labels[kube.LabelEnv])
 			return nil
 		})
 		if err != nil && !apierrors.IsNotFound(err) {

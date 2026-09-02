@@ -270,7 +270,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
 				}
-				env.Spec.EnvFromSecrets = prunedFrom
+				// Env-scoped clones last — the env's own database must win the
+				// last-source-wins race against a project-level addon of the same
+				// kind. See kube.CloneConnsLast.
+				env.Spec.EnvFromSecrets = kube.CloneConnsLast(prunedFrom, envScope)
 			}
 			if changed.Placement {
 				env.Spec.Placement = effectivePlacement
