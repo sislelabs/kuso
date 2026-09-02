@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.18] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): an environment's own addon clones always mount last ([28bd71c](https://github.com/sislelabs/kuso/commit/28bd71cb9fd0f9d564a381c8f8fd83e0cad91b2d))
+
+### 🧪 Tests
+- Test(env): pin clone-last ordering at the propagation layer ([401f0db](https://github.com/sislelabs/kuso/commit/401f0dbdd0c66a217fc057885d5eaca4bde11918))
+
 ## [0.25.17] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -342,14 +350,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(cli): add `cron edit-service` — service crons had no edit path ([71e61a1](https://github.com/sislelabs/kuso/commit/71e61a1744e9988f15dba3c9b294c5a13d004bb4))
-
-## [0.21.14] — 2026-07-26
-
-### ✨ Features
-- Feat(crons): pinImage opt-out + protect cron images from the sweep ([5ab7642](https://github.com/sislelabs/kuso/commit/5ab7642817f51bae71062f2daafb10d67e28cf60))
-
-### 🐛 Bug Fixes
-- Fix(runs): stop managed-secret placeholders shadowing the real secret ([b01c5f8](https://github.com/sislelabs/kuso/commit/b01c5f81e712ae0662de5f63099928b5b0248c4b))
 
 
 ---
