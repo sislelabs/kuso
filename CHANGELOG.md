@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.12] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): publish DIRECT_URL for external addons ([f8664bb](https://github.com/sislelabs/kuso/commit/f8664bbde07edf23e0e7c54a73c5475284bdd3a6))
+
 ## [0.25.11] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -335,12 +340,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(rbac): grant updater the RBAC it applies; stop shipping what it can't ([6535bb2](https://github.com/sislelabs/kuso/commit/6535bb2d14db1ecdf65def3302628bfbad9ea58b))
-
-## [0.21.8] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(addons,projects): delete-exclude key, clone subscriptions, publicEnv propagation ([52fed6f](https://github.com/sislelabs/kuso/commit/52fed6f9b3c1511e4a51274043c623641160e9d8))
-- Fix(redis-ha,rbac): sentinel readiness probe auth + updater RBAC gaps ([11361aa](https://github.com/sislelabs/kuso/commit/11361aa75ac260618c5730479fa98d89982e6452))
 
 
 ---

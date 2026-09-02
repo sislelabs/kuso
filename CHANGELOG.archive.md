@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.8] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(addons,projects): delete-exclude key, clone subscriptions, publicEnv propagation ([52fed6f](https://github.com/sislelabs/kuso/commit/52fed6f9b3c1511e4a51274043c623641160e9d8))
+- Fix(redis-ha,rbac): sentinel readiness probe auth + updater RBAC gaps ([11361aa](https://github.com/sislelabs/kuso/commit/11361aa75ac260618c5730479fa98d89982e6452))
+
 ## [0.21.7] — 2026-07-25
 
 ### 🐛 Bug Fixes
