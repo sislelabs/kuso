@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.20.2] — 2026-07-15
+
+### Other
+- DB browser: logical-database picker for multi-DB postgres addons ([713c5f6](https://github.com/sislelabs/kuso/commit/713c5f672c4d0531df4a411ea9ec4a87eb83a1c6))
+
 ## [0.20.1] — 2026-07-15
 
 ### Other

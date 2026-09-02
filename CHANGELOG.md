@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.3] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): let the postgres pooler front an external database ([245a0ac](https://github.com/sislelabs/kuso/commit/245a0ac803a8aeeccc29b746ab4d9f182a8f788a))
+
 ## [0.25.2] — 2026-09-01
 
 ### 🐛 Bug Fixes
@@ -394,11 +399,6 @@ messages on every release. The format is loosely based on
 - Docs(cli): document 'kuso api' raw passthrough in CLAUDE.md ([ae20e48](https://github.com/sislelabs/kuso/commit/ae20e4861c10deca2f2714effde49b6bbc31b642))
 - Docs: implementation plan for kuso api passthrough (piece 1) ([51f99f2](https://github.com/sislelabs/kuso/commit/51f99f2da0ed412d8dd88ee5878d14f54fc59715))
 - Docs: design for Openship-inspired improvements (5 pieces) ([1416c60](https://github.com/sislelabs/kuso/commit/1416c600425491f8b4b1e54c0924c5c6f6df475f))
-
-## [0.20.2] — 2026-07-15
-
-### Other
-- DB browser: logical-database picker for multi-DB postgres addons ([713c5f6](https://github.com/sislelabs/kuso/commit/713c5f672c4d0531df4a411ea9ec4a87eb83a1c6))
 
 
 ---
