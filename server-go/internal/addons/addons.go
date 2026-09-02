@@ -1715,6 +1715,17 @@ func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string,
 			}
 		}
 	}
+	// DIRECT_URL is the un-pooled, session-safe DSN — the contract apps use for
+	// work PgBouncer's transaction pooling breaks: migrations (golang-migrate's
+	// session advisory lock), CREATE INDEX CONCURRENTLY, session state held
+	// across transactions. In-cluster postgres always publishes it; external
+	// addons published nothing, so a release hook using it silently fell back
+	// to the pooled URL. The user's DATABASE_URL already IS the direct
+	// endpoint, so mirror it — unless they supplied their own (providers that
+	// expose a separate unpooled host).
+	if len(data["DIRECT_URL"]) == 0 && len(data["DATABASE_URL"]) > 0 {
+		data["DIRECT_URL"] = data["DATABASE_URL"]
+	}
 	// Publish the pooler's address alongside the mirrored credentials so
 	// ${{ <addon>.POOLER_URL }} resolves, matching what the in-cluster chart
 	// renders for a native addon.
