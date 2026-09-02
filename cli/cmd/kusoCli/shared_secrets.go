@@ -185,10 +185,11 @@ var sharedSecretUnsetCmd = &cobra.Command{
 			return err
 		}
 		var body struct {
-			Rolled int `json:"rolled"`
+			Rolled       int `json:"rolled"`
+			Unsubscribed int `json:"unsubscribed"`
 		}
 		_ = json.Unmarshal(resp.Body(), &body)
-		fmt.Printf("unset %s on %s — %s\n", args[1], args[0], rolloutMsg(body.Rolled))
+		fmt.Printf("unset %s on %s — %s\n", args[1], args[0], unsetMsg(body.Rolled, body.Unsubscribed))
 		return nil
 	},
 }
@@ -199,6 +200,31 @@ var sharedSecretUnsetCmd = &cobra.Command{
 //
 // Shared between `secret set` and `shared-secret set` since both
 // surface the rollout count the same way.
+// unsetMsg covers both ways a key reaches pods: services subscribed to it
+// by name (re-propagated + restarted) and envs mounting the whole Secret
+// (rolled). Saying only "no running envs to roll" when three services were
+// just restarted reads as if nothing happened.
+func unsetMsg(rolled, unsubscribed int) string {
+	var parts []string
+	if unsubscribed > 0 {
+		parts = append(parts, fmt.Sprintf("removed from %s (restarted)", plural(unsubscribed, "service")))
+	}
+	if rolled > 0 {
+		parts = append(parts, fmt.Sprintf("rolled %s", plural(rolled, "env")))
+	}
+	if len(parts) == 0 {
+		return "nothing was using it"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 func rolloutMsg(rolled int) string {
 	switch rolled {
 	case 0:

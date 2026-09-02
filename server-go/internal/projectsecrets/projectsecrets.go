@@ -36,8 +36,20 @@ type Service struct {
 	// projects.DropSharedKeyFromServices: a subscribed key is a non-optional
 	// secretKeyRef on the pod, so rolling without first removing the
 	// subscription fails every dependent pod with CreateContainerConfigError.
-	// nil = legacy roll-only behaviour (tests).
-	OnKeyRemoved func(ctx context.Context, project, key string) error
+	// nil = legacy roll-only behaviour (tests). Returns how many services it
+	// unsubscribed so the caller can report it — those services restart via
+	// propagation, not via the envFrom roll below, so they'd otherwise be
+	// invisible in the "rolled" count.
+	OnKeyRemoved func(ctx context.Context, project, key string) (int, error)
+}
+
+// UnsetResult says what an UnsetKey actually touched. Rolled counts envs
+// that mount the shared Secret wholesale (envFrom) and got a secretsRev
+// bump; Unsubscribed counts services that had subscribed to the key
+// individually (sharedEnvKeys) and were re-propagated without it.
+type UnsetResult struct {
+	Rolled       int `json:"rolled"`
+	Unsubscribed int `json:"unsubscribed"`
 }
 
 func New(k *kube.Client, namespace string) *Service {
@@ -168,7 +180,7 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 // expectation for kuso secrets. When a key is actually removed, rolls
 // every env that has the shared Secret attached so the removal takes
 // effect on already-running pods.
-func (s *Service) UnsetKey(ctx context.Context, project, key string) (rolled int, err error) {
+func (s *Service) UnsetKey(ctx context.Context, project, key string) (UnsetResult, error) {
 	ns := s.nsFor(ctx, project)
 	name := SecretName(project)
 	// missing tracks whether the key (or whole Secret) was absent, so we
@@ -198,17 +210,25 @@ func (s *Service) UnsetKey(ctx context.Context, project, key string) (rolled int
 		}
 		return nil
 	}); err != nil {
-		return 0, err
+		return UnsetResult{}, err
 	}
 	if missing {
-		return 0, nil
+		return UnsetResult{}, nil
 	}
+	var res UnsetResult
 	if s.OnKeyRemoved != nil {
-		if err := s.OnKeyRemoved(ctx, project, key); err != nil {
-			return 0, fmt.Errorf("unsubscribe services from %q: %w", key, err)
+		n, err := s.OnKeyRemoved(ctx, project, key)
+		if err != nil {
+			return UnsetResult{}, fmt.Errorf("unsubscribe services from %q: %w", key, err)
 		}
+		res.Unsubscribed = n
 	}
-	return s.rollDependentEnvs(ctx, project, ns, name)
+	rolled, err := s.rollDependentEnvs(ctx, project, ns, name)
+	if err != nil {
+		return UnsetResult{}, err
+	}
+	res.Rolled = rolled
+	return res, nil
 }
 
 // rollDependentEnvs bumps spec.secretsRev on every KusoEnvironment in
