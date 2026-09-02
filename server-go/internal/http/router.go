@@ -545,7 +545,15 @@ func mountAuthenticatedRoutes(
 			// data-safe remediation. Admin-gated inside the handler.
 			// The Scanner is read-only; the Remediator mutates live
 			// StatefulSets/CR annotations (audited via d.Audit).
-			rhScanner := &reconcilehealth.Scanner{Kube: d.Kube}
+			// Wire the registry probe here too: this instance serves
+			// /api/health/reconcile, the one people actually read. The
+			// auto-remediate loop in main.go builds its own; a check wired
+			// only there never reaches the report.
+			rhScanner := &reconcilehealth.Scanner{
+				Kube:         d.Kube,
+				Images:       builds.NewInClusterImageDeleter(builds.RegistryHost),
+				RegistryHost: builds.RegistryHost,
+			}
 			rhRemediator := &remediate.Remediator{Kube: d.Kube, Audit: d.Audit}
 			rhH := &httphandlers.ReconcileHealthHandler{
 				Scanner:    rhScanner,
