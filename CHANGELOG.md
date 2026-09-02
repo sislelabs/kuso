@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.9] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): re-assert a preview env's own clone conn ([2f0f4f9](https://github.com/sislelabs/kuso/commit/2f0f4f90a02a32717eb242465353f266aa75346d))
+
 ## [0.25.8] — 2026-09-02
 
 ### ✨ Features
@@ -336,11 +341,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(platform): preview data leaks, env-literal drift, ref slugification ([ade5e98](https://github.com/sislelabs/kuso/commit/ade5e98808ea6da04278b99699fff2492b27301f))
-
-## [0.21.5] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(canvas): filter services by env-group so clone services don't duplicate in prod ([f0ad352](https://github.com/sislelabs/kuso/commit/f0ad3529274dfc7467f770ae45ce4deaa364c484))
 
 
 ---

@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.5] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(canvas): filter services by env-group so clone services don't duplicate in prod ([f0ad352](https://github.com/sislelabs/kuso/commit/f0ad3529274dfc7467f770ae45ce4deaa364c484))
+
 ## [0.21.4] — 2026-07-25
 
 ### 🐛 Bug Fixes
