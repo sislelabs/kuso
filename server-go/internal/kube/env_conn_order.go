@@ -45,3 +45,36 @@ func CloneConnsLast(envFromSecrets []string, envScope string) []string {
 	}
 	return append(rest, clones...)
 }
+
+// PreserveEnvFromOrder returns desired's set in existing's order: names already
+// mounted keep their position, names new to the env are appended in desired's
+// order, names no longer desired are dropped.
+//
+// The pod template hashes envFrom in list order, so writing the same set in a
+// different order is a rollout. Writers that rebuild the list from scratch
+// (addon refresh) must not disagree with writers that append (subscribe), or
+// the next addon event rolls every pod in the project for no change.
+func PreserveEnvFromOrder(existing, desired []string) []string {
+	if len(desired) == 0 {
+		return desired
+	}
+	want := make(map[string]bool, len(desired))
+	for _, d := range desired {
+		want[d] = true
+	}
+	out := make([]string, 0, len(desired))
+	seen := make(map[string]bool, len(desired))
+	for _, e := range existing {
+		if want[e] && !seen[e] {
+			out = append(out, e)
+			seen[e] = true
+		}
+	}
+	for _, d := range desired {
+		if !seen[d] {
+			out = append(out, d)
+			seen[d] = true
+		}
+	}
+	return out
+}
