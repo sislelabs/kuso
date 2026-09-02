@@ -19,6 +19,13 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.23] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): move control-plane backup to 23:00 UTC ([082cea2](https://github.com/sislelabs/kuso/commit/082cea2ca300a49d7ec7d1c1c3f17d4c03c8c1b3))
+- Fix(backuphealth): size the control-plane stale window for a daily cadence ([9fbd79f](https://github.com/sislelabs/kuso/commit/9fbd79fa3b87272c4641306e4e5705b5e4bc66f9))
+- Fix(backup): control-plane backup daily, re-key retention slots ([8f10b6a](https://github.com/sislelabs/kuso/commit/8f10b6a5cb4713c7083b34b673f86c8d7a89403d))
+
 ## [0.25.22] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -325,14 +332,6 @@ messages on every release. The format is loosely based on
 - Feat(web): one secret primitive — remove secret toggle, unify save, reveal ([fc095e6](https://github.com/sislelabs/kuso/commit/fc095e684e221d74543d984f8f39d036899fae75))
 - Feat(cli): one secret primitive — env list --reveal + unified auto write ([750e65b](https://github.com/sislelabs/kuso/commit/750e65b271583cde74ee0e35317cd59bd7d10e0c))
 - Feat(env): one secret primitive — unified write (auto storage) + reveal ([5dfd5af](https://github.com/sislelabs/kuso/commit/5dfd5affb30d2eef7ae219aeeccbfce9993a9bf0))
-
-## [0.22.3] — 2026-07-30
-
-### Other
-- Deploy: add neutral review-host ingress (review.sislelabs.com → kuso-server) ([818fa23](https://github.com/sislelabs/kuso/commit/818fa2396a45b8a08fe10bebb85e2ffdb77848cb))
-
-### 🐛 Bug Fixes
-- Fix(previews): correct the reviewer PR comment — real version, no fake preview, no ops-domain leak ([b0e35e6](https://github.com/sislelabs/kuso/commit/b0e35e681efa3a8b5cc0e7f10a19ba4036a46e99))
 
 
 ---

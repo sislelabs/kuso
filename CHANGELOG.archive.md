@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.3] — 2026-07-30
+
+### Other
+- Deploy: add neutral review-host ingress (review.sislelabs.com → kuso-server) ([818fa23](https://github.com/sislelabs/kuso/commit/818fa2396a45b8a08fe10bebb85e2ffdb77848cb))
+
+### 🐛 Bug Fixes
+- Fix(previews): correct the reviewer PR comment — real version, no fake preview, no ops-domain leak ([b0e35e6](https://github.com/sislelabs/kuso/commit/b0e35e681efa3a8b5cc0e7f10a19ba4036a46e99))
+
 ## [0.22.2] — 2026-07-29
 
 ### 🐛 Bug Fixes
