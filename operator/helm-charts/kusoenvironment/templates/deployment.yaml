@@ -190,8 +190,10 @@ spec:
         connections crashed on first ping, restarted once or twice, and
         fired a "pod crashed" alert on every deploy. It exits 0 immediately
         when none of those vars is set, so a service with no datastore pays
-        one busybox start (~1s). The script is a verbatim copy of the Go
-        const — see kusoenvironment.waitForAddonsScript in _helpers.tpl.
+        one busybox start (~1s). Runs in SOFT mode (see the env block): an
+        addon that never answers is logged, not fatal. The script is a
+        verbatim copy of the Go const — see kusoenvironment.waitForAddonsScript
+        in _helpers.tpl.
       */}}
       initContainers:
         - name: wait-for-addons
@@ -206,10 +208,20 @@ spec:
                  only the init a request would flip every such pod to
                  Burstable and change its eviction order — a scheduling
                  side effect nobody asked for from a 1s nc loop. */}}
-          {{- with .Values.envVars }}
           env:
+            {{- /* Soft mode: an addon that never answers is logged, not fatal —
+                   the app decides whether it can run without it (some hold a
+                   URL they only touch lazily, or one that is wrong yet has
+                   never stopped them). 15 attempts × 2s caps the delay a
+                   broken URL adds to a rollout at 30s. The release Job keeps
+                   the strict default. */}}
+            - name: WAIT_FOR_ADDONS_SOFT
+              value: "1"
+            - name: WAIT_FOR_ADDONS_ATTEMPTS
+              value: "15"
+            {{- with .Values.envVars }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           {{- with .Values.envFromSecrets }}
           envFrom:
             {{- range . }}
