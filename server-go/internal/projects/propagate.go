@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"kuso/server/internal/kube"
+	"slices"
 )
 
 // changedFields names which fields on the parent KusoService have
@@ -266,6 +267,12 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// subscription. nil SubscribedAddons = legacy auto-
 				// mount-all (no change); non-nil = only addons in the
 				// list keep their conn-secret mount.
+				// Re-assert the env's OWN clones from the addon list rather than
+				// trusting prunedFrom. It started from the env's current list, so
+				// this path could preserve a clone but never restore one; preview
+				// envs lost theirs on every propagation after the parent addon
+				// changed, and mounted the production source instead.
+				prunedFrom = s.ensureEnvClones(ctx, project, envScope, prunedFrom)
 				if svc.Spec.SubscribedAddons != nil {
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
@@ -568,4 +575,48 @@ func rescopeServiceRefLiterals(in []kube.KusoEnvVar, ns, envScope string) []kube
 		out[i] = copy
 	}
 	return out
+}
+
+// ensureEnvClones adds the conn secret of every addon clone minted for
+// envScope and drops the project-level source each clone replaces. The clone
+// list comes from ReferenceableConnSecrets (the only lister that includes
+// env-scoped addons); names are matched with kube.IsEnvScopedConn. No-op for
+// production and when the lister isn't wired.
+func (s *Service) ensureEnvClones(ctx context.Context, project, envScope string, list []string) []string {
+	if envScope == "" || envScope == "production" || s.ReferenceableConnSecrets == nil {
+		return list
+	}
+	all, err := s.ReferenceableConnSecrets(ctx, project)
+	if err != nil {
+		return list
+	}
+	out := slices.Clone(list)
+	for _, conn := range all {
+		if !kube.IsEnvScopedConn(conn, envScope) {
+			continue
+		}
+		if !slices.Contains(out, conn) {
+			out = append(out, conn)
+		}
+		// "<project>-db-staging-conn" replaces "<project>-db-conn".
+		if src := cloneSourceConnName(conn, envScope); src != "" {
+			out = slices.DeleteFunc(out, func(n string) bool { return n == src })
+		}
+	}
+	return out
+}
+
+// cloneSourceConnName returns the project-level conn a clone shadows, for
+// both clone name shapes ("-<scope>-conn" and preview "-pr-N-conn").
+func cloneSourceConnName(cloneConn, envScope string) string {
+	base := strings.TrimSuffix(cloneConn, "-conn")
+	for _, suffix := range []string{"-" + envScope, "-" + strings.TrimPrefix(envScope, "preview-")} {
+		if suffix == "-" {
+			continue
+		}
+		if b := strings.TrimSuffix(base, suffix); b != base {
+			return b + "-conn"
+		}
+	}
+	return ""
 }
