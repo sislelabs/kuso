@@ -122,6 +122,24 @@ pooler:
   # instancePooler: marks the shared cluster-PG pooler so it renders even
   # though the cluster-PG CR sets no useInstanceAddon.
   instancePooler: false
+  # externalBackend: pool an external managed Postgres (external.secretName)
+  # instead of an in-cluster addon pod. Opt-in on purpose — a pooler restart
+  # drops connections to a backend kuso doesn't operate, and the provider's
+  # own connection cap becomes the thing being multiplexed. Its main use is
+  # exactly that: providers with a low max_connections (PlanetScale's 25,
+  # minus its own internal roles) can't otherwise host more than a couple of
+  # app pods. Requires pooler.host; the user's Secret must also carry
+  # POSTGRES_USER / POSTGRES_PASSWORD for the userlist.
+  externalBackend: false
+  # host/port: the external provider's endpoint. Ignored unless
+  # externalBackend is set; in-cluster pooling always targets the addon's
+  # own Service.
+  host: ""
+  port: 5432
+  # serverTLSSslmode: PgBouncer's TLS mode toward an external backend.
+  # "require" encrypts without verifying the chain, which is what managed
+  # providers expect from a pooler. Ignored for in-cluster backends.
+  serverTLSSslmode: require
 
 # publicTCP: opt-in public TCP endpoint for the addon. enabled is the
 # user toggle; port is server-allocated from the cluster's configured
