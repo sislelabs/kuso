@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.25] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
+
 ## [0.25.24] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -322,11 +327,6 @@ messages on every release. The format is loosely based on
 - Feat(web): GitLab repo support in the service Source settings ([5a22cd4](https://github.com/sislelabs/kuso/commit/5a22cd49e067253cf177ee96bba240865bd6c90e))
 - Feat(cli): connect a service to a GitLab repo + token ([cb6837c](https://github.com/sislelabs/kuso/commit/cb6837c56eb2763d745e8688b044e4ebb23ba51f))
 - Feat(gitlab): build services from private GitLab repos (server) ([cf8d2db](https://github.com/sislelabs/kuso/commit/cf8d2db84fae52c9ef49cc0938bd6f3c6e37ef93))
-
-## [0.22.5] — 2026-07-31
-
-### 🐛 Bug Fixes
-- Fix(env): keep env-scoped addon clone conns on subscription filter; CLI unset via DELETE ([6239dd2](https://github.com/sislelabs/kuso/commit/6239dd2662d88b192fc67e27c246169841add07f))
 
 
 ---

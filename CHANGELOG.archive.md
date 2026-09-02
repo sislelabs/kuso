@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.5] — 2026-07-31
+
+### 🐛 Bug Fixes
+- Fix(env): keep env-scoped addon clone conns on subscription filter; CLI unset via DELETE ([6239dd2](https://github.com/sislelabs/kuso/commit/6239dd2662d88b192fc67e27c246169841add07f))
+
 ## [0.22.4] — 2026-07-31
 
 ### Other
