@@ -720,6 +720,10 @@ var s3BucketName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 // "leave alone"; callers send {Enabled: &true/&false} to set it.
 type AddonPoolerPatch struct {
 	Enabled *bool `json:"enabled,omitempty"`
+	// Pointer semantics as above: nil = leave alone, set = apply.
+	ExternalBackend *bool   `json:"externalBackend,omitempty"`
+	Host            *string `json:"host,omitempty"`
+	Port            *int32  `json:"port,omitempty"`
 }
 
 // cronExpr5 matches a standard five-field cron expression. Mirrors
@@ -880,14 +884,25 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 			}
 			addon.Spec.TLS = v
 		}
-		if req.Pooler != nil && req.Pooler.Enabled != nil {
+		if req.Pooler != nil {
 			// Lazy-init so toggling the pooler doesn't disturb other
 			// spec fields. The chart treats a nil pooler block and
 			// {enabled:false} identically (no pooler rendered).
 			if addon.Spec.Pooler == nil {
 				addon.Spec.Pooler = &kube.KusoAddonPooler{}
 			}
-			addon.Spec.Pooler.Enabled = *req.Pooler.Enabled
+			if req.Pooler.Enabled != nil {
+				addon.Spec.Pooler.Enabled = *req.Pooler.Enabled
+			}
+			if req.Pooler.ExternalBackend != nil {
+				addon.Spec.Pooler.ExternalBackend = *req.Pooler.ExternalBackend
+			}
+			if req.Pooler.Host != nil {
+				addon.Spec.Pooler.Host = *req.Pooler.Host
+			}
+			if req.Pooler.Port != nil {
+				addon.Spec.Pooler.Port = *req.Pooler.Port
+			}
 		}
 		return nil
 	})

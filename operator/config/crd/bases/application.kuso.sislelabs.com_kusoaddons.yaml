@@ -119,6 +119,29 @@ spec:
                         Marks this as the shared pooler for the cluster
                         (instance) Postgres, so the chart renders it even
                         though the CR sets no useInstanceAddon.
+                    externalBackend:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Pool an external managed database (spec.external)
+                        instead of an in-cluster addon pod. Opt-in: a pooler
+                        restart drops connections to a backend kuso does not
+                        operate. Its purpose is providers with a low
+                        connection cap, where multiplexing is the only way to
+                        run more than a couple of app pods. Requires host.
+                    host:
+                      type: string
+                      description: >-
+                        External provider hostname. Required when
+                        externalBackend is set — the chart cannot read it
+                        from the user's Secret at render time. Ignored for
+                        in-cluster backends.
+                    port:
+                      type: integer
+                      format: int32
+                      description: >-
+                        External provider port. Defaults to 5432 when unset.
+                        Ignored for in-cluster backends.
                 publicTCP:
                   type: object
                   description: >-

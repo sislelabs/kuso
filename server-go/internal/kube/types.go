@@ -900,6 +900,18 @@ type KusoAddonPooler struct {
 	// the chart render the pooler for it without tripping the
 	// useInstanceAddon bypass that dedicated consumers rely on.
 	InstancePooler bool `json:"instancePooler,omitempty"`
+	// ExternalBackend pools an external managed database (spec.external)
+	// rather than an in-cluster addon pod. Opt-in: a pooler restart drops
+	// connections to a backend kuso doesn't operate. Its point is providers
+	// with a low connection cap, where multiplexing is the only way to run
+	// more than a couple of app pods.
+	ExternalBackend bool `json:"externalBackend,omitempty"`
+	// Host/Port are the external provider's endpoint. Required when
+	// ExternalBackend is set — the chart can't read them out of the user's
+	// Secret at render time. Ignored for in-cluster backends, which always
+	// target the addon's own Service.
+	Host string `json:"host,omitempty"`
+	Port int32  `json:"port,omitempty"`
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.
@@ -1152,12 +1164,12 @@ type KusoCronSpec struct {
 	// Command's interpretation depends on Kind:
 	//   service / command → argv for the container.
 	//   http              → unused; the chart synthesises curl args.
-	Command                    []string       `json:"command,omitempty"`
-	Suspend                    bool           `json:"suspend,omitempty"`
-	ConcurrencyPolicy          string         `json:"concurrencyPolicy,omitempty"`
-	SuccessfulJobsHistoryLimit int            `json:"successfulJobsHistoryLimit,omitempty"`
-	FailedJobsHistoryLimit     int            `json:"failedJobsHistoryLimit,omitempty"`
-	ActiveDeadlineSeconds      int            `json:"activeDeadlineSeconds,omitempty"`
+	Command                    []string `json:"command,omitempty"`
+	Suspend                    bool     `json:"suspend,omitempty"`
+	ConcurrencyPolicy          string   `json:"concurrencyPolicy,omitempty"`
+	SuccessfulJobsHistoryLimit int      `json:"successfulJobsHistoryLimit,omitempty"`
+	FailedJobsHistoryLimit     int      `json:"failedJobsHistoryLimit,omitempty"`
+	ActiveDeadlineSeconds      int      `json:"activeDeadlineSeconds,omitempty"`
 	// StartingDeadlineSeconds bounds the missed-schedule lookback so a
 	// CronJob that falls >100 schedules behind self-heals rather than
 	// wedging forever. 0 = unset (kube default: unbounded).
