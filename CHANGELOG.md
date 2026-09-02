@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.24] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backuphealth): read control-plane success from the CronJob, not GC'd Jobs ([26b2256](https://github.com/sislelabs/kuso/commit/26b2256f68612e58bcfbfa050cfdd94720c752ab))
+
 ## [0.25.23] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -322,16 +327,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): keep env-scoped addon clone conns on subscription filter; CLI unset via DELETE ([6239dd2](https://github.com/sislelabs/kuso/commit/6239dd2662d88b192fc67e27c246169841add07f))
-
-## [0.22.4] — 2026-07-31
-
-### Other
-- Merge: one secret primitive — unified env value model + reveal ([48574ca](https://github.com/sislelabs/kuso/commit/48574ca146dfde6a0e6490a7864c16349ef3342f))
-
-### ✨ Features
-- Feat(web): one secret primitive — remove secret toggle, unify save, reveal ([fc095e6](https://github.com/sislelabs/kuso/commit/fc095e684e221d74543d984f8f39d036899fae75))
-- Feat(cli): one secret primitive — env list --reveal + unified auto write ([750e65b](https://github.com/sislelabs/kuso/commit/750e65b271583cde74ee0e35317cd59bd7d10e0c))
-- Feat(env): one secret primitive — unified write (auto storage) + reveal ([5dfd5af](https://github.com/sislelabs/kuso/commit/5dfd5affb30d2eef7ae219aeeccbfce9993a9bf0))
 
 
 ---

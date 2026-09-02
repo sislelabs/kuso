@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.4] — 2026-07-31
+
+### Other
+- Merge: one secret primitive — unified env value model + reveal ([48574ca](https://github.com/sislelabs/kuso/commit/48574ca146dfde6a0e6490a7864c16349ef3342f))
+
+### ✨ Features
+- Feat(web): one secret primitive — remove secret toggle, unify save, reveal ([fc095e6](https://github.com/sislelabs/kuso/commit/fc095e684e221d74543d984f8f39d036899fae75))
+- Feat(cli): one secret primitive — env list --reveal + unified auto write ([750e65b](https://github.com/sislelabs/kuso/commit/750e65b271583cde74ee0e35317cd59bd7d10e0c))
+- Feat(env): one secret primitive — unified write (auto storage) + reveal ([5dfd5af](https://github.com/sislelabs/kuso/commit/5dfd5affb30d2eef7ae219aeeccbfce9993a9bf0))
+
 ## [0.22.3] — 2026-07-30
 
 ### Other
