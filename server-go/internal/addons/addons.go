@@ -1444,6 +1444,13 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
 				}
 			}
+			// perEnv is the desired SET; the ORDER comes from the env's live
+			// list. This refresh rebuilt the list alphabetically while the
+			// subscribe path appended, so the first addon event after a
+			// subscribe rewrote the same set in a new order — and the pod
+			// template hashes envFrom in order, so every pod in the project
+			// rolled for nothing. See kube.PreserveEnvFromOrder.
+			perEnv = kube.PreserveEnvFromOrder(live.Spec.EnvFromSecrets, perEnv)
 			// The env's own clones go LAST: envFrom is last-source-wins and every
 			// postgres addon publishes the same keys, so an alphabetical list let
 			// "psdb" beat "db-staging" and pointed staging's DIRECT_URL at
