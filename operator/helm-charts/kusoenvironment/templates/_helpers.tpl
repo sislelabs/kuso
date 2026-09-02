@@ -57,7 +57,8 @@ wait_one() {
   [ -z "$port" ] && port=$4
   echo "wait-for-addons: waiting for $name at $host:$port"
   i=0
-  while [ "$i" -lt 60 ]; do
+  attempts="${WAIT_FOR_ADDONS_ATTEMPTS:-60}"
+  while [ "$i" -lt "$attempts" ]; do
     if nc -z -w 2 "$host" "$port" 2>/dev/null; then
       echo "wait-for-addons: $name reachable at $host:$port"
       return 0
@@ -65,7 +66,7 @@ wait_one() {
     i=$((i+1))
     sleep 2
   done
-  echo "wait-for-addons: $name at $host:$port not reachable after 120s" >&2
+  echo "wait-for-addons: $name at $host:$port not reachable after $((attempts*2))s" >&2
   return 1
 }
 
@@ -78,6 +79,17 @@ if [ -n "${REDIS_URL:-}" ]; then
 fi
 if [ -n "${NATS_URL:-}" ]; then
   set -- $(host_port_from_url "$NATS_URL"); wait_one nats "${1:-}" "${2:-}" 4222 || rc=1
+fi
+# Strict (default): a present addon that never answers is a failure — the
+# release Job runs with backoffLimit 0 and wants a clear verdict, not a
+# migration attempted against nothing. Soft (WAIT_FOR_ADDONS_SOFT=1): app
+# pods. Some apps hold a DATABASE_URL/REDIS_URL they only touch lazily, or
+# one that is plain wrong yet has never stopped them running; turning that
+# into a hard block would fail a rollout that used to succeed. Warn loudly
+# and hand over to the app, which knows whether it can live without it.
+if [ "$rc" -ne 0 ] && [ "${WAIT_FOR_ADDONS_SOFT:-}" = "1" ]; then
+  echo "wait-for-addons: not every addon answered — starting the app anyway (WAIT_FOR_ADDONS_SOFT=1)" >&2
+  exit 0
 fi
 exit $rc
 {{- end -}}

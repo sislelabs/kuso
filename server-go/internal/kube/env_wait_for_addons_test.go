@@ -29,6 +29,18 @@ func TestKusoEnvironmentChart_WaitForAddonsInit(t *testing.T) {
 	if !strings.Contains(out[initIdx:appIdx], `name: "alpha-db-conn"`) {
 		t.Errorf("initContainer does not mount the env's conn secrets; it would wait on nothing.\n%s", out[initIdx:appIdx])
 	}
+	// App pods must run the wait in SOFT mode. Strict mode (the release
+	// Job's default) turned a URL the app only touches lazily — or one that
+	// is wrong but has never stopped it — into a rollout that never
+	// completes: berivangold sat in Init:0/1 on a REDIS_URL pointing at a
+	// private IP nothing listens on, while its 62-day-old replica served.
+	init := out[initIdx:appIdx]
+	if !strings.Contains(init, "WAIT_FOR_ADDONS_SOFT") || !strings.Contains(init, `value: "1"`) {
+		t.Errorf("app-pod init must set WAIT_FOR_ADDONS_SOFT=1; a dead URL would block the rollout forever.\n%s", init)
+	}
+	if !strings.Contains(init, "WAIT_FOR_ADDONS_ATTEMPTS") {
+		t.Errorf("app-pod init should cap attempts so a dead URL delays a rollout by seconds, not minutes")
+	}
 	// The script body made it through `quote` intact.
 	if !strings.Contains(out, "wait-for-addons: waiting for") {
 		t.Errorf("script body missing from the rendered command")
