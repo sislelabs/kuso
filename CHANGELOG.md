@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.16] — 2026-09-02
+
+### ✨ Features
+- Feat(health): flag environments whose image is gone from the registry ([4b3e7b7](https://github.com/sislelabs/kuso/commit/4b3e7b784507c5969410018178dfa110f79add0a))
+
+### 🧪 Tests
+- Test(builds): pin that the image sweep protects staging env images ([89140d8](https://github.com/sislelabs/kuso/commit/89140d879c7ef052150e376065f70befc483b6fa))
+
 ## [0.25.15] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -342,11 +350,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): match cron spec.service on both FQN and short name ([71bf10e](https://github.com/sislelabs/kuso/commit/71bf10e6d4c4b2fcdcaaca4852952416c7b48879))
-
-## [0.21.12] — 2026-07-26
-
-### 🐛 Bug Fixes
-- Fix(builds): repoint crons at the new image on every deploy ([6359ed7](https://github.com/sislelabs/kuso/commit/6359ed7530a5247a9381a2f53ca66e27b00c0b8f))
 
 
 ---

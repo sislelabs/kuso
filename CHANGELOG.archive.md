@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.12] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(builds): repoint crons at the new image on every deploy ([6359ed7](https://github.com/sislelabs/kuso/commit/6359ed7530a5247a9381a2f53ca66e27b00c0b8f))
+
 ## [0.21.11] — 2026-07-25
 
 ### 🐛 Bug Fixes
