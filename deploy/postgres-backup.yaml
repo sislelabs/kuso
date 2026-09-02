@@ -34,9 +34,11 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-postgres-backup
 spec:
-  # Hourly. Cheap (a single pg_dump of the kuso DB is < 50 MB
-  # compressed even at 10k services) and gives an RPO of an hour.
-  schedule: "0 * * * *"
+  # Daily at 03:00 UTC. RPO of a day for the control plane: it is
+  # config/metadata (projects, services, env vars, build history), not
+  # user data, and it changes in bursts around deploys rather than
+  # continuously. Addon backups cover the actual databases.
+  schedule: "0 3 * * *"
   # Don't pile up Jobs if a previous one is still running (e.g. slow
   # S3 upload during a network blip).
   concurrencyPolicy: Forbid
@@ -207,22 +209,28 @@ spec:
                   . /backup/meta.env
                   DEST_PREFIX="${KUSO_BACKUP_PREFIX:-kuso-postgres}"
 
-                  # Hourly retention: 24 slots, keyed by UTC hour.
-                  HOURLY="${DEST_PREFIX}/hourly/${HOUR}.sql.gz"
-                  aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${HOURLY}" \
+                  # Daily retention: 30 slots, keyed by day-of-month.
+                  # On a daily schedule this is the primary slot — every
+                  # run lands here and a slot is overwritten once a month.
+                  # (Was hourly/${HOUR} when this ran every hour; with a
+                  # 03:00 schedule an hour-keyed slot would only ever fill
+                  # one of its 24 slots.)
+                  DAILY="${DEST_PREFIX}/daily/${DOM}.sql.gz"
+                  aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${DAILY}" \
                     --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
                     --metadata "kuso-ts=$TS,kuso-size=$SIZE"
 
-                  # Daily retention: 7 slots, keyed by UTC weekday.
-                  if [ "$HOUR" = "00" ]; then
-                    DAILY="${DEST_PREFIX}/daily/${DOW}.sql.gz"
-                    aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${DAILY}" \
-                      --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
-                      --metadata "kuso-ts=$TS,kuso-size=$SIZE"
-                  fi
+                  # Weekly retention: 7 slots, keyed by UTC weekday. Gives
+                  # a second, slower-rotating copy so a bad dump that
+                  # overwrites today's daily slot doesn't leave a hole.
+                  WEEKLY="${DEST_PREFIX}/weekly/${DOW}.sql.gz"
+                  aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${WEEKLY}" \
+                    --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
+                    --metadata "kuso-ts=$TS,kuso-size=$SIZE"
 
-                  # Monthly retention: 12 slots, keyed by month.
-                  if [ "$HOUR" = "00" ] && [ "$DOM" = "01" ]; then
+                  # Monthly retention: 12 slots, keyed by month. Written
+                  # on the 1st, whatever hour the daily schedule runs at.
+                  if [ "$DOM" = "01" ]; then
                     MONTHLY="${DEST_PREFIX}/monthly/${MONTH}.sql.gz"
                     aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${MONTHLY}" \
                       --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
