@@ -16,6 +16,7 @@ var (
 		Long:  "Print the version number of kusoCli",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println(GetVersionInfo())
+			fmt.Println("Server: " + serverVersionLine())
 		},
 	}
 	subLatestCmd = &cobra.Command{
@@ -194,4 +195,22 @@ func CliCommand() *cobra.Command {
 	//subCmdUpgrade.AddCommand(subCmdUpgradeCheck)
 	//versionCmd.AddCommand(subCmdUpgrade)
 	return versionCmd
+}
+
+// ServerVersion is set by the root command to ask the logged-in instance
+// for its version. Left nil when the CLI runs without an instance.
+var ServerVersion func() (string, error)
+
+// serverVersionLine keeps `kuso version` honest: it used to print only the
+// CLI's own build, and readers took that for the cluster's version. Both
+// now appear, and a missing login says so instead of implying anything.
+func serverVersionLine() string {
+	if ServerVersion == nil {
+		return "unknown (no instance configured)"
+	}
+	v, err := ServerVersion()
+	if err != nil {
+		return "unknown (" + err.Error() + ")"
+	}
+	return v
 }
