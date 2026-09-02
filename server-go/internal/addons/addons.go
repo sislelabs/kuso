@@ -1208,6 +1208,14 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	if err != nil {
 		return err
 	}
+	// The unfiltered list too: listProjectScoped deliberately strips
+	// env-scoped clones (they must not mount project-wide), but each env
+	// still needs to find the clone minted FOR IT. Matched by env label
+	// further down.
+	addonList, err := s.List(ctx, project)
+	if err != nil {
+		return err
+	}
 	// Build baseSecrets, de-duplicated: addon conn secrets, then the
 	// project/instance-shared secrets, then any explicitly-passed
 	// extras. seen guards against listing a conn secret twice when the
@@ -1324,18 +1332,44 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			// (DATABASE_URL, S3_BUCKET, …), so whichever lands last wins
 			// and the env can silently resolve to production.
 			if envScope := live.Labels[kube.LabelEnv]; envScope != "" && envScope != "production" {
-				suffix := "-" + envScope + "-conn"
-				for _, sec := range live.Spec.EnvFromSecrets {
-					if !strings.HasSuffix(sec, suffix) {
+				// Resolve the env's clones from the ADDON LABELS, not from a
+				// name-suffix guess over the previous list. Two reasons:
+				//
+				//  1. Preview clones don't follow the "-<scope>-conn" shape.
+				//     EnsurePRAddons keeps the historical "<base>-pr-N" NAME
+				//     (DeletePRAddons and the canvas regex depend on it) while
+				//     the env SCOPE is "preview-pr-N", so the suffix test never
+				//     matched them. Named envs (staging/qa) happened to work
+				//     because their name and scope agree.
+				//
+				//  2. Reading the previous list only PRESERVES a clone that is
+				//     already mounted; it can never restore one. The GitHub
+				//     dispatcher rebuilds a preview's EnvFromSecrets from the
+				//     BASE env, so dropping an addon conn from production
+				//     propagates the omission into the preview — and with
+				//     nothing able to re-add it, the preview boots with no
+				//     DATABASE_URL. That is the tickero pr-52 incident.
+				//
+				// The env-label match is the authoritative relationship: the
+				// clone was minted FOR this env and carries its scope.
+				for i := range addonList {
+					a := &addonList[i]
+					if a.Labels[kube.LabelEnv] != envScope {
 						continue
 					}
-					if !slices.Contains(perEnv, sec) {
-						perEnv = append(perEnv, sec)
+					conn := connSecretName(a.Name)
+					if conn == "" || excludeConnSecrets[conn] {
+						continue
 					}
-					// Drop the project-level source this clone replaces:
-					// "<project>-db-staging-conn" shadows "<project>-db-conn".
-					source := strings.TrimSuffix(sec, suffix) + "-conn"
-					perEnv = slices.DeleteFunc(perEnv, func(n string) bool { return n == source })
+					if !slices.Contains(perEnv, conn) {
+						perEnv = append(perEnv, conn)
+					}
+					// The clone REPLACES its source: mounting both is
+					// last-source-wins on shared keys (DATABASE_URL, S3_BUCKET)
+					// and can silently resolve the env to production.
+					if src := cloneSourceConn(a.Name, envScope); src != "" {
+						perEnv = slices.DeleteFunc(perEnv, func(n string) bool { return n == src })
+					}
 				}
 			}
 			// Apply the per-service addon subscription filter when the
@@ -1398,6 +1432,28 @@ func orderedConnSecrets(addonCRs []kube.KusoAddon, exclude map[string]bool) []st
 	}
 	slices.Sort(out)
 	return out
+}
+
+// cloneSourceConn returns the conn secret of the project-level addon a clone
+// replaces, or "" when the name doesn't encode one.
+//
+// Clones are named either "<source>-<scope>" (named envs: db-staging in scope
+// staging) or "<source>-pr-<N>" (previews, whose scope is "preview-pr-<N>" —
+// the name and the scope deliberately differ). Both shapes are stripped so the
+// caller can drop the source conn the clone shadows.
+func cloneSourceConn(cloneName, envScope string) string {
+	for _, suffix := range []string{
+		"-" + envScope,
+		"-" + strings.TrimPrefix(envScope, "preview-"),
+	} {
+		if suffix == "-" {
+			continue
+		}
+		if base := strings.TrimSuffix(cloneName, suffix); base != cloneName {
+			return connSecretName(base)
+		}
+	}
+	return ""
 }
 
 // filterAddonConnsBySubscription mirrors filterEnvFromForSubscription
