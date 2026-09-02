@@ -29,11 +29,24 @@ pod restart to re-render — rare, operator-driven, acceptable.
    when either: a dedicated postgres addon opts in, OR this is the
    instance pooler. external + ha still bypass (ha uses a CNPG Pooler).
 */ -}}
-{{- if and (eq .Values.kind "postgres") .Values.pooler .Values.pooler.enabled (not .Values.ha) (not .Values.external) (or (not .Values.useInstanceAddon) (and .Values.pooler.instancePooler)) -}}
+{{- $externalPooled := and .Values.external .Values.pooler .Values.pooler.externalBackend -}}
+{{- if and (eq .Values.kind "postgres") .Values.pooler .Values.pooler.enabled (not .Values.ha) (or (not .Values.external) $externalPooled) (or (not .Values.useInstanceAddon) (and .Values.pooler.instancePooler)) -}}
 {{- $authQuery := eq (default "" .Values.pooler.authMode) "query" -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $poolerName := printf "%s-pooler" $name -}}
 {{- $connSecret := include "kusoaddon.connSecretName" . -}}
+{{- /*
+   Backend the pooler dials. In-cluster: the addon's own StatefulSet Service on
+   :5432. External: the managed provider's host, which must be given explicitly
+   (pooler.host / pooler.port) — the chart can't read it out of the user's
+   Secret at render time.
+*/ -}}
+{{- $backendHost := $name -}}
+{{- $backendPort := "5432" -}}
+{{- if $externalPooled -}}
+{{- $backendHost = required "pooler.host is required when pooler.externalBackend is set (the external provider's hostname)" .Values.pooler.host -}}
+{{- $backendPort = default "5432" (toString .Values.pooler.port) -}}
+{{- end -}}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -44,9 +57,10 @@ metadata:
 data:
   pgbouncer.ini: |
     [databases]
-    ; * matches whatever dbname the client connects with, routed at
-    ; the addon's Postgres StatefulSet Service on :5432.
-    * = host={{ $name }} port=5432
+    ; * matches whatever dbname the client connects with, routed at the
+    ; backend below — the addon's own StatefulSet Service, or the external
+    ; provider's host when pooler.externalBackend is set.
+    * = host={{ $backendHost }} port={{ $backendPort }}
 
     [pgbouncer]
     listen_addr = 0.0.0.0
@@ -83,8 +97,19 @@ data:
     log_connections = 0
     log_disconnections = 0
     log_pooler_errors = 1
-    ignore_startup_parameters = extra_float_digits,search_path
+    ; transaction pooling rejects any startup parameter it doesn't know, and
+    ; pgx sends both timeouts on every connect — without these, every Go app
+    ; dies with "unsupported startup parameter" the moment it's pooled. The
+    ; values still apply; clients that care set them per session instead.
+    ignore_startup_parameters = extra_float_digits,search_path,statement_timeout,idle_in_transaction_session_timeout
     admin_users = kuso
+    {{- if $externalPooled }}
+    ; Managed providers (PlanetScale, Neon, RDS) refuse unencrypted backend
+    ; logins. PgBouncer connects in plaintext unless told otherwise, so this
+    ; is required, not a hardening extra. The in-cluster path leaves it unset:
+    ; that backend serves plaintext by default (see spec.tls on the addon).
+    server_tls_sslmode = {{ default "require" .Values.pooler.serverTLSSslmode }}
+    {{- end }}
 ---
 apiVersion: v1
 kind: Service
