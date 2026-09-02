@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.3] — 2026-07-24
+
+### 🐛 Bug Fixes
+- Fix(instance-addon): grant role privileges on public schema (PG15+) ([db8a5f9](https://github.com/sislelabs/kuso/commit/db8a5f9bb3014311fd898e20b3af5310326b1b11))
+
 ## [0.21.2] — 2026-07-24
 
 ### 🐛 Bug Fixes

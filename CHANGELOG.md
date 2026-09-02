@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.7] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): make external addons behave like external addons ([680cf1a](https://github.com/sislelabs/kuso/commit/680cf1af332272ada59cd158dddaa2dfefbe336b))
+
 ## [0.25.6] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -336,11 +341,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env-group): stamp service label on cloned service (prod-canvas duplicate) ([92a0144](https://github.com/sislelabs/kuso/commit/92a0144f52a40b6608af92bf37604c6297d9a95e))
-
-## [0.21.3] — 2026-07-24
-
-### 🐛 Bug Fixes
-- Fix(instance-addon): grant role privileges on public schema (PG15+) ([db8a5f9](https://github.com/sislelabs/kuso/commit/db8a5f9bb3014311fd898e20b3af5310326b1b11))
 
 
 ---
