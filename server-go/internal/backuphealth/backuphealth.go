@@ -45,10 +45,13 @@ const (
 	secretName  = "kuso-postgres-backup"
 	cronJobName = "kuso-postgres-backup"
 	jobLabel    = "app.kubernetes.io/name=kuso-postgres-backup"
-	// StaleAfter: the CronJob runs hourly; if the newest success is
-	// older than this we flag stale (tolerates one transient
-	// failure+retry before crying wolf).
-	StaleAfter = 3 * time.Hour
+	// StaleAfter: the CronJob runs daily (03:00 UTC); if the newest
+	// success is older than this we flag stale. Sized to tolerate one
+	// missed run plus a few hours of slack before crying wolf — a
+	// tighter window would show a false "backups stale" banner for most
+	// of every day, which trains operators to ignore the one signal
+	// that matters. Was 3h when the CronJob ran hourly.
+	StaleAfter = 50 * time.Hour
 )
 
 // Status is the verdict the UI banner + watcher consume.
