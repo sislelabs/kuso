@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.2] — 2026-07-24
+
+### 🐛 Bug Fixes
+- Fix(env-group): clean up instance addon DB/role/secret on clone rollback + delete (review medium) ([8abd8fd](https://github.com/sislelabs/kuso/commit/8abd8fde557690d9d7c9036014a0f513cbda3b5f))
+- Fix(env): restore spec.kind fallback in delete-guard (review low) ([a44f803](https://github.com/sislelabs/kuso/commit/a44f8031eb60d1a3e1007b12940ae7546d167e9d))
+- Fix(env): stop treating env-group clones as production (spec.kind overload) ([799361b](https://github.com/sislelabs/kuso/commit/799361bf62fc3c26e034c8b51147d6031ff33109))
+- Fix(env-group): clone provisions instance-shared addons (THE crash fix) ([a4ff482](https://github.com/sislelabs/kuso/commit/a4ff4824a2373a7452493d8d130f78c304f42624))
+
 ## [0.21.1] — 2026-07-23
 
 ### Other

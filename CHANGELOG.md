@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.6] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): plumb pooler externalBackend/host/port end to end ([4177a3c](https://github.com/sislelabs/kuso/commit/4177a3c73bd0902180987889c55735ae6362fc60))
+
 ## [0.25.5] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -336,14 +341,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(instance-addon): grant role privileges on public schema (PG15+) ([db8a5f9](https://github.com/sislelabs/kuso/commit/db8a5f9bb3014311fd898e20b3af5310326b1b11))
-
-## [0.21.2] — 2026-07-24
-
-### 🐛 Bug Fixes
-- Fix(env-group): clean up instance addon DB/role/secret on clone rollback + delete (review medium) ([8abd8fd](https://github.com/sislelabs/kuso/commit/8abd8fde557690d9d7c9036014a0f513cbda3b5f))
-- Fix(env): restore spec.kind fallback in delete-guard (review low) ([a44f803](https://github.com/sislelabs/kuso/commit/a44f8031eb60d1a3e1007b12940ae7546d167e9d))
-- Fix(env): stop treating env-group clones as production (spec.kind overload) ([799361b](https://github.com/sislelabs/kuso/commit/799361bf62fc3c26e034c8b51147d6031ff33109))
-- Fix(env-group): clone provisions instance-shared addons (THE crash fix) ([a4ff482](https://github.com/sislelabs/kuso/commit/a4ff4824a2373a7452493d8d130f78c304f42624))
 
 
 ---
