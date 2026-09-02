@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.6] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(platform): preview data leaks, env-literal drift, ref slugification ([ade5e98](https://github.com/sislelabs/kuso/commit/ade5e98808ea6da04278b99699fff2492b27301f))
+
 ## [0.21.5] — 2026-07-25
 
 ### 🐛 Bug Fixes
