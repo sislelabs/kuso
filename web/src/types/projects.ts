@@ -228,12 +228,24 @@ export interface KusoAddonSpec {
   // serves TLS via a self-signed cert and the conn secret advertises
   // sslmode=require; omitted / "disable" = plaintext (sslmode=disable).
   tls?: "disable" | "require";
+  // external: the addon points at a database kuso does not provision. No
+  // StatefulSet is rendered; kuso mirrors secretName into <name>-conn so
+  // services envFrom: it exactly like a native addon.
+  external?: {
+    secretName?: string;
+    secretKeys?: string[];
+  };
   // pooler: opt-in PgBouncer in front of a kind=postgres addon.
   // When enabled the addon's <name>-conn Secret gains
   // POOLER_HOST/POOLER_PORT/POOLER_URL keys; DATABASE_URL stays
   // direct. Ignored for non-postgres kinds.
   pooler?: {
     enabled?: boolean;
+    // externalBackend pools an external managed database rather than an
+    // in-cluster pod; host/port are that provider's endpoint.
+    externalBackend?: boolean;
+    host?: string;
+    port?: number;
   };
   // publicTCP: opt-in public TCP endpoint for the addon. enabled is
   // the user toggle; port is server-allocated from the cluster's
