@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.10] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(operator,cli): placement panic, cron alerting, -o table, empty images ([78c7d66](https://github.com/sislelabs/kuso/commit/78c7d66a8bdee976bc20d0168acc59c2fd7e6c38))
+
 ## [0.21.9] — 2026-07-25
 
 ### 🐛 Bug Fixes
