@@ -240,7 +240,18 @@ func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	if err := h.Svc.ResyncExternal(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
+	// Optional body: rotated credentials to merge into the source Secret
+	// before re-mirroring. An empty body is a plain resync.
+	var body struct {
+		Credentials map[string]string `json:"credentials"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+			return
+		}
+	}
+	if err := h.Svc.ResyncExternal(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), body.Credentials); err != nil {
 		h.fail(w, "resync external addon", err)
 		return
 	}

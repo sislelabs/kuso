@@ -84,7 +84,7 @@ func TestDelete_RejectsCrossProjectQualifiedName(t *testing.T) {
 func TestResyncExternal_RejectsCrossProjectQualifiedName(t *testing.T) {
 	t.Parallel()
 	s := overlapAddonFixture(t)
-	if err := s.ResyncExternal(context.Background(), "foo", "foo-bar-pg"); !errors.Is(err, ErrNotFound) {
+	if err := s.ResyncExternal(context.Background(), "foo", "foo-bar-pg", nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ResyncExternal: want ErrNotFound, got %v", err)
 	}
 }

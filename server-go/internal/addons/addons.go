@@ -1070,6 +1070,16 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete addon: %w", err)
 	}
+	// External addon: the only thing kuso ever held was credentials, so
+	// nothing must linger. A native addon keeps its conn secret on purpose
+	// (resource-policy: keep, so a delete+re-add over the surviving PVC
+	// reuses the password); an external one has no PVC and no data. The
+	// mirrored <addon>-conn is always kuso's to remove. The source Secret is
+	// removed only when kuso created it from --set (label external-source=
+	// true) — one the user adopted with --secret is theirs and stays.
+	if cr.Spec.External != nil && cr.Spec.External.SecretName != "" {
+		s.deleteExternalSecrets(ctx, ns, fqn, cr.Spec.External.SecretName)
+	}
 	// Data-safety trail: deleting the addon does NOT delete its data —
 	// the StatefulSet's volumeClaimTemplates PVCs are RETAINED. That's
 	// inherent to k8s (an STS never garbage-collects its VCT-spawned
@@ -1770,7 +1780,7 @@ func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string,
 // Useful when the source Secret rotated (managed Postgres password
 // rotation, S3 creds rolled). Returns ErrNotFound if the addon
 // doesn't exist or isn't external.
-func (s *Service) ResyncExternal(ctx context.Context, project, name string) error {
+func (s *Service) ResyncExternal(ctx context.Context, project, name string, credentials map[string]string) error {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
 	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
@@ -1787,5 +1797,57 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string) erro
 	if addon.Spec.External == nil || addon.Spec.External.SecretName == "" {
 		return fmt.Errorf("%w: addon %s/%s is not external", ErrInvalid, project, name)
 	}
+	if len(credentials) > 0 {
+		if err := s.updateExternalSecret(ctx, ns, addon.Spec.External.SecretName, credentials); err != nil {
+			return err
+		}
+	}
 	return s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External, addon.Spec.Pooler)
+}
+
+// updateExternalSecret merges rotated credentials into the addon's source
+// Secret. Only a Secret kuso created (external-source=true) is written — one
+// the user adopted with --secret is theirs, and rewriting it behind their
+// back would be the wrong kind of helpful.
+//
+// Merge, not replace: a password rotation touches DATABASE_URL and
+// POSTGRES_PASSWORD, and the caller shouldn't have to re-supply every other
+// key to avoid losing it.
+func (s *Service) updateExternalSecret(ctx context.Context, ns, secretName string, credentials map[string]string) error {
+	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("%w: source secret %s: %w", ErrInvalid, secretName, err)
+	}
+	if src.Labels["kuso.sislelabs.com/external-source"] != "true" {
+		return fmt.Errorf("%w: secret %q was supplied by you, not created by kuso — update it yourself, then run resync-external without --set", ErrInvalid, secretName)
+	}
+	if src.Data == nil {
+		src.Data = map[string][]byte{}
+	}
+	for k, v := range credentials {
+		src.Data[k] = []byte(v)
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, src, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update source secret: %w", err)
+	}
+	return nil
+}
+
+// deleteExternalSecrets removes the credential Secrets an external addon
+// leaves behind. Best-effort: the CR is already gone, and a leftover Secret
+// is a hygiene problem, not a reason to fail the delete.
+func (s *Service) deleteExternalSecrets(ctx context.Context, ns, addonFQN, sourceName string) {
+	del := func(name string) {
+		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			slog.Default().Warn("external addon delete: leftover credential secret", "secret", name, "err", err)
+		}
+	}
+	del(connSecretName(addonFQN))
+	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, sourceName, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	if src.Labels["kuso.sislelabs.com/external-source"] == "true" {
+		del(sourceName)
+	}
 }
