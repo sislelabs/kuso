@@ -1420,7 +1420,7 @@ func main() {
 			serverstate.RegisterLoop(serverstate.LoopIncidents, incidents.HeartbeatInterval)
 			goSafe(logger, "incidents", func() { incidentMgr.Run(workCtx) })
 			serverstate.RegisterLoop(serverstate.LoopAutoRemediate, 5*time.Minute)
-			rhScanner := &reconcilehealth.Scanner{Kube: kubeClient}
+			rhScanner := &reconcilehealth.Scanner{Kube: kubeClient, Images: builds.NewInClusterImageDeleter(builds.RegistryHost), RegistryHost: builds.RegistryHost}
 			rhRemediator := &remediate.Remediator{Kube: kubeClient, Audit: auditSvc}
 			remediateLoop := remediate.NewScannerLoop(
 				rhScanner, rhRemediator, *namespace, 5*time.Minute,

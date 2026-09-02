@@ -70,6 +70,10 @@ const (
 	// doesn't plumb barman, so unless the operator configured CNPG
 	// backups out-of-band the schedule is a false comfort.
 	KindBackupUnrendered Kind = "backup_unrendered"
+	// KindImageMissingFromRegistry: a live env points at an image tag the
+	// in-cluster registry no longer has. The pod keeps running only while its
+	// node caches the layers; the next reschedule fails ImagePullBackOff.
+	KindImageMissingFromRegistry Kind = "image_missing_from_registry"
 )
 
 // Action is the machine-readable remediation the auto-remediator knows
@@ -127,6 +131,18 @@ type Report struct {
 // only on the kube client's list methods, so it's cheaply testable.
 type Scanner struct {
 	Kube *kube.Client
+	// Images probes the in-cluster registry for an env's image tag. nil
+	// (tests, early boot) skips the check rather than guessing.
+	Images ImageProber
+	// RegistryHost is the in-cluster registry's host:port; only images there
+	// are probed — a runtime=image service pulling from ghcr.io is the user's.
+	RegistryHost string
+}
+
+// ImageProber is the slice of builds.ImageDeleter the scanner needs: a HEAD
+// on the manifest. "" digest with nil error means the tag does not exist.
+type ImageProber interface {
+	ResolveTagDigest(ctx context.Context, repo, tag string) (string, error)
 }
 
 // Scan walks every addon + environment in the home namespace AND every
@@ -189,6 +205,8 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		for i := range envs {
 			rep.Scanned++
 			if iss, ok := ClassifyEnv(&envs[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else if iss, ok := ClassifyEnvImage(ctx, s.Images, s.RegistryHost, &envs[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
 			} else {
 				rep.Healthy++
@@ -451,3 +469,45 @@ func asString(v any) string {
 
 // truthy reports whether a k8s condition status string is True.
 func truthy(s string) bool { return strings.EqualFold(s, "True") }
+
+// ClassifyEnvImage asks the registry whether the image a live env runs still
+// exists. CR conditions can't tell: five staging envs ran for weeks on tags
+// the sweep had removed, kept alive only by node-local layer caches, while
+// health reported them fine. The first reschedule failed ImagePullBackOff.
+//
+// Only the in-cluster registry is probed (RegistryHost prefix); a probe error
+// is a transient, not evidence, and nil prober is a no-op.
+func ClassifyEnvImage(ctx context.Context, prober ImageProber, registryHost string, e *kube.KusoEnvironment) (Issue, bool) {
+	if prober == nil || registryHost == "" || e == nil || e.Spec.Image == nil || e.Spec.Image.Tag == "" {
+		return Issue{}, false
+	}
+	repo := e.Spec.Image.Repository
+	if !strings.HasPrefix(repo, registryHost+"/") {
+		return Issue{}, false
+	}
+	repo = strings.TrimPrefix(repo, registryHost+"/")
+	digest, err := prober.ResolveTagDigest(ctx, repo, e.Spec.Image.Tag)
+	if err != nil || digest != "" {
+		return Issue{}, false
+	}
+	project := e.Spec.Project
+	if project == "" {
+		project = e.Labels["kuso.sislelabs.com/project"]
+	}
+	service := strings.TrimPrefix(e.Spec.Service, project+"-")
+	fix := fmt.Sprintf("kuso redeploy %s %s", project, service)
+	if e.Spec.Branch != "" {
+		fix += " --branch " + e.Spec.Branch
+	}
+	return Issue{
+		Resource:  e.Name,
+		Namespace: e.Namespace,
+		Project:   project,
+		Type:      "environment",
+		Kind:      KindImageMissingFromRegistry,
+		Severity:  SeverityCritical,
+		Summary:   "This environment's image no longer exists in the registry — it keeps running only while its node still caches the layers; the next reschedule fails ImagePullBackOff.",
+		Detail:    fmt.Sprintf("spec.image %s:%s is not in %s (HEAD manifest 404). The image was most likely removed by build/image retention after the env stopped rebuilding.", repo, e.Spec.Image.Tag, registryHost),
+		Fix:       fix + "  — rebuilds the image and promotes it to this environment",
+	}, true
+}
