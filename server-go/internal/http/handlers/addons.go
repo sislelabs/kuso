@@ -52,6 +52,7 @@ func apiv1CreateAddonToDomain(in apiv1.CreateAddonRequest) addons.CreateAddonReq
 			ExternalBackend: in.Pooler.ExternalBackend,
 			Host:            in.Pooler.Host,
 			Port:            in.Pooler.Port,
+			PoolSize:        in.Pooler.PoolSize,
 		}
 	}
 	return out
@@ -81,6 +82,7 @@ func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonReq
 			ExternalBackend: &in.Pooler.ExternalBackend,
 			Host:            &in.Pooler.Host,
 			Port:            &in.Pooler.Port,
+			PoolSize:        &in.Pooler.PoolSize,
 		}
 	}
 	return out

@@ -750,6 +750,7 @@ type AddonPoolerPatch struct {
 	ExternalBackend *bool   `json:"externalBackend,omitempty"`
 	Host            *string `json:"host,omitempty"`
 	Port            *int32  `json:"port,omitempty"`
+	PoolSize        *int32  `json:"poolSize,omitempty"`
 }
 
 // cronExpr5 matches a standard five-field cron expression. Mirrors
@@ -928,6 +929,9 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 			}
 			if req.Pooler.Port != nil {
 				addon.Spec.Pooler.Port = *req.Pooler.Port
+			}
+			if req.Pooler.PoolSize != nil {
+				addon.Spec.Pooler.PoolSize = *req.Pooler.PoolSize
 			}
 		}
 		return nil

@@ -1029,7 +1029,12 @@ provider caps connections — set pooler.externalBackend on the addon after
 creating it:
 
   kuso api PATCH projects/<p>/addons/<name> --data '{"pooler":{"enabled":true,
-    "externalBackend":true,"host":"<provider-host>","port":5432}}'
+    "externalBackend":true,"host":"<provider-host>","port":5432,"poolSize":6}}'
+
+poolSize is PgBouncer's default_pool_size (backend connections per user/db).
+Keep it below what the provider actually leaves you: PlanetScale's 25-slot
+plan spends ~13 on its own roles, so 6 is safe there. 0 = the in-cluster
+default of 25.
 
 The pooler needs POSTGRES_USER and POSTGRES_PASSWORD among the keys above to
 build its userlist.`,

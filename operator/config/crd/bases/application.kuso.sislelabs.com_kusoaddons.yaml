@@ -142,6 +142,14 @@ spec:
                       description: >-
                         External provider port. Defaults to 5432 when unset.
                         Ignored for in-cluster backends.
+                    poolSize:
+                      type: integer
+                      format: int32
+                      description: >-
+                        PgBouncer default_pool_size (backend connections per
+                        user/db). 0 = chart default of 25. Set below an
+                        external provider's usable connection cap; the reserve
+                        pool scales with it.
                 publicTCP:
                   type: object
                   description: >-

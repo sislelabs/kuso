@@ -89,8 +89,15 @@ data:
     {{- end }}
     pool_mode = transaction
     max_client_conn = 200
-    default_pool_size = 25
-    reserve_pool_size = 5
+    {{- /* default_pool_size is backend connections per user/db. 25 suits the
+           in-cluster chart (max_connections=100); a managed backend with a
+           small cap needs pooler.poolSize, or the pooler itself exhausts the
+           provider under load. The reserve pool is ON TOP of the default, so
+           it scales down with it (poolSize/4, min 1) rather than pushing the
+           total back over the cap. */}}
+    {{- $poolSize := int (default 25 .Values.pooler.poolSize) }}
+    default_pool_size = {{ $poolSize }}
+    reserve_pool_size = {{ if .Values.pooler.poolSize }}{{ max 1 (div $poolSize 4) }}{{ else }}5{{ end }}
     reserve_pool_timeout = 3
     query_wait_timeout = 30
     server_idle_timeout = 600

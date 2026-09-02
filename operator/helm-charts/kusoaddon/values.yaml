@@ -136,6 +136,11 @@ pooler:
   # own Service.
   host: ""
   port: 5432
+  # poolSize: PgBouncer default_pool_size — backend connections per user/db.
+  # Leave unset (25) for the in-cluster chart. Set it below the provider's
+  # usable connection cap for an external backend (PlanetScale's plan leaves
+  # ~9 after its own roles: 6 is safe). The reserve pool scales with it.
+  poolSize: 0
   # serverTLSSslmode: PgBouncer's TLS mode toward an external backend.
   # "require" encrypts without verifying the chain, which is what managed
   # providers expect from a pooler. Ignored for in-cluster backends.
