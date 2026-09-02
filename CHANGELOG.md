@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.17] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(health): wire the registry probe into the scanner that serves the report ([cf67012](https://github.com/sislelabs/kuso/commit/cf67012a85b0f80950083c1333d56f8d80a64cb3))
+
 ## [0.25.16] — 2026-09-02
 
 ### ✨ Features
@@ -345,11 +350,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(runs): stop managed-secret placeholders shadowing the real secret ([b01c5f8](https://github.com/sislelabs/kuso/commit/b01c5f81e712ae0662de5f63099928b5b0248c4b))
-
-## [0.21.13] — 2026-07-26
-
-### 🐛 Bug Fixes
-- Fix(builds): match cron spec.service on both FQN and short name ([71bf10e](https://github.com/sislelabs/kuso/commit/71bf10e6d4c4b2fcdcaaca4852952416c7b48879))
 
 
 ---

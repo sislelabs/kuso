@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.13] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(builds): match cron spec.service on both FQN and short name ([71bf10e](https://github.com/sislelabs/kuso/commit/71bf10e6d4c4b2fcdcaaca4852952416c7b48879))
+
 ## [0.21.12] — 2026-07-26
 
 ### 🐛 Bug Fixes
