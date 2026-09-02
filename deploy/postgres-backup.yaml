@@ -34,11 +34,13 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-postgres-backup
 spec:
-  # Daily at 03:00 UTC. RPO of a day for the control plane: it is
-  # config/metadata (projects, services, env vars, build history), not
-  # user data, and it changes in bursts around deploys rather than
-  # continuously. Addon backups cover the actual databases.
-  schedule: "0 3 * * *"
+  # Daily at 23:00 UTC — late enough to catch a full day's changes,
+  # and clear of the addon backup window (01:00-06:00) so the two
+  # don't contend for disk and network. RPO of a day for the control
+  # plane: it is config/metadata (projects, services, env vars, build
+  # history), not user data, and it changes in bursts around deploys
+  # rather than continuously. Addon backups cover the actual databases.
+  schedule: "0 23 * * *"
   # Don't pile up Jobs if a previous one is still running (e.g. slow
   # S3 upload during a network blip).
   concurrencyPolicy: Forbid
