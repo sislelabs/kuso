@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -489,7 +490,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		return nil, fmt.Errorf("%w: kind %q does not support ha=true — no HA template exists; set ha=false or use an HA-capable kind (postgres, redis, nats)", ErrInvalid, req.Kind)
 	}
 	if req.External != nil && req.External.SecretName != "" {
-		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External); err != nil {
+		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External, req.Pooler); err != nil {
 			return nil, fmt.Errorf("%w: mirror external secret: %w", ErrInvalid, err)
 		}
 	}
@@ -1657,7 +1658,47 @@ func (s *Service) createExternalSecret(ctx context.Context, ns, addonFQN string,
 // We mirror (rather than reference) on purpose: the conn secret name
 // is a kuso convention, while the source secret name is whatever the
 // user already had. Mirroring keeps RefreshEnvSecrets one path.
-func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string, ext *kube.KusoAddonExternal) error {
+// poolerConnKeys returns the POOLER_* entries for an addon whose pooler is
+// enabled, or nil.
+//
+// The in-cluster chart renders these into the conn secret (postgres.yaml), but
+// that block is gated on (not .Values.external), so external addons published
+// none — an app could not write ${{ <addon>.POOLER_URL }} even with a pooler
+// running and serving traffic, leaving an inline DSN (password in plaintext env)
+// as the only way to reach it.
+//
+// The pooler is kuso's own Service regardless of where the backend lives, so
+// its address derives from the addon name; the credentials come from the
+// mirrored secret. sslmode=disable because PgBouncer serves plaintext on :6432
+// — a require/verify DSN fails TLS negotiation against it, same as the
+// in-cluster POOLER_URL.
+func poolerConnKeys(addonFQN string, pooler *kube.KusoAddonPooler, data map[string][]byte) map[string][]byte {
+	if pooler == nil || !pooler.Enabled {
+		return nil
+	}
+	user := string(data["POSTGRES_USER"])
+	pass := string(data["POSTGRES_PASSWORD"])
+	db := string(data["POSTGRES_DB"])
+	if user == "" || pass == "" {
+		// Without credentials the URL would be unusable; the host/port keys
+		// alone are still worth publishing.
+		return map[string][]byte{
+			"POOLER_HOST": []byte(addonFQN + "-pooler"),
+			"POOLER_PORT": []byte("6432"),
+		}
+	}
+	if db == "" {
+		db = "postgres"
+	}
+	return map[string][]byte{
+		"POOLER_HOST": []byte(addonFQN + "-pooler"),
+		"POOLER_PORT": []byte("6432"),
+		"POOLER_URL": []byte(fmt.Sprintf("postgres://%s:%s@%s-pooler:6432/%s?sslmode=disable",
+			user, url.QueryEscape(pass), addonFQN, db)),
+	}
+}
+
+func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string, ext *kube.KusoAddonExternal, pooler *kube.KusoAddonPooler) error {
 	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, ext.SecretName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("source secret %s/%s: %w", ns, ext.SecretName, err)
@@ -1673,6 +1714,12 @@ func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string,
 				data[k] = v
 			}
 		}
+	}
+	// Publish the pooler's address alongside the mirrored credentials so
+	// ${{ <addon>.POOLER_URL }} resolves, matching what the in-cluster chart
+	// renders for a native addon.
+	for k, v := range poolerConnKeys(addonFQN, pooler, data) {
+		data[k] = v
 	}
 	connName := connSecretName(addonFQN)
 	dst := &corev1.Secret{
@@ -1729,5 +1776,5 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string) erro
 	if addon.Spec.External == nil || addon.Spec.External.SecretName == "" {
 		return fmt.Errorf("%w: addon %s/%s is not external", ErrInvalid, project, name)
 	}
-	return s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External)
+	return s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External, addon.Spec.Pooler)
 }
