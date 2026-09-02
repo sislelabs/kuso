@@ -98,9 +98,14 @@ var envListCmd = &cobra.Command{
 			resp *resty.Response
 			err  error
 		)
-		if envRevealFlag {
+		switch {
+		case envScopeFlag != "":
+			// One environment's own overrides (what `env set --env` writes).
+			// Without this, an override was invisible in every view.
+			resp, err = api.GetEnvScoped(args[0], args[1], envScopeFlag)
+		case envRevealFlag:
 			resp, err = api.GetEnvRevealed(args[0], args[1])
-		} else {
+		default:
 			resp, err = api.GetEnv(args[0], args[1])
 		}
 		if err := checkRespErr(resp, err); err != nil {
@@ -594,6 +599,7 @@ func init() {
 	// envRevealFlag doc). Asks the server to resolve every value to plaintext;
 	// requires the admin/secrets:read role or values stay masked.
 	envListCmd.Flags().BoolVarP(&envRevealFlag, "reveal", "r", false, "resolve and print real values (requires secrets:read/admin)")
+	envListCmd.Flags().StringVar(&envScopeFlag, "env", "", "show ONE environment's overrides (what `env set --env` wrote) instead of the service-level vars")
 	// --env on set/unset: write a per-env override instead of a service-level
 	// var. Empty keeps the service-level (all-envs) behavior.
 	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")

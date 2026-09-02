@@ -57,6 +57,7 @@ type ProjectsAPI interface {
 	SetEnvValue(ctx context.Context, project, service, name, value string) (*kube.KusoService, error)
 	UnsetEnvVar(ctx context.Context, project, service, name string) (*kube.KusoService, error)
 	GetEnv(ctx context.Context, project, service string) ([]projects.EnvVar, error)
+	GetEnvScoped(ctx context.Context, project, service, envName string) ([]projects.EnvVar, error)
 	// GetEnvRevealed resolves every value to plaintext (admin-only reveal).
 	GetEnvRevealed(ctx context.Context, project, service string) ([]projects.EnvVar, error)
 	SetEnvWithOpts(ctx context.Context, project, service string, envVars []projects.EnvVar, opts projects.SetEnvOpts) error
