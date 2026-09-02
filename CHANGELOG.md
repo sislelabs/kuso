@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.26] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
+
 ## [0.25.25] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -320,13 +325,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(settings): gate Cluster nodes behind admin like the server does ([a8b90de](https://github.com/sislelabs/kuso/commit/a8b90de1b155f8241df7569aa38bff165f43d7c6))
 - Fix(auth): log in by email, and actually auto-login after invite redeem ([5fb7194](https://github.com/sislelabs/kuso/commit/5fb719421c1aea1bdf0bbef505571cafc12e6ed3))
-
-## [0.22.6] — 2026-08-01
-
-### ✨ Features
-- Feat(web): GitLab repo support in the service Source settings ([5a22cd4](https://github.com/sislelabs/kuso/commit/5a22cd49e067253cf177ee96bba240865bd6c90e))
-- Feat(cli): connect a service to a GitLab repo + token ([cb6837c](https://github.com/sislelabs/kuso/commit/cb6837c56eb2763d745e8688b044e4ebb23ba51f))
-- Feat(gitlab): build services from private GitLab repos (server) ([cf8d2db](https://github.com/sislelabs/kuso/commit/cf8d2db84fae52c9ef49cc0938bd6f3c6e37ef93))
 
 
 ---

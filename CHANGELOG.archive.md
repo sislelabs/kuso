@@ -2,6 +2,13 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.6] — 2026-08-01
+
+### ✨ Features
+- Feat(web): GitLab repo support in the service Source settings ([5a22cd4](https://github.com/sislelabs/kuso/commit/5a22cd49e067253cf177ee96bba240865bd6c90e))
+- Feat(cli): connect a service to a GitLab repo + token ([cb6837c](https://github.com/sislelabs/kuso/commit/cb6837c56eb2763d745e8688b044e4ebb23ba51f))
+- Feat(gitlab): build services from private GitLab repos (server) ([cf8d2db](https://github.com/sislelabs/kuso/commit/cf8d2db84fae52c9ef49cc0938bd6f3c6e37ef93))
+
 ## [0.22.5] — 2026-07-31
 
 ### 🐛 Bug Fixes
