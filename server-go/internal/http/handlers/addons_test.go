@@ -27,3 +27,23 @@ func TestApiv1AddonMappingsCarryTLS(t *testing.T) {
 		t.Errorf("update mapping invented a tls patch: %v", *empty.TLS)
 	}
 }
+
+// Same bug class as TLS above: dropping externalCredentials here made the API
+// create the source Secret and then write an addon with no spec.external at
+// all — the CLI reported success, but the addon wasn't external, so
+// resync-external rejected it and no service ever saw the credentials.
+func TestApiv1AddonMappingsCarryExternalCredentials(t *testing.T) {
+	create := apiv1CreateAddonToDomain(apiv1.CreateAddonRequest{
+		Name: "psdb", Kind: "postgres",
+		ExternalCredentials: map[string]string{
+			"DATABASE_URL": "postgres://u:p@ext.example.com:5432/db",
+		},
+	})
+	if got := create.ExternalCredentials["DATABASE_URL"]; got != "postgres://u:p@ext.example.com:5432/db" {
+		t.Errorf("create mapping externalCredentials = %v, want the DSN to survive", create.ExternalCredentials)
+	}
+
+	if bare := apiv1CreateAddonToDomain(apiv1.CreateAddonRequest{Name: "pg", Kind: "postgres"}); len(bare.ExternalCredentials) != 0 {
+		t.Errorf("create mapping invented credentials: %v", bare.ExternalCredentials)
+	}
+}

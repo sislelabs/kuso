@@ -1366,7 +1366,8 @@ func init() {
 	addonConnectExternalCmd.Flags().StringSliceVar(&addonExtKeys, "key", nil, "optional key allowlist; repeat or comma-separate. Empty = mirror every key")
 	addonConnectExternalCmd.Flags().StringArrayVar(&addonExtCreds, "set", nil, "KEY=VALUE credential for a Secret kuso creates; repeat per key. Must include the kind's connection URL (DATABASE_URL, REDIS_URL, ...)")
 	_ = addonConnectExternalCmd.MarkFlagRequired("kind")
-	_ = addonConnectExternalCmd.MarkFlagRequired("secret")
+	// --secret is no longer required on its own: --set is the other way to
+	// supply credentials. RunE enforces that exactly one of them is given.
 
 	projectAddonCmd.AddCommand(addonResyncExternalCmd)
 
