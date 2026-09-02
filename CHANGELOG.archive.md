@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.2] — 2026-07-29
+
+### 🐛 Bug Fixes
+- Fix(netpol): remove registry-ingress policy — it breaks kubelet pulls under kube-router ([1c462f6](https://github.com/sislelabs/kuso/commit/1c462f6440569abe26767eea7a69ea1d12c01024))
+
 ## [0.22.1] — 2026-07-29
 
 ### 🐛 Bug Fixes
