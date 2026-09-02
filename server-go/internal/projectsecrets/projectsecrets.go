@@ -31,6 +31,13 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+	// OnKeyRemoved runs after a key is deleted from the shared Secret and
+	// BEFORE dependent envs are rolled. Wired to
+	// projects.DropSharedKeyFromServices: a subscribed key is a non-optional
+	// secretKeyRef on the pod, so rolling without first removing the
+	// subscription fails every dependent pod with CreateContainerConfigError.
+	// nil = legacy roll-only behaviour (tests).
+	OnKeyRemoved func(ctx context.Context, project, key string) error
 }
 
 func New(k *kube.Client, namespace string) *Service {
@@ -195,6 +202,11 @@ func (s *Service) UnsetKey(ctx context.Context, project, key string) (rolled int
 	}
 	if missing {
 		return 0, nil
+	}
+	if s.OnKeyRemoved != nil {
+		if err := s.OnKeyRemoved(ctx, project, key); err != nil {
+			return 0, fmt.Errorf("unsubscribe services from %q: %w", key, err)
+		}
 	}
 	return s.rollDependentEnvs(ctx, project, ns, name)
 }

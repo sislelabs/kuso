@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
+	"slices"
 )
 
 // ListSubscribableSharedKeys returns the union of keys available
@@ -160,4 +161,47 @@ func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string,
 		return updated, nil
 	}
 	return updated, nil
+}
+
+// DropSharedKeyFromServices unsubscribes every service in the project from a
+// shared-secret key and re-propagates their envs. Called when the key is
+// deleted from the shared Secret.
+//
+// A subscribed key reaches the pod as a NON-optional secretKeyRef. Deleting the
+// key and then rolling the pods — which is what `shared-secret unset` did —
+// left that ref on the env CR, so the forced restart failed with
+// CreateContainerConfigError and the unset itself took the service down.
+// Removing the subscription first means the propagation drops the ref before
+// any pod restarts. Returns the number of services that were subscribed.
+func (s *Service) DropSharedKeyFromServices(ctx context.Context, project, key string) (int, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return 0, err
+	}
+	services, err := s.ListServices(ctx, project)
+	if err != nil {
+		return 0, fmt.Errorf("list services: %w", err)
+	}
+	touched := 0
+	for i := range services {
+		svc := &services[i]
+		if !slices.Contains(svc.Spec.SharedEnvKeys, key) {
+			continue
+		}
+		short := strings.TrimPrefix(svc.Name, project+"-")
+		mu := s.lockService(project, short)
+		updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, short, func(live *kube.KusoService) error {
+			live.Spec.SharedEnvKeys = slices.DeleteFunc(slices.Clone(live.Spec.SharedEnvKeys), func(k string) bool { return k == key })
+			return nil
+		})
+		mu.Unlock()
+		if err != nil {
+			return touched, fmt.Errorf("unsubscribe %s from %s: %w", short, key, err)
+		}
+		if err := s.propagateChangedToEnvs(ctx, ns, project, short, updated, changedFields{EnvVars: true}); err != nil {
+			return touched, fmt.Errorf("propagate %s: %w", short, err)
+		}
+		touched++
+	}
+	return touched, nil
 }
