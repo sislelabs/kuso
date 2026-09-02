@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.4] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(env-group): stamp service label on cloned service (prod-canvas duplicate) ([92a0144](https://github.com/sislelabs/kuso/commit/92a0144f52a40b6608af92bf37604c6297d9a95e))
+
 ## [0.21.3] — 2026-07-24
 
 ### 🐛 Bug Fixes

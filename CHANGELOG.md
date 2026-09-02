@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.8] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): expose the pods backing an addon ([3a02231](https://github.com/sislelabs/kuso/commit/3a02231120999fe7b0a1736aaad8485b9398ab41))
+
 ## [0.25.7] — 2026-09-02
 
 ### ✨ Features
@@ -336,11 +341,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(canvas): filter services by env-group so clone services don't duplicate in prod ([f0ad352](https://github.com/sislelabs/kuso/commit/f0ad3529274dfc7467f770ae45ce4deaa364c484))
-
-## [0.21.4] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(env-group): stamp service label on cloned service (prod-canvas duplicate) ([92a0144](https://github.com/sislelabs/kuso/commit/92a0144f52a40b6608af92bf37604c6297d9a95e))
 
 
 ---
