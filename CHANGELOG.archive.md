@@ -2,6 +2,15 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.1] — 2026-07-29
+
+### 🐛 Bug Fixes
+- Fix(netpol): allow kuso-buildkitd ingress to the registry ([6660541](https://github.com/sislelabs/kuso/commit/66605410977a5ff956fe73923b2762838174dca2))
+- Fix(namespaces): retry the kuso-server RoleBinding stamp on transient failure ([af1bfcd](https://github.com/sislelabs/kuso/commit/af1bfcd9a50a7e9b355436a28994376eac612944))
+
+### 🧪 Tests
+- Test(netpol): guard that registry ingress allows kuso-buildkitd ([1f33bfb](https://github.com/sislelabs/kuso/commit/1f33bfbe13558a5db86f86cfb54e1dbb051596a0))
+
 ## [0.22.0] — 2026-07-29
 
 ### Other

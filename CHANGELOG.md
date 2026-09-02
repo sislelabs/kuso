@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.21] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): pooler.poolSize caps PgBouncer's backend pool ([5134a9a](https://github.com/sislelabs/kuso/commit/5134a9a944d9ba797be178c217ee266a81b89cd9))
+
+### 🐛 Bug Fixes
+- Fix(cli): shared-secret unset reports the services it unsubscribed ([accedc0](https://github.com/sislelabs/kuso/commit/accedc06791a5ccadaa5c15edf3fd63a291cee1f))
+
 ## [0.25.20] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -325,15 +333,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(netpol): remove registry-ingress policy — it breaks kubelet pulls under kube-router ([1c462f6](https://github.com/sislelabs/kuso/commit/1c462f6440569abe26767eea7a69ea1d12c01024))
-
-## [0.22.1] — 2026-07-29
-
-### 🐛 Bug Fixes
-- Fix(netpol): allow kuso-buildkitd ingress to the registry ([6660541](https://github.com/sislelabs/kuso/commit/66605410977a5ff956fe73923b2762838174dca2))
-- Fix(namespaces): retry the kuso-server RoleBinding stamp on transient failure ([af1bfcd](https://github.com/sislelabs/kuso/commit/af1bfcd9a50a7e9b355436a28994376eac612944))
-
-### 🧪 Tests
-- Test(netpol): guard that registry ingress allows kuso-buildkitd ([1f33bfb](https://github.com/sislelabs/kuso/commit/1f33bfbe13558a5db86f86cfb54e1dbb051596a0))
 
 
 ---
