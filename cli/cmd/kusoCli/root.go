@@ -5,6 +5,7 @@
 package kusoCli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -123,6 +124,22 @@ func Execute() {
 		apiURL = v
 	}
 	api.Init(apiURL, tok)
+	version.ServerVersion = func() (string, error) {
+		if tok == "" {
+			return "", fmt.Errorf("not logged in; run 'kuso login'")
+		}
+		resp, err := api.RawGet("/api/system/version")
+		if err := checkRespErr(resp, err); err != nil {
+			return "", err
+		}
+		var v struct {
+			Current string `json:"current"`
+		}
+		if err := json.Unmarshal(resp.Body(), &v); err != nil {
+			return "", fmt.Errorf("decode version: %w", err)
+		}
+		return v.Current + " (" + apiURL + ")", nil
+	}
 
 	for _, cmd := range rootCmd.Commands() {
 		setUsageTemplate(cmd)

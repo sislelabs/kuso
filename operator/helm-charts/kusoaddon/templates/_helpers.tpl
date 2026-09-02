@@ -279,7 +279,13 @@ auth_user = kuso
 auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
 {{- end }}
 pool_mode = transaction
-max_client_conn = 200
+{{- /* Client side of the pooler. Each app pod holds a pgx/libpq pool of its
+       own (25 is a common default), so 200 was exhausted by ~8 pods and the
+       9th got "no more connections allowed" — a scaling wall unrelated to the
+       backend's cap. Client connections are cheap (a few KB each, fd limit is
+       1M); the backend pool (default_pool_size) is what actually protects the
+       database. */}}
+max_client_conn = 1000
 {{- /* default_pool_size is backend connections per user/db. 25 suits the
        in-cluster chart (max_connections=100); a managed backend with a
        small cap needs pooler.poolSize, or the pooler itself exhausts the
