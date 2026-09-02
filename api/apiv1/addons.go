@@ -35,6 +35,11 @@ type CreateAddonRequest struct {
 	// connections. Go pgx/libpq accept the self-signed chain;
 	// default node-postgres rejects it, so this is opt-in.
 	TLS string `json:"tls,omitempty"`
+	// ExternalCredentials creates the Secret that External would otherwise
+	// have to already exist, so connecting a managed database doesn't
+	// require producing a namespace Secret out of band. Mutually exclusive
+	// with External. Must include the kind's connection-URL key.
+	ExternalCredentials map[string]string `json:"externalCredentials,omitempty"`
 }
 
 // AddonExternalSpec tells the server to skip provisioning and
