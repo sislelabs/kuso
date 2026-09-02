@@ -236,3 +236,76 @@ via raw helm if they need a bigger broker.
 768
 {{- end -}}
 {{- end -}}
+
+{{- /*
+   PgBouncer ini for the opt-in single-node pooler (postgres-pooler.yaml).
+   Context: dict Values, authQuery, externalPooled, backendHost, backendPort.
+   The ini is a named template so the ConfigMap body and the pod-template
+   checksum below render from one source. pgbouncer.ini is a subPath mount,
+   which kubelet never refreshes; without the checksum a config change
+   (poolSize, host, TLS mode) updates the ConfigMap and nothing else, and the
+   running PgBouncer keeps its old settings until an unrelated restart.
+*/ -}}
+{{- define "kusoaddon.poolerIni" -}}
+[databases]
+; * matches whatever dbname the client connects with, routed at the
+; backend below — the addon's own StatefulSet Service, or the external
+; provider's host when pooler.externalBackend is set.
+* = host={{ .backendHost }} port={{ .backendPort }}
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+; scram-sha-256, not md5: the addon's stock postgres:16 image
+; defaults password_encryption=scram-sha-256, so the role's
+; stored verifier is SCRAM. An md5 auth_type + md5 userlist
+; can't authenticate to a SCRAM backend — pgbouncer rejects the
+; backend login with "wrong password type". With auth_type
+; scram-sha-256 and a plaintext-password userlist, pgbouncer
+; runs SCRAM both to the client and to the backend.
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+{{- if .authQuery }}
+; auth_query mode (shared cluster-DB pooler): the backend serves many
+; per-project roles created/rotated dynamically as projects opt in, so a
+; static userlist can't keep up. PgBouncer logs in as auth_user (the
+; instance superuser, the only entry in userlist.txt) and looks up each
+; client's SCRAM verifier from pg_shadow via auth_query — no pooler
+; restart when a new per-project role appears.
+; auth_user is the postgres chart's fixed superuser "kuso" (same
+; literal the chart stamps into the conn secret + pg_isready probe);
+; it's the sole entry rendered into userlist.txt below.
+auth_user = kuso
+auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
+{{- end }}
+pool_mode = transaction
+max_client_conn = 200
+{{- /* default_pool_size is backend connections per user/db. 25 suits the
+       in-cluster chart (max_connections=100); a managed backend with a
+       small cap needs pooler.poolSize, or the pooler itself exhausts the
+       provider under load. The reserve pool is ON TOP of the default, so
+       it scales down with it (poolSize/4, min 1) rather than pushing the
+       total back over the cap. */}}
+{{- $poolSize := int (default 25 .Values.pooler.poolSize) }}
+default_pool_size = {{ $poolSize }}
+reserve_pool_size = {{ if .Values.pooler.poolSize }}{{ max 1 (div $poolSize 4) }}{{ else }}5{{ end }}
+reserve_pool_timeout = 3
+query_wait_timeout = 30
+server_idle_timeout = 600
+log_connections = 0
+log_disconnections = 0
+log_pooler_errors = 1
+; transaction pooling rejects any startup parameter it doesn't know, and
+; pgx sends both timeouts on every connect — without these, every Go app
+; dies with "unsupported startup parameter" the moment it's pooled. The
+; values still apply; clients that care set them per session instead.
+ignore_startup_parameters = extra_float_digits,search_path,statement_timeout,idle_in_transaction_session_timeout
+admin_users = kuso
+{{- if .externalPooled }}
+; Managed providers (PlanetScale, Neon, RDS) refuse unencrypted backend
+; logins. PgBouncer connects in plaintext unless told otherwise, so this
+; is required, not a hardening extra. The in-cluster path leaves it unset:
+; that backend serves plaintext by default (see spec.tls on the addon).
+server_tls_sslmode = {{ default "require" .Values.pooler.serverTLSSslmode }}
+{{- end }}
+{{- end -}}
