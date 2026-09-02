@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"kuso/server/internal/kube"
 )
 
@@ -382,4 +383,42 @@ func envCRNameFor(project, service, envName string) string {
 	// double it.
 	short := strings.TrimPrefix(service, project+"-")
 	return fmt.Sprintf("%s-%s-%s", project, short, envName)
+}
+
+// GetEnvScoped returns the env-var overrides set on ONE environment — what
+// `kuso env set --env <name>` writes. The service-level list (GetEnv) never
+// showed these, so an override was invisible in both the CLI and the
+// Variables tab; the only way to learn it existed was to read the pod.
+//
+// The result is the env CR's own spec.envVars: overrides only, not the merged
+// effective set, so a caller can tell "this env pins X" apart from "X comes
+// from the service".
+func (s *Service) GetEnvScoped(ctx context.Context, project, service, envName string) ([]EnvVar, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, service, envName))
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: environment %q", ErrNotFound, envName)
+		}
+		return nil, fmt.Errorf("get env: %w", err)
+	}
+	// Tenancy: the resolved env must belong to (project, service). Mirrors
+	// ListPods — without it a viewer of project A could read project B's
+	// overrides by passing a fully-qualified env name.
+	fqn := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqn = project + "-" + service
+	}
+	if (envCR.Spec.Project != "" && envCR.Spec.Project != project) ||
+		(envCR.Spec.Service != "" && envCR.Spec.Service != fqn) {
+		return nil, fmt.Errorf("%w: environment %q", ErrNotFound, envName)
+	}
+	out := make([]EnvVar, 0, len(envCR.Spec.EnvVars))
+	for _, e := range envCR.Spec.EnvVars {
+		out = append(out, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
+	}
+	return out, nil
 }

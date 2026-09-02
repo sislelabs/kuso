@@ -1327,7 +1327,15 @@ func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 	reveal := r.URL.Query().Get("reveal") == "true" && canReadSecrets
 	var out []projects.EnvVar
 	var err error
-	if reveal {
+	// ?env=<name> returns that ONE environment's overrides (what
+	// `kuso env set --env` writes) instead of the service-level list. These
+	// were previously unreadable anywhere, so an override could pin a value
+	// on production that no view showed. Overrides are returned as stored:
+	// literals as-is, refs as their target; reveal isn't applied here.
+	if envName := r.URL.Query().Get("env"); envName != "" {
+		out, err = h.Svc.GetEnvScoped(ctx, project, chi.URLParam(r, "service"), envName)
+		reveal = false
+	} else if reveal {
 		out, err = h.Svc.GetEnvRevealed(ctx, project, chi.URLParam(r, "service"))
 	} else {
 		out, err = h.Svc.GetEnv(ctx, project, chi.URLParam(r, "service"))

@@ -182,6 +182,42 @@ spec:
             matchLabels:
               {{- include "kusoenvironment.selectorLabels" . | nindent 14 }}
       {{- end }}
+      {{- /*
+        wait-for-addons: TCP-wait on whichever of DATABASE_URL / REDIS_URL /
+        NATS_URL the pod carries before the app starts. The release Job has
+        had this since v0.16; app pods didn't, so a pod scheduled before its
+        addon (or its pooler, or the CNI policy for a fresh pod) accepted
+        connections crashed on first ping, restarted once or twice, and
+        fired a "pod crashed" alert on every deploy. It exits 0 immediately
+        when none of those vars is set, so a service with no datastore pays
+        one busybox start (~1s). The script is a verbatim copy of the Go
+        const — see kusoenvironment.waitForAddonsScript in _helpers.tpl.
+      */}}
+      initContainers:
+        - name: wait-for-addons
+          image: busybox:1.36
+          command: ["sh", "-c", {{ include "kusoenvironment.waitForAddonsScript" . | quote }}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          {{- /* No resources on purpose: an app container with autoscaling
+                 off carries no requests, so the pod is BestEffort. Giving
+                 only the init a request would flip every such pod to
+                 Burstable and change its eviction order — a scheduling
+                 side effect nobody asked for from a 1s nc loop. */}}
+          {{- with .Values.envVars }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFromSecrets }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . | quote }}
+                optional: true
+            {{- end }}
+          {{- end }}
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"

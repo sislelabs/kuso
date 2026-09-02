@@ -48,4 +48,3 @@ func TestFail_UnknownErrorStaysInternal(t *testing.T) {
 		t.Errorf("body = %q leaked an internal error to the client", body)
 	}
 }
-

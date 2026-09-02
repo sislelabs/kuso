@@ -38,6 +38,12 @@ func (k *KusoClient) GetEnv(project, service string) (*resty.Response, error) {
 // value to plaintext (managed secrets + addon/shared secretKeyRefs) when the
 // caller holds secrets:read (admin). A non-admin asking to reveal still gets
 // masked values back; the server decides. Used by `kuso env list --reveal`.
+// GetEnvScoped returns one environment's own overrides — what
+// `kuso env set --env <name>` writes — rather than the service-level list.
+func (k *KusoClient) GetEnvScoped(project, service, env string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env?env=" + esc(env))
+}
+
 func (k *KusoClient) GetEnvRevealed(project, service string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env?reveal=true")
 }

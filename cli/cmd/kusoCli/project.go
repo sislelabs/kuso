@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/go-resty/resty/v2"
+	"github.com/olekukonko/tablewriter"
 	"kuso/pkg/kusoApi"
 )
 
@@ -1086,19 +1088,111 @@ build its userlist.`,
 	},
 }
 
+var addonResyncCreds []string
+
 var addonResyncExternalCmd = &cobra.Command{
 	Use:   "resync-external <project> <name>",
-	Short: "Re-mirror an external addon's source Secret into its <name>-conn (run after upstream credentials rotated)",
-	Args:  cobra.ExactArgs(2),
+	Short: "Re-mirror an external addon's source Secret into its <name>-conn; --set rotates credentials first",
+	Long: `Re-mirror an external addon's credentials into its <name>-conn secret.
+
+Plain (no flags): re-copies whatever the source Secret holds now. Use this
+after you updated a Secret you own (one adopted with --secret).
+
+--set KEY=VALUE: merge rotated values into the source Secret first, then
+re-mirror. Only works on a Secret kuso created (connect-external --set); a
+Secret you adopted is yours to edit. Keys not mentioned are kept, so a
+password rotation is just the two keys that changed:
+
+  kuso project addon resync-external tickero psdb \
+    --set DATABASE_URL='postgres://user:NEWPW@host/db?sslmode=require' \
+    --set POSTGRES_PASSWORD=NEWPW
+
+Running pods keep the old value until they restart; kuso rolls subscribed
+services after the mirror updates.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.ResyncExternalAddon(args[0], args[1])
+		creds := map[string]string{}
+		for _, kv := range addonResyncCreds {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				return fmt.Errorf("--set %q is not KEY=VALUE", kv)
+			}
+			creds[k] = v
+		}
+		var (
+			resp *resty.Response
+			err  error
+		)
+		if len(creds) > 0 {
+			resp, err = api.ResyncExternalAddonWith(args[0], args[1], creds)
+		} else {
+			resp, err = api.ResyncExternalAddon(args[0], args[1])
+		}
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("resync: %w", err)
 		}
-		fmt.Printf("addon %s/%s conn secret refreshed\n", args[0], args[1])
+		if len(creds) > 0 {
+			fmt.Printf("addon %s/%s: %d credential key(s) rotated, conn secret refreshed\n", args[0], args[1], len(creds))
+		} else {
+			fmt.Printf("addon %s/%s conn secret refreshed\n", args[0], args[1])
+		}
+		return nil
+	},
+}
+
+var addonPodsCmd = &cobra.Command{
+	Use:   "pods <project> <name>",
+	Short: "List the pods backing an addon and why any of them isn't serving",
+	Long: `Show the pods an addon renders — the datastore itself and any sidecar
+such as the PgBouncer pooler — with phase, readiness, restarts and, for a pod
+that isn't serving, the scheduler's or kubelet's own reason.
+
+Zero pods is a real answer: it means the chart rendered a workload that has
+no running pod, which is exactly the state behind "the Service resolves but
+refuses connections".`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.AddonPods(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("addon pods: %w", err)
+		}
+		var data struct {
+			Namespace string `json:"namespace"`
+			Pods      []struct {
+				Name      string `json:"name"`
+				Ready     bool   `json:"ready"`
+				Phase     string `json:"phase"`
+				Component string `json:"component"`
+				Restarts  int32  `json:"restarts"`
+				Message   string `json:"message"`
+			} `json:"pods"`
+		}
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		if outputFormat == "json" {
+			return jsonOut(data)
+		}
+		if len(data.Pods) == 0 {
+			fmt.Printf("addon %s/%s: no pods — the chart rendered a workload nothing is running\n", args[0], args[1])
+			return nil
+		}
+		t := tablewriter.NewWriter(os.Stdout)
+		t.SetHeader([]string{"POD", "COMPONENT", "PHASE", "READY", "RESTARTS", "PROBLEM"})
+		for _, p := range data.Pods {
+			ready := "no"
+			if p.Ready {
+				ready = "yes"
+			}
+			t.Append([]string{p.Name, p.Component, p.Phase, ready, fmt.Sprint(p.Restarts), p.Message})
+		}
+		t.Render()
 		return nil
 	},
 }
@@ -1361,6 +1455,8 @@ func init() {
 	addonDeleteCmd.Flags().BoolVarP(&addonDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	projectAddonCmd.AddCommand(addonConnectExternalCmd)
+	projectAddonCmd.AddCommand(addonPodsCmd)
+	addonResyncExternalCmd.Flags().StringArrayVar(&addonResyncCreds, "set", nil, "KEY=VALUE credential to rotate before re-mirroring; repeat per key (kuso-created Secrets only)")
 	addonConnectExternalCmd.Flags().StringVar(&addonExtKind, "kind", "", "addon kind (required: postgres, redis, ...)")
 	addonConnectExternalCmd.Flags().StringVar(&addonExtSecret, "secret", "", "name of an existing kube Secret to mirror as the addon's conn secret (or use --set)")
 	addonConnectExternalCmd.Flags().StringSliceVar(&addonExtKeys, "key", nil, "optional key allowlist; repeat or comma-separate. Empty = mirror every key")
