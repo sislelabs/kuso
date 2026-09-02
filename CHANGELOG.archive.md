@@ -2,6 +2,27 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.0] — 2026-07-29
+
+### Other
+- Merge: adversarial-review remediation (3 CRIT + 9 HIGH + 9 MED) ([67db39e](https://github.com/sislelabs/kuso/commit/67db39e14e5a9abb68474ede421b685be509783e))
+
+### 🐛 Bug Fixes
+- Fix(crons,scaledown): http-cron suspend, finalizer sweep, optional secretRef, deadline, in-flight guard ([e6cd6c2](https://github.com/sislelabs/kuso/commit/e6cd6c223d39a4090cdb72483b4b64c9dca5652c))
+- Fix: import secret-ref rewrite, empty-branch promotion, SSRF/timeout nits, tlsSecret omitempty ([79c4b18](https://github.com/sislelabs/kuso/commit/79c4b189e6d69a4a2028f393249fd6931204088f))
+- Fix(updater,db): upgrade-path rollback, migration lock, CRD dry-run, minServer ([e089cb3](https://github.com/sislelabs/kuso/commit/e089cb3ed655814ac2268392aa3b15de5484fa86))
+- Fix(web): error boundaries, modal focus trap, real diffs, silent-mutation toasts ([3670e98](https://github.com/sislelabs/kuso/commit/3670e989f16cef6bf42a78243355a9c84ae0c9f7))
+- Fix(delete): reclaim secrets and PVCs so recreated resources don't inherit data ([34fa11e](https://github.com/sislelabs/kuso/commit/34fa11edf2f589bc569084543e47e3d0edd14f8f))
+- Fix(sleep): repair idle detection, replica restore, and excludePaths routing ([5edabd1](https://github.com/sislelabs/kuso/commit/5edabd10ba20ce4e8a1d973bfea3da39c2bf330a))
+- Fix(builds): keep production secrets out of preview builds; scope gh tokens ([e0623f4](https://github.com/sislelabs/kuso/commit/e0623f4d27d275841fe23f1c0fa5d65c1cefa6a4))
+- Fix(projects): isolate new projects in their own namespace by default ([d9acda3](https://github.com/sislelabs/kuso/commit/d9acda3f28a9834fe9e58b5efdbc6a9c8728c451))
+- Fix(mcp,compose): confirm gates, log-injection fencing, import fidelity ([cb5471f](https://github.com/sislelabs/kuso/commit/cb5471f4b9c5002b3ef71e6ebf304f2798840a05))
+- Fix(crons): validate onFailure secretRef ownership ([506a157](https://github.com/sislelabs/kuso/commit/506a157634627a40b8e6a20eafff44193d8acc03))
+- Fix(sql-browser): close COPY TO PROGRAM RCE on addon Postgres ([f74bd53](https://github.com/sislelabs/kuso/commit/f74bd53cbe1c75e5b02cfdbacf2f56787a507111))
+- Fix(netpol): lock down the in-cluster registry to build pods only ([6b40cf8](https://github.com/sislelabs/kuso/commit/6b40cf887fe7c69c0b551330238d913eafc6e22c))
+- Fix(rbac): stop custom roles forging instance-admin permissions ([4401a2b](https://github.com/sislelabs/kuso/commit/4401a2b830b39953aea8516c808023c0867c6e0e))
+- Fix(cli): confirmDestructive fails closed in non-interactive contexts ([2156dae](https://github.com/sislelabs/kuso/commit/2156daef1f4d9d29e4f8d7774d08461ed3cc408e))
+
 ## [0.21.15] — 2026-07-26
 
 ### 🐛 Bug Fixes
