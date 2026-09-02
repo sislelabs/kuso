@@ -104,6 +104,10 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	// Pin the addon's StatefulSet to a subset of nodes. PUT replaces
 	// the placement struct verbatim; pass empty {} to clear.
 	r.Put("/api/projects/{project}/addons/{addon}/placement", h.Placement)
+	// Pods backing the addon — the datastore and any sidecar the chart
+	// renders (the pooler). Answers "the Service resolves but refuses
+	// connections", which is otherwise undiagnosable without cluster access.
+	r.Get("/api/projects/{project}/addons/{addon}/pods", h.Pods)
 	r.Get("/api/projects/{project}/addons/{addon}/secret-keys", h.SecretKeys)
 	// Plaintext connection values. Gated behind secrets:read at the
 	// router level so the autocomplete (keys-only) endpoint above
@@ -342,6 +346,21 @@ func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Svc.List(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list addons", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *AddonsHandler) Pods(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	out, err := h.Svc.ListPods(ctx, project, chi.URLParam(r, "addon"))
+	if err != nil {
+		h.fail(w, "list addon pods", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
