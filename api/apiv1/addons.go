@@ -94,4 +94,10 @@ type UpdateAddonBackup struct {
 // deliberately means "turn the pooler off", not "unspecified".
 type AddonPoolerSpec struct {
 	Enabled bool `json:"enabled"`
+	// ExternalBackend pools an external managed database instead of an
+	// in-cluster pod. Needs Host (and Port, default 5432) — the chart has
+	// no other way to learn the provider's endpoint.
+	ExternalBackend bool   `json:"externalBackend,omitempty"`
+	Host            string `json:"host,omitempty"`
+	Port            int32  `json:"port,omitempty"`
 }
