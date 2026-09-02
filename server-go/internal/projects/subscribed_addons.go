@@ -11,6 +11,7 @@ package projects
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 
@@ -70,7 +71,53 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 			out = append(out, sec)
 		}
 	}
+
+	// Add subscribed conns the env isn't mounting yet. Without this the
+	// function was remove-only: unsubscribing worked, subscribing was a no-op
+	// on envFromSecrets, so a service could sit in spec.subscribedAddons —
+	// with a ✓ in `kuso project addon list` — while none of the addon's keys
+	// ever reached the pod. The tell was a release hook reading $DIRECT_URL
+	// and getting an empty value.
+	//
+	// Only project-scoped conns are added. Env-scoped clones are NOT: a
+	// clone belongs to one env, and adding "<project>-<addon>-<scope>-conn"
+	// here would mount one env's private database onto another. Clones are
+	// preserved above (connMatchesSubscribedBase) and re-asserted by
+	// addons.refreshEnvSecrets from the addon's env label.
+	//
+	// An env that has its own clone must not also get the project-level
+	// source: envFrom is last-source-wins on duplicate keys, so mounting
+	// both can silently resolve the env to production.
+	for _, conn := range projectAddons {
+		if !allow[conn] || slices.Contains(out, conn) {
+			continue
+		}
+		if hasCloneOf(out, conn, project) {
+			continue
+		}
+		out = append(out, conn)
+	}
 	return out
+}
+
+// hasCloneOf reports whether mounted already contains an env-scoped clone of
+// the project-level conn secret — "<project>-db-staging-conn" for "<project>-db-conn".
+// The clone replaces its source, so the source must not be added alongside it.
+func hasCloneOf(mounted []string, projectConn, project string) bool {
+	base := strings.TrimSuffix(projectConn, "-conn")
+	if base == projectConn {
+		return false
+	}
+	for _, sec := range mounted {
+		if sec == projectConn {
+			continue
+		}
+		// A clone is "<base>-<scope>-conn": same prefix, longer, still a conn.
+		if strings.HasPrefix(sec, base+"-") && strings.HasSuffix(sec, "-conn") {
+			return true
+		}
+	}
+	return false
 }
 
 // connMatchesSubscribedBase reports whether a "<project>-<addon>[-<scope>]-conn"
