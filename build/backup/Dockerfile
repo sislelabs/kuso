@@ -8,6 +8,13 @@
 #   - mariadb-client + mongodb-tools deferred until v2 — postgres
 #     covers the addon kinds users actually self-host today
 #
+# postgresql18-client: pg_dump refuses a server NEWER than itself
+# ("aborting because of server version mismatch"), so the client must
+# track the newest Postgres an addon can point at — external managed
+# providers (PlanetScale ships 18) as well as the in-cluster charts.
+# A newer pg_dump dumps older servers fine, so 18 covers 15/16/17 too.
+# alpine:3.23 is the first release that packages it.
+#
 # Pinned to alpine:3.21 because alpine:3.20 packages aws-cli 2.15.57,
 # which crashes inside its s3errormsg customisation when talking to
 # any non-AWS S3 endpoint that returns an error format aws-cli's
@@ -17,13 +24,13 @@
 # the spurious "argument of type NoneType is not iterable" abort.
 #
 # Built + pushed by `make backup-image`.
-FROM alpine:3.21
+FROM alpine:3.23
 
 RUN apk add --no-cache \
       bash \
       ca-certificates \
       aws-cli \
-      postgresql16-client \
+      postgresql18-client \
       redis \
       mongodb-tools \
       mysql-client \
