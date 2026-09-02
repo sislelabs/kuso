@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.27] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
+
 ## [0.25.26] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -319,12 +324,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(nav): hide the Cluster nodes pill from non-admins ([e793407](https://github.com/sislelabs/kuso/commit/e79340733f0618733d43d886a178b2c4e2f67e56))
-
-## [0.22.7] — 2026-08-01
-
-### 🐛 Bug Fixes
-- Fix(settings): gate Cluster nodes behind admin like the server does ([a8b90de](https://github.com/sislelabs/kuso/commit/a8b90de1b155f8241df7569aa38bff165f43d7c6))
-- Fix(auth): log in by email, and actually auto-login after invite redeem ([5fb7194](https://github.com/sislelabs/kuso/commit/5fb719421c1aea1bdf0bbef505571cafc12e6ed3))
 
 
 ---

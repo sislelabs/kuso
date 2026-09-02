@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.7] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(settings): gate Cluster nodes behind admin like the server does ([a8b90de](https://github.com/sislelabs/kuso/commit/a8b90de1b155f8241df7569aa38bff165f43d7c6))
+- Fix(auth): log in by email, and actually auto-login after invite redeem ([5fb7194](https://github.com/sislelabs/kuso/commit/5fb719421c1aea1bdf0bbef505571cafc12e6ed3))
+
 ## [0.22.6] — 2026-08-01
 
 ### ✨ Features
