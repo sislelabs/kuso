@@ -63,7 +63,11 @@ spec:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              # Always: the tag is :latest, and IfNotPresent pins each node to
+              # whatever it pulled first. After the pg_dump-18 image shipped,
+              # two of three nodes kept running the cached pg16 one and the
+              # external backup still failed there. A HEAD per run is cheap.
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
@@ -257,7 +261,7 @@ spec:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
@@ -394,7 +398,7 @@ spec:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
@@ -532,7 +536,7 @@ spec:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
@@ -662,7 +666,7 @@ spec:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
@@ -793,7 +797,7 @@ spec:
             - name: sync
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: [sh, -c]
               args:
                 - |
