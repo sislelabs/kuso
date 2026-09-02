@@ -824,6 +824,23 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	// making provisioning fail, which turned a provisioning error into a
 	// privilege upgrade. A broken SQL browser is a far better outcome
 	// than a superuser console.
+	sslMode := browserSSLMode(cr)
+
+	// External managed database: the supplied role is already NOSUPERUSER and
+	// cannot CREATE ROLE, so there is nothing to drop privileges from and no
+	// way to provision kuso_browser. Connect as the supplied user.
+	if !needsBrowserRole(cr) {
+		db, err := pgOpenAsWithSSL(host, port, user, pass, dbName, sslMode)
+		if err != nil {
+			return nil, err
+		}
+		if perr := db.PingContext(ctx); perr != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("SQL browser unavailable: could not connect to the external database: %w", perr)
+		}
+		return db, nil
+	}
+
 	if err := h.Addons.EnsureBrowserRole(ctx, ns, releaseName, user, pass, dbName); err != nil {
 		h.Logger.Error("sql-browser: could not provision NOSUPERUSER role — refusing to open the browser as the addon superuser",
 			"project", project, "addon", addon, "err", err)
@@ -831,7 +848,7 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 			addons.BrowserRole)
 	}
 
-	db, err := pgOpenAs(host, port, addons.BrowserRole, pass, dbName)
+	db, err := pgOpenAsWithSSL(host, port, addons.BrowserRole, pass, dbName, sslMode)
 	if err != nil {
 		return nil, err
 	}
@@ -850,9 +867,53 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 // pgOpenAs opens a single-connection *sql.DB to the addon postgres as the
 // given user. One connection, no pooling: the request is short and we'd
 // rather spend a fresh handshake than risk pool reuse across users.
+// needsBrowserRole reports whether the SQL browser must go through the
+// restricted kuso_browser role.
+//
+// It must, for every addon kuso provisions: the chart's `kuso` user is a
+// superuser on the stock postgres image, so a browser session could reach
+// COPY … TO PROGRAM and pg_read_file — shell execution inside the pod.
+//
+// An external managed database is the opposite case. The credentials kuso
+// holds are an ordinary login role with no superuser bit to abuse, and
+// providers withhold CREATEROLE, so provisioning cannot succeed. Keeping the
+// requirement there doesn't harden anything; it just makes the browser
+// permanently unavailable.
+func needsBrowserRole(addon *kube.KusoAddon) bool {
+	if addon == nil {
+		return true
+	}
+	ext := addon.Spec.External
+	return ext == nil || ext.SecretName == ""
+}
+
+// browserSSLMode picks the wire mode for a browser connection. The in-cluster
+// addon serves plaintext unless spec.tls=require; managed providers refuse
+// plaintext outright, so external always encrypts.
+func browserSSLMode(addon *kube.KusoAddon) string {
+	if addon == nil {
+		return "disable"
+	}
+	if !needsBrowserRole(addon) {
+		return "require"
+	}
+	if addon.Spec.TLS == "require" {
+		return "require"
+	}
+	return "disable"
+}
+
+func pgDSN(host, port, user, pass, dbName, sslMode string) string {
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host, port, user, pass, dbName, sslMode)
+}
+
 func pgOpenAs(host, port, user, pass, dbName string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-		host, port, user, pass, dbName)
+	return pgOpenAsWithSSL(host, port, user, pass, dbName, "disable")
+}
+
+func pgOpenAsWithSSL(host, port, user, pass, dbName, sslMode string) (*sql.DB, error) {
+	dsn := pgDSN(host, port, user, pass, dbName, sslMode)
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err

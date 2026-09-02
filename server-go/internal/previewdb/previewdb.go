@@ -164,6 +164,15 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 		if s.Labels[kube.LabelEnv] != "" {
 			continue
 		}
+		// Never clone an external addon. There is no StatefulSet to copy and
+		// kuso can't create a database on a managed provider, so the "clone"
+		// would just be a second pointer at the SAME production database —
+		// a PR env writing to live data. Previews use a kuso-managed addon
+		// instead; a project that wants preview databases keeps a native
+		// postgres addon alongside its external one.
+		if s.Spec.External != nil && s.Spec.External.SecretName != "" {
+			continue
+		}
 		shortSrc := addons.ShortName(project, s.Name)
 		if isPreviewCloneName(shortSrc) {
 			continue
@@ -205,8 +214,8 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 				// encrypted DB connections in production crashloop in
 				// previews (previews inherit ENVIRONMENT via shared
 				// secrets).
-				TLS: s.Spec.TLS,
-				ExtraLabels:      extraLabels,
+				TLS:         s.Spec.TLS,
+				ExtraLabels: extraLabels,
 			}); err != nil {
 				c.Logger.Warn("env addon clone create", "addon", cloneShort, "scope", envScope, "err", err)
 				return nil, fmt.Errorf("provision %s for env %s: %w", cloneShort, envScope, err)

@@ -80,17 +80,33 @@ export function SettingsTab({
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
+  // An external addon is a pointer to someone else's database. kuso runs no
+  // pod for it, so everything that configures a pod — placement, public TCP,
+  // password resync, engine version, tier, storage, HA — has nothing to act
+  // on. Showing those controls implies kuso can change a managed provider's
+  // database, which it can't.
+  const isExternal = !!cr?.spec.external?.secretName;
+
   return (
     <div className="space-y-4 p-5">
-      <ConfigurationSection project={project} addon={addon} cr={cr} />
-      <PlacementSection project={project} addon={addon} cr={cr} />
-      <PublicTCPSection project={project} addon={addon} cr={cr} />
-      <RepairPasswordSection project={project} addon={addon} cr={cr} />
+      {isExternal ? (
+        <ExternalSummarySection cr={cr} />
+      ) : (
+        <>
+          <ConfigurationSection project={project} addon={addon} cr={cr} />
+          <PlacementSection project={project} addon={addon} cr={cr} />
+          <PublicTCPSection project={project} addon={addon} cr={cr} />
+          <RepairPasswordSection project={project} addon={addon} cr={cr} />
+        </>
+      )}
       <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
-        <h4 className="text-sm font-semibold">Delete addon</h4>
+        <h4 className="text-sm font-semibold">
+          {isExternal ? "Disconnect addon" : "Delete addon"}
+        </h4>
         <p className="mt-1 text-xs text-[var(--text-secondary)]">
-          Removes the addon and tears down the Helm release. The PVC + data go with it
-          unless your storage class retains it. There is no undo.
+          {isExternal
+            ? "Removes the addon and the connection secret kuso mirrors from it. The external database and its data are untouched — kuso only ever held credentials. Services in this project lose the connection immediately."
+            : "Removes the addon and tears down the Helm release. The PVC + data go with it unless your storage class retains it. There is no undo."}
         </p>
         {!confirming ? (
           <Button
@@ -99,7 +115,8 @@ export function SettingsTab({
             className="mt-3"
             onClick={() => setConfirming(true)}
           >
-            <Trash2 className="h-3.5 w-3.5" /> Delete addon
+            <Trash2 className="h-3.5 w-3.5" />{" "}
+            {isExternal ? "Disconnect addon" : "Delete addon"}
           </Button>
         ) : (
           <div className="mt-3 space-y-2">
@@ -426,6 +443,58 @@ function ConfigurationSection({
           {save.isPending ? "Saving…" : "Save configuration"}
         </Button>
       </footer>
+    </section>
+  );
+}
+
+// ExternalSummarySection is the whole settings surface for an addon that
+// points at a database kuso does not run. There is nothing to configure —
+// engine version, tier, storage, HA and placement all belong to the provider —
+// so the panel states what kuso actually does here instead of showing a column
+// of disabled inputs that imply otherwise.
+function ExternalSummarySection({
+  cr,
+}: {
+  cr?: import("@/types/projects").KusoAddon;
+}) {
+  const secretName = cr?.spec.external?.secretName ?? "";
+  const pooler = cr?.spec.pooler;
+  const pooled = !!pooler?.enabled && !!pooler?.externalBackend;
+
+  return (
+    <section className="space-y-3 rounded-md border border-[var(--border-subtle)] p-4">
+      <div>
+        <h4 className="text-sm font-semibold">Externally managed</h4>
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+          This addon points at a database kuso doesn&apos;t run. Engine version,
+          tier, storage, backups and availability are all managed by the
+          provider — kuso only stores the credentials and hands them to every
+          subscribed service.
+        </p>
+      </div>
+
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 font-mono text-[11px]">
+        <dt className="text-[var(--text-tertiary)]">credentials</dt>
+        <dd className="truncate">{secretName || "—"}</dd>
+        <dt className="text-[var(--text-tertiary)]">pooling</dt>
+        <dd>
+          {pooled ? (
+            <>
+              PgBouncer → {pooler?.host}:{pooler?.port ?? 5432}
+            </>
+          ) : (
+            "direct (no pooler)"
+          )}
+        </dd>
+      </dl>
+
+      <p className="text-xs text-[var(--text-secondary)]">
+        Rotated the password upstream? Re-mirror it with{" "}
+        <code className="font-mono text-[11px]">
+          kuso project addon resync-external
+        </code>
+        .
+      </p>
     </section>
   );
 }
