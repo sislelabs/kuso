@@ -1727,10 +1727,17 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 // returns ok=false for everything (which forces RewriteEnvVar to
 // reject unknown refs — desired strictness).
 func (s *Service) buildAddonResolver(ctx context.Context, project string) AddonRefResolver {
-	if s.AddonConnSecrets == nil {
+	// Prefer the resolution-only list: it includes env-scoped clones, so
+	// `${{ db-staging.DATABASE_URL }}` resolves. Mounting still uses the
+	// narrower AddonConnSecrets — see the field comments.
+	lookup := s.ReferenceableConnSecrets
+	if lookup == nil {
+		lookup = s.AddonConnSecrets
+	}
+	if lookup == nil {
 		return func(string) (string, bool) { return "", false }
 	}
-	secrets, err := s.AddonConnSecrets(ctx, project)
+	secrets, err := lookup(ctx, project)
 	if err != nil || len(secrets) == 0 {
 		return func(string) (string, bool) { return "", false }
 	}

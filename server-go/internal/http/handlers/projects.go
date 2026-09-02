@@ -1829,6 +1829,11 @@ func (h *ProjectsHandler) fail(w http.ResponseWriter, op string, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, projects.ErrCompositeVarRef):
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, projects.ErrUnknownVarRef):
+		// A ref naming something we can't resolve is the caller's typo, not a
+		// server fault. As a 500 the CLI printed "internal" while the message
+		// naming the failed ref stayed in the server log.
+		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		h.Logger.Error("projects handler", "op", op, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")

@@ -660,6 +660,7 @@ func main() {
 		// every existing project addon. Without this, services added
 		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
 		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
+		projSvc.ReferenceableConnSecrets = addonSvc.ReferenceableConnSecrets
 		// Same resolver on the crons service so its onFailure webhook
 		// secretRef ownership check (HIGH-1) can tell whether a signing-key
 		// secret name belongs to the cron's own project.
