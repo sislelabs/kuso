@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.28] — 2026-09-02
+
+### ✨ Features
+- Feat(cli): kuso version also prints the server's version ([b5f98c6](https://github.com/sislelabs/kuso/commit/b5f98c63df39ab6cda001e30e04df4f921a7397c))
+
+### 🐛 Bug Fixes
+- Fix(addon): pooler accepts 1000 client connections, not 200 ([f20ecac](https://github.com/sislelabs/kuso/commit/f20ecacc6ca0c6ce6f37083555a43606c4ca0ad7))
+
 ## [0.25.27] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -319,11 +327,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(projects): stop custom-namespace projects churning + un-deletable ([48a04e9](https://github.com/sislelabs/kuso/commit/48a04e9484f5ce9047d570c40be6e2fc0fa3302c))
-
-## [0.22.8] — 2026-08-01
-
-### 🐛 Bug Fixes
-- Fix(nav): hide the Cluster nodes pill from non-admins ([e793407](https://github.com/sislelabs/kuso/commit/e79340733f0618733d43d886a178b2c4e2f67e56))
 
 
 ---

@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.8] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(nav): hide the Cluster nodes pill from non-admins ([e793407](https://github.com/sislelabs/kuso/commit/e79340733f0618733d43d886a178b2c4e2f67e56))
+
 ## [0.22.7] — 2026-08-01
 
 ### 🐛 Bug Fixes
