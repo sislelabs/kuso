@@ -288,6 +288,31 @@ func (s *Service) ConnSecretsForProject(ctx context.Context, project string) ([]
 	return out, nil
 }
 
+// ReferenceableConnSecrets is ConnSecretsForProject plus env-scoped clones.
+//
+// The two are deliberately separate. ConnSecretsForProject seeds a new env's
+// envFromSecrets, so a clone appearing there mounts one env's private database
+// onto another — the leak TestConnSecretsForProject_ExcludesClones guards.
+// Name RESOLUTION has the opposite requirement: `${{ db-staging.DATABASE_URL }}`
+// names an addon that exists, and refusing it made it impossible to pin a
+// staging or preview env to its own database — the very thing clones are for —
+// leaving an inline DSN as the only option.
+//
+// Resolving a name never mounts anything; it only rewrites a ref the user
+// wrote by hand into the secretKeyRef it already meant.
+func (s *Service) ReferenceableConnSecrets(ctx context.Context, project string) ([]string, error) {
+	all, err := s.List(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(all))
+	for _, a := range all {
+		out = append(out, connSecretName(a.Name))
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
 // pgIdentRe matches an unquoted Postgres identifier: a letter or
 // underscore, then letters/digits/underscore/$, capped at Postgres's
 // 63-byte NAMEDATALEN limit. Deliberately ASCII-only — Postgres accepts

@@ -53,6 +53,13 @@ type Service struct {
 	// re-attach secrets manually after creating the addon.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 
+	// ReferenceableConnSecrets is AddonConnSecrets plus env-scoped clones,
+	// used ONLY to resolve a ${{ <addon>.<KEY> }} the user wrote by hand.
+	// Kept separate because AddonConnSecrets seeds new envs' envFromSecrets,
+	// where a clone would mount one env's private database onto another.
+	// Resolving a name mounts nothing. nil = fall back to AddonConnSecrets.
+	ReferenceableConnSecrets func(ctx context.Context, project string) ([]string, error)
+
 	// PreviewPROpen reports whether PR #prNumber is still open on any
 	// of the project's repos. SweepExpiredPreviews consults it before
 	// deleting a TTL-expired preview env: open PR → extend the TTL,
