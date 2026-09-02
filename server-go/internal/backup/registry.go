@@ -67,7 +67,22 @@ echo "==> piping into psql"
 # silently no-op'ing or duplicating rows. That is the intended, safe behaviour:
 # no partial writes, and the operator learns the target must be empty (or the
 # dump must be --clean).
-gunzip -c /tmp/dump.sql.gz | PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
+# The backup image ships a pg_dump newer than the oldest server an addon
+# may run (postgresql18-client, so pg_dump can dump newer managed
+# providers). A newer pg_dump writes session GUCs into the preamble that
+# an older server rejects — e.g. postgres 18 emits transaction_timeout,
+# which postgres 16 fails on with "unrecognized configuration parameter".
+# Under ON_ERROR_STOP=1 that aborts the entire restore three lines in,
+# so a perfectly good dump is unrestorable onto a supported server.
+#
+# These preamble lines are session settings, not data: dropping one costs
+# nothing (the dump still sets the ones the server knows), while keeping
+# it costs the whole restore. Strip only the known-forward-compatible
+# GUCs, by exact match, before the pipe. Anything else still reaches psql
+# and still aborts loudly under ON_ERROR_STOP.
+gunzip -c /tmp/dump.sql.gz \
+  | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
+  | PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
 echo "==> done"
 `
 }
