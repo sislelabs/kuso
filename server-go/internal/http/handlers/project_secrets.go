@@ -98,12 +98,12 @@ func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	rolled, err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key"))
+	res, err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key"))
 	if err != nil {
 		h.fail(w, "unset shared secret", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rolled": rolled})
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (h *ProjectSecretsHandler) fail(w http.ResponseWriter, op string, err error) {

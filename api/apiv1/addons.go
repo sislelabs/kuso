@@ -100,4 +100,6 @@ type AddonPoolerSpec struct {
 	ExternalBackend bool   `json:"externalBackend,omitempty"`
 	Host            string `json:"host,omitempty"`
 	Port            int32  `json:"port,omitempty"`
+	// PoolSize: PgBouncer default_pool_size; 0 = chart default (25).
+	PoolSize int32 `json:"poolSize,omitempty"`
 }

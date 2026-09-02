@@ -246,6 +246,8 @@ export interface KusoAddonSpec {
     externalBackend?: boolean;
     host?: string;
     port?: number;
+    // poolSize: PgBouncer default_pool_size; 0 = chart default (25).
+    poolSize?: number;
   };
   // publicTCP: opt-in public TCP endpoint for the addon. enabled is
   // the user toggle; port is server-allocated from the cluster's

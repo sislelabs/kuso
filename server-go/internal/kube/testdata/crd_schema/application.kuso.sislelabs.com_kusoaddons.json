@@ -141,6 +141,11 @@
                 "description": "Marks this as the shared pooler for the cluster (instance) Postgres, so the chart renders it even though the CR sets no useInstanceAddon.",
                 "type": "boolean"
               },
+              "poolSize": {
+                "description": "PgBouncer default_pool_size (backend connections per user/db). 0 = chart default of 25. Set below an external provider's usable connection cap; the reserve pool scales with it.",
+                "format": "int32",
+                "type": "integer"
+              },
               "port": {
                 "description": "External provider port. Defaults to 5432 when unset. Ignored for in-cluster backends.",
                 "format": "int32",

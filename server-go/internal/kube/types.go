@@ -912,6 +912,11 @@ type KusoAddonPooler struct {
 	// target the addon's own Service.
 	Host string `json:"host,omitempty"`
 	Port int32  `json:"port,omitempty"`
+	// PoolSize is PgBouncer's default_pool_size — backend connections per
+	// user/db. 0 = chart default (25, sized for the in-cluster chart). Set it
+	// below an external provider's usable cap, or the pooler itself exhausts
+	// the backend under load.
+	PoolSize int32 `json:"poolSize,omitempty"`
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.

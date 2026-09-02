@@ -663,10 +663,7 @@ func main() {
 		projSvc.ReferenceableConnSecrets = addonSvc.ReferenceableConnSecrets
 		// shared-secret unset must drop subscriptions before rolling pods —
 		// see projectsecrets.Service.OnKeyRemoved.
-		projectSecretSvc.OnKeyRemoved = func(ctx context.Context, project, key string) error {
-			_, err := projSvc.DropSharedKeyFromServices(ctx, project, key)
-			return err
-		}
+		projectSecretSvc.OnKeyRemoved = projSvc.DropSharedKeyFromServices
 		// Same resolver on the crons service so its onFailure webhook
 		// secretRef ownership check (HIGH-1) can tell whether a signing-key
 		// secret name belongs to the cron's own project.

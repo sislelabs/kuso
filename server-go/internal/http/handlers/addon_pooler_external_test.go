@@ -20,6 +20,7 @@ func TestApiv1AddonMappingsCarryPoolerExternalBackend(t *testing.T) {
 			ExternalBackend: true,
 			Host:            "aws-eu-central-1-1.pg.psdb.cloud",
 			Port:            5432,
+			PoolSize:        6,
 		},
 	})
 	if create.Pooler == nil {
@@ -33,6 +34,9 @@ func TestApiv1AddonMappingsCarryPoolerExternalBackend(t *testing.T) {
 	}
 	if create.Pooler.Port != 5432 {
 		t.Errorf("create mapping pooler.port = %d, want 5432", create.Pooler.Port)
+	}
+	if create.Pooler.PoolSize != 6 {
+		t.Errorf("create mapping dropped pooler.poolSize (got %d) — the pooler would keep the 25 default against a 9-connection backend", create.Pooler.PoolSize)
 	}
 }
 
