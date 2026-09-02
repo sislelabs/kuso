@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.13] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): subscribing an addon now mounts its conn secret ([44a0bf6](https://github.com/sislelabs/kuso/commit/44a0bf6ecd513e4eff2b3adc2f0c1a1fa9931d55))
+
 ## [0.25.12] — 2026-09-02
 
 ### 🐛 Bug Fixes
@@ -335,11 +340,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(operator,cli): placement panic, cron alerting, -o table, empty images ([78c7d66](https://github.com/sislelabs/kuso/commit/78c7d66a8bdee976bc20d0168acc59c2fd7e6c38))
-
-## [0.21.9] — 2026-07-25
-
-### 🐛 Bug Fixes
-- Fix(rbac): grant updater the RBAC it applies; stop shipping what it can't ([6535bb2](https://github.com/sislelabs/kuso/commit/6535bb2d14db1ecdf65def3302628bfbad9ea58b))
 
 
 ---

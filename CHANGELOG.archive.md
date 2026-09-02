@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.21.9] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(rbac): grant updater the RBAC it applies; stop shipping what it can't ([6535bb2](https://github.com/sislelabs/kuso/commit/6535bb2d14db1ecdf65def3302628bfbad9ea58b))
+
 ## [0.21.8] — 2026-07-25
 
 ### 🐛 Bug Fixes
