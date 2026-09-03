@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.10] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(rbac): let kuso-server bind the managed-ns ClusterRole in new namespaces ([ab86cac](https://github.com/sislelabs/kuso/commit/ab86cacbc7bb5620aaf934e43020550b345cefd1))
+
 ## [0.22.9] — 2026-08-01
 
 ### 🐛 Bug Fixes

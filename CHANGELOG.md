@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.30] — 2026-09-03
+
+### 🐛 Bug Fixes
+- Fix(envs): refuse an env GROUP name in DeleteEnvironment instead of reporting success ([1bb70a6](https://github.com/sislelabs/kuso/commit/1bb70a6976a639bc4a71e62e890fb17edc76af49))
+
 ## [0.25.29] — 2026-09-03
 
 ### 🐛 Bug Fixes
@@ -322,11 +327,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(namespaces): stamp project namespaces PSA baseline, not restricted ([30731a7](https://github.com/sislelabs/kuso/commit/30731a7c8710dfe8d5b7620e6fb17e990612e374))
-
-## [0.22.10] — 2026-08-01
-
-### 🐛 Bug Fixes
-- Fix(rbac): let kuso-server bind the managed-ns ClusterRole in new namespaces ([ab86cac](https://github.com/sislelabs/kuso/commit/ab86cacbc7bb5620aaf934e43020550b345cefd1))
 
 
 ---
