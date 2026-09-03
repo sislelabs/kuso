@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.9] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(projects): stop custom-namespace projects churning + un-deletable ([48a04e9](https://github.com/sislelabs/kuso/commit/48a04e9484f5ce9047d570c40be6e2fc0fa3302c))
+
 ## [0.22.8] — 2026-08-01
 
 ### 🐛 Bug Fixes

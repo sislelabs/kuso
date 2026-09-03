@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.25.29] — 2026-09-03
+
+### 🐛 Bug Fixes
+- Fix(previews): key the addon clone swap off the true source, not the clone name ([16bf9cc](https://github.com/sislelabs/kuso/commit/16bf9cc6eaa40ca72437a555dd969f27107fa0fc))
+
 ## [0.25.28] — 2026-09-02
 
 ### ✨ Features
@@ -322,11 +327,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(rbac): let kuso-server bind the managed-ns ClusterRole in new namespaces ([ab86cac](https://github.com/sislelabs/kuso/commit/ab86cacbc7bb5620aaf934e43020550b345cefd1))
-
-## [0.22.9] — 2026-08-01
-
-### 🐛 Bug Fixes
-- Fix(projects): stop custom-namespace projects churning + un-deletable ([48a04e9](https://github.com/sislelabs/kuso/commit/48a04e9484f5ce9047d570c40be6e2fc0fa3302c))
 
 
 ---
