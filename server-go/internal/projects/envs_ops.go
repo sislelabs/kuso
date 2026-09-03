@@ -286,11 +286,49 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		serviceFQN = e.Spec.Service
 		envKind = e.Spec.Kind
 	case apierrors.IsNotFound(gerr) || errors.Is(gerr, ErrNotFound):
-		// CR is gone — a prior run got past phase 2 but failed during
-		// cleanup. Reconstruct what we can from the env name. We can't
-		// verify Kind is "preview" any more, but a missing CR means
-		// the prior run already passed that check, so proceeding is
-		// safe.
+		// CR is gone. Two very different situations reach here:
+		//
+		//  1. A RESUMED delete — a prior run got past phase 2 but failed
+		//     during cleanup, leaving orphaned addons/PVCs/Secrets behind.
+		//     Proceeding is correct and is the whole reason this branch
+		//     exists.
+		//  2. A name that was never an env CR at all — most commonly an
+		//     env GROUP name ("preview-pr-52", which spans one CR per
+		//     service: tickero-api-pr-52, tickero-worker-pr-52, …). That
+		//     belongs to DeleteEnvGroup.
+		//
+		// Case 2 used to fall through here and report SUCCESS while
+		// deleting no env CR whatsoever — a false success on a destructive
+		// command. Worse, it still ran the label-based addon cascade, so
+		// `kuso project env delete tickero preview-pr-52` tore down the
+		// per-PR DATABASE (matched by the preview-pr label) while leaving
+		// all four env CRs running, then printed "deleted" (2026-09-03).
+		//
+		// Tell them apart by asking whether this name is an env GROUP: a
+		// group has one env CR PER SERVICE, all carrying the group's name
+		// in the env label. If a LIVE list finds any, the caller wants
+		// DeleteEnvGroup and this function would delete none of them while
+		// still cascading the addons — so refuse and say where to go.
+		//
+		// Name-shape heuristics are NOT enough here and were tried first:
+		// inferServiceFQNFromEnv("preview-pr-52") returns "preview" (a
+		// plausible-looking but nonexistent service), while a genuine
+		// resumed delete of "tickero-api-staging" returns "" because the
+		// scope isn't a recognised suffix. Both directions are wrong. The
+		// label list is the only authority.
+		groupSel := kube.LabelSelector(map[string]string{
+			kube.LabelProject: project,
+			kube.LabelEnv:     env,
+		})
+		if grp, lerr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			List(ctx, metav1.ListOptions{LabelSelector: groupSel}); lerr == nil && len(grp.Items) > 0 {
+			names := make([]string, 0, len(grp.Items))
+			for i := range grp.Items {
+				names = append(names, grp.Items[i].GetName())
+			}
+			return fmt.Errorf("%w: %q is an env GROUP spanning %d environments (%s) — delete it as a group, not as a single environment",
+				ErrInvalid, env, len(names), strings.Join(names, ", "))
+		}
 		serviceFQN = inferServiceFQNFromEnv(env)
 	default:
 		return gerr
