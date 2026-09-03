@@ -139,9 +139,9 @@ func TestIsZeroSHA(t *testing.T) {
 		"0000000000000000000000000000000000000000": true,  // SHA-1 delete marker
 		strings.Repeat("0", 64):                    true,  // SHA-256 delete marker
 		"1111111111111111111111111111111111111111": false, // real SHA
-		"abc1234":                                   false, // short SHA
-		"":                                          false, // empty
-		"000000":                                    false, // wrong length
+		"abc1234": false, // short SHA
+		"":        false, // empty
+		"000000":  false, // wrong length
 	}
 	for in, want := range cases {
 		if got := isZeroSHA(in); got != want {
@@ -1407,5 +1407,75 @@ func TestDispatch_PRFork_OptInAllowsUntrusted(t *testing.T) {
 	}
 	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-68"); err != nil {
 		t.Errorf("preview env should exist when allowForkPreviews=true: %v", err)
+	}
+}
+
+// TestUnclonedAddonConnRefs is the regression guard for the tickero PR-52
+// leak: the project's native "db" addon was replaced by an external "psdb"
+// while PR 52 was open, so the clone (tickero-db-pr-52) no longer matched
+// any live source. The name-derived swap map missed, the swap silently
+// no-op'd, and the preview's DATABASE_URL kept resolving to the PRODUCTION
+// pooler — surfacing days later as a crashloop, not as an error.
+//
+// A ref into a project addon-conn that the swap did NOT redirect must be
+// reported so the leak is greppable at the moment it happens.
+func TestUnclonedAddonConnRefs(t *testing.T) {
+	projectConns := []string{"tickero-psdb-conn", "tickero-cache-conn"}
+	// Only the cache got cloned; psdb (external, replaced the old db) did not.
+	cloneByOrigin := map[string]string{"tickero-cache-conn": "tickero-cache-pr-52-conn"}
+
+	vars := []kube.KusoEnvVar{
+		{Name: "DATABASE_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-psdb-conn", "key": "POOLER_URL"}}}, // leak
+		{Name: "DATABASE_READ_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-psdb-conn", "key": "POOLER_URL"}}}, // leak
+		{Name: "REDIS_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-cache-conn", "key": "URL"}}}, // swapped, fine
+		{Name: "API_KEY", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-api-secrets", "key": "K"}}}, // not an addon conn
+		{Name: "PLAIN", Value: "literal"},
+	}
+
+	got := unclonedAddonConnRefs(vars, projectConns, cloneByOrigin)
+	want := []string{"DATABASE_URL->tickero-psdb-conn", "DATABASE_READ_URL->tickero-psdb-conn"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// Fully-cloned env → nothing to report.
+	full := map[string]string{
+		"tickero-psdb-conn":  "tickero-psdb-pr-52-conn",
+		"tickero-cache-conn": "tickero-cache-pr-52-conn",
+	}
+	if leaked := unclonedAddonConnRefs(vars, projectConns, full); len(leaked) != 0 {
+		t.Errorf("fully-cloned env should report nothing, got %v", leaked)
+	}
+}
+
+// TestSwapPGCloneSecrets_UsesAuthoritativeMap pins the envFromSecrets swap
+// to the cloner-supplied map. The old implementation re-derived the origin
+// by stripping "-pr-<N>-conn" off the clone name, which produced the WRONG
+// origin ("tickero-db-conn") for a project whose source addon had been
+// renamed to psdb — and failed open, leaving production mounted.
+func TestSwapPGCloneSecrets_UsesAuthoritativeMap(t *testing.T) {
+	source := []string{"tickero-psdb-conn", "tickero-cache-conn", "tickero-api-secrets"}
+	// The clone is named after the OLD source ("db"), but the cloner reports
+	// the true pairing against the CURRENT source name.
+	m := map[string]string{"tickero-psdb-conn": "tickero-db-pr-52-conn"}
+
+	out := swapPGCloneSecrets(source, m)
+	if out[0] != "tickero-db-pr-52-conn" {
+		t.Errorf("psdb-conn not swapped to the clone: %q", out[0])
+	}
+	if out[1] != "tickero-cache-conn" || out[2] != "tickero-api-secrets" {
+		t.Errorf("non-cloned secrets must pass through verbatim: %v", out)
+	}
+	if got := swapPGCloneSecrets(source, nil); got[0] != "tickero-psdb-conn" {
+		t.Error("empty map should return the source list unchanged")
 	}
 }

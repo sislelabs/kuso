@@ -23,9 +23,9 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/metrics"
-	"kuso/server/internal/version"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/spec"
+	"kuso/server/internal/version"
 )
 
 // Dispatcher routes verified webhook events to their handlers. Wired
@@ -74,7 +74,7 @@ type Dispatcher struct {
 // Kept as an interface so the github package doesn't import
 // previewdb directly (and so tests can stub it).
 type PreviewDB interface {
-	EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, error)
+	EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error)
 	DeletePRAddons(ctx context.Context, project string, prNumber int) error
 }
 
@@ -868,9 +868,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// (DATABASE_READ_URL etc.), not just the envFromSecrets list.
 	var pgCloneMap map[string]string
 	if d.PreviewDB != nil {
-		if cloneSecrets, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
-			pgCloneMap = pgCloneByOrigin(cloneSecrets, pr.Number)
-			envFromSecrets = swapPGCloneSecrets(envFromSecrets, cloneSecrets, pr.Number)
+		// cloneByOrigin comes from the cloner, which held the source addon
+		// while creating the clone. Do NOT re-derive it from the clone's
+		// name — see EnsureEnvAddonsMapped for why that fails open.
+		if _, cloneByOrigin, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
+			pgCloneMap = cloneByOrigin
+			envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 		} else {
 			d.Logger.Warn("preview db clone", "project", proj.Name, "pr", pr.Number, "err", err)
 		}
@@ -998,6 +1001,18 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// Secret (e.g. DATABASE_READ_URL → tickero-db-conn) to the per-PR
 	// clone, so a preview reads from its OWN database, not prod.
 	mergedEnvVars = swapPGCloneSecretRefsInEnvVars(mergedEnvVars, pgCloneMap)
+	// A preview env-var still pointing at a project addon-conn AFTER the
+	// swap means the pod will read the PRODUCTION datastore. That is a
+	// data-integrity risk, not a cosmetic one: previews run seed and
+	// release (migration) Jobs against whatever DATABASE_URL resolves to.
+	// It happens whenever a source addon is renamed/replaced/deleted while
+	// a PR is open, or when the addon is external (never cloneable). The
+	// swap used to fail SILENTLY here; warn loudly with the exact keys so
+	// the leak is greppable instead of showing up as a crashloop days later.
+	if leaked := unclonedAddonConnRefs(mergedEnvVars, projectAddonConns, pgCloneMap); len(leaked) > 0 {
+		d.Logger.Warn("preview env-var still points at a project addon conn — preview will use PRODUCTION data",
+			"project", proj.Name, "service", short, "pr", pr.Number, "vars", leaked)
+	}
 
 	// Clone any per-env-scoped Secret values from the baseEnv into a
 	// per-PR Secret, with URL rewrites applied. This is the only way
@@ -1450,8 +1465,7 @@ func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonCon
 // matching "<source>-pr-<N>-conn" exists in cloneSecrets. Source
 // secrets without a clone (Redis etc.) are kept verbatim. The
 // result preserves the source ordering of envFromSecrets.
-func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []string {
-	m := pgCloneByOrigin(cloneSecrets, prNumber)
+func swapPGCloneSecrets(source []string, m map[string]string) []string {
 	if len(m) == 0 {
 		return source
 	}
@@ -1466,20 +1480,35 @@ func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []
 	return out
 }
 
-// pgCloneByOrigin maps each source addon-conn Secret name to its per-PR
-// clone ("<source>-conn" → "<source>-pr-<N>-conn"). cloneSecrets are the
-// "<source>-pr-<N>-conn" names returned by EnsurePRAddons.
-func pgCloneByOrigin(cloneSecrets []string, prNumber int) map[string]string {
-	prSuffix := fmt.Sprintf("-pr-%d-conn", prNumber)
-	m := map[string]string{}
-	for _, c := range cloneSecrets {
-		if !strings.HasSuffix(c, prSuffix) {
+// unclonedAddonConnRefs returns "NAME->secret" for every envVar whose
+// secretKeyRef still targets a PROJECT-level addon-conn Secret after the
+// clone swap has run. Such a var resolves to the project's shared
+// (production) datastore inside a preview pod.
+//
+// projectAddonConns is the set of project-level addon-conn Secret names;
+// cloneByOrigin is the successful swap map. A ref into projectAddonConns
+// that is not a swap KEY is one the swap could not redirect.
+func unclonedAddonConnRefs(vars []kube.KusoEnvVar, projectAddonConns []string, cloneByOrigin map[string]string) []string {
+	isProjectConn := make(map[string]bool, len(projectAddonConns))
+	for _, n := range projectAddonConns {
+		isProjectConn[n] = true
+	}
+	var out []string
+	for _, v := range vars {
+		ref, ok := v.ValueFrom["secretKeyRef"].(map[string]any)
+		if !ok {
 			continue
 		}
-		origin := strings.TrimSuffix(c, prSuffix) + "-conn"
-		m[origin] = c
+		name, _ := ref["name"].(string)
+		if !isProjectConn[name] {
+			continue
+		}
+		if _, swapped := cloneByOrigin[name]; swapped {
+			continue // this one WAS redirected to the clone
+		}
+		out = append(out, v.Name+"->"+name)
 	}
-	return m
+	return out
 }
 
 // swapPGCloneSecretRefsInEnvVars repoints any envVar whose
