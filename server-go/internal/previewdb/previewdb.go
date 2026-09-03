@@ -90,11 +90,11 @@ func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespac
 //
 // Idempotent: re-running for the same PR finds the existing clones
 // and re-issues seed Jobs (so the reviewer can resync data).
-func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, error) {
+func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error) {
 	// Preview behavior, unchanged: postgres-only, seeded from the project's
 	// source postgres addon, with the preview-specific source-tracking labels.
-	// Everything below is the env-scope-keyed core (EnsureEnvAddons).
-	return c.EnsureEnvAddons(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
+	// Everything below is the env-scope-keyed core (EnsureEnvAddonsMapped).
+	return c.EnsureEnvAddonsMapped(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
 		Kinds:   []string{"postgres"},
 		SeedAll: true,
 		// Keep the historical clone name "<base>-pr-N" (DeletePRAddons + the
@@ -133,8 +133,25 @@ type EnvAddonOpts struct {
 // an existing clone is reused (re-seeded only when SeedAll is set). Postgres clones
 // seed from their source when SeedAll is set; redis/s3 instances are always fresh.
 func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, opts EnvAddonOpts) ([]string, error) {
+	conns, _, err := c.EnsureEnvAddonsMapped(ctx, project, envScope, opts)
+	return conns, err
+}
+
+// EnsureEnvAddonsMapped is EnsureEnvAddons plus the authoritative
+// source-conn -> clone-conn mapping.
+//
+// Callers MUST use this map rather than re-deriving the source name by
+// stripping the clone's name suffix. The suffix is not invertible: a
+// clone named "<project>-db-pr-52" says its source was short name "db",
+// but nothing guarantees an addon by that name still exists — the source
+// can be renamed, deleted, or replaced (tickero swapped its native "db"
+// for an external "psdb" while PR 52 was open, 2026-09-03). A stale
+// name-derived map silently MISSES, and a missed swap leaves the preview
+// pointing at the PRODUCTION database. Only this function, which holds
+// the source addon in hand while creating the clone, knows the true pair.
+func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope string, opts EnvAddonOpts) ([]string, map[string]string, error) {
 	if c == nil || c.Addons == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	wantKind := func(k string) bool {
 		if len(opts.Kinds) == 0 {
@@ -150,9 +167,10 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 	ns := c.namespaceFor(ctx, project)
 	sources, err := c.Addons.List(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("list addons: %w", err)
+		return nil, nil, fmt.Errorf("list addons: %w", err)
 	}
 	var connSecrets []string
+	cloneByOrigin := map[string]string{}
 	for i := range sources {
 		s := &sources[i]
 		if !wantKind(s.Spec.Kind) {
@@ -218,11 +236,13 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 				ExtraLabels: extraLabels,
 			}); err != nil {
 				c.Logger.Warn("env addon clone create", "addon", cloneShort, "scope", envScope, "err", err)
-				return nil, fmt.Errorf("provision %s for env %s: %w", cloneShort, envScope, err)
+				return nil, nil, fmt.Errorf("provision %s for env %s: %w", cloneShort, envScope, err)
 			}
 			c.Logger.Info("env addon provisioned", "source", shortSrc, "clone", cloneShort, "scope", envScope)
 		}
 		connSecrets = append(connSecrets, addons.ConnSecretName(cloneFQN))
+		// Record the true pair while we still hold the source addon.
+		cloneByOrigin[addons.ConnSecretName(addons.CRName(project, s.Name))] = addons.ConnSecretName(cloneFQN)
 
 		// Seed only postgres clones, and only when SeedAll is set (preview).
 		// Named envs default to an empty DB.
@@ -250,7 +270,7 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, envScope)
 		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
 	}
-	return connSecrets, nil
+	return connSecrets, cloneByOrigin, nil
 }
 
 // previewPRLabel is the ownership label EnsureEnvAddons stamps on a
