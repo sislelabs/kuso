@@ -246,18 +246,30 @@ func holdExpired(b *kube.KusoBuild, now time.Time) bool {
 // the transition. The first hold also stamps annPromoteHoldSince,
 // which holdExpired reads to bound the wait.
 func (p *Poller) notePromotionHold(ctx context.Context, ns string, b *kube.KusoBuild, reason string) {
-	if b.Annotations[annPromoteHold] == reason {
+	firstHold := b.Annotations[annPromoteHold] == ""
+	// Backfill: a build already held when this bound shipped carries a
+	// hold annotation but no since-stamp. Without this it would never
+	// get one — firstHold stays false forever and holdExpired reads an
+	// absent stamp as "not expired" — so precisely the stuck builds
+	// this bound exists to rescue would stay stuck for life. Dating the
+	// backfill from NOW (not the build's creation) costs one extra
+	// promoteHoldMaxAge on those builds, which is the conservative
+	// direction: it never cuts a wave short that was still progressing.
+	needsBackfill := !firstHold && b.Annotations[annPromoteHoldSince] == ""
+	// The steady-state no-op: same reason, stamp already present.
+	// Checked AFTER the backfill test so a pre-existing hold whose
+	// reason never changes still gets its stamp on the next tick.
+	if b.Annotations[annPromoteHold] == reason && !needsBackfill {
 		return
 	}
-	// Stamp the since-time only when the hold first goes on, never on
-	// a reason change: a wave whose hold reason shifts (one sibling
-	// fails, then another) is still the same continuous wait, and
-	// re-stamping would let a flapping reason reset the deadline
-	// forever — exactly the stall this bound exists to end.
-	firstHold := b.Annotations[annPromoteHold] == ""
+	// Otherwise stamp only when the hold first goes on, never on a mere
+	// reason change: a wave whose reason shifts (one sibling fails, then
+	// another) is still one continuous wait, and re-stamping would let a
+	// flapping reason reset the deadline forever — exactly the stall
+	// this bound exists to end.
 	sinceClause := ""
 	since := time.Now().UTC().Format(time.RFC3339)
-	if firstHold {
+	if firstHold || needsBackfill {
 		sinceClause = fmt.Sprintf(`,%q:%q`, annPromoteHoldSince, since)
 	}
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q%s}}}`, annPromoteHold, reason, sinceClause)
@@ -270,7 +282,7 @@ func (p *Poller) notePromotionHold(ctx context.Context, ns string, b *kube.KusoB
 		b.Annotations = map[string]string{}
 	}
 	b.Annotations[annPromoteHold] = reason
-	if firstHold {
+	if firstHold || needsBackfill {
 		b.Annotations[annPromoteHoldSince] = since
 	}
 	p.logger().Info("promotion held (same-repo atomic gate)", "build", b.Name, "reason", reason)
@@ -300,17 +312,20 @@ func (p *Poller) clearPromotionHold(ctx context.Context, ns string, b *kube.Kuso
 }
 
 // stampHoldExpired terminates a build whose hold outlived
-// promoteHoldMaxAge. The sibling that held the wave never recovered,
-// so atomicity is already lost — the only question is whether this
-// build ends visibly or hangs. Mirrors stampHeldSuperseded's shape
-// (phase=cancelled + done) so existing surfaces render it, but with a
-// message naming the timeout, and emits a build.superseded event so
-// the stall is not silent.
+// promoteHoldMaxAge: the sibling that held the wave never recovered,
+// so atomicity is already lost and the only choice left is whether
+// this build ends visibly or hangs. Mirrors stampHeldSuperseded's
+// terminal shape (phase=cancelled + spec.done) so existing surfaces
+// render it, but names the timeout and emits at warning severity —
+// this path means a green image was NOT deployed.
 func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBuild, reason string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	// The image itself is fine — it was pushed before the hold — so name
+	// the recovery path rather than implying the build has to be redone.
 	msg := fmt.Sprintf(
-		"not promoted: same-repo promotion hold exceeded %s and was abandoned (%s)",
-		promoteHoldMaxAge, reason)
+		"not promoted: same-repo promotion hold exceeded %s and was abandoned (%s). The image was built and pushed; deploy it with `kuso build rollback %s %s %s` once the sibling is fixed.",
+		promoteHoldMaxAge, reason, b.Spec.Project,
+		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), b.Name)
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:null,%q:null},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 		annPhase,
@@ -337,18 +352,21 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 		"build", b.Name, "maxAge", promoteHoldMaxAge, "reason", reason)
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		title, desc, fields := buildRichCard(b, short, "superseded", "", "")
-		desc = "Promotion was held for sibling builds for over " +
-			promoteHoldMaxAge.String() + " and has been abandoned. Retry the build to deploy this commit."
+		// build.cancelled, not build.superseded: nothing replaced this
+		// build, and the event type must agree with the phase stamped
+		// above or downstream routing and badges keyed on it disagree
+		// with the row the user sees.
+		title, _, fields := buildRichCard(b, short, "cancelled", "", "")
 		p.Notifier.Emit(EventEnvelope{
-			Type:        eventBuildSuperseded,
-			Title:       title,
-			Description: desc,
-			Project:     b.Spec.Project,
-			Service:     short,
-			URL:         buildEventURL(b.Spec.Project, short),
-			Severity:    "warning",
-			Fields:      fields,
+			Type:  eventBuildCancelled,
+			Title: title,
+			Description: "Promotion was held for sibling builds for over " +
+				promoteHoldMaxAge.String() + " and has been abandoned. Retry the build to deploy this commit.",
+			Project:  b.Spec.Project,
+			Service:  short,
+			URL:      buildEventURL(b.Spec.Project, short),
+			Severity: "warning",
+			Fields:   fields,
 		})
 	}
 	return nil

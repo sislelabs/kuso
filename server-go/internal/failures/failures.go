@@ -422,16 +422,9 @@ var logDetectors = []logDetector{
 		remediate: func(line string, tail []string) *Remediation {
 			return &Remediation{
 				Title: "Cap the build toolchain's memory",
-				// Deliberately leads with the Dockerfile ENV, not
-				// Settings → Build. For the dockerfile/nixpacks/static
-				// strategies the build pod is a thin buildctl client —
-				// the compile runs inside the SHARED buildkitd daemon,
-				// so the per-build memory limit governs the wrong
-				// process and raising it changes nothing. Only
-				// strategy=buildpacks compiles in-pod under that limit.
-				// NODE_OPTIONS is on the reserved list (buildenv.go), so
-				// it cannot be injected via build env — the Dockerfile
-				// ENV really is the only route for the common case.
+				// Fix is a Dockerfile ENV because NODE_OPTIONS is on the
+				// reserved list (buildenv.go) and is stripped from build
+				// env before it reaches the build.
 				Detail:     "The build step was killed for exceeding available memory (common for large Next.js / webpack builds). Node sizes its heap and worker count from the host's total RAM and core count, not the container's limit, so it must be capped explicitly in the Dockerfile. Note that for the dockerfile, nixpacks and static strategies the compile runs in the shared BuildKit daemon — raising the per-build memory limit in Settings → Build does not affect it. That limit applies only to strategy=buildpacks.",
 				Fix:        "ENV NODE_OPTIONS=--max-old-space-size=3072",
 				FixLang:    "dockerfile",

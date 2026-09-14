@@ -1,11 +1,14 @@
 package builds
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -306,28 +309,158 @@ func TestHoldExpired(t *testing.T) {
 	}
 }
 
-// The since-stamp must be written once at hold entry and survive a
-// change of hold REASON. Re-stamping on every reason change would let a
-// wave whose reason flaps (one sibling fails, then another) reset the
-// deadline forever — the exact stall the bound exists to end.
-func TestHoldSinceSurvivesReasonChange(t *testing.T) {
+// notePromotionHold must stamp the since-time exactly once, at hold
+// entry, and must NOT re-stamp it when only the hold REASON changes.
+// A wave whose reason flaps (one sibling fails, then another) is still
+// one continuous wait; re-stamping would reset the deadline forever and
+// resurrect the very stall the bound exists to end.
+//
+// Drives the real function against the fake dynamic client and asserts
+// on what lands on the CR — the earlier version of this test asserted on
+// a map it had built itself, so it could not have caught a regression in
+// this control flow.
+func TestNotePromotionHoldStampsSinceOnce(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 9, 14, 18, 0, 0, 0, time.UTC)
-	origin := now.Add(-promoteHoldMaxAge - time.Minute).Format(time.RFC3339)
+	b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", time.Now(), nil)
+	b.Namespace = "kuso"
+	svc := fakeService(t, seedBuild(&b))
+	p := &Poller{Svc: svc}
+	ctx := context.Background()
 
-	b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", now, nil)
-	b.Annotations[annPromoteHold] = "waiting for sibling build: internal (int-1)"
-	b.Annotations[annPromoteHoldSince] = origin
+	read := func() map[string]string {
+		t.Helper()
+		raw, err := svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").
+			Get(ctx, "cms-1", metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		return raw.GetAnnotations()
+	}
 
-	// notePromotionHold's guard: a stamp is added only when the hold
-	// annotation was previously empty.
-	if firstHold := b.Annotations[annPromoteHold] == ""; firstHold {
-		t.Fatal("precondition: an already-held build must not count as firstHold")
+	p.notePromotionHold(ctx, "kuso", &b, "waiting for sibling build: internal (int-1)")
+	first := read()
+	stamp := first[annPromoteHoldSince]
+	if stamp == "" {
+		t.Fatal("first hold must stamp the since-time; without it holdExpired never fires and the bound is dead code")
 	}
-	if b.Annotations[annPromoteHoldSince] != origin {
-		t.Errorf("since-stamp mutated: got %q, want %q", b.Annotations[annPromoteHoldSince], origin)
+	if _, err := time.Parse(time.RFC3339, stamp); err != nil {
+		t.Fatalf("since-stamp must be RFC3339 (holdExpired parses it): %q: %v", stamp, err)
 	}
-	if !holdExpired(&b, now) {
-		t.Error("a hold older than the bound must expire even after its reason changed")
+
+	// Same reason again: the early-return should make this a no-op.
+	p.notePromotionHold(ctx, "kuso", &b, "waiting for sibling build: internal (int-1)")
+	if got := read()[annPromoteHoldSince]; got != stamp {
+		t.Errorf("repeat hold with same reason changed the stamp: %q -> %q", stamp, got)
+	}
+
+	// Reason CHANGES: the hold annotation must update, the stamp must not.
+	//
+	// Backdate the stamp first. time.Now() at RFC3339 second-granularity
+	// renders an identical string twice within the same second, so a
+	// re-stamp would be invisible against a fresh stamp — verified: the
+	// naive form of this assertion passes even when the guard is removed.
+	// An unmistakably old value makes the regression detectable.
+	old := time.Now().UTC().Add(-90 * time.Minute).Format(time.RFC3339)
+	if _, err := svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Patch(
+		ctx, "cms-1", types.MergePatchType,
+		[]byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annPromoteHoldSince, old)),
+		metav1.PatchOptions{},
+	); err != nil {
+		t.Fatalf("backdate stamp: %v", err)
+	}
+	b.Annotations[annPromoteHoldSince] = old
+
+	p.notePromotionHold(ctx, "kuso", &b, "sibling build failed: internal (int-1)")
+	after := read()
+	if after[annPromoteHold] != "sibling build failed: internal (int-1)" {
+		t.Errorf("hold reason did not update: %q", after[annPromoteHold])
+	}
+	if after[annPromoteHoldSince] != old {
+		t.Errorf("reason change re-stamped the deadline (%q -> %q) — a flapping reason would hold forever",
+			old, after[annPromoteHoldSince])
+	}
+}
+
+// clearPromotionHold must remove BOTH annotations. Leaving a stale
+// since-stamp behind would make the NEXT hold on this build inherit an
+// old deadline and expire immediately.
+func TestClearPromotionHoldRemovesSinceStamp(t *testing.T) {
+	t.Parallel()
+	b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", time.Now(), nil)
+	b.Namespace = "kuso"
+	svc := fakeService(t, seedBuild(&b))
+	p := &Poller{Svc: svc}
+	ctx := context.Background()
+
+	p.notePromotionHold(ctx, "kuso", &b, "waiting for sibling build: internal (int-1)")
+	p.clearPromotionHold(ctx, "kuso", &b)
+
+	raw, err := svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").
+		Get(ctx, "cms-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	a := raw.GetAnnotations()
+	if a[annPromoteHold] != "" {
+		t.Errorf("hold annotation survived clear: %q", a[annPromoteHold])
+	}
+	if a[annPromoteHoldSince] != "" {
+		t.Errorf("since-stamp survived clear: %q — the next hold would inherit a stale deadline", a[annPromoteHoldSince])
+	}
+	if b.Annotations[annPromoteHoldSince] != "" {
+		t.Errorf("in-memory since-stamp survived clear: %q", b.Annotations[annPromoteHoldSince])
+	}
+}
+
+// A build already sitting in a hold when this bound shipped carries a
+// hold annotation but no since-stamp. It must be backfilled on the next
+// tick — otherwise firstHold stays false forever, holdExpired reads the
+// absent stamp as "not expired", and the builds this bound exists to
+// rescue stay stuck for life. Reproduces the upgrade boundary: seed a
+// held build with NO stamp, then tick the gate with the SAME reason
+// (the steady-state path that early-returns).
+func TestNotePromotionHoldBackfillsStampOnUpgrade(t *testing.T) {
+	t.Parallel()
+	const reason = "sibling build failed: internal (int-1)"
+	b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", time.Now(), nil)
+	b.Namespace = "kuso"
+	b.Annotations[annPromoteHold] = reason // held before the upgrade
+	svc := fakeService(t, seedBuild(&b))
+	p := &Poller{Svc: svc}
+	ctx := context.Background()
+
+	if b.Annotations[annPromoteHoldSince] != "" {
+		t.Fatal("precondition: the pre-upgrade build must have no since-stamp")
+	}
+
+	// Same reason as the existing hold — the steady-state no-op path.
+	p.notePromotionHold(ctx, "kuso", &b, reason)
+
+	raw, err := svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").
+		Get(ctx, "cms-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	got := raw.GetAnnotations()[annPromoteHoldSince]
+	if got == "" {
+		t.Fatal("pre-existing hold was not backfilled with a since-stamp; it can never expire")
+	}
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Fatalf("backfilled stamp must be RFC3339: %q: %v", got, err)
+	}
+	if b.Annotations[annPromoteHoldSince] != got {
+		t.Errorf("in-memory stamp %q disagrees with the CR %q", b.Annotations[annPromoteHoldSince], got)
+	}
+
+	// And the backfill must be idempotent — a second identical tick
+	// must not re-stamp, or the deadline resets every 5s forever.
+	p.notePromotionHold(ctx, "kuso", &b, reason)
+	raw2, err := svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").
+		Get(ctx, "cms-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if got2 := raw2.GetAnnotations()[annPromoteHoldSince]; got2 != got {
+		t.Errorf("backfill is not idempotent: %q -> %q; the deadline would never be reached", got, got2)
 	}
 }
