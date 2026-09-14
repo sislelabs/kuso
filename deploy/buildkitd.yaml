@@ -83,6 +83,22 @@ spec:
       labels:
         app.kubernetes.io/name: kuso-buildkitd
     spec:
+      # NO nodeSelector/affinity here, deliberately — do not "fix" this
+      # by adding one without first migrating the PVC.
+      #
+      # kuso-buildkitd-state is RWO on local-path (node-local storage),
+      # so this pod is already pinned to whichever node first bound the
+      # volume. A nodeSelector naming any other node leaves it Pending
+      # forever; one naming the SAME node is redundant. Either way the
+      # daemon cannot be scheduled away from its 20Gi build cache.
+      #
+      # This matters because buildkitd is where builds actually burn
+      # CPU and memory (build Jobs are thin buildctl clients), so it is
+      # the pod you would most want to isolate from the control plane —
+      # and the one you currently cannot move. Isolating it properly
+      # means a real volume migration: drain the cache, repoint the PVC
+      # at a build-pool node, then add the selector. Until then the
+      # container limits below are the only blast-radius bound.
       containers:
         - name: buildkitd
           image: moby/buildkit:v0.16.0
@@ -157,6 +173,23 @@ data:
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
+    [worker.oci]
+      # Cap concurrent LLB vertices. Unset means UNBOUNDED in buildkit
+      # (there is no default and no NumCPU() fallback — an unset
+      # max-parallelism leaves the semaphore nil and every ready vertex
+      # runs at once). 4 matches this container's CPU limit below.
+      #
+      # Scope, so nobody mistakes this for an OOM fix: one semaphore
+      # unit is taken per vertex (one RUN step) and held for that
+      # step's whole duration. It bounds how many steps run TOGETHER.
+      # It does NOT constrain threads INSIDE a step — a single
+      # `RUN pnpm run build` can still saturate every core, because
+      # Node sizes its worker pool and heap from the HOST's cores and
+      # RAM, not this cgroup. That case is capped in the user's
+      # Dockerfile via NODE_OPTIONS (see internal/failures OOM
+      # remediation). This setting is the blast-radius bound for
+      # several builds sharing this one daemon.
+      max-parallelism = 4
 ---
 # NetworkPolicy: only kuso build pods may reach the BuildKit daemon.
 #

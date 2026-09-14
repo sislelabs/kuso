@@ -264,3 +264,70 @@ func TestPromotionGate_BranchScoping(t *testing.T) {
 		t.Errorf("same-branch successor must supersede, got %q", got)
 	}
 }
+
+// The hold's time bound. A permanently-dead sibling (BackoffLimitExceeded,
+// never retried) used to strand a GREEN build forever: the only escapes
+// were a human retrying the sibling or pushing again. These pin the
+// deadline and, just as importantly, the cases that must NOT expire.
+func TestHoldExpired(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 14, 18, 0, 0, 0, time.UTC)
+	stamp := func(v string) *kube.KusoBuild {
+		b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", now, nil)
+		if v != "" {
+			b.Annotations[annPromoteHoldSince] = v
+		}
+		return &b
+	}
+
+	cases := []struct {
+		name  string
+		since string
+		want  bool
+	}{
+		// Absent stamp = first tick, or a CR predating the annotation.
+		// Must not expire, or an upgrade would abandon live holds.
+		{"no stamp never expires", "", false},
+		// Unparseable must fail safe toward atomicity, not liveness.
+		{"garbage stamp never expires", "not-a-timestamp", false},
+		{"fresh hold holds", now.Add(-5 * time.Minute).Format(time.RFC3339), false},
+		{"just under the bound holds", now.Add(-promoteHoldMaxAge + time.Minute).Format(time.RFC3339), false},
+		{"exactly at the bound expires", now.Add(-promoteHoldMaxAge).Format(time.RFC3339), true},
+		{"well past the bound expires", now.Add(-24 * time.Hour).Format(time.RFC3339), true},
+		// A clock skew / future stamp must not expire instantly.
+		{"future stamp holds", now.Add(time.Hour).Format(time.RFC3339), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := holdExpired(stamp(tc.since), now); got != tc.want {
+				t.Errorf("holdExpired(%q) = %v, want %v", tc.since, got, tc.want)
+			}
+		})
+	}
+}
+
+// The since-stamp must be written once at hold entry and survive a
+// change of hold REASON. Re-stamping on every reason change would let a
+// wave whose reason flaps (one sibling fails, then another) reset the
+// deadline forever — the exact stall the bound exists to end.
+func TestHoldSinceSurvivesReasonChange(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 14, 18, 0, 0, 0, time.UTC)
+	origin := now.Add(-promoteHoldMaxAge - time.Minute).Format(time.RFC3339)
+
+	b := gb("cms-1", "scuba-cms", shaA, "https://github.com/acme/mono.git", "running", now, nil)
+	b.Annotations[annPromoteHold] = "waiting for sibling build: internal (int-1)"
+	b.Annotations[annPromoteHoldSince] = origin
+
+	// notePromotionHold's guard: a stamp is added only when the hold
+	// annotation was previously empty.
+	if firstHold := b.Annotations[annPromoteHold] == ""; firstHold {
+		t.Fatal("precondition: an already-held build must not count as firstHold")
+	}
+	if b.Annotations[annPromoteHoldSince] != origin {
+		t.Errorf("since-stamp mutated: got %q, want %q", b.Annotations[annPromoteHoldSince], origin)
+	}
+	if !holdExpired(&b, now) {
+		t.Error("a hold older than the bound must expire even after its reason changed")
+	}
+}
