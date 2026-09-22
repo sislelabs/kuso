@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.11] — 2026-08-01
+
+### 🐛 Bug Fixes
+- Fix(namespaces): stamp project namespaces PSA baseline, not restricted ([30731a7](https://github.com/sislelabs/kuso/commit/30731a7c8710dfe8d5b7620e6fb17e990612e374))
+
 ## [0.22.10] — 2026-08-01
 
 ### 🐛 Bug Fixes
