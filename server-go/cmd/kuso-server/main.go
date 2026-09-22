@@ -1381,6 +1381,22 @@ func main() {
 			// notify event on the healthy↔unhealthy edge so a silently-
 			// stopped (or never-configured) kuso-DB backup doesn't stay
 			// invisible until restore time.
+			// One-shot heal: mirror the instance-wide backup Secret into
+			// every managed project namespace. EnsureNamespace covers
+			// namespaces from here on, but the ones that already exist
+			// keep whatever they had -- which before this was nothing,
+			// so their nightly backups exited 0 having written nothing
+			// while reporting a successful run.
+			goSafe(logger, "backupsecret-heal", func() {
+				n, err := kubeClient.HealBackupSecrets(workCtx)
+				if err != nil {
+					logger.Warn("backup secret heal", "healed", n, "err", err)
+					return
+				}
+				if n > 0 {
+					logger.Info("backup secret propagated", "namespaces", n)
+				}
+			})
 			serverstate.RegisterLoop(serverstate.LoopBackupHealth, backuphealth.DefaultInterval)
 			goSafe(logger, "backuphealth", func() {
 				(&backuphealth.Watcher{

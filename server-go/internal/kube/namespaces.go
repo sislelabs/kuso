@@ -121,6 +121,15 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	if berr := c.ensureManagedNSBinding(ctx, ns); berr != nil {
 		return berr
 	}
+	// Mirror the instance-wide backup credential in. Best-effort: a
+	// project namespace without it is degraded (its backups no-op), not
+	// broken, and failing project creation over a backup Secret would
+	// cost more than the gap it closes. backuphealth reports the gap.
+	// Errors are deliberately swallowed, not returned: backuphealth and
+	// reconcilehealth already surface a missing backup Secret as an
+	// unhealthy addon, which is a better channel than failing the
+	// namespace write that the project create depends on.
+	_ = c.ensureBackupSecret(ctx, ns)
 	return nil
 }
 

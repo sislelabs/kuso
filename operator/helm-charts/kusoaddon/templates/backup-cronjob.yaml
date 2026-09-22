@@ -121,18 +121,56 @@ spec:
                   rm -f /tmp/dump.gz /tmp/manifest.json
                   echo "==> manifest done"
 
-                  # Multi-DB detection: this backup only dumps the primary
-                  # $POSTGRES_DB. If the addon hosts additional logical
-                  # databases they are silently NOT in this artifact. We
-                  # can't safely change the artifact/manifest shape here
-                  # (that's the restore contract), so make the gap LOUD.
+                  # Multi-DB coverage. An instance-shared addon hosts one
+                  # logical DB per tenant, so dumping only $POSTGRES_DB left
+                  # every other tenant with NO backup while the addon still
+                  # reported healthy -- on this cluster that was 26 live DBs
+                  # behind a 393-byte "successful" dump. A stderr WARNING
+                  # (what used to be here) is not a backup.
+                  #
+                  # Each sibling DB gets its own key + own manifest, so one
+                  # tenant restores without unpacking the rest and one bad
+                  # dump can't cost the others theirs. The primary ${KEY}
+                  # artifact is untouched -- it stays the restore contract,
+                  # and Manifest.ArtifactFor looks up by key, so an older
+                  # binary still resolves it.
                   OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                     -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
                     2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
                   if [ -n "${OTHER_DBS}" ]; then
                     N=$(printf '%s\n' "${OTHER_DBS}" | grep -c . || true)
-                    echo "WARNING: addon has ${N} logical DBs but only ${POSTGRES_DB} is backed up — other DBs are NOT in this backup" >&2
+                    echo "==> addon hosts ${N} additional logical DB(s); dumping each"
+                    FAILED_DBS=""
+                    for DB in ${OTHER_DBS}; do
+                      DBKEY="${PROJECT}/${ADDON}/${TS}.db-${DB}.sql.gz"
+                      echo "==> dumping ${DB} -> s3://${BUCKET}/${DBKEY}"
+                      # Per-DB failure must not abort the run: the primary
+                      # dump is already uploaded and one unreadable tenant DB
+                      # should not cost the other 25 their backup. Collect
+                      # and exit non-zero at the end so the Job still fails.
+                      if ! PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists \
+                           -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${DB}" \
+                           | gzip > /tmp/db.gz; then
+                        echo "ERROR: pg_dump failed for ${DB}" >&2
+                        FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz; continue
+                      fi
+                      DBSHA=$(sha256sum /tmp/db.gz | awk '{print $1}')
+                      DBBYTES=$(wc -c < /tmp/db.gz | tr -d ' ')
+                      if ! aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db.gz "s3://${BUCKET}/${DBKEY}"; then
+                        echo "ERROR: upload failed for ${DB}" >&2
+                        FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz; continue
+                      fi
+                      printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${DBKEY}" "${DBSHA}" "${DBBYTES}" > /tmp/db-manifest.json
+                      aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db-manifest.json "s3://${BUCKET}/${DBKEY}.manifest.json" || true
+                      echo "==> ${DB} done (sha256=${DBSHA} bytes=${DBBYTES})"
+                      rm -f /tmp/db.gz /tmp/db-manifest.json
+                    done
+                    if [ -n "${FAILED_DBS}" ]; then
+                      echo "ERROR: logical DB dump failed for:${FAILED_DBS}" >&2
+                      exit 1
+                    fi
                   fi
 
                   # Retention prune. List existing dumps, drop ones
@@ -826,7 +864,16 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning snapshots older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `{ ... } || true`, same as the postgres prune above:
+                    # the sync already succeeded by here, and under
+                    # `set -o pipefail` a transient `aws s3 ls` error (or
+                    # the trailing `while`'s exit status) would fail the
+                    # Job AFTER a good backup. This guard was missing only
+                    # on this one of the six prune blocks, so every s3-addon
+                    # backup reported Failed while its data was safely in
+                    # the bucket -- and the real "no credentials" failures
+                    # were indistinguishable from it.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '/PRE / {print $2}' \
                       | while read ts; do
                           [ -z "${ts}" ] && continue
@@ -839,7 +886,7 @@ spec:
                             echo "    rm -r s3://${BUCKET}/${PREFIX}${ts}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" --recursive "s3://${BUCKET}/${PREFIX}${ts}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
