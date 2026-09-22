@@ -8,12 +8,30 @@
 #   - mariadb-client + mongodb-tools deferred until v2 — postgres
 #     covers the addon kinds users actually self-host today
 #
-# postgresql18-client: pg_dump refuses a server NEWER than itself
-# ("aborting because of server version mismatch"), so the client must
-# track the newest Postgres an addon can point at — external managed
-# providers (PlanetScale ships 18) as well as the in-cluster charts.
-# A newer pg_dump dumps older servers fine, so 18 covers 15/16/17 too.
-# alpine:3.23 is the first release that packages it.
+# postgresql{16,17,18}-client: we install SEVERAL, deliberately.
+#
+# pg_dump refuses a server NEWER than itself ("aborting because of
+# server version mismatch"), so the client has to cover the newest
+# Postgres an addon can point at — external managed providers
+# (PlanetScale ships 18) as well as the in-cluster charts.
+#
+# But "a newer pg_dump dumps older servers fine" is only half true, and
+# the missing half cost us every Postgres restore on the cluster: an 18
+# client emits `SET transaction_timeout = 0` at line 13 of the dump, a
+# parameter that does not exist before 17. Piped back into a PG 16
+# server under `psql -v ON_ERROR_STOP=1 --single-transaction`, the
+# restore aborts on line 13 before creating a single table. The dumps
+# looked perfect — right size, checksum verified — and were
+# unrestorable. Restore rehearsals had been failing for 19 days.
+#
+# So the version matters in BOTH directions, and neither a floor nor a
+# ceiling alone is right. backup-cronjob.yaml reads the target's
+# server_version_num at runtime and calls the matching client out of
+# /usr/libexec/postgresql<major>/, falling back to the newest installed
+# one for a server newer than anything we ship (which dumps fine; it is
+# only the restore direction that breaks).
+#
+# alpine:3.23 packages 16, 17 and 18 side by side.
 #
 # Pinned to alpine:3.21 because alpine:3.20 packages aws-cli 2.15.57,
 # which crashes inside its s3errormsg customisation when talking to
@@ -30,6 +48,8 @@ RUN apk add --no-cache \
       bash \
       ca-certificates \
       aws-cli \
+      postgresql16-client \
+      postgresql17-client \
       postgresql18-client \
       redis \
       mongodb-tools \

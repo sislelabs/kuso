@@ -99,11 +99,46 @@ spec:
                     fi
                     sleep 2
                   done
+                  # Pick the pg client that MATCHES the target server.
+                  #
+                  # pg_dump must be >= the server (it refuses to dump a
+                  # newer one), but a NEWER client is not safe either: an
+                  # 18 client writes `SET transaction_timeout = 0` into the
+                  # dump, which does not exist before 17, so restoring into
+                  # a PG 16 server under ON_ERROR_STOP=1 aborts on line 13
+                  # having created nothing. Both directions matter, so we
+                  # match the major version instead of picking an extreme.
+                  #
+                  # The image installs 16/17/18 side by side under
+                  # /usr/libexec/postgresql<major>/. A server newer than
+                  # anything we ship falls back to the newest installed
+                  # client: that still dumps correctly, and only the
+                  # restore direction would be affected.
+                  pgbin() {
+                    _want="$1"
+                    if [ -n "${_want}" ] && [ -x "/usr/libexec/postgresql${_want}/$2" ]; then
+                      echo "/usr/libexec/postgresql${_want}/$2"; return
+                    fi
+                    for _v in 18 17 16; do
+                      if [ -x "/usr/libexec/postgresql${_v}/$2" ]; then
+                        echo "/usr/libexec/postgresql${_v}/$2"; return
+                      fi
+                    done
+                    echo "$2"
+                  }
+                  # server_version_num is 160014 for 16.14 -> major 16.
+                  PGMAJOR=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) \
+                    -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+                    -tAc "SHOW server_version_num" 2>/dev/null | tr -dc '0-9' || true)
+                  if [ -n "${PGMAJOR}" ]; then PGMAJOR=$(( PGMAJOR / 10000 )); fi
+                  PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
+                  PSQL=$(pgbin "${PGMAJOR}" psql)
+                  echo "==> server major=${PGMAJOR:-unknown}, using ${PG_DUMP}"
                   # --clean --if-exists so a restore onto a populated DB
                   # (the pre-deploy-snapshot rollback case) DROPs-then-recreates
                   # instead of aborting on "relation already exists" under the
                   # restore's ON_ERROR_STOP=1 --single-transaction.
-                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists \
+                  PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
                     | gzip > /tmp/dump.gz
                   SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
@@ -134,7 +169,7 @@ spec:
                   # artifact is untouched -- it stays the restore contract,
                   # and Manifest.ArtifactFor looks up by key, so an older
                   # binary still resolves it.
-                  OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+                  OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" "${PSQL}" \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                     -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
                     2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
@@ -149,7 +184,7 @@ spec:
                       # dump is already uploaded and one unreadable tenant DB
                       # should not cost the other 25 their backup. Collect
                       # and exit non-zero at the end so the Job still fails.
-                      if ! PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists \
+                      if ! PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists \
                            -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${DB}" \
                            | gzip > /tmp/db.gz; then
                         echo "ERROR: pg_dump failed for ${DB}" >&2
@@ -317,6 +352,29 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping external ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # Match the client major to the server, same as the
+                  # in-cluster job: a newer pg_dump emits SET options the
+                  # target rejects at restore time (transaction_timeout on
+                  # an 18 client vs a 16 server aborts the restore on line
+                  # 13). Matters more here, not less — an external provider
+                  # is exactly where the server version is not ours to
+                  # pick. Unknown version falls back to the newest client.
+                  pgbin() {
+                    _want="$1"
+                    if [ -n "${_want}" ] && [ -x "/usr/libexec/postgresql${_want}/$2" ]; then
+                      echo "/usr/libexec/postgresql${_want}/$2"; return
+                    fi
+                    for _v in 18 17 16; do
+                      if [ -x "/usr/libexec/postgresql${_v}/$2" ]; then
+                        echo "/usr/libexec/postgresql${_v}/$2"; return
+                      fi
+                    done
+                    echo "$2"
+                  }
+                  PGMAJOR=$($(pgbin "" psql) "${DATABASE_URL}" -tAc "SHOW server_version_num" 2>/dev/null | tr -dc '0-9' || true)
+                  if [ -n "${PGMAJOR}" ]; then PGMAJOR=$(( PGMAJOR / 10000 )); fi
+                  PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
+                  echo "==> external server major=${PGMAJOR:-unknown}, using ${PG_DUMP}"
                   # --no-owner / --no-acl: managed providers usually
                   # disallow GRANT/REVOKE commands in dumps, which makes
                   # an unfiltered pg_dump fail at restore time. Match
@@ -324,7 +382,7 @@ spec:
                   # Dump to /tmp first (not a streamed pipe to s3) so we can
                   # sha256 the artifact and emit an integrity manifest — the
                   # restore path verifies sha256 before applying.
-                  pg_dump --clean --if-exists --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
+                  "${PG_DUMP}" --clean --if-exists --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
                   SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
                   BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
