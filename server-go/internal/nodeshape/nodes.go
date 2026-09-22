@@ -59,10 +59,22 @@ type Summary struct {
 	PodsCapacity       int   `json:"podsCapacity"`
 }
 
-// Usage is the per-node metrics-server slice the caller passes in.
+// Usage is the per-node live slice the caller passes in: CPU/memory
+// from metrics-server, disk from the kubelet Summary API.
+//
+// Disk is here rather than read off the node object because the node's
+// ephemeral-storage Capacity and Allocatable differ by a FIXED kubelet
+// reservation -- the gap is the same ~16GB whether the disk is empty
+// or nearly full. Rendering it as used-vs-free showed a constant
+// "15.0GiB / 300GiB (5%)" on nodes that were actually 83%, 81% and 62%
+// full. Zero means "no live reading"; the caller falls back to the
+// static figures.
 type Usage struct {
 	CPUMilli int64
 	MemBytes int64
+
+	DiskCapacityBytes  int64
+	DiskAvailableBytes int64
 }
 
 // BuildSummaries shapes a kube node list into the UI's wire format,
@@ -108,8 +120,14 @@ func buildSummary(n *corev1.Node, podCount int, u Usage) Summary {
 	// users intuitively expect when they read "16Gi RAM."
 	cpuCap := n.Status.Capacity.Cpu().MilliValue()
 	memCap, _ := n.Status.Capacity.Memory().AsInt64()
+	// Static fallback; see Usage's comment for why these two cannot be
+	// read as used-vs-free. Real kubelet numbers override when present.
 	diskCap, _ := n.Status.Capacity.StorageEphemeral().AsInt64()
 	diskAvail, _ := n.Status.Allocatable.StorageEphemeral().AsInt64()
+	if u.DiskCapacityBytes > 0 {
+		diskCap = u.DiskCapacityBytes
+		diskAvail = u.DiskAvailableBytes
+	}
 	podsCap, _ := n.Status.Capacity.Pods().AsInt64()
 	unreachable := n.Annotations["kuso.sislelabs.com/cordoned-by-nodewatch"] == "true"
 	return Summary{

@@ -135,11 +135,27 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		}
 	}
 	usage := s.metricsServerUsage(ctx)
+	names := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		names = append(names, n.Name)
+	}
+	disks := s.diskStats(ctx, names)
 	for _, n := range nodes {
 		cpuCap := n.Status.Capacity.Cpu().MilliValue()
 		memCap, _ := n.Status.Capacity.Memory().AsInt64()
+		// Static fallback only. Capacity/Allocatable ephemeral-storage
+		// differ by a FIXED kubelet reservation (~16GB on every node
+		// here), so using them as used-vs-free renders a constant ~5%
+		// regardless of the real disk, and leaves the disk-pressure
+		// alert unfireable. The kubelet Summary API has the truth;
+		// these values survive only so a node whose kubelet didn't
+		// answer still writes a row.
 		diskCap, _ := n.Status.Capacity.StorageEphemeral().AsInt64()
 		diskAvail, _ := n.Status.Allocatable.StorageEphemeral().AsInt64()
+		if fs, ok := disks[n.Name]; ok {
+			diskCap = fs.capacityBytes
+			diskAvail = fs.availableBytes
+		}
 		var cpuUse, memUse int64
 		if u, ok := usage[n.Name]; ok {
 			cpuUse = u.cpuMilli

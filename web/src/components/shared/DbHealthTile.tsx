@@ -7,17 +7,23 @@ import { useCan, Perms } from "@/features/auth";
 import { LoadingState } from "@/components/ui/loading-state";
 
 interface DbStats {
-  writeCount: number;
-  busyCount: number;
-  writeWaitMs: number;
-  busyWaitMs: number;
-  avgWriteWaitMs: number;
+  writeErrors: number;
+  poolOpen: number;
+  poolInUse: number;
+  poolIdle: number;
 }
 
-// SQLite write-lock health. Single-writer DB serializes every mutation
-// behind a busy_timeout (default 5s); each busy tick is a request that
-// burned the full timeout and returned an error to the user. Surfacing
-// the count here lets ops spot saturation before the bug reports start.
+// Control-plane database health.
+//
+// This tile used to read writeCount / busyCount / avgWriteWaitMs, which
+// were SQLite busy-timeout counters. Those fields stopped being served
+// in v0.9 when the control plane moved to Postgres (see
+// internal/db/stats.go), but the tile kept asking for them and falling
+// back to `?? 0` -- so it rendered a confident "Writes 0 / Busy events
+// 0 / Avg latency 0 ms" under a "SQLite write contention" label on a
+// Postgres cluster. All three numbers were hardcoded zeros, and the one
+// field the endpoint DOES serve, writeErrors, was never shown: it sat
+// at 334 while the tile displayed all-clear.
 //
 // Admin-only. Hidden for non-admins (the endpoint 403s anyway, but the
 // tile would render an empty error which is noise).
@@ -33,14 +39,14 @@ export function DbHealthTile() {
 
   if (!isAdmin) return null;
 
-  const busy = data?.busyCount ?? 0;
-  const writes = data?.writeCount ?? 0;
-  const avgMs = data?.avgWriteWaitMs ?? 0;
+  const writeErrors = data?.writeErrors ?? 0;
+  const poolInUse = data?.poolInUse ?? 0;
+  const poolOpen = data?.poolOpen ?? 0;
 
-  // Visual cue when busy is nonzero. Single-box kuso should sit at 0
-  // forever in normal operation; any tick is worth a glance.
+  // Visual cue when a write has actually failed. Healthy kuso sits at
+  // 0; any nonzero value is worth a glance.
   const tone =
-    busy > 0
+    writeErrors > 0
       ? "border-amber-500/40 bg-amber-500/5"
       : "border-[var(--border)] bg-[var(--surface)]";
 
@@ -53,7 +59,7 @@ export function DbHealthTile() {
         <Database className="h-4 w-4 text-[var(--text-tertiary)]" />
         <h2 className="text-sm font-medium">Database health</h2>
         <span className="text-xs text-[var(--text-tertiary)]">
-          SQLite write contention
+          Postgres pool + write errors
         </span>
       </header>
 
@@ -63,19 +69,20 @@ export function DbHealthTile() {
       )}
       {data && (
         <dl className="grid grid-cols-3 gap-3 text-sm">
-          <Stat label="Writes" value={writes.toLocaleString()} />
           <Stat
-            label="Busy events"
-            value={busy.toLocaleString()}
-            warn={busy > 0}
+            label="Write errors"
+            value={writeErrors.toLocaleString()}
+            warn={writeErrors > 0}
           />
-          <Stat label="Avg latency" value={`${avgMs} ms`} />
+          <Stat label="Connections in use" value={poolInUse.toLocaleString()} />
+          <Stat label="Pool open" value={poolOpen.toLocaleString()} />
         </dl>
       )}
-      {busy > 0 && (
+      {writeErrors > 0 && (
         <p className="mt-3 text-xs text-[var(--warning)]">
-          {busy} write{busy === 1 ? "" : "s"} hit the busy timeout. Sustained
-          contention indicates the single-writer SQLite is saturated.
+          {writeErrors.toLocaleString()} write
+          {writeErrors === 1 ? "" : "s"} failed since this server started.
+          Check the server logs for the underlying Postgres error.
         </p>
       )}
     </section>

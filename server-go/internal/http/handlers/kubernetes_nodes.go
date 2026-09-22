@@ -3,14 +3,17 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"golang.org/x/sync/singleflight"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/singleflight"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	restclient "k8s.io/client-go/rest"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/nodeshape"
@@ -204,5 +207,61 @@ func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape
 			MemBytes: parseQuantity(it.Usage.Memory),
 		}
 	}
+	// Disk comes from each kubelet's Summary API, not from the node
+	// object: ephemeral-storage Capacity minus Allocatable is a fixed
+	// kubelet reservation, so it renders a constant ~5% no matter how
+	// full the disk really is. One request per node, behind the same
+	// cache as the block above, and best-effort — a node that doesn't
+	// answer keeps the static fallback in nodeshape.
+	for name, u := range out {
+		fs, err := nodeFilesystem(ctx, rest, name)
+		if err != nil {
+			continue
+		}
+		u.DiskCapacityBytes = fs.capacity
+		u.DiskAvailableBytes = fs.available
+		out[name] = u
+	}
 	return out
+}
+
+type nodeFS struct{ capacity, available int64 }
+
+// nodeFilesystem reads one node's real root-filesystem usage from the
+// kubelet Summary API, proxied through the apiserver.
+func nodeFilesystem(ctx context.Context, rest restclient.Interface, node string) (nodeFS, error) {
+	fctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	body, err := rest.Get().
+		AbsPath(fmt.Sprintf("/api/v1/nodes/%s/proxy/stats/summary", node)).
+		DoRaw(fctx)
+	if err != nil {
+		return nodeFS{}, err
+	}
+	var resp struct {
+		Node struct {
+			FS *struct {
+				CapacityBytes  *int64 `json:"capacityBytes"`
+				AvailableBytes *int64 `json:"availableBytes"`
+				UsedBytes      *int64 `json:"usedBytes"`
+			} `json:"fs"`
+		} `json:"node"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nodeFS{}, err
+	}
+	fs := resp.Node.FS
+	if fs == nil || fs.CapacityBytes == nil || *fs.CapacityBytes <= 0 {
+		return nodeFS{}, errors.New("summary has no node fs capacity")
+	}
+	out := nodeFS{capacity: *fs.CapacityBytes}
+	switch {
+	case fs.AvailableBytes != nil:
+		out.available = *fs.AvailableBytes
+	case fs.UsedBytes != nil:
+		out.available = out.capacity - *fs.UsedBytes
+	default:
+		return nodeFS{}, errors.New("summary has neither available nor used bytes")
+	}
+	return out, nil
 }
