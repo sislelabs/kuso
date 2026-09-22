@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.1] — 2026-09-22
+
+### 🐛 Bug Fixes
+- Fix(netpol): target the project's workload namespace, not the release ns ([a81777b](https://github.com/sislelabs/kuso/commit/a81777bff555bf50e285d4aba57e8e0ca43c41ed))
+
 ## [0.26.0] — 2026-09-22
 
 ### 🐛 Bug Fixes
@@ -323,14 +328,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(builds): show queue position on queued builds ([f06204a](https://github.com/sislelabs/kuso/commit/f06204aa8ac3599439e5b40e64e0cf70cbf97911))
-
-## [0.22.12] — 2026-08-01
-
-### ✨ Features
-- Feat(notify): per-project notification mute ([ca0044d](https://github.com/sislelabs/kuso/commit/ca0044dba5915dfd23511549f8b4a77e6b322723))
-
-### 🐛 Bug Fixes
-- Fix(env): mount <svc>-secrets on env CRs so unified env writes reach pods ([b96ab83](https://github.com/sislelabs/kuso/commit/b96ab83460aafb63a8ba4d13ad3a12951399f2e8))
 
 
 ---

@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.12] — 2026-08-01
+
+### ✨ Features
+- Feat(notify): per-project notification mute ([ca0044d](https://github.com/sislelabs/kuso/commit/ca0044dba5915dfd23511549f8b4a77e6b322723))
+
+### 🐛 Bug Fixes
+- Fix(env): mount <svc>-secrets on env CRs so unified env writes reach pods ([b96ab83](https://github.com/sislelabs/kuso/commit/b96ab83460aafb63a8ba4d13ad3a12951399f2e8))
+
 ## [0.22.11] — 2026-08-01
 
 ### 🐛 Bug Fixes
