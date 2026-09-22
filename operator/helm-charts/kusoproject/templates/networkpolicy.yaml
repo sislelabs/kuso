@@ -26,6 +26,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-default-deny
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -40,6 +48,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-dns
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -63,6 +79,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-intra-project
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -86,6 +110,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-platform
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -150,6 +182,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-registry-egress
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -183,6 +223,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-buildkit-egress
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -220,6 +268,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-public-egress
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -257,6 +313,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-platform-api-egress
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -294,6 +358,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  {{- /* NetworkPolicy is namespace-scoped: a policy in the release
+         namespace does NOT apply to pods in the project's workload
+         namespace. The KusoProject CR always lives in the home ns
+         (see internal/projects/projects.go) while spec.namespace says
+         where the pods actually run, so without this the policies for
+         every custom-namespace project were created in `kuso` and
+         those pods ran with no default-deny at all. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-allow-instance-db-egress
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
