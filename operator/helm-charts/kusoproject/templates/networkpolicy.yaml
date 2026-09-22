@@ -139,7 +139,14 @@ spec:
 # closes the path where any tenant app pod could dial the unauthenticated
 # registry and enumerate/pull/overwrite other projects' images. Pairs
 # with the kuso-registry-ingress policy in deploy/registry.yaml.
-{{- $buildPodSelector := dict "matchLabels" (dict "kuso.sislelabs.com/project" .Release.Name "app.kubernetes.io/component" "kusobuild") -}}
+{{/* NOTE: plain `}}`, NOT `-}}`. A trailing dash here chomps the newline
+     and glues `apiVersion:` onto the end of the comment above, so this
+     document renders without an apiVersion and the WHOLE project chart
+     fails to install with "error validating data: apiVersion not set".
+     That broke reconcile for every project on the cluster for 55 days,
+     and `helm template` does not show it -- it normalizes the output.
+     Validate with `kubectl apply --dry-run=server`, not helm template. */}}
+{{- $buildPodSelector := dict "matchLabels" (dict "kuso.sislelabs.com/project" .Release.Name "app.kubernetes.io/component" "kusobuild") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
