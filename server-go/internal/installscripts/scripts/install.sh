@@ -297,6 +297,29 @@ else
   log "k3s already present; skipping install"
 fi
 
+# -------- 1b. protect the control plane from workload CPU/IO storms --------
+# The k3s server process is the apiserver, the scheduler AND the writer
+# for the SQLite datastore (state.db) on local disk. It runs in
+# system.slice with no resource guarantees by default, while every
+# tenant pod runs in kubepods.slice with a CPU request behind it. Under
+# a CPU or IO storm on this node -- a build is the usual culprit -- the
+# kernel has no reason to favour k3s, so kubelet housekeeping stalls and
+# EVERY tenant's health probes start timing out, not just the busy one.
+#
+# CPUWeight/IOWeight are relative shares, not caps: k3s still uses the
+# whole box when nothing else wants it, but wins decisively under
+# contention. MemoryMin is a hard reclaim floor the kernel will not take
+# back. Applied as a drop-in so a k3s upgrade cannot clobber it.
+log "applying k3s control-plane resource protection"
+mkdir -p /etc/systemd/system/k3s.service.d
+cat > /etc/systemd/system/k3s.service.d/10-resource-protection.conf <<'EOF'
+[Service]
+CPUWeight=10000
+IOWeight=10000
+MemoryMin=1G
+EOF
+systemctl daemon-reload 2>/dev/null || true
+
 # -------- 2. registry trust + /etc/hosts --------
 log "writing /etc/rancher/k3s/registries.yaml (insecure HTTP for in-cluster registry)"
 mkdir -p /etc/rancher/k3s

@@ -83,6 +83,35 @@ spec:
       labels:
         app.kubernetes.io/name: kuso-buildkitd
     spec:
+      # buildkitd is platform infrastructure, not a tenant workload,
+      # but it is the single greediest process on the cluster. Both
+      # halves of that matter:
+      #
+      # priorityClassName gives it the same standing as the other
+      # kuso-* control-plane pods so a tenant scale-up cannot evict
+      # the build daemon mid-build. Every other platform manifest
+      # (postgres, server-go, activator) already sets this; buildkitd
+      # was the lone omission.
+      #
+      # The anti-affinity keeps it OFF the control-plane node. A build
+      # is a CPU and IO storm, and on k3s the control-plane node also
+      # holds the SQLite datastore (state.db) on local disk — so a
+      # build sharing that node starves the API server and every
+      # tenant's health probes along with it, not just its own project.
+      #
+      # NOTE: kuso-buildkitd-state is RWO on local-path, so the PV
+      # carries a hard nodeAffinity to whichever node first bound it.
+      # This rule only takes effect on a volume bound to a non-control-
+      # plane node; if you are moving an existing install, the PVC must
+      # be recreated or the pod will go Pending against the old PV.
+      priorityClassName: kuso-platform
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
       containers:
         - name: buildkitd
           image: moby/buildkit:v0.16.0
@@ -154,6 +183,20 @@ metadata:
 data:
   buildkitd.toml: |
     debug = false
+    # Bound how many LLB vertices (RUN steps) execute at once.
+    #
+    # Unset means UNBOUNDED in buildkit — there is no default and no
+    # NumCPU() fallback; an unset max-parallelism leaves the semaphore
+    # nil and every ready vertex runs at once. That is what let a
+    # single build saturate the node and stall kubelet housekeeping
+    # for other tenants.
+    #
+    # This must not exceed the container's CPU limit below. buildkit
+    # reads the HOST core count, not the cgroup quota, so on an 8-core
+    # box with a 4-core limit it would otherwise schedule 2x the work
+    # the cgroup permits and spend the difference in CFS throttling.
+    [worker.oci]
+      max-parallelism = 3
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
