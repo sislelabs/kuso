@@ -16,6 +16,8 @@ package logship
 import (
 	"bufio"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"regexp"
@@ -64,6 +66,15 @@ const (
 	// escape hatch. Override the cap with KUSO_LOG_MAX_LINES_PER_MIN.
 	rateWindow             = 1 * time.Minute
 	rateMaxLinesPerService = 6000
+
+	// firstTailLines bounds the first stream of a container with no
+	// resume point (new pod, or a restart with nothing stored for it).
+	firstTailLines = 100
+	// resumeOverlap rewinds a resume point seeded from the DB. Stored ts
+	// is ingest time, and the previous leader may have died holding an
+	// unflushed buffer: a few duplicate lines beat a gap.
+	resumeOverlap              = 2 * time.Second
+	defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 )
 
 // resolveRateCap returns the per-service per-window line cap:
@@ -115,10 +126,14 @@ type Shipper struct {
 	Namespace string
 	Logger    *slog.Logger
 
-	mu      sync.Mutex
-	streams map[string]context.CancelFunc // podUID → cancel
-	buf     []db.LogLine
-	bufMu   sync.Mutex
+	mu         sync.Mutex
+	containers map[string]*containerState // ns/podUID/container
+	buf        []db.LogLine
+	bufMu      sync.Mutex
+
+	// Seams for tests; New wires them to the clientset and the DB.
+	openLogs     func(ctx context.Context, ns, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
+	lastStoredTs func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error)
 
 	// flushing is a single-flight guard for the out-of-band flush that
 	// append() kicks off when the buffer crosses flushBatchSize.
@@ -168,9 +183,9 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Shipper{
+	s := &Shipper{
 		DB: d, Kube: k, Namespace: namespace, Logger: logger,
-		streams: map[string]context.CancelFunc{},
+		containers: map[string]*containerState{},
 		// Pre-seed runCtx so append() called before Run() doesn't fall
 		// back to context.Background() (which would spawn an
 		// uncancellable flush goroutine). Run() overrides this with
@@ -178,10 +193,34 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 		// keeps the contract honest.
 		runCtx: context.Background(),
 	}
+	s.openLogs = func(ctx context.Context, ns, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+		return s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod, opts).Stream(ctx)
+	}
+	s.lastStoredTs = func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error) {
+		return s.DB.LatestPodLogTs(ctx, project, service, pod, since)
+	}
+	return s
 }
 
-// Run blocks until ctx done. Idempotent: re-running picks up state
-// from existing pods (every stream restarts from a fresh tail).
+// containerState is the shipping cursor for one container of one pod.
+// A terminated container is streamed to EOF once and then never
+// reopened; a running one resumes from lastTs instead of re-tailing.
+type containerState struct {
+	streaming bool
+	cancel    context.CancelFunc
+	// seeded: lastTs has been resolved (from a stream or the DB), so a
+	// zero lastTs really means "nothing shipped yet".
+	seeded  bool
+	lastTs  time.Time // kubelet timestamp of the newest shipped line
+	nAtLast int       // lines already shipped carrying exactly lastTs
+	// doneRestart is the restart count whose terminated instance was
+	// shipped to EOF; -1 when none.
+	doneRestart int32
+}
+
+// Run blocks until ctx done. After a restart or leader failover each
+// container resumes from the newest line stored for its pod, or from a
+// bounded tail when there is none.
 func (s *Shipper) Run(ctx context.Context) {
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		s.Logger.Warn("logship: kube client unavailable, log shipping disabled")
@@ -285,69 +324,139 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 	seen := map[string]struct{}{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		uid := ns + "/" + string(p.UID)
-		seen[uid] = struct{}{}
-		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded {
+		podKey := ns + "/" + string(p.UID)
+		seen[podKey] = struct{}{}
+		switch p.Status.Phase {
+		case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
+		default:
 			continue
 		}
+		container := logContainer(p)
+		if container == "" {
+			continue
+		}
+		terminated, restarts := containerTerminated(p, container)
+		key := podKey + "/" + container
 		s.mu.Lock()
-		_, has := s.streams[uid]
-		s.mu.Unlock()
-		if has {
+		st := s.containers[key]
+		if st == nil {
+			st = &containerState{doneRestart: -1}
+			s.containers[key] = st
+		}
+		if st.streaming || (terminated && st.doneRestart == restarts) {
+			s.mu.Unlock()
 			continue
 		}
 		streamCtx, cancel := context.WithCancel(ctx)
-		s.mu.Lock()
-		s.streams[uid] = cancel
+		st.streaming, st.cancel = true, cancel
 		s.mu.Unlock()
-		go s.streamPod(streamCtx, ns, *p)
+		go s.streamContainer(streamCtx, ns, *p, container, st, terminated, restarts)
 	}
-	// Drop streams for vanished pods.
+	// Drop state (and any stream) for vanished pods.
 	s.mu.Lock()
-	for uid, cancel := range s.streams {
-		if !strings.HasPrefix(uid, ns+"/") {
+	for key, st := range s.containers {
+		if !strings.HasPrefix(key, ns+"/") {
 			continue
 		}
-		if _, ok := seen[uid]; !ok {
-			cancel()
-			delete(s.streams, uid)
+		if _, ok := seen[key[:strings.LastIndex(key, "/")]]; !ok {
+			if st.cancel != nil {
+				st.cancel()
+			}
+			delete(s.containers, key)
 		}
 	}
 	s.mu.Unlock()
 }
 
-func (s *Shipper) streamPod(ctx context.Context, ns string, pod corev1.Pod) {
+// logContainer picks the container the API server would pick for a
+// GetLogs call without a container name; "" when it would refuse.
+func logContainer(p *corev1.Pod) string {
+	if len(p.Spec.Containers) == 1 {
+		return p.Spec.Containers[0].Name
+	}
+	return p.Annotations[defaultContainerAnnotation]
+}
+
+// containerTerminated reports whether the container's current instance
+// has exited (so its log is final) and that instance's restart count.
+func containerTerminated(p *corev1.Pod, container string) (bool, int32) {
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Name == container {
+			return cs.State.Terminated != nil, cs.RestartCount
+		}
+	}
+	return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed, 0
+}
+
+func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod, container string, st *containerState, terminated bool, restarts int32) {
 	defer func() {
 		s.mu.Lock()
-		delete(s.streams, ns+"/"+string(pod.UID))
+		st.streaming, st.cancel = false, nil
 		s.mu.Unlock()
 	}()
-	// Tail starting from "now"-ish: 100 lines back. Hot pods that
-	// produce thousands per second wouldn't want full historical
-	// replay; new pods get full output by virtue of TailLines being
-	// soft-capped by what the kubelet still has.
-	tail := int64(100)
-	req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
-		Follow:     true,
-		TailLines:  &tail,
-		Timestamps: false,
-	})
-	stream, err := req.Stream(ctx)
-	if err != nil {
-		s.Logger.Debug("logship stream open", "pod", pod.Name, "err", err)
-		return
-	}
-	defer stream.Close()
 
 	// Pull project / service / env labels off the pod for metadata.
 	project := pod.Labels["kuso.sislelabs.com/project"]
 	service := pod.Labels["kuso.sislelabs.com/service"]
 	env := pod.Labels["kuso.sislelabs.com/env"]
 
+	s.mu.Lock()
+	seeded, lastTs, nAtLast := st.seeded, st.lastTs, st.nAtLast
+	s.mu.Unlock()
+	if !seeded {
+		// No in-memory cursor: first sight of this container, or a
+		// fresh leader. Resume after what an earlier run stored.
+		stored, err := s.lastStoredTs(ctx, project, service, pod.Name, pod.CreationTimestamp.Time)
+		if err != nil {
+			// Fall back to a bounded tail rather than skip the pod.
+			s.Logger.Debug("logship resume point", "pod", pod.Name, "err", err)
+		} else if !stored.IsZero() {
+			lastTs, nAtLast = stored.Add(-resumeOverlap), 0
+		}
+		s.mu.Lock()
+		st.seeded, st.lastTs, st.nAtLast = true, lastTs, nAtLast
+		s.mu.Unlock()
+	}
+
+	opts := &corev1.PodLogOptions{Container: container, Follow: true, Timestamps: true}
+	if lastTs.IsZero() {
+		tail := int64(firstTailLines)
+		opts.TailLines = &tail
+	} else {
+		// SinceTime travels at second precision, so the kubelet re-serves
+		// the rest of lastTs's second; the loop below drops those lines.
+		since := metav1.NewTime(lastTs)
+		opts.SinceTime = &since
+	}
+	stream, err := s.openLogs(ctx, ns, pod.Name, opts)
+	if err != nil {
+		s.Logger.Debug("logship stream open", "pod", pod.Name, "err", err)
+		return
+	}
+	defer stream.Close()
+
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	skippedAtLast := 0
 	for scanner.Scan() {
-		line := scanner.Text()
+		ts, line, ok := splitTimestamp(scanner.Text())
+		if ok {
+			if ts.Before(lastTs) {
+				continue
+			}
+			if ts.Equal(lastTs) && skippedAtLast < nAtLast {
+				skippedAtLast++
+				continue
+			}
+			if ts.Equal(lastTs) {
+				nAtLast++
+			} else {
+				lastTs, nAtLast = ts, 1
+			}
+			s.mu.Lock()
+			st.lastTs, st.nAtLast = lastTs, nAtLast
+			s.mu.Unlock()
+		}
 		if line == "" {
 			continue
 		}
@@ -368,6 +477,32 @@ func (s *Shipper) streamPod(ctx context.Context, ns string, pod corev1.Pod) {
 			s.recordEnvHint(project, service, name, line)
 		}
 	}
+	// A terminated container's log is final: once read to EOF it is
+	// never reopened. A read error other than an over-long line means
+	// we may have stopped early, so the next tick resumes instead.
+	if err := scanner.Err(); ctx.Err() == nil && terminated && (err == nil || errors.Is(err, bufio.ErrTooLong)) {
+		s.mu.Lock()
+		st.doneRestart = restarts
+		s.mu.Unlock()
+	}
+}
+
+// splitTimestamp splits a Timestamps:true kubelet line into its
+// RFC3339Nano prefix and the message. ok is false when there is no
+// parseable prefix; the whole input is then returned as the message.
+func splitTimestamp(raw string) (time.Time, string, bool) {
+	i := strings.IndexByte(raw, ' ')
+	if i <= 0 {
+		if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return ts, "", true
+		}
+		return time.Time{}, raw, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw[:i])
+	if err != nil {
+		return time.Time{}, raw, false
+	}
+	return ts, raw[i+1:], true
 }
 
 // missingEnvPatterns capture the most common framework messages for

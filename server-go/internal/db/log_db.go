@@ -85,6 +85,24 @@ func (d *LogDB) insertLogLinesChunk(ctx context.Context, chunk []LogLine) error 
 	return nil
 }
 
+// LatestPodLogTs returns the newest stored ts for one pod (zero when it
+// has none). since is the pod's creation time: it bounds the
+// (project, service, ts DESC) index scan to the pod's own lifetime, so a
+// never-shipped pod doesn't walk the service's whole history.
+func (d *LogDB) LatestPodLogTs(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error) {
+	var ts sql.NullTime
+	err := d.DB.DB.QueryRowContext(ctx,
+		`SELECT max("ts") FROM "LogLine" WHERE "project" = $1 AND "service" = $2 AND "pod" = $3 AND "ts" >= $4`,
+		project, service, pod, since.UTC()).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("latest pod log ts: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
+}
+
 // MaxLogSearchLimit caps a single page of log search results.
 const MaxLogSearchLimit = 500
 

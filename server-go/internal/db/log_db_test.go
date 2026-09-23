@@ -55,6 +55,30 @@ func TestLogDB_InsertSearch(t *testing.T) {
 	}
 }
 
+func TestLogDB_LatestPodLogTs(t *testing.T) {
+	d := openTestDB(t).AsLogDB()
+	ctx := context.Background()
+	base := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	if err := d.InsertLogLines(ctx, []LogLine{
+		{Ts: base, Pod: "pod-a", Project: "alpha", Service: "web", Line: "1"},
+		{Ts: base.Add(5 * time.Second), Pod: "pod-a", Project: "alpha", Service: "web", Line: "2"},
+		{Ts: base.Add(9 * time.Second), Pod: "pod-b", Project: "alpha", Service: "web", Line: "3"},
+	}); err != nil {
+		t.Fatalf("InsertLogLines: %v", err)
+	}
+	got, err := d.LatestPodLogTs(ctx, "alpha", "web", "pod-a", base.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(base.Add(5 * time.Second)) {
+		t.Fatalf("pod-a latest = %v, want %v", got, base.Add(5*time.Second))
+	}
+	got, err = d.LatestPodLogTs(ctx, "alpha", "web", "pod-c", base.Add(-time.Hour))
+	if err != nil || !got.IsZero() {
+		t.Fatalf("unknown pod = %v, %v; want zero, nil", got, err)
+	}
+}
+
 // TestLogDB_SearchLogsPaging covers scrollback past the first page.
 // SearchLogs returns newest-first with no cursor, so the UI could only
 // ever show the most recent page (200 lines) and "scroll to the start
