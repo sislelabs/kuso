@@ -59,8 +59,8 @@ import (
 // MintRepoScopedToken restricts the token to the single repo being built
 // so a hostile/compromised build pod can't reach sibling repos in the
 // same installation. The github.Client implements it; when a caller wires
-// a legacy minter that only has MintInstallationToken, the build path
-// falls back to installation scope (see ensureCloneTokenSecret).
+// a legacy minter that only has MintInstallationToken, the build refuses
+// to mint rather than hand out an installation-wide token.
 type TokenMinter interface {
 	MintInstallationToken(ctx context.Context, installationID int64) (string, error)
 }
@@ -878,6 +878,11 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	installationID := githubInstallationID(proj, svcCR)
+	// A GitHub App installation only applies to github.com repos. Any other
+	// host must never see a GitHub token (git sends it after a 401).
+	if owner, _ := splitGithubURL(repoURL); owner == "" {
+		installationID = 0
+	}
 	// Auto-resolve from the GH-app cache when the user didn't pin
 	// one. Catches the common "I installed the App on my org but
 	// forgot to plumb the installation ID into the project" case —

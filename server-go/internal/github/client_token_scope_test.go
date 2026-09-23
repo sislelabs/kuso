@@ -68,28 +68,23 @@ func TestMintRepoScopedToken_CarriesRepoRestriction(t *testing.T) {
 	if !ok || len(repos) != 1 || repos[0] != "web" {
 		t.Fatalf("token request missing single-repo restriction; body=%v", gotBody)
 	}
+	perms, _ := gotBody["permissions"].(map[string]any)
+	if len(perms) != 1 || perms["contents"] != "read" {
+		t.Fatalf("token request must ask for contents:read only; permissions=%v", gotBody["permissions"])
+	}
 }
 
-// TestMintRepoScopedToken_EmptyRepoFallsBackInstallationWide confirms the
-// safe fallback: with no repo coordinates we can't scope, so we mint an
-// installation-wide token rather than fail the build.
-func TestMintRepoScopedToken_EmptyRepoFallsBackInstallationWide(t *testing.T) {
-	// No httptest server needed — with empty repo we route to
-	// MintInstallationToken, which uses the ghinstallation transport.
-	// Generating the token would require a live GitHub, so we only assert
-	// that the empty-repo branch does NOT attempt the scoped API call
-	// (which would panic on a nil server). The call will error on the
-	// network attempt, which is fine — we only care it took the
-	// installation-wide branch, observable via the error message not
-	// mentioning "repo-scoped".
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	c, err := NewClient(&Config{AppID: 1, PrivateKey: pemBytes})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	_, err = c.MintRepoScopedToken(context.Background(), 1, "", "")
-	if err != nil && strings.Contains(err.Error(), "repo-scoped") {
-		t.Errorf("empty repo should fall back to installation scope, not attempt repo-scoped mint: %v", err)
+// With no repo to scope by, the mint must fail rather than fall back to an
+// installation-wide token (which would go to api.github.com, not srv).
+func TestMintRepoScopedToken_EmptyRepoRefusesInstallationWide(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("empty repo reached the token endpoint: %s", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv.URL)
+	_, err := c.MintRepoScopedToken(context.Background(), 1, "", "")
+	if err == nil || !strings.Contains(err.Error(), "needs owner and repo") {
+		t.Fatalf("empty repo must be refused before any mint, got err=%v", err)
 	}
 }

@@ -37,29 +37,16 @@ func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName stri
 		token = t
 	}
 	if s.Tokens != nil && installationID > 0 {
-		// Prefer a token scoped to ONLY the repo being built. A build pod
-		// runs untrusted code (the repo + its dependencies, and — with fork
-		// previews — an untrusted author's PR), so its clone credential must
-		// not grant access to sibling repos in the same installation. When
-		// the minter can't repo-scope (legacy minter, or the scoped mint
-		// errors), we fall back to the installation-wide token so the build
-		// still clones rather than fail outright.
-		var (
-			t   string
-			err error
-		)
-		if rs, ok := s.Tokens.(RepoScopedTokenMinter); ok && owner != "" && repo != "" {
-			t, err = rs.MintRepoScopedToken(ctx, installationID, owner, repo)
-			if err != nil {
-				slog.Default().Warn("repo-scoped token mint failed; falling back to installation scope",
-					"build", buildName, "owner", owner, "repo", repo, "err", err)
-				t, err = s.Tokens.MintInstallationToken(ctx, installationID)
-			}
-		} else {
-			t, err = s.Tokens.MintInstallationToken(ctx, installationID)
+		// Only ever a token scoped to the one repo being built: a build pod
+		// runs untrusted code, so its clone credential must not reach sibling
+		// repos. No installation-wide fallback.
+		rs, ok := s.Tokens.(RepoScopedTokenMinter)
+		if !ok || owner == "" || repo == "" {
+			return fmt.Errorf("mint clone token: cannot scope a token to %s/%s", owner, repo)
 		}
+		t, err := rs.MintRepoScopedToken(ctx, installationID, owner, repo)
 		if err != nil {
-			return fmt.Errorf("mint installation token: %w", err)
+			return fmt.Errorf("mint repo-scoped token: %w", err)
 		}
 		token = t
 	}

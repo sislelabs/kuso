@@ -107,8 +107,8 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 
 // MintRepoScopedToken mints an installation token restricted to a SINGLE
 // repository (owner/repo) via the GitHub API's repository_ids/Repositories
-// option. The resulting token can only clone/read (and, if the App has the
-// permission, write) that one repo — not the rest of the installation.
+// option, with contents:read only. The resulting token can clone that one
+// repo and nothing else in the installation.
 //
 // This is the token the build clone/buildpacks containers should carry:
 // a build pod is untrusted execution (arbitrary code from the repo + its
@@ -117,18 +117,15 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 //
 // Scoping is done off the App-JWT transport (Apps.CreateInstallationToken),
 // NOT the cached ghinstallation transport, because ghinstallation.Token()
-// always mints installation-wide. On any failure we fall back to the
-// installation-wide token rather than break the build — a working (if
-// broader) clone beats a hard build failure, and the caller logs the
-// downgrade.
+// always mints installation-wide. There is no installation-wide fallback.
 func (c *Client) MintRepoScopedToken(ctx context.Context, installationID int64, owner, repo string) (string, error) {
 	if owner == "" || repo == "" {
-		// No repo coordinates to scope by — fall back to installation-wide.
-		return c.MintInstallationToken(ctx, installationID)
+		return "", errors.New("github: repo-scoped token needs owner and repo")
 	}
 	app := c.App()
 	tok, _, err := app.Apps.CreateInstallationToken(ctx, installationID, &gogithub.InstallationTokenOptions{
 		Repositories: []string{repo},
+		Permissions:  &gogithub.InstallationPermissions{Contents: gogithub.String("read")},
 	})
 	if err != nil {
 		return "", fmt.Errorf("github: mint repo-scoped token for %s/%s: %w", owner, repo, err)
