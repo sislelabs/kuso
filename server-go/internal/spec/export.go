@@ -81,7 +81,7 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 		return nil, fmt.Errorf("list crons: %w", err)
 	}
 	for _, lc := range liveCrons {
-		if lc.Spec.Project != project {
+		if lc.Spec.Project != project || !projectCron(lc) {
 			continue
 		}
 		f.Crons = append(f.Crons, exportCron(project, lc))

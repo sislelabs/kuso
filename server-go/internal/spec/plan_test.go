@@ -167,3 +167,26 @@ func TestPlanFor_PruneSkipsEnvScopedClones(t *testing.T) {
 		t.Fatalf("env=production addon is the project's own: update %+v create %+v", plan.AddonsToUpdate, plan.AddonsToCreate)
 	}
 }
+
+func seedServiceCron(project, service, cron string) planSeed {
+	name := project + "-" + service + "-" + cron
+	return typedPlanSeed(kube.GVRCrons, "KusoCron", name, &kube.KusoCron{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+		Spec: kube.KusoCronSpec{Project: project, Service: project + "-" + service,
+			Schedule: "0 0 * * *", Command: []string{"true"}},
+	})
+}
+
+func TestPlanFor_PruneSkipsServiceCrons(t *testing.T) {
+	stale := seedPlanCron("shop", "stale-cron")
+	stale.obj.Object["spec"].(map[string]any)["kind"] = "http"
+	k, ns := fakeKube(t, seedServiceCron("shop", "api", "nightly"), stale)
+	f := &File{Project: "shop", Prune: true}
+	plan, err := PlanFor(context.Background(), k, ns, f)
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	if len(plan.CronsToDelete) != 1 || plan.CronsToDelete[0] != "stale-cron" {
+		t.Fatalf("want only the project cron pruned, got %+v", plan.CronsToDelete)
+	}
+}

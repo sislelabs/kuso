@@ -220,3 +220,14 @@ func TestExport_LeavesOutEnvScopedClones(t *testing.T) {
 		t.Fatalf("want only db exported, got %+v", f.Addons)
 	}
 }
+
+func TestExport_LeavesOutServiceCrons(t *testing.T) {
+	k, ns := fakeKube(t, seedProject("shop"), seedFullCron("shop", "ping"), seedServiceCron("shop", "api", "nightly"))
+	f, err := Export(context.Background(), k, ns, "shop")
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(f.Crons) != 1 || f.Crons[0].Name != "ping" {
+		t.Fatalf("want only the project cron exported, got %+v", f.Crons)
+	}
+}

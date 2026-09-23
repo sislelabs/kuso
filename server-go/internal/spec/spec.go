@@ -422,6 +422,15 @@ func envScoped(labels map[string]string) bool {
 	return env != "" && env != "production"
 }
 
+// projectCron reports whether a cron is one kuso.yaml can manage.
+// apply creates and updates crons through the project cron routes,
+// which only take kind http or command; service crons (kind "" or
+// "service") come from the per-service routes and are outside the
+// file's scope.
+func projectCron(c kube.KusoCron) bool {
+	return c.Spec.Kind == "http" || c.Spec.Kind == "command"
+}
+
 // PlanFor diffs the YAML file against the live project and returns
 // the set of changes needed to bring kube into line. Read-only —
 // callers run this for the dry-run UI before pulling the trigger.
@@ -504,7 +513,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	}
 	liveCronByName := map[string]bool{}
 	for _, lc := range liveCrons {
-		if lc.Spec.Project != f.Project {
+		if lc.Spec.Project != f.Project || !projectCron(lc) {
 			continue
 		}
 		short := shortName(f.Project, lc.Name)
