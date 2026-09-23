@@ -76,6 +76,14 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"Exception in thread \"main\" java.lang.NullPointerException",
 		"ActiveRecord::RecordNotFound",
 		`{"level":"info","status":500,"path":"/api/x"}`,
+		// Error class names with no standalone "Error" word. The first
+		// two are live lines from scubatony/internal-system.
+		"wetravel reconcile failed for booking 13 (link 8045951536): [TypeError: fetch failed] {",
+		"  [cause]: AggregateError [ECONNREFUSED]: ",
+		"RuntimeException: invalid literal",
+		"NullPointerException: cannot read property",
+		"ValueError: invalid literal for int() with base 10",
+		"KeyError: 'user_id'",
 	}
 	for _, line := range matches {
 		if !matchesAnyPattern(line) {
@@ -91,42 +99,12 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"user signed in successfully",
 		`{"level":"info","status":200}`,
 		"migration applied: 0009_tenancy_rev",
+		"#17 0.510 go: downloading github.com/hashicorp/go-multierror v1.1.1",
+		"rendering <ErrorBoundary> fallback",
 	}
 	for _, line := range nonMatches {
 		if matchesAnyPattern(line) {
 			t.Errorf("matchesAnyPattern(%q) = true, want false", line)
-		}
-	}
-}
-
-// TestMatchesAnyPattern_KnownGaps documents error lines that a user would
-// reasonably expect to be caught but currently are NOT. Found while adding
-// the first tests to this package (it previously had none).
-//
-// The `\bException\b.*?:` pattern requires "Exception" as a STANDALONE
-// word, so the most common real-world forms miss:
-//
-//	RuntimeException: …          → no match (no word boundary before "Exception")
-//	NullPointerException: …      → no match (ditto)
-//	ValueError: / KeyError: …    → no match (Python's actual top-level errors)
-//
-// Python tracebacks are still caught by the "Traceback" pattern when the
-// traceback header is present, and java.lang.* by its own pattern — so this
-// is a partial-coverage gap, not a total blind spot. Widening the regex is a
-// product decision (it trades recall against false positives on lines like
-// "no exception raised"), so this test records the behaviour rather than
-// asserting a fix. Skipped so it never blocks CI.
-func TestMatchesAnyPattern_KnownGaps(t *testing.T) {
-	t.Skip("documents current known-miss patterns; widening the regex is a product decision")
-
-	for _, line := range []string{
-		"RuntimeException: invalid literal",
-		"NullPointerException: cannot read property",
-		"ValueError: invalid literal for int() with base 10",
-		"KeyError: 'user_id'",
-	} {
-		if !matchesAnyPattern(line) {
-			t.Errorf("matchesAnyPattern(%q) = false", line)
 		}
 	}
 }

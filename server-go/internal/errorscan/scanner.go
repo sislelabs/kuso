@@ -41,6 +41,10 @@ var errorPatterns = []*regexp.Regexp{
 	// Python traceback / exception.
 	regexp.MustCompile(`(?i)Traceback \(most recent call last\)`),
 	regexp.MustCompile(`(?i)\bException\b.*?:`),
+	// Error class names (TypeError, AggregateError, ValueError,
+	// NullPointerException). Case-sensitive so "multierror" and
+	// "ErrorBoundary" stay out.
+	regexp.MustCompile(`\b[A-Z][A-Za-z]*(?:Error|Exception)\b`),
 	// Node.js unhandled.
 	regexp.MustCompile(`(?i)UnhandledPromiseRejection|UnhandledRejection`),
 	// Java / JVM stacktraces.
