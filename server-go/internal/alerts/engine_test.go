@@ -257,7 +257,9 @@ func TestTickRearmsAfterThrottleExpiry(t *testing.T) {
 	}
 
 	// Backdate the stamp past the throttle window; condition persists.
-	expired := time.Now().UTC().Add(-11 * time.Minute)
+	// Postgres timestamps hold microseconds and Linux time.Now carries
+	// nanoseconds, so truncate or the round-tripped value never Equals.
+	expired := time.Now().UTC().Add(-11 * time.Minute).Truncate(time.Microsecond)
 	if err := d.MarkAlertFired(context.Background(), "r-logs", expired); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
