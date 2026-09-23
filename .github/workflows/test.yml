@@ -126,6 +126,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
+        with:
+          # Defaults to the repo-root package.json, which doesn't exist;
+          # the version comes from web/package.json's packageManager.
+          package_json_file: web/package.json
 
       - uses: actions/setup-node@v4
         with:
