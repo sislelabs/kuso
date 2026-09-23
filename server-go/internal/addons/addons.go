@@ -1564,52 +1564,15 @@ func filterAddonConnsBySubscription(envFromSecrets, projectAddonConns, subscribe
 			out = append(out, sec)
 			continue
 		}
-		// Match the exact name OR an ENV-SCOPED CLONE of a subscribed
-		// addon. A non-production env's own conn is
-		// "<project>-<addon>-<scope>-conn" (tickero-db-staging-conn for
-		// subscribed "db"), which the allow-set — built only from base
-		// names — misses. Without this clause the clone was DROPPED while
-		// the production conn was KEPT, silently repointing every staging
-		// and preview env at the production database on any addon
-		// add/delete in the project.
-		if allow[sec] || connMatchesSubscribedBase(sec, subscribedAddons, project) {
+		// Env-scoped clones never reach here: projectAddonConns is
+		// project-scoped, so a clone takes the pass-through above. A name
+		// that merely extends a subscribed one ("storage-archive" for
+		// "storage") is a different project addon and must be dropped.
+		if allow[sec] {
 			out = append(out, sec)
 		}
 	}
 	return out
-}
-
-// connMatchesSubscribedBase reports whether a "<project>-<addon>[-<scope>]-conn"
-// secret is a clone of a SUBSCRIBED base addon. A clone conn inserts an env
-// scope segment before "-conn" (tickero-db-staging-conn), so the exact
-// allow-set (which only has base names) misses it. We check whether, after
-// stripping the project prefix and the "-conn" suffix, the remainder BEGINS
-// with a subscribed addon name followed by "-" (the scope). Prefix-with-dash
-// avoids matching a different addon that merely shares a prefix
-// (e.g. subscribed "db" must not green-light "database-conn").
-//
-// MUST stay behaviourally identical to the copy in internal/projects —
-// TestFilterParity_WithProjectsImplementation locks the two together.
-func connMatchesSubscribedBase(sec string, subscribedAddons []string, project string) bool {
-	inner := strings.TrimSuffix(sec, "-conn")
-	if inner == sec {
-		return false // not a conn secret
-	}
-	if project != "" {
-		inner = strings.TrimPrefix(inner, project+"-")
-	}
-	for _, addon := range subscribedAddons {
-		short := addon
-		if project != "" {
-			short = strings.TrimPrefix(short, project+"-")
-		}
-		// Env-scoped clone: "<addon>-<scope>". Require the dash so "db"
-		// matches "db-staging" but never "database".
-		if strings.HasPrefix(inner, short+"-") {
-			return true
-		}
-	}
-	return false
 }
 
 // createAddon is the typed-write wrapper for addons.

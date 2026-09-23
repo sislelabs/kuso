@@ -16,11 +16,11 @@ func TestFilterEnvFromForSubscription_KeepsEnvScopedCloneConns(t *testing.T) {
 	t.Parallel()
 	project := "tickero"
 	subscribed := []string{"cache", "db", "queue", "storage"}
-	// projectAddons = every project-owned conn (base + clones), which is
-	// what listProjectAddonConnSecrets returns.
+	// projectAddons is what listProjectAddonConnSecrets returns: the
+	// project's own conns only. Env-scoped clones are excluded there
+	// (addons.ConnSecretsForProject), so the filter sees them as non-project.
 	projectAddons := []string{
 		"tickero-cache-conn", "tickero-db-conn", "tickero-queue-conn", "tickero-storage-conn",
-		"tickero-cache-staging-conn", "tickero-db-staging-conn", "tickero-queue-staging-conn", "tickero-storage-staging-conn",
 	}
 	// The staging env's envFromSecrets: its own clone conns + service secrets.
 	in := []string{
@@ -54,7 +54,7 @@ func TestFilterEnvFromForSubscription_DropsUnsubscribed(t *testing.T) {
 	t.Parallel()
 	project := "p"
 	subscribed := []string{"db"}
-	projectAddons := []string{"p-db-conn", "p-db-staging-conn", "p-cache-conn", "p-database-conn"}
+	projectAddons := []string{"p-db-conn", "p-cache-conn", "p-database-conn"}
 	in := []string{
 		"p-db-conn",          // subscribed base → keep
 		"p-db-staging-conn",  // subscribed clone → keep

@@ -61,13 +61,11 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 			out = append(out, sec)
 			continue
 		}
-		// Project addon conn-secret — gated by the subscription. Match the
-		// exact name OR an ENV-SCOPED CLONE of a subscribed addon: a
-		// staging/qa/preview env's own conn is "<project>-<addon>-<scope>-conn"
-		// (e.g. tickero-db-staging-conn for subscribed "db"). Those must be
-		// kept too, or propagating an env-var change to a non-production env
-		// strips its addon connections and the pod crashes with no DB URL.
-		if allow[sec] || connMatchesSubscribedBase(sec, subscribedAddons, project) {
+		// Project addon conn-secret — gated by the subscription. Env-scoped
+		// clones (tickero-db-staging-conn) are not in projectAddons, so they
+		// took the pass-through above; a name that extends a subscribed one
+		// ("storage-archive" for "storage") is a different addon.
+		if allow[sec] {
 			out = append(out, sec)
 		}
 	}
@@ -82,7 +80,7 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 	// Only project-scoped conns are added. Env-scoped clones are NOT: a
 	// clone belongs to one env, and adding "<project>-<addon>-<scope>-conn"
 	// here would mount one env's private database onto another. Clones are
-	// preserved above (connMatchesSubscribedBase) and re-asserted by
+	// passed through above and re-asserted by
 	// addons.refreshEnvSecrets from the addon's env label.
 	//
 	// An env that has its own clone must not also get the project-level
@@ -92,7 +90,7 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 		if !allow[conn] || slices.Contains(out, conn) {
 			continue
 		}
-		if hasCloneOf(out, conn, project) {
+		if hasCloneOf(out, conn, projectAddonSet) {
 			continue
 		}
 		out = append(out, conn)
@@ -103,47 +101,19 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 // hasCloneOf reports whether mounted already contains an env-scoped clone of
 // the project-level conn secret — "<project>-db-staging-conn" for "<project>-db-conn".
 // The clone replaces its source, so the source must not be added alongside it.
-func hasCloneOf(mounted []string, projectConn, project string) bool {
+// A project addon is never a clone, even when its name extends the source's
+// ("<project>-db-analytics-conn").
+func hasCloneOf(mounted []string, projectConn string, projectAddonSet map[string]bool) bool {
 	base := strings.TrimSuffix(projectConn, "-conn")
 	if base == projectConn {
 		return false
 	}
 	for _, sec := range mounted {
-		if sec == projectConn {
+		if sec == projectConn || projectAddonSet[sec] {
 			continue
 		}
 		// A clone is "<base>-<scope>-conn": same prefix, longer, still a conn.
 		if strings.HasPrefix(sec, base+"-") && strings.HasSuffix(sec, "-conn") {
-			return true
-		}
-	}
-	return false
-}
-
-// connMatchesSubscribedBase reports whether a "<project>-<addon>[-<scope>]-conn"
-// secret is a clone of a SUBSCRIBED base addon. A clone conn inserts an env
-// scope segment before "-conn" (tickero-db-staging-conn), so the exact
-// allow-set (which only has base names) misses it. We check whether, after
-// stripping the project prefix and the "-conn" suffix, the remainder BEGINS
-// with a subscribed addon name followed by "-" (the scope). Prefix-with-dash
-// avoids matching a different addon that merely shares a prefix
-// (e.g. subscribed "db" must not green-light "database-conn").
-func connMatchesSubscribedBase(sec string, subscribedAddons []string, project string) bool {
-	inner := strings.TrimSuffix(sec, "-conn")
-	if inner == sec {
-		return false // not a conn secret
-	}
-	if project != "" {
-		inner = strings.TrimPrefix(inner, project+"-")
-	}
-	for _, addon := range subscribedAddons {
-		short := addon
-		if project != "" {
-			short = strings.TrimPrefix(short, project+"-")
-		}
-		// Env-scoped clone: "<addon>-<scope>". Require the dash so "db"
-		// matches "db-staging" but never "database".
-		if strings.HasPrefix(inner, short+"-") {
 			return true
 		}
 	}

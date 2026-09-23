@@ -139,30 +139,3 @@ func TestConnSecretsForProject_ExcludesClones(t *testing.T) {
 		t.Errorf("project-wide conn list dropped the real addon alpha-db-conn; got=%v", got)
 	}
 }
-
-// TestConnMatchesSubscribedBase covers the clone-matching helper
-// directly, including the prefix trap: subscribed "db" must match
-// "db-staging" but must NOT green-light a different addon that merely
-// shares a prefix, like "database".
-func TestConnMatchesSubscribedBase(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		sec        string
-		subscribed []string
-		want       bool
-		why        string
-	}{
-		{"alpha-db-staging-conn", []string{"db"}, true, "env-scoped clone of subscribed base"},
-		{"alpha-db-pr-5-conn", []string{"db"}, true, "preview clone of subscribed base"},
-		{"alpha-database-conn", []string{"db"}, false, "shared prefix must not match"},
-		{"alpha-cache-staging-conn", []string{"db"}, false, "clone of an UNsubscribed addon"},
-		{"alpha-db-conn", []string{"db"}, false, "exact base handled by the allow-set, not here"},
-		{"alpha-shared", []string{"db"}, false, "not a conn secret at all"},
-	}
-	for _, c := range cases {
-		if got := connMatchesSubscribedBase(c.sec, c.subscribed, "alpha"); got != c.want {
-			t.Errorf("connMatchesSubscribedBase(%q, %v) = %v, want %v — %s",
-				c.sec, c.subscribed, got, c.want, c.why)
-		}
-	}
-}
