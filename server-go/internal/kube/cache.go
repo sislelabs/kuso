@@ -41,6 +41,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -98,8 +99,9 @@ type Cache struct {
 	// every Secret before it enters the indexer, so this cache holds
 	// key NAMES only. Secret VALUES are never resident. Any caller that
 	// needs a value must still go to the live API — see SecretKeysOnly.
-	secretLister corelisters.SecretLister
-	secretSynced cache.InformerSynced
+	secretFactory coreinformers.SharedInformerFactory
+	secretLister  corelisters.SecretLister
+	secretSynced  cache.InformerSynced
 
 	// Node informer — nodewatch.Watcher (30s tick) and nodemetrics.Sampler
 	// (5min tick) used to Nodes().List() every iteration. On a 50-node
@@ -200,7 +202,17 @@ func NewCache(c *Client) *Cache {
 		// cached consumer needs key names, and keeping every Secret's
 		// Data resident in every replica would be both a large memory
 		// cost and an unnecessary blast-radius increase.
-		si := pf.Core().V1().Secrets()
+		//
+		// Helm release Secrets are excluded server-side: they were ~90%
+		// of the bytes this informer listed and watched, and no cache
+		// consumer reads them. The selector needs its own factory
+		// because tweak options apply to every informer in a factory.
+		sf := coreinformers.NewSharedInformerFactoryWithOptions(c.Clientset, resyncPeriod,
+			coreinformers.WithTweakListOptions(func(o *metav1.ListOptions) {
+				o.FieldSelector = "type!=helm.sh/release.v1"
+			}))
+		cc.secretFactory = sf
+		si := sf.Core().V1().Secrets()
 		_ = si.Informer().SetTransform(stripSecretData)
 		cc.secretLister = si.Lister()
 		cc.secretSynced = si.Informer().HasSynced
@@ -222,6 +234,9 @@ func (c *Cache) Start() {
 	c.factory.Start(c.stopCh)
 	if c.podFactory != nil {
 		c.podFactory.Start(c.stopCh)
+	}
+	if c.secretFactory != nil {
+		c.secretFactory.Start(c.stopCh)
 	}
 }
 
