@@ -61,6 +61,12 @@ spec:
                     path:
                       type: string
                       default: "."
+                    defaultBranch:
+                      type: string
+                    provider:
+                      type: string
+                    tokenSecret:
+                      type: string
                 # branch + commit SHA. Both stored — the SHA is the immutable
                 # truth (image tag), the branch is the human label.
                 ref:

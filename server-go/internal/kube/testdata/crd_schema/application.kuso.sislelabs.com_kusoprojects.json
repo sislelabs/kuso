@@ -38,6 +38,15 @@
                 "default": "main",
                 "type": "string"
               },
+              "path": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "tokenSecret": {
+                "type": "string"
+              },
               "url": {
                 "type": "string"
               }

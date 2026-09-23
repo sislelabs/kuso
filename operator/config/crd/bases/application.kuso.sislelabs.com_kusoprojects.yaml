@@ -63,6 +63,12 @@ spec:
                     defaultBranch:
                       type: string
                       default: main
+                    path:
+                      type: string
+                    provider:
+                      type: string
+                    tokenSecret:
+                      type: string
                 github:
                   type: object
                   properties:

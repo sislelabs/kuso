@@ -53,6 +53,12 @@ spec:
                     path:
                       type: string
                       default: "."
+                    defaultBranch:
+                      type: string
+                    provider:
+                      type: string
+                    tokenSecret:
+                      type: string
                 runtime:
                   type: string
                   enum: ["", dockerfile, nixpacks, buildpacks, static, worker, image]

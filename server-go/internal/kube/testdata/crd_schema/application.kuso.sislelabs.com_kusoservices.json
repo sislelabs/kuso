@@ -289,8 +289,17 @@
           },
           "repo": {
             "properties": {
+              "defaultBranch": {
+                "type": "string"
+              },
               "path": {
                 "default": ".",
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "tokenSecret": {
                 "type": "string"
               },
               "url": {
