@@ -78,11 +78,11 @@ func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonReq
 	}
 	if in.Pooler != nil {
 		out.Pooler = &addons.AddonPoolerPatch{
-			Enabled:         &in.Pooler.Enabled,
-			ExternalBackend: &in.Pooler.ExternalBackend,
-			Host:            &in.Pooler.Host,
-			Port:            &in.Pooler.Port,
-			PoolSize:        &in.Pooler.PoolSize,
+			Enabled:         in.Pooler.Enabled,
+			ExternalBackend: in.Pooler.ExternalBackend,
+			Host:            in.Pooler.Host,
+			Port:            in.Pooler.Port,
+			PoolSize:        in.Pooler.PoolSize,
 		}
 	}
 	return out

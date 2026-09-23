@@ -61,7 +61,7 @@ type UpdateAddonRequest struct {
 	Database    *string             `json:"database,omitempty"`
 	Backup      *UpdateAddonBackup  `json:"backup,omitempty"`
 	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
-	Pooler *AddonPoolerSpec `json:"pooler,omitempty"`
+	Pooler *AddonPoolerPatch `json:"pooler,omitempty"`
 	// TLS flips in-cluster wire TLS on a kind=postgres addon
 	// ("disable" | "require"). Live-safe: only the pod template +
 	// conn secret re-render; the data PVC is untouched. Subscribed
@@ -86,12 +86,7 @@ type UpdateAddonBackup struct {
 // AddonPoolerSpec is the opt-in connection-pooler block. Only
 // meaningful for kind=postgres.
 //
-// Enabled is a plain bool, not a pointer: the optionality lives one
-// level up in the *AddonPoolerSpec pointer on Create/UpdateAddonRequest
-// (nil = "leave alone / no pooler"). A present block always carries an
-// explicit enabled value — on the update path the handler maps it to
-// the domain layer's *bool patch, so `{"pooler":{"enabled":false}}`
-// deliberately means "turn the pooler off", not "unspecified".
+// Create-only; updates use AddonPoolerPatch.
 type AddonPoolerSpec struct {
 	Enabled bool `json:"enabled"`
 	// ExternalBackend pools an external managed database instead of an
@@ -102,4 +97,16 @@ type AddonPoolerSpec struct {
 	Port            int32  `json:"port,omitempty"`
 	// PoolSize: PgBouncer default_pool_size; 0 = chart default (25).
 	PoolSize int32 `json:"poolSize,omitempty"`
+}
+
+// AddonPoolerPatch is the pooler block of UpdateAddonRequest. Every field
+// is a pointer so an absent key leaves the stored value alone: the web
+// toggle sends only {"enabled":…}, and zero values there used to reset
+// poolSize to the chart default and drop an external backend.
+type AddonPoolerPatch struct {
+	Enabled         *bool   `json:"enabled,omitempty"`
+	ExternalBackend *bool   `json:"externalBackend,omitempty"`
+	Host            *string `json:"host,omitempty"`
+	Port            *int32  `json:"port,omitempty"`
+	PoolSize        *int32  `json:"poolSize,omitempty"`
 }
