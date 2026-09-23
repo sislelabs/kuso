@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,6 +46,12 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 	service := chi.URLParam(r, "service")
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
+	}
+	// ErrorEvent.service is copied from LogLine.service, which is the FQ
+	// `<project>-<service>` form; callers pass the short name. Same
+	// widening as LogSearchHandler.Search.
+	if !strings.HasPrefix(service, project+"-") {
+		service = project + "-" + service
 	}
 	// A bad `since` is rejected rather than silently defaulted. The old
 	// code swallowed the parse error, so the UI's "7d"/"30d" options —
