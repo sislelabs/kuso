@@ -625,36 +625,6 @@ type Watcher struct {
 	// watcher exists to catch.
 	lastState string
 	evaluated bool
-	// last*OK carry each subsystem's verdict across INDETERMINATE /
-	// incomplete evaluations (transient kube read failures): an
-	// unknown state must neither page nor "recover" — without the
-	// carry, one apiserver flake fired a spurious unhealthy+recovered
-	// event pair.
-	lastAddonsOK  bool
-	addonsWasEval bool
-	lastBackupOK  bool
-	backupWasEval bool
-	lastGCOK      bool
-	gcWasEval     bool
-	// lastAddonsPart is the addon component of the state string from
-	// the last COMPLETE evaluation, reused verbatim during incomplete
-	// ones so alternating complete↔incomplete ticks with the same
-	// underlying failure can't flip the state and fire spuriously.
-	lastAddonsPart string
-}
-
-// carryVerdict resolves a subsystem verdict: the current one when the
-// evaluation was determinate, else the carried previous verdict
-// (healthy before the first determinate evaluation).
-func carryVerdict(current, indeterminate bool, last *bool, wasEval *bool) bool {
-	if indeterminate {
-		if *wasEval {
-			return *last
-		}
-		return true
-	}
-	*last, *wasEval = current, true
-	return current
 }
 
 func (w *Watcher) Run(ctx context.Context) {
@@ -692,12 +662,16 @@ func (w *Watcher) tick(ctx context.Context) {
 	addons, addonsComplete := ComputeAddons(cctx, w.Kube, w.Namespace)
 	cancel()
 
-	// Per-subsystem verdicts, carrying the previous one across
-	// indeterminate/incomplete evaluations — a transient apiserver
-	// flake must neither page nor "recover".
-	backupOK := carryVerdict(s.Healthy, s.Indeterminate, &w.lastBackupOK, &w.backupWasEval)
-	gcOK := carryVerdict(gc.Healthy, gc.Indeterminate, &w.lastGCOK, &w.gcWasEval)
-	addonsOK := carryVerdict(AddonsHealthy(addons), !addonsComplete, &w.lastAddonsOK, &w.addonsWasEval)
+	// A failed read keeps the previous state: no transition, no event.
+	// Carrying verdicts per subsystem was not enough, because severity
+	// and (after a restart) the addon part still moved, so one flake sent
+	// two spurious alerts. The next complete tick decides.
+	if s.Indeterminate || gc.Indeterminate || !addonsComplete {
+		w.Logger.Warn("backup health: evaluation incomplete, keeping previous state",
+			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete)
+		return
+	}
+	backupOK, gcOK, addonsOK := s.Healthy, gc.Healthy, AddonsHealthy(addons)
 
 	// Build the unhealthy-subsystem set + a combined detail naming
 	// EVERY broken subsystem (a single-detail message hid the addon
@@ -714,30 +688,17 @@ func (w *Watcher) tick(ctx context.Context) {
 		details = append(details, gc.Detail)
 	}
 	if !addonsOK {
-		part := "addon-backups"
-		if addonsComplete {
-			var names []string
-			for i := range addons {
-				if !addons[i].Healthy {
-					names = append(names, addons[i].Addon)
-					details = append(details, "addon "+addons[i].Addon+": "+addons[i].Detail)
-				}
+		var names []string
+		for i := range addons {
+			if !addons[i].Healthy {
+				names = append(names, addons[i].Addon)
+				details = append(details, "addon "+addons[i].Addon+": "+addons[i].Detail)
 			}
-			part += "(" + strings.Join(names, "+") + ")"
-			w.lastAddonsPart = part
-		} else {
-			// Carried verdict on an incomplete slice: reuse the last
-			// COMPLETE part verbatim so an incomplete tick can't flip
-			// the state string and fire spuriously.
-			if w.lastAddonsPart != "" {
-				part = w.lastAddonsPart
-			}
-			details = append(details, "addon backups unhealthy (evaluation incomplete this tick)")
 		}
-		parts = append(parts, part)
+		parts = append(parts, "addon-backups("+strings.Join(names, "+")+")")
 	}
 	severity := alertSeverity(s, gc)
-	if !addonsOK && addonsComplete {
+	if !addonsOK {
 		// A missing backup Secret is a config-level "you have no
 		// backups" → error outranks whatever the others said; a late
 		// or unreconciled run may be transient → keep the higher of
