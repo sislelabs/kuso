@@ -1033,6 +1033,7 @@ func main() {
 					if os.Getenv("KUSO_PREVIEW_DB_DISABLED") != "true" {
 						disp.PreviewDB = previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "previewdb"))
 					}
+					disp.Notifier = notifyAdapter{notifyDisp}
 				}
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
 				// Hand the github client to the build service so it can

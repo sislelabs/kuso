@@ -52,6 +52,9 @@ type Dispatcher struct {
 	// replace the source's in envFromSecrets. nil = previews share
 	// production addons (riskier; prefer wiring this).
 	PreviewDB PreviewDB
+	// Notifier receives a failure event when a preview is refused (for
+	// example its database clone failed). nil = log only.
+	Notifier builds.EventEmitter
 	// Reconciler applies config-as-code: on a push to the default
 	// branch it fetches kuso.yaml via the GitHub Contents API and
 	// applies it before builds run. nil on kube-less installs — the
@@ -856,9 +859,8 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	}
 	// Per-PR clones of every postgres addon. The clone's conn
 	// secrets REPLACE the source's so the preview pod talks to the
-	// fresh DB instead of production. Best-effort: a clone failure
-	// falls back to the source secret (preview pod still boots, just
-	// against shared data — same as the v0.7.0 behaviour). Non-
+	// fresh DB instead of production. A clone failure refuses the
+	// preview (see below) rather than falling back to the source. Non-
 	// postgres addons (Redis etc.) keep the source secret regardless;
 	// cloning Redis state is rarely useful. The clone only survives the
 	// swap when db-conn survived the subscription filter above, so a
@@ -871,12 +873,17 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// cloneByOrigin comes from the cloner, which held the source addon
 		// while creating the clone. Do NOT re-derive it from the clone's
 		// name — see EnsureEnvAddonsMapped for why that fails open.
-		if _, cloneByOrigin, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
-			pgCloneMap = cloneByOrigin
-			envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
-		} else {
-			d.Logger.Warn("preview db clone", "project", proj.Name, "pr", pr.Number, "err", err)
+		_, cloneByOrigin, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number)
+		if err != nil {
+			// Fail closed. Without its clone the preview would mount the
+			// production conn, and its seed command and release hook would
+			// write to the production database on every push. Leave any
+			// existing preview env untouched; the next push retries.
+			d.notifyPreviewRefused(proj.Name, short, pr.Number, err)
+			return fmt.Errorf("preview db clone for PR #%d: %w", pr.Number, err)
 		}
+		pgCloneMap = cloneByOrigin
+		envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	}
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(proj.Name)...)
 	port := int32(8080)
@@ -1233,6 +1240,22 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	}
 	d.Logger.Info("PR preview env ready", "env", envName, "pr", pr.Number)
 	return nil
+}
+
+// notifyPreviewRefused reports a preview that was not deployed so the
+// failure is visible outside the server log.
+func (d *Dispatcher) notifyPreviewRefused(project, service string, prNumber int, cause error) {
+	if d.Notifier == nil {
+		return
+	}
+	d.Notifier.Emit(builds.EventEnvelope{
+		Type:     "build.failed",
+		Title:    fmt.Sprintf("Preview for PR #%d not deployed: %s/%s", prNumber, project, service),
+		Body:     fmt.Sprintf("The per-PR database clone failed, so the preview was not started against the production database: %v", cause),
+		Project:  project,
+		Service:  service,
+		Severity: "error",
+	})
 }
 
 // previewBuildImage returns the image tag the preview build will
