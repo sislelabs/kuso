@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1853,5 +1854,49 @@ func (h *ProjectsHandler) fail(w http.ResponseWriter, op string, err error) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(append(stripCRServerFields(b), '\n'))
+}
+
+// stripCRServerFields drops status.deployedRelease.manifest and
+// metadata.managedFields from any CR in an encoded response. The helm
+// operator renders conn Secrets and literal env values into that
+// manifest, and viewers can read every CR list. It works on the encoded
+// bytes so the caller's (often informer-cached) objects stay untouched.
+func stripCRServerFields(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`"deployedRelease"`)) && !bytes.Contains(b, []byte(`"managedFields"`)) {
+		return b
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return b
+	}
+	stripCRServerFieldsIn(doc)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+func stripCRServerFieldsIn(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		delete(t, "managedFields")
+		if dr, ok := t["deployedRelease"].(map[string]any); ok {
+			delete(dr, "manifest")
+		}
+		for _, c := range t {
+			stripCRServerFieldsIn(c)
+		}
+	case []any:
+		for _, c := range t {
+			stripCRServerFieldsIn(c)
+		}
+	}
 }
