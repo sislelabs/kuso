@@ -171,6 +171,21 @@ spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 4
   template:
+    metadata:
+      # The POD needs the project label, not just the Job. The project's
+      # NetworkPolicies select on kuso.sislelabs.com/project: default-deny
+      # applies to the MinIO pod (which carries it), while
+      # allow-intra-project only permits sources that carry it too. An
+      # unlabelled hook pod is therefore denied ingress to the very
+      # StatefulSet it exists to initialise, so `mc alias set` gets
+      # connection-refused, the Job exhausts backoffLimit, and the
+      # post-upgrade hook fails the whole helm release — an endless
+      # reconcile loop (koreni-storage reached helm revision 2783).
+      #
+      # Only bites in a project namespace that actually has the policies,
+      # which is why addons in the shared `kuso` namespace were unaffected.
+      labels:
+        {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
       restartPolicy: OnFailure
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
