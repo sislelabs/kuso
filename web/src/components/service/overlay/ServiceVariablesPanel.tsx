@@ -6,6 +6,7 @@ import { Github } from "lucide-react";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
 import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { useEnvironments } from "@/features/projects";
+import { useServiceEnvOverrides } from "@/features/services";
 
 export function ServiceVariablesPanel({
   project,
@@ -38,6 +39,8 @@ export function ServiceVariablesPanel({
   }, [envs.data, project, service]);
 
   const [oauthOpen, setOauthOpen] = useState(false);
+  const overrides = useServiceEnvOverrides(project, service, env);
+  const overrideVars = overrides.data?.envVars ?? [];
 
   return (
     <div className="space-y-4">
@@ -46,9 +49,44 @@ export function ServiceVariablesPanel({
           Service variables
         </h3>
         <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          mounted as env on every pod
+          shared by every environment
         </p>
       </div>
+
+      {/* The editor below always reads and writes the service-wide list;
+          per-env overrides are only writable via `kuso env set --env`. */}
+      {env !== "production" && (
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[11px] leading-relaxed text-[var(--warning)]">
+          You&apos;re viewing <span className="font-semibold">{env}</span>, but these are the
+          service-wide variables. Saving here changes every environment, production included.
+          To set a value for {env} only, run{" "}
+          <code className="font-mono">
+            kuso env set {project} {service} KEY=VALUE --env {env}
+          </code>
+          .
+        </p>
+      )}
+
+      {overrideVars.length > 0 && (
+        <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+          <header className="border-b border-[var(--border-subtle)] px-3 py-2">
+            <h4 className="text-xs font-semibold tracking-tight">Overrides on {env}</h4>
+            <p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">
+              Read-only here. These win over the service-wide values below, on {env} only.
+            </p>
+          </header>
+          <ul className="divide-y divide-[var(--border-subtle)] font-mono text-[11px]">
+            {overrideVars.map((v) => (
+              <li key={v.name} className="flex gap-3 px-3 py-1.5">
+                <span className="text-[var(--text-primary)]">{v.name}</span>
+                <span className="truncate text-[var(--text-secondary)]">
+                  {v.valueFrom ? "(secret reference)" : v.value}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Integration helpers. Adding more (Google, Microsoft, etc.)
           slots in next to the GitHub button — each one fills in the

@@ -10,6 +10,7 @@ import {
   getDrift,
   getService,
   getServiceEnv,
+  getServiceEnvOverrides,
   getServiceLogs,
   listBuilds,
   listErrors,
@@ -63,6 +64,16 @@ export function useServiceEnv(project: string, service: string, reveal = false) 
       : serviceEnvQueryKey(project, service),
     queryFn: () => getServiceEnv(project, service, reveal),
     enabled: !!project && !!service,
+  });
+}
+
+// Keyed under serviceEnvQueryKey so the editor's post-save invalidation
+// refreshes it too.
+export function useServiceEnvOverrides(project: string, service: string, env: string) {
+  return useQuery({
+    queryKey: [...serviceEnvQueryKey(project, service), "overrides", env] as const,
+    queryFn: () => getServiceEnvOverrides(project, service, env),
+    enabled: !!project && !!service && !!env,
   });
 }
 

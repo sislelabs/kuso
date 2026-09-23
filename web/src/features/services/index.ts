@@ -1,6 +1,7 @@
 export {
   useService,
   useServiceEnv,
+  useServiceEnvOverrides,
   useSetServiceEnv,
   useDetectedEnv,
   useDrift,
