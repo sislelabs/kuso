@@ -19,6 +19,77 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.7] — 2026-09-23
+
+### Other
+- Validate addon version and cron image to block helm manifest injection ([0eafefc](https://github.com/sislelabs/kuso/commit/0eafefc315c5ac5df356e107faf4b76b9a301661))
+
+### ⚡ Performance
+- Perf(health): keep helm release Secrets out of the Secret informer ([87e4c96](https://github.com/sislelabs/kuso/commit/87e4c96e8a2b1f28df878d7f80570ac5c304ec5a))
+- Perf(health): stop listing every Secret payload on each reconcile scan ([83838d6](https://github.com/sislelabs/kuso/commit/83838d6a4b4ce13250cd151e5a14669679c41524))
+
+### 🐛 Bug Fixes
+- Fix(web): show an error state when a query fails ([a48a04c](https://github.com/sislelabs/kuso/commit/a48a04ceaa68ae12241a25165945afa6a3531a6d))
+- Fix(cli): add get crons and show false for unsuspended crons ([b4c19f0](https://github.com/sislelabs/kuso/commit/b4c19f07d26a73775dbe6ab097409792ee5bcec4))
+- Fix(cli): parse day and week units in logs search --since/--until ([cdc2550](https://github.com/sislelabs/kuso/commit/cdc2550d10e20be6f6c6551702dd88dcda762eb2))
+- Fix(cli): honour -o on notifications list and get ([19a52ce](https://github.com/sislelabs/kuso/commit/19a52cee16e59eb33cb5cc9ca84a84b0dd70d0f8))
+- Fix(cli): add run list so it no longer creates a run ([4f9bf1f](https://github.com/sislelabs/kuso/commit/4f9bf1f24c5512b6deafd1d0cf91b10272274253))
+- Fix(cli): reject unknown subcommands and stray positional args ([77d0c13](https://github.com/sislelabs/kuso/commit/77d0c133ad6bb6bcac635dcf6b0a1be6a5657c5e))
+- Fix(api): honour repo.defaultBranch on service create ([c920b3a](https://github.com/sislelabs/kuso/commit/c920b3abe6b57de3535ff8e1a5fe760977d8d2e7))
+- Fix(web): say the Variables tab edits service-wide values ([4a2c856](https://github.com/sislelabs/kuso/commit/4a2c856359e10b3bbb39e1f6c02a57aac7a14a18))
+- Fix(api): keep unsent pooler fields on addon update ([829cac8](https://github.com/sislelabs/kuso/commit/829cac8e2203f4005151fbc153229b548d5fa473))
+- Fix(web): wrap cluster config saves in the settings envelope ([754ac42](https://github.com/sislelabs/kuso/commit/754ac42b333a5e82e43859990e4ae45a6ec084bc))
+- Fix(web): send admin password reset to the password route ([f264329](https://github.com/sislelabs/kuso/commit/f264329ef386b34c70137ad84628f245ecc61f26))
+- Fix(operator): normalise volume accessMode and reject unknown values ([ec3c6d6](https://github.com/sislelabs/kuso/commit/ec3c6d67d88ef7c759588869ca3171dc45ce4285))
+- Fix(operator): gate env PDB and topology spread on the replica floor ([ef9508f](https://github.com/sislelabs/kuso/commit/ef9508fa086e55670b3b8e592380ec15865a749c))
+- Fix(operator): route custom-namespace sleep/stop ingress to a reachable activator ([f6961ba](https://github.com/sislelabs/kuso/commit/f6961ba3b944a1ab7946933660a9db47f94e1b1a))
+- Fix(operator): declare the repo fields the server writes in the CRD schemas ([9b594eb](https://github.com/sislelabs/kuso/commit/9b594eb307d017dc6227f8a966412e2d37047db5))
+- Fix(imagerelease): run release hooks off the heartbeat tick ([5359bc3](https://github.com/sislelabs/kuso/commit/5359bc349c6fed8c128e957af6061136c81a5fd5))
+- Fix(backups): alert when backup health can't read a check for 3 ticks ([a983424](https://github.com/sislelabs/kuso/commit/a983424fc352f60fcfd3e77b1220e92fa8351568))
+- Fix(backups): sync custom-namespace S3 secret copies on settings save ([ec4fb6a](https://github.com/sislelabs/kuso/commit/ec4fb6aa707642bab41578a00cc368c286f63c25))
+- Fix(backups): keep backup health state when an apiserver read fails ([98f345f](https://github.com/sislelabs/kuso/commit/98f345fcea3425c4be95e3dfbc46da180059ced0))
+- Fix(backups): list the newest backups instead of the oldest 1000 keys ([9bb9857](https://github.com/sislelabs/kuso/commit/9bb98579a7118ed2fd8ab96b4f4345ed23998e36))
+- Fix(activator): stamp last-activity before scaling a woken service up ([c0f353d](https://github.com/sislelabs/kuso/commit/c0f353dfe4def6dbcbeb59604eaf81397e387d9c))
+- Fix(runs): garbage-collect finished KusoRuns and skip them in the poller ([2b87104](https://github.com/sislelabs/kuso/commit/2b87104246b8bafd2b1e73910b2a8020a8df0126))
+- Fix(builds): stop the orphan sweep reaping live helm releases ([a18b067](https://github.com/sislelabs/kuso/commit/a18b067960b99bb552a55d80a27204e01870fa59))
+- Fix(errors): match error class names such as TypeError ([6e83682](https://github.com/sislelabs/kuso/commit/6e836828be528e629e8c81c7a6b6c752e3a81c26))
+- Fix(errors): let errorscan catch up instead of trailing the prune edge ([6a8e721](https://github.com/sislelabs/kuso/commit/6a8e721f5b30822a259400901c42e1a62d909f1d))
+- Fix(errors): look up error groups by the FQ service name ([44553bf](https://github.com/sislelabs/kuso/commit/44553bfc919102c3dfb085cf7b48a10b0b8c65ce))
+- Fix(logship): ship each container's log once instead of re-tailing it ([34d2d20](https://github.com/sislelabs/kuso/commit/34d2d20b3cff0fd30f1fb7f4f095cebe1ebb1828))
+- Fix(backups): make retention prune delete expired backups ([2da9f19](https://github.com/sislelabs/kuso/commit/2da9f197090713902aff63f9ac8820c10acbce53))
+- Fix(cli): show the addon source for addon-supplied env vars ([23f4ff8](https://github.com/sislelabs/kuso/commit/23f4ff82520f7d491167fab7dd966f015fa2c2cf))
+- Fix(web): keep addon and managed vars out of bulk env edits ([1325161](https://github.com/sislelabs/kuso/commit/13251619b065ce6a5afb85c67590a84421178c15))
+- Fix(github): refuse a preview whose database clone fails ([44769a7](https://github.com/sislelabs/kuso/commit/44769a72f5fd62e7e57b99ff247f3b9f7522465b))
+- Fix(addons): refuse isolated envs whose explicit refs would stay on production ([f71bdee](https://github.com/sislelabs/kuso/commit/f71bdeeffaa6998df8428d19912ba931e3c312ab))
+- Fix(addons): stop mounting sibling addons that share a subscribed prefix ([72d3cff](https://github.com/sislelabs/kuso/commit/72d3cffd0a9900f15fc3597e787d2580e9acad7b))
+- Fix(spec): keep service crons out of apply prune and export ([4f62b84](https://github.com/sislelabs/kuso/commit/4f62b846cd3a1abd91cb138ae3f57934a8adb922))
+- Fix(spec): keep env-scoped clones out of apply prune and export ([d4bbab8](https://github.com/sislelabs/kuso/commit/d4bbab86acce32845a1e42572b311c7132c835e8))
+- Fix(projects): keep env-scoped addons while a sibling env still uses them ([1f0be4c](https://github.com/sislelabs/kuso/commit/1f0be4c8d1546aedcdba839bccbf1157d380131f))
+- Fix(addons): keep a reattached instance database when re-add fails ([62ded38](https://github.com/sislelabs/kuso/commit/62ded38492c81645a7f492c9bbebaf60dbdb78b2))
+- Fix(addons): refuse instance databases owned by another project ([30eb2bc](https://github.com/sislelabs/kuso/commit/30eb2bc2a4e16822694692f13f008f35326742d3))
+- Fix(api): redact repo URL credentials for every caller ([85c7570](https://github.com/sislelabs/kuso/commit/85c75705df3c415199f09275921b13fa4dcbd26d))
+- Fix(builds): scrub clone credentials from the build workspace ([a6987e6](https://github.com/sislelabs/kuso/commit/a6987e6e6f4c7499a606bff57f374c61955abc88))
+- Fix(builds): mint GitHub clone tokens only for github.com repos ([0e4498a](https://github.com/sislelabs/kuso/commit/0e4498a97dc98b475e8f20ee6ac24c57418d27e7))
+- Fix(auth): stop user:write holders from granting beyond their own perms ([3026e37](https://github.com/sislelabs/kuso/commit/3026e3700ebb076c3b60f730d01219a9cb12ba37))
+- Fix(addons): verify ownership before listing addon pods ([bf2b311](https://github.com/sislelabs/kuso/commit/bf2b3114418d1463742c992a4720dc2eb9dc7ce0))
+- Fix(crons): refuse service crons on the project cron update route ([0a03f30](https://github.com/sislelabs/kuso/commit/0a03f30d98669cb4698ad5eb953e93959f9f4bd5))
+- Fix(builds): scope rollback and cancel to the caller's project ([b1a88f0](https://github.com/sislelabs/kuso/commit/b1a88f00aeef0de89f462713d70df397c093a817))
+- Fix(projects): refuse system and foreign namespaces on project create ([aa1faae](https://github.com/sislelabs/kuso/commit/aa1faaeb190b38a00d463dbfb574accffe237eb4))
+- Fix(api): strip release manifest and managedFields from CR responses ([93c2fea](https://github.com/sislelabs/kuso/commit/93c2fea77251c5a51b81a2a511f9e4e60fe244dc))
+- Fix(addons): only adopt external Secrets labelled for the addon ([8c0cac0](https://github.com/sislelabs/kuso/commit/8c0cac066035efc61478dfa9e1abee72f5020ce5))
+- Fix(backups): retry the control-plane backup too ([1b7492f](https://github.com/sislelabs/kuso/commit/1b7492f2775ac2afaad3c76048f2a746e1271ef8))
+
+### 👷 CI
+- Ci: pin pnpm version for the web job ([0c17fc5](https://github.com/sislelabs/kuso/commit/0c17fc5b5faf44ac58959478d4b9575f825ac9ab))
+
+### 🧪 Tests
+- Test(addons): check Delete drops an instance clone's database ([33ad085](https://github.com/sislelabs/kuso/commit/33ad08569e436b3a4762e724638ecad316d11b29))
+- Test(projects): seed a sibling env in the resumed env-delete test ([e3e4264](https://github.com/sislelabs/kuso/commit/e3e42641a594117037815899503305f4eb60af10))
+- Test(addons): fail when refresh leaves a project addon after the clone ([3e639d4](https://github.com/sislelabs/kuso/commit/3e639d46fbae6dd17bda5fd02e07b06de5a05259))
+- Test(previewdb): pin the source-to-clone conn pairing map ([861fee4](https://github.com/sislelabs/kuso/commit/861fee4dd9387b3bf68b69052be7d3696875df3f))
+- Test(db,metrics): make stateful tests re-runnable ([200dfe0](https://github.com/sislelabs/kuso/commit/200dfe0001d185043fe9450fc4662357b9826858))
+- Test(alerts): truncate backdated stamp to Postgres precision ([80a8883](https://github.com/sislelabs/kuso/commit/80a88834a70de597cdbd382da439771e93616a46))
+
 ## [0.26.6] — 2026-09-23
 
 ### 🐛 Bug Fixes
@@ -320,11 +391,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(builds): atomic same-repo promotion + security hardening batch ([15ec203](https://github.com/sislelabs/kuso/commit/15ec203b1401b1d170c4170b57068905c3257976))
-
-## [0.22.18] — 2026-08-12
-
-### 🐛 Bug Fixes
-- Fix(env-groups): clones no longer inherit custom domains or an ambiguous displayName ([8ad1645](https://github.com/sislelabs/kuso/commit/8ad164519927f6317dc59914f3fb2ea6744dde9c))
 
 
 ---

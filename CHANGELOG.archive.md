@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.18] — 2026-08-12
+
+### 🐛 Bug Fixes
+- Fix(env-groups): clones no longer inherit custom domains or an ambiguous displayName ([8ad1645](https://github.com/sislelabs/kuso/commit/8ad164519927f6317dc59914f3fb2ea6744dde9c))
+
 ## [0.22.17] — 2026-08-12
 
 ### 🐛 Bug Fixes
