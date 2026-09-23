@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -202,10 +204,8 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		// surviving Secret made the database look referenced — 16 of
 		// them accumulated unnoticed. Surface-only: reclaiming data is
 		// an operator decision, never unattended.
-		if s.Kube != nil && s.Kube.Clientset != nil {
-			if secs, serr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); serr == nil {
-				rep.Issues = append(rep.Issues, detectOrphanConnSecrets(secs.Items, liveAddons)...)
-			}
+		if secs, ok := s.connSecrets(ctx, ns); ok {
+			rep.Issues = append(rep.Issues, detectOrphanConnSecrets(secs, liveAddons)...)
 		}
 
 		envs, err := s.Kube.ListKusoEnvironments(ctx, ns)
@@ -216,12 +216,13 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 			rep.SkippedNamespaces = append(rep.SkippedNamespaces, ns+" (environments)")
 			continue
 		}
+		imageIssues := s.classifyEnvImages(ctx, envs)
 		for i := range envs {
 			rep.Scanned++
 			if iss, ok := ClassifyEnv(&envs[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
-			} else if iss, ok := ClassifyEnvImage(ctx, s.Images, s.RegistryHost, &envs[i]); ok {
-				rep.Issues = append(rep.Issues, iss)
+			} else if iss := imageIssues[i]; iss != nil {
+				rep.Issues = append(rep.Issues, *iss)
 			} else {
 				rep.Healthy++
 			}
@@ -246,6 +247,64 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		return rep.Issues[a].Resource < rep.Issues[b].Resource
 	})
 	return rep, nil
+}
+
+// connSecrets returns the "-conn" Secrets in ns for the orphan sweep. It
+// needs only metadata, so it reads the data-stripped informer cache; the
+// live fallback (cache not yet synced) skips helm release Secrets, which
+// are most of the namespace's bytes and never named "-conn".
+func (s *Scanner) connSecrets(ctx context.Context, ns string) ([]corev1.Secret, bool) {
+	if s.Kube == nil {
+		return nil, false
+	}
+	var out []corev1.Secret
+	if cached, ok := s.Kube.Cache.ListSecrets(ns); ok {
+		for _, sec := range cached {
+			if strings.HasSuffix(sec.Name, connSecretSuffix) {
+				out = append(out, *sec)
+			}
+		}
+		sort.Slice(out, func(a, b int) bool { return out[a].Name < out[b].Name })
+		return out, true
+	}
+	if s.Kube.Clientset == nil {
+		return nil, false
+	}
+	secs, err := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{FieldSelector: "type!=helm.sh/release.v1"})
+	if err != nil {
+		return nil, false
+	}
+	return secs.Items, true
+}
+
+// imageProbeConcurrency bounds the parallel registry HEADs per namespace.
+const imageProbeConcurrency = 8
+
+// classifyEnvImages runs ClassifyEnvImage for every env that ClassifyEnv
+// passes, in parallel. Result i belongs to envs[i]; nil means no issue.
+func (s *Scanner) classifyEnvImages(ctx context.Context, envs []kube.KusoEnvironment) []*Issue {
+	out := make([]*Issue, len(envs))
+	if s.Images == nil || s.RegistryHost == "" {
+		return out
+	}
+	sem := make(chan struct{}, imageProbeConcurrency)
+	var wg sync.WaitGroup
+	for i := range envs {
+		if _, ok := ClassifyEnv(&envs[i]); ok {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if iss, ok := ClassifyEnvImage(ctx, s.Images, s.RegistryHost, &envs[i]); ok {
+				out[i] = &iss
+			}
+		}(i)
+	}
+	wg.Wait()
+	return out
 }
 
 func sevRank(s Severity) int {

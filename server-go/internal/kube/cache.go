@@ -539,3 +539,18 @@ func (c *Cache) SecretKeysOnly(namespace, name string) ([]string, bool) {
 	sort.Strings(keys)
 	return keys, true
 }
+
+// ListSecrets returns the data-stripped Secrets in namespace from the
+// informer cache (metadata + key names only, see stripSecretData).
+// (nil, false) when the cache isn't ready — callers fall back to a live
+// list. Callers must not mutate the returned objects.
+func (c *Cache) ListSecrets(namespace string) ([]*corev1.Secret, bool) {
+	if c == nil || c.secretLister == nil || c.secretSynced == nil || !c.secretSynced() {
+		return nil, false
+	}
+	secs, err := c.secretLister.Secrets(namespace).List(labels.Everything())
+	if err != nil {
+		return nil, false
+	}
+	return secs, true
+}

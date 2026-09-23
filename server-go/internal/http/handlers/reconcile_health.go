@@ -22,7 +22,10 @@ import (
 // annotations. The opt-in unattended loop lives in internal/remediate; these
 // endpoints are the operator-initiated (auto=false) path.
 type ReconcileHealthHandler struct {
-	Scanner    *reconcilehealth.Scanner
+	Scanner *reconcilehealth.Scanner
+	// Reports serves GET /reconcile from a short-lived cached scan. nil
+	// falls back to a fresh Scanner.Scan per request.
+	Reports    *reconcilehealth.CachedScanner
 	Remediator *remediate.Remediator
 	DB         *db.DB
 	// Namespace the scanner sweeps. Empty → "kuso".
@@ -61,7 +64,11 @@ func (h *ReconcileHealthHandler) Report(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := reconcileHealthCtx(r)
 	defer cancel()
-	rep, err := h.Scanner.Scan(ctx, h.namespace())
+	scan := h.Scanner.Scan
+	if h.Reports != nil {
+		scan = h.Reports.Scan
+	}
+	rep, err := scan(ctx, h.namespace())
 	if err != nil {
 		h.Logger.Error("reconcile-health scan", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")

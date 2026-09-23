@@ -557,6 +557,7 @@ func mountAuthenticatedRoutes(
 			rhRemediator := &remediate.Remediator{Kube: d.Kube, Audit: d.Audit}
 			rhH := &httphandlers.ReconcileHealthHandler{
 				Scanner:    rhScanner,
+				Reports:    &reconcilehealth.CachedScanner{Scanner: rhScanner, TTL: 30 * time.Second},
 				Remediator: rhRemediator,
 				DB:         d.DB,
 				Namespace:  d.Namespace,
