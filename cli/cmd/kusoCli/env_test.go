@@ -354,6 +354,46 @@ func TestEnvList_RevealedValues(t *testing.T) {
 	}
 }
 
+// TestEnvList_AddonSecretShowsSource covers addon-supplied keys: the server
+// sends them with no value, so a blank VALUE cell read as "unset" and invited
+// an `env set` that shadows the addon secret. They must name their addon,
+// and -o json must pass the addon through.
+func TestEnvList_AddonSecretShowsSource(t *testing.T) {
+	getBody := `{"masked":false,"revealed":false,"envVars":[
+		{"name":"REDIS_HOST","source":"addon-secret","addon":"cache"}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, getBody)
+	}))
+	defer srv.Close()
+
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	defer func() { api = nil }()
+	envRevealFlag = false
+
+	out := captureStdout(t, func() {
+		if err := envListCmd.RunE(envListCmd, []string{"alpha", "web"}); err != nil {
+			t.Fatalf("list RunE: %v", err)
+		}
+	})
+	if !rowHas(out, "REDIS_HOST", "(from addon cache)", "addon") {
+		t.Errorf("addon key not rendered with its source:\n%s", out)
+	}
+
+	outputFormat = "json"
+	defer func() { outputFormat = "table" }()
+	out = captureStdout(t, func() {
+		if err := envListCmd.RunE(envListCmd, []string{"alpha", "web"}); err != nil {
+			t.Fatalf("list -o json RunE: %v", err)
+		}
+	})
+	if !strings.Contains(out, `"addon": "cache"`) {
+		t.Errorf("-o json dropped the addon field:\n%s", out)
+	}
+}
+
 // rowHas checks the rendered table contains a single row mentioning all the
 // given cell substrings. tablewriter pads/uppercases nothing in cells, so a
 // per-line substring scan is enough.

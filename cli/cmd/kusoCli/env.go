@@ -55,6 +55,8 @@ var envSecretFlag bool
 // projects.managedSecretSource.
 const managedSecretSource = "managed-secret"
 
+const addonSecretSource = "addon-secret"
+
 // envRevealFlag is bound LOCALLY on envListCmd (NOT a shared package global).
 // The CLI has a documented hazard where binding shared globals across many
 // commands lets the last init() win and silently mis-render output; keep this
@@ -124,6 +126,7 @@ var envListCmd = &cobra.Command{
 				Value     string         `json:"value"`
 				ValueFrom map[string]any `json:"valueFrom,omitempty"`
 				Source    string         `json:"source,omitempty"`
+				Addon     string         `json:"addon,omitempty"`
 			} `json:"envVars"`
 			Masked   bool `json:"masked"`
 			Revealed bool `json:"revealed"`
@@ -152,6 +155,14 @@ var envListCmd = &cobra.Command{
 						val = e.Value
 					}
 					t.Append([]string{e.Name, val, "secret"})
+				case e.Source == addonSecretSource:
+					// Mounted from the addon's conn Secret. A blank value here
+					// read as "unset" and invited an `env set` that shadows it.
+					val := "(from addon " + e.Addon + ")"
+					if revealed {
+						val = e.Value
+					}
+					t.Append([]string{e.Name, val, "addon"})
 				case e.ValueFrom != nil:
 					// An addon/shared reference — valueFrom.secretKeyRef points
 					// at another Secret. Show the wiring target when not
