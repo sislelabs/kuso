@@ -221,26 +221,7 @@ spec:
                   # cronjob (rather than relying on bucket lifecycle)
                   # because some S3-compat backends (Wasabi, B2) don't
                   # support lifecycle rules consistently.
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `|| true`: the backup + manifest already uploaded OK by
-                    # here. Under `set -o pipefail` a transient `aws s3 ls`
-                    # error (or the trailing `while`'s exit status) would
-                    # otherwise abort the whole Job AFTER success, firing a
-                    # false backup-failed alert. Prune is best-effort.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '{print $1, $2, $4}' \
-                      | while read date time name; do
-                          [ -z "${name}" ] && continue
-                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
@@ -412,26 +393,7 @@ spec:
                   rm -f /tmp/dump.gz /tmp/manifest.json
                   echo "==> manifest done"
 
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `|| true`: the backup + manifest already uploaded OK by
-                    # here. Under `set -o pipefail` a transient `aws s3 ls`
-                    # error (or the trailing `while`'s exit status) would
-                    # otherwise abort the whole Job AFTER success, firing a
-                    # false backup-failed alert. Prune is best-effort.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '{print $1, $2, $4}' \
-                      | while read date time name; do
-                          [ -z "${name}" ] && continue
-                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
@@ -562,26 +524,7 @@ spec:
                   rm -f /tmp/dump.rdb /tmp/dump.rdb.gz /tmp/manifest.json
                   echo "==> upload done"
 
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `|| true`: the backup + manifest already uploaded OK by
-                    # here. Under `set -o pipefail` a transient `aws s3 ls`
-                    # error (or the trailing `while`'s exit status) would
-                    # otherwise abort the whole Job AFTER success, firing a
-                    # false backup-failed alert. Prune is best-effort.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '{print $1, $2, $4}' \
-                      | while read date time name; do
-                          [ -z "${name}" ] && continue
-                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
@@ -705,26 +648,7 @@ spec:
                   rm -f /tmp/dump.archive.gz /tmp/manifest.json
                   echo "==> manifest done"
 
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `|| true`: the backup + manifest already uploaded OK by
-                    # here. Under `set -o pipefail` a transient `aws s3 ls`
-                    # error (or the trailing `while`'s exit status) would
-                    # otherwise abort the whole Job AFTER success, firing a
-                    # false backup-failed alert. Prune is best-effort.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '{print $1, $2, $4}' \
-                      | while read date time name; do
-                          [ -z "${name}" ] && continue
-                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
@@ -840,26 +764,7 @@ spec:
                   rm -f /tmp/dump.sql.gz /tmp/manifest.json
                   echo "==> manifest done"
 
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `|| true`: the backup + manifest already uploaded OK by
-                    # here. Under `set -o pipefail` a transient `aws s3 ls`
-                    # error (or the trailing `while`'s exit status) would
-                    # otherwise abort the whole Job AFTER success, firing a
-                    # false backup-failed alert. Prune is best-effort.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '{print $1, $2, $4}' \
-                      | while read date time name; do
-                          [ -z "${name}" ] && continue
-                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
@@ -998,34 +903,7 @@ spec:
                     --s3-no-check-bucket --stats-one-line --stats 30s
                   echo "==> sync done"
 
-                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
-                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
-                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
-                    echo "==> pruning snapshots older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    # `{ ... } || true`, same as the postgres prune above:
-                    # the sync already succeeded by here, and under
-                    # `set -o pipefail` a transient `aws s3 ls` error (or
-                    # the trailing `while`'s exit status) would fail the
-                    # Job AFTER a good backup. This guard was missing only
-                    # on this one of the six prune blocks, so every s3-addon
-                    # backup reported Failed while its data was safely in
-                    # the bucket -- and the real "no credentials" failures
-                    # were indistinguishable from it.
-                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
-                      | awk '/PRE / {print $2}' \
-                      | while read ts; do
-                          [ -z "${ts}" ] && continue
-                          ts_clean=${ts%/}
-                          # ts looks like 20260101T020000Z; convert.
-                          d=${ts_clean%T*}
-                          t=${ts_clean#*T}
-                          obj_ts=$(date -u -d "${d:0:4}-${d:4:2}-${d:6:2}T${t:0:2}:${t:2:2}:${t:4:2}Z" +%s 2>/dev/null || echo 0)
-                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
-                            echo "    rm -r s3://${BUCKET}/${PREFIX}${ts}"
-                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" --recursive "s3://${BUCKET}/${PREFIX}${ts}" || true
-                          fi
-                        done ; } || true
-                  fi
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "prefixes") | nindent 18 }}
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
