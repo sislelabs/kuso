@@ -491,6 +491,12 @@ func (c *Client) ListKusoRuns(ctx context.Context, namespace string) ([]KusoRun,
 	return list[KusoRun](ctx, c, GVRRuns, namespace, metav1.ListOptions{})
 }
 
+// ListKusoRunsSelector lists runs matching a label selector; served from
+// the informer cache, which filters before copying and decoding.
+func (c *Client) ListKusoRunsSelector(ctx context.Context, namespace, selector string) ([]KusoRun, error) {
+	return list[KusoRun](ctx, c, GVRRuns, namespace, metav1.ListOptions{LabelSelector: selector})
+}
+
 func (c *Client) GetKusoRun(ctx context.Context, namespace, name string) (*KusoRun, error) {
 	return get[KusoRun](ctx, c, GVRRuns, namespace, name)
 }

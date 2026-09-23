@@ -38,6 +38,13 @@ const (
 	annRunStartedAt   = "kuso.sislelabs.com/run-started-at"
 	annRunCompletedAt = "kuso.sislelabs.com/run-completed-at"
 	annRunMessage     = "kuso.sislelabs.com/run-message"
+
+	// labelRunPhase mirrors annRunPhase as a label so the poller can
+	// filter terminal runs out before decode. Runs created before the
+	// label existed have none and still match nonTerminalRunSelector;
+	// the annotation stays the source of truth.
+	labelRunPhase          = "kuso.sislelabs.com/run-phase"
+	nonTerminalRunSelector = labelRunPhase + " notin (succeeded,failed,cancelled)"
 )
 
 // HeartbeatInterval is the poller's default tick cadence, exported so
@@ -53,6 +60,8 @@ type Poller struct {
 	Svc      *Service
 	Interval time.Duration
 	Logger   *slog.Logger
+	// RunRetention overrides DefaultRunRetention for finished-run GC.
+	RunRetention time.Duration
 }
 
 // Run blocks until ctx is cancelled. Idempotent — multiple calls to
@@ -73,6 +82,9 @@ func (p *Poller) Run(ctx context.Context) error {
 	if err := p.tick(ctx); err != nil {
 		p.logger().Warn("runs poller: initial tick", "err", err)
 	}
+	// GC rides this leader-only loop so it is covered by the poller's
+	// liveness heartbeat; a pass is bounded by runGCBatch deletes.
+	lastGC := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -80,6 +92,10 @@ func (p *Poller) Run(ctx context.Context) error {
 		case <-t.C:
 			if err := p.tick(ctx); err != nil {
 				p.logger().Warn("runs poller: tick", "err", err)
+			}
+			if now := time.Now(); now.Sub(lastGC) >= runGCInterval {
+				lastGC = now
+				p.sweepFinishedRuns(ctx, now)
 			}
 			// Liveness heartbeat: the loop completed an iteration. Stamped
 			// even on a tick that logged an error — the goroutine is alive,
@@ -99,7 +115,7 @@ func (p *Poller) tick(ctx context.Context) error {
 		return nil
 	}
 	for _, ns := range p.scanNamespaces(ctx) {
-		runs, err := p.Svc.Kube.ListKusoRuns(ctx, ns)
+		runs, err := p.Svc.Kube.ListKusoRunsSelector(ctx, ns, nonTerminalRunSelector)
 		if err != nil {
 			p.logger().Warn("runs poller: list", "ns", ns, "err", err)
 			continue
@@ -265,8 +281,8 @@ func isTerminal(phase string) bool {
 func (p *Poller) markSucceeded(ctx context.Context, ns, name string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"succeeded",%q:%q}},"spec":{"done":true}}`,
-		annRunPhase, annRunCompletedAt, now,
+		`{"metadata":{"labels":{%q:"succeeded"},"annotations":{%q:"succeeded",%q:%q}},"spec":{"done":true}}`,
+		labelRunPhase, annRunPhase, annRunCompletedAt, now,
 	)
 	return p.patch(ctx, ns, name, patch)
 }
@@ -277,8 +293,8 @@ func (p *Poller) markSucceeded(ctx context.Context, ns, name string) error {
 func (p *Poller) markFailed(ctx context.Context, ns, name, msg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q}},"spec":{"done":true}}`,
-		annRunPhase, annRunCompletedAt, now, annRunMessage, msg,
+		`{"metadata":{"labels":{%q:"failed"},"annotations":{%q:"failed",%q:%q,%q:%q}},"spec":{"done":true}}`,
+		labelRunPhase, annRunPhase, annRunCompletedAt, now, annRunMessage, msg,
 	)
 	return p.patch(ctx, ns, name, patch)
 }
@@ -287,7 +303,7 @@ func (p *Poller) markFailed(ctx context.Context, ns, name, msg string) error {
 // flips phase=pending → phase=running once the Job has an active
 // pod. Skipped on re-observations of an already-running CR.
 func (p *Poller) markRunning(ctx context.Context, ns, name string) error {
-	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"running"}}}`, annRunPhase)
+	patch := fmt.Sprintf(`{"metadata":{"labels":{%q:"running"},"annotations":{%q:"running"}}}`, labelRunPhase, annRunPhase)
 	return p.patch(ctx, ns, name, patch)
 }
 

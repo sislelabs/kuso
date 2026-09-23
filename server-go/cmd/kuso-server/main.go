@@ -943,9 +943,10 @@ func main() {
 				serverstate.RegisterLoop(serverstate.LoopRunsPoller, runs.HeartbeatInterval)
 				goSafe(logger, "runs-poller", func() {
 					(&runs.Poller{
-						Svc:      runSvc,
-						Interval: runs.HeartbeatInterval,
-						Logger:   logger.With("component", "runs-poller"),
+						Svc:          runSvc,
+						Interval:     runs.HeartbeatInterval,
+						Logger:       logger.With("component", "runs-poller"),
+						RunRetention: time.Duration(envInt("KUSO_RUN_RETENTION_DAYS", 7)) * 24 * time.Hour,
 					}).Run(workCtx)
 				})
 			}

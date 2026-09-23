@@ -26,7 +26,8 @@ func runFakeService(t *testing.T, runsCRs ...*kube.KusoRun) *Service {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-		kube.GVRRuns: "KusoRunList",
+		kube.GVRRuns:     "KusoRunList",
+		kube.GVRProjects: "KusoProjectList",
 	})
 	for _, r := range runsCRs {
 		m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(r)

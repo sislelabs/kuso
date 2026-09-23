@@ -193,6 +193,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 				"app.kubernetes.io/component":  "kusorun",
 				kube.LabelProject:              project,
 				kube.LabelService:              fqn,
+				labelRunPhase:                  "pending",
 			},
 			Annotations: map[string]string{
 				"kuso.sislelabs.com/run-phase":      "pending",
@@ -332,7 +333,8 @@ func (s *Service) Cancel(ctx context.Context, project, name string) error {
 	// builds Cancel path uses.
 	now := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"}},"spec":{"done":true}}`,
+		`{"metadata":{"labels":{%q:"cancelled"},"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"}},"spec":{"done":true}}`,
+		labelRunPhase,
 		"kuso.sislelabs.com/run-phase",
 		"kuso.sislelabs.com/run-completed-at", now,
 		"kuso.sislelabs.com/run-message",
