@@ -650,7 +650,7 @@ func (s *Service) CleanupInstanceAddon(ctx context.Context, project, addonShort 
 	if instanceName != "" {
 		adminDSN, err := s.instanceAdminDSN(cctx, instanceName)
 		if err == nil {
-			err = s.dropInstanceAddonDB(adminDSN, project, addonShort)
+			err = s.dropInstanceAddonDB(cctx, adminDSN, project, addonShort)
 		}
 		if err != nil {
 			slog.Default().Warn("instance-addon cleanup: instance-DB drop failed (orphaned on shared server)",
@@ -703,7 +703,7 @@ func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project st
 	if req.UseInstanceAddon != "" && createdInstanceDB {
 		adminDSN, err := s.instanceAdminDSN(cctx, req.UseInstanceAddon)
 		if err == nil {
-			err = s.dropInstanceAddonDB(adminDSN, project, req.Name)
+			err = s.dropInstanceAddonDB(cctx, adminDSN, project, req.Name)
 		}
 		if err != nil {
 			slog.Default().Warn("addon create failed; instance-DB cleanup failed (orphaned on shared server)",
@@ -1078,7 +1078,7 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// delete must not nuke a production database.
 	if cr.Spec.UseInstanceAddon != "" && shouldDropInstanceDB(cr.Labels) {
 		if adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon); derr == nil {
-			if err := s.dropInstanceAddonDB(adminDSN, project, ShortName(project, fqn)); err != nil {
+			if err := s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn)); err != nil {
 				// Non-fatal: log via the orphan-trail mechanism below; the
 				// CR delete still proceeds so the preview teardown isn't
 				// wedged. An operator can reclaim the DB manually.

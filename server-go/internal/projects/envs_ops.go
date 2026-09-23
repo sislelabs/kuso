@@ -11,6 +11,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/kube"
 )
@@ -367,43 +368,56 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// the reclaim and orphans a StatefulSet+PVC+live credentials (the
 	// v0.21.6/v0.21.7 leak class). Cached helpers stay on READ paths only.
 	var deletedCloneAddons []string
+	var cloneSel map[string]string
+	var cloneScope string
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
-		selector := kube.LabelSelector(map[string]string{
+		cloneScope = "preview-pr-" + pr
+		cloneSel = map[string]string{
 			kube.LabelProject:               project,
 			"kuso.sislelabs.com/preview-pr": pr,
-		})
-		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: selector,
-		}); lerr != nil {
-			cleanupFail("KusoAddonList", selector, lerr)
-		} else {
-			for i := range addonList.Items {
-				name := addonList.Items[i].GetName()
-				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
-					cleanupFail("KusoAddon", name, derr)
-				} else {
-					deletedCloneAddons = append(deletedCloneAddons, name)
-				}
-			}
 		}
-	} else if scope := envScopeForDelete(e, env, project, serviceFQN); scope != "" {
-		// Named env (staging/qa/...): delete every addon scoped to this env via the
-		// canonical env label, so the env's OWN DB/redis/s3 + their PVCs are removed.
-		selector := kube.LabelSelector(map[string]string{
+	} else if scope := envScopeForDelete(e, env, project, serviceFQN); scope != "" && scope != "production" {
+		// Named env (staging/qa/...): its OWN DB/redis/s3 carry the canonical
+		// env label. Never "production": an addon labelled env=production is
+		// the project's own data, not a clone, and must survive a service
+		// delete.
+		cloneScope = scope
+		cloneSel = map[string]string{
 			kube.LabelProject: project,
 			kube.LabelEnv:     scope,
-		})
-		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: selector,
-		}); lerr != nil {
-			cleanupFail("KusoAddonList", selector, lerr)
-		} else {
-			for i := range addonList.Items {
-				name := addonList.Items[i].GetName()
-				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
-					cleanupFail("KusoAddon", name, derr)
-				} else {
-					deletedCloneAddons = append(deletedCloneAddons, name)
+		}
+	}
+	if cloneSel != nil {
+		// Clones belong to the env SCOPE, not to this one service: every
+		// service's staging (or PR-N) env mounts the same <project>-db-staging.
+		// Reclaim them only when no other live env still sits in the scope.
+		// If that can't be established, keep them — a leak is recoverable,
+		// a dropped DB is not.
+		users, uerr := s.liveEnvsInScope(ctx, ns, project, cloneScope, env)
+		selector := kube.LabelSelector(cloneSel)
+		switch {
+		case uerr != nil:
+			cleanupFail("KusoEnvironmentList", cloneScope, uerr)
+		case len(users) > 0:
+			slog.Info("env delete: keeping env-scoped addons still used by sibling envs",
+				"project", project, "env", env, "scope", cloneScope, "users", strings.Join(users, ","))
+		default:
+			if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: selector,
+			}); lerr != nil {
+				cleanupFail("KusoAddonList", selector, lerr)
+			} else {
+				for i := range addonList.Items {
+					name := addonList.Items[i].GetName()
+					inst, _, _ := unstructured.NestedString(addonList.Items[i].Object, "spec", "useInstanceAddon")
+					if cerr := s.cleanupInstanceClone(ctx, project, name, addonList.Items[i].GetLabels(), inst); cerr != nil {
+						cleanupFail("InstanceAddon", name, cerr)
+					}
+					if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
+						cleanupFail("KusoAddon", name, derr)
+					} else {
+						deletedCloneAddons = append(deletedCloneAddons, name)
+					}
 				}
 			}
 		}
@@ -582,4 +596,62 @@ func previewPRNumber(env, serviceFQN string) string {
 		return ""
 	}
 	return strings.TrimPrefix(suffix, "pr-")
+}
+
+// liveEnvsInScope returns the other env CRs in project that sit in the env
+// scope (staging, preview-pr-N), read with a LIVE list. self and envs
+// already terminating don't count. Envs without the env label (legacy)
+// are matched by their name-derived scope so they still count as users.
+func (s *Service) liveEnvsInScope(ctx context.Context, ns, project, scope, self string) ([]string, error) {
+	list, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project}),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var users []string
+	for i := range list.Items {
+		it := &list.Items[i]
+		if it.GetName() == self || it.GetDeletionTimestamp() != nil {
+			continue
+		}
+		got := it.GetLabels()[kube.LabelEnv]
+		if got == "" {
+			svc, _, _ := unstructured.NestedString(it.Object, "spec", "service")
+			if pr := previewPRNumber(it.GetName(), svc); pr != "" {
+				got = "preview-pr-" + pr
+			} else {
+				got = envScopeForDelete(nil, it.GetName(), project, svc)
+			}
+		}
+		if got == scope {
+			users = append(users, it.GetName())
+		}
+	}
+	return users, nil
+}
+
+// isEnvClone reports whether addon labels mark it as a per-env or per-PR
+// clone rather than the project's own addon (which includes env=production).
+func isEnvClone(labels map[string]string) bool {
+	if labels["kuso.sislelabs.com/preview-pr"] != "" {
+		return true
+	}
+	env := labels[kube.LabelEnv]
+	return env != "" && env != "production"
+}
+
+// cleanupInstanceClone drops an instance-pg clone's database, role and conn
+// Secret on the shared server. Deleting the CR alone reclaims none of them.
+// Must run while the CR still exists: CleanupInstanceAddon reads its
+// spec.useInstanceAddon. A project's own addon is never dropped here.
+func (s *Service) cleanupInstanceClone(ctx context.Context, project, name string, labels map[string]string, instance string) error {
+	if s.CleanupInstanceAddon == nil || instance == "" || !isEnvClone(labels) {
+		return nil
+	}
+	short := strings.TrimPrefix(name, project+"-")
+	if short == "" {
+		short = name
+	}
+	return s.CleanupInstanceAddon(ctx, project, short)
 }

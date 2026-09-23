@@ -526,6 +526,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				continue
 			}
 			deletedAddons = append(deletedAddons, a.Name)
+			if cerr := s.cleanupInstanceClone(ctx, name, a.Name, a.Labels, a.Spec.UseInstanceAddon); cerr != nil {
+				cleanupFail("InstanceAddon", a.Name, cerr)
+			}
 			if derr := s.Kube.DeleteKusoAddon(ctx, ns, a.Name); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("delete addon %s: %w", a.Name, derr)
 			}

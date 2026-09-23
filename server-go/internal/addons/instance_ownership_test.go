@@ -310,3 +310,33 @@ func TestInstanceAdd_FailedFreshAddDropsItsOwnDB(t *testing.T) {
 		t.Fatal("failed fresh add left its database behind")
 	}
 }
+
+// Tearing down an env clone drops the database its name maps to. When that
+// identifier belongs to another project's addon (p/"api-db" and p-api/"db"
+// both map to p_api_db), the drop must refuse rather than destroy the other
+// project's data.
+func TestInstanceCleanup_KeepsDBOwnedByAnotherProject(t *testing.T) {
+	p1 := uniqueProject(t)
+	p2 := p1 + "-api"
+	s, adminDSN := instancePGService(t, p1, p2)
+	ident := pgIdentifier(p1, "api-db")
+	dropTestIdent(t, adminDSN, ident)
+
+	if err := instanceAdd(s, p1, "api-db"); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	dyn := s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient)
+	clone := typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: p2 + "-db", Namespace: "kuso-" + p2,
+			Labels: map[string]string{kube.LabelProject: p2, kube.LabelEnv: "staging"}},
+		Spec: kube.KusoAddonSpec{Project: p2, Kind: "postgres", UseInstanceAddon: "pg"},
+	})
+	if err := dyn.Tracker().Create(kube.GVRAddons, clone.obj, "kuso-"+p2); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = s.CleanupInstanceAddon(context.Background(), p2, "db")
+	if !dbExists(t, adminDSN, ident) {
+		t.Fatalf("cleanup of %s/db dropped %s, which belongs to %s/api-db", p2, ident, p1)
+	}
+}

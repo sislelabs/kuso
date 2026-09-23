@@ -407,13 +407,13 @@ func pgIdentifier(project, addon string) string {
 }
 
 // dropInstanceAddonDB drops the per-project database + role on the
-// shared server. DESTRUCTIVE — only called for ephemeral preview-clone
-// addons (labelled kuso.sislelabs.com/preview-pr), never for a real
+// shared server. DESTRUCTIVE — only called for ephemeral env/preview-clone
+// addons (see shouldDropInstanceDB) or an Add rollback, never for a real
 // project addon (those retain data on delete, like native-addon PVCs).
 // Terminates open connections first so DROP DATABASE doesn't fail with
 // "database is being accessed by other users". Best-effort per
 // statement; returns the first hard error.
-func (s *Service) dropInstanceAddonDB(adminDSN, project, addonShort string) error {
+func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort string) error {
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
@@ -422,6 +422,20 @@ func (s *Service) dropInstanceAddonDB(adminDSN, project, addonShort string) erro
 		return fmt.Errorf("open admin: %w", err)
 	}
 	defer db.Close()
+
+	// The identifier isn't injective across projects, so the DB under this
+	// name may be another addon's. Drop only what the ownership stamp (or,
+	// for pre-stamp DBs, the absence of a competing live addon) says is ours.
+	var dbOwner, roleOwner sql.NullString
+	if err := db.QueryRow(`SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check pg_database: %w", err)
+	}
+	if err := db.QueryRow(`SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check pg_roles: %w", err)
+	}
+	if err := s.checkInstanceDBOwner(ctx, dbName, project, addonShort, dbOwner.String, roleOwner.String); err != nil {
+		return fmt.Errorf("refusing to drop: %w", err)
+	}
 
 	// Boot any open connections so DROP DATABASE can proceed.
 	_, _ = db.Exec(
