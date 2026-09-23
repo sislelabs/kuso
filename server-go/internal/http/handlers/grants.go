@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
@@ -136,9 +137,12 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty)")
 		return
 	}
+	userID := chi.URLParam(r, "userId")
+	if !requireGrant(w, r, userID, instanceRolePerms(body.Role)) {
+		return
+	}
 	ctx, cancel := grantsCtx(r)
 	defer cancel()
-	userID := chi.URLParam(r, "userId")
 	if err := h.DB.SetUserInstanceRole(ctx, userID, body.Role); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "user not found")
@@ -171,6 +175,9 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 	}
 	if !validInstanceRole(body.Role) {
 		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty)")
+		return
+	}
+	if !requireGrant(w, r, "", instanceRolePerms(body.Role)) {
 		return
 	}
 	ctx, cancel := grantsCtx(r)
@@ -251,6 +258,9 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := grantsCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
+	if !h.requireProjectGrant(w, r, project, body.UserID, body.Role) {
+		return
+	}
 	id, err := h.DB.AddProjectGrant(ctx, project, body.UserID, body.GroupID, body.Role)
 	if err != nil {
 		h.Logger.Error("add project grant", "project", project, "err", err)
@@ -262,6 +272,25 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("granted %s access to project %q with role %q (grant id=%s)",
 			granteeForAudit(body.UserID, body.GroupID), project, roleForAudit(string(body.Role)), id))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// requireProjectGrant applies the delegation rule on one project: a
+// non-admin may grant at most its own effective role there. An inherit
+// ("") grant resolves to the grantee's instance role, which for anyone
+// not already an instance admin is at most editor.
+func (h *GrantsHandler) requireProjectGrant(w http.ResponseWriter, r *http.Request, project, targetUserID string, role db.ProjectRole) bool {
+	if role == "" {
+		role = db.ProjectRoleEditor
+	}
+	var callerPerms []string
+	if claims, ok := auth.ClaimsFromContext(r.Context()); ok && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		tenancy, err := h.DB.ListUserTenancyCached(r.Context(), claims.UserID)
+		if err != nil {
+			return writeGrantErr(w, err)
+		}
+		callerPerms = auth.PermsForProjectRole(auth.ProjectRoleFor(tenancy, project))
+	}
+	return writeGrantErr(w, checkGrant(r, targetUserID, callerPerms, auth.PermsForProjectRole(role)))
 }
 
 // RemoveGrant deletes a grant by id.

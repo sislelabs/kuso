@@ -106,6 +106,14 @@ func rejectReservedPerms(w http.ResponseWriter, perms []db.PermissionInput) bool
 	return true
 }
 
+func rolePermStrings(perms []db.PermissionInput) []string {
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		out = append(out, p.Resource+":"+p.Action)
+	}
+	return out
+}
+
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !requireUserWrite(w, r) {
 		return
@@ -115,7 +123,7 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
-	if !rejectReservedPerms(w, req.Permissions) {
+	if !rejectReservedPerms(w, req.Permissions) || !requireGrant(w, r, "", rolePermStrings(req.Permissions)) {
 		return
 	}
 	id, err := randomID()
@@ -154,7 +162,7 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
-	if !rejectReservedPerms(w, req.Permissions) {
+	if !rejectReservedPerms(w, req.Permissions) || !requireGrant(w, r, "", rolePermStrings(req.Permissions)) {
 		return
 	}
 	ctx, cancel := rolesCtx(r)

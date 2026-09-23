@@ -22,6 +22,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -83,6 +85,94 @@ func AdminOnly(next http.Handler) http.Handler {
 // billing).
 func requireUserWrite(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermUserWrite)
+}
+
+// errGrantForbidden marks an access-management write that would let a
+// non-admin confer more than it holds, or change its own access.
+var errGrantForbidden = errors.New("forbidden")
+
+// checkGrant is the delegation rule for every write that confers access
+// (roles, instance roles, group membership, invites, project grants).
+// Instance admins may grant anything. Everyone else may grant only a
+// subset of callerPerms, and never to themselves: user:write alone must
+// not be a path to settings:admin. targetUserID "" means the grant has
+// no single user target (a group, an invite, a role definition).
+func checkGrant(r *http.Request, targetUserID string, callerPerms, grant []string) error {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		return fmt.Errorf("%w: unauthenticated", errGrantForbidden)
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return nil
+	}
+	if targetUserID != "" && targetUserID == claims.UserID {
+		return fmt.Errorf("%w: cannot change your own access", errGrantForbidden)
+	}
+	if missing := auth.MissingGrantPermission(callerPerms, grant); missing != "" {
+		return fmt.Errorf("%w: granting %s requires holding it yourself", errGrantForbidden, missing)
+	}
+	return nil
+}
+
+// requireGrant applies checkGrant against the caller's instance-level
+// perms and writes a 403 on violation. Returns false when the response
+// was already written.
+func requireGrant(w http.ResponseWriter, r *http.Request, targetUserID string, grant []string) bool {
+	var callerPerms []string
+	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
+		callerPerms = claims.Permissions
+	}
+	return writeGrantErr(w, checkGrant(r, targetUserID, callerPerms, grant))
+}
+
+func writeGrantErr(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, errGrantForbidden) {
+		writeErr(w, http.StatusForbidden, err.Error())
+	} else {
+		writeErr(w, http.StatusInternalServerError, "internal")
+	}
+	return false
+}
+
+// requireGrantOverUser gates acting AS another user (password reset,
+// minting their token): a non-admin may only do it to a user whose
+// effective perms are a subset of its own.
+func requireGrantOverUser(w http.ResponseWriter, r *http.Request, d *db.DB, targetUserID string) bool {
+	perms, err := auth.EffectivePermissions(r.Context(), d, targetUserID)
+	if err != nil {
+		return writeGrantErr(w, err)
+	}
+	return requireGrant(w, r, "", perms)
+}
+
+// requireRoleGrant gates assigning a custom Role to targetUserID.
+func requireRoleGrant(w http.ResponseWriter, r *http.Request, d *db.DB, targetUserID, roleID string) bool {
+	perms, err := d.RolePermissions(r.Context(), roleID)
+	if err != nil {
+		return writeGrantErr(w, err)
+	}
+	return requireGrant(w, r, targetUserID, perms)
+}
+
+// requireGroupGrant gates adding targetUserID to a group, which confers
+// the group's instance role.
+func requireGroupGrant(w http.ResponseWriter, r *http.Request, d *db.DB, targetUserID, groupID string) bool {
+	t, err := d.GetGroupTenancy(r.Context(), groupID)
+	if errors.Is(err, db.ErrNotFound) {
+		return true // let the handler report the missing group as before
+	}
+	if err != nil {
+		return writeGrantErr(w, err)
+	}
+	return requireGrant(w, r, targetUserID, instanceRolePerms(t.InstanceRole))
+}
+
+// instanceRolePerms is what an instance role confers, per auth.Compute.
+func instanceRolePerms(role db.InstanceRole) []string {
+	return auth.Compute(db.GroupTenancy{InstanceRole: role})
 }
 
 // requireProjectAccess confirms the caller has at least minRole on the

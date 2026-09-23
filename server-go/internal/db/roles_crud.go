@@ -55,6 +55,19 @@ func (d *DB) ListRolesWithPermissions(ctx context.Context) ([]FullRole, error) {
 	return out, nil
 }
 
+// RolePermissions returns a role's permissions as "<resource>:<action>".
+func (d *DB) RolePermissions(ctx context.Context, roleID string) ([]string, error) {
+	rows, err := d.permissionsForRole(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("db: role permissions: %w", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, p.Resource+":"+p.Action)
+	}
+	return out, nil
+}
+
 func (d *DB) permissionsForRole(ctx context.Context, roleID string) ([]PermissionRow, error) {
 	rows, err := d.QueryContext(ctx, `
 SELECT p.id, p.resource, p.action

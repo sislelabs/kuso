@@ -102,6 +102,9 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 			expiresAt = maxExpiry
 		}
 	}
+	if !requireGrantOverUser(w, r, h.DB, chi.URLParam(r, "userId")) {
+		return
+	}
 	ctx, cancel := tokAdminCtx(r)
 	defer cancel()
 	user, err := h.DB.FindUserByID(ctx, chi.URLParam(r, "userId"))

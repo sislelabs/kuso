@@ -128,6 +128,9 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
+	if !requireGrant(w, r, "", instanceRolePerms(req.InstanceRole)) {
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.SetGroupTenancy(ctx, chi.URLParam(r, "id"), req); err != nil {
@@ -176,6 +179,9 @@ func (h *GroupsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 // member is a no-op via ON CONFLICT DO NOTHING under the hood.
 func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	if !requireUserWrite(w, r) {
+		return
+	}
+	if !requireGroupGrant(w, r, h.DB, chi.URLParam(r, "userId"), chi.URLParam(r, "id")) {
 		return
 	}
 	ctx, cancel := groupsCtx(r)

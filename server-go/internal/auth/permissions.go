@@ -12,6 +12,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -128,6 +129,43 @@ func ValidateRolePermissions(pairs [][2]string) string {
 	for _, p := range pairs {
 		if ReservedInstancePermission(p[0], p[1]) {
 			return p[0] + ":" + p[1]
+		}
+	}
+	return ""
+}
+
+// EffectivePermissions is a user's live instance-level permission set:
+// custom-role perms ∪ Compute(tenancy), both through the tenancy cache.
+// The per-request resolver and the access-management gates share it so
+// "what can this user do" has one answer.
+func EffectivePermissions(ctx context.Context, d *db.DB, userID string) ([]string, error) {
+	rolePerms, err := d.UserPermissionsCached(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	tenancy, err := d.ListUserTenancyCached(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	perms := make([]string, 0, len(rolePerms)+8)
+	seen := make(map[string]bool, len(rolePerms)+8)
+	for _, p := range append(rolePerms, Compute(tenancy)...) {
+		if !seen[p] {
+			seen[p] = true
+			perms = append(perms, p)
+		}
+	}
+	return perms, nil
+}
+
+// MissingGrantPermission returns the first permission in grant that the
+// caller's own set does not carry, or "" when grant is a subset. This is
+// the delegation rule for access-management writes: a non-admin may only
+// confer access it already holds itself.
+func MissingGrantPermission(caller, grant []string) string {
+	for _, p := range grant {
+		if !Has(caller, Permission(p)) {
+			return p
 		}
 	}
 	return ""

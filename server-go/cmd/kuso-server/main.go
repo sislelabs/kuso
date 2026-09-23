@@ -181,27 +181,9 @@ func main() {
 	// granted role sat inert until the user minted a fresh token —
 	// and a revoked one kept working until expiry.
 	issuer.SetPermissionResolver(func(ctx context.Context, c *auth.Claims) ([]string, bool) {
-		rolePerms, err := database.UserPermissionsCached(ctx, c.UserID)
+		perms, err := auth.EffectivePermissions(ctx, database, c.UserID)
 		if err != nil {
 			return nil, false
-		}
-		tenancy, err := database.ListUserTenancyCached(ctx, c.UserID)
-		if err != nil {
-			return nil, false
-		}
-		perms := make([]string, 0, len(rolePerms)+8)
-		seen := make(map[string]bool, len(rolePerms)+8)
-		for _, p := range rolePerms {
-			if !seen[p] {
-				seen[p] = true
-				perms = append(perms, p)
-			}
-		}
-		for _, p := range auth.Compute(tenancy) {
-			if !seen[p] {
-				seen[p] = true
-				perms = append(perms, p)
-			}
 		}
 		return perms, true
 	})

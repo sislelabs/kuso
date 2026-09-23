@@ -159,6 +159,13 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !requireGrant(w, r, "", instanceRolePerms(db.InstanceRole(req.InstanceRole))) {
+		return
+	}
+	if req.GroupID != "" && !requireGroupGrant(w, r, h.DB, "", req.GroupID) {
+		return
+	}
+
 	var note *string
 	if req.Note != "" {
 		n := req.Note

@@ -68,6 +68,9 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "username, email, password required")
 		return
 	}
+	if req.RoleID != "" && !requireRoleGrant(w, r, h.DB, "", req.RoleID) {
+		return
+	}
 	hash, err := auth.HashPassword(req.Password, 0)
 	if err != nil {
 		h.fail(w, "hash password", err)
@@ -158,6 +161,9 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "forbidden: cannot change your own role or active status")
 		return
 	}
+	if req.RoleID != nil && *req.RoleID != "" && !requireRoleGrant(w, r, h.DB, userID, *req.RoleID) {
+		return
+	}
 	if err := h.DB.UpdateUser(ctx, userID, db.UpdateUserInput{
 		FirstName: req.FirstName, LastName: req.LastName, Email: req.Email, RoleID: req.RoleID, IsActive: req.IsActive,
 	}); err != nil {
@@ -215,6 +221,10 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "password required")
 		return
 	}
+	userID := chi.URLParam(r, "id")
+	if !requireGrantOverUser(w, r, h.DB, userID) {
+		return
+	}
 	hash, err := auth.HashPassword(body.Password, 0)
 	if err != nil {
 		h.fail(w, "hash", err)
@@ -222,7 +232,6 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
-	userID := chi.URLParam(r, "id")
 	if err := h.DB.UpdateUserPassword(ctx, userID, hash); err != nil {
 		h.fail(w, "update password", err)
 		return
