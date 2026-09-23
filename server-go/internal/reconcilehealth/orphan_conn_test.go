@@ -68,3 +68,36 @@ func TestDetectOrphanConnSecrets_IgnoresLiveAddons(t *testing.T) {
 		t.Fatalf("reported %d orphans for live addons: %+v", len(got), got)
 	}
 }
+
+// kuso-postgres-conn is the CONTROL-PLANE database credential, mounted
+// by kuso-server and kuso-pgbouncer. No KusoAddon is named
+// "kuso-postgres" — it is platform infrastructure, not a tenant addon —
+// so a naive "conn Secret with no CR" rule flags it, and acting on that
+// would delete the credential the server itself runs on.
+//
+// Any platform-owned conn Secret must be excluded by name.
+func TestDetectOrphanConnSecrets_SkipsPlatformSecrets(t *testing.T) {
+	secrets := []corev1.Secret{
+		{ObjectMeta: metav1.ObjectMeta{Name: "kuso-postgres-conn", Namespace: "kuso"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "kuso-instance-pg-conn", Namespace: "kuso"}},
+		// A genuine orphan alongside them, to prove the filter is not
+		// simply dropping everything.
+		{ObjectMeta: metav1.ObjectMeta{Name: "bukvite-db-staging-conn", Namespace: "kuso"}},
+	}
+	got := detectOrphanConnSecrets(secrets, map[string]bool{})
+
+	for _, iss := range got {
+		if iss.Resource == "kuso-postgres-conn" {
+			t.Fatal("kuso-postgres-conn reported as an orphan — it is the " +
+				"control-plane DB credential mounted by kuso-server and " +
+				"kuso-pgbouncer; deleting it takes down the platform")
+		}
+		if iss.Resource == "kuso-instance-pg-conn" {
+			t.Error("kuso-instance-pg-conn reported as an orphan — it is the " +
+				"shared instance-pg admin credential")
+		}
+	}
+	if len(got) != 1 || got[0].Resource != "bukvite-db-staging-conn" {
+		t.Fatalf("expected exactly the real orphan, got %+v", got)
+	}
+}

@@ -21,6 +21,20 @@ const KindOrphanConnSecret Kind = "orphan_conn_secret"
 
 const connSecretSuffix = "-conn"
 
+// platformConnSecrets are conn Secrets owned by the PLATFORM, not by any
+// KusoAddon. No CR is ever named after them, so the
+// "conn Secret with no CR" rule flags them every time — and acting on
+// that would delete the credential kuso itself runs on
+// (kuso-postgres-conn is mounted by kuso-server and kuso-pgbouncer).
+//
+// Keyed by full Secret name rather than a prefix: a tenant project may
+// legitimately be called "kuso-something", and its addons must still be
+// checked.
+var platformConnSecrets = map[string]bool{
+	"kuso-postgres-conn":    true, // control-plane database
+	"kuso-instance-pg-conn": true, // shared instance-pg admin credential
+}
+
 // detectOrphanConnSecrets reports every conn Secret whose addon CR is
 // gone. live maps addon CR names ("<project>-<addon>") that still exist.
 //
@@ -33,6 +47,9 @@ func detectOrphanConnSecrets(secrets []corev1.Secret, live map[string]bool) []Is
 		sec := &secrets[i]
 		name := sec.Name
 		if !strings.HasSuffix(name, connSecretSuffix) {
+			continue
+		}
+		if platformConnSecrets[name] {
 			continue
 		}
 		addonCR := strings.TrimSuffix(name, connSecretSuffix)
