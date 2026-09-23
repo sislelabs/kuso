@@ -21,6 +21,7 @@ import (
 
 	"kuso/pkg/kusoApi"
 
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
 
@@ -198,6 +199,55 @@ var runCancelCmd = &cobra.Command{
 	},
 }
 
+var runListCmd = &cobra.Command{
+	Use:     "list <project> <service>",
+	Aliases: []string{"ls"},
+	Short:   "List a service's runs, newest first",
+	Args:    cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.ListRuns(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list runs: %w", err)
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var runs []struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+			Spec struct {
+				Command []string `json:"command"`
+			} `json:"spec"`
+		}
+		if err := json.Unmarshal(resp.Body(), &runs); err != nil {
+			return fmt.Errorf("decode runs: %w", err)
+		}
+		if len(runs) == 0 {
+			fmt.Println("No runs.")
+			return nil
+		}
+		t := tablewriter.NewWriter(os.Stdout)
+		t.SetHeader([]string{"NAME", "PHASE", "STARTED", "COMMAND"})
+		for _, r := range runs {
+			a := r.Metadata.Annotations
+			t.Append([]string{
+				r.Metadata.Name,
+				a["kuso.sislelabs.com/run-phase"],
+				a["kuso.sislelabs.com/run-started-at"],
+				strings.Join(r.Spec.Command, " "),
+			})
+		}
+		t.Render()
+		return nil
+	},
+}
+
 var runDeleteYes bool
 
 // runDeleteCmd removes a finished run's record + pod. DeleteRun client
@@ -228,6 +278,8 @@ func init() {
 	runCmd.Flags().IntVar(&runTimeoutSeconds, "timeout-seconds", 0, "max run duration in seconds (default 1800 / 30 min)")
 	runCmd.Flags().StringArrayVar(&runEnvFlags, "env", nil, "extra env var (KEY=VALUE), repeatable")
 	runCmd.Flags().BoolVarP(&runFollow, "follow", "f", false, "stream logs + block until the run completes; exit code matches the run's exit code")
+	runCmd.AddCommand(runListCmd)
+	runListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	runCmd.AddCommand(runCancelCmd)
 	runCmd.AddCommand(runDeleteCmd)
 	runDeleteCmd.Flags().BoolVarP(&runDeleteYes, "yes", "y", false, "skip the confirmation prompt")
