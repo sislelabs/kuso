@@ -233,6 +233,16 @@ var getEnvsCmd = &cobra.Command{
 	},
 }
 
+// ---------------- get crons <project> [service] ----------------
+
+var getCronsCmd = &cobra.Command{
+	Use:     "crons <project> [service]",
+	Aliases: []string{"cron"},
+	Short:   "List crons in a project (optionally filtered by service)",
+	Args:    cobra.RangeArgs(1, 2),
+	RunE:    func(cmd *cobra.Command, args []string) error { return cronListCmd.RunE(cmd, args) },
+}
+
 // ---------------- get addons <project> ----------------
 
 var getAddonsCmd = &cobra.Command{
@@ -350,6 +360,7 @@ func init() {
 	getCmd.AddCommand(getServicesCmd)
 	getCmd.AddCommand(getEnvsCmd)
 	getCmd.AddCommand(getAddonsCmd)
+	getCmd.AddCommand(getCronsCmd)
 
 	getCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 }

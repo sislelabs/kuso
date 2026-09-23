@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/go-resty/resty/v2"
@@ -124,7 +125,7 @@ var cronListCmd = &cobra.Command{
 					asString(meta["name"]),
 					asString(spec["service"]),
 					asString(spec["schedule"]),
-					fmt.Sprintf("%v", spec["suspend"]),
+					strconv.FormatBool(spec["suspend"] == true),
 					strings.Join(cmdStrs, " "),
 				})
 			}
