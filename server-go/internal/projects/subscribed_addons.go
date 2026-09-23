@@ -11,6 +11,7 @@ package projects
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -212,6 +213,42 @@ func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []s
 		out[i].ValueFrom = newVF
 	}
 	return out
+}
+
+// unclonedAddonRefs returns "VAR -> secret" for every explicit secretKeyRef
+// that targets a project addon a new isolated env won't get a clone of:
+// external addons (never cloned) and kinds outside the requested set.
+// rescopeAddonConnRefs can only redirect refs that have a clone.
+func (s *Service) unclonedAddonRefs(ctx context.Context, project string, vars []kube.KusoEnvVar, kinds []string) ([]string, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	byConn := make(map[string]*kube.KusoAddon, len(list))
+	for i := range list {
+		if list[i].Labels[labelEnv] != "" {
+			continue
+		}
+		byConn[list[i].Name+"-conn"] = &list[i]
+	}
+	var out []string
+	for _, e := range vars {
+		skr, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := skr["name"].(string)
+		a, ok := byConn[name]
+		if !ok {
+			continue
+		}
+		external := a.Spec.External != nil && a.Spec.External.SecretName != ""
+		if external || !slices.Contains(kinds, a.Spec.Kind) {
+			out = append(out, e.Name+" -> "+name)
+		}
+	}
+	return out, nil
 }
 
 // dropProjectAddonConns removes the project's own addon conn-secrets from a

@@ -942,6 +942,17 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		if len(kinds) == 0 {
 			kinds = s.statefulAddonKinds(ctx, project)
 		}
+		// Refuse before provisioning anything: an explicit ref the rescope
+		// below can't redirect wins over envFrom, so the env would run (and
+		// migrate) against the production datastore.
+		leaked, err := s.unclonedAddonRefs(ctx, project, svc.Spec.EnvVars, kinds)
+		if err != nil {
+			return nil, err
+		}
+		if len(leaked) > 0 {
+			return nil, fmt.Errorf("%w: %s would still point at production addons that env %q does not get its own copy of (%s); pass --share-addons to share them deliberately, or reference an addon kuso can clone",
+				ErrInvalid, service, req.Name, strings.Join(leaked, ", "))
+		}
 		clones, err := s.EnvAddons(ctx, project, req.Name, kinds, seedAll)
 		if err != nil {
 			return nil, fmt.Errorf("provision env addons: %w", err)
