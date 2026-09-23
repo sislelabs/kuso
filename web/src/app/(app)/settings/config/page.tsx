@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
+import { updateClusterSettings } from "@/features/cluster-config/api";
 import { toast } from "sonner";
 import { Settings as SettingsIcon, Save } from "lucide-react";
 
@@ -40,8 +41,7 @@ export default function ClusterConfigPage() {
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (body: Record<string, unknown>) =>
-      api("/api/config", { method: "POST", body }),
+    mutationFn: updateClusterSettings,
     onSuccess: () => {
       toast.success("Cluster config saved");
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
