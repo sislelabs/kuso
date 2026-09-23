@@ -105,7 +105,19 @@ func TestDeleteEnvironment_ResumesWhenCRAlreadyGone(t *testing.T) {
 		Spec: kube.KusoAddonSpec{Project: "tickero", Kind: "postgres"},
 	})
 
-	svc, dyn, _ := newCascadeFixture(t, []seed{seedProject("tickero", kube.KusoProjectSpec{}), orphan})
+	// A live sibling env in the same project. The group guard must only
+	// match envs labelled with the name being deleted; one that matched any
+	// env in the project would refuse every resumed delete in a real project.
+	prod := typedSeed(kube.GVREnvironments, "KusoEnvironment", "tickero-api-production", &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tickero-api-production",
+			Namespace: ns,
+			Labels:    map[string]string{labelProject: "tickero", labelEnv: "production"},
+		},
+		Spec: kube.KusoEnvironmentSpec{Project: "tickero", Service: "tickero-api", Kind: "production"},
+	})
+
+	svc, dyn, _ := newCascadeFixture(t, []seed{seedProject("tickero", kube.KusoProjectSpec{}), orphan, prod})
 
 	// "tickero-api-pr-77" is an env CR NAME (not a group name), so the
 	// resume path must engage.
@@ -114,5 +126,8 @@ func TestDeleteEnvironment_ResumesWhenCRAlreadyGone(t *testing.T) {
 	}
 	if _, gerr := dyn.Resource(kube.GVRAddons).Namespace(ns).Get(context.Background(), "tickero-db-pr-77", metav1.GetOptions{}); gerr == nil {
 		t.Error("resumed delete must reclaim the orphaned per-PR addon")
+	}
+	if _, gerr := dyn.Resource(kube.GVREnvironments).Namespace(ns).Get(context.Background(), "tickero-api-production", metav1.GetOptions{}); gerr != nil {
+		t.Errorf("an unrelated env must survive a resumed delete: %v", gerr)
 	}
 }
