@@ -40,6 +40,7 @@ var notificationsCmd = &cobra.Command{
 
 var notificationsListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List notification channels",
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -31,6 +31,7 @@ var (
 
 var notificationsFeedCmd = &cobra.Command{
 	Use:   "feed",
+	Args:  cobra.NoArgs,
 	Short: "Show the in-app notification feed (the bell-icon view).",
 	Long: `Read the in-app notification feed — instance-wide deploy outcomes,
 node health, and backup events. Admin-gated. With no flags it lists the
@@ -146,6 +147,7 @@ var notifMyFeedLimit int
 
 var notificationsMyFeedCmd = &cobra.Command{
 	Use:   "my-feed",
+	Args:  cobra.NoArgs,
 	Short: "Show the notification feed scoped to your projects (read-only).",
 	Long: `Read the in-app notification feed limited to the projects you can
 access. Unlike 'notifications feed' (admin-only, instance-wide), this
@@ -201,6 +203,7 @@ their project memberships. Read-only — no unread/read-all/clear.`,
 
 var notificationsOutboxStatsCmd = &cobra.Command{
 	Use:   "outbox-stats",
+	Args:  cobra.NoArgs,
 	Short: "Show webhook delivery queue health (pending + dead-letter counts).",
 	Long: `Report the external webhook delivery queue health as pending and
 dead-letter row counts. A non-zero dead count means at least one

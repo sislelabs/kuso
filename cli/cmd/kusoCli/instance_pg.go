@@ -49,6 +49,7 @@ type instancePGStatusResp struct {
 
 var instancePGStatusCmd = &cobra.Command{
 	Use:     "status",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"get"},
 	Short:   "Show cluster Postgres status (mode, phase, consumers)",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -77,6 +78,7 @@ var (
 
 var instancePGProvisionCmd = &cobra.Command{
 	Use:   "provision",
+	Args:  cobra.NoArgs,
 	Short: "Provision an on-cluster Postgres via the kusoaddon chart",
 	Long: `Provisions a Postgres StatefulSet in the kuso namespace using the
 existing kusoaddon helm chart. Returns immediately — the helm-
@@ -145,6 +147,7 @@ var instancePGDisableYes bool
 
 var instancePGDisableCmd = &cobra.Command{
 	Use:     "disable",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"down", "rm"},
 	Short:   "Disable the cluster Postgres (refuses while consumers exist)",
 	Long: `Tears down whichever mode is active:

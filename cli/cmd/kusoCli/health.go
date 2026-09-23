@@ -55,6 +55,7 @@ type healthReport struct {
 
 var healthCmd = &cobra.Command{
 	Use:   "health",
+	Args:  cobra.NoArgs,
 	Short: "Run the platform-trust reconcile scan over cluster resources",
 	Long: `Scan cluster resources for drift and unsafe configuration and report
 any issues, grouped by severity. Read-only — nothing is changed. Use

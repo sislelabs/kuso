@@ -18,6 +18,7 @@ import (
 
 var remoteCmd = &cobra.Command{
 	Use:     "remote",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"r", "remotes"},
 	Short:   "Manage configured kuso instances",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -27,6 +28,7 @@ var remoteCmd = &cobra.Command{
 
 var remoteCreateCmd = &cobra.Command{
 	Use:     "create",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"new", "add"},
 	Short:   "Add a new kuso instance to the local config",
 	RunE: func(cmd *cobra.Command, args []string) error {

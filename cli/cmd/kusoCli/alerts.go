@@ -41,6 +41,7 @@ var (
 
 var alertListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List alert rules",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -87,6 +88,7 @@ var alertListCmd = &cobra.Command{
 
 var alertAddLogMatchCmd = &cobra.Command{
 	Use:   "add-log-match",
+	Args:  cobra.NoArgs,
 	Short: "Add a log-match alert rule",
 	Example: `  kuso alert add-log-match --name 'OOMKilled' --query OOMKilled --threshold 1 --window 5m
   kuso alert add-log-match --name 'fatal errors' --project myproj --service api --query 'fatal error' --threshold 5`,

@@ -36,6 +36,7 @@ var (
 
 var tokenCreateCmd = &cobra.Command{
 	Use:   "create",
+	Args:  cobra.NoArgs,
 	Short: "Create a new API token. Prints the token ONCE — save it.",
 	Example: `  kuso token create --name 'github-actions' --expires 90d
   kuso token create --name ci --expires 2027-01-01`,
@@ -79,6 +80,7 @@ var tokenCreateCmd = &cobra.Command{
 
 var tokenListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List your API tokens (without the token values)",
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -23,6 +23,7 @@ var instanceSecretCmd = &cobra.Command{
 
 var instanceSecretListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List instance secret keys (values are write-only)",
 	RunE: func(cmd *cobra.Command, args []string) error {

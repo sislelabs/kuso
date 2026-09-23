@@ -61,6 +61,7 @@ func rejectRetiredOutputFlag(cmdName, value string) error {
 
 var backupCmd = &cobra.Command{
 	Use:   "backup",
+	Args:  cobra.NoArgs,
 	Short: "Download a gzipped pg_dump of the kuso server DB",
 	Long: `Streams /api/admin/backup as gzipped pg_dump SQL and writes it to
 --file (default: kuso-backup-<timestamp>.sql.gz in the current dir).

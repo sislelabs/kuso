@@ -82,6 +82,7 @@ from scripts, CI, and AI agents.`,
 
 var getProjectsCmd = &cobra.Command{
 	Use:     "projects",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"project", "p"},
 	Short:   "List projects the caller has access to",
 	Example: `  kuso get projects

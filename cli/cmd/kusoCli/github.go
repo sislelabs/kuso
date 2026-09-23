@@ -30,6 +30,7 @@ var githubCmd = &cobra.Command{
 
 var githubStatusCmd = &cobra.Command{
 	Use:   "status",
+	Args:  cobra.NoArgs,
 	Short: "Show GitHub App install URL + configured state",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -53,6 +54,7 @@ var githubStatusCmd = &cobra.Command{
 
 var githubInstallationsCmd = &cobra.Command{
 	Use:     "installations",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"installs"},
 	Short:   "List orgs/users with the kuso GitHub App installed",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -144,6 +146,7 @@ var githubReposCmd = &cobra.Command{
 
 var githubRefreshCmd = &cobra.Command{
 	Use:   "refresh",
+	Args:  cobra.NoArgs,
 	Short: "Refresh the cached installation list from GitHub",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {

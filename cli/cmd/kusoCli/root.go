@@ -93,6 +93,7 @@ func Execute() {
 	rootCmd.CompletionOptions.HiddenDefaultCmd = false
 	rootCmd.AddCommand(version.CliCommand())
 	registerCommandGroups(rootCmd)
+	enforceArgContracts(rootCmd)
 	registerCompletions(rootCmd)
 	setUsageTemplate(rootCmd)
 

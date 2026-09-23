@@ -28,6 +28,7 @@ var sshKeyCmd = &cobra.Command{
 
 var sshKeyListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List stored SSH keys (private bytes are never shown).",
 	RunE: func(cmd *cobra.Command, args []string) error {

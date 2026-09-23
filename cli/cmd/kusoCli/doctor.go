@@ -35,6 +35,7 @@ func init() {
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
+	Args:  cobra.NoArgs,
 	Short: "Run pre-flight checks against the configured kuso server.",
 	Long: `doctor diagnoses common first-time setup issues:
 - token presence (kuso login),

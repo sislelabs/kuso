@@ -34,6 +34,7 @@ var incidentCmd = &cobra.Command{
 
 var incidentListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List incidents (newest first)",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -185,6 +186,7 @@ var (
 
 var incidentAgentSetCredsCmd = &cobra.Command{
 	Use:   "set-credentials",
+	Args:  cobra.NoArgs,
 	Short: "Upload your Claude Code credentials to the incident agent",
 	Long: `Reads your local Claude Code OAuth credentials and uploads the
 claudeAiOauth block to kuso, which stores it in the 'kuso-incident-agent-cc'

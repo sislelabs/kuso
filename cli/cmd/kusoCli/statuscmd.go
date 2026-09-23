@@ -22,6 +22,7 @@ func init() {
 // by default; otherwise the user passes the name explicitly.
 var statusCmd = &cobra.Command{
 	Use:     "status [project]",
+	Args:    cobra.MaximumNArgs(1),
 	Short:   "Show the project rollup: services, URLs, replicas, builds.",
 	Example: "  kuso status\n  kuso status my-product",
 	Run: func(cmd *cobra.Command, args []string) {

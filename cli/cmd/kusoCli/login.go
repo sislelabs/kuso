@@ -34,6 +34,7 @@ var (
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
+	Args:  cobra.NoArgs,
 	Short: "Login to a kuso instance",
 	Long: `Authenticate against a kuso server. The resulting token is stored
 in ~/.kuso/credentials.yaml and reused by subsequent commands.

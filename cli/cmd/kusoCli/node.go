@@ -41,6 +41,7 @@ var (
 
 var nodeAddTokenCmd = &cobra.Command{
 	Use:   "add-token",
+	Args:  cobra.NoArgs,
 	Short: "Mint a single-use bootstrap token; print the curl one-liner.",
 	Long: `Mint a single-use, time-limited token for adding a worker node.
 
@@ -131,6 +132,7 @@ on first use; replays return 410.`,
 
 var nodePendingCmd = &cobra.Command{
 	Use:   "pending",
+	Args:  cobra.NoArgs,
 	Short: "List bootstrap tokens that haven't been consumed yet.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -231,6 +233,7 @@ var nodeRevokeCmd = &cobra.Command{
 
 var nodeListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List cluster nodes with status, roles, and live usage.",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -397,6 +400,7 @@ func nodeCredsFromFlags() (kusoApi.NodeCredentials, error) {
 
 var nodeValidateCmd = &cobra.Command{
 	Use:   "validate",
+	Args:  cobra.NoArgs,
 	Short: "Pre-flight check a remote VM over SSH before joining (Coolify-style).",
 	Long: `Open an SSH session to a remote VM and run a series of probes — SSH
 handshake, root/sudo, control-plane reachability, curl, existing-k3s —
@@ -446,6 +450,7 @@ join' with the same flags.`,
 
 var nodeJoinCmd = &cobra.Command{
 	Use:   "join",
+	Args:  cobra.NoArgs,
 	Short: "SSH into a remote VM and join it to the cluster as a k3s agent.",
 	Long: `Run the k3s agent install on a remote VM over SSH and join it to this
 cluster. Blocks for the duration of the install (typically 30-90s) and
@@ -562,6 +567,7 @@ control-plane node.`,
 
 var nodeUpdatesCmd = &cobra.Command{
 	Use:   "updates",
+	Args:  cobra.NoArgs,
 	Short: "Show pending host package updates per node.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -697,6 +703,7 @@ var nodeHistoryCmd = &cobra.Command{
 
 var nodeCleanupCmd = &cobra.Command{
 	Use:   "cleanup",
+	Args:  cobra.NoArgs,
 	Short: "Delete completed pods + finished Jobs cluster-wide (admin only).",
 	Long: `Sweep Succeeded/Failed pods and finished Jobs across all namespaces.
 Running pods, active Jobs, KusoBuild-owned Jobs/pods, and the

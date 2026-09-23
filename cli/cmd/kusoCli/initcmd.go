@@ -35,6 +35,7 @@ func init() {
 // later. The schema reference at the top points at the docs.
 var initCmd = &cobra.Command{
 	Use:   "init",
+	Args:  cobra.NoArgs,
 	Short: "Write a starter kuso.yml in the current directory.",
 	Example: `  kuso init
   kuso init --runtime nixpacks --port 3000

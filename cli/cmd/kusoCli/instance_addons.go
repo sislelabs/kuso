@@ -26,6 +26,7 @@ var instanceAddonCmd = &cobra.Command{
 
 var instanceAddonListCmd = &cobra.Command{
 	Use:     "list",
+	Args:    cobra.NoArgs,
 	Aliases: []string{"ls"},
 	Short:   "List registered instance addons",
 	RunE: func(cmd *cobra.Command, args []string) error {

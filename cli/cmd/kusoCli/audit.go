@@ -31,6 +31,7 @@ var (
 
 var auditCmd = &cobra.Command{
 	Use:   "audit",
+	Args:  cobra.NoArgs,
 	Short: "Show the audit log (instance-wide, per-project, or per-service).",
 	Long: `Read the kuso audit log. With no flags this is the instance-wide view,
 which is admin-only. Pass --app <project> for a project-scoped read

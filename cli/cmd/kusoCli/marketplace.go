@@ -30,6 +30,7 @@ var marketplaceCmd = &cobra.Command{
 
 var marketplaceListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  cobra.NoArgs,
 	Short: "List available marketplace apps",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {

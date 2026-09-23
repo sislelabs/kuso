@@ -28,6 +28,7 @@ var (
 
 var usageCmd = &cobra.Command{
 	Use:   "usage",
+	Args:  cobra.NoArgs,
 	Short: "Show cluster/per-node (or per-project) resource usage + cost rollup.",
 	Long: `Show the resource-usage cost rollup over a recent window. By default
 this is the cluster + per-node view with a next-30-days cost projection.
