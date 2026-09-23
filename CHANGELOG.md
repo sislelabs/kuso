@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.4] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(addons): label the s3 init hook pod so NetworkPolicy admits it ([66d0705](https://github.com/sislelabs/kuso/commit/66d070540152afec95f30d0b600e81c221b0b6b0))
+
 ## [0.26.3] — 2026-09-23
 
 ### 🐛 Bug Fixes
@@ -320,14 +325,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(security): repo-URL deploy-token credentials no longer leak to non-admins ([9cc53ad](https://github.com/sislelabs/kuso/commit/9cc53ad18a66d9627d1acb385e39bbb41f31459d))
-
-## [0.22.15] — 2026-08-09
-
-### ✨ Features
-- Feat(auth): per-request permission resolution + instance editors can create projects ([b76f5c8](https://github.com/sislelabs/kuso/commit/b76f5c8902e3b0dadaaf83b8ed529212b5dbe16f))
-
-### 🐛 Bug Fixes
-- Fix(auth): tenancy edits no longer kill member sessions ([6c96a3a](https://github.com/sislelabs/kuso/commit/6c96a3a102965dc5c9b29a28dbaf8992f05cc9b8))
 
 
 ---

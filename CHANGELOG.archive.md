@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.15] — 2026-08-09
+
+### ✨ Features
+- Feat(auth): per-request permission resolution + instance editors can create projects ([b76f5c8](https://github.com/sislelabs/kuso/commit/b76f5c8902e3b0dadaaf83b8ed529212b5dbe16f))
+
+### 🐛 Bug Fixes
+- Fix(auth): tenancy edits no longer kill member sessions ([6c96a3a](https://github.com/sislelabs/kuso/commit/6c96a3a102965dc5c9b29a28dbaf8992f05cc9b8))
+
 ## [0.22.14] — 2026-08-04
 
 ### 🐛 Bug Fixes
