@@ -510,7 +510,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		if err != nil {
 			return nil, err
 		}
-		dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, req.Name)
+		dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name)
 		if err != nil {
 			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 		}
@@ -590,7 +590,7 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	if err != nil {
 		return err
 	}
-	dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, addonShort)
+	dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort)
 	if err != nil {
 		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 	}

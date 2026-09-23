@@ -34,6 +34,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/kube"
 )
 
 // instanceAdminDSN reads INSTANCE_ADDON_<UPPER>_DSN_ADMIN out of
@@ -77,7 +79,7 @@ func (s *Service) instanceHasPooler(ctx context.Context, ns, perProjectDSN strin
 // per-project DSN that should be stored in <addon>-conn. dbName /
 // userName are the shared form "<project>_<addon>" — both bounded
 // by 63 chars (Postgres limit).
-func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string) (perProjectDSN, password string, err error) {
+func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort string) (perProjectDSN, password string, err error) {
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
@@ -101,22 +103,38 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	// or permissions error now stops us before we attempt CREATE
 	// against a database whose existence we couldn't verify.
 	var exists int
-	if err := db.QueryRow(`SELECT 1 FROM pg_database WHERE datname = $1`, dbName).Scan(&exists); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var dbOwner sql.NullString
+	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&exists, &dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", fmt.Errorf("check pg_database: %w", err)
 	}
+	var userExists int
+	var roleOwner sql.NullString
+	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists, &roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("check pg_roles: %w", err)
+	}
+	// The identifier isn't injective across projects ("acme"/"api-db" and
+	// "acme-api"/"db" both give acme_api_db), so an existing DB or role is
+	// only ours to adopt if its ownership marker says so. Everything below
+	// rotates the role password and re-owns schema public — doing that to
+	// another project's DB hands it their data and locks them out.
+	if exists == 1 || userExists == 1 {
+		if err := s.checkInstanceDBOwner(ctx, dbName, project, addonShort, dbOwner.String, roleOwner.String); err != nil {
+			return "", "", err
+		}
+	}
+	owner := instanceDBOwnerTag(project, addonShort)
 	if exists != 1 {
 		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %s`, pq.QuoteIdentifier(dbName))); err != nil {
 			return "", "", fmt.Errorf("create db %s: %w", dbName, err)
 		}
 	}
+	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON DATABASE %s IS %s`, pq.QuoteIdentifier(dbName), pq.QuoteLiteral(owner))); err != nil {
+		return "", "", fmt.Errorf("mark db owner: %w", err)
+	}
 
 	// User: create-or-rotate. We always issue ALTER ROLE … PASSWORD
 	// so a fresh provision and a re-provision both end with a known
 	// password we can return to the caller.
-	var userExists int
-	if err := db.QueryRow(`SELECT 1 FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", fmt.Errorf("check pg_roles: %w", err)
-	}
 	if userExists != 1 {
 		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", fmt.Errorf("create role: %w", err)
@@ -125,6 +143,9 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 		if _, err := db.Exec(fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", fmt.Errorf("rotate role password: %w", err)
 		}
+	}
+	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON ROLE %s IS %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(owner))); err != nil {
+		return "", "", fmt.Errorf("mark role owner: %w", err)
 	}
 
 	// Cross-project isolation on the SHARED instance-pg server (M8).
@@ -187,6 +208,57 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	u.User = url.UserPassword(userName, pw)
 	u.Path = "/" + dbName
 	return u.String(), pw, nil
+}
+
+// instanceDBOwnerPrefix marks a DB / role comment as a kuso ownership
+// stamp. The comment lives on the Postgres object itself, so it survives
+// the addon CR and conn Secret being deleted — which is exactly the
+// "delete keeps the DB, re-add reattaches" case that needs it.
+const instanceDBOwnerPrefix = "kuso-addon:"
+
+func instanceDBOwnerTag(project, addonShort string) string {
+	return instanceDBOwnerPrefix + project + "/" + addonShort
+}
+
+// checkInstanceDBOwner decides whether an existing DB / role named ident
+// may be adopted by (project, addonShort). A kuso stamp on either object
+// is authoritative. Objects provisioned before stamps existed carry none;
+// for those, refuse only if another live instance addon CR (any project)
+// maps to the same identifier, so a legacy DB's own re-add still works.
+func (s *Service) checkInstanceDBOwner(ctx context.Context, ident, project, addonShort string, stamps ...string) error {
+	want := instanceDBOwnerTag(project, addonShort)
+	stamped := false
+	for _, c := range stamps {
+		if !strings.HasPrefix(c, instanceDBOwnerPrefix) {
+			continue
+		}
+		if c != want {
+			return fmt.Errorf("%w: instance database %s already belongs to %s", ErrConflict, ident, strings.TrimPrefix(c, instanceDBOwnerPrefix))
+		}
+		stamped = true
+	}
+	if stamped {
+		return nil
+	}
+	all, err := s.Kube.ListKusoAddons(ctx, "")
+	if err != nil {
+		return fmt.Errorf("list addons for instance db ownership: %w", err)
+	}
+	for i := range all {
+		a := &all[i]
+		if a.Spec.UseInstanceAddon == "" {
+			continue
+		}
+		p := a.Spec.Project
+		if p == "" {
+			p = a.Labels[kube.LabelProject]
+		}
+		short := ShortName(p, a.Name)
+		if (p != project || short != addonShort) && pgIdentifier(p, short) == ident {
+			return fmt.Errorf("%w: instance database %s already belongs to %s/%s", ErrConflict, ident, p, short)
+		}
+	}
+	return nil
 }
 
 // poolerDSN rewrites a direct per-project DSN to route through the cluster-DB
@@ -402,7 +474,7 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 		return err
 	}
 	short := ShortName(project, fqn)
-	dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, short)
+	dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
