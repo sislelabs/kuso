@@ -154,7 +154,8 @@ spec:
       {{- end }}
       {{- end }}
       {{- /*
-        Even spread: when replicaCount > 1, land each replica on a
+        Even spread: when the replica floor (kusoenvironment.minReplicas,
+        same notion as the PDB) is > 1, land each replica on a
         different node so a single host reboot/outage can't take all
         replicas down.
 
@@ -173,7 +174,7 @@ spec:
         When the user pins via placement.nodes (specific hostnames),
         spread is meaningless, so we skip the block entirely.
       */}}
-      {{- if and (gt (int .Values.replicaCount) 1) (not (and .Values.placement .Values.placement.nodes)) }}
+      {{- if and (ge (int (include "kusoenvironment.minReplicas" .)) 2) (not (and .Values.placement .Values.placement.nodes)) }}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

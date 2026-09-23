@@ -3,28 +3,20 @@
   during voluntary disruptions (node drain on upgrade, kubectl
   drain for hardware swap, cluster autoscaler scale-down).
 
-  Render only when there's actually something to protect: at
-  least 2 replicas. Two cases produce that:
-
-    - replicaCount > 1 explicitly set on the env
-    - autoscaling.enabled with maxReplicas > 1 (we use maxReplicas
-      because HPA can scale the deployment any time; basing the
-      budget on min would mean a drain during off-peak hours can
-      still take everything down)
-
-  For single-replica envs (replicaCount: 1 and autoscaling off),
-  a PDB doesn't help — there's no second pod to keep up. Skipping
-  the PDB lets node drains evict the lone pod cleanly; kubelet
-  reschedules within seconds.
+  Render only when the replica floor is at least 2 (replicaCount with
+  the HPA off, autoscaling.minReplicas with it on). Keying on
+  maxReplicas used to put minAvailable: 1 on HPA envs that idle at one
+  pod, so disruptionsAllowed sat at 0 and every node drain blocked on
+  the lone pod. When there's no second pod, a PDB protects nothing.
+  Skipping it lets a drain evict the pod cleanly, and kubelet
+  reschedules it within seconds.
 
   minAvailable: 1 is the safe default. Drains block while only one
   pod is up but allow normal rolling updates (which create a new
   pod before evicting the old one, so the budget stays satisfied
   throughout the rollout).
 */}}
-{{- $hasReplicas := gt (int .Values.replicaCount) 1 -}}
-{{- $hasHPA := and .Values.autoscaling .Values.autoscaling.enabled (gt (int .Values.autoscaling.maxReplicas) 1) -}}
-{{- if or $hasReplicas $hasHPA }}
+{{- if ge (int (include "kusoenvironment.minReplicas" .)) 2 }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

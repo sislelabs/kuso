@@ -106,3 +106,16 @@ kuso-activator
 {{- printf "%s-activator" (include "kusoenvironment.fullname" . | trunc 53 | trimSuffix "-") -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Replica floor: the fewest pods the env runs in steady state. With the
+HPA on that's autoscaling.minReplicas (the HPA owns spec.replicas),
+otherwise replicaCount. The PDB and topology spread both key on it.
+*/}}
+{{- define "kusoenvironment.minReplicas" -}}
+{{- if and .Values.autoscaling .Values.autoscaling.enabled -}}
+{{- int (default 1 .Values.autoscaling.minReplicas) -}}
+{{- else -}}
+{{- int .Values.replicaCount -}}
+{{- end -}}
+{{- end -}}
