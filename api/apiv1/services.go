@@ -102,6 +102,9 @@ type ServiceRepoSpec struct {
 	// gitlab.com / *gitlab* → gitlab). Set for self-hosted hosts the
 	// inference can't recognise.
 	Provider string `json:"provider,omitempty"`
+	// DefaultBranch pins the branch this service builds and deploys.
+	// Empty = track the project's default branch.
+	DefaultBranch string `json:"defaultBranch,omitempty"`
 	// Token is a GitLab clone credential (deploy / project-access /
 	// personal token) supplied on write. WRITE-ONLY: the server stores it
 	// in a per-service Secret and NEVER returns it on read. Empty leaves

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -69,5 +70,19 @@ func TestApiv1ProjectConversions_MapRepoPath(t *testing.T) {
 	updated := apiv1UpdateToDomain(apiv1.UpdateProjectRequest{DefaultRepo: repo})
 	if updated.DefaultRepo == nil || updated.DefaultRepo.Path != "services/api" {
 		t.Errorf("update: defaultRepo.path dropped: %+v", updated.DefaultRepo)
+	}
+}
+
+// The web's new-service form sends the picked repo's default branch; the
+// wire type had no field for it, so decoding silently dropped it.
+func TestApiv1CreateServiceCarriesRepoDefaultBranch(t *testing.T) {
+	var req apiv1.CreateServiceRequest
+	body := `{"name":"web","repo":{"url":"https://github.com/x/legacy","defaultBranch":"master"}}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	out := apiv1CreateServiceToDomain(req)
+	if out.Repo == nil || out.Repo.DefaultBranch != "master" {
+		t.Errorf("repo = %+v, want defaultBranch master", out.Repo)
 	}
 }

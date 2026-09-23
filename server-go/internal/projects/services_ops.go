@@ -378,9 +378,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	repoPath := "."
 	repoProvider := ""
 	repoTokenSecret := ""
+	repoBranch := ""
 	if req.Repo != nil {
 		repoURL = req.Repo.URL
 		repoProvider = req.Repo.Provider
+		repoBranch = req.Repo.DefaultBranch
 		if req.Repo.Path != "" {
 			// Validate before stamping onto the CR — the chart
 			// interpolates this into shell strings, so a value like
@@ -501,7 +503,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		Spec: kube.KusoServiceSpec{
 			Project:     project,
 			DisplayName: displayName,
-			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath, Provider: repoProvider, TokenSecret: repoTokenSecret},
+			Repo:        &kube.KusoRepoRef{URL: repoURL, DefaultBranch: repoBranch, Path: repoPath, Provider: repoProvider, TokenSecret: repoTokenSecret},
 			Runtime:     req.Runtime,
 			Dockerfile:  req.Dockerfile,
 			Command:     req.Command,
@@ -539,6 +541,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	defaultBranch := "main"
 	if proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
 		defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
+	}
+	if repoBranch != "" {
+		defaultBranch = repoBranch
 	}
 	port := req.Port
 	if port == 0 {

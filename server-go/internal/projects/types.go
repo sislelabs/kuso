@@ -155,6 +155,8 @@ type CreateServiceRepo struct {
 	URL      string `json:"url,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Provider string `json:"provider,omitempty"`
+	// DefaultBranch pins the service's branch; empty tracks the project's.
+	DefaultBranch string `json:"defaultBranch,omitempty"`
 	// Token: a GitLab clone credential, stored in a per-service Secret on
 	// create (never persisted on the CR or returned).
 	Token string `json:"token,omitempty"`
