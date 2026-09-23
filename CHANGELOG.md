@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.6] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(backups): stop re-alerting on every restart, retry failed runs ([fc2e095](https://github.com/sislelabs/kuso/commit/fc2e0952042da9380ddcabffae840ae3f5ccc141))
+
 ## [0.26.5] — 2026-09-23
 
 ### 🐛 Bug Fixes
@@ -320,11 +325,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env-groups): clones no longer inherit custom domains or an ambiguous displayName ([8ad1645](https://github.com/sislelabs/kuso/commit/8ad164519927f6317dc59914f3fb2ea6744dde9c))
-
-## [0.22.17] — 2026-08-12
-
-### 🐛 Bug Fixes
-- Fix: platform-wide security + data-safety fixes from full adversarial review ([06972e2](https://github.com/sislelabs/kuso/commit/06972e2d1bd980fe2d1e12a48e1d601b8b770cf0))
 
 
 ---

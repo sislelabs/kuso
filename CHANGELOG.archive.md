@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.17] — 2026-08-12
+
+### 🐛 Bug Fixes
+- Fix: platform-wide security + data-safety fixes from full adversarial review ([06972e2](https://github.com/sislelabs/kuso/commit/06972e2d1bd980fe2d1e12a48e1d601b8b770cf0))
+
 ## [0.22.16] — 2026-08-11
 
 ### 🐛 Bug Fixes
