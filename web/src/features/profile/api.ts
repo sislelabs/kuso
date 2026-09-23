@@ -24,6 +24,14 @@ export async function changePassword(body: ChangePasswordBody): Promise<void> {
   return api("/api/users/profile/password", { method: "PUT", body });
 }
 
+// Admin reset of another user's password: no current-password check.
+export async function resetUserPassword(userId: string, password: string): Promise<void> {
+  return api(`/api/users/id/${encodeURIComponent(userId)}/password`, {
+    method: "PUT",
+    body: { password },
+  });
+}
+
 export interface TokenSummary {
   id: string;
   name: string;

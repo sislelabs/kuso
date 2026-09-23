@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
+import { resetUserPassword } from "@/features/profile/api";
 import { toast } from "sonner";
 import { Users as UsersIcon, Plus, Trash2, KeyRound, X, Link2, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -591,11 +592,7 @@ function ResetPasswordDialog({
 }) {
   const [password, setPassword] = useState("");
   const reset = useMutation({
-    mutationFn: () =>
-      api(`/api/users/id/${encodeURIComponent(userId)}`, {
-        method: "PUT",
-        body: { password },
-      }),
+    mutationFn: () => resetUserPassword(userId, password),
     onSuccess: () => {
       toast.success(`${username}'s password reset`);
       onClose();
