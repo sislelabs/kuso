@@ -100,6 +100,7 @@ func TestReconcile_PromotesOnSuccess(t *testing.T) {
 	if err := w.reconcileOnce(context.Background()); err != nil {
 		t.Fatalf("reconcileOnce: %v", err)
 	}
+	w.wait()
 
 	env, err := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
 	if err != nil {
@@ -138,6 +139,7 @@ func TestReconcile_WithholdsOnFailure(t *testing.T) {
 	if err := w.reconcileOnce(context.Background()); err != nil {
 		t.Fatalf("reconcileOnce: %v", err)
 	}
+	w.wait()
 
 	env, err := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
 	if err != nil {
