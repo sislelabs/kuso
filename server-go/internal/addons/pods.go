@@ -61,14 +61,14 @@ func (s *Service) ListPods(ctx context.Context, project, addon string) (*AddonPo
 	if project == "" || addon == "" {
 		return nil, fmt.Errorf("%w: project and addon are required", ErrInvalid)
 	}
-	fqn := CRName(project, addon)
-	ns := s.Namespace
-	if ns == "" {
-		ns = "kuso"
+	cr, err := s.GetOwned(ctx, project, addon)
+	if err != nil {
+		return nil, err
 	}
+	ns := s.nsFor(ctx, project)
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + fqn,
+		LabelSelector: "app.kubernetes.io/instance=" + cr.Name,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)

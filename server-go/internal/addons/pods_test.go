@@ -2,6 +2,7 @@ package addons
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,7 +19,7 @@ import (
 
 func addonPodsService(t *testing.T, pods ...*corev1.Pod) *Service {
 	t.Helper()
-	s := fakeService(t, seedProj("alpha"))
+	s := fakeService(t, seedProj("alpha"), seedAddon("alpha", "pg", "postgres"))
 	objs := make([]runtime.Object, 0, len(pods))
 	for _, p := range pods {
 		objs = append(objs, p)
@@ -108,5 +109,31 @@ func TestListAddonPods_EmptyIsNotAnError(t *testing.T) {
 	}
 	if len(out.Pods) != 0 {
 		t.Errorf("pods = %d, want 0", len(out.Pods))
+	}
+}
+
+// CRName tolerates a pre-qualified name, so a viewer of "foo" asking for
+// "bar-db" or "foo-bar-db" resolves project foo-bar's addon.
+func TestListAddonPods_RefusesOtherProjectsAddon(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-bar-db-0",
+			Namespace: "kuso",
+			Labels:    map[string]string{"app.kubernetes.io/instance": "foo-bar-db"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	s := fakeService(t, seedProj("foo"), seedProj("foo-bar"), seedAddon("foo-bar", "db", "postgres"))
+	s.Kube.Clientset = kubefake.NewSimpleClientset(pod)
+
+	for _, name := range []string{"bar-db", "foo-bar-db"} {
+		out, err := s.ListPods(context.Background(), "foo", name)
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("ListPods(foo, %q): want ErrNotFound, got err=%v out=%+v", name, err, out)
+		}
+	}
+	out, err := s.ListPods(context.Background(), "foo-bar", "db")
+	if err != nil || len(out.Pods) != 1 {
+		t.Fatalf("owner ListPods: err=%v out=%+v", err, out)
 	}
 }
