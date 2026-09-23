@@ -48,6 +48,7 @@ RUN apk add --no-cache \
       bash \
       ca-certificates \
       aws-cli \
+      rclone \
       postgresql16-client \
       postgresql17-client \
       postgresql18-client \
@@ -55,6 +56,19 @@ RUN apk add --no-cache \
       mongodb-tools \
       mysql-client \
       gzip
+# rclone      -> cross-endpoint bucket sync for the s3 addon backup.
+#                `aws s3 sync` can only do s3->s3 within ONE endpoint and
+#                credential set, so the old code staged the whole bucket
+#                on local disk and re-uploaded. That broke on any object
+#                whose key exceeds the filesystem NAME_MAX of 255 bytes:
+#                a real 252-byte Cyrillic PDF name plus aws's 9-byte temp
+#                suffix came to 261 and killed the backup with
+#                "[Errno 36] Filename too long" after ~460MB. rclone
+#                streams between two independently-configured remotes, so
+#                nothing touches a filesystem and a 1024-byte S3 key is
+#                fine. It also parallelises properly -- the interim
+#                per-object `aws s3 cp` loop needed two CLI startups per
+#                object, far too slow for a 3168-object bucket.
 # redis        -> redis-cli, needed by the redis backup CronJob branch
 #                (it was referenced but missing from this image before).
 # mongodb-tools-> mongodump / mongorestore for the mongodb producer.

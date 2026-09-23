@@ -911,11 +911,43 @@ spec:
                   DEST="s3://${BUCKET}/${PROJECT}/${ADDON}/${TS}/"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> syncing s3://${SRC_BUCKET}/ → ${DEST}"
-                  AWS_ACCESS_KEY_ID="${SRC_ACCESS_KEY}" \
-                  AWS_SECRET_ACCESS_KEY="${SRC_SECRET_KEY}" \
-                    aws s3 sync --endpoint-url "${SRC_ENDPOINT}" "s3://${SRC_BUCKET}/" /tmp/src/
-                  aws s3 sync --endpoint-url "${S3_ENDPOINT}" /tmp/src/ "${DEST}"
-                  rm -rf /tmp/src
+                  # rclone, not `aws s3 sync`, and never via local disk.
+                  #
+                  # `aws s3 sync` does s3->s3 only within ONE endpoint and
+                  # credential set. Source (the addon's MinIO) and
+                  # destination (the backup provider) are neither, so the
+                  # old code downloaded the whole bucket to /tmp and
+                  # re-uploaded it. That broke on any key longer than the
+                  # filesystem NAME_MAX of 255 bytes: a real 252-byte
+                  # Cyrillic PDF name plus aws's 9-byte temp suffix came to
+                  # 261 and killed the backup with "[Errno 36] Filename too
+                  # long" -- after having already transferred ~460MB. It
+                  # also needed bucket-sized ephemeral storage on a node
+                  # where the pod has no ephemeral-storage limit.
+                  #
+                  # rclone streams directly between two independently
+                  # configured remotes, so an S3 key of any length (up to
+                  # the 1024-byte S3 limit) is fine and nothing is staged.
+                  # --transfers gives real parallelism in ONE process; the
+                  # obvious shell alternative, a per-object `aws s3 cp`
+                  # pipeline, costs two CLI startups per object and could
+                  # not finish this 3168-object bucket in reasonable time.
+                  export RCLONE_CONFIG_SRC_TYPE=s3
+                  export RCLONE_CONFIG_SRC_PROVIDER=Other
+                  export RCLONE_CONFIG_SRC_ENDPOINT="${SRC_ENDPOINT}"
+                  export RCLONE_CONFIG_SRC_ACCESS_KEY_ID="${SRC_ACCESS_KEY}"
+                  export RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY="${SRC_SECRET_KEY}"
+                  export RCLONE_CONFIG_DST_TYPE=s3
+                  export RCLONE_CONFIG_DST_PROVIDER=Other
+                  export RCLONE_CONFIG_DST_ENDPOINT="${S3_ENDPOINT}"
+                  export RCLONE_CONFIG_DST_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                  export RCLONE_CONFIG_DST_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                  export RCLONE_CONFIG_DST_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+                  # DEST is "s3://bucket/path/"; rclone wants "dst:bucket/path".
+                  RC_DEST="dst:${DEST#s3://}"
+                  rclone copy "src:${SRC_BUCKET}" "${RC_DEST}" \
+                    --transfers 16 --checkers 16 --retries 3 \
+                    --s3-no-check-bucket --stats-one-line --stats 30s
                   echo "==> sync done"
 
                   if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
