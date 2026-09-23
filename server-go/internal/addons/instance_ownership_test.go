@@ -19,8 +19,10 @@ import (
 	"github.com/lib/pq"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -260,4 +262,51 @@ func TestInstanceResync_AdoptsOwnUnmarkedLiveDB(t *testing.T) {
 		t.Fatalf("resync of own unmarked DB: %v", err)
 	}
 	execAs(t, connDSN(t, s, p, "db"), `SELECT 1`)
+}
+
+func failAddonCreates(s *Service) {
+	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("create", "kusoaddons", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("admission webhook timeout")
+	})
+}
+
+// Delete keeps a project's own instance DB so a re-add reattaches. If that
+// re-add's CR create fails, the rollback must not drop the kept database:
+// this call didn't create it.
+func TestInstanceAdd_FailedReaddKeepsRetainedDB(t *testing.T) {
+	p := uniqueProject(t)
+	s, adminDSN := instancePGService(t, p)
+	ident := pgIdentifier(p, "db")
+	dropTestIdent(t, adminDSN, ident)
+	if err := instanceAdd(s, p, "db"); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	execAs(t, connDSN(t, s, p, "db"), `CREATE TABLE keep (v text)`)
+	if err := s.Delete(context.Background(), p, "db"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	failAddonCreates(s)
+	if err := instanceAdd(s, p, "db"); err == nil {
+		t.Fatal("re-add succeeded, want the create failure")
+	}
+	if !dbExists(t, adminDSN, ident) {
+		t.Fatal("failed re-add dropped the retained database")
+	}
+}
+
+// The rollback still cleans up a database the failed add itself created.
+func TestInstanceAdd_FailedFreshAddDropsItsOwnDB(t *testing.T) {
+	p := uniqueProject(t)
+	s, adminDSN := instancePGService(t, p)
+	ident := pgIdentifier(p, "db")
+	dropTestIdent(t, adminDSN, ident)
+
+	failAddonCreates(s)
+	if err := instanceAdd(s, p, "db"); err == nil {
+		t.Fatal("add succeeded, want the create failure")
+	}
+	if dbExists(t, adminDSN, ident) {
+		t.Fatal("failed fresh add left its database behind")
+	}
 }

@@ -502,6 +502,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			return nil, fmt.Errorf("%w: mirror external secret: %w", ErrInvalid, err)
 		}
 	}
+	createdInstanceDB := false
 	if req.UseInstanceAddon != "" {
 		if req.Kind != "postgres" {
 			return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres in v0.7.6", ErrInvalid)
@@ -510,7 +511,8 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		if err != nil {
 			return nil, err
 		}
-		dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name)
+		var dsn, pw string
+		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name)
 		if err != nil {
 			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 		}
@@ -533,7 +535,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		// linger with no addon owning them, and a later re-create would
 		// silently adopt the stale state. Best-effort; failures are
 		// logged as an orphan trail.
-		s.cleanupAddSideEffects(ctx, ns, fqn, project, req)
+		s.cleanupAddSideEffects(ctx, ns, fqn, project, req, createdInstanceDB)
 		return nil, err
 	}
 	// Env-scoped addons (preview-DB clones, which carry a preview-pr env
@@ -590,7 +592,7 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	if err != nil {
 		return err
 	}
-	dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort)
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort)
 	if err != nil {
 		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 	}
@@ -667,8 +669,10 @@ func (s *Service) CleanupInstanceAddon(ctx context.Context, project, addonShort 
 // itself fails. Best-effort: every failure is logged so an operator has
 // an orphan trail, and nothing here masks the original create error.
 // Runs on a cancel-shielded context so an aborted request still cleans
-// up after itself.
-func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project string, req CreateAddonRequest) {
+// up after itself. The instance database is dropped only when this Add
+// created it (createdInstanceDB); a re-add that reattached a kept DB
+// must leave it, since it holds the project's data.
+func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project string, req CreateAddonRequest, createdInstanceDB bool) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	// A create error doesn't prove the CR write didn't land: a client-side
@@ -696,7 +700,7 @@ func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project st
 				"project", project, "addon", req.Name, "secret", connSecretName(fqn), "err", err)
 		}
 	}
-	if req.UseInstanceAddon != "" {
+	if req.UseInstanceAddon != "" && createdInstanceDB {
 		adminDSN, err := s.instanceAdminDSN(cctx, req.UseInstanceAddon)
 		if err == nil {
 			err = s.dropInstanceAddonDB(adminDSN, project, req.Name)

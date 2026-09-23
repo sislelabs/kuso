@@ -78,19 +78,21 @@ func (s *Service) instanceHasPooler(ctx context.Context, ns, perProjectDSN strin
 // on the shared server pointed to by adminDSN, then returns the
 // per-project DSN that should be stored in <addon>-conn. dbName /
 // userName are the shared form "<project>_<addon>" — both bounded
-// by 63 chars (Postgres limit).
-func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort string) (perProjectDSN, password string, err error) {
+// by 63 chars (Postgres limit). createdDB reports whether this call
+// created the database; a rollback may only drop it when true, because
+// a pre-existing one is a kept DB with data.
+func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort string) (perProjectDSN, password string, createdDB bool, err error) {
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
 	pw, err := randPassword()
 	if err != nil {
-		return "", "", fmt.Errorf("gen password: %w", err)
+		return "", "", false, fmt.Errorf("gen password: %w", err)
 	}
 
 	db, err := sql.Open("postgres", adminDSN)
 	if err != nil {
-		return "", "", fmt.Errorf("open admin: %w", err)
+		return "", "", false, fmt.Errorf("open admin: %w", err)
 	}
 	defer db.Close()
 
@@ -105,12 +107,12 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	var exists int
 	var dbOwner sql.NullString
 	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&exists, &dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", fmt.Errorf("check pg_database: %w", err)
+		return "", "", false, fmt.Errorf("check pg_database: %w", err)
 	}
 	var userExists int
 	var roleOwner sql.NullString
 	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists, &roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", fmt.Errorf("check pg_roles: %w", err)
+		return "", "", false, fmt.Errorf("check pg_roles: %w", err)
 	}
 	// The identifier isn't injective across projects ("acme"/"api-db" and
 	// "acme-api"/"db" both give acme_api_db), so an existing DB or role is
@@ -119,17 +121,17 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// another project's DB hands it their data and locks them out.
 	if exists == 1 || userExists == 1 {
 		if err := s.checkInstanceDBOwner(ctx, dbName, project, addonShort, dbOwner.String, roleOwner.String); err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 	}
 	owner := instanceDBOwnerTag(project, addonShort)
 	if exists != 1 {
 		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %s`, pq.QuoteIdentifier(dbName))); err != nil {
-			return "", "", fmt.Errorf("create db %s: %w", dbName, err)
+			return "", "", false, fmt.Errorf("create db %s: %w", dbName, err)
 		}
 	}
 	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON DATABASE %s IS %s`, pq.QuoteIdentifier(dbName), pq.QuoteLiteral(owner))); err != nil {
-		return "", "", fmt.Errorf("mark db owner: %w", err)
+		return "", "", false, fmt.Errorf("mark db owner: %w", err)
 	}
 
 	// User: create-or-rotate. We always issue ALTER ROLE … PASSWORD
@@ -137,15 +139,15 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// password we can return to the caller.
 	if userExists != 1 {
 		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
-			return "", "", fmt.Errorf("create role: %w", err)
+			return "", "", false, fmt.Errorf("create role: %w", err)
 		}
 	} else {
 		if _, err := db.Exec(fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
-			return "", "", fmt.Errorf("rotate role password: %w", err)
+			return "", "", false, fmt.Errorf("rotate role password: %w", err)
 		}
 	}
 	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON ROLE %s IS %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(owner))); err != nil {
-		return "", "", fmt.Errorf("mark role owner: %w", err)
+		return "", "", false, fmt.Errorf("mark role owner: %w", err)
 	}
 
 	// Cross-project isolation on the SHARED instance-pg server (M8).
@@ -159,10 +161,10 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// the role is created without SUPERUSER/CREATEDB/CREATEROLE, so it
 	// cannot escalate across databases.
 	if _, err := db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE %s FROM PUBLIC`, pq.QuoteIdentifier(dbName))); err != nil {
-		return "", "", fmt.Errorf("revoke public connect: %w", err)
+		return "", "", false, fmt.Errorf("revoke public connect: %w", err)
 	}
 	if _, err := db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(userName))); err != nil {
-		return "", "", fmt.Errorf("grant: %w", err)
+		return "", "", false, fmt.Errorf("grant: %w", err)
 	}
 
 	// PG15+ locks down the `public` schema: GRANT ALL ON DATABASE does NOT
@@ -176,12 +178,12 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	{
 		au, perr := url.Parse(adminDSN)
 		if perr != nil {
-			return "", "", fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
+			return "", "", false, fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
 		}
 		au.Path = "/" + dbName
 		dbConn, derr := sql.Open("postgres", au.String())
 		if derr != nil {
-			return "", "", fmt.Errorf("open new db for schema grant: %w", derr)
+			return "", "", false, fmt.Errorf("open new db for schema grant: %w", derr)
 		}
 		defer dbConn.Close()
 		for _, stmt := range []string{
@@ -189,7 +191,7 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 			fmt.Sprintf(`ALTER SCHEMA public OWNER TO %s`, pq.QuoteIdentifier(userName)),
 		} {
 			if _, err := dbConn.Exec(stmt); err != nil {
-				return "", "", fmt.Errorf("grant schema public: %w", err)
+				return "", "", false, fmt.Errorf("grant schema public: %w", err)
 			}
 		}
 	}
@@ -203,11 +205,11 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 		// all). Wrapping it here (or logging it) would leak that
 		// credential into an editor-reachable 400 body. Return a bare,
 		// DSN-free error instead.
-		return "", "", fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
+		return "", "", false, fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
 	}
 	u.User = url.UserPassword(userName, pw)
 	u.Path = "/" + dbName
-	return u.String(), pw, nil
+	return u.String(), pw, exists != 1, nil
 }
 
 // instanceDBOwnerPrefix marks a DB / role comment as a kuso ownership
@@ -474,7 +476,7 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 		return err
 	}
 	short := ShortName(project, fqn)
-	dsn, pw, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short)
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
