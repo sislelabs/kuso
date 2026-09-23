@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,6 +235,48 @@ func isManifestKey(key string) bool {
 	return strings.HasSuffix(key, ".manifest.json")
 }
 
+// backupListLimit caps the List response. An s3 addon's prefix holds one
+// object per file per snapshot, so it can run to many thousands of keys.
+const backupListLimit = 200
+
+// listNewestBackups pages through every key under prefix and returns the
+// newest limit restorable backups (newest first) plus the total count.
+// Keys start with a YYYYMMDDTHHMMSSZ stamp, so descending key order is
+// newest first; S3 itself returns keys ascending, 1000 per page.
+func listNewestBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucket, prefix string, limit int) ([]BackupObject, int, error) {
+	var items []BackupObject
+	p := s3.NewListObjectsV2Paginator(cli, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(prefix),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, o := range page.Contents {
+			key := aws.ToString(o.Key)
+			if isManifestKey(key) {
+				continue // sidecar, not a restorable backup
+			}
+			when := time.Time{}
+			if o.LastModified != nil {
+				when = *o.LastModified
+			}
+			items = append(items, BackupObject{Key: key, Size: aws.ToInt64(o.Size), When: when})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Key > items[j].Key })
+	total := len(items)
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		items = []BackupObject{}
+	}
+	return items, total, nil
+}
+
 func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
@@ -271,28 +315,13 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// where <addon-fqn> = the helm release name = the CR's metadata.name.
 	addonFQN := cr.Name
 	prefix := project + "/" + addonFQN + "/"
-	out, err := cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
-		Prefix: aws.String(prefix),
-	})
+	items, total, err := listNewestBackups(ctx, cli, bucket, prefix, backupListLimit)
 	if err != nil {
 		h.Logger.Error("backup: list", "err", err)
 		writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
 		return
 	}
-	items := make([]BackupObject, 0, len(out.Contents))
-	for _, o := range out.Contents {
-		key := aws.ToString(o.Key)
-		if isManifestKey(key) {
-			continue // sidecar, not a restorable backup
-		}
-		size := aws.ToInt64(o.Size)
-		when := time.Time{}
-		if o.LastModified != nil {
-			when = *o.LastModified
-		}
-		items = append(items, BackupObject{Key: key, Size: size, When: when})
-	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	writeJSON(w, http.StatusOK, items)
 }
 
