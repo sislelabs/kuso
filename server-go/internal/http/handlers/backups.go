@@ -217,6 +217,14 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Custom-namespace projects back up with their own copy of this
+	// Secret; without a re-sync a rotated key only reached them on the
+	// next server restart. The settings are saved either way, and the
+	// boot sweep retries, so a failed copy is logged rather than failing
+	// the request.
+	if n, err := h.Kube.HealBackupSecrets(ctx); err != nil {
+		h.Logger.Warn("backup: sync secret copies", "synced", n, "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
