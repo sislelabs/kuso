@@ -32,31 +32,40 @@ func histSampleCount(t *testing.T, vec *prometheus.HistogramVec, labels ...strin
 // TestObserveHelpers verifies the latency-histogram helpers record a
 // sample under the right outcome label without panicking — the call
 // sites pass a raw error, so the ok/error split must follow it.
+//
+// The collectors are package globals, so assert on the change in count
+// rather than the absolute value; otherwise -count=2 or -shuffle fails.
 func TestObserveHelpers(t *testing.T) {
 	start := time.Now().Add(-50 * time.Millisecond)
 
+	type series struct {
+		name   string
+		vec    *prometheus.HistogramVec
+		labels []string
+	}
+	buildOK := series{"build_create ok", buildCreateDuration, []string{"ok"}}
+	buildErr := series{"build_create error", buildCreateDuration, []string{"error"}}
+	pushOK := series{"webhook push ok", webhookDispatchDuration, []string{"push", "ok"}}
+	unknownOK := series{"webhook unknown ok", webhookDispatchDuration, []string{"unknown", "ok"}}
+	reconcileOK := series{"reconcile observe ok", reconcileObserveDuration, []string{"ok"}}
+	all := []series{buildOK, buildErr, pushOK, unknownOK, reconcileOK}
+
+	before := map[string]uint64{}
+	for _, s := range all {
+		before[s.name] = histSampleCount(t, s.vec, s.labels...)
+	}
+
 	ObserveBuildCreate(start, nil)
 	ObserveBuildCreate(start, errors.New("boom"))
-	if c := histSampleCount(t, buildCreateDuration, "ok"); c != 1 {
-		t.Errorf("build_create ok count = %d, want 1", c)
-	}
-	if c := histSampleCount(t, buildCreateDuration, "error"); c != 1 {
-		t.Errorf("build_create error count = %d, want 1", c)
-	}
-
 	ObserveWebhookDispatch("push", start, nil)
-	if c := histSampleCount(t, webhookDispatchDuration, "push", "ok"); c != 1 {
-		t.Errorf("webhook push ok count = %d, want 1", c)
-	}
 	// Empty event must not produce an empty label (it maps to "unknown").
 	ObserveWebhookDispatch("", start, nil)
-	if c := histSampleCount(t, webhookDispatchDuration, "unknown", "ok"); c != 1 {
-		t.Errorf("webhook unknown ok count = %d, want 1", c)
-	}
-
 	ObserveReconcileObserve(start, nil)
-	if c := histSampleCount(t, reconcileObserveDuration, "ok"); c != 1 {
-		t.Errorf("reconcile observe ok count = %d, want 1", c)
+
+	for _, s := range all {
+		if d := histSampleCount(t, s.vec, s.labels...) - before[s.name]; d != 1 {
+			t.Errorf("%s count grew by %d, want 1", s.name, d)
+		}
 	}
 }
 

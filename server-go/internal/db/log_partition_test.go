@@ -116,6 +116,7 @@ func TestPruneLogPartitions_NoOpWhenUnpartitioned(t *testing.T) {
 func TestMigrateLogLineToPartitioned_HappyPath(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
+	t.Cleanup(func() { restoreUnpartitionedLogLine(t, d) })
 
 	// Seed a handful of rows spanning two days so the migration
 	// has to provision multiple partitions.
@@ -160,5 +161,34 @@ func TestMigrateLogLineToPartitioned_HappyPath(t *testing.T) {
 	// A second migration call should be a no-op (already partitioned).
 	if err := d.MigrateLogLineToPartitioned(ctx, slog.Default()); err != nil {
 		t.Fatalf("second MigrateLogLineToPartitioned: %v", err)
+	}
+}
+
+// restoreUnpartitionedLogLine puts LogLine back to its fresh-install
+// shape (plain table from schema.sql plus migration 0012's index) so the
+// NotPartitioned tests pass on the next run against the same database.
+func restoreUnpartitionedLogLine(t *testing.T, d *DB) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS "LogLine" CASCADE`,
+		`DROP TABLE IF EXISTS "LogLine_legacy" CASCADE`,
+	} {
+		if _, err := d.ExecContext(ctx, stmt); err != nil {
+			t.Errorf("restore LogLine: %s: %v", stmt, err)
+			return
+		}
+	}
+	if err := d.applySchema(); err != nil {
+		t.Errorf("restore LogLine: applySchema: %v", err)
+		return
+	}
+	body, err := migrationsFS.ReadFile("migrations/0012_logline_project_service_id_index.sql")
+	if err != nil {
+		t.Errorf("restore LogLine: read migration 0012: %v", err)
+		return
+	}
+	if _, err := d.ExecContext(ctx, string(body)); err != nil {
+		t.Errorf("restore LogLine: apply migration 0012: %v", err)
 	}
 }

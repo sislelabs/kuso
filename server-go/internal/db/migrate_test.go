@@ -168,6 +168,15 @@ func TestRunMigrations_ConcurrentPodsSerialise(t *testing.T) {
 func TestApplyMigration_InsertOnConflict(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
+	// openTestDB doesn't truncate SchemaMigration (it holds the real
+	// applied versions), so a leftover probe row breaks the row-count
+	// assertions in the RunMigrations tests on the next run.
+	t.Cleanup(func() {
+		if _, err := d.ExecContext(context.Background(),
+			`DELETE FROM "SchemaMigration" WHERE "version" = 99999`); err != nil {
+			t.Errorf("cleanup probe migration row: %v", err)
+		}
+	})
 
 	conn, err := d.Conn(ctx)
 	if err != nil {
