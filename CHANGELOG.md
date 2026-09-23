@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.5] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(backups): stream s3 addon backups with rclone instead of staging on disk ([3162640](https://github.com/sislelabs/kuso/commit/3162640d9fdf445ecdd7931c5de2fa62dcb3ef31))
+
 ## [0.26.4] — 2026-09-23
 
 ### 🐛 Bug Fixes
@@ -320,11 +325,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: platform-wide security + data-safety fixes from full adversarial review ([06972e2](https://github.com/sislelabs/kuso/commit/06972e2d1bd980fe2d1e12a48e1d601b8b770cf0))
-
-## [0.22.16] — 2026-08-11
-
-### 🐛 Bug Fixes
-- Fix(security): repo-URL deploy-token credentials no longer leak to non-admins ([9cc53ad](https://github.com/sislelabs/kuso/commit/9cc53ad18a66d9627d1acb385e39bbb41f31459d))
 
 
 ---

@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.16] — 2026-08-11
+
+### 🐛 Bug Fixes
+- Fix(security): repo-URL deploy-token credentials no longer leak to non-admins ([9cc53ad](https://github.com/sislelabs/kuso/commit/9cc53ad18a66d9627d1acb385e39bbb41f31459d))
+
 ## [0.22.15] — 2026-08-09
 
 ### ✨ Features
