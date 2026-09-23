@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -147,6 +148,8 @@ export default function GroupsSettingsPage() {
           )}
           {groups.isPending ? (
             <Skeleton className="m-3 h-24" />
+          ) : groups.isError ? (
+            <QueryErrorState what="groups" error={groups.error} onRetry={() => void groups.refetch()} className="m-3" />
           ) : (groups.data ?? []).length === 0 ? (
             <p className="px-3 py-4 text-[11px] text-[var(--text-tertiary)]">No groups yet.</p>
           ) : (

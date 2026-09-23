@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -190,6 +191,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
+      ) : builds.isError ? (
+        <QueryErrorState what="builds" error={builds.error} onRetry={() => void builds.refetch()} />
       ) : (
         <BuildsList
           project={project}

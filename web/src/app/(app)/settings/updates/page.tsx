@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useCan, Perms } from "@/features/auth";
 import { CheckCircle2, AlertTriangle, RefreshCw, Clock, Package } from "lucide-react";
 import { toast } from "sonner";
@@ -89,7 +90,18 @@ export default function UpdatesPage() {
       </div>
     );
   }
-  const v = version.data!;
+  if (version.isError) {
+    return (
+      <div className="mx-auto max-w-2xl p-6 lg:p-8">
+        <QueryErrorState
+          what="version status"
+          error={version.error}
+          onRetry={() => void version.refetch()}
+        />
+      </div>
+    );
+  }
+  const v = version.data;
   const inFlight = !!status.data?.phase && status.data.phase !== "" && status.data.phase !== "done" && status.data.phase !== "failed";
 
   return (

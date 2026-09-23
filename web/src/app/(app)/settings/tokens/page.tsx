@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -209,6 +210,8 @@ export default function TokensPage() {
         </header>
         {tokens.isPending ? (
           <Skeleton className="m-3 h-16" />
+        ) : tokens.isError ? (
+          <QueryErrorState what="tokens" error={tokens.error} onRetry={() => void tokens.refetch()} className="m-3" />
         ) : (tokens.data ?? []).length === 0 ? (
           <p className="px-4 py-4 text-[11px] text-[var(--text-tertiary)]">
             No tokens issued yet.

@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -210,6 +211,8 @@ export default function NotificationsPage() {
 
       {list.isPending ? (
         <Skeleton className="h-32 w-full rounded-md" />
+      ) : list.isError ? (
+        <QueryErrorState what="notification channels" error={list.error} onRetry={() => void list.refetch()} />
       ) : (list.data ?? []).length === 0 ? (
         <EmptyState
           icon={<Bell className="h-5 w-5" />}

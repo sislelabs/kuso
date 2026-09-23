@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useMarketplace, type MarketplaceApp } from "@/features/marketplace";
 import { DeployDialog } from "@/components/marketplace/DeployDialog";
@@ -9,7 +10,8 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { EmptyState } from "@/components/shared/EmptyState";
 
 export default function MarketplacePage() {
-  const { data: apps = [], isLoading } = useMarketplace();
+  const market = useMarketplace();
+  const { data: apps = [], isLoading } = market;
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("all");
   const [selected, setSelected] = useState<MarketplaceApp | null>(null);
@@ -51,6 +53,8 @@ export default function MarketplacePage() {
           <LoadingState kind="card" />
           <LoadingState kind="card" />
         </div>
+      ) : market.isError ? (
+        <QueryErrorState what="the marketplace" error={market.error} onRetry={() => void market.refetch()} className="mt-6" />
       ) : filtered.length === 0 ? (
         <EmptyState
           title="No apps match"

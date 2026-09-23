@@ -1,5 +1,6 @@
 "use client";
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -76,6 +77,8 @@ export default function UsersPage() {
 
       {list.isPending ? (
         <Skeleton className="h-32 rounded-md" />
+      ) : list.isError ? (
+        <QueryErrorState what="users" error={list.error} onRetry={() => void list.refetch()} />
       ) : (list.data ?? []).length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-8 text-center text-sm text-[var(--text-tertiary)]">
           No users.
@@ -166,6 +169,8 @@ function InvitesSection() {
 
       {list.isPending ? (
         <Skeleton className="h-24 rounded-md" />
+      ) : list.isError ? (
+        <QueryErrorState what="invites" error={list.error} onRetry={() => void list.refetch()} />
       ) : items.length === 0 ? (
         <EmptyState
           title="No invites yet"

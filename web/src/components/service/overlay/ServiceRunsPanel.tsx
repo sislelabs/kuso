@@ -6,6 +6,7 @@
 // failed/cancelled with the same colour family so the tabs read
 // consistently.
 
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
@@ -97,6 +98,8 @@ export function ServiceRunsPanel({ project, service }: Props) {
           <Skeleton className="h-14 w-full" />
           <Skeleton className="h-14 w-full" />
         </div>
+      ) : runs.isError ? (
+        <QueryErrorState what="runs" error={runs.error} onRetry={() => void runs.refetch()} />
       ) : (runs.data ?? []).length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
           No runs yet. Fire one above to execute a migration, seed, or one-off

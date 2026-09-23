@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useErrors } from "@/features/services";
 import type { ErrorGroup } from "@/features/services";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -39,8 +40,14 @@ export function ServiceErrorsPanel({ project, service }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="text-xs text-[var(--text-secondary)]">
-          {errors.data?.length ?? 0}{" "}
-          {errors.data?.length === 1 ? "error group" : "error groups"} in last {since}
+          {errors.isError ? (
+            <>Error groups in last {since}</>
+          ) : (
+            <>
+              {errors.data?.length ?? 0}{" "}
+              {errors.data?.length === 1 ? "error group" : "error groups"} in last {since}
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1">
           {SINCE_OPTIONS.map((opt) => (
@@ -67,6 +74,8 @@ export function ServiceErrorsPanel({ project, service }: Props) {
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />
         </div>
+      ) : errors.isError ? (
+        <QueryErrorState what="errors" error={errors.error} onRetry={() => void errors.refetch()} />
       ) : (errors.data?.length ?? 0) === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
           No errors detected in the last {since}. The scanner watches pod logs for
