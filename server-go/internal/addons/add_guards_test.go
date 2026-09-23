@@ -82,7 +82,7 @@ func TestAdd_CleanupOnCreateFailure(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProj("alpha"))
 	cs := kubefake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso"},
+		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/addon": "alpha-pg"}},
 		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:p@h/db")},
 	})
 	s.Kube.Clientset = cs
@@ -121,7 +121,7 @@ func TestAdd_CommittedDespiteErrorLeavesSideEffects(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProj("alpha"))
 	cs := kubefake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso"},
+		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/addon": "alpha-pg"}},
 		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:p@h/db")},
 	})
 	s.Kube.Clientset = cs
@@ -158,7 +158,7 @@ func TestAdd_ConflictLeavesSideEffectsForWinner(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProj("alpha"))
 	cs := kubefake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso"},
+		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/addon": "alpha-pg"}},
 		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:p@h/db")},
 	})
 	s.Kube.Clientset = cs

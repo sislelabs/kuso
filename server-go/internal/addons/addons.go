@@ -1745,6 +1745,12 @@ func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string,
 	if err != nil {
 		return fmt.Errorf("source secret %s/%s: %w", ns, ext.SecretName, err)
 	}
+	// The namespace also holds platform Secrets and other projects'
+	// credentials; only a Secret labelled for this exact addon may be copied.
+	if src.Labels["kuso.sislelabs.com/addon"] != addonFQN {
+		return fmt.Errorf("%w: secret %q is not labelled kuso.sislelabs.com/addon=%s — only a Secret created for this addon can be adopted",
+			ErrInvalid, ext.SecretName, addonFQN)
+	}
 	data := map[string][]byte{}
 	if len(ext.SecretKeys) == 0 {
 		for k, v := range src.Data {
@@ -1830,7 +1836,7 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string, cred
 		return fmt.Errorf("%w: addon %s/%s is not external", ErrInvalid, project, name)
 	}
 	if len(credentials) > 0 {
-		if err := s.updateExternalSecret(ctx, ns, addon.Spec.External.SecretName, credentials); err != nil {
+		if err := s.updateExternalSecret(ctx, ns, fqn, addon.Spec.External.SecretName, credentials); err != nil {
 			return err
 		}
 	}
@@ -1845,10 +1851,13 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string, cred
 // Merge, not replace: a password rotation touches DATABASE_URL and
 // POSTGRES_PASSWORD, and the caller shouldn't have to re-supply every other
 // key to avoid losing it.
-func (s *Service) updateExternalSecret(ctx context.Context, ns, secretName string, credentials map[string]string) error {
+func (s *Service) updateExternalSecret(ctx context.Context, ns, addonFQN, secretName string, credentials map[string]string) error {
 	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: source secret %s: %w", ErrInvalid, secretName, err)
+	}
+	if src.Labels["kuso.sislelabs.com/addon"] != addonFQN {
+		return fmt.Errorf("%w: secret %q does not belong to addon %s", ErrInvalid, secretName, addonFQN)
 	}
 	if src.Labels["kuso.sislelabs.com/external-source"] != "true" {
 		return fmt.Errorf("%w: secret %q was supplied by you, not created by kuso — update it yourself, then run resync-external without --set", ErrInvalid, secretName)
@@ -1879,7 +1888,7 @@ func (s *Service) deleteExternalSecrets(ctx context.Context, ns, addonFQN, sourc
 	if err != nil {
 		return
 	}
-	if src.Labels["kuso.sislelabs.com/external-source"] == "true" {
+	if src.Labels["kuso.sislelabs.com/external-source"] == "true" && src.Labels["kuso.sislelabs.com/addon"] == addonFQN {
 		del(sourceName)
 	}
 }

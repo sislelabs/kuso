@@ -55,7 +55,7 @@ func TestDelete_ExternalKeepsUserSuppliedSecret(t *testing.T) {
 
 	// A Secret the user created themselves and adopted with --secret.
 	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-neon-creds", Namespace: "kuso"},
+		ObjectMeta: metav1.ObjectMeta{Name: "my-neon-creds", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/addon": "tickero-neon"}},
 		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:pw@h:5432/d")},
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestResyncExternal_RefusesToEditUserSecret(t *testing.T) {
 	s := fakeServiceWithSecrets(t, seedProj("tickero"))
 
 	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-neon-creds", Namespace: "kuso"},
+		ObjectMeta: metav1.ObjectMeta{Name: "my-neon-creds", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/addon": "tickero-neon"}},
 		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:pw@h:5432/d")},
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
