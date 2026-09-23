@@ -458,33 +458,29 @@ func redactRepoRefCreds(ref *kube.KusoRepoRef) *kube.KusoRepoRef {
 }
 
 // redactProjectRepoIfNeeded strips credentials from a project's
-// defaultRepo URL unless the caller may read secrets on that project.
+// defaultRepo URL for EVERY caller, secrets:read holders included.
 // Deploy-token URLs (https://user:gldt-xxx@gitlab.com/…) are working
-// clone credentials; kuso treats secret VALUES as admin-only
-// (secrets:read), and a token in a repo URL is exactly that. Same
-// contract as maskServiceEnvIfNeeded: every endpoint serializing a
-// KusoProject must route through here.
-func redactProjectRepoIfNeeded(ctx context.Context, dbConn *db.DB, p *kube.KusoProject) {
-	if p == nil || callerCanReadSecrets(ctx, dbConn, p.Name) {
+// clone credentials and no client needs them back: project Update and
+// PatchService keep the stored userinfo when a redacted URL is echoed
+// (kube.RepoURLEchoesRedacted). Every endpoint serializing a KusoProject
+// must route through here. ctx/dbConn are kept so call sites stay stable.
+func redactProjectRepoIfNeeded(_ context.Context, _ *db.DB, p *kube.KusoProject) {
+	if p == nil {
 		return
 	}
 	p.Spec.DefaultRepo = redactRepoRefCreds(p.Spec.DefaultRepo)
 }
 
-// redactServicesRepoIfNeeded is the service-slice form (one gate check
-// per project, like maskServicesEnvIfNeeded).
-func redactServicesRepoIfNeeded(ctx context.Context, dbConn *db.DB, project string, svcs []kube.KusoService) {
-	if len(svcs) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
-		return
-	}
+// redactServicesRepoIfNeeded is the service-slice form.
+func redactServicesRepoIfNeeded(_ context.Context, _ *db.DB, _ string, svcs []kube.KusoService) {
 	for i := range svcs {
 		svcs[i].Spec.Repo = redactRepoRefCreds(svcs[i].Spec.Repo)
 	}
 }
 
 // redactServiceRepoIfNeeded is the single-service form.
-func redactServiceRepoIfNeeded(ctx context.Context, dbConn *db.DB, project string, svc *kube.KusoService) {
-	if svc == nil || callerCanReadSecrets(ctx, dbConn, project) {
+func redactServiceRepoIfNeeded(_ context.Context, _ *db.DB, _ string, svc *kube.KusoService) {
+	if svc == nil {
 		return
 	}
 	svc.Spec.Repo = redactRepoRefCreds(svc.Spec.Repo)
