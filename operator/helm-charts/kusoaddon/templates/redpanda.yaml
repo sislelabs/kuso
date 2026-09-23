@@ -47,7 +47,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: redpanda
-          image: "docker.redpanda.com/redpandadata/redpanda:{{ $version }}"
+          image: {{ printf "docker.redpanda.com/redpandadata/redpanda:%s" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           # IMPORTANT: do NOT set `command:`. The image ENTRYPOINT is

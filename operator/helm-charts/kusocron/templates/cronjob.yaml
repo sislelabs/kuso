@@ -170,7 +170,7 @@ spec:
                   curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" "$PROBE_URL"
                   echo "==> ok"
               {{- else }}
-              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
+              image: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest") | quote }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               command:
                 {{- range .Values.command }}

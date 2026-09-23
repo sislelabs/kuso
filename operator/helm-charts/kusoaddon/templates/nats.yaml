@@ -110,7 +110,7 @@ spec:
               mountPath: /etc/nats
       containers:
         - name: nats
-          image: "nats:{{ $version }}"
+          image: {{ printf "nats:%s" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           args: ["-c", "/etc/nats/nats.conf"]

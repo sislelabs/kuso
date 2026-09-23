@@ -100,7 +100,7 @@ spec:
       # Only rendered when spec.tls=require.
       initContainers:
         - name: tls-prep
-          image: "postgres:{{ $version }}"
+          image: {{ printf "postgres:%s" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command:
             - sh
@@ -121,7 +121,7 @@ spec:
       {{- end }}
       containers:
         - name: postgres
-          image: "postgres:{{ $version }}"
+          image: {{ printf "postgres:%s" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: postgres

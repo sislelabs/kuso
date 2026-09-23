@@ -355,6 +355,11 @@ func validateStorageSize(s string) error {
 	return nil
 }
 
+// addonVersionRe is the OCI tag grammar. spec.version is interpolated
+// inside a quoted `image:` line in every engine template, so a quote or
+// newline would let it inject extra manifests into the helm release.
+var addonVersionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
 // Add creates a KusoAddon CR and refreshes every env's envFromSecrets
 // list to include the new addon's connection secret.
 func (s *Service) Add(ctx context.Context, project string, req CreateAddonRequest) (*kube.KusoAddon, error) {
@@ -380,6 +385,9 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	// clear 400 instead of a silent fallback to the t-shirt default.
 	if err := validateStorageSize(req.StorageSize); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	if req.Version != "" && !addonVersionRe.MatchString(req.Version) {
+		return nil, fmt.Errorf("%w: version must be an image tag (letters, digits, '.', '_', '-'; max 128 chars)", ErrInvalid)
 	}
 	// Project CR always lives in the home namespace. We also need its
 	// UID for the ownerReferences cascade below — so kube garbage-

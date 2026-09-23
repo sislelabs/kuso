@@ -59,6 +59,28 @@ var (
 	ErrInvalid  = errors.New("crons: invalid")
 )
 
+// imageRefRe mirrors projects.ociImageRE. The kusocron chart renders
+// repository/tag inside a quoted `image:` line and pullPolicy bare, so a
+// quote or newline in any of them would inject extra manifests.
+var imageRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/:@-]+$`)
+
+func validateImage(img *kube.KusoImage) error {
+	if img == nil {
+		return nil
+	}
+	for field, v := range map[string]string{"image.repository": img.Repository, "image.tag": img.Tag} {
+		if v != "" && (len(v) > 255 || !imageRefRe.MatchString(v)) {
+			return fmt.Errorf("%w: %s must be an OCI reference (letters, digits, ./_-:@; max 255 chars)", ErrInvalid, field)
+		}
+	}
+	switch img.PullPolicy {
+	case "", "Always", "IfNotPresent", "Never":
+	default:
+		return fmt.Errorf("%w: image.pullPolicy must be Always|IfNotPresent|Never", ErrInvalid)
+	}
+	return nil
+}
+
 // CRName builds "<project>-<service>-<short>" from the user-supplied
 // pieces. Idempotent: a name already prefixed with "<project>-" is
 // returned unchanged, mirroring CRName in the addons package.
@@ -442,6 +464,9 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 		if len(req.Command) == 0 {
 			return nil, fmt.Errorf("%w: kind=command requires command", ErrInvalid)
 		}
+		if err := validateImage(req.Image); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("%w: kind must be http or command", ErrInvalid)
 	}
@@ -720,6 +745,9 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		default:
 			return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
 		}
+	}
+	if err := validateImage(req.Image); err != nil {
+		return nil, err
 	}
 	// Ownership-check the onFailure signing-key secretRef BEFORE it can be
 	// written onto the CR (HIGH-1). Only meaningful when we're setting a

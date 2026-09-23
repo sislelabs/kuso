@@ -36,7 +36,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: rabbitmq
-          image: "rabbitmq:{{ $version }}-management-alpine"
+          image: {{ printf "rabbitmq:%s-management-alpine" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: amqp

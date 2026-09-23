@@ -44,7 +44,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: mongodb
-          image: "mongo:{{ $version }}"
+          image: {{ printf "mongo:%s" $version | quote }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: mongodb

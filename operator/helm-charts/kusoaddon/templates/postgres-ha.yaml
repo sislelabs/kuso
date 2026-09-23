@@ -101,7 +101,7 @@ metadata:
     # deliberate teardown goes through the PurgeData path, not helm uninstall.
     "helm.sh/resource-policy": keep
 spec:
-  imageName: "ghcr.io/cloudnative-pg/postgresql:{{ $version }}"
+  imageName: {{ printf "ghcr.io/cloudnative-pg/postgresql:%s" $version | quote }}
   instances: 3
   primaryUpdateStrategy: unsupervised
   storage:
