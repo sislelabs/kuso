@@ -183,7 +183,9 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 			rep.SkippedNamespaces = append(rep.SkippedNamespaces, ns)
 			continue
 		}
+		liveAddons := make(map[string]bool, len(addons))
 		for i := range addons {
+			liveAddons[addons[i].Name] = true
 			rep.Scanned++
 			if iss, ok := ClassifyAddon(&addons[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
@@ -191,6 +193,18 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 				rep.Issues = append(rep.Issues, iss)
 			} else {
 				rep.Healthy++
+			}
+		}
+
+		// Leaked-addon sweep: a "<addon>-conn" Secret whose CR is gone.
+		// Deleting an addon used to leave both the Secret and (for an
+		// instance-pg addon) its logical database behind, and the
+		// surviving Secret made the database look referenced — 16 of
+		// them accumulated unnoticed. Surface-only: reclaiming data is
+		// an operator decision, never unattended.
+		if s.Kube != nil && s.Kube.Clientset != nil {
+			if secs, serr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); serr == nil {
+				rep.Issues = append(rep.Issues, detectOrphanConnSecrets(secs.Items, liveAddons)...)
 			}
 		}
 

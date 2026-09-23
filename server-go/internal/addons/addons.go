@@ -1052,14 +1052,19 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	if !addonOwnedByProject(cr, project) {
 		return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 	}
-	// Ephemeral preview-clone DB cleanup. A per-PR instance-pg clone
-	// (labelled preview-pr) lives as a database on the SHARED server, so
-	// deleting the CR alone would orphan it there forever — unbounded
-	// growth across PRs. Drop the DB + role BEFORE the CR delete (we
-	// still have its spec). This is gated on the preview-pr label so a
-	// REAL project's instance-pg addon is never dropped (those retain
-	// data on delete, matching native-addon PVC retain semantics).
-	if cr.Spec.UseInstanceAddon != "" && cr.Labels["kuso.sislelabs.com/preview-pr"] != "" {
+	// Ephemeral clone DB cleanup. An instance-pg clone lives as a
+	// database on the SHARED server, so deleting the CR alone orphans it
+	// there forever: nothing references it, nothing lists it, and it
+	// keeps consuming space. Drop the DB + role BEFORE the CR delete,
+	// while we still have its spec.
+	//
+	// shouldDropInstanceDB decides. It covers per-PR previews AND named
+	// env clones (staging/qa from an env-group) — the second case used to
+	// be missed, which leaked 16 databases (~155MB) on the production
+	// cluster before anyone noticed. A project's OWN addon still retains
+	// its data, matching native-addon PVC retain semantics: an accidental
+	// delete must not nuke a production database.
+	if cr.Spec.UseInstanceAddon != "" && shouldDropInstanceDB(cr.Labels) {
 		if adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon); derr == nil {
 			if err := s.dropInstanceAddonDB(adminDSN, project, ShortName(project, fqn)); err != nil {
 				// Non-fatal: log via the orphan-trail mechanism below; the
@@ -1083,6 +1088,18 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// true) — one the user adopted with --secret is theirs and stays.
 	if cr.Spec.External != nil && cr.Spec.External.SecretName != "" {
 		s.deleteExternalSecrets(ctx, ns, fqn, cr.Spec.External.SecretName)
+	}
+	// A dropped clone leaves no data for its conn Secret to describe, so
+	// keep the two in step. The chart annotates the Secret
+	// resource-policy: keep to pair with the RETAINED data PVC — a
+	// delete+re-add must reuse the original password or the surviving
+	// database rejects it. That reasoning does not apply once the
+	// database itself is gone: the Secret is then a dangling credential
+	// for nothing, and it is exactly what made today's orphans invisible
+	// (16 leaked databases each still had a *-conn Secret, so a naive
+	// "is anything referencing it" check said yes).
+	if cr.Spec.UseInstanceAddon != "" && shouldDropInstanceDB(cr.Labels) {
+		s.deleteCloneConnSecret(ctx, ns, fqn)
 	}
 	// Data-safety trail: deleting the addon does NOT delete its data —
 	// the StatefulSet's volumeClaimTemplates PVCs are RETAINED. That's
@@ -1864,5 +1881,53 @@ func (s *Service) deleteExternalSecrets(ctx context.Context, ns, addonFQN, sourc
 	}
 	if src.Labels["kuso.sislelabs.com/external-source"] == "true" {
 		del(sourceName)
+	}
+}
+
+// shouldDropInstanceDB reports whether an instance-pg addon's logical
+// database should be dropped when its CR is deleted.
+//
+// TRUE for clones — a per-PR preview, or a named env-group env
+// (staging/qa). Their data is disposable: re-creating the env rebuilds
+// it from the source addon. Leaving it behind is a pure leak, because
+// the database outlives every reference to it.
+//
+// FALSE for a project's own addon, including one labelled
+// env=production. Those RETAIN on delete, matching the native-addon PVC
+// retain semantics — an accidental delete must not destroy production
+// data, and re-adding the same addon name deliberately reuses it.
+func shouldDropInstanceDB(labels map[string]string) bool {
+	if labels == nil {
+		return false
+	}
+	if labels["kuso.sislelabs.com/preview-pr"] != "" {
+		return true
+	}
+	// A non-production env label marks the addon as belonging to one
+	// specific cloned env, i.e. it is a clone.
+	if env := labels[kube.LabelEnv]; env != "" && env != "production" {
+		return true
+	}
+	return false
+}
+
+// deleteCloneConnSecret removes a clone addon's <addon>-conn Secret.
+//
+// Only ever called for an addon whose backing database was just dropped
+// (see shouldDropInstanceDB). The chart marks the Secret
+// resource-policy: keep so it survives helm uninstall — correct while a
+// retained PVC or database still holds data initialised with that
+// password, wrong once the data is gone.
+//
+// Best-effort: a leftover Secret is untidy, not dangerous, and must
+// never block the delete.
+func (s *Service) deleteCloneConnSecret(ctx context.Context, ns, addonFQN string) {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return
+	}
+	name := connSecretName(addonFQN)
+	if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		slog.Default().Warn("clone addon delete: leftover conn secret",
+			"secret", name, "namespace", ns, "err", err)
 	}
 }
