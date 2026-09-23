@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.13] — 2026-08-02
+
+### ✨ Features
+- Feat(builds): show queue position on queued builds ([f06204a](https://github.com/sislelabs/kuso/commit/f06204aa8ac3599439e5b40e64e0cf70cbf97911))
+
 ## [0.22.12] — 2026-08-01
 
 ### ✨ Features

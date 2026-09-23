@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.2] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(addons): stop deletion leaking databases and conn secrets ([d86e609](https://github.com/sislelabs/kuso/commit/d86e60966c9edfa9b840ca7e28702c5d72c3934e))
+
 ## [0.26.1] — 2026-09-22
 
 ### 🐛 Bug Fixes
@@ -323,11 +328,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(canvas): non-prod tabs lost all service nodes + preview clones didn't replace bases ([1ce65a8](https://github.com/sislelabs/kuso/commit/1ce65a8dccc2fa2a7bef857e74fc8050366bf11b))
-
-## [0.22.13] — 2026-08-02
-
-### ✨ Features
-- Feat(builds): show queue position on queued builds ([f06204a](https://github.com/sislelabs/kuso/commit/f06204aa8ac3599439e5b40e64e0cf70cbf97911))
 
 
 ---
