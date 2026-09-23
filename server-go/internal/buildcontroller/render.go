@@ -336,6 +336,8 @@ else
   echo "ref $REF is not a SHA; using branch HEAD"
 fi
 echo "checked out: $(git rev-parse HEAD)"
+# Drop clone credentials from .git/config: the workspace is the build context.
+git remote set-url origin "$(printf '%s' ` + shellQuote(repoURL) + ` | sed -E 's|^(https?://)[^/]*@|\1|')"
 `
 
 	c := corev1.Container{
@@ -913,6 +915,7 @@ if [ -z "$(ls -A "$OUTPUT_DIR")" ]; then
   echo "ERROR: outputDir $OUTPUT_DIR is empty"
   exit 1
 fi
+printf '\n.git\n' >> .dockerignore
 cat > .kuso-static.Dockerfile <<EOF
 FROM $RUNTIME_IMAGE
 COPY $OUTPUT_DIR /usr/share/nginx/html
