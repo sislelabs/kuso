@@ -1,0 +1,20 @@
+{{- $activatorNs := default "kuso" .Values.activatorNamespace -}}
+{{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.stopped -}}
+{{- if and $useActivator
+      (ne .Release.Namespace $activatorNs)
+      (not (eq (default "" .Values.runtime) "worker"))
+      (not .Values.internal) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kusoenvironment.activatorService" . }}
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  type: ExternalName
+  externalName: {{ printf "kuso-activator.%s.svc.cluster.local" $activatorNs }}
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+{{- end }}

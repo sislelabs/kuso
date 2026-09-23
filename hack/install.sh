@@ -462,6 +462,7 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
     --set ports.web.expose.default=true \
     --set ports.websecure.expose.default=true \
     --set service.type=LoadBalancer \
+    --set providers.kubernetesIngress.allowExternalNameServices=true \
     "${TCP_POOL_ARGS[@]}" \
     --wait --timeout=180s >/dev/null
 else

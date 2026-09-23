@@ -116,6 +116,13 @@ platformApiEgress: false
 # service. Mirrors KusoService.spec.stopped.
 stopped: false
 
+# activatorNamespace: where the shared kuso-activator Service lives. An
+# Ingress backend must be in the Ingress's own namespace, so an env in
+# any other namespace (custom-namespace projects) routes sleep/stop
+# traffic through a per-env ExternalName Service instead. Traefik only
+# follows it with providers.kubernetesIngress.allowExternalNameServices.
+activatorNamespace: kuso
+
 # tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
 # request a per-host cert via Ingress.spec.tls. Defaults to true; override to
 # false on bare-IP installs without cert-manager.

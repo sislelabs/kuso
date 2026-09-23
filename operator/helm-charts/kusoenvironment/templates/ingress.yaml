@@ -165,7 +165,7 @@ spec:
             backend:
               service:
                 {{- if $useActivator }}
-                name: kuso-activator
+                name: {{ include "kusoenvironment.activatorService" $ }}
                 port:
                   number: 80
                 {{- else }}
@@ -221,7 +221,7 @@ spec:
             backend:
               service:
                 {{- if $useActivator }}
-                name: kuso-activator
+                name: {{ include "kusoenvironment.activatorService" $ }}
                 port:
                   number: 80
                 {{- else }}

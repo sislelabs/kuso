@@ -93,3 +93,16 @@ if [ "$rc" -ne 0 ] && [ "${WAIT_FOR_ADDONS_SOFT:-}" = "1" ]; then
 fi
 exit $rc
 {{- end -}}
+
+{{/*
+Ingress backend Service for sleep/stop routing. In the activator's own
+namespace that's kuso-activator itself; elsewhere it's the per-env
+ExternalName mirror rendered by activator-service.yaml.
+*/}}
+{{- define "kusoenvironment.activatorService" -}}
+{{- if eq .Release.Namespace (default "kuso" .Values.activatorNamespace) -}}
+kuso-activator
+{{- else -}}
+{{- printf "%s-activator" (include "kusoenvironment.fullname" . | trunc 53 | trimSuffix "-") -}}
+{{- end -}}
+{{- end -}}
