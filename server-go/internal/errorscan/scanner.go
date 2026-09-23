@@ -61,6 +61,15 @@ type Scanner struct {
 	// batches close the catch-up gap faster on a backlog but burn
 	// more memory; 500 is a comfortable middle ground for a 4 GB box.
 	BatchSize int
+	// MaxBatchesPerTick and TickBudget bound one tick's catch-up loop,
+	// which runs on the leader: it stops at whichever comes first, or
+	// at a short batch (caught up).
+	MaxBatchesPerTick int
+	TickBudget        time.Duration
+	// MaxLag is how many LogLine rows the watermark may trail max(id).
+	// Further behind, the scanner jumps to max(id)-MaxLag: those lines
+	// are near the prune edge and nobody reads week-old error groups.
+	MaxLag int64
 }
 
 const watermarkKey = "errorscan.lastLogLineId"
@@ -76,12 +85,7 @@ func (s *Scanner) Run(ctx context.Context) {
 	if s.Interval <= 0 {
 		s.Interval = HeartbeatInterval
 	}
-	if s.BatchSize <= 0 {
-		s.BatchSize = 500
-	}
-	if s.Logger == nil {
-		s.Logger = slog.Default()
-	}
+	s.applyDefaults()
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	// Run a tick immediately so a fresh boot doesn't wait Interval
@@ -101,19 +105,79 @@ func (s *Scanner) Run(ctx context.Context) {
 	}
 }
 
-// tick: read watermark → fetch next batch of LogLine → scan → insert
-// matches → save new watermark. Best-effort throughout: a DB error
-// during a batch logs and stops *this* tick; the next tick retries
-// from the same watermark.
+func (s *Scanner) applyDefaults() {
+	if s.BatchSize <= 0 {
+		s.BatchSize = 500
+	}
+	if s.MaxBatchesPerTick <= 0 {
+		s.MaxBatchesPerTick = 40
+	}
+	if s.TickBudget <= 0 {
+		s.TickBudget = 20 * time.Second
+	}
+	if s.MaxLag <= 0 {
+		s.MaxLag = 100_000
+	}
+	if s.Logger == nil {
+		s.Logger = slog.Default()
+	}
+}
+
+// tick: read watermark → skip ahead if hopelessly behind → scan batches
+// until caught up or the per-tick bound is hit. Best-effort throughout:
+// a DB error logs and stops *this* tick; the next tick retries from the
+// last saved watermark.
 func (s *Scanner) tick(ctx context.Context) {
 	if s.DB == nil {
 		return
 	}
+	s.applyDefaults()
 	wm, err := s.DB.ScannerWatermark(ctx, watermarkKey)
 	if err != nil {
 		s.Logger.Warn("errorscan: read watermark", "err", err)
 		return
 	}
+	wm, err = s.skipAhead(ctx, wm)
+	if err != nil {
+		s.Logger.Warn("errorscan: skip ahead", "err", err)
+		return
+	}
+	deadline := time.Now().Add(s.TickBudget)
+	for i := 0; i < s.MaxBatchesPerTick && ctx.Err() == nil; i++ {
+		scanned, next, err := s.scanBatch(ctx, wm)
+		if err != nil {
+			s.Logger.Warn("errorscan: batch", "err", err)
+			return
+		}
+		wm = next
+		if scanned < s.BatchSize || time.Now().After(deadline) {
+			return
+		}
+	}
+}
+
+// skipAhead moves the watermark to max(id)-MaxLag when it trails further
+// than that, and returns the watermark to scan from.
+func (s *Scanner) skipAhead(ctx context.Context, wm int64) (int64, error) {
+	var maxID int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM "LogLine"`).Scan(&maxID); err != nil {
+		return wm, err
+	}
+	if maxID-wm <= s.MaxLag {
+		return wm, nil
+	}
+	target := maxID - s.MaxLag
+	if err := s.DB.SaveScannerWatermark(ctx, watermarkKey, target); err != nil {
+		return wm, err
+	}
+	s.Logger.Warn("errorscan: backlog too large, skipping ahead",
+		"from", wm, "to", target, "skippedRows", target-wm)
+	return target, nil
+}
+
+// scanBatch scans up to BatchSize LogLine rows after wm, records matches
+// and saves the new watermark. Returns rows scanned and the new watermark.
+func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 	// $N placeholders, NOT `?`. The driver is lib/pq (see internal/db),
 	// which passes `?` through as a literal — the query then fails to
 	// parse on EVERY tick, so this scanner silently never populated
@@ -129,8 +193,7 @@ func (s *Scanner) tick(ctx context.Context) {
 		wm, s.BatchSize,
 	)
 	if err != nil {
-		s.Logger.Warn("errorscan: query log lines", "err", err)
-		return
+		return 0, wm, err
 	}
 	defer rows.Close()
 
@@ -170,16 +233,17 @@ func (s *Scanner) tick(ctx context.Context) {
 		matched++
 	}
 	if err := rows.Err(); err != nil {
-		s.Logger.Warn("errorscan: rows iter", "err", err)
+		return scanned, wm, err
 	}
 	if maxID > wm {
 		if err := s.DB.SaveScannerWatermark(ctx, watermarkKey, maxID); err != nil {
-			s.Logger.Warn("errorscan: save watermark", "err", err)
+			return scanned, wm, err
 		}
 	}
 	if scanned > 0 {
-		s.Logger.Debug("errorscan: tick", "scanned", scanned, "matched", matched, "watermark", maxID)
+		s.Logger.Debug("errorscan: batch", "scanned", scanned, "matched", matched, "watermark", maxID)
 	}
+	return scanned, maxID, nil
 }
 
 // matchesAnyPattern returns true if any of the error regexes hits.
