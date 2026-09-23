@@ -49,7 +49,11 @@ spec:
   startingDeadlineSeconds: 600
   jobTemplate:
     spec:
-      backoffLimit: 2
+      # Matches the addon backup CronJobs. Each run writes its own
+      # timestamped key, so a retry is idempotent and costs only time —
+      # and this is the CONTROL-PLANE database, where losing a night's
+      # backup to one transient blip is the worst case on the cluster.
+      backoffLimit: 3
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
