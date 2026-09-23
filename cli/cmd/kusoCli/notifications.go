@@ -55,7 +55,7 @@ var notificationsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		switch notificationsGetOutput {
+		switch outputFormat {
 		case "json":
 			return jsonOut(items)
 		default:
@@ -99,11 +99,8 @@ var notificationsGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if outputFormat == "json" {
-			return jsonOut(one)
-		}
-		// Pretty print: redact webhook URLs by default to avoid
-		// shoulder-surfing the secret token. Pass --reveal to show.
+		// Redact webhook URLs and secrets in every format so a piped
+		// -o json doesn't leak them into logs. Pass --reveal to show.
 		if !notifReveal {
 			if cfg, ok := one["config"].(map[string]any); ok {
 				if u, _ := cfg["url"].(string); u != "" {
@@ -113,6 +110,9 @@ var notificationsGetCmd = &cobra.Command{
 					cfg["secret"] = "***"
 				}
 			}
+		}
+		if notificationsGetOutput == "json" {
+			return jsonOut(one)
 		}
 		buf, _ := json.MarshalIndent(one, "", "  ")
 		fmt.Println(string(buf))
