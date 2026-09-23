@@ -607,6 +607,11 @@ func AddonsWorstSeverity(addons []AddonBackupStatus) string {
 // Interval unset, so this is the effective interval.
 const DefaultInterval = 15 * time.Minute
 
+// maxIncompleteTicks bounds how long a failed read may hold the previous
+// state. Past it a check that can't be read at all (a permanent RBAC
+// error, say) raises its own state instead of muting alerting forever.
+const maxIncompleteTicks = 3
+
 type Watcher struct {
 	Kube      *kube.Client
 	Notify    *notify.Dispatcher
@@ -625,6 +630,8 @@ type Watcher struct {
 	// watcher exists to catch.
 	lastState string
 	evaluated bool
+	// incompleteTicks counts consecutive ticks with a failed read.
+	incompleteTicks int
 }
 
 func (w *Watcher) Run(ctx context.Context) {
@@ -666,12 +673,30 @@ func (w *Watcher) tick(ctx context.Context) {
 	// Carrying verdicts per subsystem was not enough, because severity
 	// and (after a restart) the addon part still moved, so one flake sent
 	// two spurious alerts. The next complete tick decides.
-	if s.Indeterminate || gc.Indeterminate || !addonsComplete {
+	incomplete := s.Indeterminate || gc.Indeterminate || !addonsComplete
+	if !incomplete {
+		w.incompleteTicks = 0
+	} else if w.incompleteTicks++; w.incompleteTicks < maxIncompleteTicks {
 		w.Logger.Warn("backup health: evaluation incomplete, keeping previous state",
 			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete)
 		return
 	}
 	backupOK, gcOK, addonsOK := s.Healthy, gc.Healthy, AddonsHealthy(addons)
+	var unreadable []string
+	if incomplete {
+		// Past the bound: the real verdict is unknown, so report which
+		// checks can't be read rather than a guess about their health.
+		backupOK, gcOK, addonsOK = true, true, true
+		if s.Indeterminate {
+			unreadable = append(unreadable, "backup")
+		}
+		if gc.Indeterminate {
+			unreadable = append(unreadable, "registry-gc")
+		}
+		if !addonsComplete {
+			unreadable = append(unreadable, "addon-backups")
+		}
+	}
 
 	// Build the unhealthy-subsystem set + a combined detail naming
 	// EVERY broken subsystem (a single-detail message hid the addon
@@ -697,7 +722,16 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		parts = append(parts, "addon-backups("+strings.Join(names, "+")+")")
 	}
+	if len(unreadable) > 0 {
+		parts = append(parts, "unreadable("+strings.Join(unreadable, "+")+")")
+		details = append(details, fmt.Sprintf(
+			"backup health can't read %s (%d consecutive failed checks); backup failures there are not being detected — check kuso-server logs and RBAC",
+			strings.Join(unreadable, ", "), w.incompleteTicks))
+	}
 	severity := alertSeverity(s, gc)
+	if len(unreadable) > 0 {
+		severity = "warn"
+	}
 	if !addonsOK {
 		// A missing backup Secret is a config-level "you have no
 		// backups" → error outranks whatever the others said; a late
@@ -735,6 +769,8 @@ func (w *Watcher) tick(ctx context.Context) {
 	case state != "":
 		title := "Control-plane backup unhealthy"
 		switch {
+		case len(unreadable) > 0:
+			title = "Backup health can't be checked"
 		case !backupOK:
 			// keep default title
 		case !gcOK:

@@ -134,3 +134,47 @@ func TestTick_FailedReadKeepsPreviousState(t *testing.T) {
 		}
 	})
 }
+
+// Keeping the previous state must be bounded: a check that can never be
+// read (say a permanent RBAC error) would otherwise mute backup alerting
+// forever. After maxIncompleteTicks consecutive failures the state moves
+// to one that names the unreadable check, once; a complete tick moves it
+// back to the real verdict.
+func TestTick_PersistentFailedReadRaisesUnreadable(t *testing.T) {
+	ctx := context.Background()
+	kc, cs, flaky := flakyCluster(t)
+	w := newProcess(kc)
+	w.tick(ctx)
+	realState := persisted(t, cs)
+
+	// Non-consecutive failures never trip the bound.
+	for i := 0; i < maxIncompleteTicks-1; i++ {
+		*flaky = true
+		w.tick(ctx)
+	}
+	*flaky = false
+	w.tick(ctx)
+	before := emits(cs)
+	for i := 0; i < maxIncompleteTicks-1; i++ {
+		*flaky = true
+		w.tick(ctx)
+	}
+	if n := emits(cs) - before; n != 0 {
+		t.Fatalf("%d failed reads after a clean tick emitted %d alerts; the count must reset", maxIncompleteTicks-1, n)
+	}
+
+	w.tick(ctx) // the maxIncompleteTicks-th consecutive failure
+	if got := persisted(t, cs); got != "unreadable(addon-backups)|warn" {
+		t.Fatalf("state after %d consecutive failed reads = %q, want the unreadable state", maxIncompleteTicks, got)
+	}
+	w.tick(ctx)
+	if n := emits(cs) - before; n != 1 {
+		t.Fatalf("persistent failed reads emitted %d alerts, want exactly 1", n)
+	}
+
+	*flaky = false
+	w.tick(ctx)
+	if got := persisted(t, cs); got != realState {
+		t.Fatalf("a complete tick should restore %q, got %q", realState, got)
+	}
+}
