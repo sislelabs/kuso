@@ -202,6 +202,9 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	if req.Namespace == "" {
 		req.Namespace = derivedProjectNamespace(req.Name)
 	}
+	if err := s.validateProjectNamespace(ctx, req.Name, req.Namespace); err != nil {
+		return nil, err
+	}
 	// DefaultRepo is now optional; pass nil through when omitted so
 	// the CR doesn't carry an empty repo struct.
 	var defaultRepo *kube.KusoRepoRef
