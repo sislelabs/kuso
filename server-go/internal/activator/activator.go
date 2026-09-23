@@ -425,6 +425,27 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	}
 	want := a.preSleepReplicas(ctx, ns, name)
 
+	// Env CR first, Deployment second. The last-activity stamp has to be
+	// visible before replicas go up: scaledown treats a running env with
+	// no recent stamp as idle, and a tick landing in the cold-start window
+	// would otherwise re-sleep it while we hold the request (-> 503).
+	// Persisting replicaCount stops the helm-operator reverting to 0, and
+	// the consumed pre-sleep annotation is cleared. Best-effort: the
+	// Deployment patch below is the authoritative wake.
+	if _, uerr := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(e *kube.KusoEnvironment) error {
+		if e.Spec.ReplicaCountValue() < want {
+			e.Spec.SetReplicaCount(want)
+		}
+		if e.Annotations == nil {
+			e.Annotations = map[string]string{}
+		}
+		e.Annotations[scaledown.LastActivityAnnotation] = a.now().UTC().Format(time.RFC3339)
+		delete(e.Annotations, scaledown.PreSleepReplicasAnnotation)
+		return nil
+	}); uerr != nil {
+		a.logger.Warn("activator: persist wake on env", "ns", ns, "env", name, "err", uerr)
+	}
+
 	// Direct Deployment scale → instant. The scale subresource avoids a
 	// full update conflict with the operator's reconcile.
 	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, want))
@@ -432,20 +453,6 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("scale deployment: %w", err)
-	}
-	// Persist desired replicas on the env CR so a later operator
-	// reconcile (which renders spec.replicas from .Values.replicaCount)
-	// doesn't clobber us back to 0. Best-effort: the Deployment patch is
-	// the authoritative wake; this just stops the revert. Also clears the
-	// pre-sleep annotation now that it's been consumed.
-	if _, uerr := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(e *kube.KusoEnvironment) error {
-		if e.Spec.ReplicaCountValue() < want {
-			e.Spec.SetReplicaCount(want)
-		}
-		delete(e.Annotations, scaledown.PreSleepReplicasAnnotation)
-		return nil
-	}); uerr != nil {
-		a.logger.Warn("activator: persist replicaCount", "ns", ns, "env", name, "err", uerr)
 	}
 	return nil
 }
