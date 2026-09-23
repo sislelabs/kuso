@@ -61,6 +61,27 @@ func toBuildpacksSpec(in *ServiceBuildpacksSpec) *kube.KusoBuildpacksSpec {
 //     a tiny nginx Dockerfile that COPYs outputDir as the site root.
 //
 // Empty string is accepted and treated as dockerfile.
+// normalizeAccessMode maps a volume accessMode onto the PVC value the
+// apiserver accepts. The kube types document the RWO/RWX shorthand, which
+// the chart used to emit verbatim into a PVC the apiserver rejects.
+// Empty stays empty (the chart defaults it to ReadWriteOnce).
+func normalizeAccessMode(m string) (string, error) {
+	switch strings.ToLower(m) {
+	case "":
+		return "", nil
+	case "rwo", "readwriteonce":
+		return "ReadWriteOnce", nil
+	case "rwx", "readwritemany":
+		return "ReadWriteMany", nil
+	case "rox", "readonlymany":
+		return "ReadOnlyMany", nil
+	case "readwriteoncepod":
+		return "ReadWriteOncePod", nil
+	default:
+		return "", fmt.Errorf("%w: volume accessMode %q (supported: ReadWriteOnce/RWO, ReadWriteMany/RWX, ReadOnlyMany/ROX, ReadWriteOncePod)", ErrInvalid, m)
+	}
+}
+
 func validateRuntime(rt string) error {
 	switch rt {
 	case "", "dockerfile", "nixpacks", "buildpacks", "static", "worker", "image":
@@ -2432,12 +2453,16 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				if v.Name == "" || v.MountPath == "" {
 					return fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
 				}
+				mode, err := normalizeAccessMode(v.AccessMode)
+				if err != nil {
+					return err
+				}
 				next = append(next, kube.KusoVolume{
 					Name:         v.Name,
 					MountPath:    v.MountPath,
 					SizeGi:       v.SizeGi,
 					StorageClass: v.StorageClass,
-					AccessMode:   v.AccessMode,
+					AccessMode:   mode,
 				})
 			}
 			svc.Spec.Volumes = next

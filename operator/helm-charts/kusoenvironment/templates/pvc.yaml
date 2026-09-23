@@ -24,8 +24,13 @@ metadata:
     # with `kubectl delete pvc`.
     "helm.sh/resource-policy": keep
 spec:
+  {{- /* Map the RWO/RWX/ROX shorthand the kube types document; the
+         apiserver rejects it verbatim and the whole release wedges. The
+         server normalises on write, this covers CRs written around it. */}}
+  {{- $aliases := dict "RWO" "ReadWriteOnce" "RWX" "ReadWriteMany" "ROX" "ReadOnlyMany" }}
+  {{- $mode := default "ReadWriteOnce" .accessMode }}
   accessModes:
-    - {{ default "ReadWriteOnce" .accessMode | quote }}
+    - {{ get $aliases (upper $mode) | default $mode | quote }}
   resources:
     requests:
       storage: {{ printf "%dGi" (default 1 (int .sizeGi)) | quote }}
