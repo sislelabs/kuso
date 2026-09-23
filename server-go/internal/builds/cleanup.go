@@ -461,6 +461,17 @@ func sortRecordsNewestFirst(recs []imageRetentionRecord) {
 	}
 }
 
+// helmReleaseOwnerGVRs are the kinds whose CRs own a helm release: every
+// kind in operator/watches.yaml (a test keeps the two in sync).
+var helmReleaseOwnerGVRs = []schema.GroupVersionResource{
+	kube.GVRProjects,
+	kube.GVRServices,
+	kube.GVREnvironments,
+	kube.GVRAddons,
+	kube.GVRCrons,
+	kube.GVRRuns,
+}
+
 // SweepOrphanHelmReleases removes Secrets named
 // sh.helm.release.v1.<release>.v<rev> whose corresponding kuso CR no
 // longer exists in the namespace. We restrict the sweep to releases
@@ -483,23 +494,12 @@ func SweepOrphanHelmReleases(ctx context.Context, kc *kube.Client, namespace str
 	// GVRs into a single set. We can be conservative — anything we
 	// don't recognise is left alone.
 	live := map[string]struct{}{}
-	gvrs := []struct {
-		label string
-		gvr   schema.GroupVersionResource
-	}{
-		{"kusoprojects", kube.GVRProjects},
-		{"kusoservices", kube.GVRServices},
-		{"kusoenvironments", kube.GVREnvironments},
-		{"kusoaddons", kube.GVRAddons},
-		{"kusocrons", kube.GVRCrons},
-	}
-	for _, g := range gvrs {
-		l, err := kc.Dynamic.Resource(g.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	for _, g := range helmReleaseOwnerGVRs {
+		l, err := kc.Dynamic.Resource(g).Namespace(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			if logFn != nil {
-				logFn("orphan-sweep list", "kind", g.label, "err", err)
-			}
-			continue
+			// An unknown owner set would mark every release of this kind
+			// orphaned; skip the sweep until the next tick instead.
+			return 0, fmt.Errorf("list %s for orphan sweep: %w", g.Resource, err)
 		}
 		for i := range l.Items {
 			live[l.Items[i].GetName()] = struct{}{}
