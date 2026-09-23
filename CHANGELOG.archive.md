@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.14] — 2026-08-04
+
+### 🐛 Bug Fixes
+- Fix(canvas): non-prod tabs lost all service nodes + preview clones didn't replace bases ([1ce65a8](https://github.com/sislelabs/kuso/commit/1ce65a8dccc2fa2a7bef857e74fc8050366bf11b))
+
 ## [0.22.13] — 2026-08-02
 
 ### ✨ Features
