@@ -262,10 +262,15 @@ export function EnvVarsEditor({
     baselineFromRows.current = incoming;
   }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes]);
 
+  // Rows as they were on entering bulk mode. Every keystroke re-parses
+  // against this snapshot, not the last parse, so a typed-then-deleted
+  // override of an addon key falls back to the original row.
+  const bulkBaseRows = useRef<Row[]>([]);
   // Bulk text is derived from rows when entering bulk mode and
   // committed back to rows on every keystroke. We keep them in sync
   // so the user can flip between modes mid-edit without losing work.
   const enterBulk = () => {
+    bulkBaseRows.current = rows;
     setBulkText(rowsToDotenv(rows));
     setMode("bulk");
   };
@@ -274,11 +279,9 @@ export function EnvVarsEditor({
   };
   const onBulkChange = (text: string) => {
     setBulkText(text);
-    // Opaque secret-ref rows AND secret-backed rows whose plaintext isn't
-    // revealed are unrepresentable in the dotenv textarea (there's no
-    // value to round-trip), so carry them across a bulk edit untouched.
-    const secrets = rows.filter((r) => r.fromSecret || (r.secretBacked && r.value === ""));
-    setRows(dotenvToRows(text, secrets));
+    // dotenvToRows carries the rows the textarea can't represent (secret
+    // refs, addon and managed rows) across the edit untouched.
+    setRows(dotenvToRows(text, bulkBaseRows.current));
     setDirty(true);
   };
 

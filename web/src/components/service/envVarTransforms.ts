@@ -338,6 +338,15 @@ export function stripProjectPrefix(fqn: string, project: string): string {
   return fqn;
 }
 
+// keptOutOfBulk marks rows the bulk textarea can't safely round-trip:
+// opaque secret refs, unrevealed secret-backed rows, and addon/managed
+// rows. A revealed addon/managed row holds real plaintext, and parsing it
+// back as a plain literal loses the flag that stops save() from writing it
+// as a service var that shadows the secret.
+export function keptOutOfBulk(r: Row): boolean {
+  return r.fromSecret || !!r.managed || !!r.addon || (r.secretBacked && r.value === "");
+}
+
 // Serialize plain (non-secret) rows to dotenv format. Secret-backed
 // rows are emitted as a comment so the user sees them in the bulk
 // view but can't accidentally rewrite them as plain values.
@@ -349,8 +358,8 @@ export function rowsToDotenv(rows: Row[]): string {
       // but can't be rewritten as a plain literal. Secret-backed VALUE
       // rows (managed secrets / addon refs) whose plaintext isn't revealed
       // also can't round-trip through the textarea, so comment them too.
-      if (r.fromSecret || (r.secretBacked && r.value === "")) {
-        return `# ${r.name}=<from secret>`;
+      if (keptOutOfBulk(r)) {
+        return r.addon ? `# ${r.name}=<from addon ${r.addon}>` : `# ${r.name}=<from secret>`;
       }
       const v = r.value ?? "";
       // Quote when the value contains whitespace, =, or # so the
@@ -373,7 +382,7 @@ export function rowsToDotenv(rows: Row[]): string {
 // stripped and \" / \\ / \n / \r are unescaped. Anything that doesn't
 // match a valid `KEY=value` pattern is silently dropped — the textarea
 // is the user's pasteboard, not a strict parser.
-export function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
+export function dotenvToRows(text: string, prevRows: Row[]): Row[] {
   const out: Row[] = [];
   const lines = text.split(/\r?\n/);
   for (const raw of lines) {
@@ -396,13 +405,24 @@ export function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
         .slice(1, -1)
         .replace(/\\(.)/g, (m, c: string) => unescape[c] ?? m);
     }
-    out.push({ id: rid(), name, value, fromSecret: false, secretBacked: false, visible: false });
+    // A line naming a kept-out row is an explicit override: keep its
+    // origin flags so the diff stays masked.
+    const prev = prevRows.find((p) => p.name === name && keptOutOfBulk(p));
+    out.push({
+      id: rid(),
+      name,
+      value,
+      fromSecret: false,
+      secretBacked: prev ? prev.secretBacked : false,
+      visible: false,
+      managed: prev?.managed,
+      addon: prev?.addon,
+      origName: prev?.origName,
+    });
   }
-  // Preserve any secret-backed entries — they aren't representable in
-  // the bulk textarea, so we re-attach them after parsing so the user
-  // doesn't accidentally lose them.
-  for (const s of prevSecrets) {
-    if (!out.some((r) => r.name === s.name)) out.push(s);
+  // Re-attach the rows the textarea couldn't represent, untouched.
+  for (const s of prevRows) {
+    if (keptOutOfBulk(s) && !out.some((r) => r.name === s.name)) out.push(s);
   }
   return out;
 }

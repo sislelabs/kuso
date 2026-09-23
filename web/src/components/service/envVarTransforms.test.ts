@@ -355,6 +355,48 @@ describe("dotenv round trip (bulk mode)", () => {
     expect(parsed.find((r) => r.name === "TOKEN")).toBe(secret);
   });
 
+  // A revealed addon/managed row carries real plaintext. Bulk mode must
+  // neither print it nor rebuild it as a plain literal: without the
+  // addon/managed flag the save writes it back as a service var that
+  // shadows the addon secret forever.
+  it("keeps revealed addon and managed rows out of the text and untouched", () => {
+    const addonRow = toRow(
+      { name: "DATABASE_URL", value: "postgres://u:S3cretPass@db/app", source: "addon-secret", addon: "db" },
+      PROJECT,
+      new Map(),
+      []
+    );
+    const managedRow = toRow(
+      { name: "API_KEY", value: "sk_live_abc", source: "managed-secret" },
+      PROJECT,
+      new Map(),
+      []
+    );
+    const rows = [literalRow("PLAIN", "v"), addonRow, managedRow];
+    const text = rowsToDotenv(rows);
+    expect(text).not.toContain("S3cretPass");
+    expect(text).not.toContain("sk_live_abc");
+    const parsed = dotenvToRows(text + "\nNEW=1", rows);
+    expect(parsed.find((r) => r.name === "DATABASE_URL")).toBe(addonRow);
+    expect(parsed.find((r) => r.name === "API_KEY")).toBe(managedRow);
+    expect(parsed.find((r) => r.name === "NEW")?.value).toBe("1");
+  });
+
+  it("a bulk line that overrides an addon key stays secret-backed", () => {
+    const addonRow = toRow(
+      { name: "DATABASE_URL", value: "postgres://old", source: "addon-secret", addon: "db" },
+      PROJECT,
+      new Map(),
+      []
+    );
+    const parsed = dotenvToRows("DATABASE_URL=postgres://new", [addonRow]);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].value).toBe("postgres://new");
+    expect(parsed[0].secretBacked).toBe(true);
+    expect(parsed[0].addon).toBe("db");
+    expect(rowDiffLabel(parsed[0])).not.toContain("postgres://new");
+  });
+
   it("drops junk lines instead of inventing rows", () => {
     const parsed = dotenvToRows(
       ["# comment", "", "NOVALUE", "=nokey", "9BAD=x", "OK=fine"].join("\n"),
