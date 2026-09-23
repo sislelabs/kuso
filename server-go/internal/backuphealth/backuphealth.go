@@ -27,6 +27,7 @@ package backuphealth
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
@@ -663,6 +665,10 @@ func (w *Watcher) Run(ctx context.Context) {
 	if interval <= 0 {
 		interval = DefaultInterval
 	}
+	// Recover the last-notified state from the previous process, so a
+	// restart does not re-fire an unchanged condition. Without this,
+	// every deploy re-pages about whatever was already broken.
+	w.lastState = w.loadState(ctx)
 	// Initial delay so a fresh boot doesn't alert before the first
 	// backup CronJob has had a chance to run.
 	t := time.NewTimer(2 * time.Minute)
@@ -751,11 +757,15 @@ func (w *Watcher) tick(ctx context.Context) {
 	// Only emit when the SET of broken subsystems changes. evaluated
 	// guards the very first tick so we don't double-fire; a cold start
 	// that's already unhealthy still alerts (lastState zero value "").
-	if w.evaluated && state == w.lastState {
+	if !shouldEmit(w.evaluated, w.lastState, state) {
 		return
 	}
 	prevState := w.lastState
 	w.evaluated, w.lastState = true, state
+	// Persist BEFORE notifying: a crash between the two costs one
+	// duplicate notification, whereas persisting after would risk
+	// losing the state and re-firing on every restart — the bug.
+	w.saveState(ctx, state)
 
 	if w.Notify == nil {
 		return
@@ -920,4 +930,78 @@ func detail(s Status) string {
 	default:
 		return "Control-plane backups healthy."
 	}
+}
+
+// shouldEmit decides whether a health evaluation is worth notifying
+// about. It edge-triggers on the SET of unhealthy subsystems (plus
+// severity), so a steady failure is reported once rather than every
+// tick.
+//
+// evaluated says whether THIS process has already evaluated once.
+// lastState is the previously-recorded state — in a fresh process that
+// is whatever was persisted by the one before it, which is the point:
+// the state used to live only in memory, so every restart re-fired an
+// unchanged condition as though it were new. Shipping three releases in
+// an afternoon produced three identical pages about one unfixed thing.
+//
+// A cold start with nothing persisted still alerts if the system is
+// already broken (lastState "" != an unhealthy state), which is the
+// behaviour the in-memory version got right and must be preserved.
+func shouldEmit(evaluated bool, lastState, current string) bool {
+	if current == lastState {
+		return false
+	}
+	_ = evaluated // state comparison alone decides; kept for call-site clarity
+	return true
+}
+
+// StateAnnotation records the last-notified health state on the
+// kuso-server Deployment, so edge-triggering survives a restart.
+//
+// Follows the nodewatch precedent (kuso.sislelabs.com/cordoned-by-
+// nodewatch): small control-plane state that must outlive a process
+// lives as an annotation on a resource we already read, rather than
+// earning a DB migration.
+const StateAnnotation = "kuso.sislelabs.com/backup-health-state"
+
+// stateCarrier is the Deployment the annotation is written to. It is
+// the server's own Deployment: always present, already watched, and
+// its lifecycle matches the state's.
+const stateCarrier = "kuso-server"
+
+// loadState reads the persisted health state. A miss — no annotation,
+// no Deployment, RBAC refusal — returns "" so the watcher behaves
+// exactly as it did before: a cold start that is already unhealthy
+// alerts once. Never fatal; a lost annotation costs one duplicate
+// notification, not a missed one.
+func (w *Watcher) loadState(ctx context.Context) string {
+	if w.Kube == nil || w.Kube.Clientset == nil {
+		return ""
+	}
+	d, err := w.Kube.Clientset.AppsV1().Deployments(w.ns()).Get(ctx, stateCarrier, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return d.Annotations[StateAnnotation]
+}
+
+// saveState persists the freshly-notified state. Best-effort for the
+// same reason as loadState.
+func (w *Watcher) saveState(ctx context.Context, state string) {
+	if w.Kube == nil || w.Kube.Clientset == nil {
+		return
+	}
+	patch := []byte(fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:%q}}}`, StateAnnotation, state))
+	if _, err := w.Kube.Clientset.AppsV1().Deployments(w.ns()).
+		Patch(ctx, stateCarrier, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		w.Logger.Debug("backup health: persist state failed (a restart may re-notify)", "err", err)
+	}
+}
+
+func (w *Watcher) ns() string {
+	if w.Namespace != "" {
+		return w.Namespace
+	}
+	return "kuso"
 }

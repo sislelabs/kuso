@@ -43,7 +43,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
@@ -316,7 +324,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
@@ -474,7 +490,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
@@ -612,7 +636,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
@@ -742,7 +774,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
@@ -873,7 +913,15 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Retry a failed run rather than losing the night's backup to one
+      # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
+      # Each run writes its own timestamped key, so a retry is idempotent
+      # and costs only time, of which a nightly job has plenty.
+      #
+      # Was 1, which meant a single failure was final: it produced a
+      # missed backup AND a pager alert for something that would have
+      # succeeded on the next attempt.
+      backoffLimit: 3
       template:
         metadata:
           labels:
