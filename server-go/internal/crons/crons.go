@@ -765,6 +765,11 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		if !cronOwnedByProject(cr, project) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}
+		// Service crons run with the service's secrets mounted and are
+		// admin-gated on the per-service route; this route is editor-gated.
+		if cr.Spec.Kind != "http" && cr.Spec.Kind != "command" {
+			return fmt.Errorf("%w: cron %s is a service cron; edit it via the service's cron endpoint", ErrInvalid, fqn)
+		}
 		if req.Schedule != nil {
 			cr.Spec.Schedule = *req.Schedule
 		}

