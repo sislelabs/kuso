@@ -231,6 +231,7 @@ func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "rollback build", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, chi.URLParam(r, "project"), out)
 	writeJSON(w, http.StatusOK, out)
 }
 

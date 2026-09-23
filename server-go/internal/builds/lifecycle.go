@@ -27,7 +27,31 @@ import (
 // history rather than a hole. Cancelling a finished build is a no-op
 // 400 — the Job's already gone and the phase is fixed.
 func (s *Service) Cancel(ctx context.Context, project, service, buildName string) error {
+	if buildName == "" {
+		return fmt.Errorf("%w: empty build name", ErrInvalid)
+	}
+	b, err := s.Kube.GetKusoBuild(ctx, s.nsFor(ctx, project), buildName)
+	if apierrors.IsNotFound(err) || (err == nil && !buildOwnedBy(b, project, service)) {
+		return fmt.Errorf("%w: build %s", ErrNotFound, buildName)
+	}
+	if err != nil {
+		return fmt.Errorf("get build: %w", err)
+	}
 	return s.cancelBuild(ctx, project, buildName, "cancelled by user")
+}
+
+func envOwnedBy(e *kube.KusoEnvironment, project string) bool {
+	if e.Spec.Project != "" {
+		return e.Spec.Project == project
+	}
+	return e.Labels[kube.LabelProject] == project
+}
+
+// buildOwnedBy guards the user-facing build mutators: builds of all
+// projects without a custom namespace share one namespace, so a name
+// lookup alone reaches other projects' builds.
+func buildOwnedBy(b *kube.KusoBuild, project, service string) bool {
+	return b != nil && b.Spec.Project == project && b.Spec.Service == project+"-"+service
 }
 
 // cancelBuild is the shared cancel core behind the user-initiated
@@ -176,6 +200,9 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(bRaw.Object, &b); derr != nil {
 			return nil, fmt.Errorf("decode build: %w", derr)
 		}
+		if !buildOwnedBy(&b, project, service) {
+			return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
+		}
 		if buildPhase(&b) != "succeeded" {
 			return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, buildPhase(&b))
 		}
@@ -209,6 +236,13 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	// would otherwise let a stale auto-promote shadow the manual
 	// rollback if its build CR happened to have a newer createdAt.
 	envCRName := project + "-" + service + "-" + envName
+	cur, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRName)
+	if apierrors.IsNotFound(err) || (err == nil && !envOwnedBy(cur, project)) {
+		return nil, fmt.Errorf("%w: environment %s", ErrNotFound, envCRName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get env %s: %w", envCRName, err)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := fmt.Sprintf(
 		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,

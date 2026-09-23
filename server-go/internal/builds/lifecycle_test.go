@@ -2,6 +2,7 @@ package builds
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,5 +132,80 @@ func TestRollback_MissingBuildErrors(t *testing.T) {
 	)
 	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-ghost"); err == nil {
 		t.Fatal("expected Rollback to error on a missing build, got nil")
+	}
+}
+
+func TestRollback_RefusesOtherProjectsBuild(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+		seedSucceededBuild("beta", "api", "beta-api-abc", "reg/beta/api", "abcdef012345"),
+	)
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "beta-api-abc"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Rollback of beta's build via alpha: want ErrNotFound, got %v", err)
+	}
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Image != nil && env.Spec.Image.Tag == "abcdef012345" {
+		t.Error("alpha env was repointed at beta's image")
+	}
+}
+
+func TestRollback_RefusesSameProjectOtherServiceBuild(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+		seedSucceededBuild("alpha", "worker", "alpha-worker-abc", "reg/alpha/worker", "abcdef012345"),
+	)
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-worker-abc"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+// "foo"+"bar-api" and "foo-bar"+"api" derive the same env CR name; the
+// env must still be refused when it belongs to the other project.
+func TestRollback_RefusesEnvOwnedByOverlappingProject(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("foo-bar", "api"),
+		seedProductionEnv("foo-bar", "api"),
+		seedSucceededBuild("foo", "bar-api", "foo-bar-api-abc", "reg/foo/bar-api", "abcdef012345"),
+	)
+	if _, err := s.Rollback(context.Background(), "foo", "bar-api", "production", "foo-bar-api-abc"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "foo-bar-api-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Image != nil && env.Spec.Image.Tag == "abcdef012345" {
+		t.Error("foo-bar's env was patched via project foo")
+	}
+}
+
+func TestCancel_RefusesOtherProjectsBuild(t *testing.T) {
+	t.Parallel()
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "beta-api-run", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "beta",
+			Service: "beta-api",
+			Image:   &kube.KusoImage{Repository: "reg/beta/api", Tag: "abc"},
+		},
+	}
+	s := fakeService(t, seedBuild(b))
+	if err := s.Cancel(context.Background(), "alpha", "web", "beta-api-run"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Cancel of beta's build via alpha: want ErrNotFound, got %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "beta-api-run")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if buildPhase(got) == "cancelled" {
+		t.Error("beta's build was cancelled via alpha")
 	}
 }
