@@ -197,3 +197,26 @@ func TestExport_OmitsNonAddonSecretRefs(t *testing.T) {
 		t.Fatalf("plain env dropped: %+v", env)
 	}
 }
+
+func TestExport_LeavesOutEnvScopedClones(t *testing.T) {
+	k, ns := fakeKube(t,
+		seedProject("shop"),
+		seedFullService("shop", "api"),
+		seedEnvScoped(seedFullService("shop", "api-staging"), map[string]string{kube.LabelEnv: "staging"}),
+		seedFullAddon("shop", "db"),
+		seedEnvScoped(seedFullAddon("shop", "db-staging"), map[string]string{kube.LabelEnv: "staging"}),
+		seedEnvScoped(seedFullAddon("shop", "db-pr-52"), map[string]string{
+			kube.LabelEnv: "preview-pr-52", "kuso.sislelabs.com/preview-pr": "52",
+		}),
+	)
+	f, err := Export(context.Background(), k, ns, "shop")
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(f.Services) != 1 || f.Services[0].Name != "api" {
+		t.Fatalf("want only api exported, got %+v", f.Services)
+	}
+	if len(f.Addons) != 1 || f.Addons[0].Name != "db" {
+		t.Fatalf("want only db exported, got %+v", f.Addons)
+	}
+}

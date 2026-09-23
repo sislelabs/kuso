@@ -132,3 +132,38 @@ func TestPlanFor_PruneTrueExecutesDeletes(t *testing.T) {
 		t.Fatalf("prune=true must leave WouldDelete empty: %+v", plan)
 	}
 }
+
+func seedEnvScoped(p planSeed, labels map[string]string) planSeed {
+	p.obj.SetLabels(labels)
+	return p
+}
+
+func TestPlanFor_PruneSkipsEnvScopedClones(t *testing.T) {
+	k, ns := fakeKube(t,
+		seedPlanService("shop", "api"),
+		seedEnvScoped(seedPlanService("shop", "api-staging"), map[string]string{kube.LabelEnv: "staging"}),
+		seedEnvScoped(seedPlanAddon("shop", "db"), map[string]string{kube.LabelEnv: "production"}),
+		seedEnvScoped(seedPlanAddon("shop", "db-staging"), map[string]string{kube.LabelEnv: "staging"}),
+		seedEnvScoped(seedPlanAddon("shop", "db-pr-52"), map[string]string{
+			kube.LabelEnv: "preview-pr-52", "kuso.sislelabs.com/preview-pr": "52",
+		}),
+		seedPlanAddon("shop", "staledb"),
+	)
+	f := &File{Project: "shop", Prune: true,
+		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Port: 8080}},
+		Addons:   []AddonSpec{{Name: "db", Kind: "postgres"}},
+	}
+	plan, err := PlanFor(context.Background(), k, ns, f)
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	if len(plan.ServicesToDelete) != 0 {
+		t.Fatalf("env-group service copy must not be pruned: %+v", plan.ServicesToDelete)
+	}
+	if len(plan.AddonsToDelete) != 1 || plan.AddonsToDelete[0] != "staledb" {
+		t.Fatalf("want only staledb pruned, got %+v", plan.AddonsToDelete)
+	}
+	if len(plan.AddonsToUpdate) != 1 || plan.AddonsToUpdate[0] != "db" || len(plan.AddonsToCreate) != 0 {
+		t.Fatalf("env=production addon is the project's own: update %+v create %+v", plan.AddonsToUpdate, plan.AddonsToCreate)
+	}
+}

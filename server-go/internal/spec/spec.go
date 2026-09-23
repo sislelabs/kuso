@@ -409,6 +409,19 @@ type Plan struct {
 	WouldDelete []string `json:"wouldDelete,omitempty"`
 }
 
+// envScoped reports whether a CR belongs to one staging/preview env
+// (an env-group service copy or an addon clone) rather than to the
+// project. kuso.yaml can't declare those, so plan and export must never
+// see them — otherwise prune deletes them and export re-emits them as
+// project-level resources. env=production is the project's own.
+func envScoped(labels map[string]string) bool {
+	if labels["kuso.sislelabs.com/preview-pr"] != "" {
+		return true
+	}
+	env := labels[kube.LabelEnv]
+	return env != "" && env != "production"
+}
+
 // PlanFor diffs the YAML file against the live project and returns
 // the set of changes needed to bring kube into line. Read-only —
 // callers run this for the dry-run UI before pulling the trigger.
@@ -427,7 +440,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	}
 	liveSvcByShort := map[string]bool{}
 	for _, ls := range liveSvcs {
-		if ls.Spec.Project != f.Project {
+		if ls.Spec.Project != f.Project || envScoped(ls.Labels) {
 			continue
 		}
 		short := shortName(f.Project, ls.Name)
@@ -458,7 +471,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	for _, la := range liveAddons {
 		// Scope to the target project — every addon CR has
 		// .spec.project set since AddService stamps it on create.
-		if la.Spec.Project != f.Project {
+		if la.Spec.Project != f.Project || envScoped(la.Labels) {
 			continue
 		}
 		// Addon CR names are <project>-<short>; strip the prefix

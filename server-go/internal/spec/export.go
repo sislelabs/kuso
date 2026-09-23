@@ -45,7 +45,7 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 	// values live only in the per-service Secret, never on the CR).
 	secSvc := secrets.New(k, namespace)
 	for _, ls := range liveSvcs {
-		if ls.Spec.Project != project {
+		if ls.Spec.Project != project || envScoped(ls.Labels) {
 			continue
 		}
 		svc := exportService(project, ls)
@@ -68,7 +68,7 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 		return nil, fmt.Errorf("list addons: %w", err)
 	}
 	for _, la := range liveAddons {
-		if la.Spec.Project != project {
+		if la.Spec.Project != project || envScoped(la.Labels) {
 			continue
 		}
 		f.Addons = append(f.Addons, exportAddon(project, la))
