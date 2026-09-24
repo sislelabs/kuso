@@ -122,6 +122,11 @@ const (
 	// hold reason (see promotion_group.go). Presence also signals "my
 	// Job succeeded, awaiting the wave" to sibling builds' verdicts.
 	annPromoteHold = "kuso.sislelabs.com/promote-hold"
+	// annPromoteHoldSince is the RFC3339 timestamp of when the hold
+	// first went on. The gate expires a hold that outlives
+	// promoteHoldMaxAge so an unrecoverable sibling can't strand a
+	// green build forever (see promotion_group.go).
+	annPromoteHoldSince = "kuso.sislelabs.com/promote-hold-since"
 	// annClassification carries the JSON-encoded failures.Classification
 	// (kind + tab + summary + actionable Remediation) for a failed build,
 	// so the Deployments tab can surface the fix when the user opens the
@@ -2302,7 +2307,12 @@ func terminatedFromState(cs corev1.ContainerStatus) string {
 	}
 	switch t.Reason {
 	case "OOMKilled":
-		return fmt.Sprintf("OOMKilled — build hit memory limit (exit %d). Increase Settings → Builds → memory limit, or reduce build footprint.", t.ExitCode)
+		// Settings → Build raises the limit on THIS container only. For
+		// dockerfile/nixpacks/static that container is a thin buildctl
+		// client and the compile runs in the shared BuildKit daemon, so
+		// the heap cap belongs in the Dockerfile (NODE_OPTIONS et al) —
+		// keep this consistent with the failures.KindBuildOOM text.
+		return fmt.Sprintf("OOMKilled — build container hit its memory limit (exit %d). Cap the toolchain's heap in your Dockerfile (e.g. ENV NODE_OPTIONS=--max-old-space-size=3072); Settings → Build only raises the limit for buildpacks builds.", t.ExitCode)
 	case "Error":
 		// Bare "Error" is a non-zero exit; format with code so users
 		// can map 137 → SIGKILL, 143 → SIGTERM, 1 → app error, etc.
@@ -2470,6 +2480,12 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		if hold := promotionHoldVerdict(b, all); hold != "" {
 			if newer := newerBuildOf(b, all); newer != "" {
 				return p.stampHeldSuperseded(ctx, ns, b, newer)
+			}
+			// A hold older than promoteHoldMaxAge means the wave has
+			// stopped making progress (a permanently-failed sibling
+			// nobody retried). Give up rather than wait forever.
+			if holdExpired(b, time.Now()) {
+				return p.stampHoldExpired(ctx, ns, b, hold)
 			}
 			p.notePromotionHold(ctx, ns, b, hold)
 			return nil // stays active; re-checked next tick

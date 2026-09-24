@@ -88,7 +88,7 @@ const COPY: Record<FailureKind, CopyPair> = {
   },
   build_oom: {
     headline: "The build ran out of memory.",
-    body: "This is the BUILD pod, not your app. Raise the build memory limit in instance settings, or reduce build parallelism.",
+    body: "This is the build toolchain, not your app. Cap the heap in your Dockerfile with ENV NODE_OPTIONS=--max-old-space-size=3072 — Node sizes itself from the host's RAM, not the container limit.",
   },
   registry_auth: {
     headline: "Registry denied the pull or push.",

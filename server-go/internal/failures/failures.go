@@ -417,13 +417,16 @@ var logDetectors = []logDetector{
 		buildTime: true,
 		re:        regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|out of memory.{0,20}(?:build|compil)`),
 		summarize: func(line string) string {
-			return "The build ran out of memory. Raise the build memory limit in Settings → Build."
+			return "The build ran out of memory. Cap the toolchain's heap in your Dockerfile (NODE_OPTIONS)."
 		},
 		remediate: func(line string, tail []string) *Remediation {
 			return &Remediation{
-				Title:      "Increase the build memory limit",
-				Detail:     "The build step was killed for exceeding its memory budget (common for large Next.js / webpack builds). Raise the build memory in Settings → Build. For Node builds you can also cap the heap with NODE_OPTIONS.",
-				Fix:        "ENV NODE_OPTIONS=--max-old-space-size=4096",
+				Title: "Cap the build toolchain's memory",
+				// Fix is a Dockerfile ENV because NODE_OPTIONS is on the
+				// reserved list (buildenv.go) and is stripped from build
+				// env before it reaches the build.
+				Detail:     "The build step was killed for exceeding available memory (common for large Next.js / webpack builds). Node sizes its heap and worker count from the host's total RAM and core count, not the container's limit, so it must be capped explicitly in the Dockerfile. Note that for the dockerfile, nixpacks and static strategies the compile runs in the shared BuildKit daemon — raising the per-build memory limit in Settings → Build does not affect it. That limit applies only to strategy=buildpacks.",
+				Fix:        "ENV NODE_OPTIONS=--max-old-space-size=3072",
 				FixLang:    "dockerfile",
 				DocsAnchor: "build/resources",
 			}
