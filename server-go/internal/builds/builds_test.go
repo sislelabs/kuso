@@ -1006,6 +1006,8 @@ type fakeReleaseRunner struct {
 	outcome  releaserun.Outcome
 	calls    int
 	infraErr error // non-nil = simulate an apiserver/infra error, not a hook exit
+	message  string
+	logTail  string
 }
 
 func (f *fakeReleaseRunner) Run(_ context.Context, _ string, _ *kube.KusoEnvironment, _ *kube.KusoImage) (releaserun.Result, error) {
@@ -1013,7 +1015,7 @@ func (f *fakeReleaseRunner) Run(_ context.Context, _ string, _ *kube.KusoEnviron
 	if f.infraErr != nil {
 		return releaserun.Result{}, f.infraErr
 	}
-	return releaserun.Result{Outcome: f.outcome, JobName: "rel-job"}, nil
+	return releaserun.Result{Outcome: f.outcome, JobName: "rel-job", Message: f.message, LogTail: f.logTail}, nil
 }
 
 // seedEnvWithRelease seeds a production env that carries a release command,

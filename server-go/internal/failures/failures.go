@@ -58,6 +58,10 @@ const (
 	// FAILED and suppresses the @here page. Detected from the clone git
 	// fatal; distinct from KindRegistryAuth (a genuine credential problem).
 	KindCloneRefMissing Kind = "clone_ref_missing"
+	// KindReleaseFailed is the pre-deploy release hook (migrations) exiting
+	// non-zero against the new image. The image built fine and was NOT
+	// promoted; the hook's own log tail is the cause.
+	KindReleaseFailed Kind = "release_failed"
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -182,6 +186,30 @@ func Classify(logLines []string, sig Signal) Classification {
 		Tab:     TabLogs,
 		Summary: "Deploy failed. See logs for details.",
 	}
+}
+
+// ClassifyRelease classifies a failed release hook from its pod log tail.
+// A recognised runtime cause (missing env, OOM, …) wins; otherwise it is
+// KindReleaseFailed with the last log line as the hint, since a migration
+// tool usually prints its reason last.
+func ClassifyRelease(logLines []string) Classification {
+	if c := Classify(logLines, Signal{}); c.Kind != KindGeneric {
+		return c
+	}
+	c := Classification{
+		Kind:    KindReleaseFailed,
+		Tab:     TabLogs,
+		Summary: "Release hook failed; the new image was not promoted and the previous version keeps running.",
+		Remediation: &Remediation{
+			Title:  "Fix the release command, then push again",
+			Detail: "The release hook (usually migrations) ran against the new image and exited non-zero. Fix the cause in the log lines, or the release command in the service settings, and push; kuso retries the hook with the next build.",
+		},
+	}
+	if n := len(logLines); n > 0 {
+		c.LineHint = truncateLine(logLines[n-1])
+		c.LineNum = n
+	}
+	return c
 }
 
 // matchDetectors tries every detector whose buildTime flag equals

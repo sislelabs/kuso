@@ -2,10 +2,13 @@ package builds
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/releaserun"
 
@@ -130,5 +133,68 @@ func TestPoller_ReleaseHookExitStillMarksReleaseFailed(t *testing.T) {
 	}
 	if ph := buildPhase(got); ph != "release-failed" {
 		t.Errorf("build phase = %q, want release-failed", ph)
+	}
+}
+
+// F10: a release-failed build's reason was the Job condition boilerplate
+// ("Job has reached the specified backoff limit") and it carried no
+// classification, so `kuso build why` had nothing to say. The release pod's
+// log tail is the actual reason. The ANSI escape guards the patch encoding:
+// %q renders it as \x1b, which is not valid JSON, and the whole patch (phase
+// included) would be rejected.
+func TestPoller_ReleaseFailedCarriesLogTail(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-fff", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-api",
+			Ref:     "fff",
+			Image:   &kube.KusoImage{Repository: "registry/alpha/api", Tag: "fff"},
+		},
+	}
+	s := fakeService(t,
+		seedBuild(build),
+		seedService("alpha", "api"),
+		seedEnvWithRelease("alpha", "api", []string{"sh", "-c", "migrate up"}),
+	)
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-fff", Namespace: "kuso"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	const lastLine = "migrate: MIGRATE_FAIL=1 — failing on purpose"
+	rr := &fakeReleaseRunner{
+		outcome: releaserun.OutcomeFailed,
+		message: "Job has reached the specified backoff limit",
+		logTail: "\x1b[32mconnecting\x1b[0m\n" + lastLine,
+	}
+	p := &Poller{Svc: s, Interval: time.Hour, ReleaseRunner: rr}
+	if err := p.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	drainPromotions(t, p)
+
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-fff")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "release-failed" {
+		t.Fatalf("build phase = %q, want release-failed", ph)
+	}
+	msg := got.Annotations[annMessage]
+	if !strings.Contains(msg, lastLine) {
+		t.Errorf("build message = %q, want the release log tail", msg)
+	}
+	var c failures.Classification
+	if err := json.Unmarshal([]byte(got.Annotations[annClassification]), &c); err != nil {
+		t.Fatalf("classification annotation: %v (raw %q)", err, got.Annotations[annClassification])
+	}
+	if c.Kind != failures.KindReleaseFailed || c.LineHint != lastLine {
+		t.Errorf("classification = %+v, want kind %s with the last log line as hint", c, failures.KindReleaseFailed)
 	}
 }

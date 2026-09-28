@@ -100,6 +100,7 @@ func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason st
 		Patch(ctx, buildName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
 		return fmt.Errorf("patch build cancelled: %w", perr)
 	}
+	s.deleteCloneTokenSecret(ns, buildName)
 	bg := metav1.DeletePropagationBackground
 	if jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, buildName, metav1.DeleteOptions{
 		PropagationPolicy: &bg,

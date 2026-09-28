@@ -567,6 +567,10 @@ func (s *Service) giveUp(ctx context.Context, u *unstructured.Unstructured, atte
 		if s.Logger != nil {
 			s.Logger.Warn("buildcontroller: stamp give-up failure state", "build", u.GetName(), "err", err)
 		}
+		return
+	}
+	if err := builds.DeleteCloneTokenSecret(pctx, s.Kube, u.GetNamespace(), u.GetName()); err != nil && s.Logger != nil {
+		s.Logger.Warn("buildcontroller: delete clone-token secret", "build", u.GetName(), "err", err)
 	}
 }
 

@@ -353,6 +353,7 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 			slog.Default().Warn("builds: patch superseded", "err", perr, "build", name)
 			continue
 		}
+		s.deleteCloneTokenSecret(ns, name)
 		bg := metav1.DeletePropagationBackground
 		if jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Delete(lctx, name, metav1.DeleteOptions{
 			PropagationPolicy: &bg,

@@ -2654,7 +2654,6 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 					p.logger().Warn("persist ref-missing classification", "build", b.Name, "err", pErr)
 				}
 			}
-			p.deleteCloneTokenSecret(ns, b.Name)
 			p.logger().Info("build cancelled: clone ref no longer exists",
 				"build", b.Name, "branch", b.Spec.Branch, "project", b.Spec.Project)
 			return nil
@@ -2771,22 +2770,50 @@ func (p *Poller) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// deleteCloneTokenSecret removes the per-build <name>-token Secret
-// once the build is terminal. Best-effort + bounded: detaches from
-// the caller's context (which may be about to return) so a slow
-// apiserver doesn't block the build-marker patch; logs and swallows
-// every error since the Job TTL is a fallback cleaner that still
-// runs.
+// CloneTokenSecretName is the per-build Secret carrying the GitHub
+// installation token the clone step uses (created by Create).
+func CloneTokenSecretName(buildName string) string { return buildName + "-token" }
+
+// DeleteCloneTokenSecret removes a build's clone-token Secret. Every
+// terminal transition calls it (directly or via the Poller/Service
+// wrappers): the Secret holds a live installation token that any pod with
+// secrets:get in the namespace can read until the Job TTL reaps it, and
+// the TTL never runs for a build whose Job was never created. NotFound is
+// success.
+func DeleteCloneTokenSecret(ctx context.Context, k *kube.Client, ns, buildName string) error {
+	if k == nil || k.Clientset == nil {
+		return nil
+	}
+	err := k.Clientset.CoreV1().Secrets(ns).Delete(ctx, CloneTokenSecretName(buildName), metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete clone-token secret %s/%s: %w", ns, CloneTokenSecretName(buildName), err)
+	}
+	return nil
+}
+
+// deleteCloneTokenSecret is DeleteCloneTokenSecret for Service-side
+// terminal paths (cancel, supersede): bounded, logged, never fails the
+// caller.
+func (s *Service) deleteCloneTokenSecret(ns, buildName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := DeleteCloneTokenSecret(ctx, s.Kube, ns, buildName); err != nil {
+		slog.Default().Warn("builds: delete clone-token secret", "build", buildName, "err", err)
+	}
+}
+
+// deleteCloneTokenSecret removes the per-build token Secret once the
+// build is terminal. Detaches from the caller's context (which may be
+// about to return) so a slow apiserver doesn't block the build-marker
+// patch; errors are logged and swallowed.
 func (p *Poller) deleteCloneTokenSecret(ns, buildName string) {
-	if p.Svc == nil || p.Svc.Kube == nil || p.Svc.Kube.Clientset == nil {
+	if p.Svc == nil {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		name := buildName + "-token"
-		err := p.Svc.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
-		if err != nil && !apierrors.IsNotFound(err) {
+		if err := DeleteCloneTokenSecret(ctx, p.Svc.Kube, ns, buildName); err != nil {
 			p.logger().Warn("delete clone-token secret", "build", buildName, "ns", ns, "err", err)
 		}
 	}()
@@ -3463,23 +3490,48 @@ func (p *Poller) markReleaseFailedWithSnapshot(ctx context.Context, ns string, b
 // patched).
 func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoBuild, e *kube.KusoEnvironment, res releaserun.Result) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	msg := res.Message
+	// The release pod's log tail says why the hook failed; the Job
+	// condition message is k8s boilerplate ("backoff limit"), so it is
+	// only the fallback.
+	msg := res.LogTail
+	if msg == "" {
+		msg = res.Message
+	}
 	if msg == "" {
 		msg = string(res.Outcome)
 	}
+	annotations := map[string]string{
+		annPhase:                         "release-failed",
+		annCompletedAt:                   now,
+		annMessage:                       msg,
+		"kuso.sislelabs.com/release-job": res.JobName,
+	}
+	if res.LogTail != "" {
+		if cj, err := json.Marshal(failures.ClassifyRelease(strings.Split(res.LogTail, "\n"))); err == nil {
+			annotations[annClassification] = string(cj)
+		}
+	}
 	// Stamp the build with the failure so the UI's deployments tab can
 	// render "Release failed" + a deep-link to the Job logs without
-	// inferring it from the env CR.
-	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"release-failed",%q:%q,%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
-		annPhase,
-		annCompletedAt, now,
-		annMessage, msg,
-		"kuso.sislelabs.com/release-job", res.JobName,
-	)
+	// inferring it from the env CR. json.Marshal, not %q: log output
+	// carries control bytes (ANSI colour) that %q renders as \x1b, which
+	// is invalid JSON and would reject the whole patch, phase included.
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": annotations,
+			"labels":      map[string]string{"kuso.sislelabs.com/build-state": "done"},
+		},
+		"spec": map[string]any{"done": true},
+	})
+	if err != nil {
+		p.logger().Warn("mark release-failed: encode patch", "err", err, "build", b.Name)
+		return
+	}
 	if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{}); perr != nil {
 		p.logger().Warn("mark release-failed: patch build", "err", perr, "build", b.Name)
+	} else {
+		p.deleteCloneTokenSecret(ns, b.Name)
 	}
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")

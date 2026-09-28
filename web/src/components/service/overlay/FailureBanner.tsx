@@ -27,7 +27,8 @@ export type FailureKind =
   | "dockerfile_not_found"
   | "build_oom"
   | "registry_auth"
-  | "clone_ref_missing";
+  | "clone_ref_missing"
+  | "release_failed";
 
 interface CopyPair {
   // headline reads as the bold first line ("Build crashed: missing env
@@ -97,6 +98,10 @@ const COPY: Record<FailureKind, CopyPair> = {
   clone_ref_missing: {
     headline: "The git ref no longer exists.",
     body: "The branch or commit was deleted or force-pushed away. Pick an existing branch and redeploy.",
+  },
+  release_failed: {
+    headline: "Release hook failed; the new image was not promoted.",
+    body: "The previous version keeps running. The hook's last log line is below — fix it and push again.",
   },
   generic: {
     headline: "Deploy failed.",

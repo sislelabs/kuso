@@ -57,8 +57,8 @@ var buildWhyCmd = &cobra.Command{
 	Short: "Explain why a build failed (classified failure + remediation)",
 	Long: `Fetch a service's builds and explain a failed one: a classified summary
 plus the suggested remediation, including a copy-pasteable fix. With no
-buildId it picks the most recent failed build; pass a buildId to explain
-a specific one.`,
+buildId it picks the most recent failed or release-failed build; pass a
+buildId to explain a specific one.`,
 	Example: `  kuso build why analiz api
   kuso build why analiz api build-abc123`,
 	Args: cobra.RangeArgs(2, 3),
@@ -125,6 +125,14 @@ a specific one.`,
 					fmt.Printf("  %s\n", fc.LineHint)
 				}
 			}
+			// A release-failed build's message is the release pod's log
+			// tail; the hint above is only its last line.
+			if target.Status == "release-failed" && target.ErrorMessage != "" {
+				fmt.Println("\nrelease log (tail):")
+				for _, line := range splitLines([]byte(target.ErrorMessage)) {
+					fmt.Printf("  %s\n", line)
+				}
+			}
 			r := fc.Remediation
 			if r.Title != "" || r.Detail != "" || r.Fix != "" {
 				fmt.Println()
@@ -161,10 +169,11 @@ a specific one.`,
 	},
 }
 
-// isFailedStatus reports whether a build status is a terminal failure.
-// Mirrors the set the build poller treats as failed (failed/error).
+// isFailedStatus reports whether a build status is a terminal failure:
+// the build itself failed, or it built but its release hook (migrations)
+// failed and the image was never promoted.
 func isFailedStatus(s string) bool {
-	return s == "failed" || s == "error"
+	return s == "failed" || s == "error" || s == "release-failed"
 }
 
 func init() {
