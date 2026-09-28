@@ -84,18 +84,23 @@ func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespac
 	return &Cloner{Kube: k, Addons: addonSvc, Namespace: namespace, Logger: logger, BaseCtx: ctx}
 }
 
-// EnsurePRAddons creates per-PR clones for every postgres addon in
-// the project + kicks off seed Jobs. Returns the list of clone
-// connection-secret names, which callers swap into envFromSecrets.
+// EnsurePRAddons creates per-PR clones for every postgres and redis addon
+// in the project + kicks off seed Jobs for the postgres ones. Returns the
+// list of clone connection-secret names, which callers swap into
+// envFromSecrets.
+//
+// Redis clones start empty. Sharing production redis let PR code read and
+// write production sessions, caches and queues; an empty cache is the
+// normal state for a fresh preview. s3 stays shared: preview DBs are seeded
+// from production and reference its objects, which an empty bucket lacks.
 //
 // Idempotent: re-running for the same PR finds the existing clones
 // and re-issues seed Jobs (so the reviewer can resync data).
 func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error) {
-	// Preview behavior, unchanged: postgres-only, seeded from the project's
-	// source postgres addon, with the preview-specific source-tracking labels.
-	// Everything below is the env-scope-keyed core (EnsureEnvAddonsMapped).
+	// Postgres clones seed from the project's source addon; everything
+	// below is the env-scope-keyed core (EnsureEnvAddonsMapped).
 	return c.EnsureEnvAddonsMapped(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
-		Kinds:   []string{"postgres"},
+		Kinds:   []string{"postgres", "redis"},
 		SeedAll: true,
 		// Keep the historical clone name "<base>-pr-N" (DeletePRAddons + the
 		// canvas's -pr-N regex depend on it), even though the env-label scope
@@ -428,7 +433,7 @@ func isPRClone(a *kube.KusoAddon, prLabel, suffix string) bool {
 	return false
 }
 
-// DeletePRAddons removes the postgres clones this project minted for PR
+// DeletePRAddons removes the addon clones this project minted for PR
 // <N>. Selection is by the kuso.sislelabs.com/preview-pr ownership label
 // (with a legacy name-suffix fallback gated on the env label) — NEVER by
 // the name suffix alone, or a real addon named e.g. "events-pr-2" would

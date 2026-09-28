@@ -558,6 +558,12 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				if svcPreviewsDisabled(&services.Items[i]) {
 					continue
 				}
+				// Env-group clones (api-qa, …) are the app for a named env
+				// and mount that env's addons; a PR previews the production
+				// service only.
+				if isEnvGroupCloneService(&services.Items[i]) {
+					continue
+				}
 				if err := d.ensurePreviewEnv(ctx, &proj, services.Items[i].GetName(), pr, baseEnv); err != nil {
 					d.Logger.Warn("ensure preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 					continue
@@ -671,6 +677,15 @@ func svcPreviewsDisabled(u *unstructured.Unstructured) bool {
 		return false
 	}
 	return disabled
+}
+
+// isEnvGroupCloneService reports whether u is a KusoService cloned into a
+// non-production env group (`kuso env-group create`). CreateEnvGroup stamps
+// kuso.sislelabs.com/env=<group> on those; production services carry no env
+// label or env=production.
+func isEnvGroupCloneService(u *unstructured.Unstructured) bool {
+	env := u.GetLabels()[kube.LabelEnv]
+	return env != "" && env != "production"
 }
 
 // serviceEffectiveRepo returns a service's effective repo URL + default
@@ -857,14 +872,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if subs := previewSubscribedAddons(ctx, d, ns, serviceFQN); subs != nil {
 		envFromSecrets = filterConnsBySubscription(envFromSecrets, subs, projectAddonConns, proj.Name)
 	}
-	// Per-PR clones of every postgres addon. The clone's conn
-	// secrets REPLACE the source's so the preview pod talks to the
-	// fresh DB instead of production. A clone failure refuses the
-	// preview (see below) rather than falling back to the source. Non-
-	// postgres addons (Redis etc.) keep the source secret regardless;
-	// cloning Redis state is rarely useful. The clone only survives the
-	// swap when db-conn survived the subscription filter above, so a
-	// frontend preview (no db subscription) correctly gets no clone conn.
+	// Per-PR clones of every postgres and redis addon (see
+	// previewdb.EnsurePRAddons). The clone's conn secrets REPLACE the
+	// source's so the preview pod talks to its own datastores instead of
+	// production. A clone failure refuses the preview (see below) rather
+	// than falling back to the source. Other kinds (s3, nats, …) keep the
+	// source secret. The clone only survives the swap when the source
+	// conn survived the subscription filter above, so a frontend preview
+	// (no db subscription) correctly gets no clone conn.
 	// pgCloneByOrigin maps source addon-conn → per-PR clone-conn; captured
 	// here so the SAME swap applies to envVars' secretKeyRefs below
 	// (DATABASE_READ_URL etc.), not just the envFromSecrets list.
@@ -987,6 +1002,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// shared defaults). dedupe handles the project-shared name
 	// appearing in both lists.
 	envFromSecrets = dedupePreserveOrder(append(baseEnvFromSecrets, envFromSecrets...))
+	// baseEnvFromSecrets is the base env's list verbatim, so it still names
+	// the SOURCE addon conns. The shared mounts appended above are for
+	// legacy mount-all (nil sharedEnvKeys); a per-key subscription reaches
+	// the pod as the secretKeyRefs inherited from the base env, exactly as
+	// production, so the scrub removes the blanket mounts in that case.
+	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
 	// Merge in previewEnvVars: by name, preview overrides win over
 	// the baseEnv copy. Empty list = no overrides (most common).
 	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
@@ -1173,7 +1194,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// secrets the reviewer set on the preview survive a resync
 		// (the shared <project>-<service>-secrets is no longer
 		// auto-attached to previews; see attachToAllEnvs).
-		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
+		//
+		// The carried list is scrubbed like a fresh one: a preview created
+		// before a mount fix (or before a new addon clone) would otherwise
+		// keep mounting production conns on every resync.
+		scrub := func(in []string) []string {
+			return scrubPreviewEnvFrom(in, proj.Name, projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+		}
+		envFromSecrets = scrub(existing.Spec.EnvFromSecrets)
 		env.Spec.EnvFromSecrets = envFromSecrets
 		// RMW under optimistic concurrency: replace the spec wholesale on
 		// the freshly-fetched CR so a concurrent write (operator status
@@ -1184,7 +1212,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		desiredSpec := env.Spec
 		if _, err := d.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(cur *kube.KusoEnvironment) error {
 			spec := desiredSpec
-			spec.EnvFromSecrets = append([]string(nil), cur.Spec.EnvFromSecrets...)
+			spec.EnvFromSecrets = scrub(cur.Spec.EnvFromSecrets)
 			cur.Spec = spec
 			return nil
 		}); err != nil {
@@ -1482,6 +1510,37 @@ func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonCon
 		}
 	}
 	return out
+}
+
+// scrubPreviewEnvFrom enforces a preview env's mount isolation on an
+// envFromSecrets list from any source: a fresh build, the base env's copy,
+// or the existing preview CR carried across a resync.
+//   - Project addon conns the service doesn't subscribe to are dropped, and
+//     so are clones of them.
+//   - A source addon conn that has a per-PR clone is REPLACED by the clone,
+//     never mounted next to it. envFrom is last-wins per key, so a key only
+//     the source carries (POOLER_URL, DIRECT_URL) would reach the preview.
+//   - With a per-key sharedEnvKeys subscription (non-nil) the blanket shared
+//     mounts go; the subscribed keys arrive as per-key secretKeyRefs.
+func scrubPreviewEnvFrom(in []string, project string, projectAddonConns, subscribedAddons []string, cloneByOrigin map[string]string, sharedEnvKeys []string) []string {
+	out := append([]string(nil), in...)
+	if subscribedAddons != nil {
+		kept := filterConnsBySubscription(projectAddonConns, subscribedAddons, projectAddonConns, project)
+		unsubscribedClone := map[string]bool{}
+		for origin, clone := range cloneByOrigin {
+			if slices.Contains(projectAddonConns, origin) && !slices.Contains(kept, origin) {
+				unsubscribedClone[clone] = true
+			}
+		}
+		out = filterConnsBySubscription(out, subscribedAddons, projectAddonConns, project)
+		out = slices.DeleteFunc(out, func(s string) bool { return unsubscribedClone[s] })
+	}
+	out = swapPGCloneSecrets(out, cloneByOrigin)
+	if sharedEnvKeys != nil {
+		shared := kube.SharedSecretNames(project)
+		out = slices.DeleteFunc(out, func(s string) bool { return slices.Contains(shared, s) })
+	}
+	return dedupePreserveOrder(out)
 }
 
 // swapPGCloneSecrets replaces every "<source>-conn" entry whose

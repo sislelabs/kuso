@@ -76,3 +76,44 @@ func TestEnsureEnvAddonsMapped_KeysByCurrentSourceNotCloneName(t *testing.T) {
 		t.Fatalf("pairs = %v, want %v", pairs, want)
 	}
 }
+
+// F8c: a preview's redis is per-PR too. Sharing production redis let PR
+// code read prod sessions/queues and write into them (queue jobs, cache
+// poisoning). Redis clones start empty; no seed is attempted.
+func TestEnsurePRAddons_ClonesRedis(t *testing.T) {
+	c, _ := newTestCloner(t, "alpha", addonCR("alpha", "cache", "redis"))
+	c.Namespace = "kuso"
+
+	_, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9)
+	if err != nil {
+		t.Fatalf("EnsurePRAddons: %v", err)
+	}
+	want := map[string]string{"alpha-cache-conn": "alpha-cache-pr-9-conn"}
+	if !reflect.DeepEqual(pairs, want) {
+		t.Fatalf("pairs = %v, want %v", pairs, want)
+	}
+	clone, err := c.Kube.GetKusoAddon(context.Background(), "kuso", "alpha-cache-pr-9")
+	if err != nil {
+		t.Fatalf("redis clone CR: %v", err)
+	}
+	if clone.Labels[previewPRLabel] != "9" {
+		t.Errorf("redis clone lacks preview-pr label (DeletePRAddons would leak it): %v", clone.Labels)
+	}
+	if _, pending := clone.Annotations[seedPendingAnnotation]; pending {
+		t.Errorf("redis clone marked seed-pending; only postgres is seeded")
+	}
+}
+
+// Projects without redis (or with only non-cloned kinds) still preview.
+func TestEnsurePRAddons_NoCloneableAddons(t *testing.T) {
+	c, _ := newTestCloner(t, "alpha", addonCR("alpha", "files", "s3"))
+	c.Namespace = "kuso"
+
+	conns, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9)
+	if err != nil {
+		t.Fatalf("EnsurePRAddons: %v", err)
+	}
+	if len(conns) != 0 || len(pairs) != 0 {
+		t.Fatalf("s3-only project cloned something: conns=%v pairs=%v", conns, pairs)
+	}
+}
