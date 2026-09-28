@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -263,5 +265,21 @@ func TestDeleteProject_PurgeInHomeNamespaceLeavesSiblingsAlone(t *testing.T) {
 	}
 	if f.secretExists(t, "kuso", "e2e-db-conn") {
 		t.Error("conn Secret survived purge")
+	}
+}
+
+// A delete that removed the project but couldn't remove one leftover (live:
+// RBAC forbade deleting the namespace) must be distinguishable from a
+// failed delete: the handler still has to run its DB cleanup — stale
+// project grants would otherwise re-attach to a project reborn under the
+// same name — and report the leftover as a warning, not a bare 500.
+func TestDeleteProject_LeftoversAreDistinguishable(t *testing.T) {
+	f := newDeleteNSFixture(t, e2eNS, kusoCreatedNS(e2eNS))
+	f.cs.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, e2eNS, nil)
+	})
+	err := f.s.DeleteWithOptions(context.Background(), "e2e", DeleteProjectOptions{PurgeData: true})
+	if !errors.Is(err, ErrCleanupOrphans) {
+		t.Fatalf("err = %v, want ErrCleanupOrphans", err)
 	}
 }

@@ -198,13 +198,29 @@ with SASL auth failures.`,
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete: %w", err)
 		}
-		suffix := ""
-		if projectDeletePurgeData {
-			suffix = " (PVCs purged)"
-		}
-		fmt.Printf("project %s deleted%s\n", args[0], suffix)
+		fmt.Print(projectDeletedMsg(args[0], projectDeletePurgeData, resp.Body()))
 		return nil
 	},
+}
+
+// projectDeletedMsg renders the delete result. A 200 body carries
+// warnings when the project was deleted but a cleanup step left
+// something behind (e.g. RBAC forbade deleting its namespace).
+func projectDeletedMsg(name string, purged bool, body []byte) string {
+	suffix := ""
+	if purged {
+		suffix = " (PVCs purged)"
+	}
+	out := fmt.Sprintf("project %s deleted%s\n", name, suffix)
+	var res struct {
+		Warnings []string `json:"warnings"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &res) == nil {
+		for _, w := range res.Warnings {
+			out += "WARNING: " + w + "\n"
+		}
+	}
+	return out
 }
 
 // ---------------- project describe ----------------

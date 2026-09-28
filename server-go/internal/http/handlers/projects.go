@@ -779,9 +779,17 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	opts := projects.DeleteProjectOptions{
 		PurgeData: r.URL.Query().Get("purgeData") == "true",
 	}
+	// A delete that left leftovers still deleted the project: fall
+	// through so the DB cleanup below runs (a stale grant would re-attach
+	// to a project reborn under this name) and report them as warnings.
+	var warnings []string
 	if err := h.Svc.DeleteWithOptions(ctx, project, opts); err != nil {
-		h.fail(w, "delete project", err)
-		return
+		if !errors.Is(err, projects.ErrCleanupOrphans) {
+			h.fail(w, "delete project", err)
+			return
+		}
+		h.Logger.Warn("delete project: deleted with leftovers", "project", project, "err", err)
+		warnings = append(warnings, err.Error())
 	}
 	// DB state scoped to the project dies with it. Grants especially:
 	// a stale ProjectGrant row resurrects its holder as project-admin
@@ -823,6 +831,10 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			Resource: "kusoproject",
 			Message:  msg,
 		})
+	}
+	if len(warnings) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"warnings": warnings})
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

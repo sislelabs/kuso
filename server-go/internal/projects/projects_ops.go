@@ -726,7 +726,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	// best-effort cleanup failures so the orphans are visible instead of
 	// hiding behind a false success.
 	if len(cleanupErrs) > 0 {
-		return fmt.Errorf("project %s deleted, but cleanup left orphans: %w", name, errors.Join(cleanupErrs...))
+		return fmt.Errorf("%w: project %s deleted, but cleanup left orphans: %w", ErrCleanupOrphans, name, errors.Join(cleanupErrs...))
 	}
 	return nil
 }

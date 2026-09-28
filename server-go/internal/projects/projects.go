@@ -403,6 +403,9 @@ func labelSelector(pairs map[string]string) string {
 // to 404 / 409 / 400 respectively.
 var (
 	ErrNotFound = errors.New("projects: not found")
+	// ErrCleanupOrphans: the delete itself succeeded but a cleanup step
+	// left something behind. Callers treat it as success with a warning.
+	ErrCleanupOrphans = errors.New("projects: deleted with leftovers")
 	ErrConflict = errors.New("projects: conflict")
 	ErrInvalid  = errors.New("projects: invalid")
 )
