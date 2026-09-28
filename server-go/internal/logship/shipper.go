@@ -167,6 +167,11 @@ type Shipper struct {
 	envHintsMu sync.Mutex
 	envHints   map[string]envHint
 
+	// Tap, when set, sees every line the DB buffer accepts (post rate
+	// cap), so external drains ship exactly what LogLine stores. Must
+	// not block: it runs on the per-container stream goroutine.
+	Tap LineTap
+
 	// runCtx is the lifecycle context set by Run. Detached out-of-band
 	// flushes (kicked from append() when the buffer exceeds the batch
 	// threshold) use this so they get cancelled on shutdown — the
@@ -200,6 +205,22 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 		return s.DB.LatestPodLogTs(ctx, project, service, pod, since)
 	}
 	return s
+}
+
+// TappedLine is a stored log line plus the metadata the LogLine row
+// doesn't carry: the kubelet emit time (LogLine.Ts is ingest time) and
+// the env identity. Pods carry no kuso.sislelabs.com/env label, so
+// EnvName comes from app.kubernetes.io/instance (the env CR name).
+type TappedLine struct {
+	db.LogLine
+	Emitted time.Time
+	EnvName string
+	EnvKind string
+}
+
+// LineTap receives lines as they are accepted for storage.
+type LineTap interface {
+	Tap(TappedLine)
 }
 
 // containerState is the shipping cursor for one container of one pod.
@@ -399,6 +420,11 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	project := pod.Labels["kuso.sislelabs.com/project"]
 	service := pod.Labels["kuso.sislelabs.com/service"]
 	env := pod.Labels["kuso.sislelabs.com/env"]
+	envName := env
+	if envName == "" {
+		envName = pod.Labels["app.kubernetes.io/instance"]
+	}
+	envKind := pod.Labels["kuso.sislelabs.com/env-kind"]
 
 	s.mu.Lock()
 	seeded, lastTs, nAtLast := st.seeded, st.lastTs, st.nAtLast
@@ -440,6 +466,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	skippedAtLast := 0
 	for scanner.Scan() {
 		ts, line, ok := splitTimestamp(scanner.Text())
+		emitted := ts
 		if ok {
 			if ts.Before(lastTs) {
 				continue
@@ -467,7 +494,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 			Ts: time.Now().UTC(), Pod: pod.Name,
 			Project: project, Service: service, Env: env,
 			Line: line,
-		})
+		}, emitted, envName, envKind)
 		// Pattern-match for missing-env-var crashes. Cheap regex
 		// per line; on hit we record the var name + log line so the
 		// UI can surface "your last crash mentioned $X — set it?"
@@ -650,9 +677,15 @@ func (s *Shipper) resetRateCounters(ctx context.Context) {
 	}
 }
 
-func (s *Shipper) append(l db.LogLine) {
+func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind string) {
 	if !s.allowLine(l.Project, l.Service) {
 		return
+	}
+	if s.Tap != nil {
+		if emitted.IsZero() {
+			emitted = l.Ts
+		}
+		s.Tap.Tap(TappedLine{LogLine: l, Emitted: emitted, EnvName: envName, EnvKind: envKind})
 	}
 	s.bufMu.Lock()
 	s.buf = append(s.buf, l)
