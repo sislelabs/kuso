@@ -25,25 +25,6 @@ var datastoreImages = map[string]string{
 	"vectorized/redpanda":          "redpanda",
 }
 
-// addonURLKey returns the conn-secret key that holds the canonical
-// connection URL for an addon kind — what a ${{ addon.KEY }} reference
-// must point at. Each kind's helm chart names this differently
-// (postgres→DATABASE_URL, redis→REDIS_URL, clickhouse→CLICKHOUSE_URL).
-func addonURLKey(kind string) string {
-	switch kind {
-	case "postgres":
-		return "DATABASE_URL"
-	case "redis":
-		return "REDIS_URL"
-	case "clickhouse":
-		return "CLICKHOUSE_URL"
-	case "redpanda":
-		return "REDPANDA_URL"
-	default:
-		return ""
-	}
-}
-
 // reservedDatastores are kinds that look like datastores but the kuso
 // addon chart doesn't implement yet. We detect them only to flag
 // them, never to create a (broken) addon.

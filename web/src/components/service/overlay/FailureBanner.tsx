@@ -28,7 +28,8 @@ export type FailureKind =
   | "build_oom"
   | "registry_auth"
   | "clone_ref_missing"
-  | "release_failed";
+  | "release_failed"
+  | "missing_capability";
 
 interface CopyPair {
   // headline reads as the bold first line ("Build crashed: missing env
@@ -102,6 +103,10 @@ const COPY: Record<FailureKind, CopyPair> = {
   release_failed: {
     headline: "Release hook failed; the new image was not promoted.",
     body: "The previous version keeps running. The hook's last log line is below — fix it and push again.",
+  },
+  missing_capability: {
+    headline: "The image needs Linux capabilities kuso drops by default.",
+    body: "Its startup changes file owners, switches user or binds a port below 1024. Check the logs for the failing call, then add the capabilities it needs with `kuso project service set <project> <service> --cap-add …`.",
   },
   generic: {
     headline: "Deploy failed.",

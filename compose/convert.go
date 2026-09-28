@@ -34,6 +34,17 @@ type Service struct {
 	Volumes   []Volume          `yaml:"volumes,omitempty"`
 	Image     *Image            `yaml:"image,omitempty"`
 	BuildArgs map[string]string `yaml:"buildArgs,omitempty"`
+	// SecurityContext mirrors spec.SecuritySpec; the server allowlists
+	// the capabilities it accepts.
+	SecurityContext *SecurityContext `yaml:"securityContext,omitempty"`
+}
+
+type SecurityContext struct {
+	Capabilities *Capabilities `yaml:"capabilities,omitempty"`
+}
+
+type Capabilities struct {
+	Add []string `yaml:"add,omitempty"`
 }
 
 type Domain struct {
@@ -69,12 +80,15 @@ type Addon struct {
 // compose gives no size hint (compose has no size concept).
 const defaultVolumeSizeGi = 5
 
-// addonRef is what depends_on env-rewriting needs to know about a
-// classified addon: its kuso slug and kind (the kind picks the conn-
-// secret URL key, which differs per datastore).
+// addonRef is what env rewriting needs to know about a classified
+// addon: its kuso slug, kind (picks the conn-secret key table), compose
+// service name (what app values point at) and the credentials its
+// compose env declared (role → literal).
 type addonRef struct {
-	slug string
-	kind string
+	slug        string
+	kind        string
+	composeName string
+	creds       map[string]string
 }
 
 // Convert turns a parsed compose project into a kuso.yaml Doc and a
@@ -100,7 +114,8 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	for _, name := range names {
 		svc := proj.Services[name]
 		if kind, _ := classifyDatastore(svc.Image); kind != "" {
-			addonByCompose[name] = addonRef{slug: slugFor[name], kind: kind}
+			addonByCompose[name] = addonRef{slug: slugFor[name], kind: kind, composeName: name,
+				creds: datastoreCreds(kind, svc.Environment)}
 		}
 	}
 
@@ -194,6 +209,7 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		if reserved := maybeReservedDatastore(svc.Image); reserved != "" {
 			rep.flag(svc.Name, "%q looks like a %s datastore, but kuso has no managed %s addon yet — kept as a plain image service (no conn-secret / backups)", svc.Image, reserved, reserved)
 		}
+		applyImageCapabilities(svc, &out, rep)
 	default:
 		out.Runtime = "dockerfile"
 		rep.flag(svc.Name, "no image and no build — set `repo:` + runtime for service `%s`", slug)
@@ -259,17 +275,31 @@ func convertEnv(svc types.ServiceConfig, addons map[string]addonRef, rep *Report
 		return nil
 	}
 	env := map[string]string{}
-	for k, vp := range svc.Environment {
+	ordered := sortedAddons(addons)
+	keys := make([]string, 0, len(svc.Environment))
+	for k := range svc.Environment {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		val := ""
-		if vp != nil {
+		if vp := svc.Environment[k]; vp != nil {
 			val = *vp
 		}
-		if rewritten, ref, ok := rewriteAddonRef(val, addons); ok {
-			env[k] = rewritten
-			rep.service(svc.Name, "env %s references addon `%s` → rewritten to %s", k, ref.slug, rewritten)
-			continue
+		ch := chooseAddonEnv(k, val, ordered)
+		switch {
+		case ch.ref != "" && ch.flag:
+			env[k] = ch.ref
+			rep.flag(svc.Name, "env %s references addon `%s` → %s (key %s): %s", k, ch.addon.slug, ch.ref, ch.key, ch.why)
+		case ch.ref != "":
+			env[k] = ch.ref
+			rep.service(svc.Name, "env %s references addon `%s` → %s (key %s: %s)", k, ch.addon.slug, ch.ref, ch.key, ch.why)
+		case ch.flag:
+			env[k] = val
+			rep.flag(svc.Name, "env %s looks like it points at addon `%s`: %s", k, ch.addon.slug, ch.why)
+		default:
+			env[k] = val
 		}
-		env[k] = val
 	}
 	return env
 }
@@ -312,32 +342,6 @@ func convertBuildArgs(svc types.ServiceConfig, rep *Report) map[string]string {
 	}
 	rep.service(svc.Name, "build.args → buildArgs (%d value(s))", len(out))
 	return out
-}
-
-// rewriteAddonRef rewrites a connection-string-ish env value that
-// points at a datastore service hostname into kuso's
-// ${{ addon.<URLKEY> }} reference form. The URL key is per kind
-// (postgres→DATABASE_URL, redis→REDIS_URL, …) so the resolved
-// secretKeyRef actually exists in the addon's conn-secret. It only
-// fires when the value's host segment exactly matches a known addon's
-// compose service name — a conservative match so unrelated values pass
-// through untouched.
-func rewriteAddonRef(val string, addons map[string]addonRef) (string, addonRef, bool) {
-	for composeName, ref := range addons {
-		key := addonURLKey(ref.kind)
-		if key == "" {
-			continue
-		}
-		// Match "scheme://…@<composeName>[:port]/…" or a bare host.
-		if strings.Contains(val, "@"+composeName+":") ||
-			strings.Contains(val, "@"+composeName+"/") ||
-			strings.Contains(val, "//"+composeName+":") ||
-			strings.Contains(val, "//"+composeName+"/") ||
-			val == composeName {
-			return "${{ " + ref.slug + "." + key + " }}", ref, true
-		}
-	}
-	return "", addonRef{}, false
 }
 
 func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {

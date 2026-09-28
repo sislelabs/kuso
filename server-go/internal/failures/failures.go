@@ -62,6 +62,10 @@ const (
 	// non-zero against the new image. The image built fine and was NOT
 	// promoted; the hook's own log tail is the cause.
 	KindReleaseFailed Kind = "release_failed"
+	// KindMissingCapability is a stock image failing at startup because
+	// kuso drops ALL Linux capabilities: it chowns a dir, switches user
+	// (setuid/setgroups via gosu/su-exec/setpriv) or binds a port < 1024.
+	KindMissingCapability Kind = "missing_capability"
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -150,7 +154,16 @@ type Signal struct {
 // logs also contain "Address already in use" from an earlier boot.
 func Classify(logLines []string, sig Signal) Classification {
 	// Pod-status signals first — these are unambiguous when present.
-	if c, ok := classifyFromSignal(sig); ok {
+	// Exception: CrashLoopBackOff only says "it keeps dying"; a log line
+	// naming a dropped capability is the actual cause, so it wins.
+	c, ok := classifyFromSignal(sig)
+	if ok && c.Kind != KindCrashLoop {
+		return c
+	}
+	if mc, found := classifyMissingCapability(logLines); found {
+		return mc
+	}
+	if ok {
 		return c
 	}
 	// Log-line regex matches second, in two phases.

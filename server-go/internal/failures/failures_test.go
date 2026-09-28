@@ -346,3 +346,144 @@ func containsAny(haystack, needle string) bool {
 	}
 	return false
 }
+
+func TestClassify_MissingCapability(t *testing.T) {
+	tests := []struct {
+		name     string
+		lines    []string
+		sig      Signal
+		wantCaps []string // every cap must appear as --cap-add X in Fix
+		denyCaps []string // none of these may appear
+	}{
+		{
+			"nginx chown (live repro)",
+			[]string{`2026/09/27 10:00:00 [emerg] 1#1: chown("/var/cache/nginx/client_temp", 101) failed (1: Operation not permitted)`,
+				`nginx: [emerg] chown("/var/cache/nginx/client_temp", 101) failed (1: Operation not permitted)`},
+			Signal{Reason: "Error", ExitCode: 1},
+			[]string{"CHOWN"}, []string{"SETUID", "NET_BIND_SERVICE"},
+		},
+		{
+			"coreutils chown",
+			[]string{"chown: changing ownership of '/data': Operation not permitted"},
+			Signal{},
+			[]string{"CHOWN"}, nil,
+		},
+		{
+			"nginx setgid",
+			[]string{`nginx: [emerg] setgid(101) failed (1: Operation not permitted)`},
+			Signal{},
+			[]string{"SETUID", "SETGID"}, []string{"CHOWN"},
+		},
+		{
+			"setpriv exit 127 (marketplace uptime-kuma)",
+			[]string{"setpriv: setgroups failed: Operation not permitted"},
+			Signal{Reason: "Error", ExitCode: 127},
+			[]string{"SETUID", "SETGID"}, nil,
+		},
+		{
+			"gosu switch user",
+			[]string{`error: failed switching to "redis": operation not permitted`},
+			Signal{},
+			[]string{"SETUID", "SETGID"}, nil,
+		},
+		{
+			"su-exec setgroups",
+			[]string{"su-exec: setgroups: Operation not permitted"},
+			Signal{},
+			[]string{"SETUID", "SETGID"}, nil,
+		},
+		{
+			"nginx bind :80",
+			[]string{`nginx: [emerg] bind() to 0.0.0.0:80 failed (13: Permission denied)`},
+			Signal{},
+			[]string{"NET_BIND_SERVICE"}, []string{"CHOWN", "SETUID"},
+		},
+		{
+			"node listen EACCES :443",
+			[]string{"Error: listen EACCES: permission denied 0.0.0.0:443"},
+			Signal{},
+			[]string{"NET_BIND_SERVICE"}, nil,
+		},
+		{
+			"apache bind :80",
+			[]string{"(13)Permission denied: AH00072: make_sock: could not bind to address [::]:80"},
+			Signal{},
+			[]string{"NET_BIND_SERVICE"}, nil,
+		},
+		{
+			// CrashLoopBackOff is the waiting reason when the terminated
+			// state is missing; the log still names the precise cause and
+			// must win over the generic crash_loop.
+			"crashloop signal still yields capability kind",
+			[]string{"chown: changing ownership of '/data': Operation not permitted"},
+			Signal{Reason: "CrashLoopBackOff"},
+			[]string{"CHOWN"}, nil,
+		},
+		{
+			"union of caps across the tail",
+			[]string{
+				"chown: changing ownership of '/data': Operation not permitted",
+				"setgroups: Operation not permitted",
+			},
+			Signal{},
+			[]string{"CHOWN", "SETUID", "SETGID"}, nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(tc.lines, tc.sig)
+			if got.Kind != KindMissingCapability {
+				t.Fatalf("Kind = %q, want %q", got.Kind, KindMissingCapability)
+			}
+			if got.Tab != TabLogs {
+				t.Errorf("Tab = %q, want logs", got.Tab)
+			}
+			if got.Summary != "The image needs Linux capabilities kuso drops by default." {
+				t.Errorf("Summary = %q", got.Summary)
+			}
+			if got.LineHint == "" {
+				t.Error("LineHint empty")
+			}
+			r := got.Remediation
+			if r == nil || r.Title == "" {
+				t.Fatalf("Remediation missing: %+v", r)
+			}
+			if !containsAny(r.Fix, "kuso project service set <project> <service>") {
+				t.Errorf("Fix = %q, want the service set command", r.Fix)
+			}
+			for _, c := range tc.wantCaps {
+				if !containsAny(r.Fix, "--cap-add "+c) {
+					t.Errorf("Fix = %q, missing --cap-add %s", r.Fix, c)
+				}
+			}
+			for _, c := range tc.denyCaps {
+				if containsAny(r.Fix, "--cap-add "+c) {
+					t.Errorf("Fix = %q, must not add %s", r.Fix, c)
+				}
+			}
+		})
+	}
+}
+
+func TestClassify_MissingCapability_NotOverbroad(t *testing.T) {
+	cases := [][]string{
+		// Plain file permission errors are not capability problems.
+		{"Error: EACCES: permission denied, open '/app/config.json'"},
+		// Binding an unprivileged port is not a NET_BIND_SERVICE problem.
+		{"Error: listen EACCES: permission denied 0.0.0.0:8080"},
+		// Build-step output (buildkit #N prefix) must not become a runtime
+		// capability fix.
+		{"#12 0.345 chown: changing ownership of '/app': Operation not permitted"},
+		// exit 127 alone is "command not found", not a capability issue.
+		{"sh: exec: line 1: ./start.sh: not found"},
+	}
+	for _, ls := range cases {
+		if got := Classify(ls, Signal{ExitCode: 127}); got.Kind == KindMissingCapability {
+			t.Errorf("%v misclassified as missing_capability", ls)
+		}
+	}
+	// A hard signal still beats a capability log line.
+	if got := Classify([]string{"setgroups: Operation not permitted"}, Signal{Reason: "OOMKilled"}); got.Kind != KindOOM {
+		t.Errorf("OOMKilled + cap line = %q, want oom", got.Kind)
+	}
+}
