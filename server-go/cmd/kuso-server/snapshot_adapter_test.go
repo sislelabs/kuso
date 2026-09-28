@@ -281,3 +281,13 @@ func runSnapshotScript(t *testing.T, script, psqlBody string) (string, string, e
 	got, _ := os.ReadFile(marker)
 	return string(out), string(got), err
 }
+
+// Finished snapshot Jobs (and their pods) had no TTL, so every deploy of a
+// snapshotBeforeDeploy service left one behind forever (live, e2e3).
+func TestBuildSnapshotJob_HasTTL(t *testing.T) {
+	t.Parallel()
+	job := buildSnapshotJob("kuso", "p-db-snapshot-1", "k", "p", "db", "t", "b", "")
+	if ttl := job.Spec.TTLSecondsAfterFinished; ttl == nil || *ttl <= 0 {
+		t.Fatalf("snapshot Job has no TTL (%v); finished Jobs pile up", ttl)
+	}
+}

@@ -163,6 +163,9 @@ echo "==> snapshot done (sha256=${SHA})"
 
 	one := int32(1)
 	zero := int32(0)
+	// Reap the Job and its pod an hour after it finishes, like seed Jobs;
+	// the snapshot itself lives in S3.
+	ttl := int32(3600)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -174,9 +177,10 @@ echo "==> snapshot done (sha256=${SHA})"
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &zero,
-			Completions:  &one,
-			Parallelism:  &one,
+			BackoffLimit:            &zero,
+			Completions:             &one,
+			Parallelism:             &one,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				// Project label puts the pod inside the project netpols so the
 				// addon's ingress admits it; public egress reaches S3.

@@ -766,6 +766,21 @@ func (s *Service) deleteProjectCRs(ctx context.Context, gvr schema.GroupVersionR
 // kuso only adopted (no NamespaceCreatedByKusoAnnotation) is never deleted,
 // and neither is the home namespace.
 func (s *Service) cleanupProjectNamespace(ctx context.Context, project, ns string, services []kube.KusoService, purge bool, fail func(kind, name string, err error)) {
+	// kuso-minted Jobs (snapshot, seed, restore) carry the project label
+	// and otherwise outlive the project until their TTL — or forever for
+	// Jobs created before they had one. The exact-match selector never
+	// touches a sibling project whose name extends this one.
+	bg := metav1.DeletePropagationBackground
+	jobs := s.Kube.Clientset.BatchV1().Jobs(ns)
+	if list, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: kube.LabelProject + "=" + project}); err != nil {
+		fail("JobList", kube.LabelProject+"="+project, err)
+	} else {
+		for i := range list.Items {
+			if err := jobs.Delete(ctx, list.Items[i].Name, metav1.DeleteOptions{PropagationPolicy: &bg}); err != nil && !apierrors.IsNotFound(err) {
+				fail("Job", list.Items[i].Name, err)
+			}
+		}
+	}
 	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
 	exclusive := ns != s.Namespace
 

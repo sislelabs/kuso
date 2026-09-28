@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -281,5 +282,30 @@ func TestDeleteProject_LeftoversAreDistinguishable(t *testing.T) {
 	err := f.s.DeleteWithOptions(context.Background(), "e2e", DeleteProjectOptions{PurgeData: true})
 	if !errors.Is(err, ErrCleanupOrphans) {
 		t.Fatalf("err = %v, want ErrCleanupOrphans", err)
+	}
+}
+
+// kuso-minted Jobs (snapshot, seed, restore) outlived their project until
+// their TTL — or forever, for ones created before a TTL existed.
+func TestDeleteProject_RemovesProjectJobs(t *testing.T) {
+	f := newDeleteNSFixture(t, "kuso", nil)
+	jobs := f.cs.BatchV1().Jobs("kuso")
+	mk := func(name, project string) {
+		if _, err := jobs.Create(context.Background(), &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/project": project},
+		}}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("e2e-db-snapshot-1", "e2e")
+	mk("e2e-api-db-snapshot-1", "e2e-api")
+	if err := f.s.DeleteWithOptions(context.Background(), "e2e", DeleteProjectOptions{PurgeData: true}); err != nil && !errors.Is(err, ErrCleanupOrphans) {
+		t.Fatalf("DeleteWithOptions: %v", err)
+	}
+	if _, err := jobs.Get(context.Background(), "e2e-db-snapshot-1", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("project Job survived the delete (err=%v)", err)
+	}
+	if _, err := jobs.Get(context.Background(), "e2e-api-db-snapshot-1", metav1.GetOptions{}); err != nil {
+		t.Errorf("sibling project's Job was deleted: %v", err)
 	}
 }

@@ -154,6 +154,7 @@ var sharedSecretSetCmd = &cobra.Command{
 		// the old value.
 		var body struct {
 			Rolled      int       `json:"rolled"`
+			Resynced    int       `json:"resynced"`
 			Subscribers *[]string `json:"subscribers"`
 		}
 		_ = json.Unmarshal(resp.Body(), &body)
@@ -161,7 +162,7 @@ var sharedSecretSetCmd = &cobra.Command{
 		if body.Subscribers != nil {
 			subs = append([]string{}, *body.Subscribers...)
 		}
-		fmt.Println(setMsg(args[0], req.Key, body.Rolled, subs))
+		fmt.Println(setMsg(args[0], req.Key, body.Rolled, body.Resynced, subs))
 		return nil
 	},
 }
@@ -227,7 +228,7 @@ func unsetMsg(rolled, unsubscribed int) string {
 // the server predates reporting them (only the roll count is known) and
 // empty when no service subscribes — services default to inheriting no
 // shared keys, so a fresh key reaches nobody until it is shared.
-func setMsg(project, key string, rolled int, subscribers []string) string {
+func setMsg(project, key string, rolled, resynced int, subscribers []string) string {
 	prefix := fmt.Sprintf("set %s on %s — ", key, project)
 	switch {
 	case subscribers == nil:
@@ -235,7 +236,16 @@ func setMsg(project, key string, rolled int, subscribers []string) string {
 	case len(subscribers) == 0:
 		return prefix + fmt.Sprintf("no service subscribes to %s, so no pod receives it; subscribe one with: kuso env share %s <service> %s", key, project, key)
 	}
-	return prefix + fmt.Sprintf("%s (%s), %s", plural(len(subscribers), "subscribing service"), strings.Join(subscribers, ", "), rolloutMsg(rolled))
+	// Resynced subscribers were re-propagated and restarted; saying "no
+	// running envs to roll" beside them read as if nothing happened.
+	effect := rolloutMsg(rolled)
+	if resynced > 0 {
+		effect = "restarted " + plural(resynced, "subscribing service")
+		if rolled > 0 {
+			effect = rolloutMsg(rolled) + ", " + effect
+		}
+	}
+	return prefix + fmt.Sprintf("%s (%s), %s", plural(len(subscribers), "subscribing service"), strings.Join(subscribers, ", "), effect)
 }
 
 func plural(n int, noun string) string {
