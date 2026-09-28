@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -161,14 +162,31 @@ func resolveHoldTimeout() time.Duration {
 // Handler returns the http.Handler that fronts scaled-to-zero traffic.
 func (a *Activator) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// Activator's own health endpoint so traefik/kube can probe it
-	// without triggering a wake.
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Activator's own health endpoint so kube can probe it without
+	// triggering a wake — but only for probe hosts. A user's host is the
+	// app's /healthz: answering it here told uptime monitors a sleeping
+	// app was healthy, and never woke it.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if !isActivatorProbeHost(r.Host) {
+			a.serve(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/", a.serve)
 	return mux
+}
+
+// isActivatorProbeHost reports whether a request is addressed to the
+// activator itself (kubelet probes by pod IP, in-cluster callers by
+// service name) rather than to a user's app host routed here by traefik.
+func isActivatorProbeHost(hostport string) bool {
+	host := hostOnly(hostport)
+	if host == "" || host == "localhost" || net.ParseIP(host) != nil {
+		return true
+	}
+	return !strings.Contains(host, ".") || strings.HasSuffix(host, ".svc") || strings.Contains(host, ".svc.")
 }
 
 func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
@@ -438,13 +456,21 @@ func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 // has ≥1 ready endpoint address — i.e. kube-proxy will route to a live
 // pod. This is the gate the activator waits on before proxying.
 func (a *Activator) endpointReady(ctx context.Context, ns, name string) (bool, error) {
-	ep, err := a.kc.Clientset.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+	// EndpointSlices, not the deprecated v1 Endpoints API: this runs every
+	// 250ms while a request is held, and each Endpoints read logged a
+	// deprecation warning.
+	slices, err := a.kc.Clientset.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: discoveryv1.LabelServiceName + "=" + name,
+	})
 	if err != nil {
 		return false, err
 	}
-	for _, ss := range ep.Subsets {
-		if len(ss.Addresses) > 0 {
-			return true, nil
+	for _, sl := range slices.Items {
+		for _, ep := range sl.Endpoints {
+			// A nil Ready condition means ready (EndpointSlice API contract).
+			if len(ep.Addresses) > 0 && (ep.Conditions.Ready == nil || *ep.Conditions.Ready) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
