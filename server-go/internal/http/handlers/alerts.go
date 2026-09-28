@@ -56,6 +56,7 @@ type createAlertBody struct {
 	Kind            string   `json:"kind"`
 	Project         string   `json:"project,omitempty"`
 	Service         string   `json:"service,omitempty"`
+	Env             string   `json:"env,omitempty"`
 	Query           string   `json:"query,omitempty"`
 	ThresholdInt    *int64   `json:"thresholdInt,omitempty"`
 	ThresholdFloat  *float64 `json:"thresholdFloat,omitempty"`
@@ -73,39 +74,9 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	if body.Name == "" || body.Kind == "" {
-		writeErr(w, http.StatusBadRequest, "name and kind required")
+	if err := normalizeAlertBody(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	switch body.Kind {
-	case db.AlertKindLogMatch, db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
-	default:
-		writeErr(w, http.StatusBadRequest, "kind must be one of log_match|node_cpu|node_mem|node_disk")
-		return
-	}
-	// Normalize severity to the canonical info|warn|error set. This
-	// matters beyond display: the notify dispatcher's mute carve-out
-	// pages through ONLY exact `severity == "error"` alert.fired
-	// events — an API/CLI rule stored as "critical" or "Error" would
-	// look page-worthy everywhere and silently stay muted.
-	switch strings.ToLower(strings.TrimSpace(body.Severity)) {
-	case "":
-		body.Severity = "warn"
-	case "info":
-		body.Severity = "info"
-	case "warn", "warning":
-		body.Severity = "warn"
-	case "error", "critical", "crit":
-		body.Severity = "error"
-	default:
-		writeErr(w, http.StatusBadRequest, "severity must be one of info|warn|error")
-		return
-	}
-	if body.WindowSeconds <= 0 {
-		body.WindowSeconds = 300
-	}
-	if body.ThrottleSeconds <= 0 {
-		body.ThrottleSeconds = 600
 	}
 	rule := db.AlertRule{
 		ID:              randomID16(),
@@ -114,6 +85,7 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Kind:            body.Kind,
 		Project:         body.Project,
 		Service:         body.Service,
+		Env:             body.Env,
 		Query:           body.Query,
 		ThresholdInt:    body.ThresholdInt,
 		ThresholdFloat:  body.ThresholdFloat,
@@ -128,6 +100,88 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, rule)
+}
+
+// normalizeAlertBody validates a create request and fills per-kind
+// defaults, so the stored rule says exactly what the engine evaluates.
+func normalizeAlertBody(b *createAlertBody) error {
+	b.Name = strings.TrimSpace(b.Name)
+	if b.Name == "" || b.Kind == "" {
+		return errors.New("name and kind required")
+	}
+	episodic := db.IsEpisodicAlertKind(b.Kind)
+	switch b.Kind {
+	case db.AlertKindLogMatch, db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
+	case db.AlertKindHTTP5xxRate:
+		b.ThresholdFloat = defaultFloat(b.ThresholdFloat, 5)
+		if *b.ThresholdFloat <= 0 || *b.ThresholdFloat > 100 {
+			return errors.New("http_5xx_rate threshold is a percentage between 0 and 100")
+		}
+		b.ThresholdInt = defaultInt(b.ThresholdInt, 20)
+	case db.AlertKindHTTPP95Latency:
+		b.ThresholdFloat = defaultFloat(b.ThresholdFloat, 1000)
+		if *b.ThresholdFloat <= 0 {
+			return errors.New("http_p95_latency threshold is milliseconds and must be > 0")
+		}
+		b.ThresholdInt = defaultInt(b.ThresholdInt, 20)
+	case db.AlertKindCertExpiry:
+		b.ThresholdInt = defaultInt(b.ThresholdInt, 14)
+		if *b.ThresholdInt < 1 || *b.ThresholdInt > 90 {
+			return errors.New("cert_expiry threshold is days before expiry, 1-90")
+		}
+	case db.AlertKindDNSMismatch:
+	default:
+		return errors.New("kind must be one of log_match|node_cpu|node_mem|node_disk|http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch")
+	}
+	if b.ThresholdInt != nil && *b.ThresholdInt < 0 {
+		return errors.New("thresholdInt must be >= 0")
+	}
+	// Env scoping only exists for the env-aware kinds; accepting it on
+	// a log/node rule would silently widen the rule's scope.
+	if b.Env != "" && !episodic {
+		return errors.New("env scoping is only supported for http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch")
+	}
+	if episodic && (b.Service != "" || b.Env != "") && b.Project == "" {
+		return errors.New("service/env scoping needs a project")
+	}
+	// Normalize severity to the canonical info|warn|error set. This
+	// matters beyond display: the notify dispatcher's mute carve-out
+	// pages through ONLY exact `severity == "error"` alert.fired
+	// events — an API/CLI rule stored as "critical" or "Error" would
+	// look page-worthy everywhere and silently stay muted.
+	switch strings.ToLower(strings.TrimSpace(b.Severity)) {
+	case "":
+		b.Severity = "warn"
+	case "info":
+		b.Severity = "info"
+	case "warn", "warning":
+		b.Severity = "warn"
+	case "error", "critical", "crit":
+		b.Severity = "error"
+	default:
+		return errors.New("severity must be one of info|warn|error")
+	}
+	if b.WindowSeconds <= 0 {
+		b.WindowSeconds = 300
+	}
+	if b.ThrottleSeconds <= 0 {
+		b.ThrottleSeconds = 600
+	}
+	return nil
+}
+
+func defaultFloat(p *float64, def float64) *float64 {
+	if p != nil {
+		return p
+	}
+	return &def
+}
+
+func defaultInt(p *int64, def int64) *int64 {
+	if p != nil {
+		return p
+	}
+	return &def
 }
 
 func (h *AlertsHandler) Delete(w http.ResponseWriter, r *http.Request) {

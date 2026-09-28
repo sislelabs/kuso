@@ -480,6 +480,12 @@ CREATE TABLE IF NOT EXISTS "AlertRule" (
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- Service-level + certificate alerts: env scoping, and the open-episode
+-- state episodic kinds (http_5xx_rate, cert_expiry, ...) use to fire
+-- once per episode and send a resolution when it clears.
+ALTER TABLE "AlertRule" ADD COLUMN IF NOT EXISTS "env" TEXT;
+ALTER TABLE "AlertRule" ADD COLUMN IF NOT EXISTS "firingSince" TIMESTAMPTZ;
+ALTER TABLE "AlertRule" ADD COLUMN IF NOT EXISTS "firingTargets" TEXT NOT NULL DEFAULT '';
 
 -- v0.9 OAuth state nonce store. Per the audit (S6), state needs a
 -- single-use marker. consumed=true means the redirect handler used

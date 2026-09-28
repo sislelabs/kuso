@@ -8,6 +8,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/hostcheck"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/serverstate"
@@ -55,6 +59,17 @@ type Engine struct {
 	Notify *notify.Dispatcher
 	Logger *slog.Logger
 
+	// PromURL is the prometheus base URL the http_* rules query
+	// (KUSO_PROMETHEUS_URL overrides the in-cluster default).
+	PromURL string
+	// Resolver answers dns_mismatch lookups; net.DefaultResolver in prod.
+	Resolver hostcheck.Resolver
+	// IngressIPs (KUSO_INGRESS_IPS, comma-separated) replaces ingress-IP
+	// discovery for dns_mismatch when the cluster can't see its own
+	// public address (external LB, NAT).
+	IngressIPs string
+	httpc      *http.Client
+
 	// lastFired is the in-memory throttle fallback keyed by rule ID.
 	// The DB row (LastFiredAt via MarkAlertFired) is the durable
 	// record, but if that write fails during a DB blip the rule would
@@ -74,6 +89,9 @@ type Engine struct {
 	// e.evaluate. Lets concurrency/timeout tests inject slow or
 	// blocking evaluations without a DB.
 	evaluateFn func(ctx context.Context, r *db.AlertRule, now time.Time) (bool, string, error)
+	// episodicFn is the same seam for episodic kinds; nil means
+	// e.evaluateEpisodic.
+	episodicFn func(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error)
 }
 
 // lastFiredMaxEntries bounds the in-memory throttle map. Rule counts
@@ -85,7 +103,17 @@ func New(d *db.DB, ld *db.LogDB, k *kube.Client, n *notify.Dispatcher, logger *s
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{DB: d, LogDB: ld, Kube: k, Notify: n, Logger: logger}
+	promURL := defaultPromURL
+	if v := os.Getenv("KUSO_PROMETHEUS_URL"); v != "" {
+		promURL = v
+	}
+	return &Engine{
+		DB: d, LogDB: ld, Kube: k, Notify: n, Logger: logger,
+		PromURL:    promURL,
+		Resolver:   net.DefaultResolver,
+		IngressIPs: os.Getenv("KUSO_INGRESS_IPS"),
+		httpc:      &http.Client{Timeout: 5 * time.Second},
+	}
 }
 
 func (e *Engine) Run(ctx context.Context) {
@@ -131,7 +159,10 @@ func (e *Engine) tick(ctx context.Context) {
 		if mem, ok := e.lastFiredMem(r.ID); ok && (last == nil || mem.After(*last)) {
 			last = &mem
 		}
-		if last != nil && now.Sub(*last) < time.Duration(r.ThrottleSeconds)*time.Second {
+		// Episodic rules must evaluate every tick — a throttle skip would
+		// hide the clear edge. They apply the throttle as a flap cooldown
+		// inside decideEpisode instead.
+		if !db.IsEpisodicAlertKind(r.Kind) && last != nil && now.Sub(*last) < time.Duration(r.ThrottleSeconds)*time.Second {
 			continue
 		}
 		runnable = append(runnable, r)
@@ -181,6 +212,10 @@ func (e *Engine) evalRules(ctx context.Context, rules []db.AlertRule, now time.T
 // evaluate error (context deadline) and is logged like any other
 // broken rule.
 func (e *Engine) evalOne(ctx context.Context, r *db.AlertRule, now time.Time) {
+	if db.IsEpisodicAlertKind(r.Kind) {
+		e.evalEpisode(ctx, r, now)
+		return
+	}
 	// evalFn is the rule-evaluation func (test seam or the real
 	// e.evaluate) — plain Go dispatch, nothing dynamic.
 	evalFn := e.evaluateFn

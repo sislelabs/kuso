@@ -13,8 +13,13 @@ import {
   deleteAlert,
   enableAlert,
   disableAlert,
+  ALERT_KINDS,
+  buildCreateBody,
+  describeRule,
+  emptyRuleForm,
+  type AlertKind,
   type AlertRule,
-  type CreateAlertBody,
+  type RuleFormState,
 } from "@/features/alerts";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
@@ -29,7 +34,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 export default function AlertsPage() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["alerts"], queryFn: listAlerts });
-  const [adding, setAdding] = useState<"log" | "node" | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const del = useMutation({
     mutationFn: (id: string) => deleteAlert(id),
@@ -60,14 +65,9 @@ export default function AlertsPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Rules</CardTitle>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setAdding("log")}>
-              <Plus className="h-3.5 w-3.5" /> Log match
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setAdding("node")}>
-              <Plus className="h-3.5 w-3.5" /> Node pressure
-            </Button>
-          </div>
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus className="h-3.5 w-3.5" /> New rule
+          </Button>
         </CardHeader>
         <CardContent>
           {list.isPending ? (
@@ -80,7 +80,7 @@ export default function AlertsPage() {
             <EmptyState
               icon={<Bell className="h-5 w-5" />}
               title="No rules yet"
-              description="Click + Log match or + Node pressure to add one."
+              description="Click + New rule to watch 5xx rates, latency, certificates, DNS, logs or nodes."
               className="px-3 py-6"
             />
           ) : (
@@ -100,10 +100,9 @@ export default function AlertsPage() {
 
       {adding && (
         <AddRuleDialog
-          kind={adding}
-          onClose={() => setAdding(null)}
+          onClose={() => setAdding(false)}
           onCreated={() => {
-            setAdding(null);
+            setAdding(false);
             qc.invalidateQueries({ queryKey: ["alerts"] });
           }}
         />
@@ -122,12 +121,7 @@ function RuleRow({
   onToggle: (on: boolean) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const detail = (() => {
-    if (rule.kind === "log_match") {
-      return `${rule.query ?? ""} ≥ ${rule.thresholdInt ?? 1} in ${formatSec(rule.windowSeconds)}`;
-    }
-    return `≥ ${rule.thresholdFloat ?? 80}% (window ${formatSec(rule.windowSeconds)})`;
-  })();
+  const detail = describeRule(rule);
   return (
     <li className="flex items-center gap-3 px-1 py-2">
       <span
@@ -147,11 +141,17 @@ function RuleRow({
             <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
               {rule.project}
               {rule.service && `/${rule.service}`}
+              {rule.env && ` → ${rule.env}`}
             </span>
           )}
         </div>
         <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">{detail}</p>
-        {rule.lastFiredAt && (
+        {rule.firingSince ? (
+          <p className="truncate font-mono text-[10px] text-[var(--error)]">
+            firing since {relativeTime(rule.firingSince)}
+            {rule.firingTargets && rule.firingTargets.length > 0 && ` · ${rule.firingTargets.join(", ")}`}
+          </p>
+        ) : rule.lastFiredAt && (
           <p className="font-mono text-[10px] text-[var(--warning)]">
             last fired {relativeTime(rule.lastFiredAt)}
           </p>
@@ -193,56 +193,28 @@ function RuleRow({
   );
 }
 
-function AddRuleDialog({
-  kind,
-  onClose,
-  onCreated,
-}: {
-  kind: "log" | "node";
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [project, setProject] = useState("");
-  const [service, setService] = useState("");
-  const [query, setQuery] = useState("");
-  const [thresholdInt, setThresholdInt] = useState("1");
-  const [thresholdPct, setThresholdPct] = useState("80");
-  const [nodeKind, setNodeKind] = useState<"node_cpu" | "node_mem" | "node_disk">("node_cpu");
-  const [window, setWindow] = useState("5m");
-  const [severity, setSeverity] = useState<"info" | "warn" | "error">("warn");
-  const [throttle, setThrottle] = useState("10m");
+const KIND_GROUPS = ["Service", "Edge", "Logs", "Nodes"] as const;
+
+function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [form, setForm] = useState<RuleFormState>(() => emptyRuleForm("http_5xx_rate"));
+  const meta = ALERT_KINDS[form.kind];
+  const set = <K extends keyof RuleFormState>(k: K, v: RuleFormState[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const built = buildCreateBody(form);
 
   const create = useMutation({
     mutationFn: () => {
-      const body: CreateAlertBody = {
-        name: name.trim(),
-        kind: kind === "log" ? "log_match" : nodeKind,
-        windowSeconds: parseDur(window),
-        severity,
-        throttleSeconds: parseDur(throttle),
-      };
-      if (kind === "log") {
-        body.project = project.trim() || undefined;
-        body.service = service.trim() || undefined;
-        body.query = query.trim();
-        body.thresholdInt = parseInt(thresholdInt, 10);
-      } else {
-        body.thresholdFloat = parseFloat(thresholdPct);
-      }
-      return createAlert(body);
+      if (!built.ok) throw new Error(built.error);
+      return createAlert(built.body);
     },
     onSuccess: () => {
-      toast.success(`Alert ${name} created`);
+      toast.success(`Alert ${form.name.trim()} created`);
       onCreated();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
   });
 
-  const submitDisabled =
-    !name.trim() ||
-    create.isPending ||
-    (kind === "log" && !query.trim());
+  const changeKind = (kind: AlertKind) =>
+    setForm((f) => ({ ...emptyRuleForm(kind), name: f.name, project: f.project, service: f.service, severity: f.severity }));
 
   return (
     <div
@@ -257,9 +229,7 @@ function AddRuleDialog({
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <h2 className="font-mono text-sm font-medium">
-              New {kind === "log" ? "log-match" : "node-pressure"} alert
-            </h2>
+            <h2 className="font-mono text-sm font-medium">New alert rule</h2>
             <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
               evaluated every 1 min · fires through configured channels
             </p>
@@ -273,97 +243,129 @@ function AddRuleDialog({
           </button>
         </header>
         <div className="space-y-3 p-4">
-          <Field label="Name">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={kind === "log" ? "OOMKilled" : "CPU > 90%"}
-              className="h-8 text-[13px]"
-            />
-          </Field>
-
-          {kind === "log" ? (
-            <>
-              <Field label="FTS5 query">
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder='OOMKilled    OR    "fatal error"'
-                  className="h-8 font-mono text-[12px]"
-                />
-              </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Project (optional)">
-                  <Input
-                    value={project}
-                    onChange={(e) => setProject(e.target.value)}
-                    placeholder="myproj"
-                    className="h-8 font-mono text-[12px]"
-                  />
-                </Field>
-                <Field label="Service (optional)">
-                  <Input
-                    value={service}
-                    onChange={(e) => setService(e.target.value)}
-                    placeholder="api"
-                    className="h-8 font-mono text-[12px]"
-                  />
-                </Field>
-              </div>
-              <Field label="Threshold (matches)">
-                <Input
-                  type="number"
-                  value={thresholdInt}
-                  onChange={(e) => setThresholdInt(e.target.value)}
-                  className="h-8 font-mono text-[12px]"
-                />
-              </Field>
-            </>
-          ) : (
-            <>
-              <Field label="Resource">
-                <select
-                  value={nodeKind}
-                  onChange={(e) => setNodeKind(e.target.value as typeof nodeKind)}
-                  className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
-                >
-                  <option value="node_cpu">CPU</option>
-                  <option value="node_mem">Memory</option>
-                  <option value="node_disk">Disk</option>
-                </select>
-              </Field>
-              <Field label="Threshold (%)">
-                <Input
-                  type="number"
-                  value={thresholdPct}
-                  onChange={(e) => setThresholdPct(e.target.value)}
-                  className="h-8 font-mono text-[12px]"
-                />
-              </Field>
-            </>
-          )}
-
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Window">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Kind">
+              <select
+                value={form.kind}
+                onChange={(e) => changeKind(e.target.value as AlertKind)}
+                className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
+              >
+                {KIND_GROUPS.map((g) => (
+                  <optgroup key={g} label={g}>
+                    {(Object.keys(ALERT_KINDS) as AlertKind[])
+                      .filter((k) => ALERT_KINDS[k].group === g)
+                      .map((k) => (
+                        <option key={k} value={k}>
+                          {ALERT_KINDS[k].label}
+                        </option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            </Field>
+            <Field label="Name">
               <Input
-                value={window}
-                onChange={(e) => setWindow(e.target.value)}
-                placeholder="5m"
+                value={form.name}
+                onChange={(e) => set("name", e.target.value)}
+                placeholder={meta.label}
+                className="h-8 text-[13px]"
+              />
+            </Field>
+          </div>
+          <p className="text-[12px] text-[var(--text-secondary)]">{meta.help}</p>
+
+          {form.kind === "log_match" && (
+            <Field label="Query (substring)">
+              <Input
+                value={form.query}
+                onChange={(e) => set("query", e.target.value)}
+                placeholder="OOMKilled"
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
+          )}
+
+          {meta.scope !== "none" && (
+            <div className={cn("grid grid-cols-1 gap-3", meta.scope === "env" ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+              <Field label="Project (optional)">
+                <Input
+                  value={form.project}
+                  onChange={(e) => set("project", e.target.value)}
+                  placeholder="all projects"
+                  className="h-8 font-mono text-[12px]"
+                />
+              </Field>
+              <Field label="Service (optional)">
+                <Input
+                  value={form.service}
+                  onChange={(e) => set("service", e.target.value)}
+                  placeholder="all services"
+                  className="h-8 font-mono text-[12px]"
+                />
+              </Field>
+              {meta.scope === "env" && (
+                <Field label="Env (optional)">
+                  <Input
+                    value={form.env}
+                    onChange={(e) => set("env", e.target.value)}
+                    placeholder="all envs"
+                    className="h-8 font-mono text-[12px]"
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+
+          {(meta.threshold || meta.minRequests) && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {meta.threshold && (
+                <Field label={meta.threshold.label}>
+                  <Input
+                    type="number"
+                    value={form.threshold}
+                    onChange={(e) => set("threshold", e.target.value)}
+                    placeholder={meta.threshold.placeholder}
+                    className="h-8 font-mono text-[12px]"
+                  />
+                </Field>
+              )}
+              {meta.minRequests && (
+                <Field label="Min requests in window">
+                  <Input
+                    type="number"
+                    value={form.minRequests}
+                    onChange={(e) => set("minRequests", e.target.value)}
+                    placeholder="20"
+                    className="h-8 font-mono text-[12px]"
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+
+          <div className={cn("grid grid-cols-1 gap-3", meta.window ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+            {meta.window && (
+              <Field label="Window">
+                <Input
+                  value={form.window}
+                  onChange={(e) => set("window", e.target.value)}
+                  placeholder="5m"
+                  className="h-8 font-mono text-[12px]"
+                />
+              </Field>
+            )}
             <Field label="Throttle">
               <Input
-                value={throttle}
-                onChange={(e) => setThrottle(e.target.value)}
+                value={form.throttle}
+                onChange={(e) => set("throttle", e.target.value)}
                 placeholder="10m"
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
             <Field label="Severity">
               <select
-                value={severity}
-                onChange={(e) => setSeverity(e.target.value as typeof severity)}
+                value={form.severity}
+                onChange={(e) => set("severity", e.target.value as RuleFormState["severity"])}
                 className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
               >
                 <option value="info">info</option>
@@ -372,12 +374,15 @@ function AddRuleDialog({
               </select>
             </Field>
           </div>
+          {!built.ok && form.name.trim() !== "" && (
+            <p className="font-mono text-[11px] text-[var(--error)]">{built.error}</p>
+          )}
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
           <Button size="sm" variant="ghost" onClick={onClose} disabled={create.isPending}>
             Cancel
           </Button>
-          <Button size="sm" disabled={submitDisabled} onClick={() => create.mutate()}>
+          <Button size="sm" disabled={!built.ok || create.isPending} onClick={() => create.mutate()}>
             {create.isPending ? "Creating…" : "Create rule"}
           </Button>
         </footer>
@@ -395,30 +400,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
-}
-
-// parseDur: "5m" / "30s" / "300" → seconds. Invalid → 0 (server applies default).
-function parseDur(s: string): number {
-  const m = s.match(/^(\d+)\s*([smhd]?)$/);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10);
-  switch (m[2]) {
-    case "":
-    case "s":
-      return n;
-    case "m":
-      return n * 60;
-    case "h":
-      return n * 3600;
-    case "d":
-      return n * 86_400;
-  }
-  return 0;
-}
-
-function formatSec(n: number): string {
-  if (n >= 86_400) return `${Math.round(n / 86_400)}d`;
-  if (n >= 3600) return `${Math.round(n / 3600)}h`;
-  if (n >= 60) return `${Math.round(n / 60)}m`;
-  return `${n}s`;
 }

@@ -1,12 +1,23 @@
 import { api } from "@/lib/api-client";
 
+export type AlertKind =
+  | "log_match"
+  | "node_cpu"
+  | "node_mem"
+  | "node_disk"
+  | "http_5xx_rate"
+  | "http_p95_latency"
+  | "cert_expiry"
+  | "dns_mismatch";
+
 export interface AlertRule {
   id: string;
   name: string;
   enabled: boolean;
-  kind: "log_match" | "node_cpu" | "node_mem" | "node_disk";
+  kind: AlertKind;
   project?: string;
   service?: string;
+  env?: string;
   query?: string;
   thresholdInt?: number;
   thresholdFloat?: number;
@@ -14,15 +25,19 @@ export interface AlertRule {
   severity: "info" | "warn" | "error";
   throttleSeconds: number;
   lastFiredAt?: string;
+  // Set while an episodic rule (http_*, cert_expiry, dns_mismatch) is firing.
+  firingSince?: string;
+  firingTargets?: string[];
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateAlertBody {
   name: string;
-  kind: AlertRule["kind"];
+  kind: AlertKind;
   project?: string;
   service?: string;
+  env?: string;
   query?: string;
   thresholdInt?: number;
   thresholdFloat?: number;
