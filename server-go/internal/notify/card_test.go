@@ -165,3 +165,15 @@ func TestDiscordPayload_PingLineNotRepeatedInEmbed(t *testing.T) {
 		t.Errorf("non-ping description changed: %q", d)
 	}
 }
+
+func TestPodCrashed_FillsServiceIntoFix(t *testing.T) {
+	cls := &failures.Classification{Kind: "missing_capability", Summary: "needs caps",
+		Remediation: &failures.Remediation{Title: "Add capabilities", Fix: "kuso project service set <project> <service> --cap-add CHOWN"}}
+	e := PodCrashed(PodCrash{Project: "cmp", Service: "nocaps", Env: "production", Classification: cls})
+	if got := e.Classification.Remediation.Fix; got != "kuso project service set cmp nocaps --cap-add CHOWN" {
+		t.Errorf("fix %q", got)
+	}
+	if cls.Remediation.Fix != "kuso project service set <project> <service> --cap-add CHOWN" {
+		t.Error("caller's classification was mutated")
+	}
+}

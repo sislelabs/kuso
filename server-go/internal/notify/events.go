@@ -75,6 +75,16 @@ type PodCrash struct {
 // start. Production crashes are error severity (default @here); other
 // envs are warn. The classifier's diagnosis renders on the card.
 func PodCrashed(c PodCrash) Event {
+	// The classifier doesn't know the service, so its fix commands carry
+	// <project> <service> placeholders; fill them so the card's command
+	// can be pasted as-is. Copy first: the caller owns the classification.
+	if cl := c.Classification; cl != nil && cl.Remediation != nil && c.Project != "" && c.Service != "" {
+		rem := *cl.Remediation
+		rem.Fix = strings.ReplaceAll(rem.Fix, "<project> <service>", c.Project+" "+c.Service)
+		cp := *cl
+		cp.Remediation = &rem
+		c.Classification = &cp
+	}
 	fields := []EventField{{Name: "Reason", Value: c.Reason, Inline: true}}
 	if c.Restarts > 0 {
 		fields = append(fields, EventField{Name: "Restarts", Value: strconv.Itoa(c.Restarts), Inline: true})
