@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.11] — 2026-09-28
+
+### Other
+- Report shared-secret subscribers and correct the skill's defaults ([8ff382b](https://github.com/sislelabs/kuso/commit/8ff382b1691d68bff677e8b301892cf567f0bcee))
+- Explain release-hook failures and drop clone tokens on every exit ([543ca48](https://github.com/sislelabs/kuso/commit/543ca483fca13a737872ac3441893bc1733eacbd))
+- Isolate PR previews from production addons and shared secrets ([2956754](https://github.com/sislelabs/kuso/commit/2956754a98f723f956002fcd24ac7a0be151f12c))
+- Delete env-group clone services through DeleteService ([f22deb6](https://github.com/sislelabs/kuso/commit/f22deb6b49e5644e9d796f597b2a3c7c47d23a58))
+- Seed env DB clones with a version-matched pg_dump ([ba38d83](https://github.com/sislelabs/kuso/commit/ba38d834a96b23f95de09d088b974c988cffda0b))
+
 ## [0.26.10] — 2026-09-28
 
 ### Other
@@ -385,24 +394,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(skill): teach the build-time secret model, buildArgs, service state, and the JSON error envelope ([6c0f67c](https://github.com/sislelabs/kuso/commit/6c0f67c331a0a136c62ca0e20517b781abaa705b))
-
-## [0.23.0] — 2026-08-19
-
-### Other
-- Ops(deploy): scope server RBAC to managed namespaces, harden control-plane backup ([6a55095](https://github.com/sislelabs/kuso/commit/6a5509560aa3ef486dbe009273210a57681e6dd6))
-
-### ✨ Features
-- Feat(mcp): credentials-file fallback, larger error bodies, envelope-aware errors; docs: skill accuracy ([f8614d2](https://github.com/sislelabs/kuso/commit/f8614d25f670e080ccb4f4b8c1c4f50cc114bc67))
-- Feat(cli): friendly unconfigured-state error, uniform error handling, full service alias, discovery-based destructive guards ([7f270c3](https://github.com/sislelabs/kuso/commit/7f270c3c387c1281951659ba482035bad63aa713))
-- Feat(web): inline form validation, shared loading/empty states, light-mode palette, service-state badges ([ffee49f](https://github.com/sislelabs/kuso/commit/ffee49fc618d2fe0a9071cc2fcd1603b00e1bb6f))
-- Feat(perf,ux): batched dashboard endpoint, informer-cached reads, JSON error envelope, service-state rollup ([abcfe6d](https://github.com/sislelabs/kuso/commit/abcfe6df61d037c6e53d11d87bb0eb83f2335f2c))
-
-### 🐛 Bug Fixes
-- Fix(resilience): per-loop liveness heartbeat, backup integrity, safe terminal states ([60e4318](https://github.com/sislelabs/kuso/commit/60e431807e1eacbf500c522c01c90d965b2a2bc7))
-- Fix(security): close cross-tenant IDOR, secret leaks, SSRF, and auth gaps ([97baff5](https://github.com/sislelabs/kuso/commit/97baff562d0b4b8cfccdfbbfb626d36ff114681a))
-
-### 🧪 Tests
-- Test(server): cover KUSO_LOG_LEVEL parsing ([6eba999](https://github.com/sislelabs/kuso/commit/6eba999ba20a14366b0695652bfd2354fd9dc138))
 
 
 ---

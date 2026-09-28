@@ -2,6 +2,24 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.0] — 2026-08-19
+
+### Other
+- Ops(deploy): scope server RBAC to managed namespaces, harden control-plane backup ([6a55095](https://github.com/sislelabs/kuso/commit/6a5509560aa3ef486dbe009273210a57681e6dd6))
+
+### ✨ Features
+- Feat(mcp): credentials-file fallback, larger error bodies, envelope-aware errors; docs: skill accuracy ([f8614d2](https://github.com/sislelabs/kuso/commit/f8614d25f670e080ccb4f4b8c1c4f50cc114bc67))
+- Feat(cli): friendly unconfigured-state error, uniform error handling, full service alias, discovery-based destructive guards ([7f270c3](https://github.com/sislelabs/kuso/commit/7f270c3c387c1281951659ba482035bad63aa713))
+- Feat(web): inline form validation, shared loading/empty states, light-mode palette, service-state badges ([ffee49f](https://github.com/sislelabs/kuso/commit/ffee49fc618d2fe0a9071cc2fcd1603b00e1bb6f))
+- Feat(perf,ux): batched dashboard endpoint, informer-cached reads, JSON error envelope, service-state rollup ([abcfe6d](https://github.com/sislelabs/kuso/commit/abcfe6df61d037c6e53d11d87bb0eb83f2335f2c))
+
+### 🐛 Bug Fixes
+- Fix(resilience): per-loop liveness heartbeat, backup integrity, safe terminal states ([60e4318](https://github.com/sislelabs/kuso/commit/60e431807e1eacbf500c522c01c90d965b2a2bc7))
+- Fix(security): close cross-tenant IDOR, secret leaks, SSRF, and auth gaps ([97baff5](https://github.com/sislelabs/kuso/commit/97baff562d0b4b8cfccdfbbfb626d36ff114681a))
+
+### 🧪 Tests
+- Test(server): cover KUSO_LOG_LEVEL parsing ([6eba999](https://github.com/sislelabs/kuso/commit/6eba999ba20a14366b0695652bfd2354fd9dc138))
+
 ## [0.22.21] — 2026-08-17
 
 ### 🐛 Bug Fixes
