@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.19] — 2026-08-17
+
+### ✨ Features
+- Feat(builds): atomic same-repo promotion + security hardening batch ([15ec203](https://github.com/sislelabs/kuso/commit/15ec203b1401b1d170c4170b57068905c3257976))
+
 ## [0.22.18] — 2026-08-12
 
 ### 🐛 Bug Fixes
