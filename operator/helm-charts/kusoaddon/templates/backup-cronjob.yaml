@@ -135,13 +135,22 @@ spec:
                     echo "$2"
                   }
                   # server_version_num is 160014 for 16.14 -> major 16.
-                  PGMAJOR=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) \
+                  # A failed probe must fail the run: falling back to the
+                  # newest client produces a dump that PG16 cannot restore,
+                  # which is worse than a visible failed backup.
+                  if ! PGVER=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                    -tAc "SHOW server_version_num" 2>/dev/null | tr -dc '0-9' || true)
-                  if [ -n "${PGMAJOR}" ]; then PGMAJOR=$(( PGMAJOR / 10000 )); fi
+                    -tAc "SHOW server_version_num"); then
+                    echo "ERROR: could not read the server version of ${ADDON}; refusing to pick a pg_dump client blind" >&2; exit 1
+                  fi
+                  PGMAJOR=$(printf '%s' "${PGVER}" | tr -dc '0-9')
+                  if [ -z "${PGMAJOR}" ]; then
+                    echo "ERROR: unparseable server_version_num '${PGVER}' from ${ADDON}" >&2; exit 1
+                  fi
+                  PGMAJOR=$(( PGMAJOR / 10000 ))
                   PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
                   PSQL=$(pgbin "${PGMAJOR}" psql)
-                  echo "==> server major=${PGMAJOR:-unknown}, using ${PG_DUMP}"
+                  echo "==> server major=${PGMAJOR}, using ${PG_DUMP}"
                   # --clean --if-exists so a restore onto a populated DB
                   # (the pre-deploy-snapshot rollback case) DROPs-then-recreates
                   # instead of aborting on "relation already exists" under the

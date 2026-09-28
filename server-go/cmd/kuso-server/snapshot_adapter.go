@@ -132,7 +132,26 @@ until pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
   if [ "$i" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST} unreachable after 60s" >&2; exit 1; fi
   echo "==> waiting for postgres ${POSTGRES_HOST} ($i)"; sleep 2
 done
-PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
+# Match the client to the server, as the backup CronJob and the previewdb
+# seed do. The default client is 18, whose SET transaction_timeout is unknown
+# before PG17, so a PG16 rollback restore would abort having created nothing.
+# The image ships 16/17/18 under /usr/libexec/postgresql<major>/.
+pgbin() { # major tool
+  if [ -n "$1" ] && [ -x "/usr/libexec/postgresql$1/$2" ]; then echo "/usr/libexec/postgresql$1/$2"; return; fi
+  for v in 18 17 16; do
+    if [ -x "/usr/libexec/postgresql$v/$2" ]; then echo "/usr/libexec/postgresql$v/$2"; return; fi
+  done
+  echo "$2"
+}
+if ! PGVER=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc "SHOW server_version_num"); then
+  echo "==> could not read the server version of ${POSTGRES_HOST}; refusing to pick a pg_dump client blind" >&2; exit 1
+fi
+PGMAJOR=$(echo "${PGVER}" | tr -dc '0-9')
+if [ -z "${PGMAJOR}" ]; then echo "==> unparseable server_version_num '${PGVER}'" >&2; exit 1; fi
+PGMAJOR=$((PGMAJOR / 10000))
+PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
+echo "==> server major=${PGMAJOR}, using ${PG_DUMP}"
+PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
 SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
 BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
 aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"

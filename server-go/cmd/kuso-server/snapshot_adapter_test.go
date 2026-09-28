@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,4 +194,90 @@ func TestBuildSnapshotJob_PodInsideProjectNetpol(t *testing.T) {
 	if got := labels["kuso.sislelabs.com/network-egress-public"]; got != "true" {
 		t.Errorf("pod label network-egress-public = %q, want true", got)
 	}
+}
+
+// The snapshot is the rollback point for a failed migration, restored into
+// the same server. The image's default pg_dump is 18, which writes SET
+// transaction_timeout; restoring that into PG16 aborts under ON_ERROR_STOP,
+// so the rollback point would be unusable exactly when it is needed. The
+// client must match the server major, and a failed probe must fail the Job
+// rather than dump blind.
+func TestBuildSnapshotJob_UsesVersionMatchedClient(t *testing.T) {
+	t.Parallel()
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "")
+	script := job.Spec.Template.Spec.Containers[0].Args[0]
+	if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("snapshot script does not parse: %v\n%s", err, out)
+	}
+	cases := []struct {
+		name      string
+		psql      string
+		wantDump  string // version whose pg_dump ran; "" = none
+		wantInOut string
+	}{
+		{"pg16 server", "echo 160004", "16", "server major=16"},
+		{"pg17 server", "echo 170002", "17", "server major=17"},
+		{"probe fails", `echo "psql: auth failed" >&2; exit 2`, "", "refusing to pick a pg_dump client"},
+		{"probe garbage", "echo nope", "", "unparseable server_version_num"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, dumped, err := runSnapshotScript(t, script, tc.psql)
+			if dumped != tc.wantDump {
+				t.Errorf("pg_dump version run = %q, want %q:\n%s", dumped, tc.wantDump, out)
+			}
+			if tc.wantDump == "" && err == nil {
+				t.Errorf("script exited 0 without dumping:\n%s", out)
+			}
+			if tc.wantDump != "" && err != nil {
+				t.Errorf("script failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, tc.wantInOut) {
+				t.Errorf("output missing %q:\n%s", tc.wantInOut, out)
+			}
+		})
+	}
+}
+
+// runSnapshotScript runs the snapshot script with the image's
+// /usr/libexec/postgresql<major>/ layout recreated under a temp dir. Every
+// version's psql answers the probe with psqlBody; each pg_dump records its
+// version so the test can see which client was picked.
+func runSnapshotScript(t *testing.T, script, psqlBody string) (string, string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	root := filepath.Join(dir, "libexec")
+	marker := filepath.Join(dir, "dumped")
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range []string{"16", "17", "18"} {
+		write(filepath.Join(root, "postgresql"+v, "psql"), psqlBody)
+		write(filepath.Join(root, "postgresql"+v, "pg_dump"), "printf "+v+" > "+marker+"; echo 'select 1;'")
+	}
+	bin := filepath.Join(dir, "bin")
+	write(filepath.Join(bin, "pg_isready"), "exit 0")
+	write(filepath.Join(bin, "pg_dump"), "printf default > "+marker+"; echo 'select 1;'")
+	write(filepath.Join(bin, "aws"), "exit 0")
+	write(filepath.Join(bin, "sleep"), "exit 0")
+
+	script = strings.ReplaceAll(script, "/usr/libexec/postgresql", filepath.Join(root, "postgresql"))
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"),
+		"BUCKET=b", "S3_ENDPOINT=e", "KEY=e2e/e2e-db/k.sql.gz",
+		"POSTGRES_HOST=e2e-db", "POSTGRES_USER=kuso", "POSTGRES_DB=e2e", "POSTGRES_PASSWORD=pw",
+	}
+	out, err := cmd.CombinedOutput()
+	got, _ := os.ReadFile(marker)
+	return string(out), string(got), err
 }

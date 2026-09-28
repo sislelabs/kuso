@@ -169,6 +169,18 @@ if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.jso
 else
   echo "==> no manifest for this backup — integrity NOT verified, proceeding"
 fi
+# The download proved egress works, not that the DB's ingress policy has
+# admitted this pod yet. Wait for the server before restoring, bounded to 60s.
+# The image has mongodb-tools but no mongosh, so probe the first host in the URI.
+MONGO_HOSTPORT=$(echo "${MONGO_URL}" | sed -E 's#^[^/]*//([^@]*@)?([^/?]+).*#\2#' | cut -d, -f1)
+MONGO_H=${MONGO_HOSTPORT%%:*}
+MONGO_P=${MONGO_HOSTPORT#*:}; [ "${MONGO_P}" = "${MONGO_H}" ] && MONGO_P=27017
+_i=0
+until nc -z -w2 "${MONGO_H}" "${MONGO_P}" 2>/dev/null; do
+  _i=$((_i+1))
+  if [ "${_i}" -ge 30 ]; then echo "==> mongodb ${MONGO_H}:${MONGO_P} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for mongodb ${MONGO_H}:${MONGO_P} (${_i})"; sleep 2
+done
 echo "==> restoring via mongorestore"
 mongorestore --uri "${MONGO_URL}" --archive=/tmp/dump.archive.gz --gzip --drop
 echo "==> done"
@@ -201,6 +213,14 @@ if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.jso
 else
   echo "==> no manifest for this backup — integrity NOT verified, proceeding"
 fi
+# Same bounded wait as postgres/mongo: the download proved egress, not that
+# the DB's ingress policy has admitted this pod yet.
+_i=0
+until nc -z -w2 "${MYSQL_HOST}" "${MYSQL_PORT:-3306}" 2>/dev/null; do
+  _i=$((_i+1))
+  if [ "${_i}" -ge 30 ]; then echo "==> mysql ${MYSQL_HOST}:${MYSQL_PORT:-3306} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for mysql ${MYSQL_HOST} (${_i})"; sleep 2
+done
 echo "==> piping into mysql"
 # The mysql CLI stops at the first SQL error by default when reading a script
 # from stdin (it only presses on with --force, which we deliberately DON'T

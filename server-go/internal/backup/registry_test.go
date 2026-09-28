@@ -1,6 +1,9 @@
 package backup
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,4 +123,86 @@ func TestPostgresRestore_WaitsForServerBeforePsql(t *testing.T) {
 	if !strings.Contains(s[:apply], "exit 1") {
 		t.Error("wait loop is not bounded (no exit 1 before the apply)")
 	}
+}
+
+// The download proves egress works, not that the database's ingress policy
+// has admitted the fresh restore pod. mongo and mysql went straight from the
+// download to mongorestore/mysql, so a restore racing kube-router failed on
+// the first refused connect (BackoffLimit 0). They must wait, bounded.
+func TestMongoMysqlRestore_WaitForServerBeforeApply(t *testing.T) {
+	cases := []struct {
+		kind, env, apply, wantNC string
+	}{
+		{"mongodb", "MONGO_URL=mongodb://u:p@mongo-host:27018/app?authSource=admin", "mongorestore", "mongo-host 27018"},
+		{"mysql", "MYSQL_HOST=mysql-host", "mysql", "mysql-host 3306"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.kind, func(t *testing.T) {
+			p, _ := NewDefaultRegistry().For(tc.kind)
+			s := p.RestoreScript()
+			if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
+				t.Fatalf("restore script does not parse: %v\n%s", err, out)
+			}
+			wait := strings.Index(s, "nc -z")
+			apply := strings.LastIndex(s, tc.apply+" ")
+			if wait < 0 || apply < 0 || wait > apply {
+				t.Fatalf("nc -z wait (at %d) must precede %s (at %d)", wait, tc.apply, apply)
+			}
+
+			out, applied, ncArgs, err := runRestoreScript(t, s, tc.apply, "exit 0", tc.env)
+			if err != nil || !applied {
+				t.Fatalf("reachable server: applied=%v err=%v\n%s", applied, err, out)
+			}
+			if !strings.Contains(ncArgs, tc.wantNC) {
+				t.Errorf("nc probed %q, want host/port %q", ncArgs, tc.wantNC)
+			}
+
+			out, applied, _, err = runRestoreScript(t, s, tc.apply, "exit 1", tc.env)
+			if applied || err == nil {
+				t.Errorf("unreachable server: applied=%v err=%v\n%s", applied, err, out)
+			}
+			if !strings.Contains(out, "unreachable after 60s") {
+				t.Errorf("output missing unreachable message:\n%s", out)
+			}
+		})
+	}
+}
+
+// runRestoreScript runs a restore script with stubbed aws/nc/sleep/gunzip
+// and a stubbed apply binary that records whether it ran. /tmp paths are
+// redirected into a temp dir so runs don't share files.
+func runRestoreScript(t *testing.T, script, apply, ncBody, connEnv string) (string, bool, string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "applied")
+	ncLog := filepath.Join(dir, "nc.log")
+	stubs := map[string]string{
+		// aws s3 cp --endpoint-url E src dst: no manifest, artifact "downloads".
+		"aws":    `case "$5" in *.manifest.json) exit 1;; esac; : > "$6"`,
+		"nc":     `echo "$@" >> ` + ncLog + "\n" + ncBody,
+		"sleep":  "exit 0",
+		"gunzip": "echo 'select 1;'",
+		apply:    "cat > /dev/null; touch " + marker,
+	}
+	for name, body := range stubs {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script = strings.ReplaceAll(script, "/tmp/", dir+"/")
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"),
+		"BUCKET=b", "S3_ENDPOINT=e", "KEY=p/a/k", connEnv,
+		"MYSQL_USER=u", "MYSQL_DB=d", "MYSQL_PASSWORD=pw",
+	}
+	out, err := cmd.CombinedOutput()
+	_, statErr := os.Stat(marker)
+	nc, _ := os.ReadFile(ncLog)
+	return string(out), statErr == nil, string(nc), err
 }
