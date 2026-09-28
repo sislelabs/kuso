@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.2] — 2026-09-28
+
+### Other
+- Fill project and service into crash-card fix commands ([0eff765](https://github.com/sislelabs/kuso/commit/0eff765e164f672b1ff49259c6d009ad771029b9))
+
 ## [0.27.1] — 2026-09-28
 
 ### Other
@@ -385,11 +390,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(addon): let the postgres pooler front an external database ([245a0ac](https://github.com/sislelabs/kuso/commit/245a0ac803a8aeeccc29b746ab4d9f182a8f788a))
-
-## [0.25.2] — 2026-09-01
-
-### 🐛 Bug Fixes
-- Fix(backup): stop the API dropping spec.backup.bucket ([1306118](https://github.com/sislelabs/kuso/commit/1306118c3ca8ecd1f873df091f33e15707cbbbd2))
 
 
 ---

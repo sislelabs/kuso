@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.2] — 2026-09-01
+
+### 🐛 Bug Fixes
+- Fix(backup): stop the API dropping spec.backup.bucket ([1306118](https://github.com/sislelabs/kuso/commit/1306118c3ca8ecd1f873df091f33e15707cbbbd2))
+
 ## [0.25.1] — 2026-09-01
 
 ### 🐛 Bug Fixes
