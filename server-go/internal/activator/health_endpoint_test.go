@@ -7,12 +7,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -76,5 +79,23 @@ func TestEndpointReadyUsesEndpointSlices(t *testing.T) {
 		if got != want {
 			t.Errorf("endpointReady(%s) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// The updater never applies RBAC, so an upgraded install may be forbidden
+// from listing EndpointSlices. Readiness must fall back to v1 Endpoints
+// rather than time every wake out into a 503 (live, v0.26.14).
+func TestEndpointReadyFallsBackWhenSlicesForbidden(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "ns"},
+		Subsets:    []corev1.EndpointSubset{{Addresses: []corev1.EndpointAddress{{IP: "10.0.0.1"}}}},
+	})
+	cs.PrependReactor("list", "endpointslices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "discovery.k8s.io", Resource: "endpointslices"}, "", nil)
+	})
+	a := New(&kube.Client{Clientset: cs}, slog.Default())
+	ok, err := a.endpointReady(context.Background(), "ns", "web")
+	if err != nil || !ok {
+		t.Fatalf("endpointReady = %v, %v; want true via the Endpoints fallback", ok, err)
 	}
 }

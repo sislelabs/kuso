@@ -91,6 +91,12 @@ rules:
   - apiGroups: [""]
     resources: [endpoints]
     verbs: [get, list, watch]
+  # endpointslices: the activator's wake readiness check (the v1
+  # Endpoints API is deprecated). It falls back to endpoints when this
+  # rule is missing, since the updater does not apply RBAC changes.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [events]
     verbs: [get, list, watch]

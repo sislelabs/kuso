@@ -33,6 +33,7 @@ import (
 	"time"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -462,6 +463,12 @@ func (a *Activator) endpointReady(ctx context.Context, ns, name string) (bool, e
 	slices, err := a.kc.Clientset.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: discoveryv1.LabelServiceName + "=" + name,
 	})
+	if apierrors.IsForbidden(err) {
+		// The updater rolls images but never applies RBAC, so an install
+		// upgraded in place may lack the endpointslices rule. Without this
+		// fallback every wake timed out into a 503.
+		return a.endpointReadyLegacy(ctx, ns, name)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -471,6 +478,21 @@ func (a *Activator) endpointReady(ctx context.Context, ns, name string) (bool, e
 			if len(ep.Addresses) > 0 && (ep.Conditions.Ready == nil || *ep.Conditions.Ready) {
 				return true, nil
 			}
+		}
+	}
+	return false, nil
+}
+
+// endpointReadyLegacy is endpointReady over the deprecated v1 Endpoints
+// API, for installs whose RBAC predates the endpointslices rule.
+func (a *Activator) endpointReadyLegacy(ctx context.Context, ns, name string) (bool, error) {
+	ep, err := a.kc.Clientset.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	for _, ss := range ep.Subsets {
+		if len(ss.Addresses) > 0 {
+			return true, nil
 		}
 	}
 	return false, nil
