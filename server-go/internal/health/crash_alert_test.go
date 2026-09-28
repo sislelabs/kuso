@@ -302,3 +302,41 @@ func TestPodCrashed_AlertsAgainAfterRecovery(t *testing.T) {
 		t.Fatalf("got %d recoveries, want 1", n)
 	}
 }
+
+// Crash detection listed pods only in the home namespace, so projects with
+// their own namespace (kuso-<project>) never got a crash alert (live: a
+// crashlooping cmp/nocaps pod in kuso-cmp produced no event). Pods owned
+// by a Job (crons, runs, builds, seeds) are not long-running workloads —
+// they fail through their own events — and were reported as a service
+// crash under the cron's name.
+func TestCheckPods_AllNamespacesAndSkipsJobPods(t *testing.T) {
+	h := newCrashHarness(t)
+	ctx := context.Background()
+
+	custom := svcPod("cmp-web-production-x-1", "CrashLoopBackOff")
+	custom.Namespace = "kuso-cmp"
+	custom.Labels[kube.LabelProject] = "cmp"
+	custom.Labels[kube.LabelService] = "cmp-web"
+	custom.Labels["app.kubernetes.io/instance"] = "cmp-web-production"
+
+	job := svcPod("shop-api-nightly-2984-abc", "CrashLoopBackOff")
+	job.Labels["app.kubernetes.io/instance"] = "shop-api-nightly"
+	job.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "shop-api-nightly-2984", UID: "j"}}
+
+	for _, p := range []*corev1.Pod{custom, job} {
+		if _, err := h.cs.CoreV1().Pods(p.Namespace).Create(ctx, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.w.checkPods(ctx)
+
+	var projects []string
+	for _, e := range h.events {
+		if e.Type == notify.EventPodCrashed {
+			projects = append(projects, e.Project+"/"+e.Service)
+		}
+	}
+	if len(projects) != 1 || projects[0] != "cmp/web" {
+		t.Errorf("crash events %v, want exactly [cmp/web] (custom namespace seen, Job pod skipped)", projects)
+	}
+}

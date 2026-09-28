@@ -165,7 +165,11 @@ func (w *Watcher) checkPods(ctx context.Context) {
 	// every pod in the namespace. On a busy cluster the unfiltered list
 	// pulled back multi-MB payloads every tick, most of it platform
 	// pods this loop then skipped. Mirrors logship's selector.
-	pods, err := w.Kube.Clientset.CoreV1().Pods(w.Namespace).List(ctx, metav1.ListOptions{
+	//
+	// All namespaces: a project may run in its own namespace
+	// (kuso-<project>), and listing only the home namespace left every
+	// such project without crash alerts.
+	pods, err := w.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
 		LabelSelector: kube.LabelProject,
 	})
 	if err != nil {
@@ -178,6 +182,12 @@ func (w *Watcher) checkPods(ctx context.Context) {
 	var order []string // first-seen order, so alerts are deterministic
 	for i := range pods.Items {
 		p := &pods.Items[i]
+		// Job pods (crons, runs, builds, seeds, release hooks) aren't
+		// long-running workloads: they fail through their own events, and
+		// reporting them here filed a cron as a crashing service env.
+		if ownedByJob(p) {
+			continue
+		}
 		key := crashKey(p)
 		o := obs[key]
 		if o == nil {
@@ -605,4 +615,13 @@ func (w *Watcher) previousLogLines(p *corev1.Pod, reason string, n int) []string
 		ls = ls[len(ls)-n:]
 	}
 	return ls
+}
+
+func ownedByJob(p *corev1.Pod) bool {
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "Job" {
+			return true
+		}
+	}
+	return false
 }
