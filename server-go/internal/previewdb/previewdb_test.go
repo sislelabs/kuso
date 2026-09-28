@@ -1,6 +1,7 @@
 package previewdb
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -250,5 +251,23 @@ func TestBuildSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	}
 	if _, ok := labels["kuso.sislelabs.com/network-egress-public"]; ok {
 		t.Error("seed pod only talks to in-project Postgres; it must not opt into public egress")
+	}
+}
+
+// The seed image's default pg_dump is 18, whose dumps don't restore into
+// PG16 (SET transaction_timeout). The pipe must use the version-matched
+// client, never the bare default binaries.
+func TestBuildSeedJob_UsesVersionMatchedClient(t *testing.T) {
+	j := buildSeedJob("kuso", "p", "p-db", "p-db-pr-1", "", 1)
+	script := strings.Join(j.Spec.Template.Spec.Containers[0].Args, "\n")
+	for _, want := range []string{"SHOW server_version_num", `"${PG_DUMP}" --no-owner`, `| PGPASSWORD="${DST_PASSWORD}" "${PSQL}"`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("seed script missing %q", want)
+		}
+	}
+	for _, line := range strings.Split(script, "\n") {
+		if l := strings.TrimSpace(line); strings.HasPrefix(l, "PGPASSWORD=\"${SRC_PASSWORD}\" pg_dump") || strings.Contains(l, "| PGPASSWORD=\"${DST_PASSWORD}\" psql") {
+			t.Errorf("seed pipe uses the unversioned default client: %q", l)
+		}
 	}
 }

@@ -767,10 +767,33 @@ wait_pg() { # host port user
 echo "==> waiting for source ${SRC_HOST}:${SRC_PORT:-5432} and clone ${DST_HOST}:${DST_PORT:-5432}"
 PGPASSWORD="${SRC_PASSWORD}" wait_pg "${SRC_HOST}" "${SRC_PORT:-5432}" "${SRC_USER}"
 PGPASSWORD="${DST_PASSWORD}" wait_pg "${DST_HOST}" "${DST_PORT:-5432}" "${DST_USER}"
-echo "==> dumping ${SRC_HOST}/${SRC_DB} → ${DST_HOST}/${DST_DB}"
-PGPASSWORD="${SRC_PASSWORD}" pg_dump --no-owner --no-acl --clean --if-exists \
+# Match the client to the servers, as the kusoaddon backup CronJob does.
+# The image ships 16/17/18 under /usr/libexec/postgresql<major>/; the
+# default pg_dump is 18, which writes SET transaction_timeout — unknown
+# before PG17 — so an 18 dump restored into a PG16 clone aborts under
+# ON_ERROR_STOP before creating anything. pg_dump must also be >= the
+# source, so use the newer of the two majors.
+pgbin() { # major tool
+  if [ -n "$1" ] && [ -x "/usr/libexec/postgresql$1/$2" ]; then echo "/usr/libexec/postgresql$1/$2"; return; fi
+  for v in 18 17 16; do
+    if [ -x "/usr/libexec/postgresql$v/$2" ]; then echo "/usr/libexec/postgresql$v/$2"; return; fi
+  done
+  echo "$2"
+}
+pgmajor() { # host user password db
+  n=$(PGPASSWORD="$3" $(pgbin "" psql) -h "$1" -U "$2" -d "$4" -tAc "SHOW server_version_num" 2>/dev/null | tr -dc '0-9')
+  [ -n "$n" ] && echo $((n / 10000))
+}
+SRC_MAJOR=$(pgmajor "${SRC_HOST}" "${SRC_USER}" "${SRC_PASSWORD}" "${SRC_DB}")
+DST_MAJOR=$(pgmajor "${DST_HOST}" "${DST_USER}" "${DST_PASSWORD}" "${DST_DB}")
+MAJOR="${DST_MAJOR}"
+if [ -n "${SRC_MAJOR}" ] && { [ -z "${MAJOR}" ] || [ "${SRC_MAJOR}" -gt "${MAJOR}" ]; }; then MAJOR="${SRC_MAJOR}"; fi
+PG_DUMP=$(pgbin "${MAJOR}" pg_dump)
+PSQL=$(pgbin "${MAJOR}" psql)
+echo "==> dumping ${SRC_HOST}/${SRC_DB} (pg${SRC_MAJOR:-?}) → ${DST_HOST}/${DST_DB} (pg${DST_MAJOR:-?}) with ${PG_DUMP}"
+PGPASSWORD="${SRC_PASSWORD}" "${PG_DUMP}" --no-owner --no-acl --clean --if-exists \
   -h "${SRC_HOST}" -U "${SRC_USER}" "${SRC_DB}" \
-  | PGPASSWORD="${DST_PASSWORD}" psql -v ON_ERROR_STOP=1 \
+  | PGPASSWORD="${DST_PASSWORD}" "${PSQL}" -v ON_ERROR_STOP=1 \
   -h "${DST_HOST}" -U "${DST_USER}" "${DST_DB}"
 echo "==> done"
 `},
