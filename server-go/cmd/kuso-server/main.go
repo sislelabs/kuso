@@ -671,7 +671,11 @@ func main() {
 			goSafe(envReleaseLog, "env-group-release", func() {
 				rctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 				defer cancel()
-				res, err := envReleaseRunner.Run(rctx, env.Namespace, env, env.Spec.Image)
+				var res releaserun.Result
+				err := waitForConnSecrets(rctx, kc.Clientset, env.Namespace, env.Spec.EnvFromSecrets, 3*time.Second)
+				if err == nil {
+					res, err = envReleaseRunner.Run(rctx, env.Namespace, env, env.Spec.Image)
+				}
 				if err == nil && res.Outcome == releaserun.OutcomeSucceeded {
 					envReleaseLog.Info("release hook succeeded", "env", env.Name, "job", res.JobName)
 					return
@@ -681,13 +685,20 @@ func main() {
 					msg = err.Error()
 				}
 				envReleaseLog.Warn("release hook failed", "env", env.Name, "job", res.JobName, "outcome", res.Outcome, "err", msg)
+				short := strings.TrimPrefix(env.Spec.Service, env.Spec.Project+"-")
+				group := env.Labels[kube.LabelEnv]
 				notifyDisp.Emit(notify.Event{
-					Type:     notify.EventRunFailed,
-					Project:  env.Spec.Project,
-					Service:  env.Spec.Service,
-					Title:    "Release hook failed for " + env.Name,
-					Body:     "The env-group clone runs against a fresh database that was not migrated: " + msg,
-					Severity: "error",
+					Type:        notify.EventRunFailed,
+					Project:     env.Spec.Project,
+					Service:     short,
+					Env:         group,
+					Title:       "✗ Release failed · " + notify.Scope(env.Spec.Project, short, group),
+					Description: "The env group's fresh database was not migrated, so the service runs against an empty schema.",
+					Body:        msg,
+					LogTail:     res.LogTail,
+					URL:         notify.ServiceLink(env.Spec.Project, short, "deployments", group),
+					Severity:    notify.EnvSeverity(group, "error"),
+					Fields:      []notify.EventField{{Name: "Reason", Value: msg, Inline: false}},
 				})
 			})
 		}

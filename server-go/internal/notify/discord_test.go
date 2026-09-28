@@ -46,22 +46,18 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 	if em["title"] != e.Title {
 		t.Errorf("title %q", em["title"])
 	}
-	// Success cards are compact: fields fold into one description line.
-	wantDesc := "feat(brand): real Papelito mark\n**Ref** `main` · `53d3f34` · **By** ivo9999 · **Built in** 1m 24s"
-	if em["description"] != wantDesc {
+	// Success cards are compact: the description stays plain prose (a
+	// phone shows it verbatim), the details fold into one blank-named field.
+	if em["description"] != e.Description {
 		t.Errorf("description %q", em["description"])
 	}
-	if em["url"] != "https://kuso.example.com/projects/distill?service=web" {
-		t.Errorf("url not absolutified: %q", em["url"])
+	cf := fieldsOf(em)
+	if len(cf) != 1 || cf[0]["name"] != blankFieldName ||
+		cf[0]["value"] != "**Ref** `main` · `53d3f34` · **By** ivo9999 · **Built in** 1m 24s" {
+		t.Errorf("compact details field: %+v", cf)
 	}
-	if _, ok := em["color"].(int); !ok {
-		t.Errorf("color missing/wrong type: %T", em["color"])
-	}
-	if em["timestamp"] != "2026-05-16T12:30:00Z" {
-		t.Errorf("timestamp %q", em["timestamp"])
-	}
-	if f := fieldsOf(em); len(f) != 0 {
-		t.Errorf("compact card should carry no field block: %+v", f)
+	if _, has := got["content"]; has {
+		t.Errorf("no mention → no message content (it would repeat the card): %v", got["content"])
 	}
 	footer, ok := em["footer"].(map[string]any)
 	if !ok {

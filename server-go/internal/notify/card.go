@@ -84,35 +84,53 @@ func cardDescription(e Event) string {
 	return body
 }
 
-// pushLine is the one-line plain-text summary of an event: the title,
-// plus what's wrong when kuso knows — the diagnosis, else the first line
-// of the description or body. It's the message content Discord shows in
-// a push notification, so it carries no markdown.
-func pushLine(e Event) string {
-	why := ""
+// whySource says which part of the card a ping's reason line came from,
+// so the embed can leave that line out instead of repeating it.
+type whySource int
+
+const (
+	whyTitle whySource = iota
+	whyDiagnosis
+	whyDescription
+	whyReason
+)
+
+// pingReason is the one-line plain-text "what broke" that follows a ping:
+// the diagnosis when kuso has one, else the first line of the description,
+// else the Reason field, else the title. It's the message content Discord
+// shows in a push notification, so it carries no markdown.
+func pingReason(e Event) (string, whySource) {
+	plain := func(s string) string {
+		s = discordToMarkup(expandTimes(s, markupPlain), markupPlain)
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[:i]
+		}
+		return truncateRunes(strings.Trim(strings.TrimSpace(s), "`"), 160)
+	}
 	if c := e.Classification; c != nil && c.Kind != failures.KindGeneric {
-		why = strings.TrimSpace(c.Summary)
+		if why := plain(c.Summary); why != "" {
+			return why, whyDiagnosis
+		}
 	}
-	if why == "" {
-		why = cardDescription(e)
+	if why := plain(cardDescription(e)); why != "" {
+		return why, whyDescription
 	}
-	if why == "" {
-		for _, f := range e.Fields {
-			if f.Name == "Reason" {
-				why = f.Value
+	for _, f := range e.Fields {
+		if f.Name == "Reason" {
+			if why := plain(f.Value); why != "" {
+				return why, whyReason
 			}
 		}
 	}
-	why = discordToMarkup(expandTimes(why, markupPlain), markupPlain)
-	if i := strings.IndexByte(why, '\n'); i >= 0 {
-		why = why[:i]
+	return e.Title, whyTitle
+}
+
+// dropFirstLine removes s's first line (the one a ping already showed).
+func dropFirstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
 	}
-	why = strings.Trim(strings.TrimSpace(why), "`")
-	line := e.Title
-	if why != "" && !strings.Contains(e.Title, why) {
-		line += " — " + truncateRunes(why, 160)
-	}
-	return line
+	return ""
 }
 
 // bold renders s in the channel's bold syntax (none for plain text).
@@ -150,7 +168,7 @@ func discordToMarkup(s string, m markup) string {
 // the web UI showed it — the Discord card made you open the logs to
 // learn "out of memory". Generic classifications ("see logs") add
 // nothing over the log tail, so they render as "".
-func diagnosisText(c *failures.Classification, m markup) string {
+func diagnosisText(c *failures.Classification, m markup, skipSummary bool) string {
 	if c == nil || c.Kind == failures.KindGeneric {
 		return ""
 	}
@@ -159,14 +177,21 @@ func diagnosisText(c *failures.Classification, m markup) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("💡 " + bold(summary, m))
+	if !skipSummary {
+		b.WriteString("💡 " + bold(summary, m))
+	}
 	if r := c.Remediation; r != nil {
 		fix := strings.TrimSpace(r.Title)
 		if fix == "" {
 			fix = strings.TrimSpace(r.Detail)
 		}
 		if fix != "" {
-			b.WriteString("\n" + bold("Fix:", m) + " " + fix)
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			} else {
+				b.WriteString("💡 ")
+			}
+			b.WriteString(bold("Fix:", m) + " " + fix)
 		}
 		// Only short snippets: a card is for triage, the full
 		// remediation lives in the dashboard.

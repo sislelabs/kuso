@@ -50,7 +50,7 @@ func plainSummary(e Event, limit int) string {
 	if desc != "" {
 		head.WriteString(discordToMarkup(expandTimes(desc, m), m) + "\n")
 	}
-	if diag := diagnosisText(e.Classification, m); diag != "" {
+	if diag := diagnosisText(e.Classification, m, false); diag != "" {
 		head.WriteString(diag + "\n")
 	}
 	for _, f := range e.Fields {
@@ -134,7 +134,7 @@ func slackPayload(e Event) map[string]any {
 	const m = markupSlack
 	desc := cardDescription(e)
 	desc = discordToMarkup(expandTimes(desc, m), m)
-	if diag := diagnosisText(e.Classification, m); diag != "" {
+	if diag := diagnosisText(e.Classification, m, false); diag != "" {
 		desc = strings.TrimSpace(desc + "\n" + diag)
 	}
 	att := map[string]any{

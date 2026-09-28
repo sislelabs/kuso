@@ -754,6 +754,10 @@ func discordColor(e Event) int {
 // it the whole webhook POST is rejected with a 400.
 const discordEmbedMaxChars = 6000
 
+// blankFieldName titles the details and link-row fields. Discord requires
+// a non-empty field name; a zero-width space renders as nothing.
+const blankFieldName = "\u200b"
+
 // discordPayload assembles the full Discord webhook body for an Event.
 // Shared by sendDiscord + sendDiscordSync so the two paths can't drift.
 //
@@ -785,17 +789,21 @@ func discordPayload(e Event, mention string) map[string]any {
 	}
 	compact := isCompact(e)
 
+	// A ping's message line already says what broke; leave that line out
+	// of the embed so the channel doesn't show it twice.
+	pingWhy, pingSrc := "", whyTitle
+	if mention != "" {
+		pingWhy, pingSrc = pingReason(e)
+	}
 	parts := make([]string, 0, 4)
 	desc := cardDescription(e)
+	if pingSrc == whyDescription {
+		desc = dropFirstLine(desc)
+	}
 	if desc != "" {
 		parts = append(parts, expandTimes(desc, m))
 	}
-	if compact {
-		if line := inlineFields(e.Fields, m); line != "" {
-			parts = append(parts, expandTimes(line, m))
-		}
-	}
-	if diag := diagnosisText(e.Classification, m); diag != "" {
+	if diag := diagnosisText(e.Classification, m, pingSrc == whyDiagnosis); diag != "" {
 		parts = append(parts, diag)
 	}
 	// Log tail goes inline when it fits, else into a Logs field (field
@@ -809,23 +817,23 @@ func discordPayload(e Event, mention string) map[string]any {
 			logInDesc = true
 		}
 	}
-	links := linksLine(e, m)
-	body := strings.Join(parts, "\n")
-	if links != "" {
-		body = truncateRunes(body, 4096-len([]rune(links))-2)
-		if body != "" {
-			body += "\n\n"
-		}
-		body += links
-	}
-	if body != "" {
+	// The description stays plain prose: with no message content a phone's
+	// push notification shows it verbatim, so markdown-heavy lines (the
+	// folded details, the link row) live in fields instead.
+	if body := strings.Join(parts, "\n"); body != "" {
 		embed["description"] = truncateRunes(body, 4096)
 	}
 
-	fields := make([]map[string]any, 0, len(e.Fields)+1)
-	if !compact {
+	fields := make([]map[string]any, 0, len(e.Fields)+2)
+	if compact {
+		if line := inlineFields(e.Fields, m); line != "" {
+			fields = append(fields, map[string]any{
+				"name": blankFieldName, "value": truncateRunes(expandTimes(line, m), 1024), "inline": false,
+			})
+		}
+	} else {
 		for _, f := range e.Fields {
-			if f.Name == "" || f.Value == "" {
+			if f.Name == "" || f.Value == "" || (pingSrc == whyReason && f.Name == "Reason") {
 				continue
 			}
 			fields = append(fields, map[string]any{
@@ -842,8 +850,14 @@ func discordPayload(e Event, mention string) map[string]any {
 			})
 		}
 	}
-	if len(fields) > 25 {
-		fields = fields[:25]
+	links := linksLine(e, m)
+	if len(fields) > 24 {
+		fields = fields[:24]
+	}
+	if links != "" {
+		fields = append(fields, map[string]any{
+			"name": blankFieldName, "value": truncateRunes(links, 1024), "inline": false,
+		})
 	}
 	if len(fields) > 0 {
 		embed["fields"] = fields
@@ -856,7 +870,7 @@ func discordPayload(e Event, mention string) map[string]any {
 	if footer != "" {
 		embed["footer"] = map[string]any{"text": footer}
 	}
-	fitDiscordEmbed(embed, footer, links)
+	fitDiscordEmbed(embed, footer, links != "")
 	payload := map[string]any{
 		"username": "kuso",
 		"embeds":   []any{embed},
@@ -864,9 +878,13 @@ func discordPayload(e Event, mention string) map[string]any {
 	if av := avatarURL(); av != "" {
 		payload["avatar_url"] = av
 	}
-	// content is what a phone's push notification shows. Without it the
-	// push is the embed's raw markdown, and a ping reads just "@here".
-	payload["content"] = truncateRunes(strings.TrimSpace(mention+" "+pushLine(e)), 2000)
+	// A ping's content is all a phone's push notification shows, so it
+	// carries what broke: "@here Pod ran out of memory". Without a mention
+	// there's no content — the push falls back to the embed's title and
+	// plain description, and the channel doesn't show the same line twice.
+	if mention != "" {
+		payload["content"] = truncateRunes(mention+" "+pingWhy, 2000)
+	}
 	// Allowed_mentions explicitly enables the parsing — without this
 	// Discord strips @here / @everyone for hardened webhooks. Roles need
 	// explicit IDs in `roles`. With no mention it parses nothing, so a
@@ -878,8 +896,8 @@ func discordPayload(e Event, mention string) map[string]any {
 // fitDiscordEmbed trims an assembled embed until it's within
 // discordEmbedMaxChars: description first, then the Logs field, then
 // drops fields from the end. footer is the already-truncated footer text;
-// keepSuffix (the link row) survives description trimming.
-func fitDiscordEmbed(embed map[string]any, footer, keepSuffix string) {
+// keepLast protects the final field (the link row) from being dropped.
+func fitDiscordEmbed(embed map[string]any, footer string, keepLast bool) {
 	count := func(s any) int {
 		str, _ := s.(string)
 		return len([]rune(str))
@@ -897,18 +915,10 @@ func fitDiscordEmbed(embed map[string]any, footer, keepSuffix string) {
 		return
 	}
 	if d := count(embed["description"]); d > 0 {
-		full := embed["description"].(string)
-		head, tail := full, ""
-		if keepSuffix != "" && strings.HasSuffix(full, keepSuffix) {
-			head, tail = strings.TrimSuffix(full, keepSuffix), keepSuffix
-		}
-		keep := len([]rune(head)) - over
-		switch {
-		case keep > 0:
-			embed["description"] = truncateRunes(head, keep) + tail
-		case tail != "":
-			embed["description"] = tail
-		default:
+		keep := d - over
+		if keep > 0 {
+			embed["description"] = truncateRunes(embed["description"].(string), keep)
+		} else {
 			delete(embed, "description")
 		}
 		over = total() - discordEmbedMaxChars
@@ -928,7 +938,11 @@ func fitDiscordEmbed(embed map[string]any, footer, keepSuffix string) {
 		break
 	}
 	for over > 0 && len(fields) > 0 {
-		fields = fields[:len(fields)-1]
+		if keepLast && len(fields) > 1 {
+			fields = append(fields[:len(fields)-2], fields[len(fields)-1])
+		} else {
+			fields = fields[:len(fields)-1]
+		}
 		over = total() - discordEmbedMaxChars
 	}
 	if over > 0 {
