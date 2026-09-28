@@ -1110,8 +1110,17 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// for nothing, and it is exactly what made today's orphans invisible
 	// (16 leaked databases each still had a *-conn Secret, so a naive
 	// "is anything referencing it" check said yes).
-	if cr.Spec.UseInstanceAddon != "" && shouldDropInstanceDB(cr.Labels) {
+	//
+	// The same holds for a NATIVE env clone (a preview's or env group's
+	// own StatefulSet): it is meant to go with its env, so its data PVCs
+	// go too. Only instance clones used to lose their Secret, so every
+	// closed PR left <addon>-pr-N-conn credentials behind. A project's
+	// own addon (no clone labels) still keeps both.
+	if shouldDropInstanceDB(cr.Labels) {
 		s.deleteCloneConnSecret(ctx, ns, fqn)
+		if cr.Spec.UseInstanceAddon == "" {
+			s.deleteCloneDataPVCs(ctx, ns, fqn)
+		}
 	}
 	// Data-safety trail: deleting the addon does NOT delete its data —
 	// the StatefulSet's volumeClaimTemplates PVCs are RETAINED. That's
@@ -1944,6 +1953,27 @@ func shouldDropInstanceDB(labels map[string]string) bool {
 //
 // Best-effort: a leftover Secret is untidy, not dangerous, and must
 // never block the delete.
+// deleteCloneDataPVCs removes a native clone's StatefulSet data PVCs.
+// Only call it for env-scoped clones (shouldDropInstanceDB): a project's
+// own addon keeps its data on delete.
+func (s *Service) deleteCloneDataPVCs(ctx context.Context, ns, addonFQN string) {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return
+	}
+	pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+	})
+	if err != nil {
+		slog.Default().Warn("clone addon delete: list data PVCs", "addon", addonFQN, "namespace", ns, "err", err)
+		return
+	}
+	for i := range pvcs.Items {
+		if err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			slog.Default().Warn("clone addon delete: leftover data PVC", "pvc", pvcs.Items[i].Name, "namespace", ns, "err", err)
+		}
+	}
+}
+
 func (s *Service) deleteCloneConnSecret(ctx context.Context, ns, addonFQN string) {
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return

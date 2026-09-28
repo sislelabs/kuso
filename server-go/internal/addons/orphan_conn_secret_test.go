@@ -116,3 +116,51 @@ func TestDelete_ProjectOwnAddonKeepsConnSecret(t *testing.T) {
 			"would mint a new password the surviving database rejects", err)
 	}
 }
+
+// A NATIVE (StatefulSet) clone — a PR preview's own postgres — must lose
+// its conn Secret and data PVC too. Only instance-backed clones did, so
+// every closed PR left <addon>-pr-N-conn credentials behind (live, e2e
+// PR 1, 2026-09-28).
+func TestDelete_NativeCloneRemovesConnSecretAndPVC(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := fakeServiceWithSecrets(t, seedProj("shop"))
+	cr := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+		"kind":       "KusoAddon",
+		"metadata": map[string]any{
+			"name":      "shop-db-pr-1",
+			"namespace": "kuso",
+			"labels": map[string]any{
+				"kuso.sislelabs.com/project":    "shop",
+				"kuso.sislelabs.com/preview-pr": "1",
+				kube.LabelEnv:                   "preview-pr-1",
+			},
+		},
+		"spec": map[string]any{"kind": "postgres"},
+	}}
+	gvr := schema.GroupVersionResource{Group: "application.kuso.sislelabs.com", Version: "v1alpha1", Resource: "kusoaddons"}
+	if _, err := s.Kube.Dynamic.Resource(gvr).Namespace("kuso").Create(ctx, cr, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed addon CR: %v", err)
+	}
+	cs := s.Kube.Clientset.CoreV1()
+	if _, err := cs.Secrets("kuso").Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shop-db-pr-1-conn", Namespace: "kuso"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed conn: %v", err)
+	}
+	if _, err := cs.PersistentVolumeClaims("kuso").Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name: "data-shop-db-pr-1-0", Namespace: "kuso",
+		Labels: map[string]string{"app.kubernetes.io/instance": "shop-db-pr-1"},
+	}}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed pvc: %v", err)
+	}
+
+	if err := s.Delete(ctx, "shop", "db-pr-1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := cs.Secrets("kuso").Get(ctx, "shop-db-pr-1-conn", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("native clone conn secret survived (err=%v)", err)
+	}
+	if _, err := cs.PersistentVolumeClaims("kuso").Get(ctx, "data-shop-db-pr-1-0", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("native clone data PVC survived (err=%v)", err)
+	}
+}
