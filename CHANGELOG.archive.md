@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.5] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: load env values up front so every var row is editable ([1ce8e75](https://github.com/sislelabs/kuso/commit/1ce8e75bae4704f7759496ff95dac0e53742e40e))
+
 ## [0.23.4] — 2026-08-24
 
 ### 🐛 Bug Fixes
