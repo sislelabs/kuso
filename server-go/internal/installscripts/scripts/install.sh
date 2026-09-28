@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.26.18}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.26.18}"
+KUSO_VERSION="${KUSO_VERSION:-v0.27.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.27.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 # Public-TCP entrypoint pool for addons (docs/superpowers/specs/
@@ -1374,9 +1374,10 @@ echo
 echo "  UI:        https://${KUSO_DOMAIN}/"
 echo "  Admin:     admin"
 if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
-  echo "  Password:  (unchanged — reused from existing install)"
+  echo "  Password:  unchanged from the previous install. To print it:"
+  echo "    kubectl -n kuso get secret kuso-admin-credentials -o jsonpath='{.data.password}' | base64 -d; echo"
+  echo "  (If the password was changed in the dashboard since then, this value is out of date.)"
   echo
-  echo "  Forgot the password? Reset it via the UI (Settings → Users)."
   echo "  Lost UI access entirely? Force-reset from the configured secret:"
   echo "    kubectl -n kuso patch secret kuso-admin-credentials --type=merge \\"
   echo "      -p '{\"stringData\":{\"password\":\"<new>\"}}'"
@@ -1386,9 +1387,6 @@ if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
   echo "    kubectl -n kuso set env deployment/kuso-server KUSO_ADMIN_PASSWORD_FORCE_RESET-"
 else
   echo "  Password:  ${ADMIN_PASSWORD}"
-  echo
-  echo "  CLI login from your workstation:"
-  echo "    kuso login --api https://${KUSO_DOMAIN} -u admin -p '${ADMIN_PASSWORD}'"
 fi
 echo
 if [[ "$KUSO_LE_ENV" == "staging" ]]; then
@@ -1408,18 +1406,18 @@ fi
 
 if [[ "${KUSO_INSECURE_SECRETS:-0}" != "1" ]]; then
   cat <<EOF
-  Save the password somewhere safe. To regenerate it later:
-
-    kubectl -n kuso patch secret kuso-server-secrets \\
-      --type=merge -p '{"stringData":{"KUSO_ADMIN_PASSWORD":"<new>"}}'
-    kubectl -n kuso rollout restart deployment/kuso-server
+  Save the password somewhere safe. To change it later: Settings → Users
+  in the dashboard, or 'kuso user list' to find the admin's id and then
+  'kuso user set-password <id> --password <new>'.
 
 EOF
   if ! kubectl get secret -n kuso kuso-github-app >/dev/null 2>&1; then
     cat <<EOF
   GitHub App: not yet configured. Two ways to fix:
-    1. Open https://${KUSO_DOMAIN}/settings/github in the dashboard
-       and paste your GitHub App credentials.
+    1. In the dashboard open Settings → GitHub
+       (https://${KUSO_DOMAIN}/settings/github) and click
+       'Create GitHub App'. GitHub creates the App and kuso stores
+       the credentials; there is nothing to copy.
     2. Re-run install with --github-wizard for an interactive prompt.
 
   Without it, services still build via 'kuso build trigger' but the
@@ -1438,7 +1436,7 @@ else
   GH_LINE="    ⚠ GitHub App — not yet (finish in dashboard → Settings → GitHub)"
 fi
 if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
-  PW_DISPLAY="<unchanged — see existing install>"
+  PW_DISPLAY="password unchanged, see above"
 else
   PW_DISPLAY="$ADMIN_PASSWORD"
 fi
@@ -1448,7 +1446,6 @@ cat <<EOF
   kuso is installed
 ────────────────────────────────────────────────────────────────────
   Dashboard:   https://${KUSO_DOMAIN}/        (admin / ${PW_DISPLAY})
-  CLI login:   kuso login --api https://${KUSO_DOMAIN} -u admin -p ${PW_DISPLAY}
 
   Provisioned:
     ✓ k3s + traefik + cert-manager
@@ -1456,10 +1453,16 @@ cat <<EOF
     ✓ in-cluster registry
 ${GH_LINE}
 
-  Verify:
-    kuso doctor                        # pre-flight checks from your workstation
+  CLI, on your workstation:
+    curl -fsSL https://${KUSO_DOMAIN}/install-cli.sh | sh
+    kuso login --api https://${KUSO_DOMAIN} -u admin   # prompts for the password
+    kuso doctor                        # checks DNS, TLS, auth and the GitHub webhook
+
+  Verify on this server:
     kubectl get pods -n kuso           # everything Running?
-    https://${KUSO_DOMAIN}/settings/github   # connect GitHub for repo deploys
+
+  Connect GitHub for repo deploys: Settings → GitHub → Create GitHub App
+    https://${KUSO_DOMAIN}/settings/github
 
   If the dashboard 502s for a minute, cert issuance is still in flight —
   check:  kubectl get certificate -n kuso

@@ -2,6 +2,24 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.0] — 2026-08-27
+
+### Other
+- Merge: platform review fixes (3 criticals + 6 highs) ([c8b4192](https://github.com/sislelabs/kuso/commit/c8b4192a905629348810ea45cdfefc85baa3a320))
+
+### ✨ Features
+- Feat: prune archived build records in the daily janitor ([633f54c](https://github.com/sislelabs/kuso/commit/633f54c5c9e694356986e7f68205be8dffaec9ba))
+
+### 🐛 Bug Fixes
+- Fix: propagate image on redeploy, clamp label values, gate cron promotion ([d342150](https://github.com/sislelabs/kuso/commit/d342150c9bec2c2f30a931bee7ff908bb3364d56))
+- Fix: stop KusoRun leaking production env values and credentials to viewers ([53274fe](https://github.com/sislelabs/kuso/commit/53274fed1bd90786fe3d77c8e53988fa8102e14c))
+- Fix: stop the preview env literal dropping ten service-derived fields ([73b8d14](https://github.com/sislelabs/kuso/commit/73b8d148382b5233811d1c5df0173d050eef32ec))
+- Fix: contain panics in the remaining background loops ([f772682](https://github.com/sislelabs/kuso/commit/f772682a02311407db8d704f9c8543a6ace109e3))
+- Fix: count direct instance admins in the bootstrap promotion gate ([bf4ab43](https://github.com/sislelabs/kuso/commit/bf4ab4384f1784d6aa97f2f756a985b353b83e55))
+- Fix: stop the image sweep untagging live images in other namespaces ([421062f](https://github.com/sislelabs/kuso/commit/421062fc8f3eb82691643aa76a7a2543927278fd))
+- Fix: never mark a build succeeded when the release gate did not run ([c0070ab](https://github.com/sislelabs/kuso/commit/c0070ab038dc6ea41a4d6622c059851b80d66c38))
+- Fix: stop addon refresh repointing scoped envs at the production database ([97c9b74](https://github.com/sislelabs/kuso/commit/97c9b744ba1c57af152eccac739ef1ea42c31f2d))
+
 ## [0.24.1] — 2026-08-24
 
 ### 🐛 Bug Fixes

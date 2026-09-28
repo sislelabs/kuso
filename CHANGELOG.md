@@ -19,6 +19,18 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.0] — 2026-09-28
+
+### Other
+- Run addon admin commands on the CloudNativePG primary ([d5965bf](https://github.com/sislelabs/kuso/commit/d5965bf234c7c810fd5c56a330a9eaf892d923b1))
+- Map compose env by variable shape and diagnose missing capabilities ([bb00193](https://github.com/sislelabs/kuso/commit/bb00193253958fa8588fc351fb575ec5ceb7f158))
+- Alert on 5xx rate, p95 latency, certificate expiry and DNS mismatch ([25ec5a3](https://github.com/sislelabs/kuso/commit/25ec5a393f6422b95ab349bc20c801d952262f68))
+- Let kuso-server delete the namespaces it creates ([da163f9](https://github.com/sislelabs/kuso/commit/da163f98b305d770e5b5ed1085b7c119fc03d498))
+
+### ✨ Features
+- Add watch paths, private registries, CI gating, plan diffs, DX fixes ([ee8d9da](https://github.com/sislelabs/kuso/commit/ee8d9da43ee91ef806ba40258b6f02289e6120e2))
+- Add log drains and a metrics export endpoint ([e83531b](https://github.com/sislelabs/kuso/commit/e83531b23ee7921235f323e4f76d082e7f78e984))
+
 ## [0.26.18] — 2026-09-28
 
 ### Other
@@ -378,24 +390,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(backup): make addon backups actually reach the DB and S3, add per-addon bucket ([c755f71](https://github.com/sislelabs/kuso/commit/c755f710fae27852e0a4509c94a92700acab25a4))
-
-## [0.25.0] — 2026-08-27
-
-### Other
-- Merge: platform review fixes (3 criticals + 6 highs) ([c8b4192](https://github.com/sislelabs/kuso/commit/c8b4192a905629348810ea45cdfefc85baa3a320))
-
-### ✨ Features
-- Feat: prune archived build records in the daily janitor ([633f54c](https://github.com/sislelabs/kuso/commit/633f54c5c9e694356986e7f68205be8dffaec9ba))
-
-### 🐛 Bug Fixes
-- Fix: propagate image on redeploy, clamp label values, gate cron promotion ([d342150](https://github.com/sislelabs/kuso/commit/d342150c9bec2c2f30a931bee7ff908bb3364d56))
-- Fix: stop KusoRun leaking production env values and credentials to viewers ([53274fe](https://github.com/sislelabs/kuso/commit/53274fed1bd90786fe3d77c8e53988fa8102e14c))
-- Fix: stop the preview env literal dropping ten service-derived fields ([73b8d14](https://github.com/sislelabs/kuso/commit/73b8d148382b5233811d1c5df0173d050eef32ec))
-- Fix: contain panics in the remaining background loops ([f772682](https://github.com/sislelabs/kuso/commit/f772682a02311407db8d704f9c8543a6ace109e3))
-- Fix: count direct instance admins in the bootstrap promotion gate ([bf4ab43](https://github.com/sislelabs/kuso/commit/bf4ab4384f1784d6aa97f2f756a985b353b83e55))
-- Fix: stop the image sweep untagging live images in other namespaces ([421062f](https://github.com/sislelabs/kuso/commit/421062fc8f3eb82691643aa76a7a2543927278fd))
-- Fix: never mark a build succeeded when the release gate did not run ([c0070ab](https://github.com/sislelabs/kuso/commit/c0070ab038dc6ea41a4d6622c059851b80d66c38))
-- Fix: stop addon refresh repointing scoped envs at the production database ([97c9b74](https://github.com/sislelabs/kuso/commit/97c9b744ba1c57af152eccac739ef1ea42c31f2d))
 
 
 ---

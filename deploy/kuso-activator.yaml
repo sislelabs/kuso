@@ -39,7 +39,7 @@ spec:
       priorityClassName: kuso-platform
       containers:
         - name: activator
-          image: ghcr.io/sislelabs/kuso-server-go:v0.26.18
+          image: ghcr.io/sislelabs/kuso-server-go:v0.27.0
           args: ["--activator"]
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
