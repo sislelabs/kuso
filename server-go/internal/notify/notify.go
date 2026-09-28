@@ -864,13 +864,14 @@ func discordPayload(e Event, mention string) map[string]any {
 	if av := avatarURL(); av != "" {
 		payload["avatar_url"] = av
 	}
-	if mention != "" {
-		payload["content"] = mention
-		// Allowed_mentions explicitly enables the parsing — without
-		// this Discord strips @here / @everyone for hardened webhooks.
-		// Roles need explicit IDs in `roles`.
-		payload["allowed_mentions"] = allowedMentionsFor(mention)
-	}
+	// content is what a phone's push notification shows. Without it the
+	// push is the embed's raw markdown, and a ping reads just "@here".
+	payload["content"] = truncateRunes(strings.TrimSpace(mention+" "+pushLine(e)), 2000)
+	// Allowed_mentions explicitly enables the parsing — without this
+	// Discord strips @here / @everyone for hardened webhooks. Roles need
+	// explicit IDs in `roles`. With no mention it parses nothing, so a
+	// title or reason containing "@everyone" can never ping.
+	payload["allowed_mentions"] = allowedMentionsFor(mention)
 	return payload
 }
 

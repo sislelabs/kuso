@@ -100,3 +100,29 @@ func TestCardDescription_BodyRepeatingFieldIsDropped(t *testing.T) {
 		t.Errorf("plain body fallback lost: %q", d)
 	}
 }
+
+// A phone's push notification shows the message content, not the embed.
+// It must say what's wrong in plain text, after the mention.
+func TestDiscordPayload_ContentIsPlainPushLine(t *testing.T) {
+	cls := &failures.Classification{Kind: failures.KindOOM, Summary: "Pod ran out of memory."}
+	e := PodCrashed(PodCrash{Project: "e2e", Service: "api", Env: "production", Reason: "OOMKilled", Classification: cls})
+	e.Timestamp = time.Now()
+	e.Severity = normalizeSeverity(e.Severity)
+	p := discordPayload(e, mentionFor(e, nil))
+	want := "@here ✗ Crashing · e2e / api → production — Pod ran out of memory."
+	if p["content"] != want {
+		t.Errorf("content %q, want %q", p["content"], want)
+	}
+
+	// No mention: still a plain summary, and nothing in it may ping.
+	b := Event{Type: EventBuildSucceeded, Severity: "info", Timestamp: time.Now(),
+		Title: "✓ Build succeeded · e2e / web → production", Description: "**Fix** the `@everyone` [thing](https://x.example)\nsecond line"}
+	p = discordPayload(b, "")
+	if p["content"] != "✓ Build succeeded · e2e / web → production — Fix the `@everyone` thing (https://x.example)" {
+		t.Errorf("content %q", p["content"])
+	}
+	am := p["allowed_mentions"].(map[string]any)
+	if parse := am["parse"].([]string); len(parse) != 0 {
+		t.Errorf("allowed_mentions must parse nothing without a mention: %v", am)
+	}
+}

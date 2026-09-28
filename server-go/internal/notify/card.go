@@ -84,6 +84,37 @@ func cardDescription(e Event) string {
 	return body
 }
 
+// pushLine is the one-line plain-text summary of an event: the title,
+// plus what's wrong when kuso knows — the diagnosis, else the first line
+// of the description or body. It's the message content Discord shows in
+// a push notification, so it carries no markdown.
+func pushLine(e Event) string {
+	why := ""
+	if c := e.Classification; c != nil && c.Kind != failures.KindGeneric {
+		why = strings.TrimSpace(c.Summary)
+	}
+	if why == "" {
+		why = cardDescription(e)
+	}
+	if why == "" {
+		for _, f := range e.Fields {
+			if f.Name == "Reason" {
+				why = f.Value
+			}
+		}
+	}
+	why = discordToMarkup(expandTimes(why, markupPlain), markupPlain)
+	if i := strings.IndexByte(why, '\n'); i >= 0 {
+		why = why[:i]
+	}
+	why = strings.Trim(strings.TrimSpace(why), "`")
+	line := e.Title
+	if why != "" && !strings.Contains(e.Title, why) {
+		line += " — " + truncateRunes(why, 160)
+	}
+	return line
+}
+
 // bold renders s in the channel's bold syntax (none for plain text).
 func bold(s string, m markup) string {
 	switch m {
