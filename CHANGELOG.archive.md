@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.1] — 2026-09-01
+
+### 🐛 Bug Fixes
+- Fix(backup): make addon backups actually reach the DB and S3, add per-addon bucket ([c755f71](https://github.com/sislelabs/kuso/commit/c755f710fae27852e0a4509c94a92700acab25a4))
+
 ## [0.25.0] — 2026-08-27
 
 ### Other
