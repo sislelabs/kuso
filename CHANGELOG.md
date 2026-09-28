@@ -19,6 +19,16 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.13] — 2026-09-28
+
+### Other
+- Give new services a default pod size ([3ce96a1](https://github.com/sislelabs/kuso/commit/3ce96a18563aaf412992a8b01e78768634ee3386))
+- Sleep non-production envs by default and allow sleep with autoscaling ([1a8e917](https://github.com/sislelabs/kuso/commit/1a8e917e0d561001c4ab3c6bd0e11bb051c3c854))
+- Drop a native env clone's conn Secret and data PVCs on delete ([76b7935](https://github.com/sislelabs/kuso/commit/76b7935f13d003a14bc087237b34305b9fb8e716))
+
+### 🐛 Bug Fixes
+- Fix the remaining e2e findings and record revisions for all edits ([fc982f2](https://github.com/sislelabs/kuso/commit/fc982f2c735b96a760db1408fce11aab07ec590d))
+
 ## [0.26.12] — 2026-09-28
 
 ### Other
@@ -383,14 +393,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: stop baking credential-looking literals into published images ([e7618d4](https://github.com/sislelabs/kuso/commit/e7618d4f5a532886232425b230b450d0ceece1bc))
-
-## [0.23.2] — 2026-08-22
-
-### 🐛 Bug Fixes
-- Fix: add a root .dockerignore so make ship stops failing on node_modules ([a207b48](https://github.com/sislelabs/kuso/commit/a207b48995f2a2291942979c151ba572eecf884c))
-- Fix: let the logs panel scroll back to the start of the archive ([0e13968](https://github.com/sislelabs/kuso/commit/0e1396895ff86e591d52265a93efc8271f31cf39))
-- Fix: make the 7d/30d range pickers actually query 7d/30d ([781740d](https://github.com/sislelabs/kuso/commit/781740d01df011a1dc9c7934a1289c45be9d8bca))
-- Fix: close cross-project log reads, CSRF bypass, and add a CI test gate ([28af5f1](https://github.com/sislelabs/kuso/commit/28af5f14e9d5518be122086145a60acb69913acf))
 
 
 ---

@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.2] — 2026-08-22
+
+### 🐛 Bug Fixes
+- Fix: add a root .dockerignore so make ship stops failing on node_modules ([a207b48](https://github.com/sislelabs/kuso/commit/a207b48995f2a2291942979c151ba572eecf884c))
+- Fix: let the logs panel scroll back to the start of the archive ([0e13968](https://github.com/sislelabs/kuso/commit/0e1396895ff86e591d52265a93efc8271f31cf39))
+- Fix: make the 7d/30d range pickers actually query 7d/30d ([781740d](https://github.com/sislelabs/kuso/commit/781740d01df011a1dc9c7934a1289c45be9d8bca))
+- Fix: close cross-project log reads, CSRF bypass, and add a CI test gate ([28af5f1](https://github.com/sislelabs/kuso/commit/28af5f14e9d5518be122086145a60acb69913acf))
+
 ## [0.23.1] — 2026-08-19
 
 ### ✨ Features
