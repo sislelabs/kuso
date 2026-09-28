@@ -1895,6 +1895,10 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 	for _, f := range e.Fields {
 		fields = append(fields, notify.EnvelopeField{Name: f.Name, Value: f.Value, Inline: f.Inline})
 	}
+	links := make([]notify.EventLink, 0, len(e.Links))
+	for _, l := range e.Links {
+		links = append(links, notify.EventLink{Label: l.Label, URL: l.URL})
+	}
 	a.d.EmitEnvelope(notify.EmitEnvelope{
 		Type:           e.Type,
 		Title:          e.Title,
@@ -1909,6 +1913,8 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		DurationMs:     e.DurationMs,
 		Fields:         fields,
 		Footer:         e.Footer,
+		Env:            e.Env,
+		Links:          links,
 		Classification: e.Classification,
 	})
 }

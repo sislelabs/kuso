@@ -72,6 +72,7 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(AdminOnly)
 		r.Get("/api/notifications", h.List)
+		r.Get("/api/notifications/event-types", h.EventTypes)
 		r.Get("/api/notifications/{id}", h.Get)
 		r.Post("/api/notifications", h.Create)
 		r.Put("/api/notifications/{id}", h.Update)
@@ -294,9 +295,8 @@ func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Reques
 }
 
 // FeedClear deletes every event in the in-app feed. Backs the
-// "Clear" button in the bell popover. The notify.Dispatcher's
-// in-memory channel is independent of this table — webhook
-// fan-out for in-flight events is unaffected.
+// "Clear" button in the bell popover. The outbox is a separate
+// table, so webhook fan-out for already-emitted events is unaffected.
 func (h *NotificationsHandler) FeedClear(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := notifCtx(r)
 	defer cancel()
@@ -367,6 +367,12 @@ func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
 
 func notifCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
+}
+
+// EventTypes serves the subscribable event catalogue the settings UI
+// renders as checkboxes. Static — no DB read.
+func (h *NotificationsHandler) EventTypes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, notify.EventCatalogue)
 }
 
 func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {

@@ -327,6 +327,12 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	var newerRef string
+	for i := range raw {
+		if raw[i].Name == newName {
+			newerRef = raw[i].Spec.Ref
+		}
+	}
 	for i := range raw {
 		if raw[i].Labels["kuso.sislelabs.com/build-state"] != "" {
 			continue
@@ -355,9 +361,14 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		}
 		if s.Notifier != nil {
 			short := strings.TrimPrefix(fqn, project+"-")
-			title, desc, fields := buildRichCard(&raw[i], short, "superseded", "", "")
+			if raw[i].Annotations == nil {
+				raw[i].Annotations = map[string]string{}
+			}
+			raw[i].Annotations[annCompletedAt] = now
+			targets := lookupBuildTargets(lctx, s.Kube, ns, s.Namespace, &raw[i])
+			title, desc, fields := buildRichCard(&raw[i], short, "superseded", "", targets)
 			if desc == "" {
-				desc = "Replaced by `" + newName + "`"
+				desc = replacedByDescription(raw[i].Spec.Branch, newerRef)
 			}
 			s.Notifier.Emit(EventEnvelope{
 				Type:        eventBuildSuperseded,
@@ -365,10 +376,12 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 				Description: desc,
 				Project:     project,
 				Service:     short,
+				Env:         singleTargetEnv(targets),
 				URL:         buildEventURL(project, short),
 				Severity:    "info",
 				DurationMs:  buildDurationMs(&raw[i]),
 				Fields:      fields,
+				Links:       buildCardLinks(project, short, "superseded", targets, nil),
 			})
 		}
 	}

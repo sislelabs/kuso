@@ -46,7 +46,9 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 	if em["title"] != e.Title {
 		t.Errorf("title %q", em["title"])
 	}
-	if em["description"] != e.Description {
+	// Success cards are compact: fields fold into one description line.
+	wantDesc := "feat(brand): real Papelito mark\n**Ref** `main` · `53d3f34` · **By** ivo9999 · **Built in** 1m 24s"
+	if em["description"] != wantDesc {
 		t.Errorf("description %q", em["description"])
 	}
 	if em["url"] != "https://kuso.example.com/projects/distill?service=web" {
@@ -58,19 +60,26 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 	if em["timestamp"] != "2026-05-16T12:30:00Z" {
 		t.Errorf("timestamp %q", em["timestamp"])
 	}
-	fields := em["fields"].([]map[string]any)
-	if len(fields) != 3 {
-		t.Fatalf("expected 3 fields, got %d", len(fields))
-	}
-	if fields[0]["name"] != "Ref" || !fields[0]["inline"].(bool) {
-		t.Errorf("first field: %+v", fields[0])
+	if f := fieldsOf(em); len(f) != 0 {
+		t.Errorf("compact card should carry no field block: %+v", f)
 	}
 	footer, ok := em["footer"].(map[string]any)
 	if !ok {
 		t.Fatalf("footer missing")
 	}
-	if got := footer["text"]; got != "distill · v9.9.9" {
-		t.Errorf("footer text %q", got)
+	if got := footer["text"]; got != "kuso.example.com" {
+		t.Errorf("footer text %q, want the instance host", got)
+	}
+	if got["avatar_url"] != "https://kuso.example.com/kuso-avatar.png" {
+		t.Errorf("avatar_url %v", got["avatar_url"])
+	}
+
+	// A failure keeps the full field block.
+	e.Type, e.Severity = EventBuildFailed, "error"
+	fem := discordPayload(e, "")["embeds"].([]any)[0].(map[string]any)
+	fields := fieldsOf(fem)
+	if len(fields) != 3 || fields[0]["name"] != "Ref" || !fields[0]["inline"].(bool) {
+		t.Errorf("failure fields: %+v", fields)
 	}
 }
 
@@ -132,38 +141,24 @@ func TestDiscordPayload_LogTailFieldOverflow(t *testing.T) {
 	}
 }
 
-// TestDiscordPayload_ExtraFallback covers the legacy back-compat: emit
-// sites that only set Extra (no Fields slice) still produce a usable
-// card, with the project/service/ref duplicates filtered out.
-func TestDiscordPayload_ExtraFallback(t *testing.T) {
+// TestDiscordPayload_ExtraNotRendered: Extra is raw-webhook data (ids,
+// internal keys). Cards used to show it as lowercase rows like
+// "rule_id: r1"; human-facing data belongs in Fields.
+func TestDiscordPayload_ExtraNotRendered(t *testing.T) {
 	e := Event{
-		Type:      EventPodCrashed,
+		Type:      EventAlertFired,
 		Timestamp: time.Now(),
-		Project:   "p",
-		Service:   "s",
-		Title:     "⚠ crash",
-		Body:      "CrashLoopBackOff",
-		Extra: map[string]string{
-			"pod":       "p-abc-123",
-			"deployURL": "ignored",
-			"ref":       "ignored",
-		},
+		Title:     "⚠ Alert",
+		Body:      "p95 high",
+		Severity:  "warn",
+		Extra:     map[string]string{"rule_id": "r1", "project": "p"},
 	}
-	got := discordPayload(e, "")
-	em := got["embeds"].([]any)[0].(map[string]any)
-	if em["description"] != "CrashLoopBackOff" {
+	em := discordPayload(e, "")["embeds"].([]any)[0].(map[string]any)
+	if em["description"] != "p95 high" {
 		t.Errorf("body should fall through to description: %q", em["description"])
 	}
-	fields := fieldsOf(em)
-	names := map[string]bool{}
-	for _, f := range fields {
-		names[f["name"].(string)] = true
-	}
-	if !names["pod"] {
-		t.Errorf("pod field missing")
-	}
-	if names["deployURL"] || names["ref"] {
-		t.Errorf("blocked-extra fields leaked: %v", names)
+	if f := fieldsOf(em); len(f) != 0 {
+		t.Errorf("Extra leaked into fields: %+v", f)
 	}
 }
 

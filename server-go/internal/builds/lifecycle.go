@@ -114,17 +114,26 @@ func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason st
 	awaitPodGone(ctx, s.Kube, ns, buildName, 5*time.Second)
 	if s.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, project+"-")
-		title, desc, fields := buildRichCard(b, short, "cancelled", "", "")
+		// b predates the patch; mirror the completion stamp so the card
+		// gets its "Stopped after" duration.
+		if b.Annotations == nil {
+			b.Annotations = map[string]string{}
+		}
+		b.Annotations[annCompletedAt] = now
+		targets := lookupBuildTargets(ctx, s.Kube, ns, s.Namespace, b)
+		title, desc, fields := buildRichCard(b, short, "cancelled", reason, targets)
 		s.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildCancelled,
 			Title:       title,
 			Description: desc,
 			Project:     project,
 			Service:     short,
+			Env:         singleTargetEnv(targets),
 			URL:         buildEventURL(project, short),
 			Severity:    "info",
 			DurationMs:  buildDurationMs(b),
 			Fields:      fields,
+			Links:       buildCardLinks(project, short, "cancelled", targets, nil),
 		})
 	}
 	return nil

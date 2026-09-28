@@ -130,16 +130,7 @@ func (w *Watcher) tick(ctx context.Context, logger *slog.Logger) {
 		return
 	}
 
-	title, body := aggregateTitleBody(pending)
-	w.Notify.Emit(notify.Event{
-		Type:      notify.EventNodeUpdatesAvailable,
-		Timestamp: time.Now().UTC(),
-		Title:     title,
-		Body:      body,
-		// warn, NOT error: unpatched nodes are informational, not a page.
-		// notify.mentionFor only @here-pings error events.
-		Severity: "warn",
-	})
+	w.Notify.Emit(digestEvent(pending))
 	if err := w.DB.SetSetting(ctx, aggregateNotifiedKey, today, "pkgupdates"); err != nil {
 		logger.Warn("pkgupdates: record daily digest watermark", "err", err)
 	}

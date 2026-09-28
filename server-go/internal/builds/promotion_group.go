@@ -356,7 +356,8 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 		// build, and the event type must agree with the phase stamped
 		// above or downstream routing and badges keyed on it disagree
 		// with the row the user sees.
-		title, _, fields := buildRichCard(b, short, "cancelled", "", "")
+		targets := lookupBuildTargets(ctx, p.Svc.Kube, ns, p.Svc.Namespace, b)
+		title, _, fields := buildRichCard(b, short, "cancelled", "", targets)
 		p.Notifier.Emit(EventEnvelope{
 			Type:  eventBuildCancelled,
 			Title: title,
@@ -364,9 +365,11 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 				promoteHoldMaxAge.String() + " and has been abandoned. Retry the build to deploy this commit.",
 			Project:  b.Spec.Project,
 			Service:  short,
+			Env:      singleTargetEnv(targets),
 			URL:      buildEventURL(b.Spec.Project, short),
-			Severity: "warning",
+			Severity: "warn",
 			Fields:   fields,
+			Links:    buildCardLinks(b.Spec.Project, short, "cancelled", targets, nil),
 		})
 	}
 	return nil
@@ -408,9 +411,10 @@ func (p *Poller) stampHeldSuperseded(ctx context.Context, ns string, b *kube.Kus
 		"build", b.Name, "supersededBy", newer)
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		title, desc, fields := buildRichCard(b, short, "superseded", "", "")
+		targets := lookupBuildTargets(ctx, p.Svc.Kube, ns, p.Svc.Namespace, b)
+		title, desc, fields := buildRichCard(b, short, "superseded", "", targets)
 		if desc == "" {
-			desc = "Replaced by `" + newer + "` before its held promotion could complete"
+			desc = replacedByDescription(b.Spec.Branch, "") + " before its held promotion could complete"
 		}
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSuperseded,
@@ -418,9 +422,11 @@ func (p *Poller) stampHeldSuperseded(ctx context.Context, ns string, b *kube.Kus
 			Description: desc,
 			Project:     b.Spec.Project,
 			Service:     short,
+			Env:         singleTargetEnv(targets),
 			URL:         buildEventURL(b.Spec.Project, short),
 			Severity:    "info",
 			Fields:      fields,
+			Links:       buildCardLinks(b.Spec.Project, short, "superseded", targets, nil),
 		})
 	}
 	return nil

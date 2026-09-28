@@ -195,16 +195,7 @@ func (e *Engine) evalOne(ctx context.Context, r *db.AlertRule, now time.Time) {
 	if !fired {
 		return
 	}
-	ev := notify.Event{
-		Type:     notify.EventAlertFired,
-		Title:    fmt.Sprintf("⚠ Alert: %s", r.Name),
-		Body:     body,
-		Project:  r.Project,
-		Service:  r.Service,
-		Severity: r.Severity,
-		Extra:    map[string]string{"rule_id": r.ID, "kind": r.Kind},
-	}
-	e.Notify.Emit(ev)
+	e.Notify.Emit(alertEvent(r, body))
 	stampCtx, sc := context.WithTimeout(ctx, 5*time.Second)
 	err = e.DB.MarkAlertFired(stampCtx, r.ID, now)
 	sc()
@@ -396,4 +387,18 @@ func summary(s string, maxLen int) string {
 		cut--
 	}
 	return s[:cut] + "…"
+}
+
+// alertEvent builds the alert.fired card for a rule. Extra carries the
+// rule scope + identity for raw-webhook consumers; AlertFired reads
+// project/service from it for the title, deep link and mute key.
+func alertEvent(r *db.AlertRule, body string) notify.Event {
+	extra := map[string]string{"rule_id": r.ID, "kind": r.Kind}
+	if r.Project != "" {
+		extra["project"] = r.Project
+	}
+	if r.Service != "" {
+		extra["service"] = r.Service
+	}
+	return notify.AlertFired(r.Name, body, r.Severity, extra)
 }

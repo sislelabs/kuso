@@ -2,10 +2,13 @@ package builds
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 )
 
@@ -31,7 +34,7 @@ func TestBuildRichCard_Succeeded(t *testing.T) {
 			Ref:     "53d3f34262ef",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "web", "succeeded", "", "")
+	title, desc, fields := buildRichCard(b, "web", "succeeded", "", nil)
 	if title != "✓ Build succeeded · distill / web" {
 		t.Errorf("title: %q", title)
 	}
@@ -70,7 +73,7 @@ func TestBuildRichCard_Failed(t *testing.T) {
 			Ref:     "abc1234",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "web", "failed", "kaniko: COPY failed: not found", "")
+	title, desc, fields := buildRichCard(b, "web", "failed", "kaniko: COPY failed: not found", nil)
 	if title != "✗ Build failed · distill / web" {
 		t.Errorf("title: %q", title)
 	}
@@ -106,7 +109,7 @@ func TestBuildRichCard_SyntheticRef(t *testing.T) {
 			Ref:     "main-mp81chv5", // synthetic — branch prefix + base36 suffix
 		},
 	}
-	_, desc, fields := buildRichCard(b, "web", "succeeded", "", "")
+	_, desc, fields := buildRichCard(b, "web", "succeeded", "", nil)
 	if desc != "Manual redeploy of `main` by ivo9999" {
 		t.Errorf("synthetic-ref description: %q", desc)
 	}
@@ -116,39 +119,11 @@ func TestBuildRichCard_SyntheticRef(t *testing.T) {
 	}
 }
 
-// TestBuildRichCard_SiteURL verifies the Site field is appended for
-// succeeded builds with a configured public URL — and stripped of the
-// scheme for display, with the full URL preserved in the markdown
-// link target.
-func TestBuildRichCard_SiteURL(t *testing.T) {
-	b := &kube.KusoBuild{
-		Spec: kube.KusoBuildSpec{
-			Project: "distill",
-			Service: "distill-web",
-			Branch:  "main",
-			Ref:     "53d3f34262ef",
-		},
-	}
-	_, _, fields := buildRichCard(b, "web", "succeeded", "", "https://web.distill.sislelabs.com")
-	var siteField *EnvelopeField
-	for i := range fields {
-		if fields[i].Name == "Site" {
-			siteField = &fields[i]
-		}
-	}
-	if siteField == nil {
-		t.Fatalf("Site field missing on succeeded build")
-	}
-	if siteField.Value != "[web.distill.sislelabs.com](https://web.distill.sislelabs.com)" {
-		t.Errorf("Site field value: %q", siteField.Value)
-	}
-}
-
-// TestLookupSiteURL covers the resolution order: explicit service domain
-// first, then the production env's auto-generated host, then "" for an
-// internal-only service or no env at all. The env fallback is the fix for
-// auto-host services (e.g. scaffold) whose Site link was silently dropped.
-func TestLookupSiteURL(t *testing.T) {
+// TestLookupBuildTargets covers env resolution for the build card: only
+// envs the build's branch promotes into, each with its OWN host. The
+// regression: a build of a feature branch tracked by a custom "verify" env
+// linked the production host and never named the env.
+func TestLookupBuildTargets(t *testing.T) {
 	svcWithDomain := func(project, service, host string, tls bool) seed {
 		s := &kube.KusoService{
 			ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service, Namespace: "kuso"},
@@ -159,95 +134,220 @@ func TestLookupSiteURL(t *testing.T) {
 		}
 		return typedSeed(kube.GVRServices, "KusoService", s)
 	}
-	prodEnv := func(project, service, host string, tlsHosts []string, internal bool) seed {
+	env := func(project, service, group, branch, host string, tlsHosts []string, internal bool) seed {
 		e := &kube.KusoEnvironment{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      project + "-" + service + "-production",
+				Name:      project + "-" + service + "-" + group,
 				Namespace: "kuso",
 				Labels: map[string]string{
 					kube.LabelProject: project,
 					kube.LabelService: service,
-					kube.LabelEnv:     "production",
+					kube.LabelEnv:     group,
 				},
 			},
 			Spec: kube.KusoEnvironmentSpec{
 				Project: project, Service: project + "-" + service, Kind: "production",
-				Host: host, TLSHosts: tlsHosts, Internal: internal,
+				Branch: branch, Host: host, TLSHosts: tlsHosts, Internal: internal,
 			},
 		}
 		return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
 	}
+	build := func(project, service, branch string) *kube.KusoBuild {
+		return &kube.KusoBuild{Spec: kube.KusoBuildSpec{Project: project, Service: project + "-" + service, Branch: branch}}
+	}
+	lookup := func(s *Service, b *kube.KusoBuild) []buildTarget {
+		return lookupBuildTargets(context.Background(), s.Kube, "kuso", "kuso", b)
+	}
 
-	t.Run("explicit service domain wins", func(t *testing.T) {
+	t.Run("feature-branch build targets its own env, not production", func(t *testing.T) {
+		s := fakeService(t,
+			seedService("scubatony", "internal-system"),
+			env("scubatony", "internal-system", "production", "main",
+				"internal-system.scubatony.sislelabs.com", []string{"internal-system.scubatony.sislelabs.com"}, false),
+			env("scubatony", "internal-system", "staging", "staging",
+				"internal-system-staging.scubatony.sislelabs.com", []string{"internal-system-staging.scubatony.sislelabs.com"}, false),
+			env("scubatony", "internal-system", "verify", "bugfix/verified-fixes-2026-09",
+				"internal-system-verify.scubatony.sislelabs.com", []string{"internal-system-verify.scubatony.sislelabs.com"}, false),
+		)
+		got := lookup(s, build("scubatony", "internal-system", "bugfix/verified-fixes-2026-09"))
+		want := []buildTarget{{Env: "verify", URL: "https://internal-system-verify.scubatony.sislelabs.com"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("custom service domain applies to production only", func(t *testing.T) {
 		s := fakeService(t,
 			svcWithDomain("distill", "web", "custom.example.com", true),
-			prodEnv("distill", "web", "web.distill.sislelabs.com", []string{"web.distill.sislelabs.com"}, false),
+			env("distill", "web", "production", "main", "web.distill.sislelabs.com", []string{"web.distill.sislelabs.com"}, false),
+			env("distill", "web", "staging", "staging", "web-staging.distill.sislelabs.com", nil, false),
 		)
-		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "distill", "distill-web")
-		if got != "https://custom.example.com" {
-			t.Errorf("got %q, want the explicit service domain", got)
+		if got := lookup(s, build("distill", "web", "main")); !reflect.DeepEqual(got, []buildTarget{{Env: "production", URL: "https://custom.example.com"}}) {
+			t.Errorf("main: got %+v", got)
+		}
+		if got := lookup(s, build("distill", "web", "staging")); !reflect.DeepEqual(got, []buildTarget{{Env: "staging", URL: "http://web-staging.distill.sislelabs.com"}}) {
+			t.Errorf("staging: got %+v", got)
 		}
 	})
 
-	t.Run("falls back to production env auto-host (TLS)", func(t *testing.T) {
-		// Service has NO spec.domains — the scaffold case.
-		s := fakeService(t,
-			seedService("scaffold", "scaffold"),
-			prodEnv("scaffold", "scaffold", "scaffold.scaffold.sislelabs.com",
-				[]string{"scaffold.scaffold.sislelabs.com"}, false),
-		)
-		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "scaffold", "scaffold-scaffold")
-		if got != "https://scaffold.scaffold.sislelabs.com" {
-			t.Errorf("got %q, want the production env https host", got)
-		}
-	})
-
-	t.Run("http when host not in TLSHosts", func(t *testing.T) {
-		s := fakeService(t,
-			seedService("p", "s"),
-			prodEnv("p", "s", "s.p.example.com", nil, false),
-		)
-		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-s")
-		if got != "http://s.p.example.com" {
-			t.Errorf("got %q, want http (host not TLS-eligible)", got)
-		}
-	})
-
-	t.Run("internal-only service has no public link", func(t *testing.T) {
+	t.Run("internal-only env is named but has no link", func(t *testing.T) {
 		s := fakeService(t,
 			seedService("p", "worker"),
-			prodEnv("p", "worker", "worker.p.example.com", []string{"worker.p.example.com"}, true),
+			env("p", "worker", "production", "main", "worker.p.example.com", []string{"worker.p.example.com"}, true),
 		)
-		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-worker")
-		if got != "" {
-			t.Errorf("got %q, want empty for internal-only service", got)
+		got := lookup(s, build("p", "worker", "main"))
+		if !reflect.DeepEqual(got, []buildTarget{{Env: "production"}}) {
+			t.Errorf("got %+v", got)
 		}
 	})
 
-	t.Run("no env, no domain -> empty", func(t *testing.T) {
-		s := fakeService(t, seedService("p", "s"))
-		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-s")
-		if got != "" {
-			t.Errorf("got %q, want empty when nothing resolves", got)
+	t.Run("dry run and unmatched branch have no targets", func(t *testing.T) {
+		s := fakeService(t,
+			seedService("p", "s"),
+			env("p", "s", "production", "main", "s.p.example.com", nil, false),
+		)
+		dry := build("p", "s", "main")
+		dry.Spec.DryRun = true
+		if got := lookup(s, dry); got != nil {
+			t.Errorf("dry run: got %+v", got)
+		}
+		if got := lookup(s, build("p", "s", "nobody-tracks-this")); got != nil {
+			t.Errorf("unmatched: got %+v", got)
 		}
 	})
 }
 
-// TestBuildRichCard_NoSiteURLOnFailure verifies the Site field is NOT
-// added for failed/cancelled/superseded builds — clicking through to
-// "the live site" of a failed build would land on the prior version,
-// which is misleading.
-func TestBuildRichCard_NoSiteURLOnFailure(t *testing.T) {
-	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{Project: "p", Service: "p-s"}}
-	for _, phase := range []string{"failed", "cancelled", "superseded"} {
-		t.Run(phase, func(t *testing.T) {
-			_, _, fields := buildRichCard(b, "s", phase, "boom", "https://example.com")
-			for _, f := range fields {
-				if f.Name == "Site" {
-					t.Errorf("Site field leaked into %s build: %+v", phase, f)
-				}
+// TestBuildRichCard_TargetsInTitle checks the card names the env(s),
+// and that site URLs no longer ride in a field (they're link-row items).
+func TestBuildRichCard_TargetsInTitle(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{Project: "scubatony", Service: "scubatony-internal-system"}}
+	targets := []buildTarget{
+		{Env: "production", URL: "https://a.example.com"},
+		{Env: "worker-env"},
+		{Env: "verify", URL: "https://b.example.com"},
+	}
+	for _, phase := range []string{"succeeded", "failed", "cancelled", "superseded"} {
+		title, _, fields := buildRichCard(b, "internal-system", phase, "boom", targets)
+		if !strings.HasSuffix(title, " · scubatony / internal-system → production, worker-env, verify") {
+			t.Errorf("%s title: %q", phase, title)
+		}
+		for _, f := range fields {
+			if strings.Contains(f.Value, "example.com") {
+				t.Errorf("%s: site URL leaked into field %+v", phase, f)
 			}
-		})
+		}
+	}
+}
+
+func TestBuildCardLinks(t *testing.T) {
+	base := "/projects/p?service=s"
+	one := []buildTarget{{Env: "staging", URL: "https://s-staging.example.com"}}
+	two := []buildTarget{{Env: "production", URL: "https://s.example.com"}, {Env: "internal"}}
+	cls := &failures.Classification{Kind: "build_oom", Tab: failures.TabBuild}
+	cases := []struct {
+		name    string
+		phase   string
+		targets []buildTarget
+		c       *failures.Classification
+		want    []EnvelopeLink
+	}{
+		{"failed, one env", "failed", one, cls, []EnvelopeLink{
+			{"View failure", base + "&tab=deployments&kind=build_oom&env=staging"},
+		}},
+		{"failed, no classification", "failed", nil, nil, []EnvelopeLink{
+			{"View failure", base + "&tab=deployments"},
+		}},
+		{"succeeded opens every env with a URL", "succeeded", two, nil, []EnvelopeLink{
+			{"Deployments", base + "&tab=deployments"},
+			{"Open production", "https://s.example.com"},
+		}},
+		{"succeeded, one env", "succeeded", one, nil, []EnvelopeLink{
+			{"Deployments", base + "&tab=deployments&env=staging"},
+			{"Open staging", "https://s-staging.example.com"},
+		}},
+		{"cancelled", "cancelled", two, nil, []EnvelopeLink{{"Deployments", base + "&tab=deployments"}}},
+		{"superseded", "superseded", one, nil, []EnvelopeLink{{"Deployments", base + "&tab=deployments&env=staging"}}},
+		{"release failed", "release-failed", []buildTarget{{Env: "production"}}, nil, []EnvelopeLink{
+			{"Deployments", base + "&tab=deployments&env=production"},
+		}},
+	}
+	for _, tc := range cases {
+		if got := buildCardLinks("p", "s", tc.phase, tc.targets, tc.c); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", tc.name, got, tc.want)
+		}
+	}
+	if got := buildCardLinks("", "s", "failed", nil, nil); got != nil {
+		t.Errorf("no project: %+v", got)
+	}
+}
+
+func TestBuildSeverity(t *testing.T) {
+	cases := []struct {
+		name    string
+		targets []buildTarget
+		want    string
+	}{
+		{"unknown targets", nil, "error"},
+		{"production", []buildTarget{{Env: "production"}}, "error"},
+		{"production among others", []buildTarget{{Env: "staging"}, {Env: "production"}}, "error"},
+		{"unnamed env", []buildTarget{{Env: ""}}, "error"},
+		{"staging", []buildTarget{{Env: "staging"}}, "warn"},
+		{"preview + custom", []buildTarget{{Env: "preview-pr-7"}, {Env: "verify"}}, "warn"},
+	}
+	for _, tc := range cases {
+		if got := buildSeverity(tc.targets); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestBuildRichCard_RefLinks(t *testing.T) {
+	const sha = "9f5792fabc0123456789abcdef0123456789abcd"
+	card := func(repoURL, branch, ref string) string {
+		b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+			Project: "p", Service: "p-s", Branch: branch, Ref: ref,
+			Repo: &kube.KusoRepoRef{URL: repoURL},
+		}}
+		_, _, fields := buildRichCard(b, "s", "succeeded", "", nil)
+		if len(fields) == 0 || fields[0].Name != "Ref" {
+			t.Fatalf("no Ref field: %+v", fields)
+		}
+		return fields[0].Value
+	}
+	cases := []struct {
+		name, repo, branch, ref, want string
+	}{
+		{"github https", "https://github.com/o/r", "main", sha,
+			"[`main`](https://github.com/o/r/tree/main) · [`9f5792f`](https://github.com/o/r/commit/" + sha + ")"},
+		{"github .git suffix", "https://github.com/o/r.git", "main", sha,
+			"[`main`](https://github.com/o/r/tree/main) · [`9f5792f`](https://github.com/o/r/commit/" + sha + ")"},
+		{"github ssh", "git@github.com:o/r.git", "main", sha,
+			"[`main`](https://github.com/o/r/tree/main) · [`9f5792f`](https://github.com/o/r/commit/" + sha + ")"},
+		{"slashed branch keeps slashes, escapes segments", "https://github.com/o/r", "feat/a b#1", sha,
+			"[`feat/a b#1`](https://github.com/o/r/tree/feat/a%20b%231) · [`9f5792f`](https://github.com/o/r/commit/" + sha + ")"},
+		{"gitlab", "https://gitlab.com/g/sub/r.git", "main", sha,
+			"[`main`](https://gitlab.com/g/sub/r/-/tree/main) · [`9f5792f`](https://gitlab.com/g/sub/r/-/commit/" + sha + ")"},
+		{"unknown host stays plain", "https://git.example.com/o/r", "main", sha, "`main` · `9f5792f`"},
+		{"no repo stays plain", "", "main", sha, "`main` · `9f5792f`"},
+		{"synthetic ref: branch link, no commit", "https://github.com/o/r", "main", "main-mp81chv5",
+			"[`main`](https://github.com/o/r/tree/main)"},
+	}
+	for _, tc := range cases {
+		if got := card(tc.repo, tc.branch, tc.ref); got != tc.want {
+			t.Errorf("%s:\n got %s\nwant %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestReplacedByDescription(t *testing.T) {
+	if got := replacedByDescription("main", "9f5792fabc01"); got != "Replaced by a newer build (`9f5792f`)" {
+		t.Errorf("sha: %q", got)
+	}
+	if got := replacedByDescription("main", "main-mp81chv5"); got != "Replaced by a newer build of `main`" {
+		t.Errorf("synthetic: %q", got)
+	}
+	if got := replacedByDescription("", ""); got != "Replaced by a newer build" {
+		t.Errorf("empty: %q", got)
 	}
 }
 
@@ -280,7 +380,7 @@ func TestBuildRichCard_NoData(t *testing.T) {
 			Service: "p-s",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "s", "succeeded", "", "")
+	title, desc, fields := buildRichCard(b, "s", "succeeded", "", nil)
 	if title != "✓ Build succeeded · p / s" {
 		t.Errorf("title: %q", title)
 	}
@@ -390,5 +490,55 @@ func TestServiceDisplayLabel(t *testing.T) {
 	// nil kube client → always the slug, never a panic.
 	if got := serviceDisplayLabel(context.Background(), nil, "kuso", "alpha-web", "web"); got != "web" {
 		t.Errorf("nil kube: got %q, want %q", got, "web")
+	}
+}
+
+// TestBuildRichCard_ReasonAlongsideCommitMessage: a failed push build has
+// a commit message, which takes the description slot. The reason must
+// still reach the card as a field, since renderers ignore Body once a
+// Description is set.
+func TestBuildRichCard_ReasonAlongsideCommitMessage(t *testing.T) {
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{annCommitMessage: "fix: thing"}},
+		Spec:       kube.KusoBuildSpec{Project: "p", Service: "p-s", Branch: "main", Ref: "abcdef1234"},
+	}
+	for _, phase := range []string{"failed", "cancelled"} {
+		_, desc, fields := buildRichCard(b, "s", phase, "build timed out after 30m", nil)
+		if desc != "fix: thing" {
+			t.Errorf("%s: description %q", phase, desc)
+		}
+		var reason string
+		for _, f := range fields {
+			if f.Name == "Reason" {
+				reason = f.Value
+			}
+		}
+		if reason != "build timed out after 30m" {
+			t.Errorf("%s: Reason field %q (fields %+v)", phase, reason, fields)
+		}
+	}
+	// Without a commit message the reason IS the description; no duplicate field.
+	b.Annotations = nil
+	_, desc, fields := buildRichCard(b, "s", "failed", "boom", nil)
+	for _, f := range fields {
+		if f.Name == "Reason" {
+			t.Errorf("duplicate Reason field when description already carries it: %+v", fields)
+		}
+	}
+	if desc != "boom" {
+		t.Errorf("description %q", desc)
+	}
+}
+
+func TestWithEnvParam(t *testing.T) {
+	base := "/projects/p?service=s"
+	if got := withEnvParam(base, []buildTarget{{Env: "preview-pr-7"}}); got != base+"&env=preview-pr-7" {
+		t.Errorf("single target: %q", got)
+	}
+	if got := withEnvParam(base, []buildTarget{{Env: "production"}, {Env: "staging"}}); got != base {
+		t.Errorf("multi target must not pin an env: %q", got)
+	}
+	if got := withEnvParam("", []buildTarget{{Env: "x"}}); got != "" {
+		t.Errorf("empty url: %q", got)
 	}
 }

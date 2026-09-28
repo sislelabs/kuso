@@ -140,7 +140,7 @@ var notificationsCreateCmd = &cobra.Command{
 	Short: "Create a notification channel (type: discord, webhook, slack)",
 	Args:  cobra.ExactArgs(1),
 	Example: `  kuso notifications create discord --name disco --url 'https://discord.com/api/webhooks/…' \
-    --events build.started,build.succeeded,build.failed,pod.crashed \
+    --events build.succeeded,build.failed,pod.crashed,addon.crashed \
     --mention here --mention-on build.failed,pod.crashed
   kuso notifications create webhook --name ci-hook --url 'https://ci.example/hook' --secret topsecret`,
 	RunE: func(cmd *cobra.Command, args []string) error {

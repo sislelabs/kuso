@@ -5,13 +5,14 @@
 // Slack later).
 //
 // Design constraints:
-//   - Non-blocking: domain code never waits on a slow webhook. Events
-//     enqueue onto a buffered channel; the dispatcher drains in its
-//     own goroutine.
+//   - Durable: Emit writes the bell-feed row and one outbox row per
+//     matching channel synchronously (bounded by a short timeout), so
+//     an event survives a restart right after it's emitted. Domain code
+//     never waits on a slow webhook — the outbox workers deliver.
 //   - Per-event filtering: the DB row carries an `events` whitelist;
 //     empty list = all events. Rows can be disabled without deletion.
-//   - Per-pipeline (project) filtering: future-friendly — today we
-//     send everything globally, but the column is there.
+//   - Per-project filtering: the `pipelines` column is a project
+//     whitelist; empty = all projects. Project-less events always pass.
 //
 // The dispatcher is safe to call from anywhere: missing DB or
 // nil dispatcher is a no-op.
@@ -28,7 +29,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,6 +44,9 @@ import (
 type EventType string
 
 const (
+	// EventBuildStarted and EventDeployRolled are never emitted. The
+	// consts stay so stored channel configs that list them still parse;
+	// they are deliberately absent from AllEventTypes / EventCatalogue.
 	EventBuildStarted    EventType = "build.started"
 	EventBuildSucceeded  EventType = "build.succeeded"
 	EventBuildFailed     EventType = "build.failed"
@@ -52,6 +55,9 @@ const (
 	EventDeployRolled    EventType = "deploy.rolled"
 	EventPodCrashed      EventType = "pod.crashed"
 	EventAddonCrashed    EventType = "addon.crashed"
+	// EventPodRecovered closes a pod.crashed episode: the service's env
+	// has been healthy for a stability window after crashing.
+	EventPodRecovered EventType = "pod.recovered"
 	EventAlertFired      EventType = "alert.fired"
 	EventBackupOK        EventType = "backup.succeeded"
 	EventBackupFailed    EventType = "backup.failed"
@@ -66,6 +72,9 @@ const (
 	// host-OS package updates). Informational (warn severity, no @here);
 	// the operator applies patches from the nodes page.
 	EventNodeUpdatesAvailable EventType = "node.updates-available"
+	// EventNodeUpdatesApplied fires when an apply-updates run (patch +
+	// optional reboot) finishes on a node.
+	EventNodeUpdatesApplied EventType = "node.updates-applied"
 	// Run lifecycle events. Fired when a KusoRun is created (started)
 	// and when the runs poller observes terminal phase transitions
 	// (succeeded / failed). A failed migration on prod is exactly the
@@ -86,23 +95,60 @@ const (
 	EventTestPing EventType = "test.ping"
 )
 
-// AllEventTypes is the canonical list of every event type the
-// notify package emits. The settings UI uses it to enumerate
-// subscriber checkboxes; tests use it to assert that every emission
-// site goes through a typed constant rather than a stringly-typed
-// literal. Add new event types here AND to the const block above.
-var AllEventTypes = []EventType{
-	EventBuildStarted, EventBuildSucceeded, EventBuildFailed,
-	EventBuildCancelled, EventBuildSuperseded,
-	EventDeployRolled,
-	EventPodCrashed,
-	EventAlertFired,
-	EventBackupOK, EventBackupFailed,
-	EventNodeUnreachable, EventNodeRecovered, EventNodeUpdatesAvailable,
-	EventRunStarted, EventRunSucceeded, EventRunFailed,
-	EventCronFailed,
-	EventTestPing,
+// EventTypeInfo is one entry of the subscribable-event catalogue served
+// at GET /api/notifications/event-types. The JSON shape is a contract
+// with the web settings UI.
+type EventTypeInfo struct {
+	Type  EventType `json:"type"`
+	Label string    `json:"label"`
+	// Group is one of build | runtime | jobs | nodes | backups | other.
+	Group string `json:"group"`
+	// DefaultMention is what mentionFor falls back to when a channel has
+	// no explicit rule: "@here" for types emitted at error severity,
+	// "" otherwise.
+	DefaultMention string `json:"defaultMention"`
 }
+
+// EventCatalogue lists every event type a channel can subscribe to, in
+// display order. DefaultMention mirrors the severity each emit site
+// uses. Mixed-severity types take the common case:
+//   - build.cancelled: info (lifecycle), warn from promotion-group aborts.
+//   - alert.fired: the rule's own severity (API default warn); node
+//     disk-pressure alerts are warn. error-severity rules still @here.
+//   - backup.failed: error when a configured backup broke, warn when
+//     backups were never configured.
+var EventCatalogue = []EventTypeInfo{
+	{EventBuildSucceeded, "Build succeeded", "build", ""},
+	{EventBuildFailed, "Build failed", "build", "@here"}, // production only; other envs are warn
+	{EventBuildCancelled, "Build cancelled", "build", ""},
+	{EventBuildSuperseded, "Build superseded", "build", ""},
+	{EventPodCrashed, "Pod crashed", "runtime", "@here"}, // production only; other envs are warn
+	{EventPodRecovered, "Pod recovered", "runtime", ""},
+	{EventAddonCrashed, "Addon crashed", "runtime", "@here"},
+	{EventAlertFired, "Alert fired", "runtime", ""},
+	{EventRunStarted, "Run started", "jobs", ""},
+	{EventRunSucceeded, "Run succeeded", "jobs", ""},
+	{EventRunFailed, "Run failed", "jobs", "@here"},
+	{EventCronFailed, "Cron failed", "jobs", ""},
+	{EventNodeUnreachable, "Node unreachable", "nodes", "@here"},
+	{EventNodeRecovered, "Node recovered", "nodes", ""},
+	{EventNodeUpdatesAvailable, "Host updates available", "nodes", ""},
+	{EventNodeUpdatesApplied, "Host updates applied", "nodes", ""},
+	{EventBackupOK, "Backup succeeded", "backups", ""},
+	{EventBackupFailed, "Backup failed", "backups", "@here"},
+}
+
+// AllEventTypes is the canonical list of every event type the notify
+// package emits: the catalogue plus test.ping (emitted by the Test
+// button, not subscribable). Add new event types to the const block
+// AND EventCatalogue.
+var AllEventTypes = func() []EventType {
+	out := make([]EventType, 0, len(EventCatalogue)+1)
+	for _, c := range EventCatalogue {
+		out = append(out, c.Type)
+	}
+	return append(out, EventTestPing)
+}()
 
 // Event is the wire-stable payload domain code emits. JSON-serialised
 // straight to webhook sinks; rendered to embeds for Discord/Slack.
@@ -146,9 +192,15 @@ type Event struct {
 	// preserved. Mixing inline=true and inline=false works the way
 	// Discord renders it: inlines pack 3-up; non-inline forces a row.
 	Fields []EventField `json:"fields,omitempty"`
-	// Footer is an optional override for the default footer (which is
-	// "<project> · <kuso version>"). Empty = use default.
+	// Footer is an optional override for the default footer (the
+	// instance host). Empty = use default.
 	Footer string `json:"footer,omitempty"`
+	// Env is the environment group the event concerns (production,
+	// staging, preview-pr-7, …); "" for events not tied to one.
+	Env string `json:"env,omitempty"`
+	// Links is the card's action row (Logs · Deployments · Site),
+	// rendered last. See EventLink.
+	Links []EventLink `json:"links,omitempty"`
 	// Classification, when populated on failure events, tells the web
 	// UI which overlay tab to open + which log line to highlight when
 	// the user clicks the bell-popover row. nil for non-failure events
@@ -172,13 +224,16 @@ type EventField struct {
 type Dispatcher struct {
 	db     *db.DB
 	logger *slog.Logger
-	ch     chan Event
 	client *http.Client
+
+	// lookupChannelFn is a test seam for drainOne's channel lookup;
+	// nil = d.lookupNotification.
+	lookupChannelFn func(ctx context.Context, id string) (db.Notification, error)
 
 	// isLeader, when set, gates the outbox DRAIN (outboxWorker →
 	// shouldRunOutbox) so multi-replica installs don't N-times-deliver
 	// the same event to Slack/Discord. It does NOT gate outbox ENQUEUE
-	// (dispatch) — any replica must be able to persist an emitted event to
+	// (Emit) — any replica must be able to persist an emitted event to
 	// the durable outbox, or events from a pod that isn't the singletons
 	// leader are lost. Delivery stays single-flight via the leader-gated
 	// drain + FOR UPDATE SKIP LOCKED claim. The bell-icon feed (Emit's
@@ -193,9 +248,8 @@ type Dispatcher struct {
 	// async); a slow hook would stall the Emit caller. nil = no hook.
 	eventHook func(Event)
 
-	mu          sync.Mutex
-	closed      bool
-	dropOnFloor bool
+	mu     sync.Mutex
+	closed bool
 
 	// baseCtx is the dispatcher's lifecycle context, set by Run.
 	// Emit's synchronous persist derives from this so a graceful
@@ -206,7 +260,7 @@ type Dispatcher struct {
 	baseCtx context.Context
 
 	// notifsCache is a short-lived cache of the configured notification
-	// channels. Without it, every event drained from `ch` does a fresh
+	// channels. Without it, every emitted event does a fresh
 	// SQLite SELECT + JSON decode — which on a build storm + a single-
 	// connection writer pool starves every other writer (audit log,
 	// nodemetrics insert, login). Cache lives for notifsCacheTTL and
@@ -218,7 +272,7 @@ type Dispatcher struct {
 	notifsExpires time.Time
 
 	// mutedCache mirrors notifsCache for the per-project mute set: the
-	// dispatch hot path checks it before enqueueing outbox rows, so it
+	// Emit hot path checks it before enqueueing outbox rows, so it
 	// must not hit the DB per event. Same TTL + invalidation as the
 	// channel configs (the mute handler calls InvalidateNotifications).
 	mutedMu      sync.RWMutex
@@ -258,16 +312,13 @@ func (d *Dispatcher) SetEventHook(fn func(Event)) {
 }
 
 // New returns a dispatcher bound to a DB for config lookup. queueSize
-// caps the in-memory event buffer; events past that point are dropped
-// (we'd rather lose a notification than wedge the build poller).
+// is ignored: it sized the old in-memory dispatch channel, which is no
+// longer on the delivery path. Kept so existing callers compile.
 func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
-	if queueSize <= 0 {
-		queueSize = 256
-	}
+	_ = queueSize
 	return &Dispatcher{
 		db:      database,
 		logger:  logger,
-		ch:      make(chan Event, queueSize),
 		baseCtx: context.Background(),
 		// SSRF-safe, redirect-refusing client. The dial guard rejects
 		// link-local, loopback, and private (RFC1918 + RFC4193)
@@ -285,16 +336,16 @@ func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
 // kuso/server/internal/httpx. Both notify and the Coolify importer
 // share the same dialer guard. See httpx/ssrf.go for the policy.)
 
-// Emit enqueues an event AND persists it to the in-app feed
-// synchronously. The persist step makes the bell-icon feed durable
-// even when the in-memory dispatch channel overflows — at most we
-// lose webhook fan-out on a burst, never the user-visible feed.
-//
-// The dispatch channel is bounded (256 by default) and Emit is non-
-// blocking. On overflow we log a warn but the event is already in
-// SQLite. A future v0.9 will move dispatch to a DB-backed work queue
-// so even webhook fan-out is durable across restarts; this is the
-// half-step that closes the silent-drop bug today.
+// emitWriteTimeout bounds each of Emit's synchronous DB steps (feed
+// persist, outbox enqueue) so a wedged DB can't stall the caller.
+const emitWriteTimeout = 2 * time.Second
+
+// Emit persists the event to the in-app feed and enqueues one outbox row
+// per matching channel, both synchronously. There is no in-memory queue
+// on the delivery path: once Emit returns, the event survives a restart
+// (e.g. a self-update roll) and delivery is up to the outbox workers.
+// Each DB step is bounded by emitWriteTimeout; failures are logged and
+// counted, never returned — domain code must not branch on notify.
 func (d *Dispatcher) Emit(e Event) {
 	if d == nil {
 		return
@@ -302,138 +353,110 @@ func (d *Dispatcher) Emit(e Event) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}
+	e.Severity = normalizeSeverity(e.Severity)
 	d.mu.Lock()
 	closed := d.closed
+	parent := d.baseCtx
+	hook := d.eventHook
+	leader := d.isLeader
 	d.mu.Unlock()
 	if closed {
 		return
 	}
-	// Persist first — synchronous to the caller. SQLite's
-	// busy_timeout will retry under contention; on hard failure we
-	// log and proceed (the channel send is still attempted, so a
-	// transient DB blip doesn't lose the webhook fan-out).
-	if d.db != nil {
-		// Wrap the timeout-context dance in a closure so cancel() is
-		// deferred — a panic between WithTimeout and the explicit
-		// cancel() (e.g. from the DB driver) would otherwise leak the
-		// context goroutine until the parent (Background) is collected,
-		// i.e. forever.
-		func() {
-			// Parent off the dispatcher's lifecycle ctx so a graceful
-			// shutdown actually cancels in-flight SQLite writes. The
-			// 2s cap still bounds worst case under contention.
-			d.mu.Lock()
-			parent := d.baseCtx
-			d.mu.Unlock()
-			if parent == nil {
-				parent = context.Background()
-			}
-			persistCtx, cancel := context.WithTimeout(parent, 2*time.Second)
-			defer cancel()
-			// Serialise the classification (if any) so the bell-icon
-			// list endpoint can hand the raw JSON to the browser without
-			// re-encoding on every read. nil/empty stays NULL in DB and
-			// omitempty in the wire payload.
-			var classification json.RawMessage
-			if e.Classification != nil {
-				if b, mErr := json.Marshal(e.Classification); mErr == nil {
-					classification = b
-				}
-			}
-			if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
-				Type:           string(e.Type),
-				Title:          e.Title,
-				Body:           e.Body,
-				Severity:       e.Severity,
-				Project:        e.Project,
-				Service:        e.Service,
-				URL:            e.URL,
-				Extra:          e.Extra,
-				Classification: classification,
-			}); err != nil && d.logger != nil {
-				d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
-			}
-		}()
+	if parent == nil {
+		parent = context.Background()
 	}
-	// Event hook (incidents.Manager): leader-only, after persist. Snapshot
-	// the fn + leader predicate under the lock, then call outside it so a
-	// slow-but-cheap hook never holds d.mu. The hook itself spawns async
-	// work; it must not block.
-	d.mu.Lock()
-	hook := d.eventHook
-	leader := d.isLeader
-	d.mu.Unlock()
+	metricsEmitted.WithLabelValues(string(e.Type)).Inc()
+	if d.db != nil {
+		d.persistFeed(parent, e)
+		d.enqueueOutbox(parent, e)
+	}
+	// Event hook (incidents.Manager): leader-only, after persist. Called
+	// outside d.mu; the hook spawns async work and must not block.
 	if hook != nil && (leader == nil || leader()) {
 		hook(e)
 	}
-	select {
-	case d.ch <- e:
-		metricsDispatched.WithLabelValues(string(e.Type)).Inc()
-		metricsQueueDepth.Set(float64(len(d.ch)))
-	default:
-		// Channel full → webhook fan-out drops this event, but the
-		// bell-icon feed has it from the persist above. Operators
-		// who care about webhook reliability should bump
-		// KUSO_NOTIFY_QUEUE_SIZE and alert on
-		// rate(kuso_notify_dropped_total[5m]) > 0.
-		metricsDropped.Inc()
-		if d.logger != nil {
-			d.logger.Warn("notify: dispatch queue full, webhook fanout skipped",
-				"type", string(e.Type), "queue_cap", cap(d.ch))
+}
+
+// persistFeed writes the bell-icon NotificationEvent row. Parented on
+// the dispatcher's lifecycle ctx so a graceful shutdown cancels it.
+func (d *Dispatcher) persistFeed(parent context.Context, e Event) {
+	ctx, cancel := context.WithTimeout(parent, emitWriteTimeout)
+	defer cancel()
+	// Serialise the classification (if any) so the bell-icon list
+	// endpoint can hand the raw JSON to the browser without re-encoding
+	// on every read. nil stays NULL in DB and omitempty on the wire.
+	var classification json.RawMessage
+	if e.Classification != nil {
+		if b, mErr := json.Marshal(e.Classification); mErr == nil {
+			classification = b
 		}
+	}
+	if err := d.db.InsertNotificationEvent(ctx, db.NotificationEvent{
+		Type:           string(e.Type),
+		Title:          e.Title,
+		Body:           e.Body,
+		Severity:       e.Severity,
+		Project:        e.Project,
+		Service:        e.Service,
+		URL:            e.URL,
+		Extra:          e.Extra,
+		Classification: classification,
+	}); err != nil && d.logger != nil {
+		d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
 	}
 }
 
-// Run consumes the event channel and dispatches to every enabled
-// notification sink. Exits when ctx is canceled. Call once in a
-// background goroutine.
+// normalizeSeverity folds severity spellings into the three values every
+// renderer + the mention default switch on (info | warn | error). Emit
+// sites wrote "warning", which matched none of them: no warn colour, and
+// release-hook failures rendered as neutral navy cards.
+func normalizeSeverity(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "warn", "warning":
+		return "warn"
+	case "error", "err", "critical", "fatal":
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+// Run binds the dispatcher's lifecycle to ctx: Emit's DB writes are
+// parented on it, and once it's canceled Emit becomes a no-op. Blocks
+// until ctx is done; call once in a background goroutine.
 func (d *Dispatcher) Run(ctx context.Context) {
 	d.mu.Lock()
 	d.baseCtx = ctx
 	d.mu.Unlock()
-	for {
-		select {
-		case <-ctx.Done():
-			d.mu.Lock()
-			d.closed = true
-			d.mu.Unlock()
-			return
-		case e := <-d.ch:
-			// Persist now happens in Emit (synchronously w.r.t. the
-			// caller) so the in-app feed survives queue overflow.
-			// Run's job is purely to fan out to webhook sinks.
-			d.dispatch(ctx, e)
-		}
-	}
+	<-ctx.Done()
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
 }
 
-func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
-	if d.db == nil {
-		return
-	}
-	// Intentionally NOT leader-gated. Any replica that emits an event
-	// must be able to write it to the durable outbox — otherwise events
-	// emitted on a pod that doesn't hold the "singletons" lease (e.g. the
-	// cluster-singletons leader in a 2+replica HA deploy, which is where
-	// nodewatch/alerts/cronwatch/pkgupdates/backuphealth emit from) are
-	// silently dropped from the outbox and never delivered.
-	//
-	// Single-delivery is enforced DOWNSTREAM, not here: the outbox drain
-	// workers (outboxWorker → shouldRunOutbox → d.isLeader, in outbox.go)
-	// stay leader-gated so exactly one replica delivers each row, and
-	// ClaimOutboxRow uses FOR UPDATE SKIP LOCKED + a lease so concurrent
-	// enqueue from multiple pods still yields at-most-once delivery.
+// enqueueOutbox writes one outbox row per channel that should receive
+// e. The outbox drain workers (outbox.go) deliver them.
+//
+// Intentionally NOT leader-gated. Any replica that emits an event must
+// be able to write it to the durable outbox — otherwise events emitted
+// on a pod that doesn't hold the "singletons" lease are silently
+// dropped. Single delivery is enforced downstream: the drain workers are
+// leader-gated and ClaimOutboxRow uses FOR UPDATE SKIP LOCKED + a lease.
+func (d *Dispatcher) enqueueOutbox(parent context.Context, e Event) {
+	ctx, cancel := context.WithTimeout(parent, emitWriteTimeout)
+	defer cancel()
 	notifs, err := d.cachedNotifications(ctx)
 	if err != nil {
-		d.logger.Warn("notify: list configs", "err", err)
+		metricsDropped.Inc()
+		d.logger.Warn("notify: list configs, webhook fanout skipped", "err", err, "type", string(e.Type))
 		return
 	}
 	// Per-project mute: muted projects skip external channel delivery
-	// entirely. The bell-feed mirror is untouched (Emit persisted the
-	// NotificationEvent before we got here), so the in-app audit trail
-	// survives a mute. Project-less events (node.*, backup health) are
-	// never muted. Fail-open: if the mute read errors, deliver — a
-	// missed mute beats silently dropped notifications.
+	// entirely. The bell feed (persistFeed) is untouched, so the in-app
+	// audit trail survives a mute. Project-less events (node.*, backup
+	// health) are never muted. Fail-open: if the mute read errors,
+	// deliver — a missed mute beats silently dropped notifications.
 	//
 	// Error-severity alert.fired bypasses the mute: mute exists to
 	// silence deploy chatter, but an alert rule the team explicitly
@@ -448,30 +471,29 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 			return
 		}
 	}
-	// Enqueue one outbox row per matching channel. The worker pool
-	// (StartOutboxWorkers, called from cmd/kuso-server's
-	// startSingletons) drains with exponential backoff. This flips
-	// webhook delivery from at-most-once (fire-and-forget on a
-	// bounded channel) to at-least-once (durable until the row is
-	// either delivered or hits the dead-letter cap).
-	payload, perr := db.MarshalOutboxPayload(e)
-	if perr != nil {
-		d.logger.Warn("notify: marshal outbox payload", "err", perr, "type", string(e.Type))
-		return
-	}
+	var payload []byte
 	for _, n := range notifs {
-		if !n.Enabled {
+		if !n.Enabled || !deliverableChannel(n.Type) {
 			continue
 		}
-		if !eventMatches(string(e.Type), n.Events) {
+		if !eventMatches(string(e.Type), n.Events) || !projectMatches(e.Project, n.Pipelines) {
 			continue
 		}
-		if !deliverableChannel(n.Type) {
-			continue
+		if payload == nil {
+			p, perr := db.MarshalOutboxPayload(e)
+			if perr != nil {
+				metricsDropped.Inc()
+				d.logger.Warn("notify: marshal outbox payload", "err", perr, "type", string(e.Type))
+				return
+			}
+			payload = p
 		}
 		if _, err := d.db.EnqueueOutbox(ctx, n.ID, string(e.Type), payload); err != nil {
+			metricsDropped.Inc()
 			d.logger.Warn("notify: enqueue outbox", "err", err, "channel", n.ID, "type", string(e.Type))
+			continue
 		}
+		metricsEnqueued.WithLabelValues(string(e.Type)).Inc()
 	}
 }
 
@@ -518,6 +540,11 @@ func (d *Dispatcher) cachedNotifications(ctx context.Context) ([]db.Notification
 	notifs, err := d.db.ListNotifications(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if notifs == nil {
+		// Non-nil so "no channels configured" is a cache hit too; Emit
+		// reads this synchronously on every event.
+		notifs = []db.Notification{}
 	}
 	d.notifsCache = notifs
 	d.notifsExpires = time.Now().Add(notifsCacheTTL)
@@ -571,6 +598,23 @@ func (d *Dispatcher) cachedMutedProjects(ctx context.Context) (map[string]bool, 
 	d.mutedCache = set
 	d.mutedExpires = time.Now().Add(notifsCacheTTL)
 	return set, nil
+}
+
+// projectMatches reports whether a channel's project whitelist (the
+// Notification.pipelines column) admits an event from project. Empty
+// whitelist = all projects. Project-less events (node.*, backup health,
+// test.ping) always pass: they're cluster-wide and a project filter
+// can't meaningfully exclude them.
+func projectMatches(project string, whitelist []string) bool {
+	if project == "" || len(whitelist) == 0 {
+		return true
+	}
+	for _, w := range whitelist {
+		if w == project {
+			return true
+		}
+	}
+	return false
 }
 
 // eventMatches returns true if `event` is in `whitelist`, or if the
@@ -658,160 +702,244 @@ func allowedMentionsFor(mention string) map[string]any {
 
 var roleMentionRE = regexp.MustCompile(`<@&(\d+)>`)
 
-func discordColor(e Event) int {
-	if e.Severity == "error" {
-		return 0xEB6534 // accent orange
-	}
-	if e.Severity == "warn" {
-		return 0xF59E0B
+// tone is the at-a-glance colour class every renderer (Discord embed
+// colour, Slack bar, text-channel emoji) derives from, so they agree.
+type tone int
+
+const (
+	toneInfo tone = iota
+	toneSuccess
+	toneNeutral
+	toneWarn
+	toneError
+)
+
+// eventTone: severity wins (Emit normalizes it to info|warn|error, so
+// every failure type arrives as error); info events are then split by
+// type into success / neutral / plain info.
+func eventTone(e Event) tone {
+	switch e.Severity {
+	case "error":
+		return toneError
+	case "warn":
+		return toneWarn
 	}
 	switch e.Type {
-	case EventBuildSucceeded, EventDeployRolled, EventBackupOK:
-		return 0x10B981 // emerald
-	case EventBuildFailed, EventPodCrashed, EventAlertFired, EventBackupFailed:
+	case EventBuildSucceeded, EventBackupOK, EventRunSucceeded,
+		EventNodeRecovered, EventNodeUpdatesApplied, EventPodRecovered:
+		return toneSuccess
+	case EventBuildCancelled, EventBuildSuperseded:
+		return toneNeutral
+	}
+	return toneInfo
+}
+
+func discordColor(e Event) int {
+	switch eventTone(e) {
+	case toneError:
 		return 0xEF4444 // red
+	case toneWarn:
+		return 0xF59E0B // amber
+	case toneSuccess:
+		return 0x10B981 // emerald
+	case toneNeutral:
+		return 0x9CA3AF // grey
 	default:
 		return 0x40476D // navy (matches the logo)
 	}
 }
 
+// discordEmbedMaxChars is Discord's cap on the summed characters of an
+// embed's title, description, field names/values and footer text. Over
+// it the whole webhook POST is rejected with a 400.
+const discordEmbedMaxChars = 6000
+
 // discordPayload assembles the full Discord webhook body for an Event.
 // Shared by sendDiscord + sendDiscordSync so the two paths can't drift.
 //
-// Card grammar (consistent across all event types):
+// Card grammar:
 //
-//	┌─ Title (linked to e.URL) ─────────────────────────────┐
-//	│ Description prose — commit message, crash reason, ... │
-//	│ ```                                                   │
-//	│ <log tail, code-fenced — only if it fits>            │
-//	│ ```                                                   │
-//	│ ─────────────────────────────────────                 │
-//	│ Field A    Field B    Field C   (inline pack 3-up)    │
-//	│ Logs (full-width, when LogTail too long for desc)     │
-//	│ ─────────────────────────────────────                 │
-//	│ <project> · v<version>                       <time>   │
-//	└───────────────────────────────────────────────────────┘
+//	┌─ <glyph> <What> · <project> / <service> → <env>  (linked) ─┐
+//	│ Description — commit message, crash summary, …            │
+//	│ 💡 Diagnosis + fix (failures kuso recognises)              │
+//	│ ```log tail```                                            │
+//	│ Field A    Field B    Field C   (inline, 3-up)            │
+//	│ Logs · Deployments · Site      (link row)                  │
+//	│ <instance host>                                   <time>  │
+//	└───────────────────────────────────────────────────────────┘
 //
-// All Event rich-card fields are optional; absent ones drop out so an
-// emit site that only sets Title/Body/URL still produces a clean
-// (thinner) card.
+// Compact cards (successes, cancellations) fold the fields into one
+// description line and skip the log tail, so failures stand out.
+// Extra is NOT rendered: it's raw-webhook data (ids, internal keys),
+// and cards showing "rule_id: r1" was noise. Anything a human should
+// see goes in Fields.
 func discordPayload(e Event, mention string) map[string]any {
+	const m = markupDiscord
 	embed := map[string]any{
-		"title":     e.Title,
+		"title":     truncateRunes(e.Title, 256),
 		"color":     discordColor(e),
 		"timestamp": e.Timestamp.Format(time.RFC3339),
 	}
 	if abs := absoluteURL(e.URL); abs != "" {
 		embed["url"] = abs
 	}
-	// Build description: prefer Description, fall back to legacy Body.
-	// Append log tail inline when it fits (description cap is 4096;
-	// fence wrappers cost 8 chars). Otherwise spill into a Logs field
-	// below — Discord caps a field value at 1024, but the renderer
-	// trims to fit so the embed validates either way.
-	desc := strings.TrimSpace(e.Description)
-	if desc == "" {
-		desc = strings.TrimSpace(e.Body)
+	compact := isCompact(e)
+
+	parts := make([]string, 0, 4)
+	desc := cardDescription(e)
+	if desc != "" {
+		parts = append(parts, expandTimes(desc, m))
 	}
+	if compact {
+		if line := inlineFields(e.Fields, m); line != "" {
+			parts = append(parts, expandTimes(line, m))
+		}
+	}
+	if diag := diagnosisText(e.Classification, m); diag != "" {
+		parts = append(parts, diag)
+	}
+	// Log tail goes inline when it fits, else into a Logs field (field
+	// values cap at 1024, description at 4096).
 	logTail := strings.TrimSpace(e.LogTail)
 	logInDesc := false
-	if logTail != "" {
+	if logTail != "" && !compact {
 		fenced := "```\n" + logTail + "\n```"
-		// Reserve ~200 chars headroom in case desc grows in future.
-		if len(desc)+1+len(fenced) <= 3800 {
-			if desc != "" {
-				desc += "\n" + fenced
-			} else {
-				desc = fenced
-			}
+		if len(strings.Join(parts, "\n"))+1+len(fenced) <= 3500 {
+			parts = append(parts, fenced)
 			logInDesc = true
 		}
 	}
-	if desc != "" {
-		embed["description"] = truncateRunes(desc, 4096)
-	}
-	// Field block. The renderer assembles in this order:
-	//   1. Caller-supplied Fields (the rich cards' main data),
-	//   2. Logs (only if LogTail didn't fit into the description),
-	//   3. Legacy Extra entries (kept for back-compat — old emit
-	//      sites that haven't migrated to Fields still get rendered).
-	fields := make([]map[string]any, 0, len(e.Fields)+4)
-	for _, f := range e.Fields {
-		if f.Name == "" || f.Value == "" {
-			continue
+	links := linksLine(e, m)
+	body := strings.Join(parts, "\n")
+	if links != "" {
+		body = truncateRunes(body, 4096-len([]rune(links))-2)
+		if body != "" {
+			body += "\n\n"
 		}
-		fields = append(fields, map[string]any{
-			"name":   truncateRunes(f.Name, 256),
-			"value":  truncateRunes(f.Value, 1024),
-			"inline": f.Inline,
-		})
+		body += links
 	}
-	if logTail != "" && !logInDesc {
-		// Wrap in a code fence, then truncate to fit Discord's 1024
-		// limit for field values. Better to lose the tail of the
-		// snippet than the whole embed.
-		fenced := "```\n" + logTail + "\n```"
-		fields = append(fields, map[string]any{
-			"name":   "Logs",
-			"value":  truncateRunes(fenced, 1024),
-			"inline": false,
-		})
+	if body != "" {
+		embed["description"] = truncateRunes(body, 4096)
 	}
-	// Extra is the legacy escape hatch. Skip the project/service
-	// duplicates the old discordFields() used to emit — the redesigned
-	// card surfaces those in the title/footer, not as field rows.
-	for k, v := range e.Extra {
-		if k == "" || v == "" {
-			continue
+
+	fields := make([]map[string]any, 0, len(e.Fields)+1)
+	if !compact {
+		for _, f := range e.Fields {
+			if f.Name == "" || f.Value == "" {
+				continue
+			}
+			fields = append(fields, map[string]any{
+				"name":   truncateRunes(f.Name, 256),
+				"value":  truncateRunes(expandTimes(f.Value, m), 1024),
+				"inline": f.Inline,
+			})
 		}
-		if k == "deployURL" || k == "ref" {
-			// Already surfaced through Fields when callers migrate;
-			// skipped here to avoid duplicates on cards that pass both
-			// the legacy Extra map and the new Fields slice.
-			continue
+		if logTail != "" && !logInDesc {
+			fields = append(fields, map[string]any{
+				"name":   "Logs",
+				"value":  truncateRunes("```\n"+logTail+"\n```", 1024),
+				"inline": false,
+			})
 		}
-		fields = append(fields, map[string]any{
-			"name":   truncateRunes(k, 256),
-			"value":  truncateRunes(v, 1024),
-			"inline": true,
-		})
+	}
+	if len(fields) > 25 {
+		fields = fields[:25]
 	}
 	if len(fields) > 0 {
-		// Discord caps the field count at 25; truncate defensively.
-		if len(fields) > 25 {
-			fields = fields[:25]
-		}
 		embed["fields"] = fields
 	}
-	// Footer. Default = "<project> · v<version>" so the cluster's
-	// origin is always visible on the card. Caller can override via
-	// e.Footer for events that aren't project-scoped (node events).
 	footer := e.Footer
 	if footer == "" {
-		parts := make([]string, 0, 2)
-		if e.Project != "" {
-			parts = append(parts, e.Project)
-		}
-		if v := strings.TrimSpace(currentVersion); v != "" {
-			parts = append(parts, v)
-		}
-		footer = strings.Join(parts, " · ")
+		footer = instanceHost()
 	}
+	footer = truncateRunes(footer, 2048)
 	if footer != "" {
-		embed["footer"] = map[string]any{"text": truncateRunes(footer, 2048)}
+		embed["footer"] = map[string]any{"text": footer}
 	}
-	body := map[string]any{
+	fitDiscordEmbed(embed, footer, links)
+	payload := map[string]any{
 		"username": "kuso",
 		"embeds":   []any{embed},
 	}
+	if av := avatarURL(); av != "" {
+		payload["avatar_url"] = av
+	}
 	if mention != "" {
-		body["content"] = mention
+		payload["content"] = mention
 		// Allowed_mentions explicitly enables the parsing — without
 		// this Discord strips @here / @everyone for hardened webhooks.
 		// Roles need explicit IDs in `roles`.
-		body["allowed_mentions"] = allowedMentionsFor(mention)
+		payload["allowed_mentions"] = allowedMentionsFor(mention)
 	}
-	return body
+	return payload
+}
+
+// fitDiscordEmbed trims an assembled embed until it's within
+// discordEmbedMaxChars: description first, then the Logs field, then
+// drops fields from the end. footer is the already-truncated footer text;
+// keepSuffix (the link row) survives description trimming.
+func fitDiscordEmbed(embed map[string]any, footer, keepSuffix string) {
+	count := func(s any) int {
+		str, _ := s.(string)
+		return len([]rune(str))
+	}
+	fields, _ := embed["fields"].([]map[string]any)
+	total := func() int {
+		n := count(embed["title"]) + count(embed["description"]) + len([]rune(footer))
+		for _, f := range fields {
+			n += count(f["name"]) + count(f["value"])
+		}
+		return n
+	}
+	over := total() - discordEmbedMaxChars
+	if over <= 0 {
+		return
+	}
+	if d := count(embed["description"]); d > 0 {
+		full := embed["description"].(string)
+		head, tail := full, ""
+		if keepSuffix != "" && strings.HasSuffix(full, keepSuffix) {
+			head, tail = strings.TrimSuffix(full, keepSuffix), keepSuffix
+		}
+		keep := len([]rune(head)) - over
+		switch {
+		case keep > 0:
+			embed["description"] = truncateRunes(head, keep) + tail
+		case tail != "":
+			embed["description"] = tail
+		default:
+			delete(embed, "description")
+		}
+		over = total() - discordEmbedMaxChars
+	}
+	for i := range fields {
+		if over <= 0 || fields[i]["name"] != "Logs" {
+			continue
+		}
+		v := fields[i]["value"].(string)
+		keep := len([]rune(v)) - over
+		if keep <= 0 {
+			fields = append(fields[:i], fields[i+1:]...)
+		} else {
+			fields[i]["value"] = truncateRunes(v, keep)
+		}
+		over = total() - discordEmbedMaxChars
+		break
+	}
+	for over > 0 && len(fields) > 0 {
+		fields = fields[:len(fields)-1]
+		over = total() - discordEmbedMaxChars
+	}
+	if over > 0 {
+		// Title + footer alone can't exceed 256 + 2048; unreachable, but
+		// keep the embed valid if the caps ever change.
+		embed["title"] = truncateRunes(embed["title"].(string), count(embed["title"])-over)
+	}
+	if len(fields) == 0 {
+		delete(embed, "fields")
+	} else {
+		embed["fields"] = fields
+	}
 }
 
 // truncateRunes shortens s to at most max RUNES (not bytes), appending
@@ -1041,12 +1169,7 @@ func absoluteURL(in string) string {
 	if !strings.HasPrefix(in, "/") {
 		return ""
 	}
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("KUSO_PUBLIC_URL")), "/")
-	if base == "" {
-		if d := strings.TrimSpace(os.Getenv("KUSO_DOMAIN")); d != "" {
-			base = "https://" + d
-		}
-	}
+	base := publicBase()
 	if base == "" {
 		return ""
 	}
@@ -1092,262 +1215,6 @@ func BuildFailed(project, service, ref, reason string) Event {
 	}
 }
 
-// PodCrashed fires when the health watcher sees a pod in
-// CrashLoopBackOff / ImagePullBackOff / ContainerConfigError state.
-// envKind is "production" / "preview-pr-7" / ... (or "" when unknown);
-// restarts is the kubelet's running restart count for the container;
-// logTail is the last few lines of the previous container's logs (may
-// be empty when no prior container exists — first-boot ImagePullBackOff
-// produces no logs to tail).
-//
-// classification, when non-nil, deep-links the bell-popover row into
-// the right overlay tab (Logs for CrashLoop, Settings for image-pull,
-// Variables for ContainerConfigError) and surfaces a one-line human
-// summary in the popover subtitle. Pass nil when the caller hasn't
-// classified yet — the UI then falls back to the default service URL.
-func PodCrashed(project, service, podName, reason, envKind, logTail string, restarts int, classification *failures.Classification) Event {
-	// Crashes → service overlay (Logs tab in particular is what the
-	// user wants next, but the overlay router defaults to Logs when
-	// the service has crashed pods, so a single deep-link works).
-	title := fmt.Sprintf("⚠ Pod crashed · %s / %s", project, service)
-	// Description carries the human-readable orientation ("production ·
-	// <pod>"); the field block has the actionable details.
-	desc := podName
-	if envKind != "" {
-		desc = envKind + " · " + podName
-	}
-	fields := []EventField{
-		{Name: "Reason", Value: reason, Inline: true},
-	}
-	if restarts > 0 {
-		fields = append(fields, EventField{
-			Name: "Restarts", Value: fmt.Sprintf("%d", restarts), Inline: true,
-		})
-	}
-	if envKind != "" {
-		fields = append(fields, EventField{Name: "Env", Value: envKind, Inline: true})
-	}
-	// Build the deep-link. When we have a classification, append the
-	// tab/kind/highlight params so the row lands the user inside the
-	// right tab of the service overlay instead of the canvas.
-	url := serviceURL(project, service)
-	// serviceURL already includes a "?service=..." query, so the tab
-	// hint appends with "&". If serviceURL is empty (no project) we
-	// don't add anything — there's nowhere to deep-link to.
-	if url != "" && classification != nil && classification.Tab != "" {
-		url = url + "&tab=" + string(classification.Tab) + "&kind=" + string(classification.Kind)
-		if classification.LineNum > 0 {
-			url = url + "&highlight=" + strconv.Itoa(classification.LineNum)
-		}
-	}
-	return Event{
-		Type:           EventPodCrashed,
-		Title:          title,
-		Description:    desc,
-		LogTail:        logTail,
-		Body:           reason, // back-compat for raw-webhook consumers
-		Project:        project,
-		Service:        service,
-		URL:            url,
-		Severity:       "warn",
-		Extra:          map[string]string{"pod": podName},
-		Fields:         fields,
-		Classification: classification,
-	}
-}
-
-// AddonCrashed fires when a managed addon's pod (postgres/redis/etc.) is
-// crashlooping or image-pull-failing. Before this, addon pods fell into
-// the service crash path (PodCrashed) which mislabelled them as a
-// phantom service named after the addon FQN and deep-linked to a service
-// overlay that doesn't exist. An addon crash is higher-severity than a
-// single service pod: every service in the project that mounts the
-// addon's conn secret loses its datastore. addonKind is postgres/redis/
-// s3/... for the card; restarts/logTail mirror PodCrashed.
-func AddonCrashed(project, addon, addonKind, podName, reason, logTail string, restarts int) Event {
-	title := fmt.Sprintf("⚠ Addon crashed · %s / %s", project, addon)
-	desc := podName
-	if addonKind != "" {
-		desc = addonKind + " · " + podName
-	}
-	fields := []EventField{
-		{Name: "Reason", Value: reason, Inline: true},
-		{Name: "Addon", Value: addon, Inline: true},
-	}
-	if addonKind != "" {
-		fields = append(fields, EventField{Name: "Kind", Value: addonKind, Inline: true})
-	}
-	if restarts > 0 {
-		fields = append(fields, EventField{Name: "Restarts", Value: fmt.Sprintf("%d", restarts), Inline: true})
-	}
-	return Event{
-		Type:        EventAddonCrashed,
-		Title:       title,
-		Description: desc,
-		LogTail:     logTail,
-		Body:        reason,
-		Project:     project,
-		// Deep-link to the project canvas; the addon node lives there.
-		URL:      projectURL(project),
-		Severity: "error",
-		Extra:    map[string]string{"pod": podName, "addon": addon, "addonKind": addonKind},
-		Fields:   fields,
-	}
-}
-
-// NodeUnreachable fires when a node has been NotReady past the
-// nodewatch threshold (5 min by default). The watcher cordons the
-// node before emitting so the event narrates a state change the
-// operator can act on, not a transient blip.
-//
-// downFor is how long the node has been NotReady at emit time —
-// usually ~= the watcher's threshold. affectedPods is the number of
-// pods that were running on the node when it went unreachable (0 when
-// the count couldn't be computed).
-func NodeUnreachable(node, reason string, downFor time.Duration, affectedPods int) Event {
-	desc := "NotReady — auto-cordoned"
-	if downFor > 0 {
-		desc = fmt.Sprintf("NotReady for %s — auto-cordoned", formatShortDuration(downFor))
-	}
-	fields := []EventField{}
-	if reason != "" {
-		fields = append(fields, EventField{Name: "Reason", Value: reason, Inline: true})
-	}
-	if affectedPods > 0 {
-		fields = append(fields, EventField{
-			Name: "Affected pods", Value: fmt.Sprintf("%d", affectedPods), Inline: true,
-		})
-	}
-	return Event{
-		Type:        EventNodeUnreachable,
-		Title:       fmt.Sprintf("⚠ Node unreachable · %s", node),
-		Description: desc,
-		Body:        reason,
-		URL:         "/settings/nodes",
-		Severity:    "error",
-		Extra:       map[string]string{"node": node},
-		Fields:      fields,
-		Footer:      "node · " + node,
-	}
-}
-
-// NodeRecovered fires when a previously-cordoned-as-unreachable node
-// transitions back to Ready. The watcher uncordons it (so workloads
-// can land again) before emitting. downFor is the total time the node
-// was unreachable (computed from the notReadySince annotation).
-func NodeRecovered(node string, downFor time.Duration) Event {
-	desc := "node is Ready again and uncordoned"
-	if downFor > 0 {
-		desc = fmt.Sprintf("Ready again after %s — uncordoned", formatShortDuration(downFor))
-	}
-	return Event{
-		Type:        EventNodeRecovered,
-		Title:       fmt.Sprintf("✓ Node recovered · %s", node),
-		Description: desc,
-		Body:        desc,
-		URL:         "/settings/nodes",
-		Severity:    "info",
-		Extra:       map[string]string{"node": node},
-		Footer:      "node · " + node,
-	}
-}
-
-// RunStarted fires when a KusoRun CR is created. The run hasn't
-// observed terminal state yet — the poller will fire RunSucceeded
-// or RunFailed once the Job lands. command is truncated for the
-// card so a 5kb argv (rare but possible) doesn't blow up the
-// webhook payload.
-func RunStarted(project, service, runName string, command []string, triggeredByUser string) Event {
-	cmd := strings.Join(command, " ")
-	if len(cmd) > 200 {
-		cmd = cmd[:200] + "…"
-	}
-	by := triggeredByUser
-	if by == "" {
-		by = "system"
-	}
-	return Event{
-		Type:        EventRunStarted,
-		Title:       fmt.Sprintf("▶ Run started · %s / %s", project, service),
-		Description: "`" + cmd + "`",
-		Project:     project,
-		Service:     service,
-		URL:         runEventURL(project, service),
-		Severity:    "info",
-		Fields: []EventField{
-			{Name: "Run", Value: "`" + runName + "`", Inline: true},
-			{Name: "By", Value: by, Inline: true},
-		},
-		Footer: "run · " + runName,
-	}
-}
-
-// RunSucceeded fires when the runs poller observes the Job's
-// JobComplete condition. Same shape as RunStarted; the duration
-// is whatever the poller can compute from the started/completed
-// annotation pair (0 when either is missing).
-func RunSucceeded(project, service, runName string, command []string, durationMs int64) Event {
-	cmd := strings.Join(command, " ")
-	if len(cmd) > 200 {
-		cmd = cmd[:200] + "…"
-	}
-	fields := []EventField{
-		{Name: "Run", Value: "`" + runName + "`", Inline: true},
-	}
-	if durationMs > 0 {
-		fields = append(fields, EventField{
-			Name: "Took", Value: formatShortDuration(time.Duration(durationMs) * time.Millisecond), Inline: true,
-		})
-	}
-	return Event{
-		Type:        EventRunSucceeded,
-		Title:       fmt.Sprintf("✓ Run succeeded · %s / %s", project, service),
-		Description: "`" + cmd + "`",
-		Project:     project,
-		Service:     service,
-		URL:         runEventURL(project, service),
-		Severity:    "info",
-		Fields:      fields,
-		DurationMs:  durationMs,
-		Footer:      "run · " + runName,
-	}
-}
-
-// RunFailed fires on JobFailed terminal transition. message is the
-// Job's failure condition message (typically the kubelet's reason
-// + the container's exit code).
-func RunFailed(project, service, runName string, command []string, message string, durationMs int64) Event {
-	cmd := strings.Join(command, " ")
-	if len(cmd) > 200 {
-		cmd = cmd[:200] + "…"
-	}
-	fields := []EventField{
-		{Name: "Run", Value: "`" + runName + "`", Inline: true},
-	}
-	if durationMs > 0 {
-		fields = append(fields, EventField{
-			Name: "Took", Value: formatShortDuration(time.Duration(durationMs) * time.Millisecond), Inline: true,
-		})
-	}
-	desc := "`" + cmd + "`"
-	if message != "" {
-		desc = "`" + cmd + "`\n" + message
-	}
-	return Event{
-		Type:        EventRunFailed,
-		Title:       fmt.Sprintf("✗ Run failed · %s / %s", project, service),
-		Description: desc,
-		Body:        message,
-		Project:     project,
-		Service:     service,
-		URL:         runEventURL(project, service),
-		Severity:    "error",
-		Fields:      fields,
-		DurationMs:  durationMs,
-		Footer:      "run · " + runName,
-	}
-}
-
 // runEventURL deep-links into the Runs tab of the service overlay.
 // Mirrors serviceURL but pins ?tab=runs so a click from Discord
 // lands on the right surface.
@@ -1384,26 +1251,17 @@ func formatShortDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd %dh", days, h)
 }
 
-func AlertFired(title, body, severity string, extra map[string]string) Event {
-	// Alert events know where to deep-link via Extra: when the rule
-	// targeted a service we can land there; otherwise fall through
-	// to the alerts page so the user sees rule context.
-	url := "/settings/alerts"
-	if extra != nil {
-		if p, s := extra["project"], extra["service"]; p != "" && s != "" {
-			url = serviceURL(p, s)
-		} else if p := extra["project"]; p != "" {
-			url = projectURL(p)
-		}
+// AlertURL is the deep-link for an alert.fired event: the service
+// overlay when the rule targets a service, the project canvas when it
+// targets a project, else the alerts settings page for rule context.
+func AlertURL(project, service string) string {
+	if project != "" && service != "" {
+		return serviceURL(project, service)
 	}
-	return Event{
-		Type:     EventAlertFired,
-		Title:    title,
-		Body:     body,
-		URL:      url,
-		Severity: severity,
-		Extra:    extra,
+	if project != "" {
+		return projectURL(project)
 	}
+	return "/settings/alerts"
 }
 
 func shortRef(s string) string {

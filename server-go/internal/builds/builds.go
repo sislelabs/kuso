@@ -2552,30 +2552,28 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	p.queueArchive(ctx, ns, b, "succeeded")
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		// Best-effort site URL lookup for the "Site" field; failure
-		// just omits the field.
-		var siteURL string
-		if p.Svc != nil {
-			siteURL = lookupSiteURL(ctx, p.Svc.Kube, ns, b.Spec.Project, b.Spec.Service)
-		}
 		// Title shows the cosmetic displayName when set (slug fallback);
 		// URLs + the Service field below stay the slug for deep-links.
 		var kc *kube.Client
+		var homeNS string
 		if p.Svc != nil {
-			kc = p.Svc.Kube
+			kc, homeNS = p.Svc.Kube, p.Svc.Namespace
 		}
 		label := serviceDisplayLabel(ctx, kc, ns, b.Spec.Service, short)
-		title, desc, fields := buildRichCard(b, label, "succeeded", "", siteURL)
+		targets := lookupBuildTargets(ctx, kc, ns, homeNS, b)
+		title, desc, fields := buildRichCard(b, label, "succeeded", "", targets)
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSucceeded,
 			Title:       title,
 			Description: desc,
 			Project:     b.Spec.Project,
 			Service:     short,
-			URL:         buildEventURL(b.Spec.Project, short),
+			Env:         singleTargetEnv(targets),
+			URL:         withEnvParam(buildEventURL(b.Spec.Project, short), targets),
 			Severity:    "info",
 			DurationMs:  buildDurationMs(b),
 			Fields:      fields,
+			Links:       buildCardLinks(b.Spec.Project, short, "succeeded", targets, nil),
 		})
 	}
 	// Promotion already ran (and succeeded) above, before the terminal
@@ -2714,11 +2712,13 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		// user directly inside the service overlay.
 		deepLink := buildFailureURL(b.Spec.Project, short, classification)
 		var kc *kube.Client
+		var homeNS string
 		if p.Svc != nil {
-			kc = p.Svc.Kube
+			kc, homeNS = p.Svc.Kube, p.Svc.Namespace
 		}
 		label := serviceDisplayLabel(ctx, kc, ns, b.Spec.Service, short)
-		title, desc, fields := buildRichCard(b, label, "failed", msg, "")
+		targets := lookupBuildTargets(ctx, kc, ns, homeNS, b)
+		title, desc, fields := buildRichCard(b, label, "failed", msg, targets)
 		p.Notifier.Emit(EventEnvelope{
 			Type:           eventBuildFailed,
 			Title:          title,
@@ -2727,10 +2727,12 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 			LogTail:        logTail,
 			Project:        b.Spec.Project,
 			Service:        short,
-			URL:            deepLink,
-			Severity:       "error",
+			Env:            singleTargetEnv(targets),
+			URL:            withEnvParam(deepLink, targets),
+			Severity:       buildSeverity(targets),
 			DurationMs:     buildDurationMs(b),
 			Fields:         fields,
+			Links:          buildCardLinks(b.Spec.Project, short, "failed", targets, &classification),
 			Classification: &classification,
 		})
 	}
@@ -3482,14 +3484,18 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		label := serviceDisplayLabel(ctx, p.Svc.Kube, ns, b.Spec.Service, short)
-		title := fmt.Sprintf("Release hook failed for %s/%s", b.Spec.Project, label)
-		desc := fmt.Sprintf("release command exited with %s — image was NOT promoted, existing pods unchanged. job=%s", res.Outcome, res.JobName)
-		fields := map[string]string{
-			"env":     e.Name,
-			"image":   fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag),
-			"job":     res.JobName,
-			"outcome": string(res.Outcome),
+		env := e.Labels[kube.LabelEnv]
+		if env == "" {
+			env = strings.TrimPrefix(e.Name, b.Spec.Service+"-")
 		}
+		targets := []buildTarget{{Env: env}}
+		_, _, fields := buildRichCard(b, label, "failed", "", nil)
+		title := fmt.Sprintf("✗ Release failed · %s / %s → %s", b.Spec.Project, label, env)
+		desc := msg + "\nImage was **not** promoted — existing pods keep running the previous version."
+		fields = append(fields,
+			EnvelopeField{Name: "Outcome", Value: string(res.Outcome), Inline: true},
+			EnvelopeField{Name: "Job", Value: "`" + res.JobName + "`", Inline: true},
+		)
 		// Reuse the eventBuildFailed channel so existing webhook
 		// subscribers pick this up — release failures are a flavour
 		// of build-failure as far as alert routing is concerned.
@@ -3497,27 +3503,17 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 			Type:        eventBuildFailed,
 			Title:       title,
 			Description: desc,
+			Body:        msg,
 			Project:     b.Spec.Project,
 			Service:     short,
-			URL:         buildEventURL(b.Spec.Project, short),
-			Severity:    "warning",
-			Fields:      flattenFields(fields),
+			Env:         env,
+			URL:         withEnvParam(buildEventURL(b.Spec.Project, short), targets),
+			Severity:    buildSeverity(targets),
+			DurationMs:  buildDurationMs(b),
+			Fields:      fields,
+			Links:       buildCardLinks(b.Spec.Project, short, "release-failed", targets, nil),
 		})
 	}
-}
-
-// flattenFields converts a map[string]string into the []EnvelopeField
-// shape the notify dispatcher expects. Tiny helper; lives here because
-// markReleaseFailed is the only caller.
-func flattenFields(m map[string]string) []EnvelopeField {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]EnvelopeField, 0, len(m))
-	for k, v := range m {
-		out = append(out, EnvelopeField{Name: k, Value: v, Inline: true})
-	}
-	return out
 }
 
 // asUnstructured is a small helper to build the unstructured shape for

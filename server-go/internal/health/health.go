@@ -18,7 +18,6 @@ package health
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -38,6 +37,45 @@ import (
 // serverstate liveness registry at the interval it beats.
 const HeartbeatInterval = 60 * time.Second
 
+// CrashAlertCooldown is how long a crash key stays remembered after the
+// last tick that observed it. A crashlooping container is Running between
+// restarts, so a tick can miss it; forgetting the key immediately made
+// every such gap re-alert. One alert per episode; an episode ends either
+// with a recovery (see RecoveryStableWindow) or, when the env never looks
+// healthy again (deleted, scaled to 0, stuck unready), after this long.
+const CrashAlertCooldown = 15 * time.Minute
+
+// RecoveryStableWindow is how long a crashed service env must look
+// healthy (a Ready pod, no crashing pods, no new restarts) before its
+// episode closes with a pod.recovered event. Three 60s ticks: long enough
+// that a crashloop's brief Running phase between backoffs doesn't count,
+// short enough to beat CrashAlertCooldown by a wide margin.
+const RecoveryStableWindow = 3 * time.Minute
+
+// crashEpisode is the per-key state of one alerted crash episode.
+type crashEpisode struct {
+	since   time.Time // first tick that observed the key bad
+	lastBad time.Time // most recent tick that observed it bad
+
+	// Recovery bookkeeping, service keys only (addon episodes just
+	// expire). healthySince is the tick the current healthy run began,
+	// zero when the env isn't currently healthy. restarts is the env's
+	// restart total at the last healthy tick, so a crash-and-restart
+	// between two ticks (never seen as Waiting) still resets the window.
+	addon                 bool
+	project, service, env string
+	healthySince          time.Time
+	restarts              int
+}
+
+// keyObservation aggregates one tick's view of every pod sharing a crash key.
+type keyObservation struct {
+	badPod   *corev1.Pod
+	reason   string
+	ready    bool
+	restarts int
+}
+
 // Watcher polls cluster state every Interval and emits notify events.
 // Construct via New, run via Run in a goroutine.
 type Watcher struct {
@@ -52,7 +90,13 @@ type Watcher struct {
 	DiskWarnPct int
 
 	mu    sync.Mutex
-	fired map[string]bool // alert key → was already fired
+	fired map[string]bool // node alert key → was already fired
+	// crashSeen maps a pod-crash key (see crashKey) to its open episode.
+	crashSeen map[string]*crashEpisode
+
+	// Test seams; nil means time.Now / w.Notify.Emit.
+	now  func() time.Time
+	emit func(notify.Event)
 }
 
 // New returns a Watcher with sensible defaults.
@@ -65,7 +109,23 @@ func New(k *kube.Client, ns string, n *notify.Dispatcher, logger *slog.Logger) *
 		Interval:    HeartbeatInterval,
 		DiskWarnPct: 85,
 		fired:       map[string]bool{},
+		crashSeen:   map[string]*crashEpisode{},
 	}
+}
+
+func (w *Watcher) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+func (w *Watcher) send(e notify.Event) {
+	if w.emit != nil {
+		w.emit(e)
+		return
+	}
+	w.Notify.Emit(e)
 }
 
 // Run loops until ctx is cancelled. First tick fires immediately so
@@ -93,8 +153,12 @@ func (w *Watcher) tick(ctx context.Context) {
 }
 
 // checkPods finds pods in CrashLoopBackOff / ImagePullBackOff /
-// CreateContainerConfigError and fires once per (pod, reason). When
-// the pod recovers we forget the key so a later relapse alerts again.
+// CreateContainerConfigError and fires once per workload episode, keyed
+// by (namespace, project, service, env) — not pod name (replicas and
+// rollout pods would multiply alerts) and not reason (ErrImagePull and
+// ImagePullBackOff alternate between ticks). A service episode closes
+// with pod.recovered after RecoveryStableWindow of health; otherwise the
+// key is forgotten after CrashAlertCooldown without being observed bad.
 func (w *Watcher) checkPods(ctx context.Context) {
 	// Only kuso-managed workload pods can be in a state this watcher
 	// reports on, so select on the project label rather than listing
@@ -108,98 +172,234 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		w.Logger.Warn("health: list pods", "err", err)
 		return
 	}
-	live := map[string]bool{}
+	now := w.clock()
+
+	obs := map[string]*keyObservation{}
+	var order []string // first-seen order, so alerts are deterministic
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		reason := podBadReason(p)
-		if reason == "" {
-			continue
+		key := crashKey(p)
+		o := obs[key]
+		if o == nil {
+			o = &keyObservation{}
+			obs[key] = o
+			order = append(order, key)
 		}
-		key := "pod:" + p.Name + ":" + reason
-		live[key] = true
-		w.mu.Lock()
-		already := w.fired[key]
-		w.fired[key] = true
-		w.mu.Unlock()
-		if already {
-			continue
-		}
-		project := p.Labels["kuso.sislelabs.com/project"]
-		service := p.Labels["app.kubernetes.io/instance"]
-		envKind := p.Labels["kuso.sislelabs.com/env-kind"]
-		restarts := containerRestartTotal(p)
-		// Addon pods (postgres/redis/s3/...) carry kuso.sislelabs.com/addon
-		// and app.kubernetes.io/name=kusoaddon. They were previously routed
-		// through the service crash path below, which read
-		// app.kubernetes.io/instance (the addon FQN) as a "service" and
-		// emitted a PodCrashed deep-linking to a service overlay that
-		// doesn't exist — a phantom service. Route addon crashes to their
-		// own higher-severity event (a crashed datastore takes down every
-		// service in the project that mounts its conn secret) and skip the
-		// service path.
-		if addon := p.Labels["kuso.sislelabs.com/addon"]; addon != "" ||
-			p.Labels["app.kubernetes.io/name"] == "kusoaddon" {
-			if addon == "" {
-				addon = p.Labels["app.kubernetes.io/instance"] // fallback to FQN
+		o.restarts += containerRestartTotal(p)
+		if reason := podBadReason(p); reason != "" {
+			if o.badPod == nil {
+				o.badPod, o.reason = p, reason
 			}
-			addonKind := p.Labels["kuso.sislelabs.com/addon-kind"]
-			logLines := w.previousLogLines(p, reason, 50)
-			logTail := ""
-			if n := len(logLines); n > 0 {
-				start := n - 5
-				if start < 0 {
-					start = 0
-				}
-				logTail = strings.Join(logLines[start:], "\n")
-			}
-			shortAddon := strings.TrimPrefix(addon, project+"-")
-			w.Notify.Emit(notify.AddonCrashed(project, shortAddon, addonKind, p.Name, reason, logTail, restarts))
-			continue
+		} else if podReady(p) {
+			o.ready = true
 		}
-		// Pull 50 lines for the classifier; the Discord card still only
-		// shows the last 5 (joined via previousLogTail). The classifier
-		// walks the larger window in reverse to find the regex that
-		// matches the failure — 5 lines is too small when nixpacks /
-		// buildpacks chatter after the actual error.
-		logLines := w.previousLogLines(p, reason, 50)
-		// Derive the short tail from the same slice so card + classifier
-		// can't disagree about what "the tail" was.
-		logTail := ""
-		if n := len(logLines); n > 0 {
-			start := n - 5
-			if start < 0 {
-				start = 0
-			}
-			logTail = strings.Join(logLines[start:], "\n")
-		}
-		// Stripping "init:" off the reason for the classifier — the
-		// signal taxonomy doesn't distinguish init vs main containers
-		// (the user cares about "image-pull failed", not "image pull
-		// failed in init container").
-		sigReason := strings.TrimPrefix(reason, "init:")
-		// Also surface the terminated reason + exit code: a pod that
-		// OOMs shows Waiting.Reason=CrashLoopBackOff on restart but
-		// Terminated.Reason=OOMKilled / exit=137 on the last run, so
-		// classifying on the Waiting reason alone mislabels every OOM
-		// as a crashloop. Prefer the terminated signal so Classify
-		// reaches KindOOM (and the exit-137 fallback).
-		termReason, exitCode := podTerminatedSignal(p)
-		sig := failures.Signal{Reason: sigReason, ExitCode: exitCode}
-		if termReason != "" {
-			sig.Reason = termReason
-		}
-		classification := failures.Classify(logLines, sig)
-		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason, envKind, logTail, restarts, &classification))
 	}
-	// Garbage-collect stale alerts so a recovered pod can re-alert
-	// later.
+
+	for _, key := range order {
+		o := obs[key]
+		if o.badPod == nil {
+			continue
+		}
+		w.mu.Lock()
+		ep, open := w.crashSeen[key]
+		if open {
+			ep.lastBad = now
+			ep.healthySince = time.Time{}
+		}
+		w.mu.Unlock()
+		if open {
+			continue
+		}
+		ep = w.alertCrash(ctx, o.badPod, o.reason, now)
+		ep.lastBad = now
+		w.mu.Lock()
+		w.crashSeen[key] = ep
+		w.mu.Unlock()
+	}
+
+	var recovered []notify.Event
 	w.mu.Lock()
-	for k := range w.fired {
-		if strings.HasPrefix(k, "pod:") && !live[k] {
-			delete(w.fired, k)
+	for key, ep := range w.crashSeen {
+		o := obs[key]
+		if o != nil && o.badPod != nil {
+			continue
+		}
+		// A healthy service env needs a Ready pod: no pods at all means
+		// deleted or scaled to 0, which is not a recovery.
+		if !ep.addon && o != nil && o.ready {
+			if ep.healthySince.IsZero() || o.restarts > ep.restarts {
+				ep.healthySince = now
+			}
+			ep.restarts = o.restarts
+			if now.Sub(ep.healthySince) >= RecoveryStableWindow {
+				recovered = append(recovered, notify.PodRecovered(ep.project, ep.service, ep.env, ep.healthySince.Sub(ep.since)))
+				delete(w.crashSeen, key)
+				continue
+			}
+		} else {
+			ep.healthySince = time.Time{}
+		}
+		if now.Sub(ep.lastBad) > CrashAlertCooldown {
+			delete(w.crashSeen, key)
 		}
 	}
 	w.mu.Unlock()
+	for _, e := range recovered {
+		w.send(e)
+	}
+}
+
+// alertCrash emits the crash event for the first bad pod of a new
+// episode and returns the episode it opens.
+func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, now time.Time) *crashEpisode {
+	project := p.Labels[kube.LabelProject]
+	restarts := containerRestartTotal(p)
+	// Addon pods (postgres/redis/s3/...) carry kuso.sislelabs.com/addon
+	// and app.kubernetes.io/name=kusoaddon. They were previously routed
+	// through the service crash path below, which read
+	// app.kubernetes.io/instance (the addon FQN) as a "service" and
+	// emitted a PodCrashed deep-linking to a service overlay that
+	// doesn't exist — a phantom service. Route addon crashes to their
+	// own higher-severity event (a crashed datastore takes down every
+	// service in the project that mounts its conn secret) and skip the
+	// service path.
+	if addon := p.Labels["kuso.sislelabs.com/addon"]; addon != "" ||
+		p.Labels["app.kubernetes.io/name"] == "kusoaddon" {
+		if addon == "" {
+			addon = p.Labels["app.kubernetes.io/instance"] // fallback to FQN
+		}
+		addonKind := p.Labels["kuso.sislelabs.com/addon-kind"]
+		logTail := lastLines(w.previousLogLines(p, reason, 50), 5)
+		shortAddon := strings.TrimPrefix(addon, project+"-")
+		w.send(notify.AddonCrashed(project, shortAddon, addonKind, p.Name, reason, logTail, restarts))
+		return &crashEpisode{since: now, addon: true, project: project}
+	}
+	// Pull 50 lines for the classifier; the Discord card still only
+	// shows the last 5. The classifier walks the larger window in
+	// reverse to find the regex that matches the failure — 5 lines is
+	// too small when nixpacks / buildpacks chatter after the actual
+	// error. Deriving the tail from the same slice keeps card and
+	// classifier agreeing on what "the tail" was.
+	logLines := w.previousLogLines(p, reason, 50)
+	logTail := lastLines(logLines, 5)
+	// Stripping "init:" off the reason for the classifier — the
+	// signal taxonomy doesn't distinguish init vs main containers
+	// (the user cares about "image-pull failed", not "image pull
+	// failed in init container").
+	sigReason := strings.TrimPrefix(reason, "init:")
+	// Also surface the terminated reason + exit code: a pod that
+	// OOMs shows Waiting.Reason=CrashLoopBackOff on restart but
+	// Terminated.Reason=OOMKilled / exit=137 on the last run, so
+	// classifying on the Waiting reason alone mislabels every OOM
+	// as a crashloop. Prefer the terminated signal so Classify
+	// reaches KindOOM (and the exit-137 fallback).
+	termReason, exitCode := podTerminatedSignal(p)
+	sig := failures.Signal{Reason: sigReason, ExitCode: exitCode}
+	if termReason != "" {
+		sig.Reason = termReason
+	}
+	classification := failures.Classify(logLines, sig)
+	service := podServiceShort(p)
+	envName := w.podEnvName(ctx, p, service)
+	w.send(notify.PodCrashed(notify.PodCrash{
+		Project:        project,
+		Service:        service,
+		Env:            envName,
+		Pod:            p.Name,
+		Reason:         reason,
+		LogTail:        logTail,
+		Restarts:       restarts,
+		Since:          now,
+		Classification: &classification,
+	}))
+	return &crashEpisode{since: now, project: project, service: service, env: envName}
+}
+
+func lastLines(lines []string, n int) string {
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// podReady reports a Running pod whose Ready condition is True.
+func podReady(p *corev1.Pod) bool {
+	if p.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// crashKey identifies the workload a bad pod belongs to. The env
+// component is the env CR name (app.kubernetes.io/instance), which is
+// unique per (service, env) and shared by every replica and rollout pod.
+func crashKey(p *corev1.Pod) string {
+	project := p.Labels[kube.LabelProject]
+	if addon := p.Labels["kuso.sislelabs.com/addon"]; addon != "" ||
+		p.Labels["app.kubernetes.io/name"] == "kusoaddon" {
+		if addon == "" {
+			addon = p.Labels["app.kubernetes.io/instance"]
+		}
+		return "addon:" + p.Namespace + "/" + project + "/" + addon
+	}
+	return "svc:" + p.Namespace + "/" + project + "/" + podServiceShort(p) + "/" + p.Labels["app.kubernetes.io/instance"]
+}
+
+// podServiceShort returns the short service slug the web UI uses in
+// ?service=. The kusoenvironment chart stamps kuso.sislelabs.com/service
+// with the env CR's spec.service, which is the FQN "<project>-<service>";
+// app.kubernetes.io/instance is the env CR name ("<fqn>-production"),
+// which is why it can't be used directly.
+func podServiceShort(p *corev1.Pod) string {
+	project := p.Labels[kube.LabelProject]
+	svc := p.Labels[kube.LabelService]
+	if svc == "" || svc == "unknown" {
+		// Pods predating the service label: strip the env suffix off the
+		// env CR name to recover the FQN.
+		svc = p.Labels["app.kubernetes.io/instance"]
+		if i := strings.LastIndex(svc, "-pr-"); i > 0 {
+			svc = svc[:i]
+		} else {
+			svc = strings.TrimSuffix(svc, "-production")
+		}
+	}
+	if project != "" {
+		svc = strings.TrimPrefix(svc, project+"-")
+	}
+	return svc
+}
+
+// podEnvName returns the env group name (production / staging /
+// preview-pr-7). Pods don't carry kube.LabelEnv — only the env CR does —
+// and env-kind on the pod reads "production" for env-group clones like
+// staging, so the CR is the authority. Falls back to deriving from the
+// env CR name, then to env-kind.
+func (w *Watcher) podEnvName(ctx context.Context, p *corev1.Pod, serviceShort string) string {
+	if v := p.Labels[kube.LabelEnv]; v != "" {
+		return v
+	}
+	envCR := p.Labels["app.kubernetes.io/instance"]
+	if envCR != "" && w.Kube != nil && w.Kube.Dynamic != nil {
+		gctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		env, err := w.Kube.GetKusoEnvironment(gctx, p.Namespace, envCR)
+		cancel()
+		if err == nil && env.Labels[kube.LabelEnv] != "" {
+			return env.Labels[kube.LabelEnv]
+		}
+	}
+	prefix := p.Labels[kube.LabelProject] + "-" + serviceShort + "-"
+	if suffix, ok := strings.CutPrefix(envCR, prefix); ok && suffix != "" {
+		if strings.HasPrefix(suffix, "pr-") {
+			return "preview-" + suffix
+		}
+		return suffix
+	}
+	return p.Labels["kuso.sislelabs.com/env-kind"]
 }
 
 // podTerminatedSignal returns the (reason, exitCode) of the pod's most
@@ -294,7 +494,7 @@ func (w *Watcher) checkNodes(ctx context.Context) {
 		w.mu.Unlock()
 		if pressure && !already {
 			w.Notify.Emit(notify.AlertFired(
-				fmt.Sprintf("⚠ Node disk pressure: %s", n.Name),
+				"Disk pressure on "+n.Name,
 				"kubelet flagged DiskPressure=True. Free up space or pods will start getting evicted.",
 				"warn",
 				map[string]string{"node": n.Name},

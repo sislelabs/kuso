@@ -115,6 +115,21 @@ const ALL_MAIN_TABS: { id: Tab; label: string; alwaysShow?: boolean }[] = [
 ];
 const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Settings" };
 
+// TAB_ALIASES maps deep-link tab slugs that aren't overlay tabs onto the
+// tab that owns that content. The server's failures.TabBuild ("build")
+// tags build-time failures (build OOM, lockfile drift, missing
+// Dockerfile, …); the failed build row with its remediation lives on
+// Deployments, so that's where the banner has to render.
+const TAB_ALIASES: Record<string, Tab> = { build: "deployments" };
+
+function resolveTab(slug: string | undefined): Tab | undefined {
+  if (!slug) return undefined;
+  const aliased = TAB_ALIASES[slug];
+  if (aliased) return aliased;
+  const match = [...ALL_MAIN_TABS, PINNED_TAB].find((t) => t.id === slug);
+  return match?.id;
+}
+
 // EditableTitle renders the service's display name in the overlay header
 // with inline click-to-edit. Click the title (or the pencil that appears
 // on hover) → it becomes an input; Enter/blur saves, Escape cancels.
@@ -313,9 +328,9 @@ export function ServiceOverlay({
     // Crons/Runs is enforced separately below — landing on a hidden
     // tab would mean the active-tab underline has nothing to anchor
     // to, so we coerce that case back to "deployments".
-    const valid = [...ALL_MAIN_TABS, PINNED_TAB].some((t) => t.id === defaultTab);
-    if (valid) {
-      setTab(defaultTab as Tab);
+    const requested = resolveTab(defaultTab);
+    if (requested) {
+      setTab(requested);
       return;
     }
     let remembered: Tab = "deployments";
@@ -332,7 +347,7 @@ export function ServiceOverlay({
   // user telling us they're done with the hint. Captured once per
   // open: re-derives from defaultTab when the user re-opens via a
   // different notification.
-  const failureTab = failureKind ? (defaultTab as Tab | undefined) : undefined;
+  const failureTab = failureKind ? resolveTab(defaultTab) : undefined;
 
   // Persist tab selection so the next open in this session lands on
   // the same place. SessionStorage (not localStorage) so a new tab/

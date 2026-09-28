@@ -123,6 +123,44 @@ func TestEvaluateNodeWithoutKubeFailsSafe(t *testing.T) {
 	}
 }
 
+// TestAlertEvent: the card goes through notify.AlertFired, so the title
+// is "<glyph> Alert · <rule name> · <scope>" and the rule's scope rides in
+// Extra (what AlertFired reads for the deep link + mute key).
+func TestAlertEvent(t *testing.T) {
+	r := &db.AlertRule{ID: "r1", Name: "5xx spike", Kind: "log_match", Project: "alpha", Service: "web", Severity: "warn"}
+	ev := alertEvent(r, "matched 12 times")
+	if ev.Title != "⚠ Alert · 5xx spike · alpha / web" {
+		t.Errorf("Title = %q", ev.Title)
+	}
+	if ev.Type != notify.EventAlertFired || ev.Body != "matched 12 times" || ev.Severity != "warn" {
+		t.Errorf("event = %+v", ev)
+	}
+	if ev.Project != "alpha" || ev.Service != "web" || ev.URL != notify.AlertURL("alpha", "web") {
+		t.Errorf("scope/url = %q %q %q", ev.Project, ev.Service, ev.URL)
+	}
+	for k, want := range map[string]string{"rule_id": "r1", "kind": "log_match", "project": "alpha", "service": "web"} {
+		if ev.Extra[k] != want {
+			t.Errorf("Extra[%q] = %q, want %q", k, ev.Extra[k], want)
+		}
+	}
+	labels := map[string]bool{}
+	for _, l := range ev.Links {
+		labels[l.Label] = true
+	}
+	if !labels["Open"] || !labels["Alert rules"] {
+		t.Errorf("Links = %+v, want Open + Alert rules", ev.Links)
+	}
+
+	// Cluster-wide rule: no scope suffix, no project/service keys.
+	ev = alertEvent(&db.AlertRule{ID: "r2", Name: "node cpu", Kind: "node_cpu", Severity: "error"}, "hot")
+	if ev.Title != "✗ Alert · node cpu" {
+		t.Errorf("unscoped Title = %q", ev.Title)
+	}
+	if _, ok := ev.Extra["project"]; ok {
+		t.Errorf("unscoped Extra has project: %+v", ev.Extra)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Postgres-backed tests. Skip without KUSO_TEST_PG_DSN (same convention
 // as internal/db and internal/audit); CI runs them against an ephemeral

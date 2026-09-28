@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -767,37 +768,142 @@ func (w *Watcher) tick(ctx context.Context) {
 	}
 	switch {
 	case state != "":
-		title := "Control-plane backup unhealthy"
-		switch {
-		case len(unreadable) > 0:
-			title = "Backup health can't be checked"
-		case !backupOK:
-			// keep default title
-		case !gcOK:
-			title = "Registry garbage-collection unhealthy"
-		default:
-			title = "Addon backups failing"
+		var failing []AddonBackupStatus
+		if !addonsOK {
+			for i := range addons {
+				if !addons[i].Healthy {
+					failing = append(failing, addons[i])
+				}
+			}
 		}
-		w.Notify.Emit(notify.Event{
-			Type:        notify.EventBackupFailed,
-			Timestamp:   time.Now().UTC(),
-			Title:       title,
-			Body:        detailMsg,
-			Description: detailMsg,
-			Severity:    severity,
-		})
+		w.Notify.Emit(failedEvent(unhealthyReport{
+			backup: s, backupOK: backupOK,
+			gc: gc, gcOK: gcOK,
+			failingAddons:   failing,
+			unreadable:      unreadable,
+			incompleteTicks: w.incompleteTicks,
+			severity:        severity,
+			body:            detailMsg,
+		}))
 		w.Logger.Warn("backup health: unhealthy", "subsystems", state, "detail", detailMsg, "severity", severity)
 	case prevState != "":
-		// Recovered (everything healthy again).
-		w.Notify.Emit(notify.Event{
-			Type:      notify.EventBackupOK,
-			Timestamp: time.Now().UTC(),
-			Title:     "Backup / registry maintenance recovered",
-			Body:      "Control-plane backups, registry GC, and addon backups are healthy again.",
-			Severity:  "info",
-		})
+		w.Notify.Emit(recoveredEvent())
 		w.Logger.Info("backup health: recovered")
 	}
+}
+
+// backupsURL is the in-app backups settings page (web/src/app/(app)/settings/backups).
+const backupsURL = "/settings/backups"
+
+// maxAddonLines caps the per-addon bullets on a backup.failed card; a
+// cluster-wide S3 misconfiguration can fail dozens at once.
+const maxAddonLines = 10
+
+// unhealthyReport is everything one backup.failed card describes.
+type unhealthyReport struct {
+	backup          Status
+	backupOK        bool
+	gc              RegistryGCStatus
+	gcOK            bool
+	failingAddons   []AddonBackupStatus
+	unreadable      []string
+	incompleteTicks int
+	severity        string
+	// body is the flat one-line detail kept for raw-webhook consumers.
+	body string
+}
+
+// failedEvent renders the backup.failed card: one bullet per broken
+// subsystem / addon, with the last successful run where known.
+func failedEvent(r unhealthyReport) notify.Event {
+	what := "Control-plane backup unhealthy"
+	switch {
+	case len(r.unreadable) > 0:
+		what = "Backup health can't be checked"
+	case !r.backupOK:
+		// control-plane backup outranks the rest; keep the default
+	case !r.gcOK:
+		what = "Registry garbage-collection unhealthy"
+	default:
+		what = "Addon backups failing"
+	}
+	glyph := "⚠"
+	if r.severity == "error" {
+		glyph = "✗"
+	}
+
+	var lines []string
+	if !r.backupOK {
+		lines = append(lines, "• **Control-plane DB** — "+r.backup.Detail+lastSuccess(r.backup.LastSuccessAt))
+	}
+	if !r.gcOK {
+		lines = append(lines, "• **Registry GC** — "+r.gc.Detail+lastSuccess(r.gc.LastSuccessAt))
+	}
+	projects := map[string]struct{}{}
+	for i, a := range r.failingAddons {
+		projects[a.Project] = struct{}{}
+		if i == maxAddonLines {
+			lines = append(lines, fmt.Sprintf("• …and %d more", len(r.failingAddons)-maxAddonLines))
+			continue
+		}
+		if i > maxAddonLines {
+			continue
+		}
+		name := notify.Scope(a.Project, strings.TrimPrefix(a.Addon, a.Project+"-"), "")
+		if a.Kind != "" {
+			name += " (" + a.Kind + ")"
+		}
+		lines = append(lines, "• **"+name+"** — "+a.Detail+lastSuccess(a.LastSuccessAt))
+	}
+	if len(r.unreadable) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"• Can't read **%s** (%d failed checks in a row) — failures there aren't being detected. Check kuso-server logs and RBAC.",
+			strings.Join(r.unreadable, ", "), r.incompleteTicks))
+	}
+
+	links := []notify.EventLink{{Label: "Backups", URL: backupsURL}}
+	if len(projects) == 1 {
+		for p := range projects {
+			if p != "" {
+				links = append(links, notify.EventLink{Label: "Project", URL: "/projects/" + url.PathEscape(p)})
+			}
+		}
+	}
+	return notify.Event{
+		Type:        notify.EventBackupFailed,
+		Timestamp:   time.Now().UTC(),
+		Title:       glyph + " " + what,
+		Description: strings.Join(lines, "\n"),
+		Body:        r.body,
+		URL:         backupsURL,
+		Severity:    r.severity,
+		Links:       links,
+	}
+}
+
+// recoveredEvent is the backup.succeeded card closing a failed episode.
+func recoveredEvent() notify.Event {
+	msg := "Control-plane backups, registry GC and addon backups are all healthy."
+	return notify.Event{
+		Type:        notify.EventBackupOK,
+		Timestamp:   time.Now().UTC(),
+		Title:       "✓ Backups healthy again",
+		Description: msg,
+		Body:        msg,
+		URL:         backupsURL,
+		Severity:    "info",
+		Links:       []notify.EventLink{{Label: "Backups", URL: backupsURL}},
+	}
+}
+
+// lastSuccess renders " · last success <time>" from an RFC3339 stamp,
+// "" when there is none.
+func lastSuccess(rfc3339 string) string {
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return ""
+	}
+	return " · last success " + notify.TimeToken(t)
 }
 
 // RegistryGCStatus reports the health of the weekly registry garbage-

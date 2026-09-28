@@ -99,12 +99,15 @@ func shouldNotifyAggregate(todayDate, lastNotifiedDate string) bool {
 	return todayDate != "" && todayDate != lastNotifiedDate
 }
 
+// nodesURL is the in-app nodes page, where updates are reviewed and applied.
+const nodesURL = "/settings/nodes"
+
 // aggregateTitleBody renders the once-a-day digest copy for every node
 // that currently has actionable updates. advisories must be pre-filtered
 // to HasUpdates()==true and non-empty (the caller checks). The body
 // leads with the node count, then one line per node.
 func aggregateTitleBody(advisories []Advisory) (title, body string) {
-	title = "Host package updates available"
+	title = "⚠ Host updates available"
 
 	anyReboot := false
 	for _, a := range advisories {
@@ -118,18 +121,21 @@ func aggregateTitleBody(advisories []Advisory) (title, body string) {
 	if len(advisories) != 1 {
 		nodeWord = "nodes"
 	}
+	title += " · " + itoa(len(advisories)) + " " + nodeWord
 	reboot := ""
 	if anyReboot {
 		reboot = " (reboot required on some)"
 	}
-	body = itoa(len(advisories)) + " " + nodeWord + " with pending host package updates" + reboot + ". Review + apply from the nodes page.\n"
+	body = itoa(len(advisories)) + " " + nodeWord + " with pending host package updates" + reboot + ".\n"
 	for _, a := range advisories {
-		line := "• " + a.Node + ": " + itoa(a.Count) + " update"
+		// The probe reports a total count only (no security split), so
+		// the count is what gets bolded.
+		line := "• **" + a.Node + "** — **" + itoa(a.Count) + "** update"
 		if a.Count != 1 {
 			line += "s"
 		}
 		if a.RebootRequired {
-			line += " (reboot required)"
+			line += " · reboot required"
 		}
 		if len(a.Sample) > 0 {
 			line += " — e.g. " + strings.Join(a.Sample, ", ")
@@ -137,6 +143,23 @@ func aggregateTitleBody(advisories []Advisory) (title, body string) {
 		body += "\n" + line
 	}
 	return title, body
+}
+
+// digestEvent is the daily node.updates-available card.
+func digestEvent(advisories []Advisory) notify.Event {
+	title, body := aggregateTitleBody(advisories)
+	return notify.Event{
+		Type:        notify.EventNodeUpdatesAvailable,
+		Timestamp:   time.Now().UTC(),
+		Title:       title,
+		Description: body,
+		Body:        body,
+		URL:         nodesURL,
+		// warn, NOT error: unpatched nodes are informational, not a page.
+		// notify.mentionFor only @here-pings error events.
+		Severity: "warn",
+		Links:    []notify.EventLink{{Label: "Nodes", URL: nodesURL}},
+	}
 }
 
 // ApplyState is the parsed pkg-apply-state annotation: where a node is
@@ -164,12 +187,17 @@ func parseApplyState(raw string) ApplyState {
 
 // notifyApplyDone builds the "patch+reboot finished" notification.
 func notifyApplyDone(node string) notify.Event {
+	desc := "Patched and rebooted — back online and uncordoned."
 	return notify.Event{
-		Type:      notify.EventNodeUpdatesAvailable,
-		Timestamp: time.Now().UTC(),
-		Title:     "Host patches applied",
-		Body:      "Node " + node + " finished applying host package updates and is back online.",
-		Severity:  "info",
+		Type:        notify.EventNodeUpdatesApplied,
+		Timestamp:   time.Now().UTC(),
+		Title:       "✓ Host updates applied · " + node,
+		Description: desc,
+		Body:        "Node " + node + " finished applying host package updates and is back online.",
+		URL:         nodesURL,
+		Severity:    "info",
+		Extra:       map[string]string{"node": node},
+		Links:       []notify.EventLink{{Label: "Nodes", URL: nodesURL}},
 	}
 }
 

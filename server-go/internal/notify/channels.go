@@ -25,61 +25,101 @@ import (
 	"kuso/server/internal/httpx"
 )
 
+// plainLogLines is how many trailing LogTail lines the text channels
+// carry — enough to show the failing line, short enough for Pushover.
+const plainLogLines = 8
+
 // plainSummary renders an Event as a compact plain-text block used by
 // the text-oriented channels (Telegram, Pushover, Email). Format:
 //
 //	<emoji> <Title>
 //	<description / body>
 //	<Field: Value> lines
+//	<last few log lines>
 //	<project · service>   <time>
 //	<url>
-func plainSummary(e Event) string {
-	var b strings.Builder
-	b.WriteString(severityEmoji(e) + " " + e.Title + "\n")
-	desc := strings.TrimSpace(e.Description)
-	if desc == "" {
-		desc = strings.TrimSpace(e.Body)
-	}
+//
+// limit > 0 caps the result in runes. The log tail absorbs the cut
+// (keeping its LAST lines) so the scope + URL footer survives; only if
+// that isn't enough is the whole text truncated.
+func plainSummary(e Event, limit int) string {
+	const m = markupPlain
+	var head strings.Builder
+	head.WriteString(severityEmoji(e) + " " + e.Title + "\n")
+	desc := cardDescription(e)
 	if desc != "" {
-		b.WriteString(desc + "\n")
+		head.WriteString(discordToMarkup(expandTimes(desc, m), m) + "\n")
+	}
+	if diag := diagnosisText(e.Classification, m); diag != "" {
+		head.WriteString(diag + "\n")
 	}
 	for _, f := range e.Fields {
 		if f.Name == "" || f.Value == "" {
 			continue
 		}
-		b.WriteString(f.Name + ": " + f.Value + "\n")
+		head.WriteString(f.Name + ": " + discordToMarkup(expandTimes(f.Value, m), m) + "\n")
 	}
+
+	var foot strings.Builder
 	scope := e.Project
 	if e.Service != "" {
 		scope += " · " + e.Service
 	}
 	when := e.Timestamp.UTC().Format(time.RFC1123)
 	if scope != "" {
-		b.WriteString("\n" + scope + "   " + when + "\n")
+		foot.WriteString("\n" + scope + "   " + when + "\n")
 	} else {
-		b.WriteString("\n" + when + "\n")
+		foot.WriteString("\n" + when + "\n")
 	}
-	if abs := absoluteURL(e.URL); abs != "" {
-		b.WriteString(abs + "\n")
+	if links := linksLine(e, m); links != "" {
+		foot.WriteString(links + "\n")
+	} else if abs := absoluteURL(e.URL); abs != "" {
+		foot.WriteString(abs + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
+
+	logs := ""
+	if tail := strings.TrimSpace(e.LogTail); tail != "" {
+		lines := strings.Split(tail, "\n")
+		if len(lines) > plainLogLines {
+			lines = lines[len(lines)-plainLogLines:]
+		}
+		logs = "\n" + strings.Join(lines, "\n") + "\n"
+		if limit > 0 {
+			room := limit - len([]rune(head.String())) - len([]rune(foot.String()))
+			logs = keepTailRunes(logs, room)
+		}
+	}
+	out := strings.TrimRight(head.String()+logs+foot.String(), "\n")
+	if limit > 0 {
+		out = truncateRunes(out, limit)
+	}
+	return out
 }
 
-// severityEmoji maps an event's severity/type to a leading glyph so
-// the text channels carry the same at-a-glance signal the Discord
-// embed colour does.
+// keepTailRunes keeps the last max runes of s, prefixing "…" when it
+// cut, or returns "" when there's no useful room.
+func keepTailRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max < 16 {
+		return ""
+	}
+	return "\n…" + string(r[len(r)-(max-2):])
+}
+
+// severityEmoji is the text-channel counterpart of discordColor.
 func severityEmoji(e Event) string {
-	if e.Severity == "error" {
+	switch eventTone(e) {
+	case toneError:
 		return "🔴"
-	}
-	if e.Severity == "warn" {
+	case toneWarn:
 		return "🟠"
-	}
-	switch e.Type {
-	case EventBuildSucceeded, EventDeployRolled, EventBackupOK:
+	case toneSuccess:
 		return "🟢"
-	case EventBuildFailed, EventPodCrashed, EventAlertFired, EventBackupFailed:
-		return "🔴"
+	case toneNeutral:
+		return "⚪"
 	default:
 		return "🔵"
 	}
@@ -91,9 +131,11 @@ func severityEmoji(e Event) string {
 // accepts the same shape, so both channels reuse this. The colour bar
 // comes from the same severity logic as the Discord embed.
 func slackPayload(e Event) map[string]any {
-	desc := strings.TrimSpace(e.Description)
-	if desc == "" {
-		desc = strings.TrimSpace(e.Body)
+	const m = markupSlack
+	desc := cardDescription(e)
+	desc = discordToMarkup(expandTimes(desc, m), m)
+	if diag := diagnosisText(e.Classification, m); diag != "" {
+		desc = strings.TrimSpace(desc + "\n" + diag)
 	}
 	att := map[string]any{
 		"fallback": e.Title,
@@ -112,46 +154,39 @@ func slackPayload(e Event) map[string]any {
 		}
 		fields = append(fields, map[string]any{
 			"title": truncateRunes(f.Name, 256),
-			"value": truncateRunes(f.Value, 1024),
+			"value": truncateRunes(discordToMarkup(expandTimes(f.Value, m), m), 1024),
 			"short": f.Inline,
 		})
 	}
 	if len(fields) > 0 {
 		att["fields"] = fields
 	}
-	scope := e.Project
-	if e.Service != "" {
-		scope += " · " + e.Service
+	footer := e.Footer
+	if footer == "" {
+		footer = instanceHost()
 	}
-	if scope != "" {
-		att["footer"] = scope
+	if footer != "" {
+		att["footer"] = footer
 	}
-	if tail := strings.TrimSpace(e.LogTail); tail != "" {
+	text := desc
+	if tail := strings.TrimSpace(e.LogTail); tail != "" && !isCompact(e) {
 		// Slack renders triple-backtick as a monospace block.
-		att["text"] = strings.TrimSpace(desc + "\n```\n" + truncateRunes(tail, 2000) + "\n```")
+		text = strings.TrimSpace(text + "\n```\n" + truncateRunes(tail, 2000) + "\n```")
 	}
+	if links := linksLine(e, m); links != "" {
+		text = strings.TrimSpace(text + "\n" + links)
+	}
+	att["text"] = text
 	return map[string]any{
 		"text":        severityEmoji(e) + " " + e.Title,
 		"attachments": []map[string]any{att},
 	}
 }
 
-// slackColor returns a hex colour string for the Slack attachment bar.
+// slackColor returns a hex colour string for the Slack attachment bar,
+// matching discordColor.
 func slackColor(e Event) string {
-	if e.Severity == "error" {
-		return "#EF4444"
-	}
-	if e.Severity == "warn" {
-		return "#F59E0B"
-	}
-	switch e.Type {
-	case EventBuildSucceeded, EventDeployRolled, EventBackupOK:
-		return "#10B981"
-	case EventBuildFailed, EventPodCrashed, EventAlertFired, EventBackupFailed:
-		return "#EF4444"
-	default:
-		return "#40476D"
-	}
+	return fmt.Sprintf("#%06X", discordColor(e))
 }
 
 // sendSlackSync posts the Slack/Mattermost incoming-webhook payload.
@@ -172,7 +207,7 @@ func (d *Dispatcher) sendTelegramSync(ctx context.Context, botToken, chatID stri
 	api := "https://api.telegram.org/bot" + url.PathEscape(botToken) + "/sendMessage"
 	body := map[string]any{
 		"chat_id":                  chatID,
-		"text":                     truncateRunes(plainSummary(e), 4096),
+		"text":                     plainSummary(e, 4096),
 		"disable_web_page_preview": true,
 	}
 	// The bot token is embedded in `api`, and Go's http client formats
@@ -202,7 +237,7 @@ func (d *Dispatcher) sendPushoverSync(ctx context.Context, token, user string, e
 		"token":    token,
 		"user":     user,
 		"title":    truncateRunes(e.Title, 250),
-		"message":  truncateRunes(plainSummary(e), 1024),
+		"message":  plainSummary(e, 1024),
 		"priority": priority,
 	}
 	if abs := absoluteURL(e.URL); abs != "" {
@@ -247,7 +282,7 @@ func (d *Dispatcher) sendEmailSync(ctx context.Context, cfg map[string]any, e Ev
 		"Subject: " + mime.BEncoding.Encode("UTF-8", subject) + "\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
 		"\r\n" +
-		plainSummary(e) + "\r\n"
+		plainSummary(e, 0) + "\r\n"
 
 	var auth smtp.Auth
 	if username != "" {

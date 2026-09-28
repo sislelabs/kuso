@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -136,18 +137,25 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 		)
 		return true, nil
 	}
-	// Fetch the channel config (URL, secret, mention rules). The
-	// dispatcher already caches Notifications in-memory; on a cache
-	// miss this falls through to a direct DB read.
-	notif, nerr := d.lookupNotification(ctx, row.NotificationID)
-	if nerr != nil {
-		// Channel deleted between Emit and worker-drain. Treat as
-		// terminal — the user removed the channel; we shouldn't keep
-		// retrying. Marking as delivered drops the row from the
-		// pending count without spamming dead-letter.
+	// Fetch the channel config (URL, secret, mention rules).
+	lookup := d.lookupChannelFn
+	if lookup == nil {
+		lookup = d.lookupNotification
+	}
+	notif, nerr := lookup(ctx, row.NotificationID)
+	if errors.Is(nerr, errChannelNotFound) {
+		// Channel deleted between Emit and worker-drain. Terminal — the
+		// user removed the channel. Marking as delivered drops the row
+		// from the pending count without spamming dead-letter.
 		_ = d.db.MarkOutboxDelivered(ctx, row.ID)
 		d.logger.Info("notify: outbox row's channel no longer exists, skipping", "row", row.ID, "channelId", row.NotificationID)
 		return true, nil
+	}
+	if nerr != nil {
+		// Transient (DB blip, ctx timeout). Leave the row untouched: the
+		// claim lease expires and a worker retries it, without burning
+		// an attempt on a failure that says nothing about the channel.
+		return true, fmt.Errorf("lookup channel %s: %w", row.NotificationID, nerr)
 	}
 	if !notif.Enabled {
 		// Channel disabled — same treatment as deleted. User can re-
@@ -160,7 +168,7 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 		if merr := d.db.MarkOutboxDelivered(ctx, row.ID); merr != nil {
 			return true, merr
 		}
-		metricsDispatched.WithLabelValues(string(ev.Type)).Inc()
+		metricsDelivered.WithLabelValues(string(ev.Type)).Inc()
 		return true, nil
 	}
 	// Failed — advance the schedule. backoff = base * 2^attempts,
@@ -257,10 +265,16 @@ func deliverableChannel(t string) bool {
 	}
 }
 
+// errChannelNotFound means the channel row genuinely doesn't exist
+// (confirmed by the DB, not just absent from the cache).
+var errChannelNotFound = errors.New("channel not found")
+
 // lookupNotification reads a single channel by id, checking the
-// in-process cache first. The cache already holds the full list
-// from cachedNotifications; a linear scan on a ~tens-of-rows list
-// is fine and avoids a DB round-trip on the hot path.
+// in-process cache first. A cache miss falls through to a direct DB
+// read: the cache can be up to notifsCacheTTL stale, and on multi-
+// replica installs a channel created on another replica is invisible
+// to this one's cache until it expires. Only a DB "not found" yields
+// errChannelNotFound; any other failure is returned as-is (transient).
 func (d *Dispatcher) lookupNotification(ctx context.Context, id string) (db.Notification, error) {
 	notifs, err := d.cachedNotifications(ctx)
 	if err != nil {
@@ -271,7 +285,14 @@ func (d *Dispatcher) lookupNotification(ctx context.Context, id string) (db.Noti
 			return n, nil
 		}
 	}
-	return db.Notification{}, errors.New("channel not found")
+	n, err := d.db.FindNotification(ctx, id)
+	if errors.Is(err, db.ErrNotFound) {
+		return db.Notification{}, errChannelNotFound
+	}
+	if err != nil {
+		return db.Notification{}, err
+	}
+	return *n, nil
 }
 
 // shouldRunOutbox folds the leader gate into one predicate. nil

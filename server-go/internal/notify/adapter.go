@@ -26,6 +26,8 @@ type EmitEnvelope struct {
 	DurationMs  int64
 	Fields      []EnvelopeField
 	Footer      string
+	Env         string
+	Links       []EventLink
 
 	// Classification, when non-nil, attaches a failure-kind + deep-
 	// link tab hint to the event. Forwarded as-is to Event so the
@@ -64,6 +66,8 @@ func (d *Dispatcher) EmitEnvelope(env EmitEnvelope) {
 		DurationMs:     env.DurationMs,
 		Fields:         fields,
 		Footer:         env.Footer,
+		Env:            env.Env,
+		Links:          env.Links,
 		Classification: env.Classification,
 	})
 }

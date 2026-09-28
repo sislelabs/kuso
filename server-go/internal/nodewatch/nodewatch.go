@@ -131,6 +131,9 @@ type pendingAction struct {
 	kind string // "cordon" | "uncordon"
 	node *corev1.Node
 	emit notify.Event
+	// downFor is the NotReady duration at emit time, kept so the cordon
+	// card can be rebuilt with the post-unlock pod count.
+	downFor time.Duration
 }
 
 func (w *Watcher) tick(ctx context.Context) {
@@ -247,7 +250,7 @@ func (w *Watcher) tick(ctx context.Context) {
 		// affectedPods is filled in post-unlock by countPodsOnNode —
 		// we don't make kube calls under the mutex.
 		actions = append(actions, pendingAction{
-			kind: "cordon", node: n,
+			kind: "cordon", node: n, downFor: now.Sub(first),
 			emit: notify.NodeUnreachable(n.Name, reasonFor(n), now.Sub(first), 0),
 		})
 	}
@@ -283,7 +286,7 @@ func (w *Watcher) tick(ctx context.Context) {
 			// that matters — pods that were scheduled on the bad node).
 			// Best-effort; a kube outage here just leaves the field off.
 			if count := w.countPodsOnNode(ctx, a.node.Name); count > 0 {
-				a.emit = withAffectedPods(a.emit, count)
+				a.emit = notify.NodeUnreachable(a.node.Name, reasonFor(a.node), a.downFor, count)
 			}
 			w.Notify.Emit(a.emit)
 		case "uncordon":
@@ -391,7 +394,6 @@ func (w *Watcher) uncordonIfOurs(ctx context.Context, n *corev1.Node) error {
 	return nil
 }
 
-
 func isReady(n *corev1.Node) bool {
 	for _, c := range n.Status.Conditions {
 		if c.Type == corev1.NodeReady {
@@ -446,21 +448,4 @@ func (w *Watcher) countPodsOnNode(ctx context.Context, nodeName string) int {
 		n++
 	}
 	return n
-}
-
-// withAffectedPods stamps the affected-pods count onto a notify.Event
-// that was assembled with count=0 (because we compute the count post-
-// unlock). Returns a copy so the caller's struct stays untouched.
-func withAffectedPods(e notify.Event, count int) notify.Event {
-	if count <= 0 {
-		return e
-	}
-	// Append rather than replace: we want to keep the Reason field
-	// that NodeUnreachable already set.
-	fields := append([]notify.EventField{}, e.Fields...)
-	fields = append(fields, notify.EventField{
-		Name: "Affected pods", Value: fmt.Sprintf("%d", count), Inline: true,
-	})
-	e.Fields = fields
-	return e
 }

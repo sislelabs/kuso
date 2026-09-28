@@ -2,7 +2,12 @@
 
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,11 +25,18 @@ import {
   Trash2,
   Send,
   Webhook,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  useNotificationEventTypes,
+  type NotificationEventGroup,
+  type NotificationEventType,
+} from "@/features/notifications";
+import { useProjects } from "@/features/projects";
 
 type NotifKind =
   | "discord"
@@ -166,16 +178,14 @@ interface ListResp {
   data?: Notification[];
 }
 
-const ALL_EVENTS = [
-  { id: "build.started",     label: "Build started" },
-  { id: "build.succeeded",   label: "Build succeeded" },
-  { id: "build.failed",      label: "Build failed" },
-  { id: "deploy.rolled",     label: "Deploy rolled" },
-  { id: "pod.crashed",       label: "Pod crashed" },
-  { id: "alert.fired",       label: "Alert fired" },
-  { id: "backup.succeeded",  label: "Backup succeeded" },
-  { id: "backup.failed",     label: "Backup failed" },
-] as const;
+const EVENT_GROUPS: { group: NotificationEventGroup; label: string }[] = [
+  { group: "build", label: "build" },
+  { group: "runtime", label: "runtime" },
+  { group: "jobs", label: "jobs" },
+  { group: "nodes", label: "nodes" },
+  { group: "backups", label: "backups" },
+  { group: "other", label: "other" },
+];
 
 export default function NotificationsPage() {
   const list = useQuery({
@@ -407,7 +417,10 @@ function NotificationRow({
             )}
           </div>
           <div className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            {n.type} · {n.events.length === 0 ? "all events" : `${n.events.length} events`}
+            {n.type} · {n.events.length === 0 ? "all events" : `${n.events.length} events`} ·{" "}
+            {(n.pipelines ?? []).length === 0
+              ? "all projects"
+              : `${n.pipelines.length} project${n.pipelines.length === 1 ? "" : "s"}`}
           </div>
         </div>
         <button
@@ -526,7 +539,21 @@ function NotificationEditor({
     }
     return c;
   });
+  // Empty events = every event type, including ones added in later
+  // releases. eventsMode makes that explicit: "custom" with nothing
+  // ticked would silently mean "all" on the server, so save is blocked
+  // in that state instead.
   const [events, setEvents] = useState<string[]>(notification?.events ?? []);
+  const [eventsMode, setEventsMode] = useState<"all" | "custom">(
+    (notification?.events ?? []).length === 0 ? "all" : "custom"
+  );
+  // pipelines is the per-channel project whitelist; empty = all projects.
+  // Carried through on save so a filter set via the CLI isn't wiped.
+  const [pipelines, setPipelines] = useState<string[]>(notification?.pipelines ?? []);
+  const [projectsMode, setProjectsMode] = useState<"all" | "selected">(
+    (notification?.pipelines ?? []).length === 0 ? "all" : "selected"
+  );
+  const eventTypes = useNotificationEventTypes();
   // Per-event mention rules. Special key "*" applies to events
   // without an explicit entry. Server-side default (when nothing
   // here matches) is @here for error-severity events, none
@@ -546,6 +573,9 @@ function NotificationEditor({
     }
     setCfg(c);
     setEvents(notification.events);
+    setEventsMode(notification.events.length === 0 ? "all" : "custom");
+    setPipelines(notification.pipelines ?? []);
+    setProjectsMode((notification.pipelines ?? []).length === 0 ? "all" : "selected");
     setMentions((notification.config.mentions as Record<string, string> | undefined) ?? {});
   }, [notification]);
 
@@ -555,6 +585,8 @@ function NotificationEditor({
   const configComplete = kindFields(type).every(
     (f) => optionalConfigKeys.has(f.key) || (cfg[f.key] ?? "").trim() !== "",
   );
+  const eventsIncomplete = eventsMode === "custom" && events.length === 0;
+  const projectsIncomplete = projectsMode === "selected" && pipelines.length === 0;
 
   const save = useMutation({
     mutationFn: () => {
@@ -567,12 +599,18 @@ function NotificationEditor({
       // @here default on reload. A redundant rule (e.g. "none" on an
       // event whose default is already none) is still dropped to keep
       // the stored config clean.
+      //
+      // Without the catalogue we don't know the defaults, so every
+      // explicit rule is kept rather than risk dropping an opt-out.
+      const catalogue = eventTypes.data;
       const cleanMentions: Record<string, string> = {};
       for (const [k, v] of Object.entries(mentions)) {
         if (!v) continue; // "" = use default
-        const def = defaultMentionFor(k); // "@here" or ""
-        const effective = v === "none" ? "" : v;
-        if (effective === def) continue; // matches default → redundant
+        const known = catalogue?.find((t) => t.type === k);
+        if (known) {
+          const effective = v === "none" ? "" : v;
+          if (effective === known.defaultMention) continue; // matches default → redundant
+        }
         cleanMentions[k] = v;
       }
       // Only persist the config keys this channel type actually uses,
@@ -586,8 +624,8 @@ function NotificationEditor({
         name,
         type,
         enabled,
-        pipelines: [],
-        events,
+        pipelines: projectsMode === "all" ? [] : pipelines,
+        events: eventsMode === "all" ? [] : events,
         config: {
           ...typeConfig,
           // mentions only mean anything for discord, but harmless to
@@ -662,83 +700,33 @@ function NotificationEditor({
           </Field>
         ))}
         <Field
-          label="events"
-          hint="toggle the events you want; configure per-event Discord mentions on the right"
+          label="projects"
+          hint="which projects' events reach this channel"
         >
-          <div className="space-y-1.5">
-            {ALL_EVENTS.map((e) => {
-              const isPicked = events.includes(e.id);
-              return (
-                <div
-                  key={e.id}
-                  className={cn(
-                    // Fixed-grid layout so the mention picker column
-                    // stays in the same x-axis spot whether or not
-                    // the event is picked. On phones the picker
-                    // column wraps below the rest (the 180px column
-                    // would force a ~640px-wide row otherwise).
-                    "grid grid-cols-[44px_1fr] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px] sm:grid-cols-[44px_180px_1fr_180px]"
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEvents((cur) =>
-                        isPicked ? cur.filter((x) => x !== e.id) : [...cur, e.id]
-                      )
-                    }
-                    aria-label={isPicked ? `Disable ${e.id}` : `Enable ${e.id}`}
-                    className={cn(
-                      "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-                      isPicked
-                        ? "border-emerald-500/30 bg-emerald-500/20"
-                        : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
-                        isPicked ? "translate-x-4" : "translate-x-0.5"
-                      )}
-                    />
-                  </button>
-                  <span
-                    className={cn(
-                      "truncate font-mono",
-                      isPicked ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]"
-                    )}
-                  >
-                    {e.id}
-                  </span>
-                  <span
-                    className={cn(
-                      "truncate",
-                      isPicked ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]"
-                    )}
-                  >
-                    {e.label}
-                  </span>
-                  {type === "discord" ? (
-                    <MentionPicker
-                      value={mentions[e.id] ?? ""}
-                      onChange={(v) =>
-                        setMentions((cur) => ({ ...cur, [e.id]: v }))
-                      }
-                      defaultMention={defaultMentionFor(e.id)}
-                      disabled={!isPicked}
-                    />
-                  ) : (
-                    <span />
-                  )}
-                </div>
-              );
-            })}
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              {events.length === 0
-                ? "No events selected — channel will receive nothing."
-                : `${events.length} event${events.length === 1 ? "" : "s"} selected.`}
-            </p>
-          </div>
+          <ProjectFilter
+            mode={projectsMode}
+            onModeChange={setProjectsMode}
+            selected={pipelines}
+            onChange={setPipelines}
+          />
+        </Field>
+        <Field
+          label="events"
+          hint={
+            type === "discord"
+              ? "all events, or a custom subset; per-event Discord mentions on the right"
+              : "all events, or a custom subset"
+          }
+        >
+          <EventPicker
+            eventTypes={eventTypes}
+            mode={eventsMode}
+            onModeChange={setEventsMode}
+            events={events}
+            onEventsChange={setEvents}
+            mentions={type === "discord" ? mentions : null}
+            onMentionChange={(id, v) => setMentions((cur) => ({ ...cur, [id]: v }))}
+          />
         </Field>
         <Field label="enabled">
           <button
@@ -767,7 +755,9 @@ function NotificationEditor({
         <Button
           size="sm"
           onClick={() => save.mutate()}
-          disabled={save.isPending || !name || !configComplete}
+          disabled={
+            save.isPending || !name || !configComplete || eventsIncomplete || projectsIncomplete
+          }
         >
           {save.isPending ? "Saving…" : isNew ? "Create" : "Save"}
         </Button>
@@ -799,6 +789,345 @@ function Field({
         {hint && <div className="mt-0.5 text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
       </div>
       <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function SegmentedToggle<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { v: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="inline-flex gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          onClick={() => onChange(o.v)}
+          aria-pressed={value === o.v}
+          className={cn(
+            "inline-flex h-7 items-center rounded px-2 font-mono text-[11px] transition-colors",
+            value === o.v
+              ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+              : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ProjectFilter edits the channel's project whitelist (the `pipelines`
+// field on the wire). "All projects" persists an empty list.
+function ProjectFilter({
+  mode,
+  onModeChange,
+  selected,
+  onChange,
+}: {
+  mode: "all" | "selected";
+  onModeChange: (m: "all" | "selected") => void;
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const projects = useProjects();
+  const existing = new Set((projects.data ?? []).map((p) => p.metadata.name));
+  // Union with the stored selection so a filter naming a since-deleted
+  // project stays visible (and removable) instead of vanishing.
+  const names = Array.from(new Set([...existing, ...selected])).sort();
+  const toggle = (name: string) =>
+    onChange(selected.includes(name) ? selected.filter((x) => x !== name) : [...selected, name]);
+
+  return (
+    <div className="space-y-2">
+      <SegmentedToggle
+        options={[
+          { v: "all", label: "All projects" },
+          { v: "selected", label: "Selected projects" },
+        ]}
+        value={mode}
+        onChange={onModeChange}
+      />
+      {mode === "selected" && (
+        <div className="flex flex-wrap items-center gap-1">
+          {selected.map((name) => (
+            <span
+              key={name}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] pl-1.5 pr-0.5 font-mono text-[11px]"
+            >
+              {name}
+              {projects.isSuccess && !existing.has(name) && (
+                <span className="text-[var(--text-tertiary)]">(missing)</span>
+              )}
+              <button
+                type="button"
+                onClick={() => toggle(name)}
+                aria-label={`Remove ${name}`}
+                className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <Popover>
+            <PopoverTrigger
+              className={cn(
+                "inline-flex h-6 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[11px] text-[var(--text-secondary)]",
+                "hover:border-[var(--border-strong)] data-[popup-open]:border-[var(--border-strong)]"
+              )}
+            >
+              <Plus className="h-3 w-3" />
+              {selected.length === 0 ? "choose projects" : "edit"}
+              <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              sideOffset={4}
+              className="max-h-72 w-56 gap-0.5 overflow-y-auto rounded-md p-1"
+            >
+              {projects.isPending ? (
+                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+                  loading projects…
+                </div>
+              ) : projects.isError ? (
+                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--error)]">
+                  couldn&rsquo;t load projects
+                </div>
+              ) : names.length === 0 ? (
+                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+                  no projects
+                </div>
+              ) : (
+                names.map((name) => {
+                  const on = selected.includes(name);
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => toggle(name)}
+                      className={cn(
+                        "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-[11px]",
+                        "hover:bg-[var(--bg-tertiary)]",
+                        on ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
+                      )}
+                    >
+                      <Check className={cn("h-3 w-3 shrink-0", on ? "opacity-100" : "opacity-0")} />
+                      <span className="truncate">{name}</span>
+                    </button>
+                  );
+                })
+              )}
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
+      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        {mode === "all"
+          ? "Events from every project, including projects created later."
+          : selected.length === 0
+            ? "Pick at least one project, or switch to All projects."
+            : `Only events from ${selected.length === 1 ? "this project" : `these ${selected.length} projects`}.`}
+      </p>
+    </div>
+  );
+}
+
+// EventPicker renders the channel's event subscription from the server's
+// event catalogue. "All events" persists an empty list, which the server
+// treats as every event type — including types added in later releases.
+// A custom subset only ever receives what's ticked.
+function EventPicker({
+  eventTypes,
+  mode,
+  onModeChange,
+  events,
+  onEventsChange,
+  mentions,
+  onMentionChange,
+}: {
+  eventTypes: UseQueryResult<NotificationEventType[]>;
+  mode: "all" | "custom";
+  onModeChange: (m: "all" | "custom") => void;
+  events: string[];
+  onEventsChange: (next: string[]) => void;
+  // null when the channel type has no mention support (non-discord).
+  mentions: Record<string, string> | null;
+  onMentionChange: (eventID: string, v: string) => void;
+}) {
+  const catalogue = eventTypes.data ?? [];
+  const known = new Set(catalogue.map((t) => t.type));
+  const knownGroups = new Set<string>(EVENT_GROUPS.map((g) => g.group));
+  const groupOf = (t: NotificationEventType): NotificationEventGroup =>
+    knownGroups.has(t.group) ? t.group : "other";
+  // Stored types the server no longer emits (e.g. deploy.rolled).
+  const stale = eventTypes.isSuccess ? events.filter((e) => !known.has(e)) : [];
+  const toggle = (id: string) =>
+    onEventsChange(events.includes(id) ? events.filter((x) => x !== id) : [...events, id]);
+  // With "all events" and no mention column there's nothing to edit
+  // per row, so the list is skipped.
+  const showRows = mode === "custom" || mentions !== null;
+
+  return (
+    <div className="space-y-2">
+      <SegmentedToggle
+        options={[
+          { v: "all", label: "All events" },
+          { v: "custom", label: "Custom" },
+        ]}
+        value={mode}
+        onChange={onModeChange}
+      />
+      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        {mode === "all"
+          ? "Every event type, including ones added in future kuso releases."
+          : events.length === 0
+            ? "Pick at least one event, or switch to All events."
+            : `${events.length} event${events.length === 1 ? "" : "s"} selected. Event types added in later releases are not included until you tick them.`}
+      </p>
+      {showRows &&
+        (eventTypes.isPending ? (
+          <Skeleton className="h-24 w-full rounded-md" />
+        ) : eventTypes.isError ? (
+          <QueryErrorState
+            what="event types"
+            error={eventTypes.error}
+            onRetry={() => void eventTypes.refetch()}
+          />
+        ) : (
+          <div className="space-y-3">
+            {EVENT_GROUPS.map(({ group, label }) => {
+              const rows = catalogue.filter((t) => groupOf(t) === group);
+              if (rows.length === 0) return null;
+              return (
+                <div key={group} className="space-y-1.5">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    {label}
+                  </div>
+                  {rows.map((t) => (
+                    <EventRow
+                      key={t.type}
+                      id={t.type}
+                      label={t.label}
+                      picked={mode === "all" || events.includes(t.type)}
+                      toggleable={mode === "custom"}
+                      onToggle={() => toggle(t.type)}
+                      mention={mentions === null ? null : (mentions[t.type] ?? "")}
+                      defaultMention={t.defaultMention}
+                      onMentionChange={(v) => onMentionChange(t.type, v)}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+            {mode === "custom" && stale.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  not emitted by this server
+                </div>
+                {stale.map((id) => (
+                  <EventRow
+                    key={id}
+                    id={id}
+                    label="never fires; untick to remove"
+                    picked
+                    toggleable
+                    onToggle={() => toggle(id)}
+                    mention={null}
+                    defaultMention=""
+                    onMentionChange={() => {}}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function EventRow({
+  id,
+  label,
+  picked,
+  toggleable,
+  onToggle,
+  mention,
+  defaultMention,
+  onMentionChange,
+}: {
+  id: string;
+  label: string;
+  picked: boolean;
+  toggleable: boolean;
+  onToggle: () => void;
+  // null hides the mention picker column.
+  mention: string | null;
+  defaultMention: string;
+  onMentionChange: (v: string) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        // Fixed-grid layout so the mention picker column stays in the
+        // same x-axis spot whether or not the event is picked. On
+        // phones the picker column wraps below the rest (the 180px
+        // column would force a ~640px-wide row otherwise).
+        "grid grid-cols-[44px_1fr] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px] sm:grid-cols-[44px_180px_1fr_180px]"
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={!toggleable}
+        aria-label={picked ? `Disable ${id}` : `Enable ${id}`}
+        className={cn(
+          "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+          picked
+            ? "border-emerald-500/30 bg-emerald-500/20"
+            : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
+          !toggleable && "cursor-default opacity-50"
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+            picked ? "translate-x-4" : "translate-x-0.5"
+          )}
+        />
+      </button>
+      <span
+        className={cn(
+          "truncate font-mono",
+          picked ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]"
+        )}
+      >
+        {id}
+      </span>
+      <span
+        className={cn(
+          "truncate",
+          picked ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]"
+        )}
+      >
+        {label}
+      </span>
+      {mention !== null ? (
+        <MentionPicker
+          value={mention}
+          onChange={onMentionChange}
+          defaultMention={defaultMention}
+          disabled={!picked}
+        />
+      ) : (
+        <span />
+      )}
     </div>
   );
 }
@@ -901,19 +1230,4 @@ function MentionPicker({
       </PopoverContent>
     </Popover>
   );
-}
-
-// defaultMentionFor mirrors the server-side notify.mentionFor logic
-// so the UI's "default (...)" label tells the truth. Outage events
-// (anything error-severity in the server's view) default to @here.
-function defaultMentionFor(eventID: string): string {
-  switch (eventID) {
-    case "build.failed":
-    case "pod.crashed":
-    case "alert.fired":
-    case "backup.failed":
-      return "@here";
-    default:
-      return "";
-  }
 }

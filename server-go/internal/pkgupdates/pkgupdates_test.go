@@ -1,6 +1,10 @@
 package pkgupdates
 
-import "testing"
+import (
+	"testing"
+
+	"kuso/server/internal/notify"
+)
 
 func TestParseAnnotation(t *testing.T) {
 	t.Parallel()
@@ -84,8 +88,8 @@ func TestAggregateTitleBody(t *testing.T) {
 	for _, want := range []string{
 		"2 nodes with pending host package updates",
 		"reboot required on some",
-		"server2: 11 updates (reboot required)",
-		"tickero-node: 4 updates (reboot required)",
+		"• **server2** — **11** updates · reboot required",
+		"• **tickero-node** — **4** updates · reboot required",
 		"base-files 1->2",
 	} {
 		if !contains(body, want) {
@@ -101,8 +105,36 @@ func TestAggregateTitleBody(t *testing.T) {
 	if contains(body2, "reboot required") {
 		t.Errorf("should not mention reboot when none required: %q", body2)
 	}
-	if !contains(body2, "n: 1 update") {
+	if !contains(body2, "**n** — **1** update") || contains(body2, "1 updates") {
 		t.Errorf("singular per-node line wrong: %q", body2)
+	}
+}
+
+// TestDigestAndAppliedCards: both host-update cards follow the title
+// grammar and link the nodes page (URL + "Nodes" link).
+func TestDigestAndAppliedCards(t *testing.T) {
+	t.Parallel()
+	d := digestEvent([]Advisory{{Node: "a", Count: 2}, {Node: "b", Count: 1}})
+	if d.Title != "⚠ Host updates available · 2 nodes" {
+		t.Errorf("digest Title = %q", d.Title)
+	}
+	if d.Severity != "warn" || d.Description == "" || d.Description != d.Body {
+		t.Errorf("digest severity/description = %q / %q", d.Severity, d.Description)
+	}
+	a := notifyApplyDone("server2")
+	if a.Title != "✓ Host updates applied · server2" || a.Severity != "info" {
+		t.Errorf("applied Title/Severity = %q / %q", a.Title, a.Severity)
+	}
+	for name, ev := range map[string]struct {
+		URL   string
+		Links []notify.EventLink
+	}{"digest": {d.URL, d.Links}, "applied": {a.URL, a.Links}} {
+		if ev.URL != "/settings/nodes" {
+			t.Errorf("%s URL = %q", name, ev.URL)
+		}
+		if len(ev.Links) != 1 || ev.Links[0] != (notify.EventLink{Label: "Nodes", URL: "/settings/nodes"}) {
+			t.Errorf("%s Links = %+v", name, ev.Links)
+		}
 	}
 }
 

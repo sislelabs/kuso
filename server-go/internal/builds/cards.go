@@ -10,6 +10,8 @@ package builds
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +40,10 @@ type EventEnvelope struct {
 	DurationMs  int64
 	Fields      []EnvelopeField
 	Footer      string
+	// Env is the env group the build targets ("" when none/several);
+	// Links is the card's action row (buildCardLinks).
+	Env   string
+	Links []EnvelopeLink
 
 	// Classification, when non-nil, carries the failure kind + a
 	// deep-link tab hint so the bell-popover row in the web UI can
@@ -47,6 +53,13 @@ type EventEnvelope struct {
 	// it nil and the UI falls back to the existing "open the service
 	// page" behavior. See internal/failures for the kind taxonomy.
 	Classification *failures.Classification
+}
+
+// EnvelopeLink mirrors notify.EventLink for the same import-boundary
+// reason.
+type EnvelopeLink struct {
+	Label string
+	URL   string
 }
 
 // EnvelopeField mirrors notify.EventField for the same import-boundary
@@ -87,18 +100,28 @@ func buildEventURL(project, service string) string {
 	return fmt.Sprintf("/projects/%s?service=%s", project, service)
 }
 
+// withEnvParam pins the project page's env selector (?env=<group>) when
+// the build targets exactly one env, so the click opens that env rather
+// than whichever one the page defaults to (production).
+func withEnvParam(u string, targets []buildTarget) string {
+	if u == "" || len(targets) != 1 || targets[0].Env == "" {
+		return u
+	}
+	return u + "&env=" + url.QueryEscape(targets[0].Env)
+}
+
 // buildRichCard assembles the title, description, and inline field
-// block for a build.* notification. phase is "succeeded"/"failed";
-// failureReason is the markFailed message (ignored on success).
+// block for a build.* notification. phase is succeeded / failed /
+// cancelled / superseded; failureReason is why a non-succeeded build
+// stopped (ignored on success).
 // Description is the commit message (first line) when available;
 // the field block surfaces ref + author + duration so consumers
 // don't need to click through to get the basics.
 //
-// siteURL is the optional public URL of the deployed service ("" to
-// omit). When provided it becomes a "Site" field in the card so the
-// user can click straight through to the live deployment from
-// Discord. Callers fetch it from the KusoService CR's first
-// configured domain.
+// targets are the envs the build deploys to (lookupBuildTargets; nil
+// when unknown). Their names go in the title so a staging or preview
+// build isn't mistaken for a production deploy; their public URLs go
+// in the link row (buildCardLinks), not the field block.
 //
 // Returned fields are []EnvelopeField — the notify adapter forwards
 // them straight through to the Discord renderer's field block.
@@ -106,7 +129,7 @@ func buildEventURL(project, service string) string {
 // cosmetic displayName when set, else the URL slug (callers resolve it
 // via serviceDisplayLabel). It's display-only; deep-link URLs + the
 // envelope's Service field still use the slug.
-func buildRichCard(b *kube.KusoBuild, label, phase, failureReason, siteURL string) (title, description string, fields []EnvelopeField) {
+func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, targets []buildTarget) (title, description string, fields []EnvelopeField) {
 	var glyph, verb string
 	switch phase {
 	case "failed":
@@ -119,6 +142,13 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason, siteURL strin
 		glyph, verb = "✓", "Build succeeded"
 	}
 	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, label)
+	if len(targets) > 0 {
+		envs := make([]string, len(targets))
+		for i, t := range targets {
+			envs[i] = t.Env
+		}
+		title += " → " + strings.Join(envs, ", ")
+	}
 
 	annos := b.Annotations
 	// Detect a synthetic ref ("<branch>-<base36-unix-ms>") produced
@@ -144,27 +174,40 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason, siteURL strin
 		} else {
 			description = fmt.Sprintf("Manual redeploy of `%s`", b.Spec.Branch)
 		}
-	} else if phase == "failed" && failureReason != "" {
+	} else if failureReason != "" && phase != "succeeded" {
 		description = failureReason
 	}
 
 	// Field block — kept compact. Branch and ref share a row because
 	// they're conceptually one pointer ("main · abcdef"); author and
-	// duration each get their own slot.
+	// duration each get their own slot. Both link to the forge when the
+	// repo URL is a recognised host.
+	var repoURL string
+	if b.Spec.Repo != nil {
+		repoURL = b.Spec.Repo.URL
+	}
+	commitURL := ""
+	if !isSynth && isHexSHA(rawRef) {
+		commitURL = forgeCommitURL(repoURL, rawRef)
+	}
 	ref := rawRef
 	if !isSynth && len(ref) > 7 {
 		ref = ref[:7]
 	}
+	branchMD := ""
+	if b.Spec.Branch != "" {
+		branchMD = mdCodeLink(b.Spec.Branch, forgeBranchURL(repoURL, b.Spec.Branch))
+	}
 	branchAndRef := ""
 	switch {
-	case isSynth && b.Spec.Branch != "":
-		branchAndRef = fmt.Sprintf("`%s`", b.Spec.Branch)
-	case b.Spec.Branch != "" && ref != "":
-		branchAndRef = fmt.Sprintf("`%s` · `%s`", b.Spec.Branch, ref)
-	case b.Spec.Branch != "":
-		branchAndRef = fmt.Sprintf("`%s`", b.Spec.Branch)
+	case isSynth && branchMD != "":
+		branchAndRef = branchMD
+	case branchMD != "" && ref != "":
+		branchAndRef = branchMD + " · " + mdCodeLink(ref, commitURL)
+	case branchMD != "":
+		branchAndRef = branchMD
 	case ref != "":
-		branchAndRef = fmt.Sprintf("`%s`", ref)
+		branchAndRef = mdCodeLink(ref, commitURL)
 	}
 	if branchAndRef != "" {
 		fields = append(fields, EnvelopeField{Name: "Ref", Value: branchAndRef, Inline: true})
@@ -190,28 +233,185 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason, siteURL strin
 			Inline: true,
 		})
 	}
-	// "Site" field links to the live deployment. Only shown for
-	// succeeded builds since failed/cancelled/superseded builds don't
-	// produce a new live URL anyway.
-	if phase == "succeeded" && siteURL != "" {
-		fields = append(fields, EnvelopeField{
-			Name:   "Site",
-			Value:  fmt.Sprintf("[%s](%s)", siteHostFromURL(siteURL), siteURL),
-			Inline: true,
-		})
+	// The commit message took the description slot, so the reason
+	// would otherwise only live in Body — which no renderer shows once a
+	// Description is set. Full-width so a long kaniko error stays legible.
+	if failureReason != "" && phase != "succeeded" && description != failureReason {
+		fields = append(fields, EnvelopeField{Name: "Reason", Value: failureReason})
 	}
 	return title, description, fields
 }
 
-// siteHostFromURL strips https:// (or http://) and any trailing slash
-// from a URL so the Discord card shows "web.distill.sislelabs.com"
-// instead of the full URL — the markdown link target carries the
-// scheme so the click still works.
-func siteHostFromURL(u string) string {
-	u = strings.TrimPrefix(u, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimSuffix(u, "/")
-	return u
+// mdCodeLink renders text as inline code, wrapped in a markdown link
+// when href is set.
+func mdCodeLink(text, href string) string {
+	if href == "" {
+		return "`" + text + "`"
+	}
+	return "[`" + text + "`](" + href + ")"
+}
+
+// forgeFlavor is the URL layout a repo host uses for commit + branch pages.
+type forgeFlavor int
+
+const (
+	forgeNone forgeFlavor = iota
+	forgeGitHub
+	forgeGitLab
+	forgeGitea
+)
+
+// forgeRepo normalises a clone URL (https or git@host:o/r, optional
+// ".git") into its https web base and the host's URL layout. forgeNone
+// for hosts we can't vouch for — a guessed link that 404s is worse than
+// plain text.
+func forgeRepo(raw string) (base string, flavor forgeFlavor) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", forgeNone
+	}
+	var host, path string
+	if rest, ok := strings.CutPrefix(raw, "git@"); ok {
+		h, p, found := strings.Cut(rest, ":")
+		if !found {
+			return "", forgeNone
+		}
+		host, path = h, p
+	} else {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return "", forgeNone
+		}
+		host, path = u.Host, u.Path
+	}
+	host = strings.ToLower(host)
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	if path == "" || !strings.Contains(path, "/") {
+		return "", forgeNone
+	}
+	switch {
+	case host == "github.com":
+		flavor = forgeGitHub
+	case host == "gitlab.com" || strings.HasPrefix(host, "gitlab."):
+		flavor = forgeGitLab
+	case host == "codeberg.org" || strings.HasPrefix(host, "gitea."):
+		flavor = forgeGitea
+	default:
+		return "", forgeNone
+	}
+	return "https://" + host + "/" + path, flavor
+}
+
+// forgeCommitURL links a commit SHA on the repo's forge; "" when the
+// host is unrecognised.
+func forgeCommitURL(repoURL, sha string) string {
+	base, flavor := forgeRepo(repoURL)
+	switch flavor {
+	case forgeGitHub, forgeGitea:
+		return base + "/commit/" + url.PathEscape(sha)
+	case forgeGitLab:
+		return base + "/-/commit/" + url.PathEscape(sha)
+	}
+	return ""
+}
+
+// forgeBranchURL links a branch's tree on the repo's forge. Each path
+// segment is escaped but the slashes are kept, since forges route
+// "feat/x" as a nested path.
+func forgeBranchURL(repoURL, branch string) string {
+	base, flavor := forgeRepo(repoURL)
+	if flavor == forgeNone || branch == "" {
+		return ""
+	}
+	segs := strings.Split(branch, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	escaped := strings.Join(segs, "/")
+	switch flavor {
+	case forgeGitHub:
+		return base + "/tree/" + escaped
+	case forgeGitLab:
+		return base + "/-/tree/" + escaped
+	case forgeGitea:
+		return base + "/src/branch/" + escaped
+	}
+	return ""
+}
+
+// buildSeverity is notify.EnvSeverity applied to a build's targets: a
+// failure is error (default @here) only when it can affect production —
+// a production target, or targets we couldn't resolve. Everything else
+// is capped at warn so a broken preview doesn't page the channel.
+func buildSeverity(targets []buildTarget) string {
+	if len(targets) == 0 {
+		return "error"
+	}
+	for _, t := range targets {
+		if t.Env == "" || t.Env == "production" {
+			return "error"
+		}
+	}
+	return "warn"
+}
+
+// singleTargetEnv is the envelope's Env: set only when the build lands
+// in exactly one env.
+func singleTargetEnv(targets []buildTarget) string {
+	if len(targets) == 1 {
+		return targets[0].Env
+	}
+	return ""
+}
+
+// buildCardLinks is the action row for a build.* card. phase is
+// succeeded / failed / release-failed / cancelled / superseded. c is
+// the failure classification (failed only; may be nil).
+func buildCardLinks(project, short, phase string, targets []buildTarget, c *failures.Classification) []EnvelopeLink {
+	base := buildEventURL(project, short)
+	if base == "" {
+		return nil
+	}
+	deployments := withEnvParam(base+"&tab=deployments", targets)
+	var links []EnvelopeLink
+	switch phase {
+	case "failed":
+		logs := base + "&tab=deployments"
+		if c != nil && c.Kind != "" {
+			logs += "&kind=" + url.QueryEscape(string(c.Kind))
+		}
+		// One link: the web has no per-build deep link, so a separate
+		// "Deployments" would open the same tab minus the failure banner.
+		links = append(links, EnvelopeLink{Label: "View failure", URL: withEnvParam(logs, targets)})
+	case "release-failed":
+		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
+	case "succeeded":
+		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
+		for _, t := range targets {
+			if t.URL != "" {
+				links = append(links, EnvelopeLink{Label: "Open " + t.Env, URL: t.URL})
+			}
+		}
+	default:
+		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
+	}
+	return links
+}
+
+// replacedByDescription is the superseded-card fallback description
+// (used when the build has no commit message). newerRef is the
+// replacing build's ref when known; synthetic refs are dropped.
+func replacedByDescription(branch, newerRef string) string {
+	if isHexSHA(newerRef) {
+		if len(newerRef) > 7 {
+			newerRef = newerRef[:7]
+		}
+		return "Replaced by a newer build (`" + newerRef + "`)"
+	}
+	if branch != "" {
+		return "Replaced by a newer build of `" + branch + "`"
+	}
+	return "Replaced by a newer build"
 }
 
 // buildDurationMs reads start + completed timestamps off the build CR
@@ -242,82 +442,108 @@ func buildDurationMs(b *kube.KusoBuild) int64 {
 	return d.Milliseconds()
 }
 
-// lookupSiteURL resolves the public URL of a service for inclusion in
-// notification cards. Returns "" when no public host can be resolved, or
-// on any kube lookup error (we don't fail the notification over a missing
-// site link).
+// buildTarget is one environment a build promotes into: its env-group
+// name (production / staging / preview-pr-7 / custom) and the public URL
+// it serves ("" for internal-only envs or when no host resolves).
+type buildTarget struct {
+	Env string
+	URL string
+}
+
+// lookupBuildTargets resolves the environments a build deploys to, using
+// the same branch rule as promoteImage (promotionBranchMatches), so the
+// card names the env the build actually lands in and links THAT env's
+// host. Before this every card linked the production host, even for
+// staging / preview / custom-env builds.
 //
-// fqn is the service's KusoService CR name (e.g. "distill-web"), not the
-// short alias. project is the owning project (for the env lookup).
+// fqn-level spec.domains[] are custom domains pinned on the production
+// env, so they only override the production target's URL.
 //
-// Resolution order:
-//  1. The service's first explicit spec.domains[] entry (a user-pinned
-//     custom domain), https/http per its TLS flag.
-//  2. The PRODUCTION KusoEnvironment's resolved host. This is the common
-//     case — most services have no explicit spec.domains and rely on the
-//     auto-generated <service>.<baseDomain> host, which the server writes
-//     onto the env CR's spec.host. Without this fallback the "Site" link
-//     was silently dropped for every auto-host service (e.g. scaffold).
-//
-// Internal-only services have no public URL, so they resolve to "".
-func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, project, fqn string) string {
-	if kc == nil || ns == "" || fqn == "" {
-		return ""
+// homeNS is where the KusoProject lives (for the default branch); ns is
+// the execution namespace holding the service + env CRs. Best-effort:
+// any kube error yields fewer (or no) targets, never a failed notify.
+func lookupBuildTargets(ctx context.Context, kc *kube.Client, ns, homeNS string, b *kube.KusoBuild) []buildTarget {
+	if kc == nil || ns == "" || b == nil || b.Spec.Service == "" || b.Spec.DryRun {
+		return nil
 	}
 	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	// 1) Explicit service-level custom domain wins.
+	project, fqn := b.Spec.Project, b.Spec.Service
+	short := strings.TrimPrefix(fqn, project+"-")
+	envs, err := kc.ListKusoEnvironmentsByLabels(lctx, ns, map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: short,
+	})
+	if err != nil || len(envs) == 0 {
+		return nil
+	}
+	defaultBranch := "main"
+	if pp, perr := kc.GetKusoProject(lctx, homeNS, project); perr == nil &&
+		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	}
+	var domainURL string
 	if svc, err := kc.GetKusoService(lctx, ns, fqn); err == nil && svc != nil && len(svc.Spec.Domains) > 0 {
 		if host := strings.TrimSpace(svc.Spec.Domains[0].Host); host != "" {
 			scheme := "https"
 			if !svc.Spec.Domains[0].TLS {
 				scheme = "http"
 			}
-			return scheme + "://" + host
+			domainURL = scheme + "://" + host
 		}
 	}
 
-	// 2) Fall back to the production env's resolved host (the auto-
-	//    generated <svc>.<baseDomain> lives here even when the service
-	//    has no explicit spec.domains).
-	short := strings.TrimPrefix(fqn, project+"-")
-	envs, err := kc.ListKusoEnvironmentsByLabels(lctx, ns, map[string]string{
-		kube.LabelProject: project,
-		kube.LabelService: short,
-	})
-	if err != nil {
-		return ""
-	}
+	var out []buildTarget
 	for i := range envs {
 		e := &envs[i]
-		// Select by the env-GROUP label, not spec.kind — clones set
-		// spec.kind="production" but belong to their own env group.
-		if e.Labels[kube.LabelEnv] != "production" {
+		if e.Spec.Service != "" && e.Spec.Service != fqn {
 			continue
 		}
-		// Internal-only services aren't reachable from outside the
-		// cluster — no public link to offer.
-		if e.Spec.Internal {
-			return ""
+		if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
+			continue
 		}
-		host := strings.TrimSpace(e.Spec.Host)
-		if host == "" && len(e.Spec.AdditionalHosts) > 0 {
-			host = strings.TrimSpace(e.Spec.AdditionalHosts[0])
+		// Env-GROUP label, not spec.kind — clones set kind=production
+		// but belong to their own group.
+		name := e.Labels[kube.LabelEnv]
+		if name == "" {
+			name = strings.TrimPrefix(e.Name, fqn+"-")
 		}
-		if host == "" {
-			return ""
+		t := buildTarget{Env: name}
+		switch {
+		case e.Spec.Internal:
+		case name == "production" && domainURL != "":
+			t.URL = domainURL
+		default:
+			t.URL = envPublicURL(e)
 		}
-		scheme := "http"
-		for _, th := range e.Spec.TLSHosts {
-			if th == host {
-				scheme = "https"
-				break
-			}
-		}
-		return scheme + "://" + host
+		out = append(out, t)
 	}
-	return ""
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Env == "production") != (out[j].Env == "production") {
+			return out[i].Env == "production"
+		}
+		return out[i].Env < out[j].Env
+	})
+	return out
+}
+
+// envPublicURL returns the env's primary public URL, https when the host
+// is TLS-eligible. "" when the env has no host.
+func envPublicURL(e *kube.KusoEnvironment) string {
+	host := strings.TrimSpace(e.Spec.Host)
+	if host == "" && len(e.Spec.AdditionalHosts) > 0 {
+		host = strings.TrimSpace(e.Spec.AdditionalHosts[0])
+	}
+	if host == "" {
+		return ""
+	}
+	for _, th := range e.Spec.TLSHosts {
+		if th == host {
+			return "https://" + host
+		}
+	}
+	return "http://" + host
 }
 
 // serviceDisplayLabel returns the name to show for a service in
