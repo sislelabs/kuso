@@ -23,7 +23,7 @@ func seedFullService(project, service string) planSeed {
 			Repo:          &kube.KusoRepoRef{URL: "https://github.com/me/api", DefaultBranch: "main"},
 			Domains:       []kube.KusoDomain{{Host: "api.shop.example.com", TLS: true}},
 			Scale:         func() *kube.KusoScaleSpec { s := &kube.KusoScaleSpec{Max: 6, TargetCPU: 65}; s.SetMin(2); return s }(),
-			Sleep:         &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20},
+			Sleep:         &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20, NonProduction: "off"},
 			Placement:     &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}},
 			Volumes:       []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 5}},
 			EnvVars: []kube.KusoEnvVar{
@@ -105,7 +105,7 @@ func TestExport_RoundTripsToNoOpPlan(t *testing.T) {
 	if s.Repo != "https://github.com/me/api" || s.Branch != "main" {
 		t.Fatalf("service repo not exported: %+v", s)
 	}
-	if s.Sleep == nil || !s.Sleep.Enabled || s.Sleep.AfterMinutes != 20 {
+	if s.Sleep == nil || !s.Sleep.Enabled || s.Sleep.AfterMinutes != 20 || s.Sleep.NonProduction != "off" {
 		t.Fatalf("service sleep not exported: %+v", s.Sleep)
 	}
 	if s.Placement == nil || s.Placement.Labels["region"] != "eu" {

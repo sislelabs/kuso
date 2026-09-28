@@ -124,6 +124,9 @@ type CreateServiceRequest struct {
 	// time (e.g. setpriv-based entrypoints). nil = chart default
 	// (drop-ALL, no escalation).
 	SecurityContext *kube.KusoSecurityContext `json:"securityContext,omitempty"`
+	// Resources is the pod CPU/memory requests+limits (ResourceRequirements
+	// shape). nil = the instance's default pod size; an empty map = none.
+	Resources *map[string]any `json:"resources,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.
@@ -199,6 +202,9 @@ type ServiceScale struct {
 type ServiceSleep struct {
 	Enabled      bool `json:"enabled,omitempty"`
 	AfterMinutes int  `json:"afterMinutes,omitempty"`
+	// NonProduction: "" / "on" = non-production envs sleep when idle
+	// (the default); "off" = they never sleep.
+	NonProduction string `json:"nonProduction,omitempty"`
 }
 
 // SetEnvRequest is the body of POST /api/projects/:p/services/:s/env.

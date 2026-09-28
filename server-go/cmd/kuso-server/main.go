@@ -52,6 +52,7 @@ import (
 	"kuso/server/internal/notify"
 	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/platformharden"
+	"kuso/server/internal/podsizes"
 	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/projects"
@@ -549,6 +550,14 @@ func main() {
 					Snapshot: snapshot,
 				})
 			}
+			if n, err := podsizes.Seed(ctx, database); err != nil {
+				logger.Warn("podsizes: seed presets", "err", err)
+			} else if n > 0 {
+				logger.Info("podsizes: seeded default presets", "count", n)
+			}
+			projSvc.DefaultPodResources = func(ctx context.Context) (map[string]any, error) {
+				return podsizes.DefaultResources(ctx, database)
+			}
 		}
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
@@ -616,6 +625,8 @@ func main() {
 		}
 		cronSvc = crons.New(kc, *namespace)
 		cronSvc.NSResolver = nsResolver
+		// Same revision sink as services (nil when there's no DB).
+		cronSvc.RecordRevision = projSvc.RecordRevision
 		runSvc = runs.New(kc, *namespace, logger.With("component", "runs"))
 		runSvc.NSResolver = nsResolver
 		runSvc.Notifier = runsNotifyAdapter{notifyDisp}
@@ -640,6 +651,9 @@ func main() {
 		// shared-secret unset must drop subscriptions before rolling pods —
 		// see projectsecrets.Service.OnKeyRemoved.
 		projectSecretSvc.OnKeyRemoved = projSvc.DropSharedKeyFromServices
+		// shared-secret set must attach the key to services that subscribed
+		// before it existed — see projectsecrets.Service.OnKeySet.
+		projectSecretSvc.OnKeySet = projSvc.ResyncSharedKeySubscribers
 		// Same resolver on the crons service so its onFailure webhook
 		// secretRef ownership check (HIGH-1) can tell whether a signing-key
 		// secret name belongs to the cron's own project.

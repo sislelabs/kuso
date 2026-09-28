@@ -572,11 +572,21 @@ func (s *KusoScaleSpec) SetMin(v int) {
 	s.Min = &v
 }
 
+// KusoServiceSleep: Enabled governs the PRODUCTION env only. Every
+// non-production env (named envs like staging, env-group clones, PR
+// previews) sleeps by default; NonProduction="off" opts the service out.
 type KusoServiceSleep struct {
 	Enabled      bool             `json:"enabled,omitempty"`
 	AfterMinutes int              `json:"afterMinutes,omitempty"`
 	WakeOn       *KusoServiceWake `json:"wakeOn,omitempty"`
+	// NonProduction: "" or "on" = non-production envs sleep when idle
+	// (the default); "off" = they never sleep.
+	NonProduction string `json:"nonProduction,omitempty"`
 }
+
+// SleepNonProductionOff is the KusoServiceSleep.NonProduction value that
+// opts a service's non-production envs out of default sleep.
+const SleepNonProductionOff = "off"
 
 // KusoServiceWake configures wake-on signals that should keep the
 // deployment warm even when sleep would otherwise idle it. v1 ships
@@ -637,6 +647,11 @@ type KusoEnvironmentSpec struct {
 	// schedulable-node count by resolveSpreadPolicy at env-write time.
 	SpreadPolicy string        `json:"spreadPolicy,omitempty"`
 	Sleep        *KusoEnvSleep `json:"sleep,omitempty"`
+	// AutoSleep routes the env's Ingress through kuso-activator because
+	// the non-production default-sleep policy applies to it. Written ONLY
+	// by the scaledown watcher (never by service propagation, which owns
+	// Sleep), so the two writers can't fight over one field.
+	AutoSleep bool `json:"autoSleep,omitempty"`
 	Host         string        `json:"host,omitempty"`
 	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
 	// env CR so the kusoenvironment chart's Ingress template can emit

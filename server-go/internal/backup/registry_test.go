@@ -82,3 +82,42 @@ func TestMysqlProducer(t *testing.T) {
 		}
 	}
 }
+
+// A fresh restore pod in a project namespace is network-isolated for
+// ~5-20s until kube-router syncs the netpol for its IP, and the Job runs
+// with BackoffLimit 0. Every restore kind must retry the artifact download,
+// and postgres must wait for the server before psql.
+func TestRestoreScripts_RetryDownloadBeforeFirstUse(t *testing.T) {
+	r := NewDefaultRegistry()
+	for _, kind := range []string{"postgres", "redis", "mongodb", "mysql"} {
+		p, _ := r.For(kind)
+		s := p.RestoreScript()
+		def := strings.Index(s, "s3_fetch() {")
+		if def < 0 {
+			t.Errorf("%s: no s3_fetch retry helper", kind)
+			continue
+		}
+		if !strings.Contains(s[def:], "until aws s3 cp") {
+			t.Errorf("%s: s3_fetch does not retry aws s3 cp", kind)
+		}
+		if first := strings.Index(s, `aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" `); first >= 0 {
+			t.Errorf("%s: artifact downloaded with a bare aws s3 cp (no retry) at %d", kind, first)
+		}
+		if !strings.Contains(s, `s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.`) {
+			t.Errorf("%s: artifact download does not go through s3_fetch", kind)
+		}
+	}
+}
+
+func TestPostgresRestore_WaitsForServerBeforePsql(t *testing.T) {
+	p, _ := NewDefaultRegistry().For("postgres")
+	s := p.RestoreScript()
+	wait := strings.Index(s, `pg_isready -h "${POSTGRES_HOST}"`)
+	apply := strings.Index(s, `psql -v ON_ERROR_STOP=1`)
+	if wait < 0 || apply < 0 || wait > apply {
+		t.Fatalf("pg_isready wait (at %d) must precede the psql apply (at %d)", wait, apply)
+	}
+	if !strings.Contains(s[:apply], "exit 1") {
+		t.Error("wait loop is not bounded (no exit 1 before the apply)")
+	}
+}

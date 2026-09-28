@@ -337,3 +337,82 @@ func TestAddEnvironment_ClonesRespectSubscription(t *testing.T) {
 		})
 	}
 }
+
+// A clone whose name doesn't derive from its source (the source was renamed
+// after the clone was minted) must still be targeted: AddEnvironment has to
+// rescope by EnvAddons' authoritative source→clone map, not by name. The
+// name-derived form looks for alpha-maindb-staging-conn, misses, and leaves
+// staging's DATABASE_URL on the PRODUCTION database.
+func TestAddEnvironment_RescopesByOriginForRenamedSource(t *testing.T) {
+	dbRef := func(name string) map[string]any {
+		return map[string]any{"secretKeyRef": map[string]any{"name": name, "key": "DATABASE_URL"}}
+	}
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{
+			Runtime: "dockerfile", Port: 3000,
+			EnvVars: []kube.KusoEnvVar{{Name: "DATABASE_URL", ValueFrom: dbRef("alpha-maindb-conn")}},
+		}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedAddon("alpha", "maindb", "postgres"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-maindb-conn"}, nil
+	}
+	s.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
+		return []string{"alpha-db-staging-conn"}, map[string]string{"alpha-maindb-conn": "alpha-db-staging-conn"}, nil
+	}
+
+	env, err := s.AddEnvironment(context.Background(), "alpha", "web", CreateEnvRequest{Name: "staging", Branch: "staging"})
+	if err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+	for _, e := range env.Spec.EnvVars {
+		if e.Name != "DATABASE_URL" {
+			continue
+		}
+		skr, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
+		if name, _ := skr["name"].(string); name != "alpha-db-staging-conn" {
+			t.Fatalf("DATABASE_URL -> %q, want the clone alpha-db-staging-conn", name)
+		}
+		return
+	}
+	t.Fatalf("DATABASE_URL missing: %+v", env.Spec.EnvVars)
+}
+
+// Only refs to conns this env stopped mounting are moved. A conn that isn't
+// one of the project's addon conns stays in envFromSecrets, so its explicit
+// ref is left alone even if EnvAddons reports a clone for it.
+func TestAddEnvironment_RescopeLeavesUndroppedConnRefs(t *testing.T) {
+	ref := map[string]any{"secretKeyRef": map[string]any{"name": "alpha-cache-conn", "key": "REDIS_URL"}}
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{
+			Runtime: "dockerfile", Port: 3000,
+			EnvVars: []kube.KusoEnvVar{{Name: "REDIS_URL", ValueFrom: ref}},
+		}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedAddon("alpha", "pg", "postgres"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	s.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
+		return []string{"alpha-pg-staging-conn", "alpha-cache-staging-conn"},
+			map[string]string{"alpha-pg-conn": "alpha-pg-staging-conn", "alpha-cache-conn": "alpha-cache-staging-conn"}, nil
+	}
+	env, err := s.AddEnvironment(context.Background(), "alpha", "web", CreateEnvRequest{Name: "staging", Branch: "staging"})
+	if err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+	for _, e := range env.Spec.EnvVars {
+		if e.Name == "REDIS_URL" {
+			skr, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
+			if name, _ := skr["name"].(string); name != "alpha-cache-conn" {
+				t.Fatalf("REDIS_URL -> %q, want alpha-cache-conn untouched", name)
+			}
+			return
+		}
+	}
+	t.Fatalf("REDIS_URL missing: %+v", env.Spec.EnvVars)
+}

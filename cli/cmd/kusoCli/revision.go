@@ -124,9 +124,6 @@ var revisionRevertCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("revert revision: %w", err)
 		}
-		if resp.StatusCode() == 501 {
-			return fmt.Errorf("server returned 501: revert is only supported for kind=service today")
-		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}

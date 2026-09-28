@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +155,41 @@ func TestMirrorBackupSecret_CopiesIntoTargetNS(t *testing.T) {
 	// Idempotent: a second call updates in place without error.
 	if err := a.mirrorBackupSecret(context.Background(), "proj-ns"); err != nil {
 		t.Fatalf("mirrorBackupSecret second call: %v", err)
+	}
+}
+
+// A fresh pod in a project namespace can't reach the DB for ~5-20s until
+// kube-router syncs the NetworkPolicy for its IP. The snapshot Job runs with
+// BackoffLimit 0 and gates the migration, so it must wait, bounded, before
+// pg_dump's first connect.
+func TestBuildSnapshotJob_WaitsForPostgresBeforeDump(t *testing.T) {
+	t.Parallel()
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "")
+	script := job.Spec.Template.Spec.Containers[0].Args[0]
+	wait := strings.Index(script, `pg_isready -h "${POSTGRES_HOST}"`)
+	dump := strings.Index(script, "pg_dump ")
+	if wait < 0 || dump < 0 || wait > dump {
+		t.Fatalf("pg_isready wait (at %d) must precede pg_dump (at %d):\n%s", wait, dump, script)
+	}
+	if !strings.Contains(script[:dump], "exit 1") {
+		t.Error("wait loop is not bounded (no exit 1 before pg_dump)")
+	}
+	if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+		t.Errorf("snapshot script does not parse: %v\n%s", err, out)
+	}
+}
+
+// Without the project label the pod sits outside the project netpols, so
+// the addon's default-deny ingress never admits it; without public egress
+// the S3 upload is blocked. Same pair the restore Job and backup CronJob carry.
+func TestBuildSnapshotJob_PodInsideProjectNetpol(t *testing.T) {
+	t.Parallel()
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "k", "e2e", "db", "t", "b", "")
+	labels := job.Spec.Template.Labels
+	if got := labels["kuso.sislelabs.com/project"]; got != "e2e" {
+		t.Errorf("pod label project = %q, want e2e", got)
+	}
+	if got := labels["kuso.sislelabs.com/network-egress-public"]; got != "true" {
+		t.Errorf("pod label network-egress-public = %q, want true", got)
 	}
 }

@@ -13,8 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
+	"kuso/server/internal/podsizes"
 )
 
 // ConfigHandler exposes /api/config/* routes.
@@ -39,6 +41,7 @@ func (h *ConfigHandler) Mount(r chi.Router) {
 	r.Get("/api/config/clusterissuer", h.ClusterIssuer)
 	r.Get("/api/config/runpacks", h.ListRunpacks)
 	r.Get("/api/config/podsizes", h.ListPodSizes)
+	r.Get("/api/config/default-podsize", h.GetDefaultPodSize)
 	r.Get("/api/config/templates", h.Templates)
 	r.Group(func(r chi.Router) {
 		r.Use(AdminOnly)
@@ -47,6 +50,7 @@ func (h *ConfigHandler) Mount(r chi.Router) {
 		r.Post("/api/config/podsizes", h.CreatePodSize)
 		r.Put("/api/config/podsizes/{id}", h.UpdatePodSize)
 		r.Delete("/api/config/podsizes/{id}", h.DeletePodSize)
+		r.Put("/api/config/default-podsize", h.SetDefaultPodSize)
 	})
 }
 
@@ -268,4 +272,48 @@ func randomID() (string, error) {
 		return "", fmt.Errorf("randomID: crypto/rand: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+type defaultPodSizeBody struct {
+	Name string `json:"name"`
+}
+
+// GetDefaultPodSize returns the preset new services are sized with
+// ("none" = no default).
+func (h *ConfigHandler) GetDefaultPodSize(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := cfgCtx(r)
+	defer cancel()
+	name, err := podsizes.DefaultName(ctx, h.DB)
+	if err != nil {
+		h.Logger.Error("get default pod size", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(w, http.StatusOK, defaultPodSizeBody{Name: name})
+}
+
+// SetDefaultPodSize sets the preset new services are sized with. Existing
+// services are not changed.
+func (h *ConfigHandler) SetDefaultPodSize(w http.ResponseWriter, r *http.Request) {
+	var body defaultPodSizeBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if body.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name is required (a preset name, or \"none\")")
+		return
+	}
+	ctx, cancel := cfgCtx(r)
+	defer cancel()
+	if err := podsizes.SetDefault(ctx, h.DB, body.Name, auth.ActorName(r.Context())); err != nil {
+		if errors.Is(err, podsizes.ErrUnknownPreset) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.Logger.Error("set default pod size", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(w, http.StatusOK, defaultPodSizeBody{Name: body.Name})
 }

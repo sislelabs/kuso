@@ -365,8 +365,8 @@ export interface PatchServiceBody {
     afterMinutes?: number;
     // wakeOn.excludePaths: any request to a listed path keeps the whole
     // deployment warm even when scale.min=0 (webhooks/callbacks on a
-    // sleeping service). Send wakeOn:null to clear.
-    wakeOn?: { excludePaths?: string[] } | null;
+    // sleeping service). Send {clear:true} to drop them.
+    wakeOn?: { excludePaths?: string[]; clear?: boolean };
   };
   volumes?: VolumePatch[];
   placement?: PlacementPatch;

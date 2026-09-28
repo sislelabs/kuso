@@ -237,13 +237,18 @@ To clear the hook: PATCH `{"release":{"clear":true}}`.
 
 Three distinct states — don't conflate them:
 
-- **Sleep (scale-to-zero):** `scale.min=0` + `sleep.enabled` — idle pods scale to zero; the activator wakes them on the next request (hold-and-proxy: the request waits for cold-start, it is not replayed).
-- **Wake:** `kuso project service wake <p> <s>` forces a sleeping service up now.
+- **Sleep (scale-to-zero):** an env idle for `sleep.afterMinutes` (default 30) scales to zero; the activator wakes it on the next request (hold-and-proxy: the request waits for the cold start, it is not replayed). `kuso status` shows it as `state=sleeping`.
+  - **Production** sleeps only when the service opts in (`sleep.enabled`, or `scale.min=0`).
+  - **Every other env** (named envs like staging, env-group clones, PR previews) sleeps **by default**. Opt a service out with `sleep.nonProduction: off`.
+  - Autoscaled services (`scale.max > scale.min`) sleep too. The HPA pauses at 0 replicas and resumes on wake.
+  - Never sleeps: workers, `internal` services, services with `wakeOn.excludePaths`, stopped services, and every service in a project with `alwaysOn`.
+  - Toggle: `kuso project service sleep <p> <s> on|off [--after 30m] [--non-production on|off]`. With no state, it prints the current settings. The web UI has the same controls under Settings → Sleep.
+- **Wake:** `kuso project service wake <p> <s>` forces a sleeping production env up now. Any request to a sleeping env's URL also wakes it.
 - **Hard-stop:** `kuso project service stop <p> <s>` (or `kuso project stop <p>` for everything) pins 0 replicas and does NOT wake on traffic — visitors get a "service stopped" page until `... start`.
 
 ### wakeOn excludePaths — keep callback paths warm
 
-ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, the deployment stays at min 1 even with `scale.min=0`. No CLI flag — kuso.yml or PATCH:
+ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag — kuso.yml or PATCH:
 
 ```bash
 curl -X PATCH ... \
@@ -750,7 +755,8 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--domains h1,h2] [--replicas N] [--max-replicas N] [--branch b] [--path dir] \
     [--internal on|off] [--private-egress on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off]
-#   NOT settable here (kuso.yml / PATCH only): release hook, sleep/wakeOn,
+#   NOT settable here (kuso.yml / PATCH only): release hook, sleep.wakeOn
+#   (sleep itself: `kuso project service sleep`),
 #   container command override, dockerfile path (create-time --dockerfile only).
 
 # Crons

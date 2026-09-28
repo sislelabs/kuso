@@ -87,6 +87,12 @@ type Service struct {
 	// addons.Service.CleanupInstanceAddon.
 	CleanupInstanceAddon func(ctx context.Context, project, addonShort string) error
 
+	// DefaultPodResources returns the instance's default pod-size preset as
+	// a spec.resources map, applied by AddService when the request carries
+	// none. nil result = no default. nil func = no default (tests / servers
+	// without a DB). Backed by podsizes.DefaultResources.
+	DefaultPodResources func(ctx context.Context) (map[string]any, error)
+
 	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
 	// named environment and returns the clones' conn-secret names, scoped by the
 	// kuso.sislelabs.com/env label = envScope, plus the authoritative

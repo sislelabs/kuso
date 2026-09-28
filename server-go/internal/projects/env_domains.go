@@ -60,6 +60,7 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 			return nil, fmt.Errorf("%w: tlsSecret is only supported for wildcard hosts (*.example.com); non-wildcard hosts get a cert-manager cert automatically", ErrInvalid)
 		}
 	}
+	ctx, rev := s.beginRevision(ctx)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -95,7 +96,9 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 		}
 	}
 
+	var before []string
 	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+		before = envHostsOf(env)
 		if wildcard {
 			// Idempotent upsert: same host re-add updates the secret
 			// (lets the operator rotate to a renamed cert secret).
@@ -125,6 +128,7 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 	if err != nil {
 		return nil, fmt.Errorf("update env: %w", err)
 	}
+	s.recordEnvDomainsChange(ctx, rev, project, service, envName, before, updated)
 	return updated, nil
 }
 
@@ -136,12 +140,15 @@ func (s *Service) RemoveEnvDomain(ctx context.Context, project, service, envName
 	if host == "" {
 		return nil, fmt.Errorf("%w: host required", ErrInvalid)
 	}
+	ctx, rev := s.beginRevision(ctx)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
 	envCRName := envCRNameFor(project, service, envName)
+	var before []string
 	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+		before = envHostsOf(env)
 		out := env.Spec.AdditionalHosts[:0]
 		for _, h := range env.Spec.AdditionalHosts {
 			if !strings.EqualFold(h, host) {
@@ -168,6 +175,7 @@ func (s *Service) RemoveEnvDomain(ctx context.Context, project, service, envName
 	if err != nil {
 		return nil, fmt.Errorf("update env: %w", err)
 	}
+	s.recordEnvDomainsChange(ctx, rev, project, service, envName, before, updated)
 	return updated, nil
 }
 
@@ -189,6 +197,7 @@ var secretNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 // Same cross-env conflict check as AddEnvDomain, applied to every
 // host in the new list.
 func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName string, hosts []string) (*kube.KusoEnvironment, error) {
+	ctx, rev := s.beginRevision(ctx)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -235,7 +244,9 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 		}
 	}
 
+	var before []string
 	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+		before = envHostsOf(env)
 		env.Spec.AdditionalHosts = clean
 		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, env.Spec.AdditionalHosts)
 		return nil
@@ -243,6 +254,7 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 	if err != nil {
 		return nil, fmt.Errorf("update env: %w", err)
 	}
+	s.recordEnvDomainsChange(ctx, rev, project, service, envName, before, updated)
 	return updated, nil
 }
 
@@ -270,6 +282,7 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		return nil, fmt.Errorf("%w: exactly one of value or secretRef must be set", ErrInvalid)
 	}
 
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -310,7 +323,7 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		}
 	}
 
-	return s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		// Record this name as a DELIBERATE per-env override so later
 		// service-level propagation preserves it instead of re-stamping
 		// the service value over it. This explicit marker is what lets
@@ -328,6 +341,11 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		env.Spec.EnvVars = append(env.Spec.EnvVars, next)
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	recordEnvOverrides(ctx, rev, project, service, envName, "env set "+name, updated)
+	return updated, nil
 }
 
 // UnsetEnvScopedVar removes a per-env override from one env CR. ErrNotFound
@@ -338,6 +356,7 @@ func (s *Service) UnsetEnvScopedVar(ctx context.Context, project, service, envNa
 	if name == "" {
 		return nil, fmt.Errorf("%w: env var name required", ErrInvalid)
 	}
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 	ns, err := s.namespaceFor(ctx, project)
@@ -372,7 +391,11 @@ func (s *Service) UnsetEnvScopedVar(ctx context.Context, project, service, envNa
 	if notFound {
 		return nil, fmt.Errorf("%w: env var %q", ErrNotFound, name)
 	}
-	return updated, err
+	if err != nil {
+		return updated, err
+	}
+	recordEnvOverrides(ctx, rev, project, service, envName, "env unset "+name, updated)
+	return updated, nil
 }
 
 // envCRNameFor returns the kube CR name for a (project, service, env)

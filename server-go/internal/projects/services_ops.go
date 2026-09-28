@@ -425,10 +425,14 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	}
 	sleep := &kube.KusoServiceSleep{Enabled: false, AfterMinutes: 30}
 	if req.Sleep != nil {
+		if err := validateSleepNonProduction(req.Sleep.NonProduction); err != nil {
+			return nil, err
+		}
 		sleep.Enabled = req.Sleep.Enabled
 		if req.Sleep.AfterMinutes > 0 {
 			sleep.AfterMinutes = req.Sleep.AfterMinutes
 		}
+		sleep.NonProduction = req.Sleep.NonProduction
 	}
 
 	// Cascade-delete the service CR when the project is deleted — but
@@ -488,6 +492,23 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		releaseSpec = &kube.KusoReleaseSpec{Command: req.Release.Command, TimeoutSeconds: timeout}
 	}
 	snapshotBeforeDeploy := req.SnapshotBeforeDeploy != nil && *req.SnapshotBeforeDeploy
+	// Without requests the scheduler packs pods blind and an idle app can
+	// grow unbounded, so a service created without resources gets the
+	// instance default pod size. A lookup failure must not block the
+	// create; the service just starts unsized, as before.
+	var resources map[string]any
+	if req.Resources != nil {
+		if len(*req.Resources) > 0 {
+			resources = *req.Resources
+		}
+	} else if s.DefaultPodResources != nil {
+		if def, err := s.DefaultPodResources(ctx); err == nil {
+			resources = def
+		} else {
+			slog.WarnContext(ctx, "add service: default pod size lookup failed; creating without resources",
+				"project", project, "service", req.Name, "err", err)
+		}
+	}
 	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
@@ -528,6 +549,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			BuildArgs:            req.BuildArgs,
 			PublicEnv:            req.PublicEnv,
 			SecurityContext:      req.SecurityContext,
+			Resources:            resources,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -862,6 +884,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if !envNameRE.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: env name must be lowercase letters/digits/dashes", ErrInvalid)
 	}
+	ctx, rev := s.beginRevision(ctx)
 
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
@@ -948,11 +971,11 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// s3) so staging/qa never touch production data — the same isolation PR
 	// previews already get. --share-addons opts out (keeps the shared project
 	// addons assembled above).
-	// droppedAddonConns + envCloneConns let the env-var rescope below
-	// rewrite explicit secretKeyRef entries (e.g. DATABASE_URL ->
-	// <project>-db-conn) onto this env's clone conns. Captured here so
-	// they're visible after the per-env-addon block.
-	var droppedAddonConns, envCloneConns []string
+	// envCloneByOrigin lets the env-var rescope below rewrite explicit
+	// secretKeyRef entries (e.g. DATABASE_URL -> <project>-db-conn) onto
+	// this env's clone conns. Captured here so it's visible after the
+	// per-env-addon block.
+	var envCloneByOrigin map[string]string
 	if !req.ShareAddons && s.EnvAddons != nil {
 		// Resolve the seed source's postgres conn-secret if --seed-from was given.
 		var seedAll bool
@@ -991,8 +1014,20 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = dropProjectAddonConns(envFromSecrets, projectAddons)
 		envFromSecrets = append(envFromSecrets, subscribedClones(clones, cloneByOrigin, svc.Spec.SubscribedAddons, project)...)
-		droppedAddonConns = projectAddons
-		envCloneConns = clones
+		// Rescope only refs to conns this env stopped mounting (the project
+		// addon conns dropped above), keyed by EnvAddons' authoritative
+		// source→clone pairing: a renamed or replaced source defeats
+		// deriving the clone from the name.
+		dropped := make(map[string]bool, len(projectAddons))
+		for _, c := range projectAddons {
+			dropped[c] = true
+		}
+		envCloneByOrigin = make(map[string]string, len(cloneByOrigin))
+		for src, clone := range cloneByOrigin {
+			if dropped[src] {
+				envCloneByOrigin[src] = clone
+			}
+		}
 	}
 
 	// Re-scope service-ref literals to THIS env before adopting them.
@@ -1009,7 +1044,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// wins over envFromSecrets on key collision, so without this a staging
 	// env's DATABASE_URL would still resolve to the PRODUCTION database even
 	// though envFromSecrets was correctly swapped above.
-	scopedSvcEnvVars = rescopeAddonConnRefs(scopedSvcEnvVars, droppedAddonConns, envCloneConns, req.Name)
+	scopedSvcEnvVars = rescopeAddonConnRefsByOrigin(scopedSvcEnvVars, envCloneByOrigin)
 	// Same treatment for inline envVars: expand the subscription into
 	// explicit valueFrom entries + drop shared-secret names from
 	// envFromSecrets so per-key gating actually works at create
@@ -1134,6 +1169,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if err != nil {
 		return nil, fmt.Errorf("create env: %w", err)
 	}
+	rev.record(ctx, project, "environment", envRevisionName(project, service, req.Name),
+		fmt.Sprintf("env %s: create (branch %s)", req.Name, req.Branch),
+		revisionSnapshot{Op: revOpEnvCreate, Informational: true, Service: shortServiceName(project, service), Env: req.Name, Branch: req.Branch})
 	return created, nil
 }
 
@@ -1224,6 +1262,7 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	if !serviceNameRE.MatchString(newName) {
 		return nil, fmt.Errorf("%w: new name must be lowercase letters/digits/dashes (≤32 chars)", ErrInvalid)
 	}
+	ctx, rev := s.beginRevision(ctx)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -1315,8 +1354,10 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 		// We've already created the new service + envs, so the
 		// rename is half-done. Surface this to the caller — they
 		// might need to delete the old one manually.
+		recordRename(ctx, rev, project, oldName, newName)
 		return created, fmt.Errorf("rename completed but old service teardown failed: %w", err)
 	}
+	recordRename(ctx, rev, project, oldName, newName)
 	return created, nil
 }
 
@@ -1603,6 +1644,7 @@ func (s *Service) SetEnvPending(ctx context.Context, project, service string, en
 // data. Every other delta op (AddDomain, SetEnvVar, PatchService)
 // holds this lock; this path was the outlier (B2 in followup).
 func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, envVars []EnvVar, opts SetEnvOpts) error {
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -1619,13 +1661,16 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	// concurrent spec edit on another pod isn't clobbered. Ownership-
 	// checked so a pre-qualified service name can't write onto a sibling
 	// project's CR (see updateOwnedServiceWithRetry).
+	var before []kube.KusoEnvVar
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+		before = svc.Spec.EnvVars
 		svc.Spec.EnvVars = convertEnvVars(rewritten)
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("update service env: %w", err)
 	}
+	recordServiceEnvVars(ctx, rev, project, service, envVarsSummary(before, updated.Spec.EnvVars), updated)
 	// Propagate to envs — the chart reads from the env CR, not the
 	// service CR (see propagateChangedToEnvs). Best-effort: a kube
 	// error here doesn't fail the user-facing save, but we log it
@@ -2202,6 +2247,20 @@ type PatchSleepRequest struct {
 	// When ExcludePaths is non-empty the deployment stays at min 1
 	// regardless of scale.Min. Send wakeOn:null to clear it.
 	WakeOn *PatchWakeOnRequest `json:"wakeOn,omitempty"`
+	// NonProduction: "" / "on" = non-production envs sleep when idle
+	// (the default); "off" = they never sleep. nil = leave alone.
+	NonProduction *string `json:"nonProduction,omitempty"`
+}
+
+// validateSleepNonProduction accepts the KusoServiceSleep.NonProduction
+// values: "" (default), "on", "off".
+func validateSleepNonProduction(v string) error {
+	switch v {
+	case "", "on", kube.SleepNonProductionOff:
+		return nil
+	default:
+		return fmt.Errorf("%w: sleep.nonProduction must be on or off (got %q)", ErrInvalid, v)
+	}
 }
 
 // PatchWakeOnRequest mirrors kube.KusoServiceWake on the wire.
@@ -2238,6 +2297,11 @@ func (s *Service) RevertService(ctx context.Context, project, service string, ra
 func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
 	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	if req.Sleep != nil && req.Sleep.NonProduction != nil {
+		if err := validateSleepNonProduction(*req.Sleep.NonProduction); err != nil {
+			return nil, err
+		}
 	}
 	// BuildArgs keys must be POSIX identifiers (they become KUSO_BA_<KEY>
 	// container vars + `--opt build-arg:KEY=` / `ENV KEY VALUE` at render).
@@ -2368,6 +2432,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			if req.Sleep.AfterMinutes != nil {
 				svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
+			}
+			if req.Sleep.NonProduction != nil {
+				svc.Spec.Sleep.NonProduction = *req.Sleep.NonProduction
 			}
 			if req.Sleep.WakeOn != nil {
 				if req.Sleep.WakeOn.Clear {

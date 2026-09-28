@@ -118,6 +118,9 @@ type CreateAddonRequest struct {
 	// can enumerate the clones it owns. Not exposed to the JSON API
 	// (the field is `-`); only internal callers populate it.
 	ExtraLabels map[string]string `json:"-"`
+	// ExtraAnnotations are stamped on the CR at creation. Internal only,
+	// like ExtraLabels: the env-addon cloner records a clone's source here.
+	ExtraAnnotations map[string]string `json:"-"`
 	// External, when set, switches the addon into connect-to-existing
 	// mode: no StatefulSet is provisioned; kuso mirrors the user-
 	// provided Secret as the addon's <name>-conn so envFromSecrets
@@ -462,6 +465,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fqn,
 			Labels:          labels,
+			Annotations:     req.ExtraAnnotations,
 			OwnerReferences: owners,
 		},
 		Spec: kube.KusoAddonSpec{
@@ -516,7 +520,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		if err != nil {
 			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 		}
-		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn)); err != nil {
+		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
 			return nil, fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
 		}
 	}
@@ -596,7 +600,7 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	if err != nil {
 		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 	}
-	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn)); err != nil {
+	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
 		return fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
 	}
 	return nil

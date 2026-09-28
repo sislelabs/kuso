@@ -524,12 +524,37 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.TriggeredBy = "api"
 	}
-	out, err := h.Svc.Create(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	out, err := h.Svc.CreateWithOutcome(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "create build", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toBuildSummary(*out))
+	status, body := createBuildResponse(out)
+	writeJSON(w, status, body)
+}
+
+// createBuildBody is the trigger response: the build plus whether it was
+// newly created. Existing=true means the trigger coalesced into an
+// in-flight build for the same service+branch — callers must not report
+// it as a fresh start.
+type createBuildBody struct {
+	buildSummary
+	Existing  bool   `json:"existing"`
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+func createBuildResponse(out builds.CreateOutcome) (int, createBuildBody) {
+	body := createBuildBody{Existing: out.Existing}
+	if out.Build != nil {
+		body.buildSummary = toBuildSummary(*out.Build)
+		if !out.Build.CreationTimestamp.IsZero() {
+			body.CreatedAt = out.Build.CreationTimestamp.UTC().Format(time.RFC3339)
+		}
+	}
+	if out.Existing {
+		return http.StatusOK, body
+	}
+	return http.StatusCreated, body
 }
 
 func (h *BuildsHandler) fail(w http.ResponseWriter, op string, err error) {

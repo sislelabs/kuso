@@ -237,6 +237,9 @@ type ScaleSpec struct {
 type SleepSpec struct {
 	Enabled      bool `yaml:"enabled,omitempty"`
 	AfterMinutes int  `yaml:"afterMinutes,omitempty"`
+	// NonProduction: "" / "on" = non-production envs sleep when idle
+	// (the default); "off" = they never sleep.
+	NonProduction string `yaml:"nonProduction,omitempty"`
 }
 
 // SecuritySpec is the kuso.yaml form of an opt-in container security

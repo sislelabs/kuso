@@ -37,6 +37,9 @@ type Service struct {
 	// tests; the deterministic project-shared / instance-shared names
 	// still validate without it, and a foreign `-conn` name is rejected.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
+	// RecordRevision, when set, is called after every successful cron
+	// mutation. Same sink as projects/addons; nil disables history.
+	RecordRevision func(ctx context.Context, project, kind, name, summary string, snapshot []byte)
 }
 
 func New(k *kube.Client, namespace string) *Service {
@@ -437,6 +440,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	if err != nil {
 		return nil, fmt.Errorf("create cron: %w", err)
 	}
+	s.recordRevision(ctx, project, fqn, "cron.create", "cron create ("+req.Schedule+")", nil, created)
 	return created, nil
 }
 
@@ -525,6 +529,7 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 	if err != nil {
 		return nil, fmt.Errorf("create project cron: %w", err)
 	}
+	s.recordRevision(ctx, project, fqn, "cron.create", "cron create ("+req.Kind+", "+req.Schedule+")", nil, created)
 	return created, nil
 }
 
@@ -581,6 +586,8 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		}
 		return nil, fmt.Errorf("update cron: %w", err)
 	}
+	fields := req.changedFields()
+	s.recordRevision(ctx, project, fqn, "cron.update", updateSummary(fields), fields, updated)
 	return updated, nil
 }
 
@@ -650,6 +657,7 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		}
 		return nil, fmt.Errorf("sync cron: %w", uerr)
 	}
+	s.recordRevision(ctx, project, fqn, "cron.sync", "cron sync image from service", []string{"image"}, updated)
 	return updated, nil
 }
 
@@ -669,6 +677,7 @@ func (s *Service) Delete(ctx context.Context, project, service, name string) err
 		}
 		return fmt.Errorf("delete cron: %w", err)
 	}
+	s.recordRevision(ctx, project, fqn, "cron.delete", "cron delete", nil, nil)
 	return nil
 }
 
@@ -818,6 +827,8 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		}
 		return nil, fmt.Errorf("update project cron: %w", err)
 	}
+	fields := req.changedFields()
+	s.recordRevision(ctx, project, fqn, "cron.update", updateSummary(fields), fields, updated)
 	return updated, nil
 }
 
@@ -838,5 +849,6 @@ func (s *Service) DeleteProject(ctx context.Context, project, name string) error
 		}
 		return fmt.Errorf("delete project cron: %w", err)
 	}
+	s.recordRevision(ctx, project, fqn, "cron.delete", "cron delete", nil, nil)
 	return nil
 }

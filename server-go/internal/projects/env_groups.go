@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -85,6 +86,14 @@ type EnvGroupSummary struct {
 	Addons      []string               `json:"addons"`
 	AddonPolicy map[string]AddonPolicy `json:"addonPolicy,omitempty"`
 	CreatedAt   string                 `json:"createdAt,omitempty"`
+	// RewrittenEnvVars ("<clone-svc>: KEY") lists literals CreateEnvGroup
+	// retargeted from a sibling's production URL to its clone in the group.
+	// Only set on create.
+	RewrittenEnvVars []string `json:"rewrittenEnvVars,omitempty"`
+	// Warnings lists literals that still name a host under the project's
+	// domain that isn't any service's production host, so they couldn't be
+	// mapped and may still reach production. Only set on create.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // labelEnv constant lives in projects.go (kuso.sislelabs.com/env).
@@ -531,20 +540,27 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	for _, item := range ordered {
 		siblingRename[item.short] = item.short + "-" + req.Name
 	}
-	// Prod-host → new-host map. Each clone sibling gets a host from
-	// buildEnvHost; the rewriter substitutes the prod host in any
-	// literal env-var value with this new host so e.g.
-	// API_BASE=https://kuso-demo-todo-api.hui.sislelabs.com becomes
-	// API_BASE=https://kuso-demo-todo-api-test.hui.sislelabs.com.
-	prodHosts := map[string]string{}
-	for _, item := range ordered {
-		// Production env CR name is "<svc-fqn>-production" (see
-		// projects.productionEnvName).
-		prodEnvCRName := fmt.Sprintf("%s-production", item.fqn)
-		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, prodEnvCRName); perr == nil && prodEnv != nil && prodEnv.Spec.Host != "" {
-			newHost := buildEnvHost(proj.Spec.BaseDomain, project, item.short, req.Name)
-			prodHosts[prodEnv.Spec.Host] = newHost
+	// Prod-host → clone-host map, exact hosts only. A sibling's production
+	// URL (auto host, extra hosts, custom domains) in a literal is retargeted
+	// at that sibling's clone host so e.g. web-qa's API_BASE stops pointing
+	// at production api. Custom domains map to the clone's auto host too:
+	// clones never inherit custom domains.
+	prodHosts, cloneHosts := s.envGroupHostMap(ctx, ns, project, proj.Spec.BaseDomain, req.Name, ordered)
+	domainSuffix := projectDomainSuffix(project, proj.Spec.BaseDomain)
+	var rewrittenKeys, hostWarnings []string
+	// literalNotes reports a literal's rewrite and any project-domain host
+	// left in it that maps to no clone. Warnings name the host, never the
+	// value: managed-secret values are copied through here too.
+	literalNotes := func(svcShort, key, before, after string) (rewritten, warnings []string) {
+		if after != before {
+			rewritten = append(rewritten, svcShort+": "+key)
 		}
+		for _, h := range unmappedProjectHosts(after, domainSuffix, cloneHosts) {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s: %s still points at %s, which is under the project domain but isn't a production host of any service in this project; check it doesn't reach production",
+				svcShort, key, h))
+		}
+		return rewritten, warnings
 	}
 
 	for idx, item := range ordered {
@@ -567,6 +583,12 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			prodHosts,
 			req.Name,
 		)
+		for i, src := range item.svc.Spec.EnvVars {
+			if src.ValueFrom == nil {
+				rw, warn := literalNotes(newSvcShort, src.Name, src.Value, newEnvVars[i].Value)
+				rewrittenKeys, hostWarnings = append(rewrittenKeys, rw...), append(hostWarnings, warn...)
+			}
+		}
 
 		// Addon + shared-secret mounts for THIS service, gated by the source
 		// service's subscriptions exactly like AddEnvironment (nil = legacy
@@ -626,7 +648,22 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// Copying gives staging its own isolated config under the
 		// label-consistent name. Best-effort: a missing source secret just
 		// means there's nothing to copy (service had no managed secrets).
-		if err := s.copyManagedServiceSecret(ctx, ns, item.short, newSvcShort, project, req.Name); err != nil {
+		var secretRewrites, secretWarnings []string
+		rewriteSecretValue := func(key string, val []byte) []byte {
+			if !utf8.Valid(val) {
+				return val
+			}
+			out, _ := rewriteProdHosts(string(val), prodHosts)
+			rw, warn := literalNotes(newSvcShort, key, string(val), out)
+			secretRewrites, secretWarnings = append(secretRewrites, rw...), append(secretWarnings, warn...)
+			return []byte(out)
+		}
+		created, err := s.copyManagedServiceSecret(ctx, ns, item.short, newSvcShort, project, req.Name, rewriteSecretValue)
+		if created {
+			rewrittenKeys = append(rewrittenKeys, secretRewrites...)
+			hostWarnings = append(hostWarnings, secretWarnings...)
+		}
+		if err != nil {
 			return nil, failCreate(fmt.Errorf("copy managed secret for %s: %w", item.short, err))
 		}
 		createdServices = append(createdServices, newSvcCR)
@@ -816,6 +853,9 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		Addons:      freshAddonShorts(freshAddonRename),
 		AddonPolicy: policy,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+
+		RewrittenEnvVars: rewrittenKeys,
+		Warnings:         hostWarnings,
 	}, nil
 }
 
@@ -948,6 +988,7 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 	if branch == "" {
 		return fmt.Errorf("%w: branch required", ErrInvalid)
 	}
+	ctx, rev := s.beginRevision(ctx)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
@@ -971,12 +1012,41 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 		envCRName = envs[i].Name
 		break
 	}
+	return s.setEnvBranch(ctx, rev, ns, project, envCRName, branch)
+}
+
+// setEnvBranch patches one env CR's spec.branch and records the change.
+// The snapshot names the env by (service, env) so envRevisionName maps it
+// back to the CR; a CR whose name doesn't follow "<service>-<env>" gets an
+// informational record instead of one a revert would misroute.
+func (s *Service) setEnvBranch(ctx context.Context, rev *revisionScope, ns, project, crName, branch string) error {
+	cur, err := s.Kube.GetKusoEnvironment(ctx, ns, crName)
+	if err != nil {
+		return fmt.Errorf("get env: %w", err)
+	}
+	group := cur.Labels[labelEnv]
+	if group == "production" {
+		return fmt.Errorf("%w: production branches are set via service settings, not env-scoped", ErrInvalid)
+	}
 	patch := fmt.Sprintf(`{"spec":{"branch":%q}}`, branch)
 	_, err = s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		Patch(ctx, envCRName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+		Patch(ctx, crName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch env branch: %w", err)
 	}
+	old := cur.Spec.Branch
+	if old == branch {
+		return nil
+	}
+	snap := revisionSnapshot{Op: revOpEnvBranch, Branch: branch}
+	if svcPrefix := cur.Spec.Service + "-"; cur.Spec.Service != "" && strings.HasPrefix(crName, svcPrefix) {
+		snap.Service = strings.TrimPrefix(cur.Spec.Service, project+"-")
+		snap.Env = strings.TrimPrefix(crName, svcPrefix)
+	} else {
+		snap.Informational = true
+	}
+	rev.record(ctx, project, "environment", strings.TrimPrefix(crName, project+"-"),
+		fmt.Sprintf("env %s: branch %s → %s", group, old, branch), snap)
 	return nil
 }
 
@@ -1066,18 +1136,11 @@ func rewriteEnvVarsForGroup(
 			newVal = strings.ReplaceAll(newVal,
 				oldFQN+"-production.", newFQN+"-production.")
 		}
-		// Public-host replace. prodHosts is "host.com" → "service-fqn".
-		// For every prod host whose service is in siblingRename, the
-		// new env's host comes from buildEnvHost — but to keep this
-		// rewriter side-effect-free we let the caller compute the new
-		// host map and pass it in via prodHosts (key=old host,
-		// value=new host).
-		for oldHost, newHost := range prodHosts {
-			if oldHost == "" || newHost == "" || oldHost == newHost {
-				continue
-			}
-			newVal = strings.ReplaceAll(newVal, oldHost, newHost)
-		}
+		// Public-host replace: prodHosts maps a sibling's production host
+		// to its clone host. Exact host tokens only — a substring replace
+		// let a service whose host IS the base domain rewrite every other
+		// host under it.
+		newVal, _ = rewriteProdHosts(newVal, prodHosts)
 		_ = envSuffix // reserved for future name-only forms
 		if newVal != v.Value {
 			out[i].Value = newVal
@@ -1271,24 +1334,35 @@ func freshAddonShorts(m map[string]string) []string {
 // values are copied verbatim, which is the intended clone behavior).
 // Best-effort on a MISSING source (service had no managed secret) — that
 // is not an error; there is simply nothing to copy. Idempotent: if the
-// destination already exists (re-run), it is left as-is.
-func (s *Service) copyManagedServiceSecret(ctx context.Context, ns, srcShort, dstShort, project, envName string) error {
+// destination already exists (re-run), it is left as-is. transform, when
+// set, rewrites each value (called in key order); created reports whether
+// the destination was written, i.e. whether those rewrites took effect.
+func (s *Service) copyManagedServiceSecret(ctx context.Context, ns, srcShort, dstShort, project, envName string, transform func(key string, val []byte) []byte) (created bool, err error) {
 	if s.Kube == nil || s.Kube.Clientset == nil {
-		return nil // no core client wired (test fixtures) — nothing to copy
+		return false, nil // no core client wired (test fixtures) — nothing to copy
 	}
 	srcName := kube.ServiceSecretName(project, srcShort)
 	dstName := kube.ServiceSecretName(project, dstShort)
 
 	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, srcName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil // nothing to copy
+		return false, nil // nothing to copy
 	}
 	if err != nil {
-		return fmt.Errorf("read source secret %s: %w", srcName, err)
+		return false, fmt.Errorf("read source secret %s: %w", srcName, err)
 	}
 
 	data := make(map[string][]byte, len(src.Data))
-	for k, v := range src.Data {
+	keys := make([]string, 0, len(src.Data))
+	for k := range src.Data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := src.Data[k]
+		if transform != nil {
+			v = transform(k, v)
+		}
 		data[k] = v
 	}
 	dst := &corev1.Secret{
@@ -1307,10 +1381,96 @@ func (s *Service) copyManagedServiceSecret(ctx context.Context, ns, srcShort, ds
 	}
 	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, dst, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
-		return nil // idempotent re-run
+		return false, nil // idempotent re-run
 	}
 	if err != nil {
-		return fmt.Errorf("create clone secret %s: %w", dstName, err)
+		return false, fmt.Errorf("create clone secret %s: %w", dstName, err)
 	}
-	return nil
+	return true, nil
+}
+
+// envGroupHostMap maps every public host a cloned service answers on in
+// production (env host, extra hosts, custom domains) to that service's host
+// in the new group. Keys and values are lowercase. cloneHosts is the set of
+// the map's values, for telling a mapped literal from an unmapped one.
+func (s *Service) envGroupHostMap(ctx context.Context, ns, project, baseDomain, group string, ordered []envGroupSvc) (prodToClone map[string]string, cloneHosts map[string]bool) {
+	prodToClone = map[string]string{}
+	cloneHosts = map[string]bool{}
+	for _, item := range ordered {
+		newHost := strings.ToLower(buildEnvHost(baseDomain, project, item.short, group))
+		cloneHosts[newHost] = true
+		var hosts []string
+		prodEnv, err := s.Kube.GetKusoEnvironment(ctx, ns, productionEnvName(project, item.short))
+		if err == nil && prodEnv != nil && prodEnv.Spec.Host != "" {
+			hosts = append(hosts, prodEnv.Spec.Host)
+			hosts = append(hosts, prodEnv.Spec.AdditionalHosts...)
+		} else {
+			hosts = append(hosts, defaultHost(item.short, project, baseDomain))
+		}
+		for _, d := range item.svc.Spec.Domains {
+			hosts = append(hosts, d.Host)
+		}
+		for _, h := range hosts {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h == "" || strings.Contains(h, "*") {
+				continue
+			}
+			if _, taken := prodToClone[h]; !taken {
+				prodToClone[h] = newHost
+			}
+		}
+	}
+	return prodToClone, cloneHosts
+}
+
+// projectDomainSuffix is the domain every auto-generated host of the
+// project sits under (see defaultHost).
+func projectDomainSuffix(project, baseDomain string) string {
+	if baseDomain != "" {
+		return strings.ToLower(baseDomain)
+	}
+	return strings.ToLower(project + "." + config.DefaultBaseDomain())
+}
+
+// hostTokenRE matches a maximal dotted hostname run. Taking the whole run
+// is what makes matching exact: "my-api.x.com" and "api.x.com.evil.io" are
+// single tokens that never equal "api.x.com".
+var hostTokenRE = regexp.MustCompile(`[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+`)
+
+// rewriteProdHosts replaces every hostname in val that exactly equals
+// (case-insensitively) a key of hosts with its value, leaving scheme, port,
+// path and everything else untouched.
+func rewriteProdHosts(val string, hosts map[string]string) (string, bool) {
+	if len(hosts) == 0 || val == "" {
+		return val, false
+	}
+	changed := false
+	out := hostTokenRE.ReplaceAllStringFunc(val, func(tok string) string {
+		if nh, ok := hosts[strings.ToLower(tok)]; ok && nh != "" {
+			changed = true
+			return nh
+		}
+		return tok
+	})
+	return out, changed
+}
+
+// unmappedProjectHosts returns the hosts in val under domainSuffix that are
+// not in known (the group's clone hosts), deduped in order of appearance.
+func unmappedProjectHosts(val, domainSuffix string, known map[string]bool) []string {
+	if val == "" || domainSuffix == "" {
+		return nil
+	}
+	var out []string
+	for _, tok := range hostTokenRE.FindAllString(val, -1) {
+		h := strings.ToLower(tok)
+		if h != domainSuffix && !strings.HasSuffix(h, "."+domainSuffix) {
+			continue
+		}
+		if known[h] || slices.Contains(out, h) {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
 }

@@ -199,6 +199,8 @@ type PatchServiceRequest struct {
 	Scale             *PatchScaleRequest           `json:"scale,omitempty"`
 	Repo              *PatchRepoRequest            `json:"repo,omitempty"`
 	SecurityContext   *PatchSecurityContextRequest `json:"securityContext,omitempty"`
+	// Resources replaces spec.resources verbatim; an empty map clears it.
+	Resources *map[string]any `json:"resources,omitempty"`
 }
 
 // PatchSecurityContextRequest mirrors the server's kube.KusoSecurityContext.
@@ -505,8 +507,8 @@ func (k *KusoClient) GetRevision(project, id string) (*resty.Response, error) {
 }
 
 // RevertRevision replays a stored snapshot through the matching
-// update endpoint. Currently only kind=service is supported by the
-// server; addon/env revert returns 501.
+// update path (service, environment, addon). Informational revisions
+// (secret writes, env creation, renames, crons) return 422.
 func (k *KusoClient) RevertRevision(project, id string) (*resty.Response, error) {
 	return k.client.Post("/api/projects/" + esc(project) + "/revisions/" + esc(id) + "/revert")
 }

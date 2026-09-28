@@ -33,6 +33,8 @@ func TestDeleteProject_KeepsHelmOwnedConnSecrets(t *testing.T) {
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 

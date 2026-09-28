@@ -20,6 +20,10 @@
             },
             "type": "array"
           },
+          "autoSleep": {
+            "description": "Server-managed by the scaledown watcher. True on a non-production env that sleeps by default; routes the Ingress through kuso-activator like sleep.enabled.",
+            "type": "boolean"
+          },
           "autoscaling": {
             "properties": {
               "enabled": {

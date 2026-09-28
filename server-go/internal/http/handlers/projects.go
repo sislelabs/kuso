@@ -138,6 +138,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		}
 		out.SecurityContext = sc
 	}
+	out.Resources = in.Resources
 	return out
 }
 

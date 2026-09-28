@@ -10,6 +10,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -118,6 +119,7 @@ func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string,
 	if keys == nil {
 		keys = []string{}
 	}
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -145,13 +147,19 @@ func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string,
 	// RMW under optimistic concurrency (WithRetry) — the in-process
 	// service lock doesn't span replicas, so fetch-mutate-update so a
 	// concurrent spec edit on another pod isn't clobbered.
+	var before []string
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+		before = svc.Spec.SharedEnvKeys
 		svc.Spec.SharedEnvKeys = clean
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service sharedEnvKeys: %w", err)
 	}
+	added, removed := stringsDiff(before, clean)
+	rev.record(ctx, project, "service", shortServiceName(project, service),
+		joinSummary("env share", added, "env unshare", removed),
+		revisionSnapshot{Op: revOpSharedEnvKeys, SharedEnvKeys: &clean})
 	// Propagate to envs — sharedEnvKeys flows through the EnvVars
 	// branch of propagateChangedToEnvs (which we extended to resolve
 	// subscribed keys to valueFrom entries).
@@ -204,4 +212,36 @@ func (s *Service) DropSharedKeyFromServices(ctx context.Context, project, key st
 		touched++
 	}
 	return touched, nil
+}
+
+// ResyncSharedKeySubscribers re-propagates the envs of every service that
+// subscribes to key by name. Called after the key is written to the shared
+// Secret: a service that subscribed before the key existed had it dropped
+// as unresolvable, so its envs carry no secretKeyRef and no restart would
+// deliver the value. Propagation re-resolves the subscription, adds the ref
+// and so rolls the pod. Returns the number of services re-propagated.
+func (s *Service) ResyncSharedKeySubscribers(ctx context.Context, project, key string) (int, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return 0, err
+	}
+	services, err := s.ListServices(ctx, project)
+	if err != nil {
+		return 0, fmt.Errorf("list services: %w", err)
+	}
+	touched := 0
+	var errs []error
+	for i := range services {
+		svc := &services[i]
+		if !slices.Contains(svc.Spec.SharedEnvKeys, key) {
+			continue
+		}
+		short := strings.TrimPrefix(svc.Name, project+"-")
+		if err := s.propagateChangedToEnvs(ctx, ns, project, short, svc, changedFields{EnvVars: true}); err != nil {
+			errs = append(errs, fmt.Errorf("propagate %s: %w", short, err))
+			continue
+		}
+		touched++
+	}
+	return touched, errors.Join(errs...)
 }

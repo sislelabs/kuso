@@ -2,9 +2,8 @@
 // status poller that watches the rendered Job (via batch/v1) and
 // promotes the image tag onto the production env on success.
 //
-// Phase 5 ships build creation that accepts an explicit ref or a public-
-// repo branch (synthetic ref). Branch → SHA resolution via the GitHub
-// App lands in Phase 6 once the github package is wired.
+// Create accepts an explicit ref, or a branch whose HEAD is resolved via
+// the GitHub App (synthetic "<branch>-<ms>" ref when that isn't possible).
 //
 // FUTURE: this package + the helm-operator-driven Job rendering for
 // KusoBuild are the most likely subsystem to move to a Go controller
@@ -82,6 +81,13 @@ type InstallationResolver interface {
 	ResolveInstallationForRepo(ctx context.Context, owner, repo string) (int64, error)
 }
 
+// BranchSHAResolver resolves a branch to its HEAD commit via the GitHub
+// App. Discovered by type-asserting RepoAccess / Tokens (the
+// github.Client implements all three), so no extra wiring is needed.
+type BranchSHAResolver interface {
+	ResolveBranchSHA(ctx context.Context, installationID int64, owner, repo, branch string) (string, error)
+}
+
 // RepoAccessChecker preflights "can the GitHub App actually read this
 // repo?" against the live API. Used to fail-fast before spinning up
 // kaniko — without it, an unreachable repo costs the user a 30-60s
@@ -146,6 +152,11 @@ const (
 	annTriggerSource = "kuso.sislelabs.com/build-triggered-by"
 	annTriggerUser   = "kuso.sislelabs.com/build-triggered-by-user"
 	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
+	// annRefFromBranch marks a build whose ref was resolved from the
+	// branch HEAD at trigger time (no explicit ref). Such builds used to
+	// carry synthetic refs and keep that behaviour where the ref shape
+	// mattered — see isBranchHeadBuild.
+	annRefFromBranch = "kuso.sislelabs.com/ref-from-branch"
 )
 
 // LabelBuildState is the terminal-state marker label on a KusoBuild CR.
@@ -665,35 +676,100 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 	return out, nil
 }
 
-// Create persists a new KusoBuild. Phase 5 limits:
+// branchResolver finds the optional BranchSHAResolver on the wired
+// GitHub collaborators.
+func (s *Service) branchResolver() BranchSHAResolver {
+	if r, ok := s.RepoAccess.(BranchSHAResolver); ok {
+		return r
+	}
+	if r, ok := s.Tokens.(BranchSHAResolver); ok {
+		return r
+	}
+	return nil
+}
+
+// resolveBranchHead returns the HEAD SHA of branch, or "" when it can't
+// be resolved (the caller then synthesizes a ref). Every "" is logged
+// with its reason — a synthetic ref silently hides which commit shipped.
+func (s *Service) resolveBranchHead(ctx context.Context, installationID int64, repoURL, branch, project, service string) string {
+	log := slog.Default().With("project", project, "service", service, "branch", branch, "repo", repoURL)
+	owner, repo := splitGithubURL(repoURL)
+	if owner == "" {
+		log.Info("build: non-github repo, using synthetic ref")
+		return ""
+	}
+	if installationID == 0 {
+		log.Info("build: no GitHub App installation can access repo, using synthetic ref")
+		return ""
+	}
+	r := s.branchResolver()
+	if r == nil {
+		log.Warn("build: no GitHub client wired for branch resolution, using synthetic ref")
+		return ""
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	sha, err := r.ResolveBranchSHA(rctx, installationID, owner, repo, branch)
+	if err != nil {
+		log.Warn("build: branch HEAD resolution failed, using synthetic ref", "installation", installationID, "err", err)
+		return ""
+	}
+	if !shaRE.MatchString(sha) {
+		log.Warn("build: branch HEAD resolution returned no SHA, using synthetic ref", "installation", installationID, "got", sha)
+		return ""
+	}
+	return sha
+}
+
+// CreateOutcome is Create's result with the coalescing verdict exposed:
+// Existing=true means no new build was made — an in-flight build for the
+// same service+branch was returned instead.
+type CreateOutcome struct {
+	Build    *kube.KusoBuild
+	Existing bool
+}
+
+// Create persists a new KusoBuild (or returns a coalesced in-flight one;
+// use CreateWithOutcome to tell which).
 //   - explicit `ref` (40-char SHA) → image tag = first 12 chars
 //   - explicit `ref` (anything else) → image tag = ref verbatim
-//   - empty ref + branch + no GitHub installation → synthetic
-//     "<branch>-<unix-millis>" tag (kaniko clones HEAD of the branch)
-//   - branch → SHA via GitHub App is Phase 6
+//   - empty ref → branch HEAD resolved via the GitHub App when an
+//     installation can read the repo; otherwise a synthetic
+//     "<branch>-<unix-millis>" ref (kaniko clones HEAD of the branch)
 //
 // The KusoBuild CR carries the resolved image repository + tag. The
 // operator's helm-charts/kusobuild chart renders the kaniko Job; the
 // poller picks up its outcome.
-func (s *Service) Create(ctx context.Context, project, service string, req CreateBuildRequest) (_ *kube.KusoBuild, err error) {
+func (s *Service) Create(ctx context.Context, project, service string, req CreateBuildRequest) (*kube.KusoBuild, error) {
+	out, err := s.CreateWithOutcome(ctx, project, service, req)
+	return out.Build, err
+}
+
+// CreateWithOutcome is Create plus whether the build was newly created.
+func (s *Service) CreateWithOutcome(ctx context.Context, project, service string, req CreateBuildRequest) (_ CreateOutcome, err error) {
 	start := time.Now()
 	defer func() { metrics.ObserveBuildCreate(start, err) }()
+	b, existing, err := s.create(ctx, project, service, req)
+	return CreateOutcome{Build: b, Existing: existing}, err
+}
+
+func (s *Service) create(ctx context.Context, project, service string, req CreateBuildRequest) (_ *kube.KusoBuild, _ bool, err error) {
 	fqn := project + "-" + service
 	ns := s.nsFor(ctx, project)
 	svcCR, err := s.Kube.GetKusoService(ctx, ns, fqn)
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+		return nil, false, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("preflight service: %w", err)
+		return nil, false, fmt.Errorf("preflight service: %w", err)
 	}
 	// KusoProject CR always lives in the home namespace.
 	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("%w: project %s", ErrNotFound, project)
+		return nil, false, fmt.Errorf("%w: project %s", ErrNotFound, project)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("preflight project: %w", err)
+		return nil, false, fmt.Errorf("preflight project: %w", err)
 	}
 
 	// runtime=image services don't go through kaniko at all — the
@@ -703,14 +779,14 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// keeps the build pipeline honest: KusoBuild CRs only exist for
 	// services that actually build.
 	if svcCR.Spec.Runtime == "image" {
-		return nil, fmt.Errorf("%w: runtime=image services don't build — change image.tag and save the service spec to redeploy", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: runtime=image services don't build — change image.tag and save the service spec to redeploy", ErrInvalid)
 	}
 	// A runtime=worker service with FromService set reuses a sibling
 	// service's image — it has nothing of its own to build. Refusing
 	// here (same as runtime=image) keeps KusoBuild CRs only for
 	// services that genuinely produce an image.
 	if svcCR.Spec.Runtime == "worker" && svcCR.Spec.FromService != "" {
-		return nil, fmt.Errorf("%w: worker %q reuses %q's image — trigger a build on %q instead", ErrInvalid, service, svcCR.Spec.FromService, svcCR.Spec.FromService)
+		return nil, false, fmt.Errorf("%w: worker %q reuses %q's image — trigger a build on %q instead", ErrInvalid, service, svcCR.Spec.FromService, svcCR.Spec.FromService)
 	}
 
 	repoURL := ""
@@ -725,7 +801,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		repoURL = proj.Spec.DefaultRepo.URL
 	}
 	if repoURL == "" {
-		return nil, fmt.Errorf("%w: service has no repo URL configured", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: service has no repo URL configured", ErrInvalid)
 	}
 	// SECURITY: repoURL and branch are interpolated into the clone
 	// init-container's /bin/sh script (buildcontroller/render.go). That
@@ -737,7 +813,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// stated contract real, so a future edit to the quoting (or a new
 	// interpolation site) isn't a single point of failure.
 	if err := ValidateRepoURL(repoURL); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+		return nil, false, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
 
 	branch := req.Branch
@@ -749,16 +825,39 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		}
 	}
 	if err := ValidateGitRef(branch); err != nil {
-		return nil, fmt.Errorf("%w: branch: %s", ErrInvalid, err.Error())
+		return nil, false, fmt.Errorf("%w: branch: %s", ErrInvalid, err.Error())
+	}
+
+	installationID := githubInstallationID(proj, svcCR)
+	// A GitHub App installation only applies to github.com repos. Any other
+	// host must never see a GitHub token (git sends it after a 401).
+	if owner, _ := splitGithubURL(repoURL); owner == "" {
+		installationID = 0
+	}
+	// Auto-resolve from the GH-app cache when the user didn't pin
+	// one. Catches the common "I installed the App on my org but
+	// forgot to plumb the installation ID into the project" case —
+	// the cache already has the installation→repo map from the
+	// install-callback flow, so we can look it up without a network
+	// round-trip. Best-effort: a resolver miss falls through to the
+	// existing unauth-clone path.
+	if installationID == 0 && s.InstallResolver != nil {
+		if owner, repoName := splitGithubURL(repoURL); owner != "" {
+			if id, err := s.InstallResolver.ResolveInstallationForRepo(ctx, owner, repoName); err == nil && id > 0 {
+				installationID = id
+			}
+		}
 	}
 
 	sha := req.Ref
+	// manual = no explicit ref (CLI/UI trigger, system redeploy). The
+	// webhook path always carries the pushed SHA.
+	manual := req.Ref == ""
+	if manual {
+		sha = s.resolveBranchHead(ctx, installationID, repoURL, branch, project, service)
+	}
 	syntheticRef := !shaRE.MatchString(sha)
 	if syntheticRef {
-		// Phase 5 cannot resolve branch → SHA via GitHub yet. Synthesize
-		// a unique-ish ref. Phase 6 will replace this branch with the
-		// real github resolve.
-		//
 		// Slugify the branch first: it flows straight into spec.Ref, the
 		// image tag (ImageTag), and the kuso.sislelabs.com/build-ref Job
 		// label. A branch like "deploy/kuso" carries a '/', which is
@@ -776,8 +875,9 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// fail on the second one with "secret already exists" or worse, both
 	// would race to push the same image tag. We only dedup on real SHAs;
 	// synthetic refs already carry a unix-ms suffix so they're already
-	// unique-by-construction.
-	if !syntheticRef {
+	// unique-by-construction. Manual triggers skip it too: they get a
+	// unique CR name below and coalesce under the service lock instead.
+	if !syntheticRef && !manual {
 		key := inFlightKey(project, service, sha)
 		entry := &inFlightEntry{done: make(chan struct{})}
 		if existing, loaded := s.inFlight.LoadOrStore(key, entry); loaded {
@@ -789,9 +889,9 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			select {
 			case <-prev.done:
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, false, ctx.Err()
 			}
-			return nil, fmt.Errorf("%w: build for %s/%s@%s already in flight",
+			return nil, false, fmt.Errorf("%w: build for %s/%s@%s already in flight",
 				ErrConflict, project, service, shortRef(sha))
 		}
 		defer func() {
@@ -808,11 +908,17 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// CR creation so the operator's helm render is bounded too).
 	release, capHit, err := s.admitBuild(ctx, project)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer release()
 
 	buildName := buildCRName(project, service, sha)
+	if manual && !syntheticRef {
+		// A resolved HEAD is usually already built (redeploying an
+		// unchanged branch), and that build owns the SHA-keyed name.
+		// Suffix like a synthetic ref so the manual build gets its own CR.
+		buildName = buildCRName(project, service, sha[:12]+"-"+strconv.FormatInt(time.Now().UnixMilli(), 36))
+	}
 
 	// Per-service serialization. Without this, two simultaneous Create
 	// calls (different SHAs) both pass findActiveForService with no
@@ -839,9 +945,14 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// inFlight map above. The 30s window is roughly "two redeploy
 	// clicks within human reaction time"; longer windows risk
 	// coalescing genuinely-distinct intents.
-	if syntheticRef && req.Ref == "" {
+	// A resolved HEAD only coalesces into a build of that same commit
+	// (or a synthetic one, whose commit is unknown); an in-flight build
+	// of an older commit is a different intent.
+	if manual {
 		if existing, err := s.findRecentForBranch(ctx, ns, project, fqn, branch, 30*time.Second); err == nil && existing != nil {
-			return existing, nil
+			if syntheticRef || !shaRE.MatchString(existing.Spec.Ref) || existing.Spec.Ref == sha {
+				return existing, true, nil
+			}
 		}
 	}
 
@@ -882,27 +993,6 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		strategy = "dockerfile"
 	}
 
-	installationID := githubInstallationID(proj, svcCR)
-	// A GitHub App installation only applies to github.com repos. Any other
-	// host must never see a GitHub token (git sends it after a 401).
-	if owner, _ := splitGithubURL(repoURL); owner == "" {
-		installationID = 0
-	}
-	// Auto-resolve from the GH-app cache when the user didn't pin
-	// one. Catches the common "I installed the App on my org but
-	// forgot to plumb the installation ID into the project" case —
-	// the cache already has the installation→repo map from the
-	// install-callback flow, so we can look it up without a network
-	// round-trip. Best-effort: a resolver miss falls through to the
-	// existing unauth-clone path.
-	if installationID == 0 && s.InstallResolver != nil {
-		if owner, repoName := splitGithubURL(repoURL); owner != "" {
-			if id, err := s.InstallResolver.ResolveInstallationForRepo(ctx, owner, repoName); err == nil && id > 0 {
-				installationID = id
-			}
-		}
-	}
-
 	// Preflight: when we have a github URL + an installation, verify
 	// the App can actually see the repo. Costs one HTTP round-trip
 	// (~150ms); saves the user a 30-60s "kaniko spins, fails to
@@ -913,7 +1003,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if installationID > 0 && s.RepoAccess != nil {
 		if owner, repoName := splitGithubURL(repoURL); owner != "" {
 			if err := s.RepoAccess.CheckRepoAccess(ctx, installationID, owner, repoName); err != nil {
-				return nil, fmt.Errorf("%w: github preflight failed for %s/%s: %v — install the kuso GitHub App on this repo's owner OR change the repo URL", ErrInvalid, owner, repoName, err)
+				return nil, false, fmt.Errorf("%w: github preflight failed for %s/%s: %v — install the kuso GitHub App on this repo's owner OR change the repo URL", ErrInvalid, owner, repoName, err)
 			}
 		}
 	}
@@ -925,7 +1015,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// helm render finds it the moment the Job pod schedules.
 	tokenOwner, tokenRepo := splitGithubURL(repoURL)
 	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID, tokenOwner, tokenRepo, svcCR.Spec.Repo); err != nil {
-		return nil, fmt.Errorf("clone token secret: %w", err)
+		return nil, false, fmt.Errorf("clone token secret: %w", err)
 	}
 	// Ensure the per-service build cache PVC exists. Kept best-effort:
 	// the kusobuild chart's cache mount is gated on .Values.cache.enabled
@@ -973,6 +1063,9 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 	if req.CommitMessage != "" {
 		annos[annCommitMessage] = req.CommitMessage
+	}
+	if manual && !syntheticRef {
+		annos[annRefFromBranch] = "true"
 	}
 	spec := kube.KusoBuildSpec{
 		Project: project,
@@ -1114,7 +1207,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 	created, cerr := s.Kube.CreateKusoBuild(ctx, ns, build)
 	if cerr != nil {
-		return created, cerr
+		return created, false, cerr
 	}
 	// Adopt the clone-token Secret under the freshly-created KusoBuild CR
 	// so it cascade-deletes with the build (retention sweep, project
@@ -1129,7 +1222,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if created != nil && created.UID != "" {
 		s.adoptCloneTokenSecret(ctx, ns, buildName, string(created.UID))
 	}
-	return created, nil
+	return created, false, nil
 }
 
 // adoptCloneTokenSecret stamps an ownerReference to the KusoBuild CR onto

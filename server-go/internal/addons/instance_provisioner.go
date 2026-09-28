@@ -62,12 +62,13 @@ func (s *Service) instanceAdminDSN(ctx context.Context, instanceAddonName string
 // instance addon's "<host>-conn" Secret carries a non-empty POOLER_HOST
 // (the managed cluster PG with pooler.enabled populates it; external
 // instance addons have no such Secret, so we route direct for them).
-func (s *Service) instanceHasPooler(ctx context.Context, ns, perProjectDSN string) bool {
+// The instance addon lives in the home namespace, never the project's.
+func (s *Service) instanceHasPooler(ctx context.Context, perProjectDSN string) bool {
 	u, err := url.Parse(perProjectDSN)
 	if err != nil || u.Hostname() == "" {
 		return false
 	}
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, u.Hostname()+"-conn", metav1.GetOptions{})
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, u.Hostname()+"-conn", metav1.GetOptions{})
 	if err != nil {
 		return false
 	}
@@ -301,7 +302,12 @@ func poolerDSN(directDSN string) (string, error) {
 // testable. When poolerExists, DATABASE_URL is rewritten through the PgBouncer
 // pooler (-pooler:6432) and the POOLER_* keys are populated; DIRECT_URL always
 // stays the un-pooled input DSN — see the DIRECT_URL note below.
-func instanceAddonConnData(dsn, password string, poolerExists bool) (map[string][]byte, error) {
+//
+// hostNS is the instance server's namespace: a bare Service host (e.g.
+// "kuso-instance-pg") is qualified with it so pods in a project's own
+// execution namespace can resolve it. The pooler host is derived from the
+// bare name first, since "-pooler" is a suffix on the Service name.
+func instanceAddonConnData(dsn, password string, poolerExists bool, hostNS string) (map[string][]byte, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse per-project DSN: %w", err)
@@ -315,17 +321,22 @@ func instanceAddonConnData(dsn, password string, poolerExists bool) (map[string]
 	dbName := strings.TrimPrefix(u.Path, "/")
 
 	// Route DATABASE_URL through the pooler by default when one exists.
-	databaseURL := dsn
+	// The pooler DSN is derived from the bare host before qualification.
 	poolerHost, poolerPort, poolerURL := "", "", ""
 	if poolerExists {
 		pURL, perr := poolerDSN(dsn)
 		if perr != nil {
 			return nil, fmt.Errorf("derive pooler DSN: %w", perr)
 		}
-		databaseURL = pURL
-		poolerHost = host + "-pooler"
+		poolerURL = QualifyInClusterHost(pURL, hostNS)
+		poolerHost = QualifyInClusterHost(host+"-pooler", hostNS)
 		poolerPort = "6432"
-		poolerURL = pURL
+	}
+	dsn = QualifyInClusterHost(dsn, hostNS)
+	host = QualifyInClusterHost(host, hostNS)
+	databaseURL := dsn
+	if poolerExists {
+		databaseURL = poolerURL
 	}
 	// DIRECT_URL is always the un-pooled, session-safe DSN (the raw per-project
 	// `dsn` input — host:5432 direct, never the -pooler:6432 rewrite). Apps that
@@ -349,7 +360,7 @@ func instanceAddonConnData(dsn, password string, poolerExists bool) (map[string]
 }
 
 func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN, dsn, password string, poolerExists bool) error {
-	data, err := instanceAddonConnData(dsn, password, poolerExists)
+	data, err := instanceAddonConnData(dsn, password, poolerExists, s.Namespace)
 	if err != nil {
 		return err
 	}
@@ -494,5 +505,5 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
-	return s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn))
+	return s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn))
 }

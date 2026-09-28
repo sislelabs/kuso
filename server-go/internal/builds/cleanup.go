@@ -441,8 +441,14 @@ func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int, protected 
 		}
 		sortRecordsNewestFirst(recs)
 		repo := fmt.Sprintf("%s/%s", k.project, k.service)
+		// Rebuilds of one commit share a tag; an aged-out record must not
+		// untag what a kept record still points at.
+		kept := map[string]bool{}
+		for _, r := range recs[:keep] {
+			kept[r.imageTag] = true
+		}
 		for _, r := range recs[keep:] {
-			if protected[repo+":"+r.imageTag] {
+			if protected[repo+":"+r.imageTag] || kept[r.imageTag] {
 				continue
 			}
 			out = append(out, untagTarget{repo: repo, tag: r.imageTag, project: k.project, buildName: r.buildName})

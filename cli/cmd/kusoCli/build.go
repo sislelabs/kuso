@@ -118,29 +118,50 @@ var buildTriggerCmd = &cobra.Command{
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("trigger build: %w", err)
 		}
-		// Server returns the BuildSummary wire shape (flat
-		// {id,serviceName,branch,commitSha,imageTag,status}), NOT the
-		// raw KusoBuild CR. Earlier versions of this command decoded it
-		// as a CR and printed an empty name; switch to the typed shape
-		// the handler actually emits.
-		var data struct {
-			ID     string `json:"id"`
-			Branch string `json:"branch"`
-			Status string `json:"status"`
+		line, id, err := triggerResultLine(resp.Body(), time.Now())
+		if err != nil {
+			return err
 		}
-		if err := json.Unmarshal(resp.Body(), &data); err != nil {
-			return fmt.Errorf("decode response: %w", err)
-		}
-		fmt.Printf("build %s started (branch=%s, status=%s)\n", data.ID, data.Branch, data.Status)
-		if buildTriggerFollow && !buildTriggerDryRun && data.ID != "" {
-			status, ferr := pollBuildToTerminal(args[0], args[1], data.ID)
+		fmt.Println(line)
+		if buildTriggerFollow && !buildTriggerDryRun && id != "" {
+			status, ferr := pollBuildToTerminal(args[0], args[1], id)
 			if ferr != nil {
 				return ferr // non-zero exit on failed/timeout so CI/scripts catch it
 			}
-			fmt.Printf("build %s %s\n", data.ID, status)
+			fmt.Printf("build %s %s\n", id, status)
 		}
 		return nil
 	},
+}
+
+// triggerResultLine renders the trigger response. The server returns the
+// flat BuildSummary shape (NOT the raw KusoBuild CR) plus `existing`,
+// which is true when the trigger coalesced into an in-flight build for
+// the same service+branch — that must not read as a fresh start.
+func triggerResultLine(body []byte, now time.Time) (line, id string, err error) {
+	var data struct {
+		ID        string `json:"id"`
+		Branch    string `json:"branch"`
+		Status    string `json:"status"`
+		StartedAt string `json:"startedAt"`
+		CreatedAt string `json:"createdAt"`
+		Existing  bool   `json:"existing"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", "", fmt.Errorf("decode response: %w", err)
+	}
+	if !data.Existing {
+		return fmt.Sprintf("build %s started (branch=%s, status=%s)", data.ID, data.Branch, data.Status), data.ID, nil
+	}
+	since := data.StartedAt
+	if since == "" {
+		since = data.CreatedAt
+	}
+	age := ""
+	if t, perr := time.Parse(time.RFC3339, since); perr == nil {
+		age = " (started " + ageBetween(t, now) + " ago)"
+	}
+	return fmt.Sprintf("build %s already in progress%s — not starting another", data.ID, age), data.ID, nil
 }
 
 var (
@@ -319,7 +340,11 @@ func relativeAge(iso string) string {
 	if err != nil {
 		return iso
 	}
-	d := time.Since(t)
+	return ageBetween(t, time.Now())
+}
+
+func ageBetween(t, now time.Time) string {
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))

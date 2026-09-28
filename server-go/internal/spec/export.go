@@ -143,8 +143,9 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	}
 	if cr.Spec.Sleep != nil {
 		s.Sleep = &SleepSpec{
-			Enabled:      cr.Spec.Sleep.Enabled,
-			AfterMinutes: cr.Spec.Sleep.AfterMinutes,
+			Enabled:       cr.Spec.Sleep.Enabled,
+			AfterMinutes:  cr.Spec.Sleep.AfterMinutes,
+			NonProduction: cr.Spec.Sleep.NonProduction,
 		}
 	}
 	if cr.Spec.Placement != nil {

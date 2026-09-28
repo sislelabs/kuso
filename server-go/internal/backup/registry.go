@@ -25,6 +25,22 @@ func (r *Registry) For(kind string) (Producer, bool) {
 	return p, ok
 }
 
+// s3FetchShell defines s3_fetch, a bounded retry around the artifact
+// download. A fresh restore pod in a project namespace has no network for
+// ~5-20s until kube-router syncs the NetworkPolicy for its IP, and the
+// restore Job runs with BackoffLimit 0, so a single refused connection
+// used to be the whole restore.
+const s3FetchShell = `
+s3_fetch() { # src dst
+  _i=0
+  until aws s3 cp --endpoint-url "${S3_ENDPOINT}" "$1" "$2"; do
+    _i=$((_i+1))
+    if [ "${_i}" -ge 30 ]; then echo "==> could not download $1 after 60s" >&2; exit 1; fi
+    echo "==> download failed, retrying (${_i})"; sleep 2
+  done
+}
+`
+
 // --- postgres ---------------------------------------------------------
 
 type postgresProducer struct{}
@@ -35,8 +51,8 @@ func (postgresProducer) ArtifactExt() string { return "sql.gz" }
 func (postgresProducer) RestoreScript() string {
 	return `
 set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
+` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
+s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
 echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
 if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
   WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
@@ -80,6 +96,14 @@ echo "==> piping into psql"
 # it costs the whole restore. Strip only the known-forward-compatible
 # GUCs, by exact match, before the pipe. Anything else still reaches psql
 # and still aborts loudly under ON_ERROR_STOP.
+# The download proved egress works, not that the DB's ingress policy has
+# admitted this pod yet. Wait for the server before psql, bounded to 60s.
+_i=0
+until pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
+  _i=$((_i+1))
+  if [ "${_i}" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for postgres ${POSTGRES_HOST} (${_i})"; sleep 2
+done
 gunzip -c /tmp/dump.sql.gz \
   | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
   | PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
@@ -101,8 +125,8 @@ func (redisProducer) ArtifactExt() string { return "rdb.gz" }
 func (redisProducer) RestoreScript() string {
 	return `
 set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.rdb.gz
+` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
+s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.rdb.gz
 if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
   WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
   GOT=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
@@ -129,8 +153,8 @@ func (mongoProducer) ArtifactExt() string { return "archive.gz" }
 func (mongoProducer) RestoreScript() string {
 	return `
 set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.archive.gz
+` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
+s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.archive.gz
 if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
   WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
   GOT=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
@@ -161,8 +185,8 @@ func (mysqlProducer) ArtifactExt() string { return "sql.gz" }
 func (mysqlProducer) RestoreScript() string {
 	return `
 set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
+` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
+s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
 if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
   WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
   GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')

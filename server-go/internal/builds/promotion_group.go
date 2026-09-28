@@ -30,8 +30,9 @@ package builds
 //     queue advances instead of deadlocking behind the hold.
 //
 // Escape hatches, deliberate:
-//   - Manual triggers (kuso build trigger / UI redeploy) synthesize a
-//     non-SHA ref → never gated. Forcing one service out alone is a
+//   - Manual triggers (kuso build trigger / UI redeploy) with no explicit
+//     ref → never gated, even when their ref resolved to the branch HEAD
+//     (annRefFromBranch). Forcing one service out alone is a
 //     two-keystroke operator action, not a config knob.
 //   - A CANCELLED sibling build counts as "operator said skip it" and
 //     doesn't hold the wave.
@@ -99,13 +100,20 @@ func latestOf(list []*kube.KusoBuild) *kube.KusoBuild {
 	return out
 }
 
+// isBranchHeadBuild reports a manual trigger whose ref was resolved from
+// the branch HEAD. It carries a real SHA, so the ref shape alone no
+// longer tells it apart from a webhook build.
+func isBranchHeadBuild(b *kube.KusoBuild) bool {
+	return b.Annotations[annRefFromBranch] == "true"
+}
+
 // promotionHoldVerdict decides whether build b must wait before
 // promoting. all is every live KusoBuild CR in b's project (one
 // label-list). Returns "" to proceed, else a human-readable hold
 // reason. Pure — no kube access — so the decision matrix is
 // unit-testable.
 func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
-	if b == nil || !shaRE.MatchString(b.Spec.Ref) {
+	if b == nil || !shaRE.MatchString(b.Spec.Ref) || isBranchHeadBuild(b) {
 		return "" // manual/synthetic-ref build — never gated
 	}
 	repo := buildRepoURL(b)
@@ -129,6 +137,13 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 			continue
 		}
 		if s.Spec.Branch != b.Spec.Branch {
+			continue
+		}
+		if isBranchHeadBuild(s) {
+			// Manual builds were never wave members (they used to carry
+			// synthetic refs); a resolved SHA mustn't change that. They
+			// still count for forgiveness via branchBySvc.
+			branchBySvc[s.Spec.Service] = append(branchBySvc[s.Spec.Service], s)
 			continue
 		}
 		branchBySvc[s.Spec.Service] = append(branchBySvc[s.Spec.Service], s)

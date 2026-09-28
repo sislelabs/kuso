@@ -74,6 +74,19 @@ func (k *KusoClient) DeletePodSize(id string) (*resty.Response, error) {
 	return k.client.Delete("/api/config/podsizes/" + esc(id))
 }
 
+// GetDefaultPodSize returns {"name": ...}: the preset new services are
+// sized with, or "none". GET /api/config/default-podsize.
+func (k *KusoClient) GetDefaultPodSize() (*resty.Response, error) {
+	return k.client.Get("/api/config/default-podsize")
+}
+
+// SetDefaultPodSize sets the default preset (a preset name or "none").
+// PUT /api/config/default-podsize. Admin-gated.
+func (k *KusoClient) SetDefaultPodSize(name string) (*resty.Response, error) {
+	k.client.SetBody(map[string]string{"name": name})
+	return k.client.Put("/api/config/default-podsize")
+}
+
 // ListRunpacks returns every runpack (with phases inlined). Read-only —
 // there is no create/update route; delete is the only mutation.
 func (k *KusoClient) ListRunpacks() (*resty.Response, error) {

@@ -349,13 +349,25 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping external ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # A fresh pod in a project namespace is network-isolated
+                  # for ~5-20s until kube-router syncs the NetworkPolicy for
+                  # its IP. Wait (bounded) before the first connect.
+                  for i in $(seq 1 30); do
+                    if pg_isready -d "${DATABASE_URL}" -q; then break; fi
+                    if [ "$i" = "30" ]; then
+                      echo "ERROR: external postgres for ${ADDON} unreachable after 60s" >&2; exit 1
+                    fi
+                    sleep 2
+                  done
                   # Match the client major to the server, same as the
                   # in-cluster job: a newer pg_dump emits SET options the
                   # target rejects at restore time (transaction_timeout on
                   # an 18 client vs a 16 server aborts the restore on line
                   # 13). Matters more here, not less — an external provider
                   # is exactly where the server version is not ours to
-                  # pick. Unknown version falls back to the newest client.
+                  # pick. An unknown version FAILS the run: guessing the
+                  # newest client produced "successful" backups that could
+                  # not be restored.
                   pgbin() {
                     _want="$1"
                     if [ -n "${_want}" ] && [ -x "/usr/libexec/postgresql${_want}/$2" ]; then
@@ -368,10 +380,16 @@ spec:
                     done
                     echo "$2"
                   }
-                  PGMAJOR=$($(pgbin "" psql) "${DATABASE_URL}" -tAc "SHOW server_version_num" 2>/dev/null | tr -dc '0-9' || true)
-                  if [ -n "${PGMAJOR}" ]; then PGMAJOR=$(( PGMAJOR / 10000 )); fi
+                  if ! PGVER=$($(pgbin "" psql) "${DATABASE_URL}" -tAc "SHOW server_version_num"); then
+                    echo "ERROR: could not read the server version of ${ADDON}; refusing to pick a pg_dump client blind" >&2; exit 1
+                  fi
+                  PGMAJOR=$(printf '%s' "${PGVER}" | tr -dc '0-9')
+                  if [ -z "${PGMAJOR}" ]; then
+                    echo "ERROR: unparseable server_version_num '${PGVER}' from ${ADDON}" >&2; exit 1
+                  fi
+                  PGMAJOR=$(( PGMAJOR / 10000 ))
                   PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
-                  echo "==> external server major=${PGMAJOR:-unknown}, using ${PG_DUMP}"
+                  echo "==> external server major=${PGMAJOR}, using ${PG_DUMP}"
                   # --no-owner / --no-acl: managed providers usually
                   # disallow GRANT/REVOKE commands in dumps, which makes
                   # an unfiltered pg_dump fail at restore time. Match

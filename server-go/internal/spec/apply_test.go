@@ -649,3 +649,26 @@ func TestApply_GeneratedKeyShadowingSurfacesError(t *testing.T) {
 		t.Fatal("--rotate-secrets must force past the shadow guard")
 	}
 }
+
+func TestApply_CarriesSleepNonProduction(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{
+			{Name: "api", Runtime: "dockerfile", Sleep: &SleepSpec{NonProduction: "off"}},
+			{Name: "web", Runtime: "dockerfile", Sleep: &SleepSpec{NonProduction: "off"}},
+		},
+	}
+	plan := &Plan{ServicesToCreate: []string{"api"}, ServicesToUpdate: []string{"web"}}
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(fp.created) != 1 || fp.created[0].req.Sleep == nil || fp.created[0].req.Sleep.NonProduction != "off" {
+		t.Fatalf("create lost nonProduction: %+v", fp.created)
+	}
+	if len(fp.patched) != 1 || fp.patched[0].req.Sleep == nil ||
+		fp.patched[0].req.Sleep.NonProduction == nil || *fp.patched[0].req.Sleep.NonProduction != "off" {
+		t.Fatalf("patch lost nonProduction: %+v", fp.patched)
+	}
+}

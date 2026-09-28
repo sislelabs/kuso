@@ -79,7 +79,7 @@ func TestPoolerDSN_PreservesCredsAndDB(t *testing.T) {
 func TestInstanceAddonConnData_DirectURLNeverPooled(t *testing.T) {
 	const dsn = "postgres://berivangold_db:secret@kuso-instance-pg:5432/berivangold_db?sslmode=disable"
 
-	data, err := instanceAddonConnData(dsn, "secret", true /* poolerExists */)
+	data, err := instanceAddonConnData(dsn, "secret", true /* poolerExists */, "")
 	if err != nil {
 		t.Fatalf("instanceAddonConnData: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestInstanceAddonConnData_DirectURLNeverPooled(t *testing.T) {
 func TestInstanceAddonConnData_NoPooler(t *testing.T) {
 	const dsn = "postgres://app:secret@some-external-pg:5432/app?sslmode=require"
 
-	data, err := instanceAddonConnData(dsn, "secret", false /* poolerExists */)
+	data, err := instanceAddonConnData(dsn, "secret", false /* poolerExists */, "")
 	if err != nil {
 		t.Fatalf("instanceAddonConnData: %v", err)
 	}

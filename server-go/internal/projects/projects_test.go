@@ -31,6 +31,8 @@ func fakeService(t *testing.T, seeds ...seed) *Service {
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	for _, s := range seeds {
@@ -409,6 +411,7 @@ func TestDelete_CleansProjectScopedSecrets(t *testing.T) {
 		kube.GVRKuso: "KusoList", kube.GVRProjects: "KusoProjectList",
 		kube.GVRServices: "KusoServiceList", kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons: "KusoAddonList", kube.GVRBuilds: "KusoBuildList",
+		kube.GVRCrons: "KusoCronList", kube.GVRRuns: "KusoRunList",
 	})
 	for _, sd := range []seed{
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),

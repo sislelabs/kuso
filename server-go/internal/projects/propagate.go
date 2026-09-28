@@ -255,12 +255,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// rewrites a staging env's DATABASE_URL back to the production
 				// conn (an explicit env entry wins over envFromSecrets on key
 				// collision), silently re-pointing staging at the production
-				// database. The env's own clone conns are already present in
-				// prunedFrom (carried from AddEnvironment); the dropped bases
-				// are the project's addon conns.
+				// database. The source→clone map comes from the clone CRs'
+				// recorded provenance, not their names.
 				if envScope != "production" {
-					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
-					merged = rescopeAddonConnRefs(merged, projectAddons, prunedFrom, envScope)
+					merged = rescopeAddonConnRefsByOrigin(merged, s.envCloneConnByOrigin(ctx, ns, project, envScope))
 				}
 				env.Spec.EnvVars = merged
 				// Filter the propagated envFromSecrets by the addon
@@ -619,4 +617,42 @@ func cloneSourceConnName(cloneConn, envScope string) string {
 		}
 	}
 	return ""
+}
+
+// envCloneConnByOrigin maps each project addon conn to the conn of its clone
+// for envScope, using the source each clone CR recorded when it was minted
+// (preview-source label, env-group-source-addon annotation). Only a clone
+// with neither falls back to deriving its source from its name. nil on a
+// list error: rescoping then leaves refs alone rather than guess.
+func (s *Service) envCloneConnByOrigin(ctx context.Context, ns, project, envScope string) map[string]string {
+	if envScope == "" || envScope == "production" {
+		return nil
+	}
+	list, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project, labelEnv: envScope})
+	if err != nil {
+		slog.WarnContext(ctx, "propagate: list env addon clones", "project", project, "env", envScope, "err", err)
+		return nil
+	}
+	out := make(map[string]string, len(list))
+	for i := range list {
+		a := &list[i]
+		cloneConn := a.Name + "-conn"
+		var src string
+		switch {
+		case a.Labels["kuso.sislelabs.com/preview-source"] != "":
+			short := a.Labels["kuso.sislelabs.com/preview-source"]
+			if !strings.HasPrefix(short, project+"-") {
+				short = project + "-" + short
+			}
+			src = short + "-conn"
+		case a.Annotations["kuso.sislelabs.com/env-group-source-addon"] != "":
+			src = a.Annotations["kuso.sislelabs.com/env-group-source-addon"] + "-conn"
+		default:
+			src = cloneSourceConnName(cloneConn, envScope)
+		}
+		if src != "" && src != cloneConn {
+			out[src] = cloneConn
+		}
+	}
+	return out
 }

@@ -42,6 +42,8 @@ type ProjectsAPI interface {
 	DeleteService(ctx context.Context, project, service string) error
 	RenameService(ctx context.Context, project, oldName, newName string) (*kube.KusoService, error)
 	RevertService(ctx context.Context, project, service string, raw json.RawMessage) error
+	RevertServiceSnapshot(ctx context.Context, project, service string, raw []byte) error
+	RevertEnvironmentSnapshot(ctx context.Context, project, name string, raw []byte) error
 	WakeService(ctx context.Context, project, service string) error
 	StopService(ctx context.Context, project, service string) error
 	StartService(ctx context.Context, project, service string) error

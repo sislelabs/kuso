@@ -86,3 +86,29 @@ func TestApiv1CreateServiceCarriesRepoDefaultBranch(t *testing.T) {
 		t.Errorf("repo = %+v, want defaultBranch master", out.Repo)
 	}
 }
+
+// resources absent = server default pod size; {} = explicitly none. The
+// mapper must keep that distinction instead of collapsing both to nil.
+func TestApiv1CreateServiceCarriesResources(t *testing.T) {
+	var absent, empty, set apiv1.CreateServiceRequest
+	for body, dst := range map[string]*apiv1.CreateServiceRequest{
+		`{"name":"web"}`:                                         &absent,
+		`{"name":"web","resources":{}}`:                          &empty,
+		`{"name":"web","resources":{"limits":{"memory":"1Gi"}}}`: &set,
+	} {
+		if err := json.Unmarshal([]byte(body), dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := apiv1CreateServiceToDomain(absent); out.Resources != nil {
+		t.Errorf("absent resources mapped to %v, want nil", *out.Resources)
+	}
+	if out := apiv1CreateServiceToDomain(empty); out.Resources == nil || len(*out.Resources) != 0 {
+		t.Errorf("empty resources mapped to %v, want non-nil empty", out.Resources)
+	}
+	out := apiv1CreateServiceToDomain(set)
+	want := map[string]any{"limits": map[string]any{"memory": "1Gi"}}
+	if out.Resources == nil || !reflect.DeepEqual(*out.Resources, want) {
+		t.Errorf("resources = %v, want %v", out.Resources, want)
+	}
+}

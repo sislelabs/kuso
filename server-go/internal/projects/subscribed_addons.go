@@ -173,11 +173,12 @@ func (s *Service) listProjectAddonConnSecrets(ctx context.Context, project strin
 	return out
 }
 
-// rescopeAddonConnRefs rewrites explicit secretKeyRef env-vars that point at a
-// project base addon conn-secret so they instead point at the env's own clone
-// conn-secret. Used by AddEnvironment after the per-env addon clones are
-// provisioned and envFromSecrets has been swapped (dropProjectAddonConns +
-// append(clones)).
+// rescopeAddonConnRefsByOrigin rewrites explicit secretKeyRef env-vars that
+// point at a project addon conn-secret so they instead point at the env's own
+// clone of that addon. cloneByOrigin is source conn -> clone conn, recorded
+// while the source addon was in hand (EnvAddons' cloneByOrigin, env-group's
+// freshAddonRename, or the clone CR's recorded provenance). Refs to a conn
+// absent from the map are left alone.
 //
 // Without this, a ${{ db.DATABASE_URL }} ref resolved against production lands
 // in the service spec as an explicit env[].valueFrom.secretKeyRef{name:
@@ -185,31 +186,9 @@ func (s *Service) listProjectAddonConnSecrets(ctx context.Context, project strin
 // staging env, the explicit secretKeyRef is copied unchanged — and an explicit
 // env entry WINS over envFromSecrets on key collision in Kubernetes. So even
 // though envFromSecrets correctly carries "<project>-db-staging-conn", the
-// staging pod's DATABASE_URL still resolves to the PRODUCTION database. That
-// silently defeats per-env isolation (staging writes hit prod).
-//
-// The base->clone mapping mirrors EnsureEnvAddons: a base conn named
-// "<addon>-conn" maps to "<addon>-<envScope>-conn", and we only rewrite when
-// the matching clone conn is actually present in the env's secret list.
-func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []string, envScope string) []kube.KusoEnvVar {
-	if envScope == "" || envScope == "production" || len(in) == 0 || len(droppedBaseConns) == 0 {
-		return in
-	}
-	clonePresent := make(map[string]bool, len(cloneConns))
-	for _, c := range cloneConns {
-		clonePresent[c] = true
-	}
-	// Map each dropped base conn to its expected clone conn for this scope,
-	// but only if that clone was actually provisioned for the env.
-	baseToClone := make(map[string]string, len(droppedBaseConns))
-	for _, base := range droppedBaseConns {
-		short := strings.TrimSuffix(base, "-conn")
-		clone := short + "-" + envScope + "-conn"
-		if clonePresent[clone] {
-			baseToClone[base] = clone
-		}
-	}
-	if len(baseToClone) == 0 {
+// staging pod's DATABASE_URL still resolves to the PRODUCTION database.
+func rescopeAddonConnRefsByOrigin(in []kube.KusoEnvVar, cloneByOrigin map[string]string) []kube.KusoEnvVar {
+	if len(in) == 0 || len(cloneByOrigin) == 0 {
 		return in
 	}
 	out := make([]kube.KusoEnvVar, len(in))
@@ -223,8 +202,8 @@ func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []s
 			continue
 		}
 		name, _ := skr["name"].(string)
-		clone, hit := baseToClone[name]
-		if !hit {
+		clone, hit := cloneByOrigin[name]
+		if !hit || clone == "" {
 			continue
 		}
 		// Deep-copy the ValueFrom map so we don't mutate the source service
@@ -242,6 +221,30 @@ func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []s
 		out[i].ValueFrom = newVF
 	}
 	return out
+}
+
+// rescopeAddonConnRefs is the name-derived form of
+// rescopeAddonConnRefsByOrigin: base "<addon>-conn" maps to
+// "<addon>-<envScope>-conn" when that clone is in cloneConns. A renamed or
+// replaced source defeats the derivation (the preview-clone-origin bug
+// class), so callers that hold a cloneByOrigin map should call
+// rescopeAddonConnRefsByOrigin instead. Kept for callers not yet switched.
+func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []string, envScope string) []kube.KusoEnvVar {
+	if envScope == "" || envScope == "production" || len(in) == 0 || len(droppedBaseConns) == 0 {
+		return in
+	}
+	clonePresent := make(map[string]bool, len(cloneConns))
+	for _, c := range cloneConns {
+		clonePresent[c] = true
+	}
+	baseToClone := make(map[string]string, len(droppedBaseConns))
+	for _, base := range droppedBaseConns {
+		clone := strings.TrimSuffix(base, "-conn") + "-" + envScope + "-conn"
+		if clonePresent[clone] {
+			baseToClone[base] = clone
+		}
+	}
+	return rescopeAddonConnRefsByOrigin(in, baseToClone)
 }
 
 // unclonedAddonRefs returns "VAR -> secret" for every explicit secretKeyRef
@@ -347,6 +350,7 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	if addons == nil {
 		addons = []string{}
 	}
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -372,13 +376,19 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	// update under optimistic concurrency so a concurrent spec edit on
 	// another pod (or a mid-flight operator status patch) can't be
 	// clobbered — the mutation re-runs against the fresh object on 409.
+	var before []string
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+		before = svc.Spec.SubscribedAddons
 		svc.Spec.SubscribedAddons = clean
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	added, removed := stringsDiff(before, clean)
+	rev.record(ctx, project, "service", shortServiceName(project, service),
+		joinSummary("addon subscribe", added, "addon unsubscribe", removed),
+		revisionSnapshot{Op: revOpSubscribedAddons, SubscribedAddons: &clean})
 	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
 		// Best-effort propagation; service spec is the source of
 		// truth, next save retries.

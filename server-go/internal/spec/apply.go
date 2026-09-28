@@ -258,7 +258,7 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 		req.Scale = &projects.ServiceScale{Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU}
 	}
 	if s.Sleep != nil {
-		req.Sleep = &projects.ServiceSleep{Enabled: s.Sleep.Enabled, AfterMinutes: s.Sleep.AfterMinutes}
+		req.Sleep = &projects.ServiceSleep{Enabled: s.Sleep.Enabled, AfterMinutes: s.Sleep.AfterMinutes, NonProduction: s.Sleep.NonProduction}
 	}
 	if s.Static != nil {
 		req.Static = &projects.ServiceStaticSpec{BuildCmd: s.Static.BuildCmd, OutputDir: s.Static.OutputDir}
@@ -333,12 +333,15 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	{
 		enabled := false
 		after := 0
+		nonProd := ""
 		if s.Sleep != nil {
 			enabled = s.Sleep.Enabled
 			after = s.Sleep.AfterMinutes
+			nonProd = s.Sleep.NonProduction
 		}
 		sleep.Enabled = &enabled
 		sleep.AfterMinutes = &after
+		sleep.NonProduction = &nonProd
 	}
 
 	placement := &projects.PatchPlacementRequest{}

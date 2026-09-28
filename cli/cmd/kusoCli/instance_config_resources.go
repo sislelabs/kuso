@@ -7,6 +7,7 @@
 //   kuso instance-config podsize create --name small --cpu-limit 500m --mem-limit 512Mi --cpu-request 100m --mem-request 128Mi
 //   kuso instance-config podsize edit <id> --name ...
 //   kuso instance-config podsize delete <id>
+//   kuso instance-config podsize default [<name>|none]
 //   kuso instance-config runpack list [-o json]
 //   kuso instance-config runpack delete <id>
 //   kuso instance-config templates|banner|clusterissuer|registry [-o json]
@@ -188,6 +189,44 @@ Prompts for confirmation unless --yes.`,
 	},
 }
 
+var instanceConfigPodSizeDefaultCmd = &cobra.Command{
+	Use:   "default [<name>|none]",
+	Short: "Show or set the pod size new services get",
+	Long: `Show or set the instance's default pod size. A service created without
+explicit resources (no --size) gets this preset's requests/limits; "none"
+creates services with no requests or limits. Existing services are not
+changed. Setting requires settings:admin.`,
+	Example: `  kuso instance-config podsize default
+  kuso instance-config podsize default large
+  kuso instance-config podsize default none`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if len(args) == 0 {
+			resp, err := api.GetDefaultPodSize()
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("get default pod size: %w", err)
+			}
+			var data struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(resp.Body(), &data); err != nil {
+				return fmt.Errorf("decode response: %w", err)
+			}
+			fmt.Println(data.Name)
+			return nil
+		}
+		resp, err := api.SetDefaultPodSize(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("set default pod size: %w", err)
+		}
+		fmt.Printf("default pod size set to %s (existing services unchanged)\n", args[0])
+		return nil
+	},
+}
+
 var instanceConfigRunpackCmd = &cobra.Command{
 	Use:     "runpack",
 	Aliases: []string{"runpacks"},
@@ -286,6 +325,7 @@ func init() {
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeCreateCmd)
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeEditCmd)
 	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeDeleteCmd)
+	instanceConfigPodSizeCmd.AddCommand(instanceConfigPodSizeDefaultCmd)
 	instanceConfigPodSizeDeleteCmd.Flags().BoolVarP(&podSizeDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	instanceConfigCmd.AddCommand(instanceConfigRunpackCmd)

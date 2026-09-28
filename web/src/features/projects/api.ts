@@ -1,5 +1,6 @@
 import { api } from "@/lib/api-client";
 import { env } from "@/lib/env";
+import { verifyCompleteGzip } from "@/lib/gzip-verify";
 import type {
   KusoAddon,
   KusoEnvironment,
@@ -359,6 +360,9 @@ export async function downloadAddonBackup(project: string, addon: string): Promi
     throw new Error(detail.trim() || `${res.status} ${res.statusText}`);
   }
   const blob = await res.blob();
+  // Refuse to save a truncated dump: the server's X-Kuso-Backup-Status
+  // trailer is invisible to fetch(), so check the gzip itself.
+  await verifyCompleteGzip(blob);
   const filename =
     filenameFromDisposition(res.headers.get("Content-Disposition")) ??
     `${project}-${addon}.gz`;

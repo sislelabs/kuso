@@ -40,6 +40,8 @@ func newCascadeFixture(t *testing.T, seeds []seed, objs ...runtime.Object) (*Ser
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	for _, sd := range seeds {
@@ -214,6 +216,8 @@ func TestCreateEnvGroup_RollbackFailureIsSurfacedNotSwallowed(t *testing.T) {
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	seeds := []seed{

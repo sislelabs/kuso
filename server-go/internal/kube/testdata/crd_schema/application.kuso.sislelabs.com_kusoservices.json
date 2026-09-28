@@ -392,6 +392,14 @@
                 "default": false,
                 "type": "boolean"
               },
+              "nonProduction": {
+                "description": "`enabled` governs the production env only. Every\nnon-production env (named envs, env-group clones,\nPR previews) sleeps after afterMinutes idle by\ndefault; \"off\" keeps them always on.\n",
+                "enum": [
+                  "on",
+                  "off"
+                ],
+                "type": "string"
+              },
               "wakeOn": {
                 "description": "Must-stay-warm signals. When excludePaths is\nnon-empty, the operator keeps the deployment\nat min 1 even when scale.Min=0 would otherwise\nidle it. Tickero's payment-callback use case:\nwakeOn.excludePaths: [\"/api/v1/payments/notify\"]\nmeans /api/v1/payments/notify is reachable 24/7\nand the rest of the service stays warm too\n(per-path isolation needs a service split).\n",
                 "properties": {

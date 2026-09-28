@@ -63,6 +63,19 @@ const (
 	ManagedByValue = "kuso"
 )
 
+// NamespaceCreatedByKusoAnnotation marks a namespace EnsureNamespace
+// created, as opposed to one it adopted. ManagedByLabel can't tell the
+// two apart: the adopt path patches it on, and users are told to add it
+// themselves before pinning a pre-existing namespace. Project purge-delete
+// drops the namespace only when this is present.
+const NamespaceCreatedByKusoAnnotation = "kuso.sislelabs.com/namespace-created-by-kuso"
+
+// NamespaceCreatedByKuso reports whether ns was created (not adopted) by
+// EnsureNamespace.
+func NamespaceCreatedByKuso(ns *corev1.Namespace) bool {
+	return ns != nil && ns.Annotations[NamespaceCreatedByKusoAnnotation] == "true"
+}
+
 // EnsureNamespace creates ns if it doesn't already exist and patches
 // in the Pod Security Standards labels (baseline — see pssLabels) so
 // user pods scheduled there can't go privileged or mount host paths.
@@ -89,8 +102,9 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	}
 	_, err := c.Clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   ns,
-			Labels: labels,
+			Name:        ns,
+			Labels:      labels,
+			Annotations: map[string]string{NamespaceCreatedByKusoAnnotation: "true"},
 		},
 	}, metav1.CreateOptions{})
 	switch {

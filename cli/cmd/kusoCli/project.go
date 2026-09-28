@@ -356,6 +356,11 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	} else if serviceAddFromService != "" {
 		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
+	res, err := serviceAddResources(cmd)
+	if err != nil {
+		return err
+	}
+	req.Resources = res
 	resp, err := api.AddService(args[0], req)
 	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("add service: %w", err)
@@ -533,6 +538,9 @@ Settings → Source / Networking flow.
   --repo https://gitlab.com/acme/api.git  # re-point the service at a new source repo
   --provider gitlab             # VCS provider (optional; inferred from the URL)
   --gitlab-token <token>        # GitLab clone credential (stored as a Secret, never returned)
+  --size medium                 # apply a pod-size preset's requests/limits (none clears)
+  --memory-limit 1536Mi         # set one quantity, keeping the rest
+  --memory-request 256Mi --cpu-request 100m
 
 The GitLab clone token is write-only: the server stores it in a per-service
 Secret and never returns it. Supply it via --gitlab-token, on stdin with
@@ -746,6 +754,11 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			}
 			req.SecurityContext = sc
 		}
+		res, err := serviceSetResources(cmd, args[0], args[1])
+		if err != nil {
+			return err
+		}
+		req.Resources = res
 		resp, err := api.PatchService(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("patch service: %w", err)

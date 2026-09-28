@@ -13,6 +13,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/kube"
@@ -552,6 +553,17 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			}
 		}
 	}
+	// Runs + crons. KusoRuns carry no ownerReference, so nothing else
+	// reaps them: each one kept its CR and helm release Secret alive
+	// after the project was gone. Crons do have an ownerRef to the
+	// service CR, but that GC is async and skipped when the ref is
+	// missing on older CRs, so delete them explicitly too.
+	if err := s.deleteProjectCRs(ctx, kube.GVRRuns, ns, name); err != nil {
+		return err
+	}
+	if err := s.deleteProjectCRs(ctx, kube.GVRCrons, ns, name); err != nil {
+		return err
+	}
 	// Project-scoped Secrets created imperatively by kuso-server (NOT by
 	// any helm chart, so the operator's CR-delete cascade never reaches
 	// them). Left behind, they orphan in the shared `kuso` namespace and
@@ -596,14 +608,27 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				// then fails to auth against the old data — silent DB outage.
 				// The helm-uninstall triggered by the addon-CR cascade already
 				// respects the keep policy and leaves these behind on purpose;
-				// this sweep must do the same. (PurgeData is the explicit
-				// destructive path and handles PVCs separately below.)
-				if sec.Annotations["helm.sh/resource-policy"] == "keep" {
+				// this sweep must do the same.
+				//
+				// PurgeData is the exception: the PVCs are deleted below, so
+				// the kept Secret no longer guards any data and would only
+				// linger as a live credential for a database that's gone.
+				if sec.Annotations["helm.sh/resource-policy"] == "keep" && !opts.PurgeData {
 					continue
 				}
 				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
 					Delete(ctx, sec.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 					return fmt.Errorf("delete project-scoped secret %s: %w", sec.Name, derr)
+				}
+			}
+		}
+		// Name-derived backstop for the conn Secrets of the addons we just
+		// deleted, in case one lost its project label.
+		if opts.PurgeData {
+			for _, a := range deletedAddons {
+				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
+					Delete(ctx, a+"-conn", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					return fmt.Errorf("delete addon conn secret %s-conn: %w", a, derr)
 				}
 			}
 		}
@@ -694,6 +719,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			}
 		}
 	}
+	if s.Kube.Clientset != nil {
+		s.cleanupProjectNamespace(ctx, name, ns, services, opts.PurgeData, cleanupFail)
+	}
 	// The cascade finished (project CR is gone); surface any collected
 	// best-effort cleanup failures so the orphans are visible instead of
 	// hiding behind a false success.
@@ -701,6 +729,131 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		return fmt.Errorf("project %s deleted, but cleanup left orphans: %w", name, errors.Join(cleanupErrs...))
 	}
 	return nil
+}
+
+// deleteProjectCRs deletes every CR of gvr in ns that belongs to project
+// (project label or spec.project). Lists live rather than from the
+// informer cache: a teardown must not skip a CR created seconds ago.
+func (s *Service) deleteProjectCRs(ctx context.Context, gvr schema.GroupVersionResource, ns, project string) error {
+	list, err := s.Kube.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // CRD not installed
+		}
+		return fmt.Errorf("list %s: %w", gvr.Resource, err)
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		specProject, _, _ := unstructured.NestedString(item.Object, "spec", "project")
+		if item.GetLabels()[labelProject] != project && specProject != project {
+			continue
+		}
+		if derr := s.Kube.Dynamic.Resource(gvr).Namespace(ns).
+			Delete(ctx, item.GetName(), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete %s %s: %w", gvr.Resource, item.GetName(), derr)
+		}
+	}
+	return nil
+}
+
+// cleanupProjectNamespace removes what's left in the project's execution
+// namespace once every CR is gone: cert-manager TLS Secrets (including those
+// of envs deleted before the project), the mirrored backup credential, and,
+// on purge, the namespace itself when kuso created it.
+//
+// Without purge the namespace stays: it holds the retained addon PVCs and
+// their conn Secrets so a recreate can pick the data back up. A namespace
+// kuso only adopted (no NamespaceCreatedByKusoAnnotation) is never deleted,
+// and neither is the home namespace.
+func (s *Service) cleanupProjectNamespace(ctx context.Context, project, ns string, services []kube.KusoService, purge bool, fail func(kind, name string, err error)) {
+	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
+	exclusive := ns != s.Namespace
+
+	var otherProjects []string
+	all, err := s.Kube.ListKusoProjects(ctx, s.Namespace)
+	if err != nil {
+		fail("ProjectList", "*", err)
+		return
+	}
+	for i := range all {
+		if all[i].Name == project {
+			continue
+		}
+		otherProjects = append(otherProjects, all[i].Name)
+		if all[i].Spec.Namespace == ns {
+			// Another project runs here too; nothing in it is ours alone.
+			exclusive = false
+		}
+	}
+
+	// cert-manager creates <env>-tls / <env>-tls-extra-<n> with no owner
+	// reference, so they outlive their Certificate. The env loop above
+	// only reaches envs that still existed at delete time.
+	if list, lerr := secrets.List(ctx, metav1.ListOptions{}); lerr != nil {
+		fail("SecretList", "cert-manager", lerr)
+	} else {
+		for i := range list.Items {
+			sec := &list.Items[i]
+			if _, ok := sec.Annotations["cert-manager.io/certificate-name"]; !ok {
+				continue
+			}
+			if !exclusive && !certSecretBelongsTo(sec.Name, project, services, otherProjects) {
+				continue
+			}
+			if derr := secrets.Delete(ctx, sec.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				fail("Secret", sec.Name, derr)
+			}
+		}
+	}
+
+	if !exclusive {
+		return
+	}
+	if derr := secrets.Delete(ctx, kube.BackupSecretName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+		fail("Secret", kube.BackupSecretName, derr)
+	}
+	if !purge {
+		return
+	}
+	nsObj, err := s.Kube.Clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			fail("Namespace", ns, err)
+		}
+		return
+	}
+	if !kube.NamespaceCreatedByKuso(nsObj) {
+		slog.Info("project delete: keeping namespace kuso did not create", "project", project, "ns", ns)
+		return
+	}
+	if derr := s.Kube.Clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+		fail("Namespace", ns, derr)
+	}
+}
+
+// certSecretBelongsTo decides ownership of a cert-manager Secret in a
+// namespace shared between projects. Env names are <service-CR>-<suffix>,
+// so the Secret must start with one of the project's service CR names. A
+// sibling project whose name extends this one's (e2e vs e2e-api) produces
+// the same prefixes, so any match on a longer project name wins and the
+// Secret is left alone: a missed cleanup beats deleting a live cert.
+func certSecretBelongsTo(secret, project string, services []kube.KusoService, otherProjects []string) bool {
+	matched := false
+	for i := range services {
+		if strings.HasPrefix(secret, services[i].Name+"-") {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false
+	}
+	for _, p := range otherProjects {
+		if len(p) > len(project) && strings.HasPrefix(secret, p+"-") {
+			return false
+		}
+	}
+	return true
 }
 
 // listServicesForProject filters by label rather than relying on

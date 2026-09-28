@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -12,6 +13,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/projects"
 )
 
 // Revision endpoints. The CR-mutating endpoints (PatchService,
@@ -215,9 +217,9 @@ func redactSnapshotValue(v any) any {
 }
 
 // RevertRevision replays the stored snapshot back through the
-// matching update endpoint. Currently supports kind="service" by
-// PATCHing the service spec; addon/environment revert returns 501
-// for now (we can add them once the service path proves out).
+// matching update path (service, environment, addon). Informational
+// revisions — ones that record a change without replayable state —
+// get a 422 naming why.
 //
 // We don't auto-create a "revert revision" before applying — the
 // PATCH itself triggers a fresh InsertRevision via the standard
@@ -255,47 +257,53 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleEditor) {
 		return
 	}
+	kind, err := h.replayRevision(ctx, rev)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": kind})
+	case errors.Is(err, projects.ErrNotRevertable):
+		writeErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("revision %s (%s) can't be reverted: %s", rev.ID, rev.Summary, err.Error()))
+	case errors.Is(err, errRevertUnsupported), errors.Is(err, errRevertUnavailable):
+		status := http.StatusNotImplemented
+		if errors.Is(err, errRevertUnavailable) {
+			status = http.StatusServiceUnavailable
+		}
+		writeErr(w, status, err.Error())
+	default:
+		h.fail(w, "revert "+rev.Kind, err)
+	}
+}
+
+var (
+	errRevertUnsupported = errors.New("revert not supported for this kind")
+	errRevertUnavailable = errors.New("revert unavailable")
+)
+
+// replayRevision dispatches a stored snapshot to the mutator that can replay
+// it. Informational snapshots (secret writes, env creation, renames, every
+// cron revision) are refused up front with ErrNotRevertable rather than
+// silently no-oping.
+func (h *ProjectsHandler) replayRevision(ctx context.Context, rev *db.Revision) (string, error) {
+	if projects.RevisionInformational(rev.Snapshot) {
+		return rev.Kind, fmt.Errorf("%w: it records what changed but stores no state to replay", projects.ErrNotRevertable)
+	}
 	switch rev.Kind {
 	case "service":
-		if err := h.revertServiceFromSnapshot(ctx, rev); err != nil {
-			h.fail(w, "revert service", err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "service"})
+		return "service", h.Svc.RevertServiceSnapshot(ctx, rev.Project, rev.Name, rev.Snapshot)
+	case "environment":
+		return "environment", h.Svc.RevertEnvironmentSnapshot(ctx, rev.Project, rev.Name, rev.Snapshot)
 	case "addon":
 		if h.AddonReverter == nil {
-			writeErr(w, http.StatusServiceUnavailable, "addon revert unavailable")
-			return
+			return "addon", fmt.Errorf("%w: addon revert", errRevertUnavailable)
 		}
 		var snap struct {
 			Patch json.RawMessage `json:"patch"`
 		}
 		if err := json.Unmarshal(rev.Snapshot, &snap); err != nil {
-			h.fail(w, "decode addon revision", err)
-			return
+			return "addon", fmt.Errorf("decode addon revision: %w", err)
 		}
-		if err := h.AddonReverter.RevertAddon(ctx, rev.Project, rev.Name, snap.Patch); err != nil {
-			h.fail(w, "revert addon", err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "addon"})
+		return "addon", h.AddonReverter.RevertAddon(ctx, rev.Project, rev.Name, snap.Patch)
 	default:
-		writeErr(w, http.StatusNotImplemented, "revert: only kind=service and kind=addon are supported")
+		return rev.Kind, fmt.Errorf("%w: kind=%s", errRevertUnsupported, rev.Kind)
 	}
-}
-
-// revertServiceFromSnapshot decodes the snapshot into a PatchService
-// request and applies it. We re-use the existing patch path so any
-// validation / propagation / notification it does runs on revert too.
-func (h *ProjectsHandler) revertServiceFromSnapshot(ctx context.Context, rev *db.Revision) error {
-	var snap struct {
-		Patch json.RawMessage `json:"patch"`
-	}
-	if err := json.Unmarshal(rev.Snapshot, &snap); err != nil {
-		return err
-	}
-	// Forward the raw snapshot.patch payload through the same
-	// PatchService implementation. We don't go through HTTP again —
-	// the service has a public method that takes a parsed body.
-	return h.Svc.RevertService(ctx, rev.Project, rev.Name, snap.Patch)
 }

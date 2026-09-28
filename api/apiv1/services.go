@@ -61,6 +61,10 @@ type CreateServiceRequest struct {
 	// escalation). The server validates capabilities against its
 	// allowlist.
 	SecurityContext *ServiceSecurityContext `json:"securityContext,omitempty"`
+	// Resources is the pod CPU/memory requests+limits in k8s
+	// ResourceRequirements shape ({"requests":{...},"limits":{...}}).
+	// nil = the instance's default pod size; an empty map = none.
+	Resources *map[string]any `json:"resources,omitempty"`
 }
 
 // ServiceRelease is the pre-deploy release hook (migrations etc.).

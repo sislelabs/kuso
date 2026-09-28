@@ -73,7 +73,14 @@ export interface KusoServiceSpec {
     requests?: { cpu?: string; memory?: string };
     limits?: { cpu?: string; memory?: string };
   };
-  sleep?: { enabled?: boolean; afterMinutes?: number };
+  // enabled governs the production env; nonProduction ("on" default |
+  // "off") governs every other env, which sleeps by default.
+  sleep?: {
+    enabled?: boolean;
+    afterMinutes?: number;
+    nonProduction?: "on" | "off";
+    wakeOn?: { excludePaths?: string[] };
+  };
   // stopped=true is a hard stop: the service is scaled to 0 replicas
   // with wake-on-traffic disabled (distinct from sleep, which wakes
   // on the next request). Visitors get a 503 until it's started again.

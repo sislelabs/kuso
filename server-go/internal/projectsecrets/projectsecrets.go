@@ -44,6 +44,14 @@ type Service struct {
 	// propagation, not via the envFrom roll below, so they'd otherwise be
 	// invisible in the "rolled" count.
 	OnKeyRemoved func(ctx context.Context, project, key string) (int, error)
+	// OnKeySet runs after a key is written and BEFORE dependent envs are
+	// rolled. Wired to projects.ResyncSharedKeySubscribers: a service that
+	// subscribed to the key before it existed has no secretKeyRef for it
+	// (unresolvable keys are dropped on propagation), so neither the roll
+	// below nor a restart would ever deliver the value. Re-propagating adds
+	// the ref, which restarts the pod. Returns how many services it
+	// re-propagated. nil = roll-only (tests).
+	OnKeySet func(ctx context.Context, project, key string) (int, error)
 }
 
 // UnsetResult says what an UnsetKey actually touched. Rolled counts envs
@@ -116,6 +124,9 @@ type SetOptions struct {
 type SetResult struct {
 	Rolled      int      `json:"rolled"`
 	Subscribers []string `json:"subscribers"`
+	// Resynced counts services subscribed by name whose envs were
+	// re-propagated so the key's ref is present (see OnKeySet).
+	Resynced int `json:"resynced,omitempty"`
 }
 
 // SetKey upserts a single env-var-style entry. Creates the Secret
@@ -184,6 +195,14 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 	}); err != nil {
 		return SetResult{}, err
 	}
+	var resynced int
+	if s.OnKeySet != nil {
+		n, err := s.OnKeySet(ctx, project, key)
+		if err != nil {
+			return SetResult{}, fmt.Errorf("attach %q to subscribed services: %w", key, err)
+		}
+		resynced = n
+	}
 	rolled, err := s.rollDependentEnvs(ctx, project, ns, name, key)
 	if err != nil {
 		return SetResult{}, err
@@ -192,7 +211,7 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 	if err != nil {
 		return SetResult{}, err
 	}
-	return SetResult{Rolled: rolled, Subscribers: subs}, nil
+	return SetResult{Rolled: rolled, Subscribers: subs, Resynced: resynced}, nil
 }
 
 // subscribers returns the sorted short names of the project's services

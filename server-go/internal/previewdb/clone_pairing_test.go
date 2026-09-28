@@ -117,3 +117,25 @@ func TestEnsurePRAddons_NoCloneableAddons(t *testing.T) {
 		t.Fatalf("s3-only project cloned something: conns=%v pairs=%v", conns, pairs)
 	}
 }
+
+// A named env's clone records its source on the CR (the annotation env-group
+// clones use), so propagation's envCloneConnByOrigin reads the pairing
+// instead of deriving it from the clone's name.
+func TestEnsureEnvAddonsMapped_NamedEnvCloneRecordsSource(t *testing.T) {
+	c, _ := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"), addonCR("alpha", "cache", "redis"))
+	c.Namespace = "kuso"
+
+	if _, _, err := c.EnsureEnvAddonsMapped(context.Background(), "alpha", "staging",
+		EnvAddonOpts{Kinds: []string{"postgres", "redis"}}); err != nil {
+		t.Fatalf("EnsureEnvAddonsMapped: %v", err)
+	}
+	for clone, src := range map[string]string{"alpha-pg-staging": "alpha-pg", "alpha-cache-staging": "alpha-cache"} {
+		a, err := c.Kube.GetKusoAddon(context.Background(), "kuso", clone)
+		if err != nil {
+			t.Fatalf("clone %s: %v", clone, err)
+		}
+		if got := a.Annotations[envGroupSourceAddonAnnotation]; got != src {
+			t.Errorf("%s source annotation = %q, want %q", clone, got, src)
+		}
+	}
+}

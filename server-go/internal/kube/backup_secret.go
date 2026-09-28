@@ -17,6 +17,10 @@ import (
 // wrote nothing.
 const backupSecretName = "kuso-backup-s3"
 
+// BackupSecretName is exported for teardown paths that remove the
+// per-namespace copy.
+const BackupSecretName = backupSecretName
+
 // ensureBackupSecret mirrors the instance-wide backup credential from
 // the home namespace into ns.
 //

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { updateClusterSettings } from "@/features/cluster-config/api";
+import { DefaultPodSizeSection } from "@/components/settings/DefaultPodSizeSection";
 import { toast } from "sonner";
 import { Settings as SettingsIcon, Save } from "lucide-react";
 
@@ -141,6 +142,8 @@ export default function ClusterConfigPage() {
           </Button>
         </footer>
       </section>
+
+      <DefaultPodSizeSection canEdit={canEdit} />
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="border-b border-[var(--border-subtle)] px-4 py-2.5">

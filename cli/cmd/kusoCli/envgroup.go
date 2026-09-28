@@ -133,9 +133,43 @@ var envGroupCreateCmd = &cobra.Command{
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create env-group: %w", err)
 		}
-		fmt.Printf("env-group %s/%s created (addons default to fresh; --share-addon to reuse prod)\n", args[0], args[1])
+		msg, err := envGroupCreateMsg(args[0], args[1], resp.Body())
+		if err != nil {
+			return err
+		}
+		fmt.Print(msg)
 		return nil
 	},
+}
+
+// envGroupCreateMsg renders the create response: the literals the server
+// retargeted from a sibling's production URL to its clone, and the
+// project-domain URLs it couldn't map (which may still reach production).
+func envGroupCreateMsg(project, name string, body []byte) (string, error) {
+	var resp struct {
+		RewrittenEnvVars []string `json:"rewrittenEnvVars"`
+		Warnings         []string `json:"warnings"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return "", fmt.Errorf("decode response: %w", err)
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "env-group %s/%s created (addons default to fresh; --share-addon to reuse prod)\n", project, name)
+	if len(resp.RewrittenEnvVars) > 0 {
+		b.WriteString("env vars retargeted at this group's clones:\n")
+		for _, k := range resp.RewrittenEnvVars {
+			fmt.Fprintf(&b, "  %s\n", k)
+		}
+	}
+	if len(resp.Warnings) > 0 {
+		b.WriteString("WARNING: these env vars may still point at production; review them:\n")
+		for _, w := range resp.Warnings {
+			fmt.Fprintf(&b, "  %s\n", w)
+		}
+	}
+	return b.String(), nil
 }
 
 var envGroupDeleteCmd = &cobra.Command{

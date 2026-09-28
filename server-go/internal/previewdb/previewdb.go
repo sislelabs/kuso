@@ -212,9 +212,15 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		cloneFQN := addons.CRName(project, cloneShort)
 
 		extraLabels := map[string]string{kube.LabelEnv: envScope}
+		var extraAnnotations map[string]string
 		if opts.PreviewPR != "" {
 			extraLabels["kuso.sislelabs.com/preview-pr"] = opts.PreviewPR
 			extraLabels["kuso.sislelabs.com/preview-source"] = shortSrc
+		} else {
+			// Named envs record the source the same way env-group clones
+			// do, so propagation pairs clone→source from the CR instead
+			// of the clone's name (which a renamed source defeats).
+			extraAnnotations = map[string]string{envGroupSourceAddonAnnotation: s.Name}
 		}
 
 		// Create the clone if it doesn't exist. We don't update an existing
@@ -237,8 +243,9 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 				// encrypted DB connections in production crashloop in
 				// previews (previews inherit ENVIRONMENT via shared
 				// secrets).
-				TLS:         s.Spec.TLS,
-				ExtraLabels: extraLabels,
+				TLS:              s.Spec.TLS,
+				ExtraLabels:      extraLabels,
+				ExtraAnnotations: extraAnnotations,
 			}); err != nil {
 				c.Logger.Warn("env addon clone create", "addon", cloneShort, "scope", envScope, "err", err)
 				return nil, nil, fmt.Errorf("provision %s for env %s: %w", cloneShort, envScope, err)
@@ -277,6 +284,11 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 	}
 	return connSecrets, cloneByOrigin, nil
 }
+
+// envGroupSourceAddonAnnotation records a named-env clone's source addon
+// (FQN). Shared with env-group clones; read by projects.envCloneConnByOrigin
+// and addons.cloneSourceConnFor.
+const envGroupSourceAddonAnnotation = "kuso.sislelabs.com/env-group-source-addon"
 
 // previewPRLabel is the ownership label EnsureEnvAddons stamps on a
 // per-PR postgres clone (value = the PR number). It's the authoritative

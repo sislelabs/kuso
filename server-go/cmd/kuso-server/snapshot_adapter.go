@@ -93,6 +93,29 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 		}
 	}
 
+	jobName := fmt.Sprintf("%s-snapshot-%d", release, time.Now().Unix())
+	job := buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride)
+	if _, err := a.kc.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		return "", fmt.Errorf("create snapshot job: %w", err)
+	}
+	// Block until the snapshot Job actually finishes. Returning the key the
+	// instant the Job is created is fire-and-forget: the caller (the build
+	// poller's Snapshotter path) would let the migration run against data the
+	// snapshot hadn't captured yet — or against a snapshot that FAILED (empty
+	// BUCKET, pg_dump error) that we'd have silently recorded as a good
+	// restore point. Poll to a terminal condition and propagate failure so the
+	// migration is gated on a real, completed snapshot.
+	if err := a.waitForJob(ctx, ns, jobName); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// buildSnapshotJob renders the one-shot pre-deploy snapshot Job. Mirrors the
+// postgres backup CronJob's script (kusoaddon/templates/backup-cronjob.yaml):
+// temp-file dump → sha256 → upload artifact + manifest.
+func buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride string) *batchv1.Job {
+	release := addons.CRName(project, addon)
 	script := fmt.Sprintf(`
 set -eo pipefail
 if [ -z "${BUCKET:-}" ]; then
@@ -100,6 +123,15 @@ if [ -z "${BUCKET:-}" ]; then
   exit 1
 fi
 echo "==> pre-deploy snapshot %s → s3://${BUCKET}/${KEY}"
+# A fresh pod in a project namespace is network-isolated for ~5-20s until
+# kube-router syncs the NetworkPolicy for its IP; with BackoffLimit 0 the
+# first refused connect would fail the snapshot and block the deploy.
+i=0
+until pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
+  i=$((i+1))
+  if [ "$i" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for postgres ${POSTGRES_HOST} ($i)"; sleep 2
+done
 PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
 SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
 BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
@@ -112,8 +144,7 @@ echo "==> snapshot done (sha256=${SHA})"
 
 	one := int32(1)
 	zero := int32(0)
-	jobName := fmt.Sprintf("%s-snapshot-%d", release, time.Now().Unix())
-	job := &batchv1.Job{
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: ns,
@@ -128,6 +159,15 @@ echo "==> snapshot done (sha256=${SHA})"
 			Completions:  &one,
 			Parallelism:  &one,
 			Template: corev1.PodTemplateSpec{
+				// Project label puts the pod inside the project netpols so the
+				// addon's ingress admits it; public egress reaches S3.
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"kuso.sislelabs.com/role":                  "snapshot",
+						"kuso.sislelabs.com/project":               project,
+						"kuso.sislelabs.com/network-egress-public": "true",
+					},
+				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
@@ -153,20 +193,6 @@ echo "==> snapshot done (sha256=${SHA})"
 			},
 		},
 	}
-	if _, err := a.kc.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		return "", fmt.Errorf("create snapshot job: %w", err)
-	}
-	// Block until the snapshot Job actually finishes. Returning the key the
-	// instant the Job is created is fire-and-forget: the caller (the build
-	// poller's Snapshotter path) would let the migration run against data the
-	// snapshot hadn't captured yet — or against a snapshot that FAILED (empty
-	// BUCKET, pg_dump error) that we'd have silently recorded as a good
-	// restore point. Poll to a terminal condition and propagate failure so the
-	// migration is gated on a real, completed snapshot.
-	if err := a.waitForJob(ctx, ns, jobName); err != nil {
-		return "", err
-	}
-	return key, nil
 }
 
 // waitForJob polls a Job until it reports a terminal condition (Complete or

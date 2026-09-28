@@ -82,6 +82,7 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		}
 	}
 
+	ctx, rev := s.beginRevision(ctx)
 	// In-process mutex guards same-replica races. Multi-replica
 	// races land on the kube optimistic-concurrency check below:
 	// updateWithRetry re-runs the duplicate scan against the live
@@ -136,6 +137,7 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 			return updated, fmt.Errorf("mirror domain to production env: %w", perr)
 		}
 	}
+	recordServiceDomains(ctx, rev, project, service, "domain add "+host, updated)
 	return updated, nil
 }
 
@@ -155,6 +157,7 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 		return nil, fmt.Errorf("%w: host required", ErrInvalid)
 	}
 
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -195,6 +198,7 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 			return updated, fmt.Errorf("mirror domain removal to production env: %w", perr)
 		}
 	}
+	recordServiceDomains(ctx, rev, project, service, "domain remove "+host, updated)
 	return updated, nil
 }
 
@@ -248,6 +252,7 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		return nil, fmt.Errorf("%w: exactly one of value, secretRef, or secretValue must be set", ErrInvalid)
 	}
 
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -282,6 +287,8 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		if err := s.bumpSecretsRevForService(ctx, ns, project, service); err != nil {
 			return nil, fmt.Errorf("bump secretsRev after secret write: %w", err)
 		}
+		rev.record(ctx, project, "service", shortServiceName(project, service),
+			"env set "+name+" (secret)", revisionSnapshot{Op: revOpEnvSecret, Informational: true, Keys: []string{name}})
 		svc, gerr := s.GetService(ctx, project, service)
 		if gerr != nil {
 			return nil, gerr
@@ -321,6 +328,7 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
+	recordServiceEnvVars(ctx, rev, project, service, "env set "+name, updated)
 	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); perr != nil {
 		return nil, fmt.Errorf("propagate envVars to envs: %w", perr)
 	}
@@ -351,6 +359,7 @@ func (s *Service) SetEnvValue(ctx context.Context, project, service, name, value
 	if !validEnvVarName(name) {
 		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
 	}
+	ctx, rev := s.beginRevision(ctx)
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
 		return nil, err
@@ -359,7 +368,24 @@ func (s *Service) SetEnvValue(ctx context.Context, project, service, name, value
 	if err != nil {
 		return nil, err
 	}
-	switch chooseEnvStorage(name, value, svc) {
+	storage := chooseEnvStorage(name, value, svc)
+	updated, err := s.setEnvValueAs(ctx, ns, project, service, name, value, storage, svc)
+	if err != nil {
+		return nil, err
+	}
+	if storage == StorageSecret {
+		rev.record(ctx, project, "service", shortServiceName(project, service),
+			"env set "+name+" (secret)", revisionSnapshot{Op: revOpEnvSecret, Informational: true, Keys: []string{name}})
+	} else {
+		recordServiceEnvVars(ctx, rev, project, service, "env set "+name, updated)
+	}
+	return updated, nil
+}
+
+// setEnvValueAs performs SetEnvValue's write for an already-chosen storage
+// class. Split out so SetEnvValue records one revision around it.
+func (s *Service) setEnvValueAs(ctx context.Context, ns, project, service, name, value string, storage EnvStorage, svc *kube.KusoService) (*kube.KusoService, error) {
+	switch storage {
 	case StorageRef:
 		// A ${{ ref }} needs the addon/service rewrite the bulk SetEnv path
 		// performs (literal → secretKeyRef). Merge just this one var into
@@ -520,6 +546,7 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 		return nil, fmt.Errorf("%w: env var name required", ErrInvalid)
 	}
 
+	ctx, rev := s.beginRevision(ctx)
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
@@ -561,6 +588,8 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 		if berr := s.bumpSecretsRevForService(ctx, ns, project, service); berr != nil {
 			return nil, fmt.Errorf("bump secretsRev after secret unset: %w", berr)
 		}
+		rev.record(ctx, project, "service", shortServiceName(project, service),
+			"env unset "+name+" (secret)", revisionSnapshot{Op: revOpEnvSecret, Informational: true, Keys: []string{name}})
 		svc, gerr := s.GetService(ctx, project, service)
 		if gerr != nil {
 			return nil, gerr
@@ -570,6 +599,7 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
+	recordServiceEnvVars(ctx, rev, project, service, "env unset "+name, updated)
 	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); perr != nil {
 		return nil, fmt.Errorf("propagate envVars to envs: %w", perr)
 	}

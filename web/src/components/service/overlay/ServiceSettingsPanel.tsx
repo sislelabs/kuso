@@ -10,7 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { stripRepoCredentials } from "@/lib/format";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket } from "lucide-react";
+import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -20,6 +20,7 @@ import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
 import { ScaleSection } from "./settings/ScaleSection";
+import { SleepSection } from "./settings/SleepSection";
 import { PlacementSection } from "./settings/PlacementSection";
 import { VolumesSection } from "./settings/VolumesSection";
 import { BuildSection } from "./settings/BuildSection";
@@ -44,6 +45,7 @@ const SECTIONS = [
   { id: "source",     label: "Source",     icon: Github },
   { id: "networking", label: "Networking", icon: Network },
   { id: "scale",      label: "Scale",      icon: Layers3 },
+  { id: "sleep",      label: "Sleep",      icon: Moon },
   { id: "placement",  label: "Placement",  icon: MapPin },
   { id: "volumes",    label: "Volumes",    icon: HardDrive },
   { id: "build",      label: "Build",      icon: Hammer },
@@ -129,7 +131,14 @@ function fieldDiffValues(
     domains: (s) => norm(s.domains),
     internal: (s) => (s.internal ? "internal (no public URL)" : "public"),
     scale: scale,
-    sleep: (s) => (Number(s.scaleMin) === 0 ? "sleep enabled (min 0)" : "sleep disabled"),
+    sleep: (s) =>
+      [
+        `production ${Number(s.scaleMin) === 0 || s.sleepEnabled ? "sleeps" : "always on"}`,
+        `after ${s.sleepAfter}m`,
+        s.sleepExcludePaths.trim() ? `keep-warm: ${s.sleepExcludePaths.split("\n").filter(Boolean).join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
     resources: resources,
     runtime: (s) => s.runtime,
     dockerfile: (s) => s.dockerfile,
@@ -322,7 +331,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       state.scaleMax !== baseline.scaleMax ||
       state.scaleCPU !== baseline.scaleCPU;
     const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
-    if (scaleChanged || excludeChanged) {
+    const sleepChanged =
+      state.sleepEnabled !== baseline.sleepEnabled || state.sleepAfter !== baseline.sleepAfter;
+    if (scaleChanged || excludeChanged || sleepChanged) {
       const min = Number(state.scaleMin);
       const max = Number(state.scaleMax);
       const cpu = Number(state.scaleCPU);
@@ -333,19 +344,31 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       if (scaleChanged) {
         body.scale = { min, max, targetCPU: cpu };
       }
-      // Only flip the sleep enabled flag — keep the user's existing
-      // afterMinutes value. Pre-v0.10 we hardcoded afterMinutes: 5
-      // on every scale save, silently resetting any custom idle
-      // timeout the user had configured elsewhere.
-      body.sleep = { enabled: min === 0 };
-      // wakeOn.excludePaths: paths that must stay reachable even when the
-      // service sleeps (webhooks/callbacks). Empty list clears the
-      // override (wakeOn:null) so the deployment can scale to zero again.
-      const paths = state.sleepExcludePaths
-        .split("\n")
-        .map((p) => p.trim())
-        .filter(Boolean);
-      body.sleep.wakeOn = paths.length > 0 ? { excludePaths: paths } : null;
+      // min=0 only works behind the activator, so it forces production
+      // sleep on. Otherwise sleep.enabled follows the Sleep switch; it used
+      // to be reset to false on every scale save with min ≥ 1, silently
+      // undoing sleep enabled elsewhere (CLI, kuso.yml).
+      const minCrossedZero = (Number(baseline.scaleMin) === 0) !== (min === 0);
+      if (sleepChanged || excludeChanged || minCrossedZero) {
+        body.sleep = { enabled: min === 0 || state.sleepEnabled };
+        if (state.sleepAfter !== baseline.sleepAfter) {
+          const after = Number(state.sleepAfter);
+          if (!Number.isInteger(after) || after < 1) {
+            toast.error("Idle window must be a whole number of minutes ≥ 1");
+            return;
+          }
+          body.sleep.afterMinutes = after;
+        }
+        if (excludeChanged) {
+          // Paths that must stay reachable (webhooks/callbacks) keep the
+          // whole deployment warm. An empty list clears the override.
+          const paths = state.sleepExcludePaths
+            .split("\n")
+            .map((p) => p.trim())
+            .filter(Boolean);
+          body.sleep.wakeOn = paths.length > 0 ? { excludePaths: paths } : { clear: true };
+        }
+      }
     }
     if (
       state.cpuRequest !== baseline.cpuRequest ||
@@ -609,6 +632,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           <SourceSection state={state} setState={setState} project={project} service={service} />
           <NetworkingSection state={state} setState={setState} autoHost={autoHost} />
           <ScaleSection state={state} setState={setState} />
+          <SleepSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
           <VolumesSection state={state} setState={setState} />
           <BuildSection state={state} setState={setState} />
