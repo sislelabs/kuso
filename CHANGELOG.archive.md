@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.1] — 2026-08-19
+
+### ✨ Features
+- Feat(builds): wire Spec.BuildArgs into dockerfile + nixpacks as the non-secret build-time channel ([ccf73dd](https://github.com/sislelabs/kuso/commit/ccf73dd979284cfb8f768ee3ccec88cbcacd305a))
+
+### 📝 Docs
+- Docs(skill): teach the build-time secret model, buildArgs, service state, and the JSON error envelope ([6c0f67c](https://github.com/sislelabs/kuso/commit/6c0f67c331a0a136c62ca0e20517b781abaa705b))
+
 ## [0.23.0] — 2026-08-19
 
 ### Other

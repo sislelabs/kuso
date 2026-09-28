@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.12] — 2026-09-28
+
+### Other
+- Stop Discord cards repeating themselves; fix env-group release race ([5879267](https://github.com/sislelabs/kuso/commit/58792675a20c1abcce5587a35cb22d80f70df7c6))
+
 ## [0.26.11] — 2026-09-28
 
 ### Other
@@ -386,14 +391,6 @@ messages on every release. The format is loosely based on
 - Fix: let the logs panel scroll back to the start of the archive ([0e13968](https://github.com/sislelabs/kuso/commit/0e1396895ff86e591d52265a93efc8271f31cf39))
 - Fix: make the 7d/30d range pickers actually query 7d/30d ([781740d](https://github.com/sislelabs/kuso/commit/781740d01df011a1dc9c7934a1289c45be9d8bca))
 - Fix: close cross-project log reads, CSRF bypass, and add a CI test gate ([28af5f1](https://github.com/sislelabs/kuso/commit/28af5f14e9d5518be122086145a60acb69913acf))
-
-## [0.23.1] — 2026-08-19
-
-### ✨ Features
-- Feat(builds): wire Spec.BuildArgs into dockerfile + nixpacks as the non-secret build-time channel ([ccf73dd](https://github.com/sislelabs/kuso/commit/ccf73dd979284cfb8f768ee3ccec88cbcacd305a))
-
-### 📝 Docs
-- Docs(skill): teach the build-time secret model, buildArgs, service state, and the JSON error envelope ([6c0f67c](https://github.com/sislelabs/kuso/commit/6c0f67c331a0a136c62ca0e20517b781abaa705b))
 
 
 ---
