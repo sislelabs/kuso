@@ -53,9 +53,13 @@ rules:
        kusoruns/status, kusoes/status]
     verbs: [get, update, patch]
   # Kube-native resources we read/write to manage tenants.
+  # delete: project delete --purge-data removes a namespace kuso created
+  # for the project. The server only deletes namespaces carrying the
+  # kuso.sislelabs.com/namespace-created-by-kuso annotation, never the
+  # home namespace or one another project still uses.
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list, watch, create, patch]
+    verbs: [get, list, watch, create, patch, delete]
   - apiGroups: [""]
     resources: [configmaps]
     # patch + delete were missing on releases through v0.11.1: the
