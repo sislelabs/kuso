@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.24.0] — 2026-08-24
+
+### ✨ Features
+- Feat: show addon-supplied env vars in the Variables tab ([e00b38a](https://github.com/sislelabs/kuso/commit/e00b38a13572ad4cc1411c0727f34b24d43b53d3))
+
 ## [0.23.5] — 2026-08-24
 
 ### 🐛 Bug Fixes
