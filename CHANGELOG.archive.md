@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.20] — 2026-08-17
+
+### 🐛 Bug Fixes
+- Fix(security)/feat(ops): editor secret-leak fixes + audit trails + ops hardening ([5941e2e](https://github.com/sislelabs/kuso/commit/5941e2e6d6d7b09cf3ca0e526716611a6c3087e5))
+
 ## [0.22.19] — 2026-08-17
 
 ### ✨ Features

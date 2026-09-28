@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.9] — 2026-09-28
+
+### Other
+- Reclaim PVCs, conn and TLS secrets on env-group delete ([f45889e](https://github.com/sislelabs/kuso/commit/f45889e59d2cd5af746ef3b9001ceb34150f327b))
+
 ## [0.26.8] — 2026-09-28
 
 ### Other
@@ -393,11 +398,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(security)/fix(cli)/fix(mcp)/fix(web)/feat(resilience): platform-review remediation batch ([8291111](https://github.com/sislelabs/kuso/commit/829111156375eceb055211168fda53fe314cd50e))
-
-## [0.22.20] — 2026-08-17
-
-### 🐛 Bug Fixes
-- Fix(security)/feat(ops): editor secret-leak fixes + audit trails + ops hardening ([5941e2e](https://github.com/sislelabs/kuso/commit/5941e2e6d6d7b09cf3ca0e526716611a6c3087e5))
 
 
 ---
