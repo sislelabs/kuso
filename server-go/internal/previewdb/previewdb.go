@@ -726,6 +726,14 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 			Parallelism:             &one,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
+				// The project netpols select pods by the project label;
+				// without it the seed pod can't reach either Postgres.
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"kuso.sislelabs.com/role":    "preview-seed",
+						"kuso.sislelabs.com/project": project,
+					},
+				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{

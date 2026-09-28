@@ -113,8 +113,13 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
+					// Project label so the project netpols let the pod reach
+					// the preview DB; public egress matches the release Job,
+					// which runs the same user image.
 					Labels: map[string]string{
-						"kuso.sislelabs.com/preview-seed": envCRName,
+						"kuso.sislelabs.com/preview-seed":          envCRName,
+						"kuso.sislelabs.com/project":               project,
+						"kuso.sislelabs.com/network-egress-public": "true",
 					},
 				},
 				Spec: corev1.PodSpec{

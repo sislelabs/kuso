@@ -495,47 +495,8 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// bucket when restoring into a sibling.
 	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env(srcCR.BackupBucket(""))...)
 
-	one := int32(1)
-	zero := int32(0)
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			// The project's execution namespace: the <release>-conn
-			// Secret the env refs below resolve against is namespace-
-			// local, so a Job in the home namespace can't start for
-			// projects with a per-project namespace. Matches where the
-			// chart's scheduled backup CronJob runs.
-			Name:      jobName,
-			Namespace: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":    "kuso-server",
-				"kuso.sislelabs.com/role":         "restore",
-				"kuso.sislelabs.com/project":      project,
-				"kuso.sislelabs.com/addon":        destAddon,
-				"kuso.sislelabs.com/source-addon": addon,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &zero,
-			Completions:  &one,
-			Parallelism:  &one,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:            "restore",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Command:         []string{"sh", "-c"},
-						Args:            []string{restoreShell},
-						// KEY names the artifact; the rest of the env is the
-						// kind-aware connection params (restoreConnEnv) +
-						// shared S3 creds (restoreS3Env), computed above.
-						Env: append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...),
-					}},
-				},
-			},
-		},
-	}
+	job := buildRestoreJob(ns, jobName, project, destAddon, addon, restoreShell,
+		append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...))
 	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
@@ -1270,5 +1231,58 @@ func stringifyCell(v any) string {
 		return x.UTC().Format(time.RFC3339)
 	default:
 		return fmt.Sprintf("%v", x)
+	}
+}
+
+// buildRestoreJob renders the restore Job. env carries KEY (the artifact)
+// plus the kind-aware connection params and shared S3 creds.
+func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell string, env []corev1.EnvVar) *batchv1.Job {
+	one := int32(1)
+	zero := int32(0)
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			// The project's execution namespace: the <release>-conn
+			// Secret the env refs below resolve against is namespace-
+			// local, so a Job in the home namespace can't start for
+			// projects with a per-project namespace. Matches where the
+			// chart's scheduled backup CronJob runs.
+			Name:      jobName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":    "kuso-server",
+				"kuso.sislelabs.com/role":         "restore",
+				"kuso.sislelabs.com/project":      project,
+				"kuso.sislelabs.com/addon":        destAddon,
+				"kuso.sislelabs.com/source-addon": srcAddon,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &zero,
+			Completions:  &one,
+			Parallelism:  &one,
+			Template: corev1.PodTemplateSpec{
+				// Same pair the chart's backup CronJob pod carries: the
+				// project label puts the pod inside the project netpols so
+				// it can reach the destination DB, public egress reaches S3.
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"kuso.sislelabs.com/role":                  "restore",
+						"kuso.sislelabs.com/project":               project,
+						"kuso.sislelabs.com/network-egress-public": "true",
+					},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:            "restore",
+						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Command:         []string{"sh", "-c"},
+						Args:            []string{restoreShell},
+						Env:             env,
+					}},
+				},
+			},
+		},
 	}
 }

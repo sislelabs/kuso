@@ -254,6 +254,8 @@ var projectDescribeCmd = &cobra.Command{
 
 var (
 	serviceAddPath        string
+	serviceAddRepo        string
+	serviceAddBranch      string
 	serviceAddRuntime     string
 	serviceAddDockerfile  string
 	serviceAddPort        int
@@ -294,8 +296,12 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		Runtime:    serviceAddRuntime,
 		Dockerfile: serviceAddDockerfile,
 		Port:       int32(serviceAddPort),
-		Repo:       &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
-		Command:    serviceAddCommand,
+		Repo: &kusoApi.ServiceRepoSpec{
+			URL:           strings.TrimSpace(serviceAddRepo),
+			Path:          serviceAddPath,
+			DefaultBranch: serviceAddBranch,
+		},
+		Command: serviceAddCommand,
 	}
 	// Build a ServiceScale only when the user actually set a flag —
 	// passing an all-zero struct would clobber the chart's defaults
@@ -337,6 +343,9 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--runtime=worker requires --from-service (the sibling service whose image to reuse)")
 		}
 		req.FromService = serviceAddFromService
+		if serviceAddRepo != "" || serviceAddBranch != "" {
+			return fmt.Errorf("--repo / --branch not valid with --runtime=worker (it reuses --from-service's image)")
+		}
 		// Workers don't build independently. Drop the default "."
 		// repo path so the server-side spec stays clean (the worker
 		// CR has no Repo block at all).
@@ -361,6 +370,8 @@ var serviceAddCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	Example: `  kuso project service add analiz api --port 8080
   kuso project service add analiz web --path apps/web --port 3000
+  # Multi-repo project: build this service from its own repo:
+  kuso project service add analiz api --repo https://github.com/acme/api --branch develop
   # Force a Dockerfile build instead of auto-detection:
   kuso service add analiz api --runtime dockerfile --port 8080`,
 	RunE: runServiceAdd,
@@ -1413,6 +1424,8 @@ func init() {
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
+	serviceAddCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
+	serviceAddCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
 	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
@@ -1490,6 +1503,8 @@ func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")

@@ -1430,13 +1430,26 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					if conn == "" || excludeConnSecrets[conn] {
 						continue
 					}
+					src := cloneSourceConnFor(a, project, envScope)
+					// A clone is mounted only where its SOURCE is subscribed.
+					// When the source can't be resolved, never ADD it — only
+					// keep it if the env already mounts it.
+					if live.Spec.SubscribedAddons != nil {
+						if src == "" {
+							if !slices.Contains(live.Spec.EnvFromSecrets, conn) {
+								continue
+							}
+						} else if !subscribesToConn(live.Spec.SubscribedAddons, project, src) {
+							continue
+						}
+					}
 					if !slices.Contains(perEnv, conn) {
 						perEnv = append(perEnv, conn)
 					}
 					// The clone REPLACES its source: mounting both is
 					// last-source-wins on shared keys (DATABASE_URL, S3_BUCKET)
 					// and can silently resolve the env to production.
-					if src := cloneSourceConn(a.Name, envScope); src != "" {
+					if src != "" {
 						perEnv = slices.DeleteFunc(perEnv, func(n string) bool { return n == src })
 					}
 				}
@@ -1534,6 +1547,32 @@ func cloneSourceConn(cloneName, envScope string) string {
 		}
 	}
 	return ""
+}
+
+// cloneSourceConnFor resolves an env-scoped clone's source conn secret,
+// preferring what was recorded on the CR at clone time (preview-source label,
+// env-group-source-addon annotation) over name derivation, which a renamed or
+// replaced source defeats.
+func cloneSourceConnFor(a *kube.KusoAddon, project, envScope string) string {
+	if short := a.Labels["kuso.sislelabs.com/preview-source"]; short != "" {
+		return connSecretName(CRName(project, short))
+	}
+	if fqn := a.Annotations["kuso.sislelabs.com/env-group-source-addon"]; fqn != "" {
+		return connSecretName(fqn)
+	}
+	return cloneSourceConn(a.Name, envScope)
+}
+
+// subscribesToConn reports whether a subscription list covers a project
+// addon conn secret, with the same short/FQ allow rule as
+// filterAddonConnsBySubscription.
+func subscribesToConn(subscribedAddons []string, project, conn string) bool {
+	for _, name := range subscribedAddons {
+		if conn == name+"-conn" || (project != "" && conn == project+"-"+name+"-conn") {
+			return true
+		}
+	}
+	return false
 }
 
 // filterAddonConnsBySubscription mirrors filterEnvFromForSubscription

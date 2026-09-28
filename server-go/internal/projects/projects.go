@@ -89,9 +89,17 @@ type Service struct {
 
 	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
 	// named environment and returns the clones' conn-secret names, scoped by the
-	// kuso.sislelabs.com/env label = envScope. nil = the env shares the project's
-	// addons (the legacy behavior). Backed by previewdb.Cloner.EnsureEnvAddons.
-	EnvAddons func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error)
+	// kuso.sislelabs.com/env label = envScope, plus the authoritative
+	// source-conn -> clone-conn map. nil = the env shares the project's addons
+	// (the legacy behavior). Backed by previewdb.Cloner.EnsureEnvAddonsMapped.
+	EnvAddons func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) (clones []string, cloneByOrigin map[string]string, err error)
+
+	// RunEnvRelease runs an env's release hook (migrations) against its
+	// current image. MUST return immediately — the implementation runs the
+	// Job asynchronously and surfaces a failure itself (log + notify). nil =
+	// skip. Used by CreateEnvGroup, whose clones inherit production's
+	// already-released image but point at FRESH, empty addons.
+	RunEnvRelease func(env *kube.KusoEnvironment)
 
 	// RecordRevision is called after every successful spec mutation
 	// (PatchService, SetEnv, …) with the patch payload that produced

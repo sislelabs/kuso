@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -474,13 +476,13 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	}
 
 	// 2) Clone services + create their envs.
-	addonConnSecrets := []string{}
+	// Candidate conn-secrets: shared addons use the production conn secret;
+	// fresh addons use the new <project>-<addon>-<env>-conn secret. Each
+	// cloned service then mounts only what its source subscribes to.
+	var sharedConn, projectAddonConns []string
 	if s.AddonConnSecrets != nil {
-		// We want EVERY conn-secret the cloned services should mount:
-		// shared addons use the production conn secret; fresh addons
-		// use the new <project>-<addon>-<env>-conn secret.
-		var sharedConn []string
 		if all, _ := s.AddonConnSecrets(ctx, project); len(all) > 0 {
+			projectAddonConns = all
 			for _, sec := range all {
 				// sec is "<project>-<addon>-conn". Recover short.
 				trimmed := strings.TrimSuffix(strings.TrimPrefix(sec, project+"-"), "-conn")
@@ -493,13 +495,19 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				}
 			}
 		}
-		addonConnSecrets = append(addonConnSecrets, sharedConn...)
 	}
-	// Fresh-addon conn-secrets.
-	for _, freshShort := range freshAddonRename {
-		addonConnSecrets = append(addonConnSecrets, fmt.Sprintf("%s-%s-conn", project, freshShort))
+	// freshAddonRename is the authoritative source->clone pair (recorded
+	// while the source addon was in hand). Sorted: envFrom order decides
+	// which secret wins a duplicate key.
+	freshConns := make([]string, 0, len(freshAddonRename))
+	freshConnByOrigin := make(map[string]string, len(freshAddonRename))
+	for srcShort, freshShort := range freshAddonRename {
+		clone := fmt.Sprintf("%s-%s-conn", project, freshShort)
+		freshConns = append(freshConns, clone)
+		freshConnByOrigin[fmt.Sprintf("%s-%s-conn", project, srcShort)] = clone
 	}
-	addonConnSecrets = append(addonConnSecrets, kube.SharedSecretNames(project)...)
+	sort.Strings(freshConns)
+	var releaseEnvs []*kube.KusoEnvironment
 
 	// Anchor: the first env CR we create carries the group-level
 	// annotations. Picks the alphabetically-first service so the same
@@ -559,6 +567,24 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			prodHosts,
 			req.Name,
 		)
+
+		// Addon + shared-secret mounts for THIS service, gated by the source
+		// service's subscriptions exactly like AddEnvironment (nil = legacy
+		// mount-all for both).
+		subs := item.svc.Spec.SubscribedAddons
+		svcEnvFrom := append(append([]string{}, sharedConn...), subscribedClones(freshConns, freshConnByOrigin, subs, project)...)
+		svcEnvFrom = append(svcEnvFrom, kube.SharedSecretNames(project)...)
+		if subs != nil {
+			svcEnvFrom = filterEnvFromForSubscription(svcEnvFrom, subs, projectAddonConns, project)
+		}
+		envEnvVars := newEnvVars
+		if item.svc.Spec.SharedEnvKeys != nil {
+			merged, pruned, err := s.resolveSharedEnvKeysForEnv(ctx, ns, project, item.svc.Spec.SharedEnvKeys, newEnvVars, nil, svcEnvFrom, nil)
+			if err != nil {
+				return nil, failCreate(fmt.Errorf("resolve shared env keys for %s: %w", item.short, err))
+			}
+			envEnvVars, svcEnvFrom = merged, pruned
+		}
 
 		// Clone the KusoService with the rewritten envVars. Branch
 		// defaults to whatever production has — user retunes per-
@@ -693,7 +719,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				TLSEnabled:       true,
 				ClusterIssuer:    "letsencrypt-prod",
 				IngressClassName: "traefik",
-				// addonConnSecrets (addon conn + shared) PLUS the clone's OWN
+				// svcEnvFrom (subscribed addon conns + shared) PLUS the clone's OWN
 				// managed secrets, named against newSvcShort so they MATCH the
 				// env's service label. RefreshEnvSecrets (fires on every addon
 				// add/delete) recomputes envFromSecrets from that label, so the
@@ -711,11 +737,11 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				// segment while EnvSecretName appends req.Name as the ENV
 				// segment; both call sites pass the same two args, so the two
 				// names match exactly (no mismatch to reconcile).
-				EnvFromSecrets: append(append([]string{}, addonConnSecrets...),
+				EnvFromSecrets: append(svcEnvFrom,
 					kube.ServiceSecretName(project, newSvcShort),
 					kube.EnvSecretName(project, newSvcShort, req.Name),
 				),
-				EnvVars:         newEnvVars,
+				EnvVars:         envEnvVars,
 				Image:           inheritImage,
 				Placement:       ResolvePlacement(proj.Spec.Placement, item.svc.Spec.Placement),
 				Volumes:         item.svc.Spec.Volumes,
@@ -763,10 +789,23 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				// it would strand the clone imageless.
 			},
 		}
-		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR); err != nil {
+		createdEnv, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR)
+		if err != nil {
 			return nil, failCreate(fmt.Errorf("clone env for %s: %w", item.short, err))
 		}
 		createdEnvs = append(createdEnvs, envCRName)
+		// The inherited image was released against PRODUCTION's database;
+		// a fresh clone is empty, so its migrations still have to run.
+		if inheritImage != nil && item.svc.Spec.Release != nil && len(item.svc.Spec.Release.Command) > 0 &&
+			usesAnyConn(svcEnvFrom, envEnvVars, freshConns) {
+			releaseEnvs = append(releaseEnvs, createdEnv)
+		}
+	}
+	// Only once the whole group exists: a failure above rolls every env back.
+	if s.RunEnvRelease != nil {
+		for _, e := range releaseEnvs {
+			s.RunEnvRelease(e)
+		}
 	}
 
 	return &EnvGroupSummary{
@@ -1041,6 +1080,23 @@ func rewriteEnvVarsForGroup(
 		}
 	}
 	return out
+}
+
+// usesAnyConn reports whether an env reads any of conns, via an envFrom mount
+// or an explicit secretKeyRef.
+func usesAnyConn(envFrom []string, envVars []kube.KusoEnvVar, conns []string) bool {
+	for _, c := range conns {
+		if slices.Contains(envFrom, c) {
+			return true
+		}
+	}
+	for _, e := range envVars {
+		skr, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
+		if name, _ := skr["name"].(string); name != "" && slices.Contains(conns, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // cloneServiceSpec returns a deep-ish copy of a service spec, suitable

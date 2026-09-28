@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,19 +24,25 @@ func seedAddon(project, short, kind string) seed {
 }
 
 // fakeEnvAddons returns an EnvAddons func that records its call and returns the
-// given clone conn-secrets, so AddEnvironment's swap logic can be asserted.
+// given clone conn-secrets, so AddEnvironment's swap logic can be asserted. The
+// origin map is derived from the conventional "<base>-<scope>-conn" names —
+// fine for fixtures; production gets it from EnsureEnvAddonsMapped.
 func fakeEnvAddons(clones []string, got *struct {
 	scope   string
 	kinds   []string
 	seedAll bool
 	called  bool
-}) func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error) {
-	return func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error) {
+}) func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
+	return func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
 		got.scope = envScope
 		got.kinds = kinds
 		got.seedAll = seedAll
 		got.called = true
-		return clones, nil
+		byOrigin := make(map[string]string, len(clones))
+		for _, c := range clones {
+			byOrigin[strings.TrimSuffix(c, "-"+envScope+"-conn")+"-conn"] = c
+		}
+		return clones, byOrigin, nil
 	}
 }
 
@@ -267,5 +274,66 @@ func TestAddEnvironment_ShareAddonsKeepsProjectConns(t *testing.T) {
 	}
 	if contains(env.Spec.EnvFromSecrets, "alpha-pg-staging-conn") {
 		t.Fatalf("no per-env clone should be mounted with --share-addons: %v", env.Spec.EnvFromSecrets)
+	}
+}
+
+// TestAddEnvironment_ClonesRespectSubscription: a new env gets its own copy
+// of every stateful addon, but only mounts the clones of addons the service
+// subscribes to. The e2e frontend with subscribedAddons=[] was handed its
+// staging DATABASE_URL and REDIS_URL because clones were appended after the
+// subscription filter had already run.
+func TestAddEnvironment_ClonesRespectSubscription(t *testing.T) {
+	const dbClone, cacheClone = "alpha-db-staging-conn", "alpha-cache-staging-conn"
+	cases := []struct {
+		name       string
+		subscribed []string
+		want       []string
+		notWant    []string
+	}{
+		{"subscribed to db only", []string{"db"}, []string{dbClone}, []string{cacheClone}},
+		{"subscribed to nothing", []string{}, nil, []string{dbClone, cacheClone}},
+		{"nil subscription mounts all", nil, []string{dbClone, cacheClone}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{Runtime: "dockerfile", Port: 3000, SubscribedAddons: tc.subscribed}),
+				seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+				seedAddon("alpha", "db", "postgres"),
+				seedAddon("alpha", "cache", "redis"),
+			)
+			s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+				return []string{"alpha-db-conn", "alpha-cache-conn", "alpha-shared"}, nil
+			}
+			var got struct {
+				scope   string
+				kinds   []string
+				seedAll bool
+				called  bool
+			}
+			s.EnvAddons = fakeEnvAddons([]string{dbClone, cacheClone}, &got)
+
+			env, err := s.AddEnvironment(context.Background(), "alpha", "web", CreateEnvRequest{Name: "staging", Branch: "staging"})
+			if err != nil {
+				t.Fatalf("AddEnvironment: %v", err)
+			}
+			efs := env.Spec.EnvFromSecrets
+			for _, w := range tc.want {
+				if !contains(efs, w) {
+					t.Errorf("want %s mounted: %v", w, efs)
+				}
+			}
+			for _, nw := range tc.notWant {
+				if contains(efs, nw) {
+					t.Errorf("%s must not be mounted: %v", nw, efs)
+				}
+			}
+			for _, prod := range []string{"alpha-db-conn", "alpha-cache-conn"} {
+				if contains(efs, prod) {
+					t.Errorf("production conn %s leaked into staging env: %v", prod, efs)
+				}
+			}
+		})
 	}
 }

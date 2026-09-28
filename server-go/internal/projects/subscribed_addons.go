@@ -34,17 +34,7 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 	if subscribedAddons == nil {
 		return envFromSecrets
 	}
-	// Exact allow-set of conn-secret names from subscribed addon names.
-	// Conn secrets follow "<project>-<addon>-conn"; accept both the short
-	// ("pg" → "<project>-pg-conn") and FQ ("tickero-pg" → "tickero-pg-conn")
-	// shapes the user might write.
-	allow := make(map[string]bool, len(subscribedAddons))
-	for _, name := range subscribedAddons {
-		allow[name+"-conn"] = true
-		if project != "" {
-			allow[project+"-"+name+"-conn"] = true
-		}
-	}
+	allow := subscribedConnSet(subscribedAddons, project)
 	// Set of all project-owned conn-secret names. Anything NOT in this set
 	// passes through unchanged.
 	projectAddonSet := make(map[string]bool, len(projectAddons))
@@ -95,6 +85,45 @@ func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []st
 			continue
 		}
 		out = append(out, conn)
+	}
+	return out
+}
+
+// subscribedConnSet is the exact allow-set of conn-secret names for a
+// subscription. Conn secrets follow "<project>-<addon>-conn"; accept both the
+// short ("pg" → "<project>-pg-conn") and FQ ("tickero-pg" → "tickero-pg-conn")
+// shapes the user might write.
+func subscribedConnSet(subscribedAddons []string, project string) map[string]bool {
+	allow := make(map[string]bool, 2*len(subscribedAddons))
+	for _, name := range subscribedAddons {
+		allow[name+"-conn"] = true
+		if project != "" {
+			allow[project+"-"+name+"-conn"] = true
+		}
+	}
+	return allow
+}
+
+// subscribedClones keeps the clone conns whose SOURCE addon the service
+// subscribes to. cloneByOrigin (source conn -> clone conn) comes from
+// previewdb.EnsureEnvAddonsMapped; the source is never re-derived from the
+// clone's name, which is not invertible. nil subscription = legacy mount-all.
+func subscribedClones(clones []string, cloneByOrigin map[string]string, subscribedAddons []string, project string) []string {
+	if subscribedAddons == nil {
+		return clones
+	}
+	allow := subscribedConnSet(subscribedAddons, project)
+	keep := make(map[string]bool, len(cloneByOrigin))
+	for origin, clone := range cloneByOrigin {
+		if allow[origin] {
+			keep[clone] = true
+		}
+	}
+	out := make([]string, 0, len(clones))
+	for _, c := range clones {
+		if keep[c] {
+			out = append(out, c)
+		}
 	}
 	return out
 }

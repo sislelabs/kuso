@@ -232,3 +232,23 @@ func TestIsPreviewCloneName(t *testing.T) {
 		})
 	}
 }
+
+// The project netpols (<p>-default-deny / <p>-allow-intra-project) select
+// pods by kuso.sislelabs.com/project. Labelling only the Job object left
+// the seed POD outside the project, so it could never reach either
+// Postgres and the clone stayed empty.
+func TestBuildSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
+	t.Parallel()
+
+	job := buildSeedJob("kuso-e2e", "e2e", "e2e-db", "e2e-db-staging", "", 1780059297)
+	labels := job.Spec.Template.ObjectMeta.Labels
+	if got := labels["kuso.sislelabs.com/project"]; got != "e2e" {
+		t.Errorf("pod template kuso.sislelabs.com/project = %q, want %q", got, "e2e")
+	}
+	if got := labels["kuso.sislelabs.com/role"]; got != "preview-seed" {
+		t.Errorf("pod template kuso.sislelabs.com/role = %q, want preview-seed", got)
+	}
+	if _, ok := labels["kuso.sislelabs.com/network-egress-public"]; ok {
+		t.Error("seed pod only talks to in-project Postgres; it must not opt into public egress")
+	}
+}

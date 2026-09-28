@@ -664,8 +664,38 @@ func main() {
 		// get. Backed by a previewdb cloner (independent of the github/preview
 		// path so it's always available for `kuso environment add`).
 		envAddonCloner := previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "env-addons"))
-		projSvc.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error) {
-			return envAddonCloner.EnsureEnvAddons(ctx, project, envScope, previewdb.EnvAddonOpts{Kinds: kinds, SeedAll: seedAll})
+		projSvc.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
+			return envAddonCloner.EnsureEnvAddonsMapped(ctx, project, envScope, previewdb.EnvAddonOpts{Kinds: kinds, SeedAll: seedAll})
+		}
+		// Env-group clones inherit production's image but get fresh addons:
+		// run the release hook (migrations) against them in the background.
+		// releaserun's wait-for-addons init container covers the fresh DB
+		// still starting up.
+		envReleaseRunner := releaserun.New(kc)
+		envReleaseLog := logger.With("component", "env-group-release")
+		projSvc.RunEnvRelease = func(env *kube.KusoEnvironment) {
+			goSafe(envReleaseLog, "env-group-release", func() {
+				rctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+				defer cancel()
+				res, err := envReleaseRunner.Run(rctx, env.Namespace, env, env.Spec.Image)
+				if err == nil && res.Outcome == releaserun.OutcomeSucceeded {
+					envReleaseLog.Info("release hook succeeded", "env", env.Name, "job", res.JobName)
+					return
+				}
+				msg := res.Message
+				if err != nil {
+					msg = err.Error()
+				}
+				envReleaseLog.Warn("release hook failed", "env", env.Name, "job", res.JobName, "outcome", res.Outcome, "err", msg)
+				notifyDisp.Emit(notify.Event{
+					Type:     notify.EventRunFailed,
+					Project:  env.Spec.Project,
+					Service:  env.Spec.Service,
+					Title:    "Release hook failed for " + env.Name,
+					Body:     "The env-group clone runs against a fresh database that was not migrated: " + msg,
+					Severity: "error",
+				})
+			})
 		}
 		// Spec reconciler — the apply endpoint reuses the same
 		// project + addon services for create/update/delete so the

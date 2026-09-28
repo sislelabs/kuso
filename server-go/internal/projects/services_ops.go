@@ -979,16 +979,18 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			return nil, fmt.Errorf("%w: %s would still point at production addons that env %q does not get its own copy of (%s); pass --share-addons to share them deliberately, or reference an addon kuso can clone",
 				ErrInvalid, service, req.Name, strings.Join(leaked, ", "))
 		}
-		clones, err := s.EnvAddons(ctx, project, req.Name, kinds, seedAll)
+		clones, cloneByOrigin, err := s.EnvAddons(ctx, project, req.Name, kinds, seedAll)
 		if err != nil {
 			return nil, fmt.Errorf("provision env addons: %w", err)
 		}
 		// Drop the PROJECT addon conn-secrets from envFromSecrets (keep shared /
 		// instance / per-service / foo-conn secrets), then append the clones so the
-		// env's DATABASE_URL/REDIS_URL/etc. resolve to its OWN addons.
+		// env's DATABASE_URL/REDIS_URL/etc. resolve to its OWN addons. Every
+		// stateful addon gets a clone, but only clones of subscribed sources
+		// are mounted — the subscription filter above never saw them.
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = dropProjectAddonConns(envFromSecrets, projectAddons)
-		envFromSecrets = append(envFromSecrets, clones...)
+		envFromSecrets = append(envFromSecrets, subscribedClones(clones, cloneByOrigin, svc.Spec.SubscribedAddons, project)...)
 		droppedAddonConns = projectAddons
 		envCloneConns = clones
 	}
