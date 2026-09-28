@@ -59,13 +59,8 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 	if err != nil {
 		return nil, err
 	}
-	subscribed := svc.Spec.SharedEnvKeys
-	if subscribed == nil {
-		// Should not happen post-migration; coerce to [] so the wire
-		// shape stays stable and the UI doesn't trip on null.
-		subscribed = []string{}
-	}
-	out := &SubscribableSharedKeys{Subscribed: subscribed}
+	out := &SubscribableSharedKeys{Subscribed: svc.Spec.SharedEnvKeys}
+	var all []string
 	for _, name := range kube.SharedSecretNames(project) {
 		keys, err := s.listSecretKeys(ctx, ns, name)
 		if err != nil {
@@ -75,6 +70,15 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 			Secret: name,
 			Keys:   keys,
 		})
+		all = append(all, keys...)
+	}
+	if out.Subscribed == nil {
+		// Unset = every shared key is mounted, so report them all. Not
+		// only pre-migration data: a service created since the last
+		// server restart is unset too. Reporting [] made `env unshare K`
+		// drop every key and `env share K` narrow a mount-all service.
+		sort.Strings(all)
+		out.Subscribed = dedupeSorted(all)
 	}
 	return out, nil
 }
@@ -244,4 +248,15 @@ func (s *Service) ResyncSharedKeySubscribers(ctx context.Context, project, key s
 		touched++
 	}
 	return touched, errors.Join(errs...)
+}
+
+// dedupeSorted drops adjacent duplicates from a sorted slice; never nil.
+func dedupeSorted(in []string) []string {
+	out := make([]string, 0, len(in))
+	for i, v := range in {
+		if i == 0 || v != in[i-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }

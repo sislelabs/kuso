@@ -332,11 +332,12 @@ func (s *Service) ListSubscribableAddons(ctx context.Context, project, service s
 
 	subscribed := svc.Spec.SubscribedAddons
 	if subscribed == nil {
-		// Legacy mode — coerce to [] for the wire so the UI doesn't
-		// have to special-case nil. The post-migration server seeds
-		// every service so this branch only fires for pre-migration
-		// reads.
-		subscribed = []string{}
+		// Unset = mount every addon, so report every addon as subscribed.
+		// This is not only pre-migration data: a service created since
+		// the last server restart is unset too. Reporting [] made the UI
+		// and CLI believe it mounted nothing, and `addon unsubscribe`
+		// (current minus one) then dropped every addon.
+		subscribed = append([]string{}, shortAvailable...)
 	}
 	return &SubscribableAddons{
 		Subscribed: subscribed,
