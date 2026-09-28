@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.18] — 2026-09-28
+
+### Other
+- Reap snapshot Jobs and report shared-key resyncs ([538a7de](https://github.com/sislelabs/kuso/commit/538a7de6ab3eb4cebdb111a15c2fddf5802ad48f))
+
 ## [0.26.17] — 2026-09-28
 
 ### Other
@@ -391,11 +396,6 @@ messages on every release. The format is loosely based on
 - Fix: stop the image sweep untagging live images in other namespaces ([421062f](https://github.com/sislelabs/kuso/commit/421062fc8f3eb82691643aa76a7a2543927278fd))
 - Fix: never mark a build succeeded when the release gate did not run ([c0070ab](https://github.com/sislelabs/kuso/commit/c0070ab038dc6ea41a4d6622c059851b80d66c38))
 - Fix: stop addon refresh repointing scoped envs at the production database ([97c9b74](https://github.com/sislelabs/kuso/commit/97c9b744ba1c57af152eccac739ef1ea42c31f2d))
-
-## [0.24.1] — 2026-08-24
-
-### 🐛 Bug Fixes
-- Fix: clear env-CR literals that shadow a managed secret value ([4b99242](https://github.com/sislelabs/kuso/commit/4b992421ba5c1a1d27da93880ad63241e0fa060d))
 
 
 ---

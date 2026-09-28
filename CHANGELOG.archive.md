@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.24.1] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: clear env-CR literals that shadow a managed secret value ([4b99242](https://github.com/sislelabs/kuso/commit/4b992421ba5c1a1d27da93880ad63241e0fa060d))
+
 ## [0.24.0] — 2026-08-24
 
 ### ✨ Features
