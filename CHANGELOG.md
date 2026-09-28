@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.14] — 2026-09-28
+
+### Other
+- Route user /healthz to the app and read readiness from EndpointSlices ([8dc86ac](https://github.com/sislelabs/kuso/commit/8dc86acee2c8159f1088dbe661613ffb53c5e1b7))
+
 ## [0.26.13] — 2026-09-28
 
 ### Other
@@ -388,11 +393,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: let secret-backed env vars be rotated and renamed ([1f14db8](https://github.com/sislelabs/kuso/commit/1f14db8a462880f0259a0f6a8f67f26f8f2b99ba))
-
-## [0.23.3] — 2026-08-24
-
-### 🐛 Bug Fixes
-- Fix: stop baking credential-looking literals into published images ([e7618d4](https://github.com/sislelabs/kuso/commit/e7618d4f5a532886232425b230b450d0ceece1bc))
 
 
 ---

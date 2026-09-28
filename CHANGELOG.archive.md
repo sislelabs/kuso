@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.3] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: stop baking credential-looking literals into published images ([e7618d4](https://github.com/sislelabs/kuso/commit/e7618d4f5a532886232425b230b450d0ceece1bc))
+
 ## [0.23.2] — 2026-08-22
 
 ### 🐛 Bug Fixes
