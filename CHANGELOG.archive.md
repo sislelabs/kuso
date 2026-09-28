@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.23.4] — 2026-08-24
+
+### 🐛 Bug Fixes
+- Fix: let secret-backed env vars be rotated and renamed ([1f14db8](https://github.com/sislelabs/kuso/commit/1f14db8a462880f0259a0f6a8f67f26f8f2b99ba))
+
 ## [0.23.3] — 2026-08-24
 
 ### 🐛 Bug Fixes

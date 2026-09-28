@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.15] — 2026-09-28
+
+### Other
+- Fall back to v1 Endpoints when EndpointSlices are forbidden ([ec83980](https://github.com/sislelabs/kuso/commit/ec839807030a74904de14ceed8d0b403fb842cb1))
+
 ## [0.26.14] — 2026-09-28
 
 ### Other
@@ -388,11 +393,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: load env values up front so every var row is editable ([1ce8e75](https://github.com/sislelabs/kuso/commit/1ce8e75bae4704f7759496ff95dac0e53742e40e))
-
-## [0.23.4] — 2026-08-24
-
-### 🐛 Bug Fixes
-- Fix: let secret-backed env vars be rotated and renamed ([1f14db8](https://github.com/sislelabs/kuso/commit/1f14db8a462880f0259a0f6a8f67f26f8f2b99ba))
 
 
 ---
