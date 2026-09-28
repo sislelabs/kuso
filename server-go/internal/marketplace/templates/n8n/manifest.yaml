@@ -4,6 +4,7 @@ description: Extendable workflow automation with a fair-code license.
 category: automation
 website: https://n8n.io
 appVersion: "1.62.1"
+size: large
 prompts:
   - key: host
     title: Domain

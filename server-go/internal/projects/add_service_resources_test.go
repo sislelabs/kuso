@@ -89,3 +89,60 @@ func TestAddService_NoDefaultLeavesResourcesEmpty(t *testing.T) {
 		t.Fatalf("resources = %v, want none", created.Spec.Resources)
 	}
 }
+
+var largeRes = map[string]any{
+	"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
+	"limits":   map[string]any{"memory": "2Gi"},
+}
+
+func sizedFixture(t *testing.T) *Service {
+	t.Helper()
+	s := defaultPodFixture(t, mediumRes)
+	s.PodSizeResources = func(_ context.Context, name string) (map[string]any, bool, error) {
+		if name == "large" {
+			return largeRes, true, nil
+		}
+		return nil, false, nil
+	}
+	return s
+}
+
+// A named size (e.g. a marketplace app's preset) beats the instance default.
+func TestAddService_NamedSizeBeatsDefault(t *testing.T) {
+	t.Parallel()
+	s := sizedFixture(t)
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "large"})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if !reflect.DeepEqual(created.Spec.Resources, largeRes) {
+		t.Fatalf("resources = %v, want large %v", created.Spec.Resources, largeRes)
+	}
+}
+
+func TestAddService_ExplicitResourcesBeatNamedSize(t *testing.T) {
+	t.Parallel()
+	s := sizedFixture(t)
+	mine := map[string]any{"requests": map[string]any{"memory": "64Mi"}}
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "large", Resources: &mine})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if !reflect.DeepEqual(created.Spec.Resources, mine) {
+		t.Fatalf("resources = %v, want %v", created.Spec.Resources, mine)
+	}
+}
+
+// A preset the admin deleted falls back to the default rather than failing
+// the create.
+func TestAddService_UnknownSizeFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	s := sizedFixture(t)
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "gone"})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if !reflect.DeepEqual(created.Spec.Resources, mediumRes) {
+		t.Fatalf("resources = %v, want default %v", created.Spec.Resources, mediumRes)
+	}
+}

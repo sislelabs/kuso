@@ -558,6 +558,9 @@ func main() {
 			projSvc.DefaultPodResources = func(ctx context.Context) (map[string]any, error) {
 				return podsizes.DefaultResources(ctx, database)
 			}
+			projSvc.PodSizeResources = func(ctx context.Context, name string) (map[string]any, bool, error) {
+				return podsizes.ResourcesFor(ctx, database, name)
+			}
 		}
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
@@ -851,6 +854,27 @@ func main() {
 			// Leader-gated like the other singleton sweeps so multi-replica
 			// installs don't double-seed, and idempotent across acquisitions.
 			go envAddonCloner.ResumePendingSeeds(workCtx)
+			// One-shot backfills for addon state written before two fixes:
+			// named-env clones missing their source annotation, and
+			// instance-backed conn Secrets in custom project namespaces
+			// that still carry a bare (unresolvable) instance host.
+			// Idempotent; leader-gated so replicas don't race the writes.
+			if addonSvc != nil {
+				goSafe(logger, "addon-boot-heal", func() {
+					hl := logger.With("component", "addon-boot-heal")
+					if n, err := addonSvc.HealCloneSourceAnnotations(workCtx, hl); err != nil {
+						hl.Warn("clone source backfill", "stamped", n, "err", err)
+					} else {
+						hl.Info("clone source backfill done", "stamped", n)
+					}
+					if n, err := addonSvc.HealInstanceConnHosts(workCtx, hl); err != nil {
+						hl.Warn("instance conn host heal", "healed", n, "err", err)
+					} else {
+						hl.Info("instance conn host heal done", "healed", n,
+							"note", "consuming pods pick up rewritten hosts on their next restart")
+					}
+				})
+			}
 			// Tell readyz this pod is leading AND running the poller, so
 			// it enforces the poller heartbeat. Only set when the poller
 			// is actually enabled — otherwise readyz would expect a beat

@@ -497,11 +497,27 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// instance default pod size. A lookup failure must not block the
 	// create; the service just starts unsized, as before.
 	var resources map[string]any
-	if req.Resources != nil {
+	sized := false
+	if req.Resources == nil && req.Size != "" && s.PodSizeResources != nil {
+		res, ok, err := s.PodSizeResources(ctx, req.Size)
+		switch {
+		case err != nil:
+			slog.WarnContext(ctx, "add service: pod size lookup failed; using default",
+				"project", project, "service", req.Name, "size", req.Size, "err", err)
+		case !ok:
+			slog.WarnContext(ctx, "add service: unknown pod size; using default",
+				"project", project, "service", req.Name, "size", req.Size)
+		default:
+			resources, sized = res, true
+		}
+	}
+	switch {
+	case sized:
+	case req.Resources != nil:
 		if len(*req.Resources) > 0 {
 			resources = *req.Resources
 		}
-	} else if s.DefaultPodResources != nil {
+	case s.DefaultPodResources != nil:
 		if def, err := s.DefaultPodResources(ctx); err == nil {
 			resources = def
 		} else {

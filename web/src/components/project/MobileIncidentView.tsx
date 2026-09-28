@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
 import { serviceShortName } from "@/lib/utils";
 import {
+  buildTriggerMessage,
   useTriggerBuild,
   useStopService,
   useStartService,
@@ -207,7 +208,8 @@ function MobileServiceCard({
     trigger.mutate(
       {},
       {
-        onSuccess: () => toast.success(`Redeploy queued for ${shortName}`),
+        onSuccess: (res) =>
+          toast.success(buildTriggerMessage(res, `Redeploy queued for ${shortName}`, shortName)),
         onError: (err) => toast.error(err instanceof Error ? err.message : "Redeploy failed"),
       },
     );

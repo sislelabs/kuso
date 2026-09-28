@@ -77,6 +77,9 @@ func RenderTemplate(m *Manifest, templateYAML []byte, project string, answers ma
 		s.Repo = substitute(s.Repo)
 		s.Branch = substitute(s.Branch)
 		s.Path = substitute(s.Path)
+		if s.Size == "" {
+			s.Size = m.Size
+		}
 		for i := range s.Command {
 			s.Command[i] = substitute(s.Command[i])
 		}

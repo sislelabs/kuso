@@ -112,6 +112,11 @@ type ServiceSpec struct {
 	// setpriv-based entrypoints). Omitted = chart default (drop-ALL,
 	// no escalation). Mirrors kube.KusoSecurityContext.
 	SecurityContext *SecuritySpec `yaml:"securityContext,omitempty"`
+	// Size names a pod-size preset (small/medium/large or an admin-defined
+	// one) whose resources the service gets when it is CREATED. Ignored on
+	// update — resources are edited on the live service afterwards.
+	// Omitted = the instance default pod size.
+	Size string `yaml:"size,omitempty"`
 }
 
 // ReleaseSpec is the pre-deploy release hook (migrations etc.), flattened

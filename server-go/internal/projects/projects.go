@@ -92,6 +92,9 @@ type Service struct {
 	// none. nil result = no default. nil func = no default (tests / servers
 	// without a DB). Backed by podsizes.DefaultResources.
 	DefaultPodResources func(ctx context.Context) (map[string]any, error)
+	// PodSizeResources resolves a named pod-size preset to its resources
+	// map; ok=false when no preset has that name.
+	PodSizeResources func(ctx context.Context, name string) (res map[string]any, ok bool, err error)
 
 	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
 	// named environment and returns the clones' conn-secret names, scoped by the

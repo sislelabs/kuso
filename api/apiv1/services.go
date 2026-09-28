@@ -154,6 +154,9 @@ type ServiceScale struct {
 type ServiceSleep struct {
 	Enabled      bool `json:"enabled,omitempty"`
 	AfterMinutes int  `json:"afterMinutes,omitempty"`
+	// NonProduction: "" / "on" = non-production envs sleep when idle
+	// (the default); "off" = they never sleep.
+	NonProduction string `json:"nonProduction,omitempty"`
 }
 
 // ServiceStatic configures the static runtime: optional buildCmd

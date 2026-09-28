@@ -284,6 +284,7 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	req.BuildArgs = s.BuildArgs
 	req.PublicEnv = s.PublicEnv
 	req.SecurityContext = toKubeSecurityContext(s.SecurityContext)
+	req.Size = s.Size
 	return req
 }
 

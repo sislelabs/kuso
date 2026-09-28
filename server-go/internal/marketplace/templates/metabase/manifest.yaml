@@ -4,6 +4,7 @@ description: Open-source business intelligence and dashboards.
 category: data
 website: https://www.metabase.com
 appVersion: "0.51.1.4"
+size: large
 prompts:
   - key: host
     title: Domain

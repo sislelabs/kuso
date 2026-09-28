@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { useBuilds, useService, useTriggerBuild } from "@/features/services";
+import { buildTriggerMessage, useBuilds, useService, useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
@@ -119,8 +119,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
 
   const onRedeploy = async (body: { branch?: string; ref?: string } = {}) => {
     try {
-      await trigger.mutateAsync(body);
-      toast.success("Build triggered");
+      const res = await trigger.mutateAsync(body);
+      toast.success(buildTriggerMessage(res, "Build triggered"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to trigger build");
     }

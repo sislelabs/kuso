@@ -112,3 +112,14 @@ func TestApiv1CreateServiceCarriesResources(t *testing.T) {
 		t.Errorf("resources = %v, want %v", out.Resources, want)
 	}
 }
+
+func TestApiv1CreateServiceCarriesSleepNonProduction(t *testing.T) {
+	var in apiv1.CreateServiceRequest
+	if err := json.Unmarshal([]byte(`{"name":"web","sleep":{"afterMinutes":10,"nonProduction":"off"}}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	out := apiv1CreateServiceToDomain(in)
+	if out.Sleep == nil || out.Sleep.NonProduction != "off" || out.Sleep.AfterMinutes != 10 {
+		t.Fatalf("sleep = %+v, want afterMinutes 10 + nonProduction off", out.Sleep)
+	}
+}

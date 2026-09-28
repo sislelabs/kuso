@@ -136,3 +136,21 @@ func TestResources_OmitsEmptyQuantities(t *testing.T) {
 		t.Fatalf("Resources(empty) = %v, want nil", got)
 	}
 }
+
+func TestResourcesFor_NamedPreset(t *testing.T) {
+	st := &fakeStore{}
+	if _, err := Seed(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ResourcesFor(context.Background(), st, "large")
+	if err != nil || !ok {
+		t.Fatalf("large: ok=%v err=%v", ok, err)
+	}
+	lim, _ := got["limits"].(map[string]any)
+	if lim["memory"] != "2Gi" {
+		t.Fatalf("large limits = %v, want memory 2Gi", got["limits"])
+	}
+	if _, ok, err := ResourcesFor(context.Background(), st, "gigantic"); ok || err != nil {
+		t.Fatalf("unknown preset: ok=%v err=%v, want false, nil", ok, err)
+	}
+}

@@ -112,6 +112,16 @@ func DefaultResources(ctx context.Context, st Store) (map[string]any, error) {
 	return Resources(p), nil
 }
 
+// ResourcesFor is the named preset's spec.resources map; ok=false when no
+// preset has that name.
+func ResourcesFor(ctx context.Context, st Store, name string) (map[string]any, bool, error) {
+	p, ok, err := find(ctx, st, name)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	return Resources(p), true, nil
+}
+
 // Resources renders a preset as the k8s ResourceRequirements map the
 // kusoenvironment chart passes through toYaml. Empty quantities are
 // omitted; a preset with none set yields nil.

@@ -672,3 +672,16 @@ func TestApply_CarriesSleepNonProduction(t *testing.T) {
 		t.Fatalf("patch lost nonProduction: %+v", fp.patched)
 	}
 }
+
+func TestApply_CreateServiceCarriesSize(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "image", Size: "large"}}}
+	plan := &Plan{ServicesToCreate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := fp.created[0].req.Size; got != "large" {
+		t.Fatalf("create size = %q, want large", got)
+	}
+}

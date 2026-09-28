@@ -40,10 +40,35 @@ func TestParseManifest_Errors(t *testing.T) {
 		"bad prompt kind":   "name: umami\ntitle: X\ndescription: d\ncategory: data\nprompts:\n  - key: k\n    title: T\n    kind: secret\n",
 		"dup prompt key":    "name: umami\ntitle: X\ndescription: d\ncategory: data\nprompts:\n  - key: k\n    title: A\n    kind: string\n  - key: k\n    title: B\n    kind: string\n",
 		"unknown field":     "name: umami\ntitle: X\ndescription: d\ncategory: data\nbogus: 1\n",
+		"bad size":          "name: umami\ntitle: X\ndescription: d\ncategory: data\nsize: Huge!\n",
 	}
 	for label, raw := range cases {
 		if _, err := ParseManifest([]byte(raw)); !errors.Is(err, ErrInvalidManifest) {
 			t.Errorf("%s: want ErrInvalidManifest, got %v", label, err)
+		}
+	}
+}
+
+func TestParseManifest_Size(t *testing.T) {
+	m, err := ParseManifest([]byte("name: metabase\ntitle: M\ndescription: d\ncategory: data\nsize: large\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Size != "large" {
+		t.Fatalf("size = %q, want large", m.Size)
+	}
+}
+
+// Memory-heavy catalog apps must not deploy at the default pod size.
+func TestCatalog_HeavyAppsDeclareSize(t *testing.T) {
+	want := map[string]string{"metabase": "large", "n8n": "large", "gitea": "medium", "plausible": "medium"}
+	for app, size := range want {
+		e, err := GetEntry(app)
+		if err != nil {
+			t.Fatalf("%s: %v", app, err)
+		}
+		if e.Manifest.Size != size {
+			t.Errorf("%s size = %q, want %q", app, e.Manifest.Size, size)
 		}
 	}
 }

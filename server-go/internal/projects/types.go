@@ -127,6 +127,9 @@ type CreateServiceRequest struct {
 	// Resources is the pod CPU/memory requests+limits (ResourceRequirements
 	// shape). nil = the instance's default pod size; an empty map = none.
 	Resources *map[string]any `json:"resources,omitempty"`
+	// Size names a pod-size preset used when Resources is nil. Beats the
+	// instance default; an unknown preset falls back to the default.
+	Size string `json:"size,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

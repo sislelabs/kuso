@@ -40,8 +40,10 @@ export {
   runMessage,
   runCompletedAt,
 } from "./api";
+export { buildTriggerMessage } from "./buildTrigger";
 export type {
   BuildSummary,
+  TriggerBuildResult,
   ErrorGroup,
   PatchServiceBody,
   KusoCron,

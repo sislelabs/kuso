@@ -4,6 +4,7 @@ description: Simple, open-source, lightweight and privacy-friendly web analytics
 category: analytics
 website: https://plausible.io
 appVersion: "2.1.4"
+size: medium
 prompts:
   - key: host
     title: Domain

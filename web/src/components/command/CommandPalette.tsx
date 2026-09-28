@@ -33,7 +33,7 @@ import {
   ScrollText,
   Variable,
 } from "lucide-react";
-import { triggerBuild } from "@/features/services";
+import { buildTriggerMessage, triggerBuild } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -109,8 +109,8 @@ export function CommandPalette() {
   const runBuild = async (svc: string) => {
     setOpen(false);
     try {
-      await triggerBuild(currentProject, svc, {});
-      toast.success(`Build queued for ${svc}`);
+      const res = await triggerBuild(currentProject, svc, {});
+      toast.success(buildTriggerMessage(res, `Build queued for ${svc}`, svc));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger build");
     }

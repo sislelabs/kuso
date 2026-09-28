@@ -91,3 +91,37 @@ func TestRenderTemplate_NoInjection(t *testing.T) {
 		t.Fatalf("answer not stored verbatim: %q", f.Services[0].Env["ADMIN_EMAIL"].Value)
 	}
 }
+
+func TestRenderTemplate_StampsManifestSize(t *testing.T) {
+	m := mustManifest(t,
+		Prompt{Key: "host", Title: "Host", Kind: "domain", Required: true},
+		Prompt{Key: "admin_email", Title: "Email", Kind: "string", Required: true},
+	)
+	m.Size = "large"
+	f, _, err := RenderTemplate(m, []byte(tmplWithPrompt), "shop",
+		map[string]string{"host": "app.example.com", "admin_email": "a@b.co"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Services[0].Size; got != "large" {
+		t.Fatalf("service size = %q, want large", got)
+	}
+	out, _ := MarshalFile(f)
+	if !strings.Contains(string(out), "size: large") {
+		t.Fatalf("rendered kuso.yaml lacks size:\n%s", out)
+	}
+}
+
+// A size declared on the service in the template wins over the manifest's.
+func TestRenderTemplate_TemplateSizeWins(t *testing.T) {
+	m := mustManifest(t)
+	m.Size = "large"
+	tmpl := "apiVersion: kuso/v1\nproject: x\nservices:\n  - name: app\n    runtime: image\n    size: small\n    image: { repository: ghcr.io/x/app, tag: \"1\" }\n"
+	f, _, err := RenderTemplate(m, []byte(tmpl), "shop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Services[0].Size; got != "small" {
+		t.Fatalf("service size = %q, want small", got)
+	}
+}

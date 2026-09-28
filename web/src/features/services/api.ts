@@ -281,11 +281,15 @@ export async function cancelBuild(
   );
 }
 
+// existing=true: the trigger coalesced into an in-flight build for the
+// same service+branch rather than starting a new one.
+export type TriggerBuildResult = BuildSummary & { existing?: boolean };
+
 export async function triggerBuild(
   project: string,
   service: string,
   body: { branch?: string; ref?: string } = {}
-): Promise<BuildSummary> {
+): Promise<TriggerBuildResult> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds`,
     { method: "POST", body }

@@ -41,6 +41,10 @@ type Manifest struct {
 	Website     string   `yaml:"website,omitempty" json:"website,omitempty"`
 	AppVersion  string   `yaml:"appVersion,omitempty" json:"appVersion,omitempty"`
 	Prompts     []Prompt `yaml:"prompts,omitempty" json:"prompts,omitempty"`
+	// Size is the pod-size preset the app's services are created with
+	// (e.g. "large" for a JVM app). A size set on a service in the
+	// template wins. Omitted = the instance default pod size.
+	Size string `yaml:"size,omitempty" json:"size,omitempty"`
 }
 
 var (
@@ -73,6 +77,9 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	}
 	if !validCategories[m.Category] {
 		return nil, fmt.Errorf("%w: category %q is not a known category", ErrInvalidManifest, m.Category)
+	}
+	if m.Size != "" && !slugRe.MatchString(m.Size) {
+		return nil, fmt.Errorf("%w: size %q must match %s", ErrInvalidManifest, m.Size, slugRe)
 	}
 	seen := map[string]bool{}
 	for _, p := range m.Prompts {

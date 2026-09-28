@@ -97,7 +97,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		out.Scale = &projects.ServiceScale{Min: in.Scale.Min, Max: in.Scale.Max, TargetCPU: in.Scale.TargetCPU}
 	}
 	if in.Sleep != nil {
-		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes}
+		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes, NonProduction: in.Sleep.NonProduction}
 	}
 	if in.Static != nil {
 		out.Static = &projects.ServiceStaticSpec{

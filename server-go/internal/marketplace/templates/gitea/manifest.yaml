@@ -4,6 +4,7 @@ description: Self-hosted, lightweight Git service.
 category: dev-tools
 website: https://gitea.io
 appVersion: "1.22.3"
+size: medium
 prompts:
   - key: host
     title: Domain

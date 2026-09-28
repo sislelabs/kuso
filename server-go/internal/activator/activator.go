@@ -520,16 +520,29 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	if lerr != nil {
 		return "", "", false, lerr
 	}
+	// Exact host wins over any wildcard, so scan every env before
+	// falling back to the wildcard match.
+	var wild *kube.KusoEnvironment
 	for i := range envs {
 		e := &envs[i]
 		if hostMatches(host, e) {
-			a.hostMu.Lock()
-			a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()}
-			a.hostMu.Unlock()
-			return e.Name, e.Namespace, e.Spec.Stopped, nil
+			return a.cacheHost(host, e)
+		}
+		if wild == nil && wildcardMatches(host, e) {
+			wild = e
 		}
 	}
+	if wild != nil {
+		return a.cacheHost(host, wild)
+	}
 	return "", "", false, fmt.Errorf("no env matches host %q", host)
+}
+
+func (a *Activator) cacheHost(host string, e *kube.KusoEnvironment) (string, string, bool, error) {
+	a.hostMu.Lock()
+	a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()}
+	a.hostMu.Unlock()
+	return e.Name, e.Namespace, e.Spec.Stopped, nil
 }
 
 func hostMatches(host string, e *kube.KusoEnvironment) bool {
@@ -538,6 +551,35 @@ func hostMatches(host string, e *kube.KusoEnvironment) bool {
 	}
 	for _, h := range e.Spec.AdditionalHosts {
 		if strings.EqualFold(h, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// wildcardMatches reports whether one of the env's wildcard hosts
+// covers host. Wildcards live in spec.wildcardDomains (the chart renders
+// them as a separate Ingress that also routes through the activator
+// while asleep); a "*." entry in host/additionalHosts is honoured too.
+// Standard one-label semantics: "*.example.com" covers "a.example.com",
+// not "example.com" or "a.b.example.com" — so at most one wildcard
+// pattern can cover a given host and "most specific" needs no ranking.
+func wildcardMatches(host string, e *kube.KusoEnvironment) bool {
+	dot := strings.IndexByte(host, '.')
+	if dot <= 0 {
+		return false
+	}
+	want := "*" + host[dot:]
+	for _, w := range e.Spec.WildcardDomains {
+		if strings.EqualFold(w.Host, want) {
+			return true
+		}
+	}
+	if strings.EqualFold(e.Spec.Host, want) {
+		return true
+	}
+	for _, h := range e.Spec.AdditionalHosts {
+		if strings.EqualFold(h, want) {
 			return true
 		}
 	}

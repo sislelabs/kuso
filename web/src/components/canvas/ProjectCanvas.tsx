@@ -45,7 +45,7 @@ import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { isProductionGroup } from "@/lib/env-group";
-import { useTriggerBuild } from "@/features/services";
+import { buildTriggerMessage, useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
   ExternalLink,
@@ -643,7 +643,10 @@ export function ProjectCanvas({
             }
             const data = focused.data as ServiceNodeData;
             void callTrigger(data.project, focusedShort, trigger).then(
-              () => toast.success(`Build triggered for ${focusedShort}`),
+              (res) =>
+                toast.success(
+                  buildTriggerMessage(res, `Build triggered for ${focusedShort}`, focusedShort),
+                ),
               (err) =>
                 toast.error(err instanceof Error ? err.message : "Failed to trigger build"),
             );
@@ -830,8 +833,8 @@ export function ProjectCanvas({
         ...editorGate(canServicesWrite),
         onSelect: async () => {
           try {
-            await callTrigger(data.project, short, trigger);
-            toast.success(`Build triggered for ${short}`);
+            const res = await callTrigger(data.project, short, trigger);
+            toast.success(buildTriggerMessage(res, `Build triggered for ${short}`, short));
           } catch (err) {
             toast.error(err instanceof Error ? err.message : "Failed to trigger build");
           }
@@ -1238,7 +1241,7 @@ async function callTrigger(
 ) {
   void _hint;
   const { triggerBuild } = await import("@/features/services/api");
-  await triggerBuild(project, service, {});
+  return triggerBuild(project, service, {});
 }
 
 // callStopStart adapter: like callTrigger, the canvas hits the stop/
