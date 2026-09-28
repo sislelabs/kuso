@@ -108,7 +108,7 @@ you, the operator is expected to plan DNS cutover separately.`,
 			return fmt.Errorf("conflict: project already exists. Re-run with --policy rename or --policy overwrite")
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		var result struct {
 			Project      string   `json:"project"`

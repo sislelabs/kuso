@@ -144,7 +144,7 @@ var sharedSecretSetCmd = &cobra.Command{
 			}
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		// Surface the rollout count so the user knows the change
 		// actually reached the running pods. Previously this just

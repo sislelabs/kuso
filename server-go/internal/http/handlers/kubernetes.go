@@ -36,6 +36,8 @@ type KubernetesHandler struct {
 	Namespace string
 	DB        *db.DB
 	Logger    *slog.Logger
+
+	ingress ingressCache
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -46,6 +48,9 @@ func (h *KubernetesHandler) Mount(rt interface {
 	Put(string, http.HandlerFunc)
 }) {
 	rt.Get("/api/kubernetes/events", h.Events)
+	// Custom-domain DNS target. Lives here, not on ConfigHandler, because
+	// it needs the kube client.
+	rt.Get("/api/config/ingress", h.IngressTargets)
 	rt.Get("/api/kubernetes/storageclasses", h.StorageClasses)
 	rt.Get("/api/kubernetes/domains", h.Domains)
 	rt.Get("/api/kubernetes/nodes", h.Nodes)

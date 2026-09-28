@@ -149,7 +149,7 @@ func serviceSetResources(cmd *cobra.Command, project, service string) (*map[stri
 
 func init() {
 	for _, c := range []*cobra.Command{serviceAddCmd, serviceAddTopCmd} {
-		c.Flags().StringVar(&serviceAddSize, "size", "", "pod-size preset (see `kuso instance-config podsize list`), or none; default: the instance's default pod size")
+		c.Flags().StringVar(&serviceAddSize, "size", "", "pod-size `preset` (list them with kuso instance-config podsize list), or none; default: the instance's default pod size")
 	}
 	for _, c := range []*cobra.Command{serviceSetCmd, serviceSetTopCmd} {
 		c.Flags().StringVar(&serviceSetSize, "size", "", "apply a pod-size preset's requests/limits (replaces current), or none to clear")

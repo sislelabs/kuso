@@ -152,6 +152,9 @@
               "pullPolicy": {
                 "type": "string"
               },
+              "pullSecret": {
+                "type": "string"
+              },
               "repository": {
                 "type": "string"
               },
@@ -456,6 +459,17 @@
                 }
               },
               "type": "object"
+            },
+            "type": "array"
+          },
+          "waitForCI": {
+            "description": "When true, webhook-triggered builds (pushes and PR\npreviews) are created queued and held until the commit's\nGitHub check runs and commit statuses (excluding kuso's\nown kuso/* contexts) are all green. A failing check or the\ngate timeout cancels the build. Manual builds are not held.\n",
+            "type": "boolean"
+          },
+          "watchPaths": {
+            "description": "Glob patterns (relative to the repo root) that gate\nGitHub push-triggered builds, e.g. \"apps/web/**\".\nEmpty = every push builds the service.\n",
+            "items": {
+              "type": "string"
             },
             "type": "array"
           }

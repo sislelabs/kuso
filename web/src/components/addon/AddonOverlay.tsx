@@ -145,7 +145,11 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") guardedClose();
+      if (e.key !== "Escape") return;
+      // A dialog opened from inside the overlay (restore confirm, etc.)
+      // handles its own Escape; don't also close the overlay under it.
+      if (document.querySelector('[data-slot="dialog-content"]')) return;
+      guardedClose();
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;

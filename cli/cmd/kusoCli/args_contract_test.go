@@ -83,3 +83,17 @@ func TestLeafRejectsStrayPositional(t *testing.T) {
 		}
 	}
 }
+
+func TestWrongArgCountPrintsUseLine(t *testing.T) {
+	_, err := runRoot(t, "project", "addon", "add", "only-one")
+	if err == nil {
+		t.Fatal("want arg-count error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "accepts 2 arg(s), received 1") {
+		t.Errorf("want cobra's count message kept, got %q", msg)
+	}
+	if strings.Count(msg, "Usage: kuso project addon add <project> <name>") != 1 {
+		t.Errorf("want the use line exactly once, got %q", msg)
+	}
+}

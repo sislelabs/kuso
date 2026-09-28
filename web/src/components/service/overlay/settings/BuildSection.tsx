@@ -3,9 +3,10 @@
 import { Hammer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { useRegistryCredentials } from "@/features/registry-credentials";
 import { Section, Row, RUNTIMES, type SectionProps } from "./_primitives";
 
-export function BuildSection({ state, setState }: SectionProps) {
+export function BuildSection({ state, setState, project }: SectionProps & { project: string }) {
   const isDockerfile = state.runtime === "dockerfile";
   // runtime=image services never build — the chart pulls the image
   // straight from the registry. Editing the reference here + saving
@@ -40,8 +41,8 @@ export function BuildSection({ state, setState }: SectionProps) {
               spellCheck={false}
             />
           }
-          last
         />
+        <PullSecretRow project={project} state={state} setState={setState} />
       </Section>
     );
   }
@@ -92,5 +93,47 @@ export function BuildSection({ state, setState }: SectionProps) {
         />
       )}
     </Section>
+  );
+}
+
+// PullSecretRow picks the project registry credential a private image is
+// pulled with. Pills, not a dropdown: the list is short and this keeps
+// clear of the dropdown-menu primitive.
+function PullSecretRow({ project, state, setState }: SectionProps & { project: string }) {
+  const creds = useRegistryCredentials(project);
+  const options = [
+    { value: "", label: "none (public)" },
+    ...(creds.data ?? []).map((c) => ({ value: c.secretName, label: c.registry })),
+  ];
+  // A credential that was deleted out from under the service still shows,
+  // so the user can see and clear it.
+  if (state.imagePullSecret && !options.some((o) => o.value === state.imagePullSecret)) {
+    options.push({ value: state.imagePullSecret, label: `${state.imagePullSecret} (missing)` });
+  }
+  return (
+    <Row
+      label="registry login"
+      hint="private images — add logins under project settings"
+      control={
+        <div className="inline-flex flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+          {options.map((o) => (
+            <button
+              key={o.value || "none"}
+              type="button"
+              onClick={() => setState((s) => ({ ...s, imagePullSecret: o.value }))}
+              className={cn(
+                "rounded px-1.5 py-1 font-mono text-[10px] whitespace-nowrap transition-colors",
+                state.imagePullSecret === o.value
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
+              )}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      }
+      last
+    />
   );
 }

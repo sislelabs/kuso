@@ -191,7 +191,7 @@ func TestExport_OmitsNonAddonSecretRefs(t *testing.T) {
 	}
 	env := f.Services[0].Env
 	if _, ok := env["API_KEY"]; ok {
-		t.Fatalf("non-addon secret ref must be omitted, got %q", env["API_KEY"])
+		t.Fatalf("non-addon secret ref must be omitted, got %+v", env["API_KEY"])
 	}
 	if env["PLAIN"].Value != "ok" {
 		t.Fatalf("plain env dropped: %+v", env)

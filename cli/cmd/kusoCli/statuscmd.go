@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -23,7 +26,7 @@ func init() {
 var statusCmd = &cobra.Command{
 	Use:     "status [project]",
 	Args:    cobra.MaximumNArgs(1),
-	Short:   "Show the project rollup: services, URLs, replicas, builds.",
+	Short:   "Show the project rollup: services, URLs, replicas, last build, addons.",
 	Example: "  kuso status\n  kuso status my-product",
 	Run: func(cmd *cobra.Command, args []string) {
 		project := ""
@@ -53,7 +56,7 @@ var statusCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		if resp.StatusCode() >= 400 {
-			fmt.Fprintf(os.Stderr, "status failed (%d): %s\n", resp.StatusCode(), resp.String())
+			fmt.Fprintf(os.Stderr, "status failed: %s\n", apiErrorMessage(resp.StatusCode(), string(resp.Body())))
 			os.Exit(1)
 		}
 
@@ -160,8 +163,73 @@ var statusCmd = &cobra.Command{
 					fmt.Printf("    branch %s\n", e.Spec.Branch)
 				}
 			}
+			svcShort := short(s.Metadata.Name, rollup.Project.Metadata.Name)
+			if br, err := api.ListBuilds(project, svcShort); err == nil && br.StatusCode() < 300 {
+				var builds []statusBuild
+				if json.Unmarshal(br.Body(), &builds) == nil {
+					if line := lastBuildLine(builds); line != "" {
+						fmt.Printf("  %s\n", line)
+					}
+				}
+			}
+		}
+		if ar, err := api.GetAddonsForProject(project); err == nil && ar.StatusCode() < 300 {
+			var addons []map[string]any
+			if json.Unmarshal(ar.Body(), &addons) == nil {
+				fmt.Print(addonsStatusLines(project, addons))
+			}
 		}
 	},
+}
+
+type statusBuild struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Branch       string `json:"branch"`
+	StartedAt    string `json:"startedAt"`
+	ErrorMessage string `json:"errorMessage"`
+}
+
+// lastBuildLine summarises the newest build by startedAt. The list is
+// live CRs followed by archived records, so its order isn't trusted.
+func lastBuildLine(builds []statusBuild) string {
+	var latest *statusBuild
+	var latestAt time.Time
+	for i := range builds {
+		t, _ := time.Parse(time.RFC3339, builds[i].StartedAt)
+		if latest == nil || t.After(latestAt) {
+			latest, latestAt = &builds[i], t
+		}
+	}
+	if latest == nil {
+		return "last build: none"
+	}
+	line := fmt.Sprintf("last build: %s  %s", latest.Status, latest.ID)
+	if latest.Branch != "" {
+		line += "  branch=" + latest.Branch
+	}
+	if latest.Status == "failed" && latest.ErrorMessage != "" {
+		line += "\n    " + latest.ErrorMessage
+	}
+	return line
+}
+
+// addonsStatusLines renders the project's addons as "name (kind version)".
+func addonsStatusLines(project string, addons []map[string]any) string {
+	if len(addons) == 0 {
+		return "\naddons: none\n"
+	}
+	parts := make([]string, 0, len(addons))
+	for _, a := range addons {
+		spec := mapAt(a, "spec")
+		desc := asString(spec["kind"])
+		if v := asString(spec["version"]); v != "" {
+			desc += " " + v
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", stripPrefix(resourceName(a), project+"-"), desc))
+	}
+	sort.Strings(parts)
+	return "\naddons: " + strings.Join(parts, ", ") + "\n"
 }
 
 func short(full, project string) string {

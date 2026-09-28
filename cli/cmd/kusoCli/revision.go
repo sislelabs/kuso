@@ -94,7 +94,7 @@ var revisionShowCmd = &cobra.Command{
 			return fmt.Errorf("revision %s not found", args[1])
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		// Just dump the JSON body — the snapshot field is the most
 		// useful thing here and it's already structured. Honour
@@ -114,7 +114,9 @@ var revisionRevertCmd = &cobra.Command{
 	Short: "Replay a revision's snapshot back through the matching update path",
 	Long: "Server-side this re-runs the patch against the live CR. A fresh " +
 		"revision is recorded with reason=\"revert: <original id>\" so the " +
-		"history stays linear (you can revert the revert to roll forward).",
+		"history stays linear (you can revert the revert to roll forward).\n\n" +
+		"This reverts configuration (service/env/addon/cron spec), not code. To put a " +
+		"previous build's image back live, use kuso build rollback.",
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -125,7 +127,7 @@ var revisionRevertCmd = &cobra.Command{
 			return fmt.Errorf("revert revision: %w", err)
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		fmt.Printf("revision %s reverted\n", args[1])
 		return nil

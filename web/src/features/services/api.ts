@@ -358,7 +358,11 @@ export interface PatchServiceBody {
   // repository/tag. Absent leaves it unchanged; tag defaults to
   // "latest" server-side. This is ALSO how image services redeploy —
   // they never build, so there's no build endpoint to hit.
-  image?: { repository: string; tag?: string };
+  // pullSecret: registry credential (host or secret name); "" clears,
+  // absent keeps the current one.
+  image?: { repository: string; tag?: string; pullSecret?: string };
+  // watchPaths replaces the push-build globs; [] restores the default.
+  watchPaths?: string[];
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
@@ -394,6 +398,9 @@ export interface PatchServiceBody {
   // replaces the argv and `timeoutSeconds` the cap (server default
   // 900 when <= 0).
   release?: { command?: string[]; timeoutSeconds?: number; clear?: boolean };
+  // waitForCI holds push/PR builds until the commit's GitHub checks
+  // (excluding kuso/* statuses) are green. Absent leaves it unchanged.
+  waitForCI?: boolean;
 }
 
 export interface PatchRepoBody {

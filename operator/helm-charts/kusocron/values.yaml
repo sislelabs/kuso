@@ -18,6 +18,8 @@ image:
   repository: ""
   tag: latest
   pullPolicy: IfNotPresent
+  # dockerconfigjson Secret for private registries (KusoImage.pullSecret).
+  pullSecret: ""
 # Envs from the same connection-secrets every service in the project
 # already picks up via envFrom.
 envFromSecrets: []

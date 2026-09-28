@@ -19,7 +19,7 @@ var (
 
 func init() {
 	initCmd.Flags().StringVar(&initProject, "project", "", "project name (default: current dir name)")
-	initCmd.Flags().StringVar(&initRuntime, "runtime", "dockerfile", "runtime: dockerfile|nixpacks|static|buildpacks")
+	initCmd.Flags().StringVar(&initRuntime, "runtime", "", "runtime: nixpacks|dockerfile|static|buildpacks (default: dockerfile when ./Dockerfile exists, else nixpacks)")
 	initCmd.Flags().IntVar(&initPort, "port", 8080, "container port")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing kuso.yml")
 	initCmd.Flags().StringVar(&initTemplate, "template", "", "scaffold from a known-good template: payload")
@@ -57,6 +57,12 @@ var initCmd = &cobra.Command{
 			project = sanitizeName(filepath.Base(cwd))
 		}
 		repo := guessGitRemote()
+		if initRuntime == "" {
+			initRuntime = "nixpacks"
+			if _, err := os.Stat("Dockerfile"); err == nil {
+				initRuntime = "dockerfile"
+			}
+		}
 
 		var body string
 		switch initTemplate {

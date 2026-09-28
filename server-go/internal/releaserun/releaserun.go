@@ -298,6 +298,11 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 		})
 	}
 
+	var pullSecrets []corev1.LocalObjectReference
+	if image.PullSecret != "" {
+		pullSecrets = []corev1.LocalObjectReference{{Name: image.PullSecret}}
+	}
+
 	backoff := int32(0) // One shot — never retry a failed migration.
 	parallelism := int32(1)
 	completions := int32(1)
@@ -347,6 +352,7 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptrBool(false),
+					ImagePullSecrets:             pullSecrets,
 					// wait-for-addons: a freshly-provisioned project addon
 					// (postgres/redis/nats) may still be bootstrapping when
 					// the build finishes and this release Job fires — and an

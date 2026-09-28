@@ -71,7 +71,7 @@ var marketplaceInfoCmd = &cobra.Command{
 			return fmt.Errorf("app %q not found", args[0])
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		fmt.Println(string(resp.Body()))
 		return nil
@@ -109,7 +109,7 @@ var marketplaceDeployCmd = &cobra.Command{
 			return fmt.Errorf("app %q not found", app)
 		}
 		if resp.StatusCode() >= 400 {
-			return fmt.Errorf("render failed (%d): %s", resp.StatusCode(), resp.String())
+			return fmt.Errorf("render failed: %w", checkRespErr(resp, nil))
 		}
 		var rendered struct {
 			YAML  string                          `json:"yaml"`
@@ -135,14 +135,14 @@ var marketplaceDeployCmd = &cobra.Command{
 			return fmt.Errorf("create project: %w", err)
 		}
 		if pr.StatusCode() >= 300 && pr.StatusCode() != 409 {
-			return fmt.Errorf("create project failed (%d): %s", pr.StatusCode(), pr.String())
+			return fmt.Errorf("create project failed: %w", checkRespErr(pr, nil))
 		}
 		ar, err := api.ApplyConfig(project, []byte(rendered.YAML), false, false)
 		if err != nil {
 			return fmt.Errorf("apply: %w", err)
 		}
 		if ar.StatusCode() >= 400 {
-			return fmt.Errorf("apply failed (%d): %s", ar.StatusCode(), ar.String())
+			return fmt.Errorf("apply failed: %w", checkRespErr(ar, nil))
 		}
 		fmt.Printf("→ deployed %s into project %s\n", app, project)
 		return nil

@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useProject, useAddons, createEnvGroup } from "@/features/projects";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { X, Plus, Database, Share2, Sparkles } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Plus, Database, Share2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -73,15 +80,6 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     setPolicy(def);
   }, [open, addonShorts]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   const create = useMutation({
     mutationFn: () => createEnvGroup(project, { name, addonPolicy: policy }),
     onSuccess: () => {
@@ -103,8 +101,8 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
       toast.error("Name required");
       return;
     }
-    if (name === "production" || name.startsWith("pr-")) {
-      toast.error('Names "production" and "pr-*" are reserved');
+    if (name === "production" || name.startsWith("pr-") || name.startsWith("preview-")) {
+      toast.error('Names "production", "pr-*" and "preview-*" are reserved for kuso-managed environments');
       return;
     }
     if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name)) {
@@ -119,48 +117,30 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   };
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(8,8,11,0.6)] p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.12 }}
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.96, y: 6 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.96, y: 6 }}
-            transition={{ type: "spring", stiffness: 360, damping: 32 }}
-            className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-              <div>
-                <h2 className="font-heading text-base font-semibold tracking-tight">
-                  New environment
-                </h2>
-                <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !create.isPending) onClose();
+      }}
+      disablePointerDismissal={create.isPending}
+    >
+      <DialogContent
+        className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-lg"
+        showCloseButton={!create.isPending}
+      >
+            <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
+              <DialogTitle className="font-heading">New environment</DialogTitle>
+              <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
                   Mirror every service + (optionally) addon under a new name. Send the URL to a
                   client for review without touching production.
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Close"
-                onClick={onClose}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </header>
+              </DialogDescription>
+            </DialogHeader>
 
             <div className="flex-1 overflow-y-auto">
               <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
-                <Field label="name" hint="becomes part of every cloned service's URL">
+                <Field label="name" hint="becomes part of every cloned service's URL" htmlFor="new-env-name">
                   <Input
+                    id="new-env-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="staging"
@@ -257,7 +237,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               )}
             </div>
 
-            <footer className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+            <DialogFooter className="m-0 items-center justify-between gap-2 rounded-b-2xl px-4 py-3 sm:justify-between">
               <p className="text-[10px] text-[var(--text-tertiary)]">
                 {services.length === 0 ? (
                   "Add a service first"
@@ -289,11 +269,9 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                   {create.isPending ? "Mirroring…" : "Create environment"}
                 </Button>
               </div>
-            </footer>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -351,17 +329,22 @@ function defaultPolicyForKind(kind: string): AddonPolicy {
 function Field({
   label,
   hint,
+  htmlFor,
   children,
 }: {
   label: string;
   hint?: string;
+  htmlFor: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+      <label
+        htmlFor={htmlFor}
+        className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+      >
         {label}
-      </div>
+      </label>
       {children}
       {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
     </div>

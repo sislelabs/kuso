@@ -25,6 +25,8 @@ image:
   repository: ""
   tag: ""
   pullPolicy: IfNotPresent
+  # dockerconfigjson Secret for private registries (KusoImage.pullSecret).
+  pullSecret: ""
 
 # envFromSecrets — the service's resolved envFromSecrets list, so
 # the run inherits DATABASE_URL, REDIS_URL, etc.

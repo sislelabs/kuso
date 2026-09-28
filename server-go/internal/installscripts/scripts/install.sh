@@ -1062,6 +1062,8 @@ run_github_wizard() {
          Permissions:        Contents: Read & write
                              Metadata: Read-only
                              Pull requests: Read & write
+                             Commit statuses: Read & write
+                             Checks: Read-only
                              Webhooks: Read & write
          Subscribe to:       push, pull_request, installation
 

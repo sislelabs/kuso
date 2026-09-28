@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { RotateCcw, Download } from "lucide-react";
 import {
@@ -14,6 +13,7 @@ import {
 } from "@/features/projects";
 import type { KusoAddon } from "@/types/projects";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -147,11 +147,11 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
           <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
             {noS3 ? (
               <>
-                Add S3 (or compatible) credentials in{" "}
+                S3 credentials live in{" "}
                 <a href="/settings/backups" className="text-[var(--accent)] underline">
-                  /settings/backups
-                </a>
-                , then set a schedule above to start the CronJob.
+                  Settings → Backups
+                </a>{" "}
+                (admin). Once they are set, pick a schedule above.
               </>
             ) : (
               <>
@@ -273,37 +273,35 @@ function ConfirmRestore({
   }, [item]);
   const allow = !pending && (!inPlace || typed === sourceAddon);
   return (
-    <AnimatePresence>
+    <Dialog
+      open={item !== null}
+      onOpenChange={(next) => {
+        if (!next && !pending) onCancel();
+      }}
+      disablePointerDismissal={pending}
+    >
       {item && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.1 }}
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(8,8,11,0.7)] p-4"
-          onClick={onCancel}
-        >
-          <motion.div
-            initial={{ scale: 0.96, y: 4 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.96, y: 4 }}
-            transition={{ duration: 0.12 }}
-            onClick={(e) => e.stopPropagation()}
+          <DialogContent
+            showCloseButton={false}
             className={cn(
-              "w-full max-w-md rounded-md border bg-[var(--bg-elevated)] p-5",
+              "block rounded-md bg-[var(--bg-elevated)] p-5 sm:max-w-md",
               target === "" ? "border-red-500/40" : "border-amber-500/40",
             )}
           >
-            <h3 className="text-base font-semibold">Restore this backup?</h3>
-            <p className="mt-2 text-xs text-[var(--text-secondary)]">
+            <DialogTitle>Restore this backup?</DialogTitle>
+            <DialogDescription className="mt-2 text-xs text-[var(--text-secondary)]">
               Pipes <span className="font-mono">{tail(item.key)}</span> into the chosen
               target database via <span className="font-mono">psql</span>.
-            </p>
+            </DialogDescription>
             <div className="mt-4 space-y-2">
-              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              <label
+                htmlFor="restore-target"
+                className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+              >
                 Restore into
               </label>
               <select
+                id="restore-target"
                 value={target}
                 onChange={(e) => {
                   setTarget(e.target.value);
@@ -326,12 +324,16 @@ function ConfirmRestore({
                     undone.
                   </p>
                   <div className="space-y-1 pt-1">
-                    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    <label
+                      htmlFor="restore-confirm"
+                      className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                    >
                       type{" "}
                       <span className="text-[var(--text-primary)]">{sourceAddon}</span>{" "}
                       to confirm
-                    </div>
+                    </label>
                     <Input
+                      id="restore-confirm"
                       value={typed}
                       onChange={(e) => setTyped(e.target.value)}
                       spellCheck={false}
@@ -368,10 +370,9 @@ function ConfirmRestore({
                 {pending ? "Starting…" : `Restore into ${target || sourceAddon}`}
               </Button>
             </div>
-          </motion.div>
-        </motion.div>
+          </DialogContent>
       )}
-    </AnimatePresence>
+    </Dialog>
   );
 }
 

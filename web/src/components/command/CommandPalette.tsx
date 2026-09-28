@@ -32,6 +32,8 @@ import {
   Play,
   ScrollText,
   Variable,
+  Clock,
+  Bell,
 } from "lucide-react";
 import { buildTriggerMessage, triggerBuild } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
@@ -110,7 +112,7 @@ export function CommandPalette() {
     setOpen(false);
     try {
       const res = await triggerBuild(currentProject, svc, {});
-      toast.success(buildTriggerMessage(res, `Build queued for ${svc}`, svc));
+      toast.success(buildTriggerMessage(res, `Redeploy started for ${svc}`, svc));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger build");
     }
@@ -121,6 +123,41 @@ export function CommandPalette() {
       <CommandInput placeholder="Jump or do: project, service, env var, redeploy…" />
       <CommandList>
         <CommandEmpty>No matches.</CommandEmpty>
+
+        {currentProject && (
+          <>
+            <CommandGroup heading={`Add to ${currentProject}`}>
+              <CommandItem
+                onSelect={() => go(`/projects/${encodeURIComponent(currentProject)}/services/new`)}
+                value="add new service create"
+              >
+                <Plus className="h-4 w-4 text-[var(--text-tertiary)]" />
+                Add service
+              </CommandItem>
+              {/* The canvas opens these dialogs from ?add=; it isn't
+                  mounted on an empty project, which has its own buttons. */}
+              {serviceList.length + addonList.length > 0 && (
+                <>
+                  <CommandItem
+                    onSelect={() => go(`/projects/${encodeURIComponent(currentProject)}?add=addon`)}
+                    value="add new addon database postgres redis create"
+                  >
+                    <Database className="h-4 w-4 text-[var(--text-tertiary)]" />
+                    Add addon
+                  </CommandItem>
+                  <CommandItem
+                    onSelect={() => go(`/projects/${encodeURIComponent(currentProject)}?add=cron`)}
+                    value="add new cron job schedule create"
+                  >
+                    <Clock className="h-4 w-4 text-[var(--text-tertiary)]" />
+                    Add cron job
+                  </CommandItem>
+                </>
+              )}
+            </CommandGroup>
+            <CommandSeparator />
+          </>
+        )}
 
         {currentProject && serviceList.length > 0 && (
           <>
@@ -270,6 +307,10 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/settings/nodes")} value="nodes cluster servers">
             <Box className="h-4 w-4 text-[var(--text-tertiary)]" />
             Cluster nodes
+          </CommandItem>
+          <CommandItem onSelect={() => go("/settings/alerts")} value="alerts alerting rules thresholds">
+            <Bell className="h-4 w-4 text-[var(--text-tertiary)]" />
+            Alerts
           </CommandItem>
           {isAdmin && (
             <CommandItem onSelect={() => go("/settings/users")} value="users admin">

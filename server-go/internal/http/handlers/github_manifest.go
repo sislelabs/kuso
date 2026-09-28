@@ -152,6 +152,10 @@ func (h *GithubConfigureHandler) ManifestConfig(w http.ResponseWriter, r *http.R
 			// hook_attributes). Deployments read/write lets kuso post
 			// deployment statuses back to the PR.
 			"deployments": "write",
+			// Commit statuses (kuso/<service>) on every build, and the
+			// wait-for-CI gate reading check runs + other statuses.
+			"statuses": "write",
+			"checks":   "read",
 		},
 	}
 

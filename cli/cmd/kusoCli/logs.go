@@ -211,5 +211,5 @@ func init() {
 	logsCmd.Flags().StringVar(&logsEnv, "env", "production", "environment (production|preview-pr-N|<custom>)")
 	logsCmd.Flags().IntVar(&logsLines, "lines", 200, "number of lines to fetch (max 2000)")
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "stream live logs over WebSocket until ^C")
-	logsCmd.Flags().StringVar(&logsBuild, "build", "", "tail a specific build's pod logs (id from `kuso build list`)")
+	logsCmd.Flags().StringVar(&logsBuild, "build", "", "tail this `build-id`'s pod logs (ids from kuso build list)")
 }

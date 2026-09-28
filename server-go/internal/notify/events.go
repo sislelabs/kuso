@@ -315,3 +315,17 @@ func AlertFired(name, body, severity string, extra map[string]string) Event {
 		Links:    links,
 	}
 }
+
+// AlertResolved closes an alert episode opened by AlertFired. It keeps
+// the alert.fired type so every channel that received the fire also
+// gets the all-clear; Extra["state"]="resolved" tells webhook consumers
+// which edge this is.
+func AlertResolved(name, body string, extra map[string]string) Event {
+	ev := AlertFired(name, body, "info", extra)
+	ev.Title = "✓ Resolved · " + strings.TrimPrefix(ev.Title, "⚠ Alert · ")
+	if ev.Extra == nil {
+		ev.Extra = map[string]string{}
+	}
+	ev.Extra["state"] = "resolved"
+	return ev
+}

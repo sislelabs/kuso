@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addAddon } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { X, Plus } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -128,16 +135,6 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, open, availableInstanceNames.length]);
 
-  // ESC closes — same affordance as the rest of the overlays.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   const create = useMutation({
     mutationFn: () => {
       const body: Parameters<typeof addAddon>[1] = { name, kind };
@@ -194,48 +191,34 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       return;
     }
     if (mode === "instance" && kind !== "postgres") {
-      toast.error("Instance-shared mode only supports postgres in v0.7.6");
+      toast.error("Shared-server mode only supports Postgres");
       return;
     }
     create.mutate();
   };
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(8,8,11,0.6)] p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.12 }}
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.96, y: 6 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.96, y: 6 }}
-            transition={{ type: "spring", stiffness: 360, damping: 32 }}
-            className="w-full max-w-lg rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-              <div>
-                <h2 className="font-heading text-base font-semibold tracking-tight">Add addon</h2>
-                <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-                  Connection envs are wired into every service in{" "}
-                  <span className="font-mono text-[var(--text-secondary)]">{project}</span>.
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Close"
-                onClick={onClose}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </header>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Closing mid-create would hide the result of a request that is
+        // still running, so Escape and backdrop clicks wait for it.
+        if (!next && !create.isPending) onClose();
+      }}
+      disablePointerDismissal={create.isPending}
+    >
+      <DialogContent className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-lg" showCloseButton={!create.isPending}>
+            <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
+              <DialogTitle className="font-heading">Add addon</DialogTitle>
+              <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
+                Services in{" "}
+                <span className="font-mono text-[var(--text-secondary)]">{project}</span>{" "}
+                that have no explicit addon list get its connection env vars
+                automatically. Services with an explicit list get them only
+                after you subscribe them (
+                <code className="font-mono">kuso project addon subscribe</code>).
+              </DialogDescription>
+            </DialogHeader>
 
             {/* Kind picker grid */}
             <div className="grid grid-cols-3 gap-2 border-b border-[var(--border-subtle)] p-3">
@@ -287,7 +270,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                 autoFocus={!!kind}
               />
               <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                Becomes the helm release name. Lowercase, dashes, ≤32 chars.
+                Lowercase letters, digits and dashes, up to 32 characters.
               </p>
             </div>
 
@@ -468,10 +451,9 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               {mode === "instance" && (
                 <div className="space-y-2">
                   <p className="text-[11px] leading-snug text-[var(--text-tertiary)]">
-                    Provisions an isolated database on a shared server
-                    registered cluster-wide. v0.7.6: postgres only.
-                    Admin must first set{" "}
-                    <code className="font-mono">INSTANCE_ADDON_&lt;NAME&gt;_DSN_ADMIN</code> in instance secrets.
+                    Creates a separate database for this project on a
+                    Postgres server an admin registered in Settings →
+                    Cluster database. Postgres only.
                   </p>
                   <div>
                     <label
@@ -514,7 +496,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               )}
             </div>
 
-            <footer className="flex items-center justify-end gap-2 px-4 py-3">
+            <DialogFooter className="m-0 rounded-b-2xl px-4 py-3">
               <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
                 Cancel
               </Button>
@@ -536,10 +518,8 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       ? "Provision DB"
                       : "Add addon"}
               </Button>
-            </footer>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

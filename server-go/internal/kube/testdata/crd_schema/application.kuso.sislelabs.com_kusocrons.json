@@ -60,6 +60,9 @@
                 "default": "IfNotPresent",
                 "type": "string"
               },
+              "pullSecret": {
+                "type": "string"
+              },
               "repository": {
                 "type": "string"
               },

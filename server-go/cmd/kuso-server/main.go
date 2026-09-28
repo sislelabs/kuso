@@ -34,6 +34,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/cronwatch"
 	"kuso/server/internal/db"
+	"kuso/server/internal/drains"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
@@ -320,6 +321,8 @@ func main() {
 	var projSvc *projects.Service
 	var secSvc *secrets.Service
 	var buildSvc *builds.Service
+	// Commit statuses + wait-for-CI gate; bound to the GitHub client below.
+	ghBridge := &githubBuildBridge{}
 	var logsSvc *logs.Service
 	var cfgSvc *config.Service
 	var statSvc *status.Service
@@ -597,6 +600,7 @@ func main() {
 		// its image from the archived BuildRecord so rollback still works
 		// for builds within the image-retention window.
 		buildSvc.RecordLookup = buildRecordLookupAdapter{database}
+		buildSvc.CI = ghBridge
 		// GC the per-(project,service) lock map every 15min. Without
 		// this, ephemeral preview-env services (created/torn down on
 		// every PR) leave one mutex pointer behind forever — slow
@@ -921,6 +925,8 @@ func main() {
 					// external-registry clusters → sweep self-disables.
 					ImageDeleter: builds.NewInClusterImageDeleter(builds.RegistryHost),
 					ImageRecords: imageRecordsAdapter{database},
+					// GitHub commit statuses; inert until ghBridge.set.
+					CommitStatuses: ghBridge,
 				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
@@ -1127,6 +1133,7 @@ func main() {
 				// updating kuso" with one HTTP round-trip instead of a
 				// 30-60s failed-clone cycle.
 				buildSvc.RepoAccess = ghCli
+				ghBridge.set(ghCli)
 				// Preview TTL sweep gate: before deleting an expired
 				// preview env, ask GitHub whether its PR is still open
 				// on any of the project's repos (project defaultRepo +
@@ -1429,6 +1436,12 @@ func main() {
 			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
 				serverstate.RegisterLoop(serverstate.LoopLogship, logship.HeartbeatInterval)
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
+				// Log drains ride the same lease so each line ships once
+				// cluster-wide. Not heartbeat-registered: its loop only
+				// reloads config and has no per-tick beat.
+				drainFwd := drains.NewForwarder(&drains.SettingStore{DB: database}, logger.With("component", "drains"))
+				ls.Tap = drainFwd
+				goSafe(logger, "drains", func() { drainFwd.Run(workCtx) })
 				goSafe(logger, "logship", func() { ls.Run(workCtx) })
 			}
 			serverstate.RegisterLoop(serverstate.LoopAlerts, alerts.HeartbeatInterval)

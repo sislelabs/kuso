@@ -88,10 +88,10 @@ audit logs — treat the output like a credential. To restore:
 			return fmt.Errorf("download: %w", err)
 		}
 		if resp.StatusCode() == 404 {
-			return fmt.Errorf("server returned 404 — backup endpoint disabled")
+			return fmt.Errorf("backup endpoint not available on this server (404)")
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		if err := os.WriteFile(out, resp.Body(), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", out, err)
@@ -141,10 +141,10 @@ you want to fire-and-forget and check status separately).`,
 			return fmt.Errorf("upload: %w", err)
 		}
 		if resp.StatusCode() == 404 {
-			return fmt.Errorf("server returned 404 — restore endpoint not available")
+			return fmt.Errorf("restore endpoint not available on this server (404)")
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		var ack struct {
 			JobName    string `json:"jobName"`
@@ -199,7 +199,7 @@ func waitForRestore(statusURL, jobName string, deadline time.Duration) error {
 			continue
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("status %d: %s", resp.StatusCode(), string(resp.Body()))
+			return fmt.Errorf("restore status: %w", checkRespErr(resp, nil))
 		}
 		var st struct {
 			Phase            string `json:"phase"`
@@ -252,7 +252,15 @@ var backupSettingsGetCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
-		return jsonOut(out)
+		switch backupSettingsOutput {
+		case "json":
+			return jsonOut(out)
+		case "table", "":
+			renderBackupSettings(cmd.OutOrStdout(), out)
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", backupSettingsOutput)
+		}
 	},
 }
 
@@ -330,11 +338,23 @@ var backupHealthCmd = &cobra.Command{
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("backup health: %w", err)
 		}
-		var out map[string]any
-		if err := json.Unmarshal(resp.Body(), &out); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+		switch backupHealthOutput {
+		case "json":
+			var out map[string]any
+			if err := json.Unmarshal(resp.Body(), &out); err != nil {
+				return fmt.Errorf("decode response: %w", err)
+			}
+			return jsonOut(out)
+		case "table", "":
+			var h backupHealthView
+			if err := json.Unmarshal(resp.Body(), &h); err != nil {
+				return fmt.Errorf("decode response: %w", err)
+			}
+			renderBackupHealth(cmd.OutOrStdout(), h)
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", backupHealthOutput)
 		}
-		return jsonOut(out)
 	},
 }
 
@@ -377,6 +397,8 @@ func init() {
 	backupSettingsSetCmd.Flags().StringVar(&backupSetAccessKey, "access-key-id", "", "S3 access key ID")
 	backupSettingsSetCmd.Flags().StringVar(&backupSetSecretKey, "secret-access-key", "", "S3 secret access key (preserved server-side if omitted after first save)")
 	backupCmd.AddCommand(backupHealthCmd)
+	backupHealthCmd.Flags().StringVarP(&backupHealthOutput, "output", "o", "table", "output format: table|json")
+	backupSettingsGetCmd.Flags().StringVarP(&backupSettingsOutput, "output", "o", "table", "output format: table|json")
 	backupCmd.AddCommand(backupDBStatsCmd)
 	rootCmd.AddCommand(restoreCmd)
 	restoreCmd.Flags().BoolVarP(&restoreYes, "yes", "y", false, "skip the overwrite confirmation prompt")

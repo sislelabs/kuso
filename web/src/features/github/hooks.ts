@@ -16,7 +16,14 @@ export function useInstallURL() {
 }
 
 export function useInstallations() {
-  return useQuery({ queryKey: ["github", "installations"] as const, queryFn: listInstallations, staleTime: 60_000 });
+  // "always": the usual flow is install on github.com, then switch back
+  // to this tab well inside staleTime, and the new install must show.
+  return useQuery({
+    queryKey: ["github", "installations"] as const,
+    queryFn: listInstallations,
+    staleTime: 60_000,
+    refetchOnWindowFocus: "always",
+  });
 }
 
 export function useInstallationRepos(installationId: number | null) {

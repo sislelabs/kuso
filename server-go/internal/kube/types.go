@@ -232,7 +232,12 @@ type KusoServiceSpec struct {
 	// builds, relative to repo.path. Empty = "Dockerfile". Lets a monorepo
 	// service build from e.g. "apps/web/Dockerfile.dev". Ignored for
 	// non-dockerfile runtimes.
-	Dockerfile string   `json:"dockerfile,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
+	// WatchPaths gates GitHub push-triggered builds: glob patterns
+	// relative to the repo root (`apps/web/**`, `packages/ui/**`). A push
+	// builds this service only when a changed file matches one. Empty =
+	// every push builds it. Manual triggers and PR previews ignore it.
+	WatchPaths []string `json:"watchPaths,omitempty"`
 	Command    []string `json:"command,omitempty"`
 	// FromService — for runtime=worker, the sibling service whose
 	// image to reuse. Empty = the worker has its own repo + builds.
@@ -355,6 +360,11 @@ type KusoServiceSpec struct {
 	// migration has a one-click restore. Only fires when a release hook is
 	// also present. Mirrored onto every owned env.
 	SnapshotBeforeDeploy bool `json:"snapshotBeforeDeploy,omitempty"`
+	// WaitForCI holds webhook-triggered builds (push + PR preview) queued
+	// until the commit's GitHub checks/statuses, excluding kuso's own
+	// kuso/* contexts, are green. Read by builds.create + the poller's
+	// CI gate; service-level only (not mirrored onto envs).
+	WaitForCI bool `json:"waitForCI,omitempty"`
 }
 
 // KusoReleaseSpec configures a release hook. The Job uses the new
@@ -794,6 +804,12 @@ type KusoImage struct {
 	Repository string `json:"repository,omitempty"`
 	Tag        string `json:"tag,omitempty"`
 	PullPolicy string `json:"pullPolicy,omitempty"`
+	// PullSecret names a kubernetes.io/dockerconfigjson Secret (a project
+	// registry credential, see internal/registrycreds) in the project
+	// namespace. The env/cron/run charts and the release Job render it
+	// as imagePullSecrets. Rides along wherever KusoImage is copied
+	// (service → env → cron/run). Empty = anonymous pull.
+	PullSecret string `json:"pullSecret,omitempty"`
 }
 
 type KusoAutoscaling struct {

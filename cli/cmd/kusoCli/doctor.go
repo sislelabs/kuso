@@ -218,7 +218,7 @@ output names the next concrete step for every finding.`,
 			case resp.StatusCode() == 401 || resp.StatusCode() == 403:
 				report("github", fmt.Sprintf("webhook-health returned %d — admin token required for this check", resp.StatusCode()), "warn")
 			case resp.StatusCode() >= 300:
-				report("github", fmt.Sprintf("webhook-health returned %d: %s", resp.StatusCode(), strings.TrimSpace(string(resp.Body()))), "warn")
+				report("github", "webhook-health failed: "+apiErrorMessage(resp.StatusCode(), string(resp.Body())), "warn")
 			default:
 				var wh struct {
 					Configured        bool   `json:"configured"`

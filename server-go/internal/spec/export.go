@@ -63,6 +63,23 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 				svc.Env[key] = EnvValue{Generate: kind}
 			}
 		}
+		// Every other key in the managed Secret (the unified env write's
+		// default storage) exports as {secret: true}: named so it isn't
+		// silently lost, never with its value. A key the CR also carries
+		// is skipped — the inline CR value shadows the Secret's.
+		if k.Clientset != nil {
+			if keys, kerr := secSvc.ListKeys(ctx, project, shortName, ""); kerr == nil {
+				for _, key := range keys {
+					if _, onCR := svc.Env[key]; onCR {
+						continue
+					}
+					if svc.Env == nil {
+						svc.Env = map[string]EnvValue{}
+					}
+					svc.Env[key] = EnvValue{Secret: true}
+				}
+			}
+		}
 		f.Services = append(f.Services, svc)
 	}
 	sort.Slice(f.Services, func(i, j int) bool { return f.Services[i].Name < f.Services[j].Name })
@@ -124,6 +141,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 		Internal:          cr.Spec.Internal,
 		PrivateEgress:     cr.Spec.PrivateEgress,
 		PlatformAPIEgress: cr.Spec.PlatformAPIEgress,
+		WaitForCI:         cr.Spec.WaitForCI,
 		Command:           cr.Spec.Command,
 	}
 	if cr.Spec.Repo != nil {
@@ -131,6 +149,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 		s.Branch = cr.Spec.Repo.DefaultBranch
 		s.Path = cr.Spec.Repo.Path
 	}
+	s.WatchPaths = cr.Spec.WatchPaths
 	for _, d := range cr.Spec.Domains {
 		s.Domains = append(s.Domains, DomainSpec{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret})
 	}
@@ -168,7 +187,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 		s.Buildpacks = &BuildpacksSpec{Builder: cr.Spec.Buildpacks.BuilderImage}
 	}
 	if cr.Spec.Image != nil {
-		s.Image = &ImageSpec{Repository: cr.Spec.Image.Repository, Tag: cr.Spec.Image.Tag}
+		s.Image = &ImageSpec{Repository: cr.Spec.Image.Repository, Tag: cr.Spec.Image.Tag, PullSecret: cr.Spec.Image.PullSecret}
 	}
 	if cr.Spec.Release != nil && len(cr.Spec.Release.Command) > 0 {
 		s.Release = &ReleaseSpec{

@@ -157,6 +157,9 @@
                 "default": "IfNotPresent",
                 "type": "string"
               },
+              "pullSecret": {
+                "type": "string"
+              },
               "repository": {
                 "type": "string"
               },
@@ -188,6 +191,9 @@
             "description": "A runtime=image target withheld until the service's release hook (migration) succeeds. Promoted to image by the imagerelease watcher.",
             "properties": {
               "pullPolicy": {
+                "type": "string"
+              },
+              "pullSecret": {
                 "type": "string"
               },
               "repository": {

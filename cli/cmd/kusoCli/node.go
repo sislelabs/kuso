@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -218,7 +219,7 @@ var nodeRevokeCmd = &cobra.Command{
 		case 404:
 			return fmt.Errorf("token %s not found", args[0])
 		default:
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 	},
 }
@@ -497,7 +498,7 @@ first to catch prereq problems early.`,
 				}
 				return fmt.Errorf("join failed: %s", fail.Error)
 			}
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		var out struct {
 			Output   string `json:"output"`
@@ -637,10 +638,10 @@ reboot orchestration when a kernel or other update requires a restart.`,
 		if resp.StatusCode() == 409 {
 			// Nothing-to-do or already-running both map to 409; pass the
 			// server's message through so the user sees which.
-			return fmt.Errorf("%s", strings.TrimSpace(string(resp.Body())))
+			return errors.New(strings.TrimSpace(errEnvelopeMessage(string(resp.Body()))))
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		fmt.Printf("Update Job started on %s", name)
 		if nodeApplyReboot {

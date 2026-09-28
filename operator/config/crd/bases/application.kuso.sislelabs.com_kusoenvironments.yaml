@@ -90,6 +90,7 @@ spec:
                     pullPolicy:
                       type: string
                       default: IfNotPresent
+                    pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
                 pendingImage:
                   type: object
                   description: >-
@@ -101,6 +102,7 @@ spec:
                     tag: { type: string }
                     pullPolicy:
                       type: string
+                    pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
                 port:
                   type: integer
                   format: int32

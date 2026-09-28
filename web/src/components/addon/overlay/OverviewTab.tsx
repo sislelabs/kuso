@@ -69,11 +69,12 @@ export function OverviewTab({
       <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
         Data persists on the cluster node&apos;s disk via a PVC. Survives pod
         restarts, deployments, and helm upgrades. Does NOT survive
-        node failure or addon deletion. Configure scheduled backups in{" "}
+        node failure. For off-cluster copies, schedule backups on this
+        addon&apos;s Backups tab. The S3 credentials they upload to live in{" "}
         <a href="/settings/backups" className="text-[var(--accent)] underline">
-          /settings/backups
+          Settings → Backups
         </a>{" "}
-        for off-cluster snapshots.
+        (admin).
       </p>
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
@@ -84,7 +85,7 @@ export function OverviewTab({
           <div className="flex items-center gap-2">
             <PublicAccessBadge publicTCP={cr?.spec.publicTCP} />
             <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              wired into every service in this project
+              mounted on services without an explicit addon list
             </span>
           </div>
         </header>
@@ -110,8 +111,10 @@ export function OverviewTab({
       </section>
 
       <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-        These vars are auto-injected as env on every service pod. Use them from your
-        app code, or copy <span className="text-[var(--text-secondary)]">DATABASE_URL</span> to
+        Services with no explicit addon list get these as env vars automatically.
+        Services with an explicit list get them only once subscribed (
+        <span className="text-[var(--text-secondary)]">kuso project addon subscribe</span>).
+        Copy <span className="text-[var(--text-secondary)]">DATABASE_URL</span> to
         connect from <span className="font-mono">psql</span> /{" "}
         <span className="font-mono">kubectl port-forward</span>.
       </p>

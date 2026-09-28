@@ -170,7 +170,7 @@ var cronDeleteYes bool
 
 var cronDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <service> <name>",
-	Aliases: []string{"rm"},
+	Aliases: []string{"rm", "delete-service", "rm-service"},
 	Short:   "Delete a cron",
 	Long: "Delete a cron.\n\n" +
 		"Its schedule stops immediately and the cron spec is not recoverable\n" +
@@ -343,8 +343,9 @@ var cronAddCommandCmd = &cobra.Command{
 }
 
 var cronEditCmd = &cobra.Command{
-	Use:   "edit <project> <name>",
-	Short: "Edit a project-scoped cron (kind=http or kind=command)",
+	Use:     "edit <project> <name>",
+	Aliases: []string{"edit-project"},
+	Short:   "Edit a project-scoped cron (kind=http or kind=command)",
 	Long: `Patch fields on an existing project-scoped cron in place.
 Service-attached crons (kind=service) use 'kuso cron sync' for the
 parent-image refresh and the schedule/command pair on each delete +

@@ -98,6 +98,12 @@ spec:
       # serviceAccountName + automountServiceAccountToken: true on
       # the parent KusoService spec (future work).
       automountServiceAccountToken: false
+      {{- /* Private-registry credential (runtime=image), a project
+        dockerconfigjson Secret named by KusoImage.pullSecret. */}}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . | quote }}
+      {{- end }}
       {{- /*
         Placement — pin to a subset of nodes by label and/or hostname.
         labels become a nodeSelector; nodes become a required

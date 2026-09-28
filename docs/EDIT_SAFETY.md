@@ -60,7 +60,7 @@ Most fields are **immutable post-creation** — the helm chart is provisioning a
 | `password`, `database` | ❌ No | Changing these orphans the existing data. |
 | `tls` (postgres) | ⚠️ With caveat | Only touches the pod template + conn secret, so the flip is safe for the data: DB pod restarts serving (or dropping) TLS and `<name>-conn` re-renders with the matching `sslmode`. BUT consuming app pods resolve `envFrom` at container start — they keep the stale `sslmode` until restarted. Flip the addon, then restart every subscribed env. Exposed on the API, CLI, and kuso.yml since v0.18.123: `kuso project addon update <p> <addon> --tls require\|disable`. node-postgres rejects the self-signed cert that `require` serves; Go pgx/libpq accept it. |
 
-If `kuso addon update` rejects an edit with "immutable", the only path is `backup → delete → create new → restore`. Yes, this is annoying. It's the cost of using StatefulSets honestly instead of pretending they're mutable.
+If `kuso project addon update` rejects an edit with "immutable", the only path is `backup → delete → create new → restore`. Yes, this is annoying. It's the cost of using StatefulSets honestly instead of pretending they're mutable.
 
 ## Cross-cutting hazards
 

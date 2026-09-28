@@ -119,8 +119,12 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req roleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		writeErr(w, http.StatusBadRequest, "name required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, `"name" is required`)
 		return
 	}
 	if !rejectReservedPerms(w, req.Permissions) || !requireGrant(w, r, "", rolePermStrings(req.Permissions)) {
@@ -135,6 +139,10 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	if err := h.DB.CreateRole(ctx, id, req.Name, req.Description, req.Permissions); err != nil {
+		if db.IsUniqueViolation(err) {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("role %q already exists", req.Name))
+			return
+		}
 		h.Logger.Error("create role", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
@@ -158,8 +166,12 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req roleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		writeErr(w, http.StatusBadRequest, "name required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, `"name" is required`)
 		return
 	}
 	if !rejectReservedPerms(w, req.Permissions) || !requireGrant(w, r, "", rolePermStrings(req.Permissions)) {
@@ -172,6 +184,8 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
 			writeErr(w, http.StatusNotFound, "role not found")
+		case db.IsUniqueViolation(err):
+			writeErr(w, http.StatusConflict, fmt.Sprintf("role %q already exists", req.Name))
 		default:
 			h.Logger.Error("update role", "err", err)
 			writeErr(w, http.StatusInternalServerError, "internal")

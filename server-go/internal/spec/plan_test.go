@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -163,8 +164,10 @@ func TestPlanFor_PruneSkipsEnvScopedClones(t *testing.T) {
 	if len(plan.AddonsToDelete) != 1 || plan.AddonsToDelete[0] != "staledb" {
 		t.Fatalf("want only staledb pruned, got %+v", plan.AddonsToDelete)
 	}
-	if len(plan.AddonsToUpdate) != 1 || plan.AddonsToUpdate[0] != "db" || len(plan.AddonsToCreate) != 0 {
-		t.Fatalf("env=production addon is the project's own: update %+v create %+v", plan.AddonsToUpdate, plan.AddonsToCreate)
+	// The seeded CR has no kind, so db shows as (not-applied) drift
+	// rather than unchanged — either way it's matched, not created.
+	if len(plan.AddonsToCreate) != 0 || (changeFor(plan, "addon:db") == nil && !reflect.DeepEqual(plan.AddonsUnchanged, []string{"db"})) {
+		t.Fatalf("env=production addon is the project's own: unchanged %+v create %+v changes %+v", plan.AddonsUnchanged, plan.AddonsToCreate, plan.Changes)
 	}
 }
 

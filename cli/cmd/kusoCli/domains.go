@@ -138,14 +138,17 @@ var (
 var domainsAddCmd = &cobra.Command{
 	Use:   "add <project> <service> <host>",
 	Short: "Bind a custom hostname to a service",
-	Long: `Append a custom hostname to a service. DNS must already point at
-the cluster IP — kuso doesn't manage your registrar.
+	Long: `Append a custom hostname to a service. Point the host's DNS at the
+cluster; kuso doesn't manage your registrar. After the add, the command
+prints the record to create (from the server's ingress address).
 
 cert-manager will mint a Let's Encrypt cert on first request to the
 host (HTTP-01 challenge). If the host doesn't resolve to the cluster
 yet you'll see traefik default-cert during the propagation window.
 
-Adds are idempotent: duplicate (host, tls) returns 409 with no change.
+Adding a host that is already bound with the same TLS settings fails
+with 409 and changes nothing. Adding it again with a different --no-tls
+or --tls-secret updates that host's TLS settings.
 
 Wildcard hosts ("*.example.com") route every matching subdomain and
 require --tls-secret — the name of a pre-provisioned wildcard cert
@@ -179,7 +182,8 @@ lifts the ~50 certs/week LE ceiling for many-tenant platforms:
 			if err := checkRespErr(resp, err); err != nil {
 				return fmt.Errorf("add env domain: %w", err)
 			}
-			fmt.Printf("bound %s to %s/%s env=%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service, domainsEnv)
+			fmt.Printf("bound %s to %s/%s env=%s\n", host, project, service, domainsEnv)
+			fmt.Print(dnsTargetHint(host, fetchIngressTarget()))
 			return nil
 		}
 
@@ -188,7 +192,8 @@ lifts the ~50 certs/week LE ceiling for many-tenant platforms:
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("add domain: %w", err)
 		}
-		fmt.Printf("bound %s to %s/%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service)
+		fmt.Printf("bound %s to %s/%s\n", host, project, service)
+		fmt.Print(dnsTargetHint(host, fetchIngressTarget()))
 		return nil
 	},
 }
@@ -238,7 +243,7 @@ var domainsRemoveCmd = &cobra.Command{
 			return fmt.Errorf("%s is not bound to %s/%s", host, project, service)
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		fmt.Printf("unbound %s from %s/%s\n", host, project, service)
 		return nil
@@ -261,4 +266,36 @@ func init() {
 	domainsListCmd.Flags().StringVarP(&domainsListOutput, "output", "o", "table", "output format [table, json]")
 	domainsCmd.AddCommand(domainsListCmd, domainsAddCmd, domainsRemoveCmd)
 	rootCmd.AddCommand(domainsCmd)
+}
+
+// fetchIngressTarget reads GET /api/config/ingress. Nil on any failure,
+// including a 404 from servers that predate the endpoint.
+func fetchIngressTarget() *kusoApi.IngressTarget {
+	resp, err := api.GetIngressTarget()
+	if err != nil || resp.StatusCode() >= 300 {
+		return nil
+	}
+	var t kusoApi.IngressTarget
+	if json.Unmarshal(resp.Body(), &t) != nil {
+		return nil
+	}
+	return &t
+}
+
+// dnsTargetHint tells the user which DNS record to create for host.
+// Wildcard hosts get the same advice; the record name is the pattern.
+func dnsTargetHint(host string, t *kusoApi.IngressTarget) string {
+	if t == nil || t.Source == "none" || (len(t.IPs) == 0 && len(t.Hostnames) == 0) {
+		return "Point DNS for " + host + " at your cluster's public IP (find it with: kuso node list)\n"
+	}
+	var b strings.Builder
+	switch {
+	case len(t.IPs) == 1:
+		fmt.Fprintf(&b, "Point an A record for %s at %s\n", host, t.IPs[0])
+	case len(t.IPs) > 1:
+		fmt.Fprintf(&b, "Point A records for %s at any of: %s\n", host, strings.Join(t.IPs, ", "))
+	default:
+		fmt.Fprintf(&b, "Point a CNAME record for %s at %s\n", host, t.Hostnames[0])
+	}
+	return b.String()
 }

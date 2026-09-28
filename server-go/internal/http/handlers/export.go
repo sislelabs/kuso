@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,7 +118,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	// own caches so this is cheap.
 	desc, err := h.Projects.Describe(ctx, project)
 	if err != nil {
-		if err == projects.ErrNotFound {
+		if errors.Is(err, projects.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "project not found")
 			return
 		}

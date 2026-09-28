@@ -288,8 +288,10 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	if !envGroupNameRE.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: env name must be lowercase letters/digits/dashes (≤32 chars)", ErrInvalid)
 	}
-	if strings.HasPrefix(req.Name, "pr-") {
-		return nil, fmt.Errorf("%w: name %q is reserved (pr-* is webhook-driven)", ErrInvalid, req.Name)
+	for _, prefix := range []string{"pr-", "preview-"} {
+		if strings.HasPrefix(req.Name, prefix) {
+			return nil, fmt.Errorf("%w: name %q is reserved: the %s prefix is used for PR preview environments", ErrInvalid, req.Name, prefix)
+		}
 	}
 
 	ns, err := s.namespaceFor(ctx, project)

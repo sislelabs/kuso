@@ -55,7 +55,7 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, logs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "environment not found")
+			writeErr(w, http.StatusNotFound, h.Svc.MissingTarget(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env))
 		default:
 			h.Logger.Error("tail logs", "err", err)
 			writeErr(w, http.StatusInternalServerError, "internal")

@@ -18,6 +18,7 @@ import {
   ENV_MASK_SENTINEL,
   ENV_NAME_RE,
   addonShortByConnSecret,
+  buildTimePrefix,
   dotenvToRows,
   reservedEnvWarning,
   rid,
@@ -702,6 +703,7 @@ export function EnvVarsEditor({
               <div className="flex flex-col gap-0.5">
                 <Input
                   placeholder="KEY"
+                  aria-label={r.name ? `Name of variable ${r.name}` : `Name of variable ${i + 1}`}
                   value={r.name}
                   onChange={(e) => update(i, { name: e.target.value })}
                   className={cn(
@@ -719,6 +721,12 @@ export function EnvVarsEditor({
                 {reservedEnvWarning(r.name) && (
                   <span className="font-mono text-[10px] text-amber-400">
                     {reservedEnvWarning(r.name)}
+                  </span>
+                )}
+                {buildTimePrefix(r.name) && (
+                  <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    {buildTimePrefix(r.name)}* is inlined at build time: a change reaches the
+                    browser after the next build, unless the key is in publicEnv (kuso.yml).
                   </span>
                 )}
                 {/* The addon origin used to render as a "from <addon>" caption
@@ -742,6 +750,7 @@ export function EnvVarsEditor({
                 // eye. The editor already holds the plaintext (reveal read),
                 // so this is display-only — no refetch needed to unmask.
                 type={r.visible || r.fromSecret ? "text" : "password"}
+                aria-label={r.name ? `Value of ${r.name}` : `Value of variable ${i + 1}`}
                 value={r.value}
                 onChange={(e) => update(i, { value: e.target.value })}
                 className="h-8 min-w-0 font-mono text-[12px]"
@@ -774,7 +783,9 @@ export function EnvVarsEditor({
                 />
                 <button
                   type="button"
-                  aria-label={r.visible ? "Hide" : "Show"}
+                  aria-label={
+                    r.visible ? `Hide value of ${r.name || "variable"}` : `Show value of ${r.name || "variable"}`
+                  }
                   onClick={() => {
                     // Reveal path: secret-backed / opaque-ref values aren't
                     // loaded on the default read. First time the user opens
@@ -798,7 +809,7 @@ export function EnvVarsEditor({
                 </button>
                 <button
                   type="button"
-                  aria-label="Remove"
+                  aria-label={r.name ? `Remove ${r.name}` : "Remove variable"}
                   onClick={() => remove(i)}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400 disabled:opacity-30"
                 >

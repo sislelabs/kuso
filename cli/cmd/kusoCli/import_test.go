@@ -70,3 +70,27 @@ func TestComposeApplyGates(t *testing.T) {
 		t.Errorf("both overrides set should pass, got: %v", err)
 	}
 }
+
+func TestImportFileFlagWithDeprecatedOut(t *testing.T) {
+	t.Cleanup(func() {
+		importFile, importOut = "", ""
+		for _, n := range []string{"file", "out"} {
+			importComposeCmd.Flags().Lookup(n).Changed = false
+		}
+	})
+	if err := importComposeCmd.Flags().Parse([]string{"-o", "old.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := importDestFile(); got != "old.yaml" {
+		t.Errorf("-o alone: got %q, want old.yaml", got)
+	}
+	if err := importComposeCmd.Flags().Parse([]string{"--file", "new.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := importDestFile(); got != "new.yaml" {
+		t.Errorf("--file should win: got %q", got)
+	}
+	if importComposeCmd.Flags().Lookup("out").Deprecated == "" {
+		t.Error("--out should be marked deprecated")
+	}
+}

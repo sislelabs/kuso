@@ -2,6 +2,7 @@
 
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   useMutation,
   useQuery,
@@ -204,8 +205,13 @@ export default function NotificationsPage() {
         <div>
           <h1 className="font-heading text-xl font-semibold tracking-tight">Notifications</h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Discord webhooks, generic webhook fan-out. Configure once instance-wide; every
-            build/crash/alert event lands in every enabled channel.
+            Channels for kuso events: Discord, Slack, Mattermost, Telegram, Pushover, email or a
+            generic webhook. Channels are instance-wide; each one gets the events and projects
+            you pick for it. Rules for when to alert live in{" "}
+            <Link href="/settings/alerts" className="text-[var(--accent)] hover:underline">
+              Alert rules
+            </Link>
+            .
           </p>
         </div>
       </header>
@@ -227,7 +233,7 @@ export default function NotificationsPage() {
         <EmptyState
           icon={<Bell className="h-5 w-5" />}
           title="No notification channels yet"
-          description="Click + New channel to add a Discord webhook."
+          description="Click New channel to send kuso events to Discord, Slack, email or another destination."
           className="p-8"
         />
       ) : (
@@ -400,7 +406,11 @@ function NotificationRow({
         method: "PUT",
         body: { ...n, enabled },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "notifications"] }),
+    onSuccess: (_d, enabled) => {
+      toast.success(enabled ? `${n.name} enabled` : `${n.name} disabled`);
+      qc.invalidateQueries({ queryKey: ["admin", "notifications"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
   });
 
   return (
@@ -426,13 +436,16 @@ function NotificationRow({
         <button
           type="button"
           onClick={() => toggle.mutate(!n.enabled)}
+          disabled={toggle.isPending}
+          role="switch"
+          aria-checked={n.enabled}
           className={cn(
             "inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors",
             n.enabled
               ? "border-emerald-500/30 bg-emerald-500/20"
               : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
           )}
-          aria-label={n.enabled ? "Disable" : "Enable"}
+          aria-label={n.enabled ? `Disable ${n.name}` : `Enable ${n.name}`}
         >
           <span
             className={cn(
@@ -468,11 +481,11 @@ function NotificationRow({
         title={`Delete ${n.name}?`}
         body={
           <p>
-            Removes this {n.type} sink. Future events will no longer fan out
-            here. The persisted notification feed is unaffected.
+            Removes this {n.type} channel. Future events will no longer be
+            sent here. The persisted notification feed is unaffected.
           </p>
         }
-        confirmLabel="Delete sink"
+        confirmLabel="Delete channel"
         destructive
         pending={remove.isPending}
         onConfirm={() => remove.mutate()}

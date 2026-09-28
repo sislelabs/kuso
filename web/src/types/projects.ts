@@ -53,10 +53,13 @@ export interface KusoServiceSpec {
   // dockerfile overrides the Dockerfile filename for runtime=dockerfile
   // (relative to repo.path). Empty = "Dockerfile".
   dockerfile?: string;
+  // watchPaths: repo-root globs gating push-triggered builds. Empty =
+  // server default: every push builds the service.
+  watchPaths?: string[];
   // image is the registry pointer for runtime=image services. The env
   // chart pulls it directly — no build. Editing tag+saving is how an
   // image service redeploys (there is no build endpoint for these).
-  image?: { repository?: string; tag?: string };
+  image?: { repository?: string; tag?: string; pullSecret?: string };
   // fromService names the sibling service (short name, e.g. "web")
   // whose built image a runtime=worker service reuses. Required by
   // the server for runtime=worker, rejected for every other runtime.
@@ -108,6 +111,8 @@ export interface KusoServiceSpec {
   // promoted. Non-zero exit fails the deploy and keeps the old
   // version serving. Undefined/absent = no hook.
   release?: { command?: string[]; timeoutSeconds?: number };
+  // waitForCI holds push/PR builds until the commit's GitHub checks pass.
+  waitForCI?: boolean;
 }
 
 export interface KusoVolume {

@@ -74,6 +74,14 @@ spec:
                     runtime=dockerfile. Empty defaults to "Dockerfile".
                     Lets a monorepo service build from a non-standard
                     path, e.g. "apps/web/Dockerfile.dev".
+                watchPaths:
+                  type: array
+                  items:
+                    type: string
+                  description: |
+                    Glob patterns (relative to the repo root) that gate
+                    GitHub push-triggered builds, e.g. "apps/web/**".
+                    Empty = every push builds the service.
                 command:
                   type: array
                   items: { type: string }
@@ -394,6 +402,7 @@ spec:
                     repository: { type: string }
                     tag: { type: string }
                     pullPolicy: { type: string }
+                    pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
                 github:
                   type: object
                   description: |
@@ -488,6 +497,14 @@ spec:
                     addon(s) BEFORE the release hook runs, so a bad migration
                     has a one-click restore. Only fires when a release hook is
                     also present. Mirrored onto every owned KusoEnvironment.
+                waitForCI:
+                  type: boolean
+                  description: |
+                    When true, webhook-triggered builds (pushes and PR
+                    previews) are created queued and held until the commit's
+                    GitHub check runs and commit statuses (excluding kuso's
+                    own kuso/* contexts) are all green. A failing check or the
+                    gate timeout cancels the build. Manual builds are not held.
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

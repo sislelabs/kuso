@@ -26,8 +26,18 @@ import {
 import { Logo } from "@/components/shared/Logo";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
-import { useSession, useSignOut, useCan, Perms } from "@/features/auth";
-import { useProjects, useEnvGroups } from "@/features/projects";
+import { useSession, useSignOut, useCan, useCanOnProject, Perms } from "@/features/auth";
+import {
+  useProjects,
+  useEnvGroups,
+  useProject,
+  deleteEnvGroup,
+  envGroupsQueryKey,
+} from "@/features/projects";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { envGroupLabel } from "@/lib/env-group";
+import { pullRequestUrl } from "@/lib/pull-request-url";
+import { toast } from "sonner";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {
@@ -42,6 +52,7 @@ import {
   Settings,
   Users,
   Trash2,
+  GitPullRequest,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -312,6 +323,28 @@ function EnvironmentSwitcher({ project }: { project: string }) {
 
   const currentEnv = search?.get("env") ?? "production";
 
+  // PR context for a preview env: number, branch and a GitHub link, read
+  // off the env CRs the project describe already returns.
+  const projectData = useProject(project);
+  const preview = useMemo(() => {
+    const d = projectData.data;
+    if (!d || currentEnv === "production") return null;
+    const env = d.environments.find(
+      (e) => envGroupLabel(e) === currentEnv && e.spec.pullRequest?.number,
+    );
+    if (!env) return null;
+    const pr = env.spec.pullRequest?.number;
+    const branch = env.spec.pullRequest?.headRef || env.spec.branch;
+    const svc = d.services.find((s) => s.metadata.name === env.spec.service);
+    const repo = svc?.spec.repo?.url ?? d.project.spec.defaultRepo?.url;
+    return { pr, branch, url: pullRequestUrl(repo, pr), expiresAt: env.spec.ttl?.expiresAt };
+  }, [projectData.data, currentEnv]);
+
+  const qc = useQueryClient();
+  const canDelete = useCanOnProject(project, Perms.ServicesWrite);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   // Migrated from a hand-rolled absolutely-positioned ul with manual
   // outside-click + ESC listeners to the same Popover+Command
   // primitive ProjectPicker uses. Behavioural wins: keyboard arrows,
@@ -393,6 +426,19 @@ function EnvironmentSwitcher({ project }: { project: string }) {
               )}
               <CommandSeparator />
               <CommandGroup className="px-0">
+                {currentEnv !== "production" && canDelete && (
+                  <CommandItem
+                    value="__delete__"
+                    onSelect={() => {
+                      setOpen(false);
+                      setConfirmDelete(true);
+                    }}
+                    className="px-2 py-1.5 text-[12px] text-red-400"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Delete {currentEnv}…
+                  </CommandItem>
+                )}
                 <CommandItem
                   value="__new__"
                   onSelect={() => {
@@ -409,6 +455,68 @@ function EnvironmentSwitcher({ project }: { project: string }) {
           </Command>
         </PopoverContent>
       </Popover>
+
+      {preview && (
+        <span
+          className="hidden items-center gap-1 font-mono text-[11px] text-[var(--text-tertiary)] md:inline-flex"
+          title={
+            preview.expiresAt
+              ? `Preview expires ${new Date(preview.expiresAt).toLocaleString()}`
+              : undefined
+          }
+        >
+          <GitPullRequest className="h-3 w-3" aria-hidden />
+          {preview.url ? (
+            <a
+              href={preview.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] hover:underline"
+            >
+              #{preview.pr}
+            </a>
+          ) : (
+            <span>#{preview.pr}</span>
+          )}
+          {preview.branch && <span className="max-w-[160px] truncate">{preview.branch}</span>}
+        </span>
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete environment ${currentEnv}`}
+        body={
+          <>
+            Deletes every service, environment and env-scoped addon in{" "}
+            <span className="font-mono text-[var(--text-primary)]">{currentEnv}</span>, including
+            the data in its own databases. Production is not touched.
+            {preview && " A new push to the PR can create the preview again."}
+          </>
+        }
+        typeToConfirm={currentEnv}
+        confirmLabel="Delete environment"
+        pending={deleting}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={async () => {
+          const name = currentEnv;
+          setDeleting(true);
+          try {
+            await deleteEnvGroup(project, name);
+            toast.success(`Environment ${name} deleted`);
+            setConfirmDelete(false);
+            qc.invalidateQueries({ queryKey: envGroupsQueryKey(project) });
+            qc.invalidateQueries({ queryKey: ["projects", project] });
+            const next = new URLSearchParams(search?.toString() ?? "");
+            next.delete("env");
+            const qs = next.toString();
+            router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/"), { scroll: false });
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to delete environment");
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
 
       <NewEnvironmentDialog
         project={project}
@@ -529,11 +637,19 @@ function NotificationsButton() {
     }
   };
 
-  const badge = (unread.data?.unread ?? 0) > 0;
+  const unreadCount = unread.data?.unread ?? 0;
+  const badge = unreadCount > 0;
+  const [confirmClear, setConfirmClear] = useState(false);
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setConfirmClear(false);
+        onOpenChange(next);
+      }}
+    >
       <PopoverTrigger
-        aria-label="Notifications"
+        aria-label={badge ? `Notifications, ${unreadCount} unread` : "Notifications"}
         className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
         <Bell className="h-4 w-4" />
@@ -552,10 +668,10 @@ function NotificationsButton() {
                 admin viewers get a read-only feed with no mutation
                 affordances — the feed is project-scoped and read
                 state isn't tracked per-user yet. */}
-            {isAdmin && (feed.data ?? []).length > 0 && (
+            {isAdmin && (feed.data ?? []).length > 0 && !confirmClear && (
               <button
                 type="button"
-                onClick={() => clearAll.mutate()}
+                onClick={() => setConfirmClear(true)}
                 disabled={clearAll.isPending}
                 title="Clear all notifications"
                 aria-label="Clear all notifications"
@@ -564,6 +680,28 @@ function NotificationsButton() {
                 <Trash2 className="h-3 w-3" aria-hidden />
                 clear
               </button>
+            )}
+            {isAdmin && confirmClear && (
+              <span className="inline-flex items-center gap-1.5 font-mono text-[10px]">
+                <span className="text-[var(--text-secondary)]">clear for everyone?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmClear(false);
+                    clearAll.mutate();
+                  }}
+                  className="text-red-400 hover:underline"
+                >
+                  yes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClear(false)}
+                  className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  no
+                </button>
+              </span>
             )}
             {isAdmin && (
               <Link

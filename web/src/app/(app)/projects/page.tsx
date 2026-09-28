@@ -113,8 +113,13 @@ export default function ProjectsPage() {
         <EmptyState
           icon={<LayoutGrid className="h-5 w-5" />}
           title="No projects yet"
-          description="Connect a GitHub repo and kuso will build, deploy, and give you a live URL. Already running Coolify? Import from there in one step."
+          description={
+            canCreate
+              ? "Connect a GitHub repo and kuso will build, deploy, and give you a live URL. Already running Coolify? Import from there in one step."
+              : "You don't have access to any projects yet. Only an admin can create projects; ask one to create a project or grant you access to an existing one."
+          }
           action={
+            canCreate ? (
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 href="/projects/new"
@@ -130,6 +135,7 @@ export default function ProjectsPage() {
                 Import from Coolify
               </Link>
             </div>
+            ) : undefined
           }
         />
       )}

@@ -181,6 +181,22 @@ export function SourceSection({
             spellCheck={false}
           />
         }
+      />
+      {/* Push-build gate for monorepos. PR previews and manual builds
+          ignore it; a push whose file list is unknown builds anyway. */}
+      <Row
+        label="watch paths"
+        hint="pushes build only when a changed file matches — blank = every push"
+        control={
+          <textarea
+            value={state.watchPaths}
+            onChange={(e) => setState((s) => ({ ...s, watchPaths: e.target.value }))}
+            placeholder={"apps/web/**\npackages/ui/**"}
+            rows={2}
+            spellCheck={false}
+            className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
+          />
+        }
         last={!isGitlab}
       />
       {/* GitLab access token — shown only when the URL looks like a

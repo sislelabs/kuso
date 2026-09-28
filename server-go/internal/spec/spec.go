@@ -57,6 +57,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/projects"
 )
 
 // File is the deserialised kuso.yaml. apiVersion is empty (legacy) or
@@ -85,6 +86,7 @@ type ServiceSpec struct {
 	// PlatformAPIEgress allows the service's pods to call the kuso API
 	// over in-cluster DNS (for apps that orchestrate kuso).
 	PlatformAPIEgress bool                `yaml:"platformApiEgress,omitempty"`
+	WaitForCI         bool                `yaml:"waitForCI,omitempty"`
 	Command           []string            `yaml:"command,omitempty"`
 	Domains           []DomainSpec        `yaml:"domains,omitempty"`
 	Env               map[string]EnvValue `yaml:"env,omitempty"`
@@ -117,6 +119,9 @@ type ServiceSpec struct {
 	// update — resources are edited on the live service afterwards.
 	// Omitted = the instance default pod size.
 	Size string `yaml:"size,omitempty"`
+	// WatchPaths are repo-root globs gating push-triggered builds
+	// (default: path/** when path is set). See kube.KusoServiceSpec.
+	WatchPaths []string `yaml:"watchPaths,omitempty"`
 }
 
 // ReleaseSpec is the pre-deploy release hook (migrations etc.), flattened
@@ -143,13 +148,24 @@ type ReleaseSpec struct {
 // mapping sets Generate; the value is minted ONCE on first apply, written
 // to the per-service Secret (not the CR's cleartext env), and never
 // rotated on re-apply unless `kuso apply --rotate-secrets` is passed.
+//
+// `{secret: true}` marks a key whose value lives in the service's
+// kuso-managed Secret (set out-of-band, e.g. `kuso env set`). Export
+// emits it so the key isn't silently lost; apply treats it as a no-op —
+// it never writes, overwrites or clears the stored value.
 type EnvValue struct {
 	Value    string // literal value or ${{ }} varref
 	Generate string // generator kind (e.g. "hex32"); empty for a literal
+	Secret   bool   // value held in the managed Secret; apply leaves it alone
 }
 
 // IsGenerated reports whether this entry is a generate directive.
 func (e EnvValue) IsGenerated() bool { return e.Generate != "" }
+
+// managedElsewhere reports whether the value lives outside the CR's
+// cleartext env (generated or secret-held), so apply must not put it
+// in spec.envVars.
+func (e EnvValue) managedElsewhere() bool { return e.Generate != "" || e.Secret }
 
 // UnmarshalYAML accepts a scalar (literal) or a mapping with either
 // `value:` or `generate:`. KnownFields strictness is preserved by
@@ -168,19 +184,30 @@ func (e *EnvValue) UnmarshalYAML(node *yaml.Node) error {
 	// top-level decoder's strictness.
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		k := node.Content[i].Value
-		if k != "value" && k != "generate" {
-			return fmt.Errorf("%w: unknown env value field %q (want value or generate)", ErrInvalid, k)
+		if k != "value" && k != "generate" && k != "secret" {
+			return fmt.Errorf("%w: unknown env value field %q (want value, generate or secret)", ErrInvalid, k)
 		}
 	}
 	var m struct {
 		Value    *string `yaml:"value"`
 		Generate string  `yaml:"generate"`
+		Secret   *bool   `yaml:"secret"`
 	}
 	if err := node.Decode(&m); err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
 	if m.Value != nil && m.Generate != "" {
 		return fmt.Errorf("%w: env value sets both value and generate", ErrInvalid)
+	}
+	if m.Secret != nil {
+		if !*m.Secret {
+			return fmt.Errorf("%w: env value secret must be true (omit it for a literal)", ErrInvalid)
+		}
+		if m.Value != nil || m.Generate != "" {
+			return fmt.Errorf("%w: env value {secret: true} can't also set value or generate", ErrInvalid)
+		}
+		e.Secret = true
+		return nil
 	}
 	if m.Generate != "" {
 		if !validGenerateKind(m.Generate) {
@@ -200,6 +227,9 @@ func (e *EnvValue) UnmarshalYAML(node *yaml.Node) error {
 func (e EnvValue) MarshalYAML() (any, error) {
 	if e.Generate != "" {
 		return map[string]string{"generate": e.Generate}, nil
+	}
+	if e.Secret {
+		return map[string]bool{"secret": true}, nil
 	}
 	return e.Value, nil
 }
@@ -222,6 +252,9 @@ func validGenerateKind(k string) bool { _, ok := generateKinds[k]; return ok }
 type ImageSpec struct {
 	Repository string `yaml:"repository,omitempty"`
 	Tag        string `yaml:"tag,omitempty"`
+	// PullSecret names a project registry credential (`kuso registry
+	// login`) by registry host or Secret name, for private images.
+	PullSecret string `yaml:"pullSecret,omitempty"`
 }
 
 // DomainSpec is one custom domain on a service.
@@ -415,6 +448,45 @@ type Plan struct {
 	// kuso.yaml, when prune is false. Each entry is "kind:name", e.g.
 	// "service:old". Reported, not executed.
 	WouldDelete []string `json:"wouldDelete,omitempty"`
+	// *Unchanged list resources that exist and already match the file —
+	// apply sends them nothing.
+	ServicesUnchanged []string `json:"servicesUnchanged"`
+	AddonsUnchanged   []string `json:"addonsUnchanged"`
+	CronsUnchanged    []string `json:"cronsUnchanged"`
+	// Changes is the field-level diff behind every *ToUpdate entry, plus
+	// addon drift apply does not act on (NotApplied).
+	Changes []ResourceChange `json:"changes,omitempty"`
+	// Warnings are things apply can't fix, e.g. a {secret: true} key the
+	// service's Secret doesn't hold.
+	Warnings []string `json:"warnings,omitempty"`
+
+	// svcPatch / svcEnvChanged carry what PlanFor computed to Apply in
+	// the same process, so apply sends exactly the diff the plan shows.
+	// Absent (a hand-built plan) → Apply falls back to the full
+	// declarative request.
+	svcPatch      map[string]projects.PatchServiceRequest
+	svcEnvChanged map[string]bool
+}
+
+// ResourceChange is the field-level diff for one resource, keyed
+// "service:api" / "addon:db" / "cron:nightly".
+type ResourceChange struct {
+	Resource string        `json:"resource"`
+	Fields   []FieldChange `json:"fields"`
+	// NotApplied marks a diff apply won't act on (existing addons are
+	// never modified by apply).
+	NotApplied bool `json:"notApplied,omitempty"`
+}
+
+// FieldChange is one differing field. From/To are display strings;
+// env values are never echoed. Destructive marks changes that lose
+// data or traffic (volume/domain removal, release hook cleared, scale
+// to zero).
+type FieldChange struct {
+	Field       string `json:"field"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Destructive bool   `json:"destructive,omitempty"`
 }
 
 // envScoped reports whether a CR belongs to one staging/preview env
@@ -443,7 +515,10 @@ func projectCron(c kube.KusoCron) bool {
 // the set of changes needed to bring kube into line. Read-only —
 // callers run this for the dry-run UI before pulling the trigger.
 func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*Plan, error) {
-	plan := &Plan{}
+	plan := &Plan{
+		svcPatch:      map[string]projects.PatchServiceRequest{},
+		svcEnvChanged: map[string]bool{},
+	}
 
 	// Services: by name (the YAML name maps to the short service
 	// name; the CR name is project-prefixed).
@@ -455,22 +530,45 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
 	}
-	liveSvcByShort := map[string]bool{}
+	var projectSvcs []kube.KusoService
 	for _, ls := range liveSvcs {
+		if ls.Spec.Project == f.Project {
+			projectSvcs = append(projectSvcs, ls)
+		}
+	}
+	envs := newEnvDiffer(ctx, k, namespace, f.Project, projectSvcs)
+	liveSvcByShort := map[string]bool{}
+	for i := range liveSvcs {
+		ls := &liveSvcs[i]
 		if ls.Spec.Project != f.Project || envScoped(ls.Labels) {
 			continue
 		}
 		short := shortName(f.Project, ls.Name)
 		liveSvcByShort[short] = true
-		if _, want := desiredSvcs[short]; !want {
+		desired, want := desiredSvcs[short]
+		if !want {
 			plan.ServicesToDelete = append(plan.ServicesToDelete, short)
-		} else {
-			plan.ServicesToUpdate = append(plan.ServicesToUpdate, short)
+			continue
 		}
+		req, fields := diffServiceSpec(ls, desired)
+		envFields, crEnvChanged, warns := envs.diff(ls, short, desired)
+		plan.Warnings = append(plan.Warnings, warns...)
+		fields = append(fields, envFields...)
+		if len(fields) == 0 {
+			plan.ServicesUnchanged = append(plan.ServicesUnchanged, short)
+			continue
+		}
+		plan.ServicesToUpdate = append(plan.ServicesToUpdate, short)
+		plan.Changes = append(plan.Changes, ResourceChange{Resource: "service:" + short, Fields: fields})
+		plan.svcPatch[short] = req
+		plan.svcEnvChanged[short] = crEnvChanged
 	}
-	for name := range desiredSvcs {
+	for name, s := range desiredSvcs {
 		if !liveSvcByShort[name] {
 			plan.ServicesToCreate = append(plan.ServicesToCreate, name)
+			for _, key := range secretMarkedKeys(s.Env) {
+				plan.Warnings = append(plan.Warnings, missingSecretWarning(f.Project, name, key))
+			}
 		}
 	}
 
@@ -497,10 +595,17 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		// + create the short name".
 		short := shortName(f.Project, la.Name)
 		liveAddonByName[short] = true
-		if _, want := desiredAddons[short]; !want {
+		desired, want := desiredAddons[short]
+		if !want {
 			plan.AddonsToDelete = append(plan.AddonsToDelete, short)
+			continue
+		}
+		// Apply has no addon update path — it only creates and deletes —
+		// so drift is reported (NotApplied) but never planned as an update.
+		if fields := diffAddon(exportAddon(f.Project, la), desired); len(fields) > 0 {
+			plan.Changes = append(plan.Changes, ResourceChange{Resource: "addon:" + short, Fields: fields, NotApplied: true})
 		} else {
-			plan.AddonsToUpdate = append(plan.AddonsToUpdate, short)
+			plan.AddonsUnchanged = append(plan.AddonsUnchanged, short)
 		}
 	}
 	for name := range desiredAddons {
@@ -526,11 +631,21 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		}
 		short := shortName(f.Project, lc.Name)
 		liveCronByName[short] = true
-		if _, want := desiredCrons[short]; !want {
+		desired, want := desiredCrons[short]
+		if !want {
 			plan.CronsToDelete = append(plan.CronsToDelete, short)
-		} else {
-			plan.CronsToUpdate = append(plan.CronsToUpdate, short)
+			continue
 		}
+		fields, notApplied := diffCron(exportCron(f.Project, lc), desired)
+		if len(notApplied) > 0 {
+			plan.Changes = append(plan.Changes, ResourceChange{Resource: "cron:" + short, Fields: notApplied, NotApplied: true})
+		}
+		if len(fields) == 0 {
+			plan.CronsUnchanged = append(plan.CronsUnchanged, short)
+			continue
+		}
+		plan.CronsToUpdate = append(plan.CronsToUpdate, short)
+		plan.Changes = append(plan.Changes, ResourceChange{Resource: "cron:" + short, Fields: fields})
 	}
 	for name := range desiredCrons {
 		if !liveCronByName[name] {
@@ -538,6 +653,11 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		}
 	}
 
+	sort.Strings(plan.ServicesUnchanged)
+	sort.Strings(plan.AddonsUnchanged)
+	sort.Strings(plan.CronsUnchanged)
+	sort.Strings(plan.Warnings)
+	sort.SliceStable(plan.Changes, func(i, j int) bool { return plan.Changes[i].Resource < plan.Changes[j].Resource })
 	sort.Strings(plan.ServicesToCreate)
 	sort.Strings(plan.ServicesToUpdate)
 	sort.Strings(plan.ServicesToDelete)

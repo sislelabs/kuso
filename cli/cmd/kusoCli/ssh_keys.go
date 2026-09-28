@@ -155,7 +155,7 @@ var sshKeyRmCmd = &cobra.Command{
 		case 404:
 			return fmt.Errorf("SSH key %s not found", args[0])
 		default:
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 	},
 }

@@ -27,7 +27,7 @@ This skill is current to **v0.23.1**. Run `kuso version` to confirm what's on th
 - **Project** = the top-level grouping. One repo or many; one base domain.
 - **Service** = one deployable app inside a project. Has a runtime, a port, and env vars.
 - **Environment** = one running instance of a service. Each service auto-gets a `production` env. PR previews AND long-lived named envs (`staging`, `qa`) are extra envs. A named env **tracks a git branch** — pushes to that branch auto-build+deploy it (v0.18.120+). See "Persistent environments".
-- **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. Which addons a service gets is its `subscribedAddons` list; a new service starts with it unset (mount everything) until the next kuso-server restart freezes it to the addons that existed then. See "Subscriptions" for the exact default and how to subscribe/unsubscribe.
+- **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. Which addons a service gets is its `subscribedAddons` list. A service with no list (unset) mounts every addon, including ones added later. A service with an explicit list mounts only those addons, so a newly added addon does NOT reach it until you run `kuso project addon subscribe <p> <svc> <addon>`. A new service starts unset, but the next kuso-server restart (every upgrade is one) writes the list out as the addons that existed then. If `DATABASE_URL` is missing after `kuso project addon add`, check `subscribedAddons` in `kuso get services <p> -o json` and subscribe. See "Subscriptions".
 - **Build** = a kaniko Job that produces an image and patches the env's `image.tag`. One build per `(service, ref)`. Helm-operator rolls the new pod.
 - **Deploy = push.** kuso auto-deploys on `git push` to a branch some env tracks (production tracks the service default, usually `main`): the GitHub webhook fires a build, which promotes and rolls the new pod with zero manual steps. **A merge to `main` is already a production deploy — you do NOT run anything to ship it.** `kuso build trigger` / `kuso redeploy` are only for *out-of-band* rebuilds (rebuild without a new commit, deploy a non-tracked ref, re-run after a transient failure) — not part of the normal ship flow.
 - **Release hook** (v0.16+) = an optional Job that runs **before** the new image is promoted. Heroku-style migration phase. Set via `spec.release.command`.
@@ -153,6 +153,11 @@ kuso project service add papelito web \
   --image-repo ghcr.io/sislelabs/papelito \
   --image-tag v1.2.3 \
   --port 3000
+#     Private registry? Store a login, then attach it to the service.
+#     The password is read from stdin and never returned.
+echo "$GHCR_TOKEN" | kuso registry login papelito ghcr.io --username octo --password-stdin
+kuso project service set papelito web --image-pull-secret ghcr.io   # '' detaches
+kuso registry list papelito        # logout refuses while a service uses it
 
 # 4. Domains
 kuso domains add papelito web papelito.example.com
@@ -171,10 +176,19 @@ kuso env share papelito web ENVIRONMENT                # only this shared key
 kuso project addon unsubscribe papelito web db cache   # drop DB/redis conns
 kuso project addon list papelito web                   # verify what's mounted
 
-# 6. Trigger the FIRST build (repo-based runtimes only). One-time bootstrap:
-#    there's no commit-since-creation to have fired a webhook yet. After this,
-#    every push to the tracked branch auto-builds+deploys — you won't run this again.
-kuso build trigger papelito web
+# 6. The first build starts on its own: `service add` triggers it for
+#    repo-based runtimes and prints whether it started. After that, every push
+#    to the tracked branch auto-builds+deploys. Run `kuso build trigger` only if
+#    the add output says the first build did not start.
+#    Monorepo: every push builds every service of the repo unless the service
+#    sets watch paths; then a push builds it only if a changed file matches.
+#    List shared code the service depends on too:
+#      kuso project service set papelito web --watch-paths 'apps/web/**,packages/ui/**'
+#    ('' clears them; kuso.yml: `watchPaths: [...]`). A push whose file
+#    list GitHub truncated builds anyway. `[skip ci]`, `[ci skip]` or
+#    `[skip kuso]` in the head commit message makes kuso ignore the push
+#    entirely (no builds, no kuso.yml apply). PR previews ignore both.
+kuso build list papelito web
 
 # Watch it
 kuso logs papelito web -f
@@ -233,6 +247,16 @@ Job naming: `<env-name>-release-<short-image-tag>`. Re-deploying the same tag is
 
 To clear the hook: PATCH `{"release":{"clear":true}}`.
 
+## GitHub commit statuses and wait-for-CI
+
+Every build of a real commit on a GitHub repo posts a commit status: context `kuso/<service>`, or `kuso/<service> (<env>)` for a non-production env or PR preview. It goes `pending` (queued / waiting for CI / building), then `success` when deployed, `failure` on a build, release-hook or CI failure, and `error` when cancelled or superseded. The status links to the service's Deployments tab. This needs the GitHub App's **Commit statuses: write** and **Checks: read** permissions. Installs made before these were added must accept the new permissions on GitHub first. Until then, statuses fail quietly (server log only).
+
+```bash
+kuso project service set <p> <svc> --wait-for-ci on    # kuso.yml: services[].waitForCI: true
+```
+
+With `waitForCI` on, builds from a push or PR preview are created **queued** and don't start until every check run and commit status on the commit is green. kuso's own `kuso/*` statuses don't count. A red check cancels the build with `CI failed: <check>`. CI still running after 60 minutes (`KUSO_CI_GATE_TIMEOUT`) also cancels it. A commit that reports no checks within 3 minutes builds anyway. Manual `kuso build trigger` is never held. `kuso build list` shows a held build as queued with the message "waiting for GitHub CI checks to pass".
+
 ## Sleep, wake, and hard-stop
 
 Three distinct states — don't conflate them:
@@ -280,12 +304,26 @@ curl -X PATCH ... \
 
 The watcher polls Jobs labeled `kuso.sislelabs.com/cron` every 30s; on terminal failure it POSTs `{project, service, cron, jobName, startedAt, finishedAt, logsURL}` with `X-Kuso-Signature: sha256=<hex>` when `secretRef` is set, retrying 3x with linear backoff. It also emits `cron.failed` to notify subscribers — make sure the Discord/Slack channel subscribes to that event.
 
+## Log & metrics drains — ship to Grafana / OTLP / Loki (admin)
+
+```bash
+kuso drain add --type otlp --url https://otlp-gateway-….grafana.net/otlp --header "Authorization=Basic <b64 id:token>"
+kuso drain add --type loki --url https://USER:TOKEN@logs-….grafana.net --project shop   # userinfo → Basic auth header
+kuso drain add --type http --url https://logs.example.com/in --secret "$HMAC_KEY"      # X-Kuso-Signature HMAC
+kuso drain test <id>      # one sample line; prints upstream status (401 = bad creds)
+kuso drain list / delete <id>
+```
+
+Drains forward exactly what the log viewer stores (post per-service rate cap), batched (500 lines / 2s), retried 4x on 5xx/429/network errors, then dropped. A slow sink drops its own lines (`kuso_drain_lines_dropped_total{reason=buffer_full|send_failed}` on `/metrics`) and never slows log collection. Shipping runs on the leader replica only; config edits apply within ~30s. `/v1/logs` and `/loki/api/v1/push` are appended to base URLs. `service` is the short name; `env` is the env CR name.
+
+Metrics are pull-only: scrape `GET /api/metrics/export` (Prometheus text, bearer = admin API token or `KUSO_METRICS_SCRAPE_TOKEN`) for per-env `kuso_env_http_requests_per_second`, `_5xx_per_second`, `_p95_latency_seconds`, `kuso_env_cpu_cores`, `kuso_env_memory_bytes`, `kuso_env_pods` labelled project/service/env.
+
 ## Backups — addon data and control plane
 
 ```bash
 # On-demand dump straight to your disk — no S3 config needed (editor role).
 # postgres → .sql.gz, s3 → .tar.gz; other kinds not supported.
-kuso addon-backup download <p> <addon> [-o dump.sql.gz] [--force]
+kuso addon-backup download <p> <addon> [--file dump.sql.gz] [--force]
 
 # Scheduled dumps to the cluster-wide S3 bucket:
 kuso addon-backup schedule <p> <addon> --schedule '0 3 * * *' --retention 14
@@ -295,7 +333,7 @@ kuso addon-backup restore <p> <addon> <s3-key>     # --into <sibling> or in-plac
 # The S3 bucket + health for all of the above (admin):
 kuso backup settings get / set --bucket ... --endpoint ... --access-key-id ...
 kuso backup health                                  # are backups actually landing?
-kuso backup --output kuso-backup-$(date +%s).sql.gz # control-plane DB dump
+kuso backup --file kuso-backup-$(date +%s).sql.gz # control-plane DB dump
 ```
 
 ### External-DB backups — PlanetScale / Neon / Supabase / RDS
@@ -672,10 +710,36 @@ secrets, no DB/Redis/NATS conns. Previews respect subscriptions too.
   `kuso domains add <p> <svc> <host>` (`--no-tls` for HTTP-only). They land as the
   env's `additionalHosts` and get their own LE cert. `--env <name>` scopes to one
   env; without it the host is mirrored onto the PRODUCTION env. DNS must already
-  point at the cluster IP — kuso doesn't manage your registrar.
+  point at the cluster IP — kuso doesn't manage your registrar. `kuso domains add`
+  prints the A record to create; `kuso api GET config/ingress` returns the same
+  IPs. On older servers without that endpoint, use the IP the kuso dashboard
+  domain resolves to (`dig +short <kuso-domain>`).
 - A service can serve on its auto-host AND its custom hosts simultaneously.
   Make the base domain your real domain (`--domain tickero.bg`) so the primary
   host is `<svc>.tickero.bg` rather than `<svc>.<cluster-base>`.
+
+## Alerts — service health, certs, DNS
+
+`kuso alert create --kind <kind> [--project p --service s --env e] [--threshold N]`
+adds a rule; `kuso alert list` shows each rule's threshold and whether it is firing.
+
+| Kind | `--threshold` means | Notes |
+| --- | --- | --- |
+| `http_5xx_rate` | % of requests that were 5xx (default 5) | `--min-requests` (default 20) skips idle envs |
+| `http_p95_latency` | p95 in ms (default 1000) | same `--min-requests` floor; from traefik metrics |
+| `cert_expiry` | days before expiry (default 14) | also fires on a cert-manager Certificate not Ready for 15m+, with its reason |
+| `dns_mismatch` | none | env host doesn't resolve to the cluster's ingress IPs; Cloudflare-proxied hosts are skipped |
+
+These four fire once when the condition starts and send a `✓ Resolved` card when it
+clears. `--throttle` is the minimum gap between two fires, which damps flapping.
+New installs get an instance-wide `cert_expiry` rule named "TLS certificates" (14 days).
+If DNS goes through an external load balancer the cluster can't see, set
+`KUSO_INGRESS_IPS` on kuso-server to the public IPs.
+
+```bash
+kuso alert create --kind http_5xx_rate --project shop --service web --threshold 5 --window 5m
+kuso alert create --kind dns_mismatch --project shop
+```
 
 ## Preview (PR) environments
 
@@ -772,7 +836,7 @@ kuso cron delete-project <project> <name>       # kind=http|command
 # One-shot runs (migrations, seeds, console)
 kuso run <project> <service> -- sh -c 'rake db:seed'      # NOTE: -- separator, not --cmd
 kuso run <project> <service> --follow -- <cmd>            # -f streams logs + blocks; exit code = the run's
-kuso run <project> <service> --env DEBUG=1 --timeout-seconds 600 -- <cmd>
+kuso run <project> <service> --set-env DEBUG=1 --timeout-seconds 600 -- <cmd>  # always runs against production
 kuso run cancel <project> <run>                           # kill a running one-shot
 
 # Shells + domains
@@ -1068,7 +1132,7 @@ project service stop|start    hard-stop (no wake-on-traffic) / resume
 project delete <p>            cascades to services/envs/addons
 health [fix <r>]              reconcile health + one-click remediation
 doctor                        pre-flight checks
-backup --output <file>        control-plane pg_dump; backup settings/health for addon S3
+backup --file <file>          control-plane pg_dump; backup settings/health for addon S3
 upgrade --check / --version vX.Y.Z
 version
 ```

@@ -17,6 +17,7 @@ import (
 	"net/http"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/httperr"
 )
 
 // Permission is a typed string so accidental misuse (passing a perm
@@ -261,11 +262,11 @@ func (i *Issuer) Require(want Permission) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())
 			if !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				httperr.Write(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			if !Has(c.Permissions, want) {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				httperr.Write(w, http.StatusForbidden, "forbidden: missing permission "+string(want))
 				return
 			}
 			next.ServeHTTP(w, r)

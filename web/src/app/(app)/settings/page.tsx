@@ -25,6 +25,8 @@ import {
   FileUp,
   Bot,
   Clock,
+  Siren,
+  Waves,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -64,7 +66,7 @@ const CARDS: Card[] = [
   { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",        icon: Globe,        perm: Perms.SettingsAdmin, group: "cluster", keywords: "env environment variable global secret" },
   { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "cluster", keywords: "kaniko buildpacks memory cpu limit concurrent" },
   { href: "/settings/sessions",         title: "Sessions",         description: "How long a login stays valid before re-auth. Extend it or turn expiry off.", icon: Clock, perm: Perms.SettingsAdmin, group: "cluster", keywords: "session login logout jwt token expiry timeout remember never sign-out auth" },
-  { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot" },
+  { href: "/settings/backups",          title: "Backups",          description: "S3 credentials for addon backups, plus control-plane backup and registry GC health.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot" },
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update" },
   { href: "/settings/usage",            title: "Usage + cost",     description: "Per-node CPU + memory rollup with monthly cost projection.",        icon: DollarSign,   perm: Perms.SettingsRead,  group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },
   { href: "/settings/health",           title: "Health",           description: "Reconcile-health scan: failed helm releases, stuck addons, orphaned envs — with one-click fixes.", icon: ShieldCheck, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook" },
@@ -80,7 +82,9 @@ const CARDS: Card[] = [
 
   // Integrations: external wires.
   { href: "/settings/github",        title: "GitHub App",   description: "Connect a GitHub App so kuso can monitor repos and trigger builds.", icon: Github,    perm: Perms.SettingsAdmin, group: "integrations", keywords: "github app webhook repo build push pr" },
-  { href: "/settings/notifications", title: "Notifications", description: "Discord webhooks, generic webhook fan-out, alerts.",                  icon: Bell,      group: "integrations", keywords: "webhook slack discord email alert" },
+  { href: "/settings/notifications", title: "Notifications", description: "Channels for kuso events: Discord, Slack, Mattermost, Telegram, Pushover, email, generic webhook.", icon: Bell, group: "integrations", keywords: "webhook slack discord email telegram pushover mattermost channel alert" },
+  { href: "/settings/alerts",        title: "Alert rules",   description: "Rules evaluated every minute that fire through your notification channels.", icon: Siren, perm: Perms.SettingsAdmin, group: "integrations", keywords: "alert rule threshold cpu memory error rate page oncall" },
+  { href: "/settings/drains",        title: "Log & metrics drains", description: "Forward app logs to Grafana, OTLP, Loki or a webhook; scrape per-env metrics.", icon: Waves, perm: Perms.SettingsAdmin, group: "integrations", keywords: "drain log forward otlp opentelemetry loki grafana datadog prometheus metrics scrape export observability" },
   { href: "/settings/incident-agent", title: "Incident agent", description: "Autonomous claude -p agent that investigates incidents + opens fix PRs.", icon: Bot, perm: Perms.SettingsAdmin, group: "integrations", keywords: "incident agent claude ai discord pr autonomous crash alert investigate" },
   { href: "/settings/import",        title: "Import from Coolify", description: "Migrate Coolify apps + dbs + services into kuso.",             icon: ArrowDown, perm: Perms.SettingsAdmin, group: "integrations", keywords: "coolify import migrate migration" },
   { href: "/settings/import-compose", title: "Import docker-compose", description: "Convert a docker-compose.yml into kuso projects, services + addons.", icon: FileUp, perm: Perms.SettingsAdmin, group: "integrations", keywords: "docker compose import convert yaml migrate" },

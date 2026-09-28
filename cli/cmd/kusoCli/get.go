@@ -2,7 +2,9 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -27,39 +29,56 @@ func checkRespErr(resp *resty.Response, err error) error {
 		return fmt.Errorf("nil response")
 	}
 	if resp.StatusCode() >= 300 {
-		body := string(resp.Body())
-		// The server speaks the JSON error envelope {"error": "...",
-		// "code": "..."} — surface just the message, never raw JSON
-		// braces on the terminal. Non-JSON bodies (older servers,
-		// proxies) pass through untouched.
-		body = errEnvelopeMessage(body)
-		if body == "" {
-			body = resp.Status()
-		}
-		// 401 deserves a more useful pointer than the raw "unauthorized".
-		if resp.StatusCode() == 401 {
-			return fmt.Errorf("server returned 401: %s — run `kuso login` to refresh the token", body)
-		}
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), body)
+		return errors.New(apiErrorMessage(resp.StatusCode(), string(resp.Body())))
 	}
 	return nil
+}
+
+// apiErrorMessage renders a non-2xx response as "<message> (<status>)".
+// The server speaks the JSON error envelope {"error","code","requestId"?};
+// only the message and request id reach the terminal, never raw braces.
+// Non-JSON bodies (older servers, proxies) pass through trimmed; an empty
+// body falls back to the HTTP status text. 401 adds the re-login hint.
+func apiErrorMessage(status int, body string) string {
+	msg, reqID := parseErrEnvelope(body)
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		msg = strings.ToLower(http.StatusText(status))
+		if msg == "" {
+			msg = "request failed"
+		}
+	}
+	out := fmt.Sprintf("%s (%d)", msg, status)
+	if reqID != "" {
+		out += fmt.Sprintf(" (request id: %s)", reqID)
+	}
+	if status == http.StatusUnauthorized {
+		out += ": run `kuso login` to refresh the token"
+	}
+	return out
 }
 
 // errEnvelopeMessage extracts the "error" field from a JSON error
 // envelope body. Returns the input unchanged when it isn't an envelope
 // (backward compat with pre-envelope servers).
 func errEnvelopeMessage(body string) string {
+	msg, _ := parseErrEnvelope(body)
+	return msg
+}
+
+func parseErrEnvelope(body string) (msg, requestID string) {
 	trimmed := strings.TrimSpace(body)
 	if !strings.HasPrefix(trimmed, "{") {
-		return body
+		return body, ""
 	}
 	var env struct {
-		Error string `json:"error"`
+		Error     string `json:"error"`
+		RequestID string `json:"requestId"`
 	}
 	if json.Unmarshal([]byte(trimmed), &env) == nil && env.Error != "" {
-		return env.Error
+		return env.Error, env.RequestID
 	}
-	return body
+	return body, ""
 }
 
 // getCmd is the agent-friendly read entrypoint. v0.2 surfaces:

@@ -22,6 +22,8 @@ image:
   repository: ""
   tag: latest
   pullPolicy: IfNotPresent
+  # dockerconfigjson Secret for private registries (KusoImage.pullSecret).
+  pullSecret: ""
 
 # port: container port to expose, copied from KusoService.spec.port.
 port: 8080

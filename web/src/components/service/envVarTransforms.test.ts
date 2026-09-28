@@ -3,6 +3,7 @@ import type { KusoEnvVar } from "@/types/projects";
 import {
   addonRefFromValueFrom,
   addonShortByConnSecret,
+  buildTimePrefix,
   dotenvToRows,
   literalToRef,
   reservedEnvWarning,
@@ -503,5 +504,24 @@ describe("toRow addon-secret rows", () => {
     );
     expect(row.value).toBe("");
     expect(row.fromSecret).toBe(false);
+  });
+});
+
+describe("buildTimePrefix", () => {
+  it("flags framework-inlined public vars", () => {
+    expect(buildTimePrefix("NEXT_PUBLIC_API_URL")).toBe("NEXT_PUBLIC_");
+    expect(buildTimePrefix("VITE_API_URL")).toBe("VITE_");
+    expect(buildTimePrefix("REACT_APP_KEY")).toBe("REACT_APP_");
+  });
+
+  it("prefers the specific prefix over the generic PUBLIC_", () => {
+    expect(buildTimePrefix("NUXT_PUBLIC_SITE")).toBe("NUXT_PUBLIC_");
+    expect(buildTimePrefix("PUBLIC_SITE")).toBe("PUBLIC_");
+  });
+
+  it("ignores runtime vars and a bare prefix", () => {
+    expect(buildTimePrefix("DATABASE_URL")).toBe("");
+    expect(buildTimePrefix("API_PUBLIC_KEY")).toBe("");
+    expect(buildTimePrefix("VITE_")).toBe("");
   });
 });

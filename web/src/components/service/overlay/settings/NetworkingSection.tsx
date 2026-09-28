@@ -1,8 +1,11 @@
 "use client";
 
-import { Network, Plus, X, Globe, Lock } from "lucide-react";
+import { useState } from "react";
+import { Network, Plus, X, Globe, Copy, Check } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useIngressTargets } from "@/features/cluster";
 import { Section, Row, type SectionProps } from "./_primitives";
 
 // NetworkingSection — the single source of truth for "where does
@@ -131,7 +134,7 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
               className="inline-flex max-w-[420px] items-center gap-1.5 truncate rounded-md bg-[var(--bg-tertiary)] px-2 py-1 font-mono text-[12px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
               title={`Open https://${autoHost}`}
             >
-              <Lock className="h-3 w-3 shrink-0" />
+              <Globe className="h-3 w-3 shrink-0" />
               <span className="truncate">{autoHost}</span>
             </a>
           }
@@ -141,8 +144,8 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
         label="custom domains"
         hint={
           hosts.length === 0
-            ? "point a DNS A-record at the cluster IP, then add the host below · auto-TLS via Let's Encrypt"
-            : `${hosts.length} bound · DNS must point at cluster IP · if your app redirects to the auto-domain, set NEXTAUTH_URL / AUTH_URL / APP_URL / etc. to the custom host`
+            ? "point a DNS A record at the cluster, then add the host below · auto-TLS via Let's Encrypt"
+            : `${hosts.length} bound · DNS must point at the cluster · if your app redirects to the auto-domain, set NEXTAUTH_URL / AUTH_URL / APP_URL / etc. to the custom host`
         }
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
@@ -185,10 +188,74 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
               <Plus className="h-3 w-3" />
               Add domain
             </Button>
+            {!state.internal && <DnsTargetHint host={hosts[0]} />}
           </div>
         }
         last
       />
     </Section>
+  );
+}
+
+// DnsTargetHint tells the user exactly which record to create. Hidden
+// when the server can't name an address (older server, or no public IP).
+function DnsTargetHint({ host }: { host?: string }) {
+  const targets = useIngressTargets();
+  const t = targets.data;
+  if (!t || t.source === "none") return null;
+  const name = host || "your domain";
+  return (
+    <div className="space-y-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-[11px] text-[var(--text-secondary)]">
+      {t.ips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span>
+            Point an A record for <span className="font-mono text-[var(--text-primary)]">{name}</span> at
+            {t.ips.length > 1 ? " any of" : ""}
+          </span>
+          {t.ips.map((ip) => (
+            <CopyValue key={ip} value={ip} />
+          ))}
+        </div>
+      )}
+      {t.hostnames.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span>
+            {t.ips.length > 0 ? "Or point" : "Point"} a CNAME for{" "}
+            <span className="font-mono text-[var(--text-primary)]">{name}</span> at
+          </span>
+          {t.hostnames.map((h) => (
+            <CopyValue key={h} value={h} />
+          ))}
+        </div>
+      )}
+      {t.source === "nodes" && (
+        <div className="text-[var(--text-tertiary)]">
+          These are node addresses (no load balancer found); pick one that is reachable from the internet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CopyValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          toast.error("clipboard unavailable");
+        }
+      }}
+      aria-label={`Copy ${value}`}
+      className="inline-flex items-center gap-1 rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-primary)] hover:text-[var(--accent)]"
+    >
+      {value}
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+    </button>
   );
 }

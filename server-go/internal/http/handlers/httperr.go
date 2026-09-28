@@ -1,15 +1,18 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	"kuso/server/internal/httperr"
 )
 
 // writeErr is THE error writer for the HTTP API. Every error response
 // is a JSON envelope:
 //
-//	{"error": "<human-readable message>", "code": "<machine code>"}
+//	{"error": "<human-readable message>", "code": "<machine code>", "requestId": "<id>"}
 //
 // so the web client, CLI, MCP server and scripts all parse one shape
 // instead of sniffing free text. The message is the same string that
@@ -28,70 +31,13 @@ func writeErrCode(w http.ResponseWriter, status int, msg, code string) {
 }
 
 // writeErrExtra appends extra structured fields to the envelope.
-// "error" and "code" are reserved — extras never override them.
+// "error", "code" and "requestId" are reserved — extras never override them.
 func writeErrExtra(w http.ResponseWriter, status int, msg, code string, extra map[string]any) {
-	payload := map[string]any{"error": msg}
-	if code != "" {
-		payload["code"] = code
-	}
-	for k, v := range extra {
-		if k == "error" || k == "code" {
-			continue
-		}
-		payload[k] = v
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		// Marshal of map[string]string-ish payloads can't realistically
-		// fail; fall back to plain text rather than an empty 500 body.
-		// (Not http.Error / writeErr — this IS the writer.)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(status)
-		w.Write([]byte(msg + "\n"))
-		return
-	}
-	h := w.Header()
-	h.Set("Content-Type", "application/json")
-	// http.Error set nosniff; keep that property.
-	h.Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	w.Write(append(b, '\n'))
+	httperr.WriteExtra(w, status, msg, code, extra)
 }
 
-// errCode derives the machine `code` from the HTTP status. Kept
-// deliberately coarse — clients that need finer distinctions get them
-// via writeErrCode at the site (e.g. "shadowed").
-func errCode(status int) string {
-	switch status {
-	case http.StatusBadRequest:
-		return "bad_request"
-	case http.StatusUnauthorized:
-		return "unauthorized"
-	case http.StatusForbidden:
-		return "forbidden"
-	case http.StatusNotFound:
-		return "not_found"
-	case http.StatusMethodNotAllowed:
-		return "method_not_allowed"
-	case http.StatusConflict:
-		return "conflict"
-	case http.StatusGone:
-		return "gone"
-	case http.StatusRequestEntityTooLarge:
-		return "too_large"
-	case http.StatusUnprocessableEntity:
-		return "invalid"
-	case http.StatusTooManyRequests:
-		return "rate_limited"
-	case http.StatusServiceUnavailable:
-		return "unavailable"
-	}
-	if status >= 500 {
-		return "internal"
-	}
-	return "error"
-}
+// errCode derives the machine `code` from the HTTP status.
+func errCode(status int) string { return httperr.Code(status) }
 
 // notFoundMsg builds the 404 message. When the wrapped error carries
 // more than the bare sentinel ("projects: not found: service p/s"),
@@ -119,4 +65,18 @@ func kindFromOp(op string) string {
 		return op
 	}
 	return "resource"
+}
+
+// kubeErrStatus maps a Kubernetes API error the caller caused to a 4xx:
+// Invalid/BadRequest (a CR the schema rejects) -> 400, Conflict/
+// AlreadyExists -> 409. ok is false for anything else, which stays a
+// server fault. The kube message names the field, so it is passed through.
+func kubeErrStatus(err error) (status int, ok bool) {
+	switch {
+	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
+		return http.StatusBadRequest, true
+	case apierrors.IsConflict(err), apierrors.IsAlreadyExists(err):
+		return http.StatusConflict, true
+	}
+	return 0, false
 }

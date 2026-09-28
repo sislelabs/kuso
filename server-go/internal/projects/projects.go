@@ -263,7 +263,7 @@ func (s *Service) namespaceFor(ctx context.Context, project string) (string, err
 	p, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", ErrNotFound
+			return "", fmt.Errorf("%w: project %s", ErrNotFound, project)
 		}
 		return "", err
 	}
@@ -337,7 +337,7 @@ func (s *Service) getOwnedService(ctx context.Context, ns, project, service stri
 	svc, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, service))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
 		}
 		return nil, err
 	}

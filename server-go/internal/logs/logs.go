@@ -403,3 +403,28 @@ func containerNames(in []corev1.Container) []string {
 	}
 	return out
 }
+
+// MissingTarget turns a Tail ErrNotFound into a message naming what is
+// actually missing: the project, the service, or the environment. Kube
+// errors other than NotFound fall through to the environment message.
+func (s *Service) MissingTarget(ctx context.Context, project, service, env string) string {
+	if strings.HasPrefix(env, "build:") || strings.HasPrefix(env, "run:") {
+		return fmt.Sprintf("%s not found in project %s", env, project)
+	}
+	if s.Kube != nil {
+		if _, err := s.Kube.GetKusoProject(ctx, s.Namespace, project); apierrors.IsNotFound(err) {
+			return fmt.Sprintf("project %s not found", project)
+		}
+		fqn := service
+		if !strings.HasPrefix(service, project+"-") {
+			fqn = project + "-" + service
+		}
+		if _, err := s.Kube.GetKusoService(ctx, s.nsFor(ctx, project), fqn); apierrors.IsNotFound(err) {
+			return fmt.Sprintf("service %s/%s not found", project, strings.TrimPrefix(fqn, project+"-"))
+		}
+	}
+	if env == "" {
+		env = "production"
+	}
+	return fmt.Sprintf("environment %s not found for service %s/%s", env, project, strings.TrimPrefix(service, project+"-"))
+}

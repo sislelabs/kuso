@@ -92,7 +92,7 @@ var incidentShowCmd = &cobra.Command{
 			return fmt.Errorf("incident %s not found", args[0])
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		var in kusoApi.Incident
 		if err := json.Unmarshal(resp.Body(), &in); err != nil {
@@ -161,7 +161,7 @@ var incidentResolveCmd = &cobra.Command{
 			return fmt.Errorf("incident %s not found", args[0])
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		fmt.Printf("incident %s resolved\n", args[0])
 		return nil

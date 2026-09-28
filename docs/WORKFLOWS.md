@@ -1,6 +1,13 @@
 # Kuso server: HTTP workflows reference
 
-Source-of-truth catalogue of every endpoint the kuso-server exposes,
+> **Not a complete endpoint list.** This page covers the main workflows and
+> was last fully updated in July 2026. Later routes (rollback, env groups,
+> invites, runs, crons, revisions, backups, placement and others) are missing.
+> For the full, current set of routes read `server-go/internal/http/router.go`
+> and the `Mount` function of each handler in `server-go/internal/http/handlers/`.
+> Any route can be called with `kuso api <METHOD> <path>`.
+
+Catalogue of the main endpoints the kuso-server exposes,
 the request/response shape, and the web-UI page or CLI command that
 triggers it. Read alongside `LIVE_TEST_PLAN.md` for the journey-derived
 walkthrough used to verify the Go rewrite against the live cluster.

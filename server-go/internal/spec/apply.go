@@ -175,12 +175,23 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 		}
 	}
 	for _, name := range plan.ServicesToUpdate {
-		req := servicePatchReq(desiredSvcs[name])
-		if _, err := r.Projects.PatchService(ctx, f.Project, name, req); err != nil {
-			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "update", Message: err.Error()})
+		// A PlanFor plan carries the minimal patch (only differing
+		// fields); a hand-built plan falls back to the full declarative
+		// request.
+		req, planned := plan.svcPatch[name]
+		if !planned {
+			req = servicePatchReq(desiredSvcs[name])
 		}
-		// SetEnv unconditionally — an empty/omitted env: block in the
-		// YAML must declaratively reset the service to zero env vars.
+		if !patchIsEmpty(req) {
+			if _, err := r.Projects.PatchService(ctx, f.Project, name, req); err != nil {
+				out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "update", Message: err.Error()})
+			}
+		}
+		if envChanged, ok := plan.svcEnvChanged[name]; ok && !envChanged {
+			continue
+		}
+		// SetEnv is a full replace — an empty/omitted env: block in the
+		// YAML declaratively resets the service to zero env vars.
 		// mapToEnvVars(nil) returns an empty slice and SetEnv applies
 		// that as a full replace (svc.Spec.EnvVars = []), so omitting
 		// env: clears existing vars rather than leaving them stale.
@@ -201,10 +212,11 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 	}
 
 	for _, name := range plan.ServicesToCreate {
-		if skippedCreate[name] || len(desiredSvcs[name].Env) == 0 {
+		envVars := mapToEnvVars(desiredSvcs[name].Env)
+		if skippedCreate[name] || len(envVars) == 0 {
 			continue
 		}
-		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
+		if err := r.Projects.SetEnvPending(ctx, f.Project, name, envVars); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
@@ -215,7 +227,9 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 	// exists in the per-service Secret unless opts.RotateSecrets forces it.
 	// Generated values live in the Secret, NOT the CR's cleartext env — so
 	// they survive the declarative env full-replace above untouched.
-	for _, name := range append(append([]string{}, plan.ServicesToCreate...), plan.ServicesToUpdate...) {
+	// Unchanged services are included: a --rotate-secrets apply must
+	// reach them, and generate-once makes the pass a no-op otherwise.
+	for _, name := range append(append(append([]string{}, plan.ServicesToCreate...), plan.ServicesToUpdate...), plan.ServicesUnchanged...) {
 		if skippedCreate[name] {
 			continue // create was refused (masked env) — nothing to attach to
 		}
@@ -268,12 +282,17 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	}
 	if s.Image != nil {
 		req.Image = &projects.ServiceImageSpec{Repository: s.Image.Repository, Tag: s.Image.Tag}
+		if s.Image.PullSecret != "" {
+			ps := s.Image.PullSecret
+			req.Image.PullSecret = &ps
+		}
 	}
+	req.WatchPaths = s.WatchPaths
 	for _, d := range s.Domains {
 		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 	}
-	if len(s.Env) > 0 {
-		req.EnvVars = mapToEnvVars(s.Env)
+	if ev := mapToEnvVars(s.Env); len(ev) > 0 {
+		req.EnvVars = ev
 	}
 	if s.Release != nil {
 		req.Release = &projects.PatchReleaseRequest{
@@ -312,28 +331,31 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	internal := s.Internal
 	privateEgress := s.PrivateEgress
 	platformAPIEgress := s.PlatformAPIEgress
+	waitForCI := s.WaitForCI
 
 	domains := make([]projects.ServiceDomain, 0, len(s.Domains))
 	for _, d := range s.Domains {
 		domains = append(domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret})
 	}
 
+	// An omitted scale: block resets to AddService's defaults (min 1,
+	// max 5, targetCPU 70) — not to zeros, which would be min=0, i.e.
+	// scale-to-zero.
 	scale := &projects.PatchScaleRequest{}
 	if s.Scale != nil {
 		scale.Min = intPtrAlways(s.Scale.Min)
 		scale.Max = intPtrAlways(s.Scale.Max)
 		scale.TargetCPU = intPtrAlways(s.Scale.TargetCPU)
 	} else {
-		zero := 0
-		scale.Min = &zero
-		scale.Max = &zero
-		scale.TargetCPU = &zero
+		scale.Min = intPtrAlways(1)
+		scale.Max = intPtrAlways(5)
+		scale.TargetCPU = intPtrAlways(70)
 	}
 
 	sleep := &projects.PatchSleepRequest{}
 	{
 		enabled := false
-		after := 0
+		after := 30 // AddService's default
 		nonProd := ""
 		if s.Sleep != nil {
 			enabled = s.Sleep.Enabled
@@ -345,10 +367,11 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		sleep.NonProduction = &nonProd
 	}
 
-	placement := &projects.PatchPlacementRequest{}
+	// Omitted placement = the project default (Clear), not an explicit
+	// empty "schedule anywhere" override.
+	placement := &projects.PatchPlacementRequest{Clear: true}
 	if s.Placement != nil {
-		placement.Labels = s.Placement.Labels
-		placement.Nodes = s.Placement.Nodes
+		placement = &projects.PatchPlacementRequest{Labels: s.Placement.Labels, Nodes: s.Placement.Nodes}
 	}
 
 	volumes := make([]projects.VolumePatch, 0, len(s.Volumes))
@@ -373,10 +396,14 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	// omitted block resets a runtime=image service's registry pointer
 	// back to empty — declarative reset, same as Static/Buildpacks.
 	image := &projects.ServiceImageSpec{}
+	pullSecret := ""
 	if s.Image != nil {
 		image.Repository = s.Image.Repository
 		image.Tag = s.Image.Tag
+		pullSecret = s.Image.PullSecret
 	}
+	image.PullSecret = &pullSecret
+	watchPaths := append([]string{}, s.WatchPaths...)
 	cmd := s.Command
 
 	// Release is set unconditionally (declarative reset): an omitted
@@ -404,6 +431,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Internal:          &internal,
 		PrivateEgress:     &privateEgress,
 		PlatformAPIEgress: &platformAPIEgress,
+		WaitForCI:         &waitForCI,
 		Domains:           &domains,
 		Scale:             scale,
 		Sleep:             sleep,
@@ -417,6 +445,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		BuildArgs:         &buildArgs,
 		PublicEnv:         &publicEnv,
 		SecurityContext:   toKubeSecurityContext(s.SecurityContext),
+		WatchPaths:        &watchPaths,
 	}
 }
 
@@ -522,17 +551,19 @@ func (r *Reconciler) resolveMaskedEnv(ctx context.Context, project, service stri
 }
 
 // mapToEnvVars converts the desired env map into the projects wire
-// shape. GENERATED entries are skipped — their values live in the
-// per-service Secret (written by generateSecrets), not the CR's
-// cleartext env, and reach the pod via envFromSecrets.
+// shape, sorted by name so a re-apply doesn't reorder the CR env (and
+// roll the pods) on map iteration order. GENERATED and {secret: true}
+// entries are skipped — their values live in the per-service Secret,
+// not the CR's cleartext env, and reach the pod via envFromSecrets.
 func mapToEnvVars(in map[string]EnvValue) []projects.EnvVar {
 	out := make([]projects.EnvVar, 0, len(in))
 	for k, v := range in {
-		if v.IsGenerated() {
+		if v.managedElsewhere() {
 			continue
 		}
 		out = append(out, projects.EnvVar{Name: k, Value: v.Value})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -640,8 +671,8 @@ func intPtrAlways(i int) *int {
 }
 
 func (p *Plan) Summary() string {
-	return fmt.Sprintf("svc +%d ~%d -%d  addons +%d ~%d -%d  crons +%d ~%d -%d",
-		len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete),
-		len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete),
-		len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete))
+	return fmt.Sprintf("svc +%d ~%d -%d =%d  addons +%d ~%d -%d =%d  crons +%d ~%d -%d =%d",
+		len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete), len(p.ServicesUnchanged),
+		len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete), len(p.AddonsUnchanged),
+		len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete), len(p.CronsUnchanged))
 }

@@ -37,6 +37,8 @@ export interface FormState {
   // field on save leaves any existing stored token untouched — the write
   // path only sends it when the user actually typed a value.
   repoToken: string;
+  // watchPaths: push-build globs, one per line. "" = server default.
+  watchPaths: string;
   // Networking
   port: string;
   domains: string; // newline-separated
@@ -72,6 +74,8 @@ export interface FormState {
   // they bypass the build pipeline entirely.
   imageRepository: string;
   imageTag: string;
+  // imagePullSecret: registry-credential Secret name ("" = anonymous).
+  imagePullSecret: string;
   // Storage
   volumes: VolumeRow[];
   // Placement
@@ -79,6 +83,7 @@ export interface FormState {
   placementNodes: string[];
   // Deploy
   previewsDisabled: boolean;
+  waitForCI: boolean;
   // Security (advanced) — opt-in escape hatch for images that self-drop
   // root at runtime (setpriv/gosu/su-exec). capAdd is comma-separated
   // capability names without the CAP_ prefix, e.g. "SETUID, SETGID".
@@ -138,6 +143,7 @@ export function fromSvc(svc?: KusoService): FormState {
     repoProvider,
     // Write-only — never returned by the server, so always blank on load.
     repoToken: "",
+    watchPaths: (svc?.spec.watchPaths ?? []).join("\n"),
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
     internal: !!(svc?.spec as { internal?: boolean } | undefined)?.internal,
@@ -159,6 +165,7 @@ export function fromSvc(svc?: KusoService): FormState {
     dockerfile: svc?.spec.dockerfile ?? "",
     imageRepository: svc?.spec.image?.repository ?? "",
     imageTag: svc?.spec.image?.tag ?? "",
+    imagePullSecret: svc?.spec.image?.pullSecret ?? "",
     volumes: (svc?.spec.volumes ?? []).map((v: KusoVolume) => ({
       name: v.name,
       mountPath: v.mountPath,
@@ -173,6 +180,7 @@ export function fromSvc(svc?: KusoService): FormState {
     // KusoService type may not declare it (newer field), so cast.
     previewsDisabled:
       !!(svc?.spec as { previews?: { disabled?: boolean } } | undefined)?.previews?.disabled,
+    waitForCI: !!svc?.spec.waitForCI,
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
     releaseCommand: (svc?.spec.release?.command ?? []).join(" "),

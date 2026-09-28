@@ -11,6 +11,7 @@ import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { BuildRow, type BuildRowStatus } from "./BuildRow";
 
 interface Props {
@@ -120,18 +121,19 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const onRedeploy = async (body: { branch?: string; ref?: string } = {}) => {
     try {
       const res = await trigger.mutateAsync(body);
-      toast.success(buildTriggerMessage(res, "Build triggered"));
+      toast.success(buildTriggerMessage(res, "Redeploy started"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to trigger build");
     }
   };
 
   const redeployBody = env?.spec?.branch ? { branch: env.spec.branch } : {};
+  const group = envGroupName(env);
   // Redeploy is a real production build+rollout on one click. Confirm
   // for the production env (a misclick rebuilds live); preview/staging
   // redeploys fire straight through — they're cheap and expected.
   const requestRedeploy = () => {
-    if (env?.spec?.kind === "production") {
+    if (env && isProductionGroup(env)) {
       setConfirmRedeploy(true);
       return;
     }
@@ -155,8 +157,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           ) : (
             <span className="font-mono text-[var(--text-tertiary)]">no URL yet</span>
           )}
-          {env?.spec.kind && (
-            <span className="font-mono text-[var(--text-tertiary)]">{env.spec.kind}</span>
+          {env && (
+            <span className="font-mono text-[var(--text-tertiary)]">{group}</span>
           )}
         </div>
         {isImage ? (
@@ -207,7 +209,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
 
       <ConfirmDialog
         open={confirmRedeploy}
-        title="Redeploy production?"
+        title={`Redeploy ${group}?`}
         destructive={false}
         confirmLabel="Redeploy"
         body={
@@ -218,7 +220,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
             <span className="font-mono text-[var(--text-primary)]">
               {env?.spec?.branch || "the default branch"}
             </span>{" "}
-            and rolls it out to <strong>production</strong> when it succeeds.
+            and rolls it out to <strong>{group}</strong> when it succeeds.
           </span>
         }
         pending={trigger.isPending}
@@ -282,8 +284,7 @@ function BuildsList({
     }
     return (
       <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-        No builds for this environment yet. Trigger one with the button above or push to the connected
-        branch.
+        No builds for this environment yet. Click Redeploy above or push to the connected branch.
       </p>
     );
   }
@@ -306,15 +307,7 @@ function BuildsList({
             key={b.id}
             project={project}
             service={service}
-            env={
-              // Prefer the env-group label (production / staging /
-              // preview-pr-N) so the rollback API addresses the
-              // right CR. Falls back to "production" on legacy
-              // env CRs without the label.
-              env?.metadata?.labels?.["kuso.sislelabs.com/env"] ??
-              env?.spec?.kind ??
-              "production"
-            }
+            env={envGroupName(env)}
             build={b}
             status={s}
             duration={buildDuration(b, s)}

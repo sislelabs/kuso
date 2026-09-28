@@ -83,11 +83,13 @@ export function SharedSecretsCard({ project }: { project: string }) {
       <header>
         <h3 className="font-heading text-sm font-semibold tracking-tight">Project secrets</h3>
         <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
-          Auto-attached to every service in this project as env vars (via{" "}
+          Stored in{" "}
           <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
             {project}-shared
           </code>
-          ). Use for cross-service integrations like Resend, Postmark, Stripe, OpenAI.
+          . A service with no subscription list gets every key as an env var; a service with a
+          list gets only the keys it subscribes to on its Variables tab. Use for cross-service
+          integrations like Resend, Postmark, Stripe, OpenAI.
         </p>
       </header>
 

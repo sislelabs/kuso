@@ -55,6 +55,7 @@ type CreateAlertRequest struct {
 	Kind            string   `json:"kind"`
 	Project         string   `json:"project,omitempty"`
 	Service         string   `json:"service,omitempty"`
+	Env             string   `json:"env,omitempty"`
 	Query           string   `json:"query,omitempty"`
 	ThresholdInt    *int64   `json:"thresholdInt,omitempty"`
 	ThresholdFloat  *float64 `json:"thresholdFloat,omitempty"`

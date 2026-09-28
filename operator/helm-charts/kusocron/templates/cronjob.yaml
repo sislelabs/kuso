@@ -68,6 +68,10 @@ spec:
           # which has disabled automount since the pod-hardening pass.
           automountServiceAccountToken: false
           restartPolicy: OnFailure
+          {{- with .Values.image.pullSecret }}
+          imagePullSecrets:
+            - name: {{ . | quote }}
+          {{- end }}
           {{- /* Pod securityContext is kind-dependent:
 
                  kind=http uses our own curlimages/curl image, whose

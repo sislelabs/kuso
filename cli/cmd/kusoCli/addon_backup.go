@@ -144,8 +144,8 @@ Other addon kinds (redis, clickhouse, redpanda) aren't supported.
 
 The dump is the addon's entire dataset — treat the output like a
 credential. Editor role required.`,
-	Example: `  kuso addon-backup download myproj myproj-db
-  kuso addon-backup download myproj myproj-db --file /tmp/db.sql.gz`,
+	Example: `  kuso addon-backup download myproj db
+  kuso addon-backup download myproj db --file /tmp/db.sql.gz`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Retired-flag check before the login gate — see backup.go.
@@ -276,7 +276,8 @@ var addonBackupScheduleCmd = &cobra.Command{
 cron expression (UTC). RetentionDays controls how long old objects
 stay in S3 — 0 means keep forever (the chart's prune step skips).
 Pass --schedule="" to disable scheduled backups (chart drops the
-CronJob entirely; existing S3 objects stay).
+CronJob entirely; existing S3 objects stay). "kuso addon-backup
+unschedule" does the same thing.
 
 --bucket overrides the instance-wide backup bucket for this addon
 only; pass --bucket="" to clear it. Endpoint, region and credentials
@@ -285,9 +286,9 @@ principal must be able to write to the bucket you name.
 
 This requires admin S3 credentials configured at /settings/backups
 (or via PUT /api/admin/backup-settings).`,
-	Example: `  kuso addon-backup schedule hui hui-postgres --schedule "0 3 * * *" --retention 14
-  kuso addon-backup schedule hui hui-postgres --schedule "" 
-  kuso addon-backup schedule hui hui-postgres --bucket hui-backups`,
+	Example: `  kuso addon-backup schedule myproj db --schedule "0 3 * * *" --retention 14
+  kuso addon-backup schedule myproj db --schedule ""    # same as: kuso addon-backup unschedule myproj db
+  kuso addon-backup schedule myproj db --bucket myproj-backups`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -326,6 +327,10 @@ var addonBackupUnscheduleCmd = &cobra.Command{
 	Use:     "unschedule <project> <addon>",
 	Aliases: []string{"disable"},
 	Short:   "Disable scheduled backups for an addon (keeps existing S3 objects)",
+	Long: `Disable scheduled backups for an addon. Same as
+kuso addon-backup schedule <project> <addon> --schedule "". Existing S3
+objects are kept.`,
+	Example: "  kuso addon-backup unschedule myproj db",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {

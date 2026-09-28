@@ -14,6 +14,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -167,7 +168,7 @@ func runUsernamePasswordLogin() error {
 		return fmt.Errorf("login: %w", err)
 	}
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
-		return fmt.Errorf("login failed (%d): %s", resp.StatusCode(), strings.TrimSpace(string(resp.Body())))
+		return errors.New(loginFailedMessage(resp.StatusCode(), string(resp.Body())))
 	}
 	var body struct {
 		AccessToken string `json:"access_token"`
@@ -234,4 +235,14 @@ func hostFromURL(raw string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// loginFailedMessage turns a failed /api/auth/login response into one
+// line. 401 here means bad credentials, not an expired token, so the
+// generic "run kuso login" hint would be circular.
+func loginFailedMessage(status int, body string) string {
+	if status == 401 {
+		return "login failed: wrong username or password"
+	}
+	return "login failed: " + strings.TrimSuffix(apiErrorMessage(status, body), ": run `kuso login` to refresh the token")
 }

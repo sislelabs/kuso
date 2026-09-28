@@ -17,6 +17,7 @@ import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { serviceBlast } from "@/lib/blast-radius";
 import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
+import { parseWatchPathsText } from "@/features/services/watchPaths";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
 import { ScaleSection } from "./settings/ScaleSection";
@@ -96,7 +97,9 @@ function fieldDiffValues(
       .filter(Boolean)
       .join(" ");
   const image = (s: FormState) =>
-    [s.imageRepository, s.imageTag && `:${s.imageTag}`].filter(Boolean).join("");
+    [s.imageRepository, s.imageTag && `:${s.imageTag}`, s.imagePullSecret && ` (pull secret ${s.imagePullSecret})`]
+      .filter(Boolean)
+      .join("");
   const placement = (s: FormState) =>
     [
       s.placement
@@ -142,11 +145,13 @@ function fieldDiffValues(
     resources: resources,
     runtime: (s) => s.runtime,
     dockerfile: (s) => s.dockerfile,
+    watchPaths: (s) => parseWatchPathsText(s.watchPaths).join(", ") || "default",
     image: image,
     repo: repo,
     placement: placement,
     volumes: volumes,
     previews: (s) => (s.previewsDisabled ? "disabled" : "enabled"),
+    waitForCI: (s) => (s.waitForCI ? "wait for CI" : "build immediately"),
     release: release,
     securityContext: security,
   };
@@ -208,6 +213,10 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // pendingBody holds a built-but-not-yet-applied patch while the
   // blast-radius confirm dialog is open. null = dialog closed.
   const [pendingBody, setPendingBody] = useState<PatchServiceBody | null>(null);
+  // Env-scoped custom domains staged alongside pendingBody. They save via
+  // the env endpoint, not the service PATCH, but go through the same
+  // confirm dialog (a domain change can hit the Let's Encrypt rate limit).
+  const [pendingHosts, setPendingHosts] = useState<string[] | null>(null);
   const patch = usePatchService(project, service);
   // Pull the active env's host so the Networking section can
   // surface the auto-domain inline (read-only). The KusoService spec
@@ -258,6 +267,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
 
   const onSave = async () => {
     const body: PatchServiceBody = {};
+    let envHosts: string[] | null = null;
     if (state.displayName !== baseline.displayName) {
       const trimmed = state.displayName.trim();
       // Hyphen at end of class doesn't need escaping (eslint
@@ -289,29 +299,10 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       if (a !== b) {
         // Per-env scope (v0.16.19): the form binds to the env CR's
         // AdditionalHosts, and saves go to the env endpoint so the
-        // change doesn't leak to sibling envs. We fire this BEFORE
-        // the svc PATCH so a failure (e.g. cross-env conflict)
-        // surfaces without partially-applying other svc fields.
+        // change doesn't leak to sibling envs. Staged here; applyPatch
+        // PUTs them after the confirm dialog.
         if (activeEnv) {
-          const envName = env || "production";
-          const hosts = a.split("\n").filter(Boolean);
-          try {
-            await api<unknown>(
-              `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(envName)}/domains`,
-              { method: "PUT", body: { hosts } },
-            );
-            // Invalidate envs cache so the next render reads fresh
-            // AdditionalHosts (otherwise baseline stays stale and
-            // the dirty flag re-fires).
-            await qcForPanel.invalidateQueries({ queryKey: envsQueryKey(project) });
-          } catch (err) {
-            toast.error(
-              err instanceof Error
-                ? `Save domains: ${err.message}`
-                : "Save domains failed",
-            );
-            return;
-          }
+          envHosts = a.split("\n").filter(Boolean);
         } else {
           // No active env CR resolved (legacy fallback): use the old
           // svc-level path. spec.domains becomes a seed-only template
@@ -398,20 +389,28 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     if (state.dockerfile !== baseline.dockerfile) {
       body.dockerfile = state.dockerfile;
     }
+    if (state.watchPaths !== baseline.watchPaths) {
+      body.watchPaths = parseWatchPathsText(state.watchPaths);
+    }
     // Image reference: only meaningful for runtime=image services,
     // where re-pointing repository/tag + saving is the redeploy path
     // (they never build). Repository must stay non-empty — clearing
     // it would strand the service with nothing to run.
     if (
       state.imageRepository !== baseline.imageRepository ||
-      state.imageTag !== baseline.imageTag
+      state.imageTag !== baseline.imageTag ||
+      state.imagePullSecret !== baseline.imagePullSecret
     ) {
       const repository = state.imageRepository.trim();
       if (!repository) {
         toast.error("Image repository can't be empty");
         return;
       }
-      body.image = { repository, tag: state.imageTag.trim() || undefined };
+      body.image = {
+        repository,
+        tag: state.imageTag.trim() || undefined,
+        pullSecret: state.imagePullSecret,
+      };
     }
     // A typed GitLab token is write-only — it never round-trips from the
     // server, so it can't be diffed against the baseline the way the
@@ -487,6 +486,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       // to the project toggle's setting).
       body.previews = state.previewsDisabled ? { disabled: true } : { clear: true };
     }
+    if (state.waitForCI !== baseline.waitForCI) {
+      body.waitForCI = state.waitForCI;
+    }
     if (
       state.releaseCommand !== baseline.releaseCommand ||
       state.releaseTimeout !== baseline.releaseTimeout
@@ -520,7 +522,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       }
     }
 
-    if (Object.keys(body).length === 0) {
+    if (Object.keys(body).length === 0 && envHosts === null) {
       // Nothing actually changed (user shuffled empty rows around or
       // typed-then-deleted). Reset the baseline so the save bar
       // hides without firing a no-op API call.
@@ -535,17 +537,37 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     // before committing. applyPatch (the dialog's confirm) does the
     // actual mutation.
     setSaveError(null);
+    setPendingHosts(envHosts);
     setPendingBody(body);
   };
 
   // applyPatch commits the body the confirm dialog is showing.
-  const applyPatch = async (body: PatchServiceBody) => {
+  const applyPatch = async (body: PatchServiceBody, hosts: string[] | null) => {
     setPending(true);
     setSaveError(null);
     try {
-      await patch.mutateAsync(body);
+      // Domains first so a failure (e.g. cross-env conflict) surfaces
+      // before other service fields are partially applied.
+      if (hosts !== null) {
+        const envName = env || "production";
+        try {
+          await api<unknown>(
+            `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(envName)}/domains`,
+            { method: "PUT", body: { hosts } },
+          );
+        } catch (err) {
+          throw new Error(`Save domains: ${err instanceof Error ? err.message : "failed"}`);
+        }
+        // Refetch so the baseline picks up the new AdditionalHosts and
+        // the dirty flag clears.
+        await qcForPanel.invalidateQueries({ queryKey: envsQueryKey(project) });
+      }
+      if (Object.keys(body).length > 0) {
+        await patch.mutateAsync(body);
+      }
       toast.success("Changes saved");
       setPendingBody(null);
+      setPendingHosts(null);
       // The GitLab token is write-only — the server took it into a
       // Secret and will never echo it back, so clear the field now that
       // it's committed. Without this the typed value lingers in state
@@ -561,6 +583,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       toast.error(msg);
       setSaveError(msg);
       setPendingBody(null);
+      setPendingHosts(null);
     } finally {
       setPending(false);
     }
@@ -573,7 +596,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // spans three form fields) so the user sees the actual change per
   // field, mirroring how EnvVarsEditor builds its diff.
   const diffEntries: DiffEntry[] = pendingBody
-    ? Object.keys(pendingBody).map((field) => {
+    ? [...Object.keys(pendingBody), ...(pendingHosts !== null ? ["domains"] : [])].map((field) => {
         const [before, after] = fieldDiffValues(field, baseline, state);
         return {
           field,
@@ -635,7 +658,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           <SleepSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
           <VolumesSection state={state} setState={setState} />
-          <BuildSection state={state} setState={setState} />
+          <BuildSection state={state} setState={setState} project={project} />
           <DeploySection project={project} state={state} setState={setState} />
           <ReleaseSection state={state} setState={setState} />
           <SecuritySection state={state} setState={setState} />
@@ -688,9 +711,12 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         entries={diffEntries}
         confirmLabel="Apply & reconcile"
         confirming={pending}
-        onCancel={() => setPendingBody(null)}
+        onCancel={() => {
+          setPendingBody(null);
+          setPendingHosts(null);
+        }}
         onConfirm={() => {
-          if (pendingBody) void applyPatch(pendingBody);
+          if (pendingBody) void applyPatch(pendingBody, pendingHosts);
         }}
       />
     </div>
@@ -735,12 +761,11 @@ function EnvBranchSection({
   const overrideBranch = envRow?.spec.branch ?? "";
   const serviceDefaultBranch = svc?.spec?.repo?.defaultBranch ?? "main";
   const hasOverride = overrideBranch.trim() !== "";
-  // Create-time convenience: when no override is set yet, prefill the
-  // input with the env's own name (the `staging`-env-tracks-`staging`-
-  // branch convention) as a SUGGESTION — still editable/clearable, and
-  // not persisted until the user hits Save.
+  // When no override is set, the env's own name (the `staging`-env-
+  // tracks-`staging`-branch convention) is shown as the placeholder, not
+  // the value, so the input never looks like a live setting it isn't.
   const suggestedBranch = env;
-  const currentBranch = hasOverride ? overrideBranch : suggestedBranch;
+  const currentBranch = overrideBranch;
   const repoLabel = (() => {
     // Credentials out FIRST: a gitlab deploy-token URL fell through the
     // github-only match below and rendered the token verbatim.
@@ -753,10 +778,9 @@ function EnvBranchSection({
   useEffect(() => {
     setBranch(currentBranch);
   }, [currentBranch]);
-  // "Dirty" = the input differs from what's actually persisted (the
-  // override, or empty when none). The suggestion prefill is NOT
-  // persisted, so a freshly-suggested value that equals the env name is
-  // still savable.
+  // "Dirty" = the input differs from what's actually persisted. Empty
+  // stays unsavable: the server rejects an empty branch, so there is no
+  // "clear override" call yet.
   const dirty = branch.trim() !== "" && branch.trim() !== overrideBranch.trim();
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
@@ -801,7 +825,8 @@ function EnvBranchSection({
           type="text"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          placeholder={serviceDefaultBranch}
+          placeholder={suggestedBranch}
+          aria-label={`Branch ${service} tracks in ${env}`}
           spellCheck={false}
           className="h-8 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--accent)]"
         />

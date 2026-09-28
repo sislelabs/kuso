@@ -35,12 +35,21 @@ func cronUpdateReq(c CronSpec) crons.UpdateProjectCronRequest {
 	sched := c.Schedule
 	susp := c.Suspend
 	pin := c.PinImage
-	return crons.UpdateProjectCronRequest{
+	req := crons.UpdateProjectCronRequest{
 		Schedule: &sched,
 		Command:  c.Command,
 		Suspend:  &susp,
 		PinImage: &pin,
 	}
+	if c.Kind == "http" {
+		url := c.URL
+		req.URL = &url
+	}
+	if c.Kind == "command" && c.Image != "" {
+		repo, tag := splitImage(c.Image)
+		req.Image = &kube.KusoImage{Repository: repo, Tag: tag}
+	}
+	return req
 }
 
 // splitImage splits "repo:tag" into its parts. A missing tag defaults

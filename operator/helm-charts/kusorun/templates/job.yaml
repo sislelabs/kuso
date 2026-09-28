@@ -32,6 +32,10 @@ spec:
       # rule the kusoenvironment deployment and kusocron apply.
       automountServiceAccountToken: false
       restartPolicy: Never
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       {{- with .Values.placement }}

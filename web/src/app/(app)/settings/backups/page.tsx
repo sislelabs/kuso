@@ -6,6 +6,7 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { toast } from "sonner";
 import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 
@@ -127,8 +128,8 @@ export default function BackupSettingsPage() {
         <div>
           <h1 className="font-heading text-xl font-semibold tracking-tight">Backups</h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            S3-compatible storage for scheduled addon dumps. Every postgres addon with a
-            <span className="font-mono"> backup.schedule</span> ships dumps here.
+            S3 credentials for addon backups. Every addon with a backup schedule uploads its
+            dumps to this bucket.
           </p>
         </div>
       </header>
@@ -137,6 +138,12 @@ export default function BackupSettingsPage() {
 
       {settings.isPending ? (
         <Skeleton className="h-72 w-full rounded-md" />
+      ) : settings.isError ? (
+        <QueryErrorState
+          what="backup settings"
+          error={settings.error}
+          onRetry={() => void settings.refetch()}
+        />
       ) : (
         <form
           onSubmit={(e) => {
@@ -204,8 +211,8 @@ export default function BackupSettingsPage() {
       )}
 
       <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
-        Add <span className="text-[var(--text-secondary)]">backup: {`{ schedule: "0 3 * * *" }`}</span> on a postgres addon
-        in kuso.yml to enable daily dumps. The CronJob inherits these credentials.
+        S3 credentials live here (admin only). Schedule backups per addon on its Backups tab
+        (open the addon on the project canvas). Each backup job uses these credentials.
       </p>
     </div>
   );
@@ -228,6 +235,7 @@ function Field({
   placeholder?: string;
   last?: boolean;
 }) {
+  const id = `backup-${label.replace(/\s+/g, "-")}`;
   return (
     <div
       className={
@@ -236,12 +244,15 @@ function Field({
       }
     >
       <div className="min-w-[140px]">
-        <div className="text-[12px] text-[var(--text-secondary)]">{label}</div>
+        <label htmlFor={id} className="block text-[12px] text-[var(--text-secondary)]">
+          {label}
+        </label>
         {hint && (
           <div className="font-mono text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>
         )}
       </div>
       <Input
+        id={id}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}

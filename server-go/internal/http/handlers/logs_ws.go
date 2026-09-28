@@ -286,7 +286,11 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		// Try to write a final error frame; ignore failure (conn likely closed).
-		_ = sink.Write(logs.Frame{Type: "error", Message: err.Error()})
+		msg := err.Error()
+		if errors.Is(err, logs.ErrNotFound) {
+			msg = h.Svc.MissingTarget(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
+		}
+		_ = sink.Write(logs.Frame{Type: "error", Message: msg})
 		switch {
 		case errors.Is(err, logs.ErrNotFound):
 			h.Logger.Info("ws logs: env not found", "env", envName)

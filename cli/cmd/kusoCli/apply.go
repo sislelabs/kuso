@@ -3,7 +3,9 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -154,22 +156,48 @@ func trimTrailing(s, cut string) string {
 }
 
 func printApplyResult(body []byte, dryRun bool) {
-	// Plan-only response on dry run; ApplyResult on real apply. Try
-	// the latter first; fall back to plan-only when there's no `plan`
-	// wrapper.
+	if renderApplyResult(os.Stdout, os.Stderr, body, dryRun) {
+		os.Exit(1)
+	}
+}
+
+type applyFieldChange struct {
+	Field       string `json:"field"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Destructive bool   `json:"destructive"`
+}
+
+type applyResourceChange struct {
+	Resource   string             `json:"resource"`
+	Fields     []applyFieldChange `json:"fields"`
+	NotApplied bool               `json:"notApplied"`
+}
+
+type applyPlan struct {
+	ServicesToCreate  []string              `json:"servicesToCreate"`
+	ServicesToUpdate  []string              `json:"servicesToUpdate"`
+	ServicesToDelete  []string              `json:"servicesToDelete"`
+	ServicesUnchanged []string              `json:"servicesUnchanged"`
+	AddonsToCreate    []string              `json:"addonsToCreate"`
+	AddonsToUpdate    []string              `json:"addonsToUpdate"`
+	AddonsToDelete    []string              `json:"addonsToDelete"`
+	AddonsUnchanged   []string              `json:"addonsUnchanged"`
+	CronsToCreate     []string              `json:"cronsToCreate"`
+	CronsToUpdate     []string              `json:"cronsToUpdate"`
+	CronsToDelete     []string              `json:"cronsToDelete"`
+	CronsUnchanged    []string              `json:"cronsUnchanged"`
+	WouldDelete       []string              `json:"wouldDelete"`
+	Changes           []applyResourceChange `json:"changes"`
+	Warnings          []string              `json:"warnings"`
+}
+
+// renderApplyResult prints the plan (dry run) or ApplyResult (real
+// apply) with per-field diffs. Returns true when the result carries
+// step errors.
+func renderApplyResult(out, errOut io.Writer, body []byte, dryRun bool) bool {
 	var ar struct {
-		Plan struct {
-			ServicesToCreate []string `json:"servicesToCreate"`
-			ServicesToUpdate []string `json:"servicesToUpdate"`
-			ServicesToDelete []string `json:"servicesToDelete"`
-			AddonsToCreate   []string `json:"addonsToCreate"`
-			AddonsToUpdate   []string `json:"addonsToUpdate"`
-			AddonsToDelete   []string `json:"addonsToDelete"`
-			CronsToCreate    []string `json:"cronsToCreate"`
-			CronsToUpdate    []string `json:"cronsToUpdate"`
-			CronsToDelete    []string `json:"cronsToDelete"`
-			WouldDelete      []string `json:"wouldDelete"`
-		} `json:"plan"`
+		Plan   applyPlan `json:"plan"`
 		Errors []struct {
 			Resource string `json:"resource"`
 			Op       string `json:"op"`
@@ -186,52 +214,87 @@ func printApplyResult(body []byte, dryRun bool) {
 	if !dryRun {
 		verb = "did"
 	}
-	fmt.Printf("services: %s create %d, update %d, delete %d\n",
-		verb, len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete))
-	fmt.Printf("addons:   %s create %d, update %d, delete %d\n",
-		verb, len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete))
-	fmt.Printf("crons:    %s create %d, update %d, delete %d\n",
-		verb, len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete))
-	for _, n := range p.ServicesToCreate {
-		fmt.Println("  + service", n)
+	fmt.Fprintf(out, "services: %s create %d, update %d, delete %d, unchanged %d\n",
+		verb, len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete), len(p.ServicesUnchanged))
+	fmt.Fprintf(out, "addons:   %s create %d, update %d, delete %d, unchanged %d\n",
+		verb, len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete), len(p.AddonsUnchanged))
+	fmt.Fprintf(out, "crons:    %s create %d, update %d, delete %d, unchanged %d\n",
+		verb, len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete), len(p.CronsUnchanged))
+
+	changes := map[string]applyResourceChange{}
+	destructive := 0
+	for _, c := range p.Changes {
+		if !c.NotApplied {
+			changes[c.Resource] = c
+			for _, f := range c.Fields {
+				if f.Destructive {
+					destructive++
+				}
+			}
+		}
 	}
-	for _, n := range p.ServicesToUpdate {
-		fmt.Println("  ~ service", n)
+	printFields := func(fields []applyFieldChange) {
+		for _, f := range fields {
+			mark := ""
+			if f.Destructive {
+				mark = "  [DESTRUCTIVE]"
+			}
+			fmt.Fprintf(out, "      %s: %s → %s%s\n", f.Field, f.From, f.To, mark)
+		}
 	}
-	for _, n := range p.ServicesToDelete {
-		fmt.Println("  - service", n)
+	section := func(sign, kind string, names []string) {
+		for _, n := range names {
+			fmt.Fprintf(out, "  %s %s %s\n", sign, kind, n)
+			if c, ok := changes[kind+":"+n]; ok {
+				printFields(c.Fields)
+			}
+		}
 	}
-	for _, n := range p.AddonsToCreate {
-		fmt.Println("  + addon", n)
+	section("+", "service", p.ServicesToCreate)
+	section("~", "service", p.ServicesToUpdate)
+	section("-", "service", p.ServicesToDelete)
+	section("+", "addon", p.AddonsToCreate)
+	section("~", "addon", p.AddonsToUpdate)
+	section("-", "addon", p.AddonsToDelete)
+	section("+", "cron", p.CronsToCreate)
+	section("~", "cron", p.CronsToUpdate)
+	section("-", "cron", p.CronsToDelete)
+
+	for _, c := range p.Changes {
+		if !c.NotApplied {
+			continue
+		}
+		kind, name, _ := strings.Cut(c.Resource, ":")
+		fmt.Fprintf(out, "  ! %s %s (drift, not applied — apply doesn't modify this)\n", kind, name)
+		printFields(c.Fields)
 	}
-	for _, n := range p.AddonsToUpdate {
-		fmt.Println("  ~ addon", n)
+	if destructive > 0 {
+		s := "s"
+		if destructive == 1 {
+			s = ""
+		}
+		fmt.Fprintf(out, "\nWARNING: %d destructive change%s (marked [DESTRUCTIVE] above)\n", destructive, s)
 	}
-	for _, n := range p.AddonsToDelete {
-		fmt.Println("  - addon", n)
-	}
-	for _, n := range p.CronsToCreate {
-		fmt.Println("  + cron", n)
-	}
-	for _, n := range p.CronsToUpdate {
-		fmt.Println("  ~ cron", n)
-	}
-	for _, n := range p.CronsToDelete {
-		fmt.Println("  - cron", n)
+	if len(p.Warnings) > 0 {
+		fmt.Fprintln(out, "\nwarnings:")
+		for _, w := range p.Warnings {
+			fmt.Fprintln(out, "  ! "+w)
+		}
 	}
 	if len(p.WouldDelete) > 0 {
-		fmt.Printf("\nnot pruned (set `prune: true` to delete): %d\n", len(p.WouldDelete))
+		fmt.Fprintf(out, "\nnot pruned (set `prune: true` to delete): %d\n", len(p.WouldDelete))
 		for _, n := range p.WouldDelete {
-			fmt.Println("  ! " + n)
+			fmt.Fprintln(out, "  ! "+n)
 		}
 	}
 	if len(ar.Errors) > 0 {
-		fmt.Fprintln(os.Stderr, "\nERRORS:")
+		fmt.Fprintln(errOut, "\nERRORS:")
 		for _, e := range ar.Errors {
-			fmt.Fprintf(os.Stderr, "  %s %s: %s\n", e.Op, e.Resource, e.Message)
+			fmt.Fprintf(errOut, "  %s %s: %s\n", e.Op, e.Resource, e.Message)
 		}
-		os.Exit(1)
+		return true
 	}
+	return false
 }
 
 // Tiny string helpers — kept here so apply.go doesn't pull in a

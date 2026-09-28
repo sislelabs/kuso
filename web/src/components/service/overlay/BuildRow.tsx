@@ -170,10 +170,18 @@ export function BuildRow({
         </button>
         {/* Rollback needs the build's image. Once it ages past the
             image-retention window the sweep prunes the registry tag and
-            blanks b.imageTag, so we hide the chip — the build stays
-            listed as history but can't be rolled back to. */}
+            blanks b.imageTag; show that instead of silently dropping the chip. */}
         {s === "superseded" && canDeploy && !!b.imageTag && (
           <RollbackButton project={project} service={service} env={env} buildId={b.id} sha={sha} />
+        )}
+        {s === "superseded" && canDeploy && !b.imageTag && (
+          <span
+            title="The registry image for this build was deleted by the image-retention sweep, so it can't be rolled back to."
+            className="inline-flex cursor-not-allowed items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-tertiary)]"
+          >
+            <Undo2 className="h-3 w-3" />
+            image pruned
+          </span>
         )}
         {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
           <CancelButton project={project} service={service} buildId={b.id} />
@@ -181,6 +189,8 @@ export function BuildRow({
         <button
           type="button"
           onClick={onToggle}
+          aria-expanded={isOpen}
+          aria-label={isOpen ? "Hide build log" : "Show build log"}
           className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
         >
           {isOpen ? (
@@ -412,7 +422,7 @@ function RollbackButton({
           e.stopPropagation();
           setConfirming(true);
         }}
-        title={`Roll production back to ${sha || buildId}`}
+        title={`Roll ${env || "production"} back to ${sha || buildId}`}
         className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400"
       >
         <Undo2 className="h-3 w-3" />

@@ -4,7 +4,7 @@
 //
 //   kuso run <project> <service> -- <command…>
 //   kuso run alpha web -- python manage.py migrate
-//   kuso run alpha web --env FOO=bar -- ./scripts/seed.sh
+//   kuso run alpha web --set-env FOO=bar -- ./scripts/seed.sh
 //
 // The trailing args (after --) are the argv for the run container.
 // We avoid shell expansion on the CLI side; users who need a shell
@@ -27,7 +27,8 @@ import (
 
 var (
 	runTimeoutSeconds int
-	runEnvFlags       []string
+	runSetEnvFlags    []string
+	runEnvFlags       []string // deprecated --env KEY=VALUE, kept for one release
 	runFollow         bool
 )
 
@@ -44,10 +45,11 @@ var runCmd = &cobra.Command{
 		}
 		project, service := args[0], args[1]
 		command := args[2:]
-		envVars, err := parseRunEnvFlags(runEnvFlags)
+		envVars, err := parseRunEnvFlags(append(append([]string{}, runSetEnvFlags...), runEnvFlags...))
 		if err != nil {
 			return err
 		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "Runs use the production environment's image and secrets.")
 		req := kusoApi.CreateRunRequest{
 			Command:        command,
 			Env:            envVars,
@@ -172,7 +174,7 @@ func parseRunEnvFlags(flags []string) ([]kusoApi.RunEnvVar, error) {
 	for _, f := range flags {
 		i := strings.IndexByte(f, '=')
 		if i <= 0 {
-			return nil, fmt.Errorf("--env %q: expected KEY=VALUE", f)
+			return nil, fmt.Errorf("--set-env %q: expected KEY=VALUE", f)
 		}
 		out = append(out, kusoApi.RunEnvVar{Name: f[:i], Value: f[i+1:]})
 	}
@@ -276,7 +278,11 @@ var runDeleteCmd = &cobra.Command{
 
 func init() {
 	runCmd.Flags().IntVar(&runTimeoutSeconds, "timeout-seconds", 0, "max run duration in seconds (default 1800 / 30 min)")
-	runCmd.Flags().StringArrayVar(&runEnvFlags, "env", nil, "extra env var (KEY=VALUE), repeatable")
+	runCmd.Flags().StringArrayVarP(&runSetEnvFlags, "set-env", "e", nil, "extra env var as `KEY=VALUE`, repeatable")
+	// Separate slice: two pflag string arrays sharing one pointer reset
+	// each other on first Set, dropping values.
+	runCmd.Flags().StringArrayVar(&runEnvFlags, "env", nil, "extra env var as `KEY=VALUE` (deprecated: use --set-env)")
+	_ = runCmd.Flags().MarkDeprecated("env", "use --set-env (or -e); --env will name an environment in a later release")
 	runCmd.Flags().BoolVarP(&runFollow, "follow", "f", false, "stream logs + block until the run completes; exit code matches the run's exit code")
 	runCmd.AddCommand(runListCmd)
 	runListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

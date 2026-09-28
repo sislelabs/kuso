@@ -92,6 +92,9 @@
               "pullPolicy": {
                 "type": "string"
               },
+              "pullSecret": {
+                "type": "string"
+              },
               "repository": {
                 "type": "string"
               },

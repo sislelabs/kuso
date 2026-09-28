@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { X, Users as UsersIcon, User as UserIcon, ChevronRight, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ProjectAccessPanel — the role-system-v2 per-project access list.
 // Admins add users or groups to a project, each with an optional role
@@ -69,6 +70,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  const [confirmRemove, setConfirmRemove] = useState<{ id: string; label: string } | null>(null);
 
   const add = useMutation({
     mutationFn: (body: { userId?: string; groupId?: string; role: ProjectRole }) =>
@@ -87,6 +89,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
       }),
     onSuccess: () => {
       toast.success("Access removed");
+      setConfirmRemove(null);
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "remove failed"),
@@ -157,7 +160,12 @@ export function ProjectAccessPanel({ project }: { project: string }) {
                 grant={g}
                 label={g.kind === "group" ? groupName(g.groupId) : userName(g.userId)}
                 onRoleChange={(role) => setOverride.mutate({ ...g, roleOverride: role })}
-                onRemove={() => remove.mutate(g.id)}
+                onRemove={() =>
+                  setConfirmRemove({
+                    id: g.id,
+                    label: g.kind === "group" ? groupName(g.groupId) : userName(g.userId),
+                  })
+                }
               />
             ))}
           </ul>
@@ -171,6 +179,21 @@ export function ProjectAccessPanel({ project }: { project: string }) {
           pending={add.isPending}
         />
       </div>
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        title={`Remove ${confirmRemove?.label ?? ""} from ${project}?`}
+        body={
+          <p>
+            They lose access to this project unless another grant (or an admin instance role)
+            still covers them. You can add them back at any time.
+          </p>
+        }
+        confirmLabel="Remove access"
+        destructive
+        pending={remove.isPending}
+        onConfirm={() => confirmRemove && remove.mutate(confirmRemove.id)}
+        onCancel={() => setConfirmRemove(null)}
+      />
       <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
         Override sets the role on <span className="text-[var(--text-secondary)]">this</span>{" "}
         project. &ldquo;inherit&rdquo; uses the grantee&apos;s instance role (viewer if they
@@ -245,6 +268,7 @@ function GrantRow({
           </span>
         )}
         <select
+          aria-label={`Role on this project for ${label}`}
           value={grant.roleOverride}
           onChange={(e) => onRoleChange(e.target.value as ProjectRole)}
           className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
@@ -258,7 +282,7 @@ function GrantRow({
         <button
           type="button"
           onClick={onRemove}
-          aria-label="Remove access"
+          aria-label={`Remove access for ${label}`}
           className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
         >
           <X className="h-3 w-3" />

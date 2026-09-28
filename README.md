@@ -17,10 +17,12 @@ Underneath, it's honest Kubernetes: `KusoProject`, `KusoService`, `KusoEnvironme
 ```bash
 kuso project create shop --repo https://github.com/you/shop --domain shop.example.com
 kuso project addon add shop db --kind postgres --version 16
-kuso project service add shop web --runtime dockerfile --port 3000
-kuso build trigger shop web        # first build only — every push after this auto-deploys
+kuso project service add shop web --runtime dockerfile --port 3000   # starts the first build
+kuso build list shop web           # every push to main after this auto-deploys
 kuso logs shop web -f
 ```
+
+The service is served at `web.shop.example.com`: each service gets `<service>.<project domain>`, and a service named the same as the project (`shop`) gets the bare `shop.example.com`. Point an A record for that host (or `*.shop.example.com`) at the same IP as your kuso domain.
 
 ## Why kuso?
 
@@ -31,13 +33,13 @@ kuso logs shop web -f
 - **Managed addons with batteries.** Postgres (optionally HA via CloudNativePG — 3 replicas, ~30s failover), Redis/Valkey, MongoDB, RabbitMQ, ClickHouse, Redpanda (Kafka API), NATS, S3-compatible storage, Meilisearch, Mailpit. Connection secrets auto-inject; per-service subscriptions keep DB creds out of your public frontend; scheduled and on-demand backups included.
 - **A marketplace for the usual suspects.** `kuso marketplace deploy n8n` — Gitea, Metabase, n8n, Plausible, Umami, Uptime Kuma, Vaultwarden, rendered into ordinary kuso services you manage like everything else.
 - **Self-healing, not just self-hosting.** `kuso doctor` diagnoses first-run setup (DNS, TLS, webhook delivery). `kuso health` flags stuck helm releases and drift cluster-wide, with one-command remediation. Failed builds come back with a classified cause and a suggested fix (`kuso build why`), not a raw log dump.
-- **Zero-downtime self-update.** `make ship` cuts a GitHub release; every running instance pulls itself forward on the next updater tick — image swap, operator roll, CRD apply, all in-cluster. No ssh-from-laptop, ever.
+- **Zero-downtime self-update.** Each instance checks GitHub for new releases. When one is out, Settings → Updates shows an Update button, and `kuso upgrade` does the same from the CLI: an in-cluster Job swaps the images, rolls the operator and applies CRDs. Nothing updates until you click or run it. No ssh from your laptop.
 - **Built to scale up.** Postgres-backed, stateless, multi-replica control plane. Multi-node clusters with token-based bootstrap (NAT-friendly), label-driven placement, auto-cordon on node failure. Point the control plane at managed Postgres when you outgrow the bundled one.
 - **Honest about what's missing.** Multi-region active/active, edge functions, a WAF, a Grafana clone — not on the roadmap. Cloudflare and managed Postgres already do those well. kuso does the control plane and the cluster, and does them properly.
 
 ## Install
 
-One command on a fresh Ubuntu 22/24 or Debian 12/13 box. Provisions k3s + Traefik + cert-manager + Let's Encrypt + Postgres + the kuso operator/server/registry. About 5 minutes from `curl` to a logged-in dashboard.
+One command on a fresh Ubuntu 22/24 or Debian 12/13 box. x86_64/amd64 only: release images are not built for arm64, and the installer stops on other architectures. Provisions k3s + Traefik + cert-manager + Let's Encrypt + Postgres + the kuso operator/server/registry. About 5 minutes from `curl` to a logged-in dashboard.
 
 **Before you run it**, point DNS at the box's public IP:
 
@@ -127,7 +129,8 @@ Previews follow the same flow per PR, with their own cloned database, and are to
 | HA addons (CloudNativePG, Redis Sentinel) | [docs/ADDON_HA.md](./docs/ADDON_HA.md) |
 | Sharing one Postgres server across projects | [docs/SHARED_ADDONS.md](./docs/SHARED_ADDONS.md) |
 | Prometheus metrics + what to alert on | [docs/METRICS.md](./docs/METRICS.md) |
-| Every HTTP endpoint, request/response shapes | [docs/WORKFLOWS.md](./docs/WORKFLOWS.md) |
+| HTTP API: main workflows with request/response shapes | [docs/WORKFLOWS.md](./docs/WORKFLOWS.md) (not a full list) |
+| HTTP API: every route | `server-go/internal/http/router.go` and each handler's `Mount` in `server-go/internal/http/handlers/`; call any of them with `kuso api <METHOD> <path>` |
 | GitHub App manual setup | [docs/GITHUB_APP_SETUP.md](./docs/GITHUB_APP_SETUP.md) |
 
 ## Repo layout

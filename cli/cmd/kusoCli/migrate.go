@@ -266,7 +266,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			fmt.Fprintf(os.Stderr, "    · project exists (ok)\n")
 			stats.skipped++
 		case resp.StatusCode() >= 300:
-			fmt.Fprintf(os.Stderr, "    ✗ create project %d: %s\n", resp.StatusCode(), string(resp.Body()))
+			fmt.Fprintf(os.Stderr, "    ✗ create project: %s\n", apiErrorMessage(resp.StatusCode(), string(resp.Body())))
 			stats.failed++
 			continue
 		default:

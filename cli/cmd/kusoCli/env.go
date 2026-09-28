@@ -301,7 +301,7 @@ var envUnsetCmd = &cobra.Command{
 					return fmt.Errorf("%s is not an override on %s/%s [env=%s]", k, project, service, envScopeFlag)
 				}
 				if resp.StatusCode() >= 300 {
-					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+					return checkRespErr(resp, nil)
 				}
 			}
 			fmt.Printf("unset %d env override(s) on %s/%s [env=%s]\n", len(keys), project, service, envScopeFlag)
@@ -327,8 +327,7 @@ var envUnsetCmd = &cobra.Command{
 			case resp.StatusCode() == 404:
 				// Already absent — not an error, just not counted.
 			default:
-				return fmt.Errorf("unset %s: server returned %d: %s",
-					k, resp.StatusCode(), string(resp.Body()))
+				return fmt.Errorf("unset %s: %w", k, checkRespErr(resp, nil))
 			}
 		}
 		fmt.Printf("unset %d env var(s) on %s/%s\n", removed, project, service)
@@ -441,7 +440,7 @@ var secretSetCmd = &cobra.Command{
 			}
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		scope := "shared"
 		if secretEnvFlag != "" {
@@ -610,20 +609,20 @@ func init() {
 	// envRevealFlag doc). Asks the server to resolve every value to plaintext;
 	// requires the admin/secrets:read role or values stay masked.
 	envListCmd.Flags().BoolVarP(&envRevealFlag, "reveal", "r", false, "resolve and print real values (requires secrets:read/admin)")
-	envListCmd.Flags().StringVar(&envScopeFlag, "env", "", "show ONE environment's overrides (what `env set --env` wrote) instead of the service-level vars")
+	envListCmd.Flags().StringVar(&envScopeFlag, "env", "", "show only this `environment`'s overrides (what env set --env wrote) instead of the service-level vars")
 	// --env on set/unset: write a per-env override instead of a service-level
 	// var. Empty keeps the service-level (all-envs) behavior.
-	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
+	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one `environment` by name (e.g. production, staging, preview-pr-12); empty = service-level (all envs)")
 	// --secret: store the VALUE in the kuso-managed <service>-secrets Secret
 	// (envFrom-mounted) instead of as a plaintext literal on the CR.
 	envSetCmd.Flags().BoolVar(&envSecretFlag, "secret", false, "store the value as a managed secret in <service>-secrets (envFrom-mounted) instead of a plaintext literal")
-	envUnsetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
+	envUnsetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one `environment` by name (e.g. production, staging, preview-pr-12); empty = service-level (all envs)")
 	envUnsetCmd.Flags().BoolVarP(&envUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 
 	rootCmd.AddCommand(secretCmd)
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)
 	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
-	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one environment (production|preview-pr-N); empty = shared across all envs")
+	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one `environment` by name (e.g. production, staging, preview-pr-12); empty = shared across all envs")
 	secretSetCmd.Flags().BoolVar(&secretForceFlag, "force", false, "override the shadow check (set even if a project-shared secret with the same key exists)")
 	secretUnsetCmd.Flags().BoolVarP(&secretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 }

@@ -3,11 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
-import { api } from "@/lib/api-client";
+import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Globe, Store } from "lucide-react";
@@ -66,22 +65,12 @@ export default function NewProjectPage() {
     if (draft.baseDomain) setBaseDomain(draft.baseDomain);
   }, []);
 
-  // Cluster's default baseDomain — when the user hasn't typed one,
-  // the resolved URL preview falls back to this so they see exactly
-  // what their service domain will look like ("api.cluster.com" not
-  // an abstract "{name}.{cluster}").
-  const cfg = useQuery<{ baseDomain?: string }>({
-    queryKey: ["instance-config"],
-    queryFn: () => api("/api/config"),
-    staleTime: 60_000,
-  });
-  const effectiveBase = (baseDomain.trim() || cfg.data?.baseDomain || "").replace(/^\.+|\.+$/g, "");
-  // The preview shows what a *service inside this project* will look
-  // like, not the project itself. We use "web" as a concrete example
-  // so the user reads "web.my-product.example.com" instead of a
-  // bracketed placeholder that looks like magic syntax.
+  const instanceDomain = useInstanceDomain() || "kuso.example.com";
+  // A concrete "web" service reads better than a bracketed placeholder.
   const exampleService = "web";
-  const previewBase = effectiveBase || "your-cluster.example.com";
+  const previewProject = name.trim() || "my-product";
+  const exampleHost = defaultServiceHost(exampleService, previewProject, baseDomain, instanceDomain);
+  const sameNameHost = defaultServiceHost(previewProject, previewProject, baseDomain, instanceDomain);
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,8 +151,9 @@ export default function NewProjectPage() {
         className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
       >
         <div className="space-y-4 px-4 py-4">
-          <Field label="Name" hint="lowercase, dashes; used as the slug">
+          <Field label="Name" hint="lowercase, dashes; used as the slug" htmlFor="project-name">
             <Input
+              id="project-name"
               ref={nameInputRef}
               name="name"
               value={name}
@@ -182,8 +172,9 @@ export default function NewProjectPage() {
               </p>
             )}
           </Field>
-          <Field label="Description" hint="optional; shown on the projects list">
+          <Field label="Description" hint="optional; shown on the projects list" htmlFor="project-description">
             <Input
+              id="project-description"
               name="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -192,12 +183,13 @@ export default function NewProjectPage() {
               maxLength={120}
             />
           </Field>
-          <Field label="Base domain" hint="optional; auto from cluster if blank">
+          <Field label="Base domain" hint="optional; auto from cluster if blank" htmlFor="project-base-domain">
             <Input
+              id="project-base-domain"
               name="baseDomain"
               value={baseDomain}
               onChange={(e) => setBaseDomain(e.target.value)}
-              placeholder={cfg.data?.baseDomain ?? "my-product.example.com"}
+              placeholder="my-product.example.com"
               className="h-8 font-mono text-[13px]"
             />
           </Field>
@@ -219,13 +211,22 @@ export default function NewProjectPage() {
               </span>
             </label>
           </Field>
-          <Field label="URL preview" hint="example service URL (services get their own subdomain)">
+          <Field label="URL preview" hint="where a service named web would be served">
             <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
               <Globe className="h-3 w-3 text-[var(--text-tertiary)]" />
-              <span className="truncate">
-                https://<span className="text-[var(--text-tertiary)]">{exampleService}</span>.{previewBase}
-              </span>
+              <span className="truncate">https://{exampleHost}</span>
             </div>
+            <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+              A service named after the project is served at{" "}
+              <span className="font-mono">{sameNameHost}</span>.
+              {baseDomain.trim() && (
+                <>
+                  {" "}Point a wildcard DNS record{" "}
+                  <span className="font-mono">*.{baseDomain.trim().replace(/^\.+|\.+$/g, "")}</span>{" "}
+                  (and the bare domain) at the cluster.
+                </>
+              )}
+            </p>
           </Field>
         </div>
         <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
@@ -253,18 +254,25 @@ export default function NewProjectPage() {
 function Field({
   label,
   hint,
+  htmlFor,
   children,
 }: {
   label: string;
   hint?: string;
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
+  const labelClass = "block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
   return (
     <div className="grid grid-cols-[140px_1fr] items-start gap-3">
       <div>
-        <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          {label}
-        </div>
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className={labelClass}>
+            {label}
+          </label>
+        ) : (
+          <div className={labelClass}>{label}</div>
+        )}
         {hint && <div className="mt-0.5 text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
       </div>
       <div>{children}</div>

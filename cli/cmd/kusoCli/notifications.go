@@ -35,7 +35,13 @@ var notificationsGetOutput string
 var notificationsCmd = &cobra.Command{
 	Use:     "notifications",
 	Aliases: []string{"notification", "notify", "notif"},
-	Short:   "Manage notification channels (Discord / webhook / Slack)",
+	Short:   "Manage notification channels (Discord, Slack, Mattermost, Telegram, Pushover, email, webhook)",
+	Long: `Manage notification channels.
+
+kuso can send to Discord, Slack, Mattermost, Telegram, Pushover, email and
+generic webhooks. "create" here makes discord, slack and webhook channels;
+create the other kinds in the web UI (Settings > Notifications). Every kind
+shows up in "list" and can be tested or deleted from the CLI.`,
 }
 
 var notificationsListCmd = &cobra.Command{
@@ -136,9 +142,10 @@ var (
 )
 
 var notificationsCreateCmd = &cobra.Command{
-	Use:   "create <type>",
-	Short: "Create a notification channel (type: discord, webhook, slack)",
-	Args:  cobra.ExactArgs(1),
+	Use:     "create <type>",
+	Aliases: []string{"add"},
+	Short:   "Create a notification channel (type: discord, webhook, slack)",
+	Args:    cobra.ExactArgs(1),
 	Example: `  kuso notifications create discord --name disco --url 'https://discord.com/api/webhooks/…' \
     --events build.succeeded,build.failed,pod.crashed,addon.crashed \
     --mention here --mention-on build.failed,pod.crashed
@@ -293,7 +300,7 @@ var notificationsTestCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			// Server now returns useful error text (502 with the
 			// upstream Discord/webhook body) — surface it.
-			return fmt.Errorf("test failed (%d): %s", resp.StatusCode(), strings.TrimSpace(string(resp.Body())))
+			return fmt.Errorf("test failed: %w", checkRespErr(resp, nil))
 		}
 		fmt.Println("test sent.")
 		return nil

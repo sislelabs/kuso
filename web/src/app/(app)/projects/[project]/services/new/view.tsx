@@ -16,7 +16,7 @@ import {
   type DetectRuntimeResponse,
 } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
-import { useServices } from "@/features/projects";
+import { useProject, useServices } from "@/features/projects";
 import { triggerBuild } from "@/features/services";
 import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
@@ -124,34 +124,66 @@ export function AddServiceView() {
   // response matching the most recent pick is applied.
   const detectSeq = useRef(0);
 
-  // Prefill name from repo + run detect on first pick.
+  // Preselect the project's default repository (if the GitHub App can
+  // see it) once, so "Add service" on a repo-backed project starts one
+  // click shorter. A ref guard keeps "change" from re-picking it.
+  const projectQuery = useProject(project);
+  const defaultRepoURL = projectQuery.data?.project?.spec?.defaultRepo?.url ?? "";
+  const defaultRepoApplied = useRef(false);
+  useEffect(() => {
+    if (defaultRepoApplied.current || picked || !defaultRepoURL || allRepos.length === 0) return;
+    defaultRepoApplied.current = true;
+    const full = defaultRepoURL
+      .replace(/^https?:\/\/github\.com\//, "")
+      .replace(/\.git$/, "")
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    const match = allRepos.find(({ repo }) => repo.fullName.toLowerCase() === full);
+    if (match) setPicked({ installationId: match.installationId, repo: match.repo });
+  }, [defaultRepoURL, allRepos, picked]);
+
+  // Prefill name from repo on first pick.
   useEffect(() => {
     if (!picked) return;
     // Repo name is already kebab-case in 99% of cases, so it doubles
     // as a sensible display-name default — slug derives back to itself.
     const repoName = picked.repo.fullName.split("/")[1] ?? "service";
     if (!name) setName(repoName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked]);
 
+  // Detect runtime + port for the picked repo, and again when the
+  // monorepo path changes (debounced so typing "apps/api" doesn't fire
+  // one request per keystroke).
+  useEffect(() => {
+    if (!picked) return;
     const [owner, repoOnly] = picked.repo.fullName.split("/");
     const seq = ++detectSeq.current;
-    detect
-      .mutateAsync({
-        installationId: picked.installationId,
-        owner: owner ?? "",
-        repo: repoOnly ?? "",
-        branch: picked.repo.defaultBranch,
-        path: "",
-      })
-      .then((res: DetectRuntimeResponse) => {
-        if (seq !== detectSeq.current) return; // stale — a newer pick superseded this
-        setRuntime(res.runtime ?? "dockerfile");
-        if (res.port) setPort(String(res.port));
-        setReason(res.reason ?? null);
-      })
-      .catch(() => {
-        /* leave defaults */
-      });
-  }, [picked]);
+    const timer = setTimeout(
+      () => {
+        detect
+          .mutateAsync({
+            installationId: picked.installationId,
+            owner: owner ?? "",
+            repo: repoOnly ?? "",
+            branch: picked.repo.defaultBranch,
+            path: path.trim(),
+          })
+          .then((res: DetectRuntimeResponse) => {
+            if (seq !== detectSeq.current) return; // stale — a newer pick/path superseded this
+            setRuntime(res.runtime ?? "dockerfile");
+            if (res.port) setPort(String(res.port));
+            setReason(res.reason ?? null);
+          })
+          .catch(() => {
+            /* leave defaults */
+          });
+      },
+      path.trim() ? 500 : 0,
+    );
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, path]);
 
   const onAdd = async () => {
     // Client-side validation → inline per-field errors + focus the
@@ -228,6 +260,9 @@ export function AddServiceView() {
           github: { installationId: picked!.installationId },
         };
       }
+      // Land on the new service's Deployments tab so the first build is
+      // the first thing the user sees, not the bare canvas.
+      const serviceHref = `/projects/${encodeURIComponent(project)}?service=${encodeURIComponent(slug)}&tab=deployments`;
       const created = await api(`/api/projects/${encodeURIComponent(project)}/services`, {
         method: "POST",
         body,
@@ -248,7 +283,7 @@ export function AddServiceView() {
           `Service created, but the first build failed to start: ${firstBuild.error} — trigger a build from the service page.`,
           { duration: Infinity, closeButton: true },
         );
-        router.replace(`/projects/${encodeURIComponent(project)}`);
+        router.replace(serviceHref);
         return;
       }
       if (firstBuild?.triggered) {
@@ -258,7 +293,7 @@ export function AddServiceView() {
             ? `Service ${name} added — building from ${picked.repo.defaultBranch}`
             : `Service ${name} added — first build started`,
         );
-        router.replace(`/projects/${encodeURIComponent(project)}`);
+        router.replace(serviceHref);
         return;
       }
 
@@ -297,7 +332,7 @@ export function AddServiceView() {
       } else {
         toast.success(`Service ${name} added`);
       }
-      router.replace(`/projects/${encodeURIComponent(project)}`);
+      router.replace(serviceHref);
     } catch (e) {
       if (e instanceof ApiError) {
         toast.error(e.message);
@@ -332,6 +367,7 @@ export function AddServiceView() {
         <div className="flex gap-2 px-4 py-3">
           <button
             type="button"
+            aria-pressed={source === "repo"}
             onClick={() => {
               setSource("repo");
               setFieldErrors({});
@@ -353,6 +389,7 @@ export function AddServiceView() {
           </button>
           <button
             type="button"
+            aria-pressed={source === "image"}
             onClick={() => {
               setSource("image");
               setFieldErrors({});
@@ -386,8 +423,10 @@ export function AddServiceView() {
                 label="name"
                 hint={slug ? `url slug: ${slug}` : "letters / digits / spaces / hyphens"}
                 error={fieldErrors.name}
+                htmlFor="svc-name"
               >
                 <Input
+                  id="svc-name"
                   ref={nameInputRef}
                   value={name}
                   onChange={(e) => {
@@ -399,8 +438,9 @@ export function AddServiceView() {
                   className="h-8 text-[12px]"
                 />
               </Field>
-              <Field label="port" hint="container port; defaults to 8080">
+              <Field label="port" hint="container port; defaults to 8080" htmlFor="svc-port">
                 <Input
+                  id="svc-port"
                   type="number"
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
@@ -413,8 +453,10 @@ export function AddServiceView() {
               label="image"
               hint="full registry path; e.g. ghcr.io/owner/app"
               error={fieldErrors.image}
+              htmlFor="svc-image"
             >
               <Input
+                id="svc-image"
                 ref={imageInputRef}
                 value={imageRepo}
                 onChange={(e) => {
@@ -426,8 +468,9 @@ export function AddServiceView() {
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
-            <Field label="tag" hint="immutable tags or digests roll predictably; :latest is mutable">
+            <Field label="tag" hint="immutable tags or digests roll predictably; :latest is mutable" htmlFor="svc-tag">
               <Input
+                id="svc-tag"
                 value={imageTag}
                 onChange={(e) => setImageTag(e.target.value)}
                 placeholder="latest"
@@ -587,8 +630,10 @@ export function AddServiceView() {
                     : "letters / digits / spaces / hyphens"
                 }
                 error={fieldErrors.name}
+                htmlFor="svc-name"
               >
                 <Input
+                  id="svc-name"
                   ref={nameInputRef}
                   value={name}
                   onChange={(e) => {
@@ -599,8 +644,9 @@ export function AddServiceView() {
                   className="h-8 text-[12px]"
                 />
               </Field>
-              <Field label="port" hint="container port">
+              <Field label="port" hint="container port" htmlFor="svc-port">
                 <Input
+                  id="svc-port"
                   type="number"
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
@@ -609,8 +655,9 @@ export function AddServiceView() {
                 />
               </Field>
             </div>
-            <Field label="path" hint="monorepo subdir; root if empty">
+            <Field label="path" hint="monorepo subdir; root if empty" htmlFor="svc-path">
               <Input
+                id="svc-path"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 placeholder="apps/api"
@@ -623,6 +670,7 @@ export function AddServiceView() {
                   <button
                     key={r}
                     type="button"
+                    aria-pressed={runtime === r}
                     onClick={() => setRuntime(r)}
                     className={
                       "rounded px-2 py-1 font-mono text-[11px] " +
@@ -637,8 +685,9 @@ export function AddServiceView() {
               </div>
             </Field>
             {runtime === "dockerfile" && (
-              <Field label="dockerfile" hint="path to Dockerfile; default if empty">
+              <Field label="dockerfile" hint="path to Dockerfile; default if empty" htmlFor="svc-dockerfile">
                 <Input
+                  id="svc-dockerfile"
                   value={dockerfile}
                   onChange={(e) => setDockerfile(e.target.value)}
                   placeholder="Dockerfile"
@@ -667,6 +716,7 @@ export function AddServiceView() {
                       <button
                         key={s}
                         type="button"
+                        aria-pressed={fromService === s}
                         onClick={() => {
                           setFromService(s);
                           clearFieldError("fromService");
@@ -686,8 +736,9 @@ export function AddServiceView() {
               </Field>
             )}
             {runtime === "worker" && (
-              <Field label="command">
+              <Field label="command" htmlFor="svc-command">
                 <Input
+                  id="svc-command"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
                   placeholder="bundle exec sidekiq    OR    sh -c &quot;celery worker -A app&quot;"
@@ -736,18 +787,27 @@ function Field({
   label,
   hint,
   error,
+  htmlFor,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  // Set when the field wraps a single input; button groups have no
+  // single control to point a <label> at.
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
+  const labelClass = "block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
   return (
     <div className="space-y-1">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {label}
-      </div>
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className={labelClass}>
+          {label}
+        </label>
+      ) : (
+        <div className={labelClass}>{label}</div>
+      )}
       {children}
       {error ? (
         <div role="alert" className="text-[11px] text-[var(--error)]">

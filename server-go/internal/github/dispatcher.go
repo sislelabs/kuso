@@ -284,6 +284,13 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		}
 		return nil
 	}
+	// [skip ci] / [ci skip] / [skip kuso] in the HEAD commit: kuso ignores
+	// the push entirely (no builds, no config-as-code apply).
+	if directive, ok := skipCIDirective(p.HeadCommit.Message); ok {
+		d.Logger.Info("push skipped by commit directive", "repo", repoFullName, "branch", branch, "directive", directive)
+		return nil
+	}
+	changes := parsePushChanges(body)
 	for _, proj := range projects {
 		// Repo matching is now PER-SERVICE (multi-repo projects): a
 		// service's effective repo is its spec.repo.url, falling back to
@@ -411,6 +418,11 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			// that isn't the default) is dropped — we don't build every
 			// random branch push.
 			if branch != svcBranch && !envBranches[short][branch] {
+				continue
+			}
+			// Monorepo watch paths (see watchpaths.go).
+			if ok, reason := pushTouchesService(serviceWatchPaths(&raw.Items[i]), changes); !ok {
+				d.Logger.Info("push build skipped", "project", proj.Name, "service", short, "reason", reason)
 				continue
 			}
 			// For a PR-merge push, prefer the head SHA (so the build

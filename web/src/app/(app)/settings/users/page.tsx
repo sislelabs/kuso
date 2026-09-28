@@ -10,7 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { resetUserPassword } from "@/features/profile/api";
 import { toast } from "sonner";
-import { Users as UsersIcon, Plus, Trash2, KeyRound, X, Link2, Copy, Check } from "lucide-react";
+import { Users as UsersIcon, Plus, Trash2, KeyRound, Link2, Copy, Check } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -320,7 +321,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <Modal title="New invitation" onClose={onClose}>
+    <Modal title="New invitation" onClose={onClose} busy={create.isPending}>
       <div className="space-y-3">
         <Field label="group" hint="invitee joins this group on signup; empty = pending">
           <select
@@ -402,6 +403,7 @@ function UserRowItem({
 }) {
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmDisable, setConfirmDisable] = useState(false);
   const remove = useMutation({
     mutationFn: () => api(`/api/users/id/${encodeURIComponent(u.id)}`, { method: "DELETE" }),
     onSuccess: () => {
@@ -417,8 +419,14 @@ function UserRowItem({
         method: "PUT",
         body: { isActive },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+    onSuccess: (_d, isActive) => {
+      toast.success(isActive ? `${u.username} enabled` : `${u.username} disabled`);
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      setConfirmDisable(false);
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
   });
+  const pending = (u.groups ?? []).includes("kuso-pending");
   // Instance role: the user's default access level across the instance.
   // "admin" sees every project; editor/viewer set the baseline on
   // granted projects; "" inherits from the user's groups. Server
@@ -457,6 +465,14 @@ function UserRowItem({
               {u.provider}
             </span>
           )}
+          {pending && (
+            <span
+              className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
+              title="Joined through an invite with no group. Add them to a group or set an instance role to give them access."
+            >
+              pending
+            </span>
+          )}
           {u.roleName && u.roleName !== "none" && (
             <span className="rounded bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--accent)]">
               {u.roleName}
@@ -480,6 +496,7 @@ function UserRowItem({
               role
             </span>
             <select
+              aria-label={`Instance role for ${u.username}`}
               value={u.instanceRole ?? ""}
               disabled={setInstanceRole.isPending}
               onChange={(e) => setInstanceRole.mutate(e.target.value)}
@@ -493,14 +510,17 @@ function UserRowItem({
           </label>
           <button
             type="button"
-            onClick={() => toggleActive.mutate(!u.isActive)}
+            onClick={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
+            disabled={toggleActive.isPending}
             className={cn(
               "inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors",
               u.isActive
                 ? "border-emerald-500/30 bg-emerald-500/20"
                 : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
             )}
-            aria-label={u.isActive ? "Disable" : "Enable"}
+            role="switch"
+            aria-checked={u.isActive}
+            aria-label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
             title={u.isActive ? "Disable user" : "Enable user"}
           >
             <span
@@ -517,11 +537,26 @@ function UserRowItem({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Delete"
+            aria-label={`Delete ${u.username}`}
             onClick={() => setConfirmOpen(true)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
+          <ConfirmDialog
+            open={confirmDisable}
+            title={`Disable ${u.username}?`}
+            body={
+              <p>
+                {u.username} can no longer sign in until you enable the account
+                again. Nothing is deleted.
+              </p>
+            }
+            confirmLabel="Disable user"
+            destructive
+            pending={toggleActive.isPending}
+            onConfirm={() => toggleActive.mutate(false)}
+            onCancel={() => setConfirmDisable(false)}
+          />
           <ConfirmDialog
             open={confirmOpen}
             title={`Delete ${u.username}?`}
@@ -564,7 +599,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
   });
   return (
-    <Modal title="New user" onClose={onClose}>
+    <Modal title="New user" onClose={onClose} busy={create.isPending}>
       <div className="space-y-3">
         <Field label="username">
           <Input value={username} onChange={(e) => setUsername(e.target.value)} className="h-8 font-mono text-[12px]" autoFocus />
@@ -605,7 +640,7 @@ function ResetPasswordDialog({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Reset failed"),
   });
   return (
-    <Modal title={`Reset password for ${username}`} onClose={onClose}>
+    <Modal title={`Reset password for ${username}`} onClose={onClose} busy={reset.isPending}>
       <Field label="new password" hint="≥ 8 chars; user receives no email — share manually">
         <Input
           type="password"
@@ -625,34 +660,44 @@ function ResetPasswordDialog({
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+// Rendered only while open (callers mount it conditionally). `busy`
+// blocks Escape/backdrop close while a request is in flight.
+function Modal({
+  title,
+  onClose,
+  busy = false,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  busy?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <div
-      className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(8,8,11,0.6)] p-4"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose();
+      }}
+      disablePointerDismissal={busy}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
-      >
-        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </header>
+      <DialogContent className="block gap-0 rounded-md p-0 sm:max-w-md" showCloseButton={!busy}>
+        <DialogHeader className="border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
+          <DialogTitle className="text-sm">{title}</DialogTitle>
+        </DialogHeader>
         <div className="p-4">{children}</div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
+// A <label> wrapper so the control inside is named by the label text.
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">{label}</div>
+    <label className="block space-y-1">
+      <span className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">{label}</span>
       {children}
-      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
-    </div>
+      {hint && <span className="block text-[10px] text-[var(--text-tertiary)]/70">{hint}</span>}
+    </label>
   );
 }

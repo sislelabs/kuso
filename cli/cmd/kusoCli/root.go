@@ -67,6 +67,8 @@ var rootCmd = &cobra.Command{
 	// the error exactly once instead of cobra + Execute() printing it twice.
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Typos like "kuso notifcations" get a "Did you mean" line.
+	SuggestionsMinimumDistance: 2,
 	Long: `kuso ships your code from a git repo to a running URL on a
 Kubernetes cluster you control. Project graph, services, environments,
 addons, builds, secrets — all driven by a small set of CRDs reconciled
@@ -77,7 +79,7 @@ command tree.`,
 	Example: `  kuso login --api https://kuso.example.com          # once, per instance
   kuso doctor                                       # verify session + DNS + webhooks
   kuso project create my-app --repo https://github.com/me/my-app
-  kuso status my-app                                # services, URLs, replicas, builds
+  kuso status my-app                                # services, URLs, builds, addons
   kuso logs my-app web --follow                     # tail production logs
   kuso db sql my-app my-app-db "SELECT count(*) FROM users"
 

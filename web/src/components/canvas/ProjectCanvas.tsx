@@ -64,6 +64,8 @@ import {
   Play,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const nodeTypes = {
   service: ServiceNode,
@@ -533,6 +535,25 @@ export function ProjectCanvas({
     nodeId: string;
   } | null>(null);
   const [stopping, setStopping] = useState(false);
+  // Pending redeploy-confirm for the `r` key and the context menu, so
+  // those entry points ask first like the Deployments tab does.
+  const [confirmRedeploy, setConfirmRedeploy] = useState<string | null>(null);
+  const [redeploying, setRedeploying] = useState(false);
+
+  // ?add=addon|cron opens the matching dialog (the ⌘K palette links
+  // here). Strip the param afterwards so a reload doesn't reopen it.
+  const router = useRouter();
+  const search = useSearchParams();
+  const addParam = search?.get("add");
+  useEffect(() => {
+    if (addParam !== "addon" && addParam !== "cron") return;
+    if (addParam === "addon") setShowAddAddon(true);
+    else setShowAddCron(true);
+    const next = new URLSearchParams(search?.toString() ?? "");
+    next.delete("add");
+    const qs = next.toString();
+    router.replace(`/projects/${encodeURIComponent(project)}${qs ? `?${qs}` : ""}`);
+  }, [addParam, search, router, project]);
 
   // Edge category visibility. The two kinds today:
   //   - addon: the project's addon-conn Secret is mounted on every
@@ -638,18 +659,10 @@ export function ProjectCanvas({
           if (focused && focusedShort) {
             e.preventDefault();
             if (!canServicesWrite) {
-              toast.error("Triggering a build requires editor access on this project");
+              toast.error("Redeploying requires editor access on this project");
               break;
             }
-            const data = focused.data as ServiceNodeData;
-            void callTrigger(data.project, focusedShort, trigger).then(
-              (res) =>
-                toast.success(
-                  buildTriggerMessage(res, `Build triggered for ${focusedShort}`, focusedShort),
-                ),
-              (err) =>
-                toast.error(err instanceof Error ? err.message : "Failed to trigger build"),
-            );
+            setConfirmRedeploy(focusedShort);
           }
           break;
         case "?":
@@ -664,7 +677,7 @@ export function ProjectCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [nodes, focusIdx, project, onSelectService, trigger, canServicesWrite]);
+  }, [nodes, focusIdx, project, onSelectService, canServicesWrite]);
 
   useEffect(() => {
     if (!project) return;
@@ -778,7 +791,7 @@ export function ProjectCanvas({
     }
   };
 
-  // Right-click on a service node — Open / View logs / Trigger build / Delete.
+  // Right-click on a service node — Open / View logs / Redeploy / Delete.
   const onServiceContext = (
     e: React.MouseEvent,
     data: ServiceNodeData
@@ -828,17 +841,11 @@ export function ProjectCanvas({
       },
       {
         id: "trigger",
-        label: "Trigger build",
+        label: "Redeploy…",
         icon: RotateCcw,
+        shortcut: canServicesWrite ? "r" : undefined,
         ...editorGate(canServicesWrite),
-        onSelect: async () => {
-          try {
-            const res = await callTrigger(data.project, short, trigger);
-            toast.success(buildTriggerMessage(res, `Build triggered for ${short}`, short));
-          } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to trigger build");
-          }
-        },
+        onSelect: () => setConfirmRedeploy(short),
       },
       // Crons + Runs deep-links. The service-overlay panels for both
       // tabs render their create-composer at the top of the panel
@@ -1102,6 +1109,13 @@ export function ProjectCanvas({
           filters={edgeFilters}
           setFilters={setEdgeFilters}
         />
+        <AddMenuPanel
+          project={project}
+          canServicesWrite={canServicesWrite}
+          canAddonsWrite={canAddonsWrite}
+          onAddAddon={() => setShowAddAddon(true)}
+          onAddCron={() => setShowAddCron(true)}
+        />
       </ReactFlow>
 
       <CanvasContextMenu
@@ -1156,7 +1170,9 @@ export function ProjectCanvas({
               <span className="font-mono text-[var(--text-primary)]">
                 {confirmDelete?.short}
               </span>
-              . The PVC + data go with it unless your storage class retains it.
+              . Its data volume (PVC) and connection secret are kept: re-adding
+              an addon with the same name reattaches the old data. To free
+              the disk, delete the PVC by hand afterwards.
             </>
           )
         }
@@ -1200,6 +1216,36 @@ export function ProjectCanvas({
             toast.error(err instanceof Error ? err.message : "Failed to delete");
           } finally {
             setDeleting(false);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmRedeploy}
+        title={`Redeploy ${confirmRedeploy ?? ""}?`}
+        destructive={false}
+        confirmLabel="Redeploy"
+        body={
+          <>
+            This starts a new build of{" "}
+            <span className="font-mono text-[var(--text-primary)]">{confirmRedeploy}</span> and rolls
+            it out when the build succeeds.
+          </>
+        }
+        pending={redeploying}
+        onCancel={() => setConfirmRedeploy(null)}
+        onConfirm={async () => {
+          if (!confirmRedeploy) return;
+          const short = confirmRedeploy;
+          setRedeploying(true);
+          try {
+            const res = await callTrigger(project, short, trigger);
+            toast.success(buildTriggerMessage(res, `Redeploy started for ${short}`, short));
+            setConfirmRedeploy(null);
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to redeploy");
+          } finally {
+            setRedeploying(false);
           }
         }}
       />
@@ -1258,6 +1304,77 @@ async function callStopStart(
   if (action === "stop") await stopService(project, service);
   else await startService(project, service);
   qc.invalidateQueries({ queryKey: ["projects", project] });
+}
+
+// AddMenuPanel is the visible "+ Add" entry point in the canvas's top-left
+// corner: the same add actions as the pane right-click menu, reachable by
+// keyboard and touch.
+function AddMenuPanel({
+  project,
+  canServicesWrite,
+  canAddonsWrite,
+  onAddAddon,
+  onAddCron,
+}: {
+  project: string;
+  canServicesWrite: boolean;
+  canAddonsWrite: boolean;
+  onAddAddon: () => void;
+  onAddCron: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const itemCls =
+    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  const needsEditor = "Needs editor access on this project";
+  return (
+    <Panel position="top-left" className="!m-3">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]">
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-48 gap-0.5 p-1">
+          {canServicesWrite ? (
+            <a href={`/projects/${encodeURIComponent(project)}/services/new`} className={itemCls}>
+              <Plus className="h-3.5 w-3.5" />
+              Service
+            </a>
+          ) : (
+            <button type="button" disabled title={needsEditor} className={itemCls}>
+              <Plus className="h-3.5 w-3.5" />
+              Service
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={!canAddonsWrite}
+            title={canAddonsWrite ? undefined : needsEditor}
+            className={itemCls}
+            onClick={() => {
+              setOpen(false);
+              onAddAddon();
+            }}
+          >
+            <Database className="h-3.5 w-3.5" />
+            Addon (database, cache, …)
+          </button>
+          <button
+            type="button"
+            disabled={!canServicesWrite}
+            title={canServicesWrite ? undefined : needsEditor}
+            className={itemCls}
+            onClick={() => {
+              setOpen(false);
+              onAddCron();
+            }}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Cron job
+          </button>
+        </PopoverContent>
+      </Popover>
+    </Panel>
+  );
 }
 
 // EdgeControlsPanel — bottom-right cluster that combines a legend

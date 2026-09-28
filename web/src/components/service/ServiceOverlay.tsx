@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { motion, AnimatePresence } from "motion/react";
 import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns, usePatchService, useStopService, useStartService } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
+import { envGroupName } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, Square, Play } from "lucide-react";
 import { useCanOnProject, Perms } from "@/features/auth";
@@ -402,6 +403,17 @@ export function ServiceOverlay({
     if (!Number.isFinite(ms)) return false;
     return Date.now() - ms < 60_000;
   }, [builds.data]);
+  // Build-time failure kinds carry the classifier's lineHint + remediation
+  // on the build record; the bell link only has ?kind=. Use the newest
+  // build with that kind so the banner shows the same fix BuildRow does.
+  // Runtime kinds (crash_loop, oom, …) have no build record to read from.
+  const failureClass = useMemo(
+    () =>
+      failureKind
+        ? (builds.data ?? []).find((b) => b.failureClass?.kind === failureKind)?.failureClass
+        : undefined,
+    [builds.data, failureKind],
+  );
   const showCrons = (crons.data?.length ?? -1) !== 0;
   const showRuns = (runs.data?.length ?? -1) !== 0;
   // Shell is project-admin only on the server (terminal_ws.go gates on
@@ -810,7 +822,11 @@ export function ServiceOverlay({
                         on from the hint. */}
                     {failureKind && tab === failureTab && (
                       <div className="px-5 pt-5">
-                        <FailureBanner kind={failureKind} />
+                        <FailureBanner
+                          kind={failureKind}
+                          lineHint={failureClass?.lineHint}
+                          remediation={failureClass?.remediation}
+                        />
                       </div>
                     )}
                     {/* First-deploy coachmark — fires on the user's
@@ -858,7 +874,13 @@ export function ServiceOverlay({
                     )}
                     {tab === "logs" && (
                       <div className="p-5">
-                        <ServiceLogsPanel project={project} service={service ?? ""} />
+                        <ServiceLogsPanel
+                          key={env?.metadata.name ?? "none"}
+                          project={project}
+                          service={service ?? ""}
+                          defaultEnv={env ? envGroupName(env) : ""}
+                          streamEnv={env?.metadata.name}
+                        />
                       </div>
                     )}
                     {tab === "errors" && (

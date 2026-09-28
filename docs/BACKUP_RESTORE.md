@@ -19,7 +19,7 @@ kuso has three distinct kinds of state. They have different recovery stories.
 The `kuso` CLI ships with `backup` and `restore` verbs that pull / push a `pg_dump` snapshot via an admin-only HTTP endpoint. **Backup is enabled by default** since v0.8.3 — no extra config step. From your workstation:
 
 ```bash
-kuso backup -o /backups/kuso-$(date -u +%Y%m%d).sql.gz
+kuso backup --file /backups/kuso-$(date -u +%Y%m%d).sql.gz
 ```
 
 If you have a regulated workload that mandates disabling network-accessible backup endpoints, set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
@@ -33,7 +33,7 @@ Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Co
 
 ```cron
 # /etc/cron.d/kuso-backup — runs daily at 04:00 UTC
-0 4 * * * root kuso backup -o /var/backups/kuso/kuso-$(date -u +\%Y\%m\%d).sql.gz \
+0 4 * * * root kuso backup --file /var/backups/kuso/kuso-$(date -u +\%Y\%m\%d).sql.gz \
   && find /var/backups/kuso -mtime +30 -delete
 ```
 
@@ -44,7 +44,7 @@ The backup file contains **JWT secrets, hashed passwords, GitHub App private key
 A backup on the same disk as the server doesn't survive a disk failure. Bare minimum: `rsync` / `aws s3 cp` / `restic backup` the snapshot to a different machine.
 
 ```bash
-kuso backup -o /tmp/kuso.sql.gz
+kuso backup --file /tmp/kuso.sql.gz
 aws s3 cp /tmp/kuso.sql.gz s3://your-backups/kuso/$(date -u +%Y%m%dT%H%M).sql.gz
 shred -u /tmp/kuso.sql.gz
 ```

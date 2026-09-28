@@ -21,3 +21,17 @@ func (k *KusoClient) SetEnvDomains(project, service, env string, hosts []string)
 	k.client.SetBody(map[string]any{"hosts": hosts})
 	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/domains")
 }
+
+// IngressTarget is GET /api/config/ingress: where custom-domain DNS
+// should point. Source is "loadbalancer", "nodes" or "none".
+type IngressTarget struct {
+	IPs       []string `json:"ips"`
+	Hostnames []string `json:"hostnames"`
+	Source    string   `json:"source"`
+}
+
+// GetIngressTarget returns the cluster's public ingress address(es).
+// Older servers 404; callers treat that as "unknown".
+func (k *KusoClient) GetIngressTarget() (*resty.Response, error) {
+	return k.client.Get("/api/config/ingress")
+}

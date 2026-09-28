@@ -55,7 +55,7 @@ func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var req crons.CreateProjectCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad json")
+		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	out, err := h.Svc.AddProject(ctx, project, req)
@@ -78,7 +78,7 @@ func (h *CronsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var req crons.UpdateProjectCronRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad json")
+		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	out, err := h.Svc.UpdateProject(ctx, project, name, req)

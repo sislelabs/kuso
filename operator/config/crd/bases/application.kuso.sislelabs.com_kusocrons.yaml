@@ -125,6 +125,7 @@ spec:
                     pullPolicy:
                       type: string
                       default: IfNotPresent
+                    pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
                 envFromSecrets:
                   # Server-resolved from the parent service env. Shape +
                   # CEL guard keep a hand-edited CR from mounting

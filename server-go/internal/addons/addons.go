@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/placement"
@@ -101,6 +102,41 @@ var noHAKinds = map[string]bool{
 	"rabbitmq": true,
 	"redpanda": true,
 	"mysql":    true,
+}
+
+// SupportedKinds are the addon kinds the kusoaddon chart can deploy. Keep
+// in sync with $supported in
+// operator/helm-charts/kusoaddon/templates/unsupported.yaml.
+var SupportedKinds = []string{
+	"postgres", "redis", "valkey", "mongodb", "mysql", "rabbitmq",
+	"s3", "mailpit", "nats", "meilisearch", "clickhouse", "redpanda",
+}
+
+// reservedKinds are in the CRD's spec.kind enum but have no chart template;
+// the chart renders a "not implemented" marker for them. Still accepted so a
+// create that the CRD itself allows keeps working.
+var reservedKinds = []string{"memcached", "elasticsearch", "kafka", "cockroachdb", "couchdb"}
+
+// Sizes are the t-shirt sizes the CRD's spec.size enum accepts.
+var Sizes = []string{"small", "medium", "large"}
+
+// validateCreateShape checks name, kind and size before anything touches the
+// cluster, so a typo gets a 400 naming the accepted values instead of a CRD
+// 422 surfacing as a 500.
+func validateCreateShape(req CreateAddonRequest) error {
+	if req.Name == "" || req.Kind == "" {
+		return fmt.Errorf("%w: name and kind are required", ErrInvalid)
+	}
+	if errs := validation.IsDNS1123Label(req.Name); len(errs) > 0 {
+		return fmt.Errorf("%w: name %q must be lowercase letters, digits and '-', start and end with a letter or digit, max 63 chars", ErrInvalid, req.Name)
+	}
+	if !slices.Contains(SupportedKinds, req.Kind) && !slices.Contains(reservedKinds, req.Kind) {
+		return fmt.Errorf("%w: unknown kind %q; supported kinds: %s", ErrInvalid, req.Kind, strings.Join(SupportedKinds, ", "))
+	}
+	if req.Size != "" && !slices.Contains(Sizes, req.Size) {
+		return fmt.Errorf("%w: unknown size %q; supported sizes: %s", ErrInvalid, req.Size, strings.Join(Sizes, ", "))
+	}
+	return nil
 }
 
 // CreateAddonRequest is the body of POST /api/projects/:p/addons.
@@ -366,8 +402,8 @@ var addonVersionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // Add creates a KusoAddon CR and refreshes every env's envFromSecrets
 // list to include the new addon's connection secret.
 func (s *Service) Add(ctx context.Context, project string, req CreateAddonRequest) (*kube.KusoAddon, error) {
-	if req.Name == "" || req.Kind == "" {
-		return nil, fmt.Errorf("%w: name and kind are required", ErrInvalid)
+	if err := validateCreateShape(req); err != nil {
+		return nil, err
 	}
 	// SECURITY: spec.database is interpolated into DDL that runs as the
 	// addon's Postgres SUPERUSER (see EnsureBrowserRole / the backup
@@ -455,7 +491,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		}
 		secretName, err := s.createExternalSecret(ctx, ns, fqn, req.ExternalCredentials)
 		if err != nil {
-			return nil, fmt.Errorf("%w: create external secret: %w", ErrInvalid, err)
+			return nil, fmt.Errorf("create external secret: %w", err)
 		}
 		req.External = &kube.KusoAddonExternal{SecretName: secretName}
 	}
@@ -503,13 +539,16 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	}
 	if req.External != nil && req.External.SecretName != "" {
 		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External, req.Pooler); err != nil {
-			return nil, fmt.Errorf("%w: mirror external secret: %w", ErrInvalid, err)
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("%w: external secret %q not found in namespace %s", ErrInvalid, req.External.SecretName, ns)
+			}
+			return nil, fmt.Errorf("mirror external secret: %w", err)
 		}
 	}
 	createdInstanceDB := false
 	if req.UseInstanceAddon != "" {
 		if req.Kind != "postgres" {
-			return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres in v0.7.6", ErrInvalid)
+			return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres", ErrInvalid)
 		}
 		adminDSN, err := s.instanceAdminDSN(ctx, req.UseInstanceAddon)
 		if err != nil {
@@ -518,10 +557,10 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		var dsn, pw string
 		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name)
 		if err != nil {
-			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
+			return nil, fmt.Errorf("provision instance addon db: %w", err)
 		}
 		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
-			return nil, fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
+			return nil, fmt.Errorf("write conn secret: %w", err)
 		}
 	}
 	created, err := createAddon(ctx, s, ns, addon)

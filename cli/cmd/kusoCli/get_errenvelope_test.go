@@ -25,3 +25,34 @@ func TestErrEnvelopeMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIErrorMessage(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"envelope", 409, `{"error":"addon p/db already exists","code":"conflict"}`, "addon p/db already exists (409)"},
+		{"envelope with request id", 500, `{"error":"boom","code":"internal","requestId":"abc-123"}`, "boom (500) (request id: abc-123)"},
+		{"401 keeps login hint", 401, `{"error":"unauthorized","code":"unauthorized"}`, "unauthorized (401): run `kuso login` to refresh the token"},
+		{"plain text body", 502, "bad gateway from proxy\n", "bad gateway from proxy (502)"},
+		{"empty body uses status text", 404, "", "not found (404)"},
+		{"whitespace body uses status text", 503, "  \n", "service unavailable (503)"},
+		{"json without error field passes through", 400, `{"message":"x"}`, `{"message":"x"} (400)`},
+	}
+	for _, tc := range cases {
+		if got := apiErrorMessage(tc.status, tc.body); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLoginFailedMessage(t *testing.T) {
+	if got := loginFailedMessage(401, `{"code":"unauthorized","error":"unauthorized"}`); got != "login failed: wrong username or password" {
+		t.Errorf("401: got %q", got)
+	}
+	if got := loginFailedMessage(429, `{"error":"too many attempts","code":"rate_limited"}`); got != "login failed: too many attempts (429)" {
+		t.Errorf("429: got %q", got)
+	}
+}

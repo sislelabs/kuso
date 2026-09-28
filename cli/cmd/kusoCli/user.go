@@ -307,7 +307,7 @@ func init() {
 	userCreateCmd.Flags().StringVar(&userCreatePassword, "password", "", "password (required)")
 	userCreateCmd.Flags().StringVar(&userCreateFirstName, "first-name", "", "first name")
 	userCreateCmd.Flags().StringVar(&userCreateLastName, "last-name", "", "last name")
-	userCreateCmd.Flags().StringVar(&userCreateRoleID, "role-id", "", "role id (from `kuso get roles`/admin)")
+	userCreateCmd.Flags().StringVar(&userCreateRoleID, "role-id", "", "`role-id` to assign (list them with kuso get roles)")
 
 	userDeleteCmd.Flags().BoolVarP(&userYes, "yes", "y", false, "skip the confirmation prompt")
 

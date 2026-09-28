@@ -15,7 +15,7 @@ import (
 // TestCRDSchema_GoldenStable diffs every CRD YAML in
 // operator/config/crd/bases against a golden snapshot of its
 // `spec.versions[*].schema.openAPIV3Schema` tree. Drift fails the
-// test; the regenerator (run with `go test -update`) writes a fresh
+// test; the regenerator (run with KUSO_UPDATE_GOLDENS=1) writes a fresh
 // golden file the developer reviews + commits.
 //
 // Why this catches what the round-trip test doesn't: the round-trip
@@ -27,7 +27,7 @@ import (
 //
 // Update flow:
 //  1. You change a CRD YAML.
-//  2. `go test ./internal/kube/ -run TestCRDSchema_GoldenStable -update`
+//  2. `KUSO_UPDATE_GOLDENS=1 go test ./internal/kube/ -run TestCRDSchema_GoldenStable`
 //  3. Inspect the diff in testdata/crd_schema/<kind>.json.
 //  4. Commit both files together.
 func TestCRDSchema_GoldenStable(t *testing.T) {
@@ -85,7 +85,7 @@ func TestCRDSchema_GoldenStable(t *testing.T) {
 				t.Fatalf("read golden: %v", err)
 			}
 			if string(want) != string(normalized) {
-				t.Errorf("CRD schema drift in %s — run `go test ./internal/kube/ -run TestCRDSchema_GoldenStable -update` to refresh golden after review.\n--- want\n%s\n--- got\n%s",
+				t.Errorf("CRD schema drift in %s — run `KUSO_UPDATE_GOLDENS=1 go test ./internal/kube/ -run TestCRDSchema_GoldenStable` to refresh golden after review.\n--- want\n%s\n--- got\n%s",
 					e.Name(), string(want), string(normalized))
 			}
 		})

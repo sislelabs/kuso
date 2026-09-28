@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -78,7 +79,7 @@ var logsSearchCmd = &cobra.Command{
 			return err
 		}
 		if code >= 300 {
-			return fmt.Errorf("server returned %d: %s", code, string(body))
+			return errors.New(apiErrorMessage(code, string(body)))
 		}
 		if logsSearchOutput == "json" {
 			fmt.Println(string(body))
@@ -163,7 +164,7 @@ func parseLookback(s string) (time.Duration, error) {
 func init() {
 	logsCmd.AddCommand(logsSearchCmd)
 	logsSearchCmd.Flags().StringVar(&logsSearchQ, "q", "", "case-insensitive substring to find in log lines (matched literally — no quoting/AND/OR/prefix)")
-	logsSearchCmd.Flags().StringVar(&logsSearchEnv, "env", "", "filter by env (production, preview-pr-N)")
+	logsSearchCmd.Flags().StringVar(&logsSearchEnv, "env", "", "filter by `environment` name (e.g. production, staging, preview-pr-12)")
 	logsSearchCmd.Flags().StringVar(&logsSearchLimit, "limit", "100", "max lines to return (server caps at 500)")
 	logsSearchCmd.Flags().StringVar(&logsSearchSince, "since", "", "lower bound (1h, 7d, 2026-01-01, RFC3339, unix)")
 	logsSearchCmd.Flags().StringVar(&logsSearchUntil, "until", "", "upper bound (1h/7d ago, 2026-01-01, RFC3339, unix)")

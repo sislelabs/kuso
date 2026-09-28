@@ -253,7 +253,7 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	}
 	dur, err := parseRangeDuration(rangeStr)
 	if err != nil || dur > 30*24*time.Hour {
-		writeErr(w, http.StatusBadRequest, "bad range")
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("invalid range %q: use a Go duration (15m, 1h, 24h) or days/weeks (7d, 2w), max 30d", rangeStr))
 		return
 	}
 	end := time.Now().UTC()

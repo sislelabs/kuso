@@ -381,8 +381,54 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("add service: %w", err)
 	}
-	fmt.Printf("service %s/%s added\n", args[0], args[1])
+	var created struct {
+		FirstBuild *serviceFirstBuild `json:"firstBuild"`
+	}
+	_ = json.Unmarshal(resp.Body(), &created)
+	host := ""
+	if er, err := api.GetEnvironment(args[0], envCRName(args[0], args[1], "production")); err == nil && er.StatusCode() < 300 {
+		var env struct {
+			Spec struct {
+				Host string `json:"host"`
+			} `json:"spec"`
+		}
+		if json.Unmarshal(er.Body(), &env) == nil {
+			host = env.Spec.Host
+		}
+	}
+	fmt.Print(serviceAddedSummary(args[0], args[1], host, created.FirstBuild))
 	return nil
+}
+
+// serviceFirstBuild mirrors the create-service response's optional
+// firstBuild block. Absent when there was nothing to build.
+type serviceFirstBuild struct {
+	Triggered bool   `json:"triggered"`
+	Error     string `json:"error"`
+}
+
+// serviceAddedSummary is the output of `service add`. The server's
+// firstBuild carries no build id, so the hint points at build list.
+func serviceAddedSummary(project, service, host string, fb *serviceFirstBuild) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "service %s/%s added\n", project, service)
+	if host != "" {
+		fmt.Fprintf(&b, "host: %s\n", host)
+	}
+	switch {
+	case fb == nil:
+	case fb.Triggered:
+		fmt.Fprintf(&b, "first build started. Find its id with: kuso build list %s %s\n", project, service)
+		fmt.Fprintf(&b, "then follow it with: kuso logs %s %s --build <id>\n", project, service)
+	default:
+		msg := fb.Error
+		if msg == "" {
+			msg = "no reason given"
+		}
+		fmt.Fprintf(&b, "first build did not start: %s\n", msg)
+		fmt.Fprintf(&b, "retry with: kuso build trigger %s %s\n", project, service)
+	}
+	return b.String()
 }
 
 var serviceAddCmd = &cobra.Command{
@@ -490,6 +536,7 @@ var (
 	serviceSetInternal          string // "on" | "off" | "" (leave alone)
 	serviceSetPrivateEgress     string // "on" | "off" | "" (leave alone)
 	serviceSetPlatformAPIEgress string // "on" | "off" | "" (leave alone)
+	serviceSetWaitForCI         string // "on" | "off" | "" (leave alone)
 	serviceSetMinReplicas       int
 	serviceSetMaxReplicas       int
 	serviceSetPath              string   // monorepo subpath (relative to repo root)
@@ -548,9 +595,13 @@ Settings → Source / Networking flow.
   --private-egress=off          # allow public internet egress
   --platform-api-egress=on      # allow calling the kuso API (http://kuso-server) from pods
   --platform-api-egress=off     # revoke kuso API access (the default)
+  --wait-for-ci=on              # hold push/PR builds until GitHub CI checks pass
+  --wait-for-ci=off             # build immediately on push (the default)
   --cap-add SETUID --cap-add SETGID   # add back Linux capabilities (repeatable)
   --allow-privilege-escalation=on     # allow a process to gain more privs than its parent
   --allow-privilege-escalation=off    # disallow (kuso's hardened default)
+  --watch-paths 'apps/web/**,packages/**'  # push builds only when these change ('' = default)
+  --image-pull-secret ghcr.io   # pull a runtime=image service with a 'kuso registry login' credential ('' clears)
   --repo https://gitlab.com/acme/api.git  # re-point the service at a new source repo
   --provider gitlab             # VCS provider (optional; inferred from the URL)
   --gitlab-token <token>        # GitLab clone credential (stored as a Secret, never returned)
@@ -631,6 +682,16 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 				req.PlatformAPIEgress = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--platform-api-egress must be on|off (got %q)", serviceSetPlatformAPIEgress)
+			}
+		}
+		if cmd.Flags().Changed("wait-for-ci") {
+			switch serviceSetWaitForCI {
+			case "on", "true", "yes":
+				req.WaitForCI = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.WaitForCI = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--wait-for-ci must be on|off (got %q)", serviceSetWaitForCI)
 			}
 		}
 		if cmd.Flags().Changed("replicas") || cmd.Flags().Changed("max-replicas") {
@@ -770,6 +831,21 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			}
 			req.SecurityContext = sc
 		}
+		if cmd.Flags().Changed("watch-paths") {
+			wp := parseWatchPathsFlag(serviceSetWatchPaths)
+			req.WatchPaths = &wp
+		}
+		if cmd.Flags().Changed("image-pull-secret") {
+			cur, err := api.GetService(args[0], args[1])
+			if err := checkRespErr(cur, err); err != nil {
+				return fmt.Errorf("fetch current service spec: %w", err)
+			}
+			img, err := imagePullSecretPatch(cur.Body(), serviceSetImagePullSecret)
+			if err != nil {
+				return err
+			}
+			req.Image = img
+		}
 		res, err := serviceSetResources(cmd, args[0], args[1])
 		if err != nil {
 			return err
@@ -812,8 +888,17 @@ var projectAddonCmd = &cobra.Command{
 
 var addonAddCmd = &cobra.Command{
 	Use:   "add <project> <name>",
-	Short: "Add an addon to a project (auto-injected as envFrom into every service)",
-	Args:  cobra.ExactArgs(2),
+	Short: "Add an addon to a project",
+	Long: `Add an addon (database, cache, queue, ...) to a project.
+
+Its connection secret (DATABASE_URL, REDIS_URL, ...) is mounted into every
+service that has no explicit addon subscription list. Services with an explicit
+list do not get it until you subscribe them:
+
+  kuso project addon subscribe <project> <service> <addon>
+
+After the add, the command prints which services mount it.`,
+	Args: cobra.ExactArgs(2),
 	Example: `  kuso project addon add analiz pg --kind postgres --version 16
   kuso project addon add analiz pg --kind postgres --tls require
   kuso project addon add analiz cache --kind redis --version 7 --size small`,
@@ -832,25 +917,11 @@ var addonAddCmd = &cobra.Command{
 				return fmt.Errorf("--tls require is only supported with --kind postgres")
 			}
 		}
-		// Loud warnings for known-fragile single-pod defaults. These
-		// addons are easy to provision but lose data or messages on
-		// pod loss, and the failure mode is silent until something
-		// dies. Surfacing it at add-time gives the operator one chance
-		// to add --ha before any app starts depending on the addon.
-		// stderr (not stdout) so scripts that parse `addon add` output
-		// stay clean.
+		// One-line HA reminder for fragile single-pod kinds; stderr so
+		// scripts parsing stdout stay clean.
 		if !addonAddHA {
-			switch addonAddKind {
-			case "nats":
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: NATS addon defaulting to single pod — pod loss or node failure DROPS in-flight JetStream messages")
-				fmt.Fprintln(cmd.ErrOrStderr(), "         payment / ticketing / billing workloads should pass --ha for a 3-replica clustered StatefulSet")
-				fmt.Fprintln(cmd.ErrOrStderr(), "         (even with --ha, streams must be created with `--replicas 3` for HA writes — see docs/ADDON_HA.md)")
-			case "redis":
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Redis addon defaulting to single pod — pod loss = ~30-60s of failed reads/writes until reschedule")
-				fmt.Fprintln(cmd.ErrOrStderr(), "         apps using Redis for session state, rate limiting, or seat-hold counters should pass --ha (3 Redis + 3 Sentinel)")
-			case "postgres":
-				fmt.Fprintln(cmd.ErrOrStderr(), "note: Postgres addon defaulting to single pod — pass --ha for a 3-replica CloudNativePG Cluster with ~30s automatic failover")
-				fmt.Fprintln(cmd.ErrOrStderr(), "      (requires cert-manager + the CNPG operator preinstalled — see docs/ADDON_HA.md)")
+			if note := addonHANote(addonAddKind); note != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), note)
 			}
 		}
 		req := kusoApi.CreateAddonRequest{
@@ -866,6 +937,7 @@ var addonAddCmd = &cobra.Command{
 			return fmt.Errorf("add addon: %w", err)
 		}
 		fmt.Printf("addon %s/%s (%s) added\n", args[0], args[1], addonAddKind)
+		printAddonMounts(cmd.OutOrStdout(), args[0], strings.TrimPrefix(args[1], args[0]+"-"))
 		return nil
 	},
 }
@@ -1263,7 +1335,7 @@ Then any project can:
 
 The kuso server creates DATABASE "<project>_<addon>" + a matching
 role on the shared server, then writes the per-project DSN into
-<name>-conn. v0.7.6 supports postgres only.`,
+<name>-conn. Only postgres is supported.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -1476,6 +1548,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
@@ -1486,6 +1559,8 @@ func init() {
 	serviceSetCmd.Flags().BoolVar(&serviceSetGitlabTokenStdin, "gitlab-token-stdin", false, "read the GitLab clone token from stdin instead of --gitlab-token (avoids the token landing in shell history)")
 	serviceSetCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
 	serviceSetCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
+	serviceSetCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -1516,7 +1591,7 @@ func init() {
 
 	projectAddonCmd.AddCommand(addonConnectInstanceCmd)
 	addonConnectInstanceCmd.Flags().StringVar(&addonInstName, "instance", "", "name of the registered shared addon (required, matches INSTANCE_ADDON_<UPPER>_DSN_ADMIN)")
-	addonConnectInstanceCmd.Flags().StringVar(&addonExtKind, "kind", "postgres", "addon kind (only postgres is supported in v0.7.6)")
+	addonConnectInstanceCmd.Flags().StringVar(&addonExtKind, "kind", "postgres", "addon kind (only postgres is supported)")
 	_ = addonConnectInstanceCmd.MarkFlagRequired("instance")
 
 	projectAddonCmd.AddCommand(addonResyncInstanceCmd)
@@ -1555,6 +1630,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
@@ -1566,6 +1642,8 @@ func init() {
 	// register every flag the shared RunE reads.
 	serviceSetTopCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same

@@ -82,6 +82,8 @@ type CreateServiceRequest struct {
 	// for runtime=dockerfile. Empty = "Dockerfile". For monorepos with a
 	// non-standard name, e.g. "apps/web/Dockerfile.dev".
 	Dockerfile string `json:"dockerfile,omitempty"`
+	// WatchPaths gates push-triggered builds (see kube.KusoServiceSpec).
+	WatchPaths []string `json:"watchPaths,omitempty"`
 	// Command is the argv for runtime=worker. Ignored otherwise.
 	Command []string `json:"command,omitempty"`
 	// FromService is the sibling service whose built image this
@@ -138,6 +140,10 @@ type CreateServiceRequest struct {
 type ServiceImageSpec struct {
 	Repository string `json:"repository,omitempty"`
 	Tag        string `json:"tag,omitempty"`
+	// PullSecret references a project registry credential by registry
+	// host ("ghcr.io") or Secret name. nil keeps the current one on a
+	// patch; "" clears it.
+	PullSecret *string `json:"pullSecret,omitempty"`
 }
 
 // ServiceStaticSpec configures the static runtime: optional buildCmd

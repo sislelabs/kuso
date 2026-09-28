@@ -96,6 +96,28 @@ export function reservedEnvWarning(name: string): string {
   return "";
 }
 
+// Prefixes that front-end frameworks inline into the client bundle at
+// build time (Next.js, Vite, CRA, Nuxt, Expo, Gatsby, SvelteKit/Astro).
+// Ordered longest-first so NUXT_PUBLIC_/EXPO_PUBLIC_ win over PUBLIC_.
+const BUILD_TIME_PREFIXES = [
+  "NEXT_PUBLIC_",
+  "NUXT_PUBLIC_",
+  "EXPO_PUBLIC_",
+  "REACT_APP_",
+  "GATSBY_",
+  "VITE_",
+  "PUBLIC_",
+] as const;
+
+// buildTimePrefix returns the framework prefix that makes `name` a
+// build-time (bundle-inlined) variable, or "" when it isn't one.
+export function buildTimePrefix(name: string): string {
+  for (const p of BUILD_TIME_PREFIXES) {
+    if (name.startsWith(p) && name.length > p.length) return p;
+  }
+  return "";
+}
+
 // addonByConnSecret maps "<project>-<addon>-conn" → "<addon>" so the
 // editor can detect a secretKeyRef that originally came from an addon
 // ref like ${{ postgres.DATABASE_URL }} and render it as a ref again

@@ -2,9 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+
+	"kuso/server/internal/httperr"
 )
 
 // ctxKey is unexported so callers must go through ClaimsFromContext.
@@ -85,12 +90,16 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 			}
 			tok, ok := bearerToken(r)
 			if !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				httperr.Write(w, http.StatusUnauthorized, "unauthorized: missing bearer token")
 				return
 			}
 			claims, err := i.Verify(tok)
 			if err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				msg := "unauthorized: invalid token; log in again"
+				if errors.Is(err, jwt.ErrTokenExpired) {
+					msg = "unauthorized: token expired; log in again"
+				}
+				httperr.Write(w, http.StatusUnauthorized, msg)
 				return
 			}
 			// Revocation check after signature/expiry. Two probes
@@ -102,7 +111,9 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 			// previously revoked token. See the RevocationChecker type
 			// doc above and cmd/kuso-server/revocation.go.
 			if i.CheckRevoked(r.Context(), claims) {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				// Also the fail-closed answer when the revocation store is
+				// unreachable, so don't claim the token was revoked.
+				httperr.Write(w, http.StatusUnauthorized, "unauthorized: token is no longer accepted; log in again")
 				return
 			}
 			i.ResolvePermissions(r.Context(), claims)

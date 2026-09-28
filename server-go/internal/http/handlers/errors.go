@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -61,7 +62,7 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("since"); v != "" {
 		d, err := parseRangeDuration(v)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad since")
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("invalid since %q: use a Go duration (30m, 6h) or days/weeks (7d, 2w), max 30d", v))
 			return
 		}
 		if d > 30*24*time.Hour {

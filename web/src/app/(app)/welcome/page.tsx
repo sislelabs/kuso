@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { toast } from "sonner";
 
 // Guided 3-step onboarding for users landing on a fresh kuso install.
@@ -79,6 +80,8 @@ export default function WelcomePage() {
           <Step1InstallGitHub
             installations={installs}
             isLoading={installations.isPending}
+            isChecking={installations.isFetching}
+            onCheckAgain={() => void installations.refetch()}
             onContinue={() => setStep(2)}
           />
         )}
@@ -142,10 +145,14 @@ function Stepper({ current, hasGitHub }: { current: Step; hasGitHub: boolean }) 
 function Step1InstallGitHub({
   installations,
   isLoading,
+  isChecking,
+  onCheckAgain,
   onContinue,
 }: {
   installations: GithubInstallation[];
   isLoading: boolean;
+  isChecking: boolean;
+  onCheckAgain: () => void;
   onContinue: () => void;
 }) {
   const installURL = useInstallURL();
@@ -227,6 +234,9 @@ function Step1InstallGitHub({
                 first.
               </span>
             )}
+            <Button onClick={onCheckAgain} variant="outline" size="sm" disabled={isChecking}>
+              {isChecking ? "Checking…" : "Check again"}
+            </Button>
             <Button onClick={onContinue} variant="outline" size="sm">
               Skip — I&apos;ll do this later
             </Button>
@@ -402,6 +412,7 @@ function Step2PickRepo({
 // ?step=3&project=<slug> so the back button returns here, not to the
 // repo picker.
 function Step3Deploy({ project }: { project: string }) {
+  const instanceDomain = useInstanceDomain();
   if (!project) {
     // Defensive: if someone deep-links /welcome?step=3 with no
     // project we degrade to "go to dashboard" rather than rendering
@@ -417,6 +428,7 @@ function Step3Deploy({ project }: { project: string }) {
     );
   }
   const projectPath = `/projects/${encodeURIComponent(project)}`;
+  const exampleHost = defaultServiceHost("web", project, "", instanceDomain || "<kuso-domain>");
   const addServicePath = `${projectPath}/services/new`;
   return (
     <div>
@@ -424,7 +436,7 @@ function Step3Deploy({ project }: { project: string }) {
         <CheckCircle2 className="mt-1 h-5 w-5 text-[var(--success)]" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight">
-            Project <span className="font-mono">{project}</span> is live
+            Project <span className="font-mono">{project}</span> created
           </h2>
           <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
             One more click. Pick the part of the repo to deploy first
@@ -466,8 +478,8 @@ function Step3Deploy({ project }: { project: string }) {
       </div>
 
       <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
-        Tip: every service gets a free <code>*.{`{project}`}.kuso</code> domain. Bring your
-        own under <Link href={`${projectPath}/settings`} className="text-[var(--accent)] hover:underline">project settings</Link>.
+        Tip: each service gets its own URL, e.g. a service named web is served at{" "}
+        <code>{exampleHost}</code>. Bring your own domain under <Link href={`${projectPath}/settings`} className="text-[var(--accent)] hover:underline">project settings</Link>.
       </p>
     </div>
   );

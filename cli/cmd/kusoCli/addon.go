@@ -142,7 +142,7 @@ boundary as reading env values or opening a shell. --keys lists keys only
 			return fmt.Errorf("forbidden: revealing addon connection values requires the admin role (use --keys for names only)")
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			return checkRespErr(resp, nil)
 		}
 		var out struct {
 			Values map[string]string `json:"values"`

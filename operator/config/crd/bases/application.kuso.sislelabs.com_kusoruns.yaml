@@ -134,6 +134,7 @@ spec:
                     repository: { type: string }
                     tag: { type: string }
                     pullPolicy: { type: string }
+                    pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
                 # envFromSecrets is the parent service's resolved
                 # envFromSecrets list so the run inherits DB and
                 # cache connection strings. Same shape + CEL guard as

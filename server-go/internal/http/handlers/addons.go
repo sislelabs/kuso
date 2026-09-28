@@ -517,6 +517,10 @@ func (h *AddonsHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, addons.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
+		if status, ok := kubeErrStatus(err); ok {
+			writeErr(w, status, err.Error())
+			return
+		}
 		h.Logger.Error("addons handler", "op", op, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 	}

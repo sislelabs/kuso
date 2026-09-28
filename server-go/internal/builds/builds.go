@@ -292,6 +292,10 @@ type Service struct {
 	// registry (within imageRetentionWindow). Optional: nil → rollback
 	// only works against live CRs (pre-v0.17.x behaviour).
 	RecordLookup BuildRecordLookup
+
+	// CI gates webhook builds of waitForCI services on the commit's
+	// GitHub checks (ci_gate.go). Optional: nil → never gated.
+	CI CIChecker
 }
 
 // BuildRecordLookup fetches one archived build's roll-back-relevant
@@ -963,7 +967,8 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// active slot frees up. The chart doesn't render a Job until the
 	// build-state=queued label is removed, so a queued CR consumes
 	// no node resources.
-	queued := capHit
+	gateCI := s.shouldGateOnCI(svcCR, req, repoURL, sha, installationID)
+	queued := capHit || gateCI
 	if !queued {
 		// LIVE read (not the informer cache) inside the per-service lock so
 		// the active-check is read-your-writes: a Create ~50ms earlier whose
@@ -1049,6 +1054,11 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// same service finishes.
 		labels["kuso.sislelabs.com/build-state"] = "queued"
 		annos[annPhase] = "queued"
+	}
+	if gateCI {
+		annos[annCIGate] = ciGateWaiting
+		annos[annCIGateSince] = time.Now().UTC().Format(time.RFC3339)
+		annos[annMessage] = "waiting for GitHub CI checks to pass"
 	}
 	// Trigger context — captured from the request handler. user/api/
 	// webhook/system distinguishes the four valid sources; the user
@@ -1443,6 +1453,15 @@ type Poller struct {
 	ImageDeleter ImageDeleter
 	ImageRecords ImageRecordLister
 
+	// CommitStatuses posts GitHub commit statuses as builds transition
+	// (commit_status.go). Optional: nil → no statuses.
+	CommitStatuses CommitStatusReporter
+	statusMu       sync.Mutex
+	statusPosted   map[string]string // ns/build → key posted, until the informer shows the stamp
+	statusRetry    map[string]statusRetryState
+	// detached runs status posts + CI gate checks off the tick goroutine.
+	detached detachedRunner
+
 	// fairnessCursor remembers, per namespace, the last project we
 	// promoted from. Next tick, dispatchQueued starts the round at
 	// the *next* project in alphabetical order. Without this, Go's
@@ -1786,6 +1805,8 @@ func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 			p.logger().Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 		}
 	}
+	p.syncCommitStatuses(ctx, ns, raw)
+	p.evaluateCIGates(ctx, ns, raw)
 	// Queue dispatcher: promote the oldest queued build per service
 	// when no active (running/pending) build exists for it. Runs
 	// after the activeBuilds sweep so a build that finished THIS
@@ -1842,6 +1863,9 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 	byKey := map[string]*svcQueue{}
 	for i := range raw {
 		b := &raw[i]
+		if ciGateHolds(b) {
+			continue // evaluateCIGates releases it
+		}
 		key := b.Spec.Project + "/" + b.Spec.Service
 		q, ok := byKey[key]
 		if !ok {

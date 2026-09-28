@@ -16,11 +16,20 @@ import {
   unmuteProjectNotifications,
 } from "@/features/projects";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
+import { RegistryCredentialsCard } from "@/components/project/RegistryCredentialsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
 import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
 import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon } from "lucide-react";
+
+// Empty or non-numeric input falls back to the 7-day default; anything
+// else is clamped to the 1..30 range the input advertises.
+function clampPreviewTtl(raw: string): number {
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return 7;
+  return Math.min(30, Math.max(1, n));
+}
 
 // Project settings — flat layout, sections separated by horizontal
 // rules + small uppercase headers. Mirrors the polish of /settings
@@ -43,7 +52,9 @@ export function ProjectSettingsView() {
   const [repoURL, setRepoURL] = useState("");
   const [repoBranch, setRepoBranch] = useState("");
   const [previewsEnabled, setPreviewsEnabled] = useState(false);
-  const [previewsTtl, setPreviewsTtl] = useState<number>(7);
+  // Kept as the raw input string so the field can be cleared while
+  // typing; clamped on blur and on save.
+  const [previewsTtl, setPreviewsTtl] = useState("7");
   const [alwaysOn, setAlwaysOn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   // Notification mute is NOT part of the project spec (it lives in the
@@ -67,7 +78,7 @@ export function ProjectSettingsView() {
       setRepoURL(s.defaultRepo?.url ?? "");
       setRepoBranch(s.defaultRepo?.defaultBranch ?? "");
       setPreviewsEnabled(!!s.previews?.enabled);
-      setPreviewsTtl(s.previews?.ttlDays ?? 7);
+      setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
       setAlwaysOn(!!s.alwaysOn);
     }
   }, [project.data]);
@@ -103,7 +114,7 @@ export function ProjectSettingsView() {
         ...(repoURL.trim()
           ? { defaultRepo: { url: repoURL.trim(), defaultBranch: repoBranch.trim() || undefined } }
           : {}),
-        previews: { enabled: previewsEnabled, ttlDays: previewsTtl },
+        previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl) },
         alwaysOn,
       });
       toast.success("Saved");
@@ -167,6 +178,12 @@ export function ProjectSettingsView() {
               <code className="rounded bg-[var(--bg-tertiary)] px-1">
                 &lt;service&gt;.{baseDomain || "<base>"}
               </code>
+              ; a service named {projectName} gets the bare domain.
+            </p>
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              DNS: add an A record for{" "}
+              <code className="rounded bg-[var(--bg-tertiary)] px-1">*.{baseDomain || "<base>"}</code>{" "}
+              (and one for the bare domain) pointing at your cluster&apos;s public IP.
             </p>
           </div>
 
@@ -233,8 +250,8 @@ export function ProjectSettingsView() {
             <span className="flex-1">
               <span className="text-[13px] font-medium">Spawn a preview env on every PR</span>
               <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
-                Requires a GitHub App install + the project repo set under Cluster config →
-                GitHub. Each preview clones every service and runs them at{" "}
+                Requires the GitHub App installed on the repo and the default repository
+                set above. Each preview clones every service and runs them at{" "}
                 <span className="font-mono">
                   &lt;svc&gt;-pr-&lt;N&gt;.{baseDomain || "<base>"}
                 </span>
@@ -252,13 +269,16 @@ export function ProjectSettingsView() {
                 value={previewsTtl}
                 min={1}
                 max={30}
-                onChange={(e) => setPreviewsTtl(parseInt(e.target.value, 10) || 7)}
+                onChange={(e) => setPreviewsTtl(e.target.value)}
+                onBlur={(e) => setPreviewsTtl(String(clampPreviewTtl(e.target.value)))}
                 className="w-32 font-mono"
               />
               <p className="text-[10px] text-[var(--text-tertiary)]">
-                Per-PR DB clones are off by default to save disk —{" "}
-                <code className="font-mono">KUSO_PREVIEW_DB_ENABLED=true</code> on the server
-                to opt in (otherwise PR previews share the production DB).
+                Each preview gets its own Postgres and Redis addons (Postgres starts as a
+                copy of production data), so reviewers never write to production. This is on
+                by default; a server started with{" "}
+                <code className="font-mono">KUSO_PREVIEW_DB_DISABLED=true</code> skips the
+                clones, and previews then use the production addons.
               </p>
             </div>
           )}
@@ -350,6 +370,8 @@ export function ProjectSettingsView() {
 
       {/* Project secrets — flat now, no Card wrapper */}
       <SharedSecretsCard project={projectName} />
+
+      <RegistryCredentialsCard project={projectName} />
 
       {/* Access — who can see/act on this project (admin-only). */}
       {isAdmin && (

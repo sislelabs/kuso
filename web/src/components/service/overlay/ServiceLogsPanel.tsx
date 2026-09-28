@@ -12,10 +12,17 @@ import { useEnvironments } from "@/features/projects";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isProductionGroup } from "@/lib/env-group";
+import { LogStream } from "@/components/logs/LogStream";
 
 interface Props {
   project: string;
   service: string;
+  // Env-group of the env the overlay is showing (production / staging /
+  // preview-pr-N). Pre-selects the env filter so staging doesn't mix in
+  // production lines.
+  defaultEnv?: string;
+  // Env CR name for the live tail. Omitted → the Live toggle is hidden.
+  streamEnv?: string;
 }
 
 // Lines fetched per page. The server clamps at 500; 200 keeps the
@@ -32,11 +39,12 @@ const PAGE_SIZE = 200;
 // plus custom RFC3339 inputs hidden behind a toggle. Indie SaaS
 // founders mostly want "what just happened" and a relative range
 // is the right default.
-export function ServiceLogsPanel({ project, service }: Props) {
+export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv }: Props) {
   const [q, setQ] = useState("");
-  const [env, setEnv] = useState("");
+  const [env, setEnv] = useState(defaultEnv);
   const [since, setSince] = useState("1h");
-  const [committed, setCommitted] = useState({ q: "", env: "", since: "1h" });
+  const [committed, setCommitted] = useState({ q: "", env: defaultEnv, since: "1h" });
+  const [live, setLive] = useState(false);
 
   // Build the env-filter list from the actual envs that exist for
   // this service (production + any preview-pr-N). The dropdown used
@@ -120,10 +128,28 @@ export function ServiceLogsPanel({ project, service }: Props) {
         <div>
           <h3 className="font-mono text-sm font-medium">Logs</h3>
           <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
-            Searchable archive, 7d retention. Substring match, case-insensitive. Polls every 10s when no query is set — for true streaming, use the Deployments tab.
+            {live
+              ? "Live tail of the running pods in this environment."
+              : "Searchable archive, 7d retention. Substring match, case-insensitive. Polls every 10s when no query is set."}
           </p>
         </div>
+        {streamEnv && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-pressed={live}
+            onClick={() => setLive((v) => !v)}
+          >
+            {live ? "Search archive" : "Live tail"}
+          </Button>
+        )}
       </header>
+
+      {live && streamEnv ? (
+        <LogStream project={project} service={service} env={streamEnv} height="60vh" />
+      ) : (
+      <>
 
       {/* Search bar */}
       <form
@@ -138,6 +164,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            aria-label="Search log text"
             placeholder="Search log text — fatal error"
             className="h-8 pl-7 font-mono text-[12px]"
           />
@@ -148,6 +175,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
                 setQ("");
                 setCommitted((c) => ({ ...c, q: "" }));
               }}
+              aria-label="Clear search"
               className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               <X className="h-3 w-3" />
@@ -157,6 +185,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
         <select
           value={env}
           onChange={(e) => setEnv(e.target.value)}
+          aria-label="Environment"
           className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
         >
           <option value="">all envs</option>
@@ -214,6 +243,8 @@ export function ServiceLogsPanel({ project, service }: Props) {
             if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage();
           }}
         />
+      )}
+      </>
       )}
     </div>
   );

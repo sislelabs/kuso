@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,8 +29,10 @@ import (
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
 	"kuso/server/internal/db"
+	"kuso/server/internal/drains"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
+	"kuso/server/internal/httperr"
 	"kuso/server/internal/incidents"
 	"kuso/server/internal/installscripts"
 	"kuso/server/internal/instancepg"
@@ -41,6 +44,7 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/reconcilehealth"
+	"kuso/server/internal/registrycreds"
 	"kuso/server/internal/remediate"
 	"kuso/server/internal/runs"
 	"kuso/server/internal/secrets"
@@ -118,6 +122,7 @@ type GithubDeps struct {
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
+	r.Use(requestIDHeader)
 	r.Use(chimw.Recoverer)
 	r.Use(slogRequest(d.Logger))
 	// Cap request bodies at 1 MiB. Every JSON handler in this app
@@ -217,6 +222,17 @@ func NewRouter(d Deps) http.Handler {
 			jwtChain.ServeHTTP(w, req)
 		})
 	}
+	// Per-env metrics export for external scrapers (Grafana Alloy,
+	// Prometheus, Grafana Cloud Metrics Endpoint). Same gate as /metrics.
+	exportH := &httphandlers.MetricsExportHandler{Kube: d.Kube, Namespace: d.Namespace, Logger: d.Logger}
+	exportJWT := d.Issuer.Middleware()(httphandlers.AdminOnly(exportH))
+	r.Get("/api/metrics/export", func(w http.ResponseWriter, req *http.Request) {
+		if metricsPublic || (scrapeToken != "" && metricsScrapeTokenMatches(req, scrapeToken)) {
+			exportH.ServeHTTP(w, req)
+			return
+		}
+		exportJWT.ServeHTTP(w, req)
+	})
 	// Wire the persistent login rate limiter to the DB. Without this
 	// the limiter falls open (no caps) — better than no /login at all
 	// on a fresh boot before main has stitched the DB in, but main
@@ -402,17 +418,20 @@ func NewRouter(d Deps) http.Handler {
 	installscripts.Mount(r.Get)
 
 	// SPA fallback. Anything that isn't an API or webhook route falls
-	// through to the embedded Vue bundle. The embed.FS always contains
+	// through to the embedded web bundle. The embed.FS always contains
 	// at least a placeholder index.html so this never panics.
+	var spaH http.Handler
 	if spaFS, err := web.Dist(); err == nil {
-		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz", "/readyz"); err == nil {
-			r.NotFound(spaH.ServeHTTP)
+		if h, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz", "/readyz"); err == nil {
+			spaH = h
 		} else {
 			d.Logger.Warn("spa: handler unavailable", "err", err)
 		}
 	} else {
 		d.Logger.Warn("spa: embedded dist unavailable", "err", err)
 	}
+	r.NotFound(apiFallback(spaH, http.StatusNotFound))
+	r.MethodNotAllowed(apiFallback(spaH, http.StatusMethodNotAllowed))
 
 	return r
 }
@@ -528,6 +547,8 @@ func mountAuthenticatedRoutes(
 				}
 			}
 			notifH.Mount(r)
+			drainsH := &httphandlers.DrainsHandler{Store: &drains.SettingStore{DB: d.DB}, Tester: drains.NewSender(), Logger: d.Logger, ProjectExists: notifH.ProjectExists}
+			drainsH.Mount(r)
 			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			tokAdminH.Mount(r)
 		}
@@ -595,6 +616,12 @@ func mountAuthenticatedRoutes(
 			if d.ProjectSecrets != nil {
 				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, DB: d.DB, Logger: d.Logger}
 				psH.Mount(r)
+			}
+			if d.Kube != nil {
+				rcSvc := registrycreds.New(d.Kube, d.Namespace)
+				rcSvc.NSResolver = d.Addons.NSResolver
+				rcH := &httphandlers.RegistryCredsHandler{Svc: rcSvc, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
+				rcH.Mount(r)
 			}
 			if d.InstanceSecrets != nil {
 				isH := &httphandlers.InstanceSecretsHandler{Svc: d.InstanceSecrets, Audit: d.Audit, Logger: d.Logger}
@@ -693,7 +720,7 @@ func cookieCSRFMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		http.Error(w, "csrf origin check failed", http.StatusForbidden)
+		httperr.Write(w, http.StatusForbidden, "csrf origin check failed: the Origin or Referer header does not match this server")
 	})
 }
 
@@ -981,7 +1008,7 @@ func inFlightLimit(n int) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 			default:
 				w.Header().Set("Retry-After", "1")
-				http.Error(w, "server busy", http.StatusServiceUnavailable)
+				httperr.Write(w, http.StatusServiceUnavailable, "server busy, retry shortly")
 			}
 		})
 	}
@@ -1044,6 +1071,36 @@ func devCORS(next http.Handler) http.Handler {
 // healthz stays unauthenticated and returns the embedded version. The
 // shape ({"status":"ok","version":...}) is the same one Phase 0 shipped.
 // healthz / readyz live in probes.go.
+
+// requestIDHeader echoes chi's request id (the same one slogRequest logs)
+// as X-Request-Id on every response. httperr.Write reads it back from the
+// response headers to put it in the error body.
+func requestIDHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id := chimw.GetReqID(r.Context()); id != "" {
+			w.Header().Set(httperr.RequestIDHeader, id)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// apiFallback answers requests no route matched. Under /api/ (or with no
+// SPA available) that is a JSON 404, or 405 when the path exists with
+// another method, so API clients never get an HTML shell or plain text.
+// Everything else goes to the SPA.
+func apiFallback(spaH http.Handler, status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if spaH != nil && !strings.HasPrefix(r.URL.Path, "/api/") {
+			spaH.ServeHTTP(w, r)
+			return
+		}
+		msg := fmt.Sprintf("no API route %s %s", r.Method, r.URL.Path)
+		if status == http.StatusMethodNotAllowed {
+			msg = fmt.Sprintf("method %s not allowed on %s", r.Method, r.URL.Path)
+		}
+		httperr.Write(w, status, msg)
+	}
+}
 
 // slogRequest is a thin access-log middleware backed by slog. We don't
 // pull in chi/middleware.Logger because its default formatter writes to

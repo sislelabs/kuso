@@ -22,7 +22,8 @@ import (
 
 var (
 	importProject          string
-	importOut              string
+	importOut              string // deprecated --out/-o, kept for one release
+	importFile             string
 	importApply            bool
 	importDryRun           bool
 	importAllowEmptyAddons bool
@@ -44,7 +45,7 @@ or image (runtime=image) services. Compose keys kuso has no field for
 are reported, never silently dropped.
 
 Default is dry-run: prints the generated kuso.yaml + a mapping report,
-touches nothing. -o writes the kuso.yaml to disk. --apply creates the
+touches nothing. --file writes the kuso.yaml to disk. --apply creates the
 resources on the connected kuso instance.
 
 --apply refuses to run when the conversion carries data-loss risk:
@@ -56,7 +57,7 @@ data, users and init scripts are NOT migrated — override with
   kuso import compose docker-compose.yml
 
   # write the kuso.yaml to disk for review / git
-  kuso import compose docker-compose.yml -o kuso.yaml
+  kuso import compose docker-compose.yml --file kuso.yaml
 
   # convert and create resources on the connected kuso
   kuso import compose docker-compose.yml --apply
@@ -96,17 +97,17 @@ data, users and init scripts are NOT migrated — override with
 			fmt.Fprintln(os.Stderr)
 		}
 
-		if importOut != "" {
-			if err := os.WriteFile(importOut, yamlOut, 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", importOut, err)
+		if dest := importDestFile(); dest != "" {
+			if err := os.WriteFile(dest, yamlOut, 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", dest, err)
 			}
-			fmt.Fprintf(os.Stderr, "→ wrote %s\n", importOut)
+			fmt.Fprintf(os.Stderr, "→ wrote %s\n", dest)
 		}
 
 		if !importApply {
 			// Dry-run: emit the generated kuso.yaml on stdout.
 			fmt.Print(string(yamlOut))
-			fmt.Fprintln(os.Stderr, "\n→ dry-run only — pass --apply to create resources, or -o to save the kuso.yaml")
+			fmt.Fprintln(os.Stderr, "\n→ dry-run only — pass --apply to create resources, or --file to save the kuso.yaml")
 			return nil
 		}
 
@@ -126,7 +127,7 @@ data, users and init scripts are NOT migrated — override with
 				return fmt.Errorf("create project: %w", err)
 			}
 			if pr.StatusCode() >= 300 && pr.StatusCode() != 409 {
-				return fmt.Errorf("create project failed (%d): %s", pr.StatusCode(), pr.String())
+				return fmt.Errorf("create project failed: %w", checkRespErr(pr, nil))
 			}
 		}
 		resp, err := api.ApplyConfig(doc.Project, yamlOut, importDryRun, false)
@@ -134,7 +135,7 @@ data, users and init scripts are NOT migrated — override with
 			return fmt.Errorf("apply: %w", err)
 		}
 		if resp.StatusCode() >= 400 {
-			return fmt.Errorf("apply failed (%d): %s", resp.StatusCode(), resp.String())
+			return fmt.Errorf("apply failed: %w", checkRespErr(resp, nil))
 		}
 		printApplyResult(resp.Body(), importDryRun)
 		return nil
@@ -181,11 +182,24 @@ func projectNameFromPath(path string) string {
 
 func init() {
 	importComposeCmd.Flags().StringVar(&importProject, "project", "", "kuso project slug (default: compose file's directory name)")
-	importComposeCmd.Flags().StringVarP(&importOut, "out", "o", "", "write the generated kuso.yaml to this path")
+	importComposeCmd.Flags().StringVar(&importFile, "file", "", "write the generated kuso.yaml to this `path`")
+	// -o selects the output format on most commands; the file meaning
+	// moved to --file (as on kuso backup). Still honoured for one release.
+	importComposeCmd.Flags().StringVarP(&importOut, "out", "o", "", "write the generated kuso.yaml to this `path` (deprecated: use --file)")
+	_ = importComposeCmd.Flags().MarkDeprecated("out", "use --file; -o/--out will be removed in a later release")
 	importComposeCmd.Flags().BoolVar(&importApply, "apply", false, "create resources on the connected kuso (default is dry-run)")
 	importComposeCmd.Flags().BoolVar(&importDryRun, "server-dry-run", false, "with --apply, ask the server for the plan without writing")
 	importComposeCmd.Flags().BoolVar(&importAllowEmptyAddons, "allow-empty-addons", false, "with --apply, permit datastore conversions — the managed addons start EMPTY; source volumes/data are NOT migrated")
 	importComposeCmd.Flags().BoolVar(&importAllowMissingEnv, "allow-missing-env-files", false, "with --apply, permit services whose env_file values were not imported")
 	importCmd.AddCommand(importComposeCmd)
 	rootCmd.AddCommand(importCmd)
+}
+
+// importDestFile returns the --file path, falling back to the
+// deprecated --out/-o.
+func importDestFile() string {
+	if importFile != "" {
+		return importFile
+	}
+	return importOut
 }

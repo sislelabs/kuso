@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useConfigureGithub,
@@ -504,6 +505,20 @@ function ConfiguredPanel({
         </div>
       </div>
 
+      {installations.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
+          <p className="text-[12px] text-[var(--text-secondary)]">
+            kuso can see your repos. Next, create a project and add a service from one of them.
+          </p>
+          <Link
+            href="/projects/new"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+          >
+            Create a project
+          </Link>
+        </div>
+      )}
+
       {/* Installations / repo coverage. The previous page showed
           nothing here; users had no way to see which orgs/repos kuso
           actually has access to without leaving for github.com. The
@@ -807,7 +822,7 @@ function WizardForm(props: WizardFormProps) {
             <li>
               Permissions:{" "}
               <span className="font-mono text-[12px]">
-                Contents: Read · Metadata: Read · Pull requests: Read &amp; Write · Webhooks: Read
+                Contents: Read · Metadata: Read · Pull requests: Read &amp; Write · Commit statuses: Read &amp; Write · Checks: Read · Webhooks: Read
                 &amp; Write · Deployments: Read &amp; Write
               </span>
               . Subscribe to events: <span className="font-mono text-[12px]">push, pull_request, installation, installation_repositories</span>.

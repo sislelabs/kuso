@@ -51,6 +51,32 @@ export function DeploySection({
           </p>
         )}
       </div>
+      <Row
+        label="wait for CI"
+        hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."
+        control={
+          <button
+            type="button"
+            onClick={() => setState((s) => ({ ...s, waitForCI: !s.waitForCI }))}
+            aria-pressed={state.waitForCI}
+            aria-label="Toggle wait for CI"
+            className={cn(
+              "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+              state.waitForCI
+                ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
+                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+                state.waitForCI ? "translate-x-4" : "translate-x-0.5",
+              )}
+            />
+          </button>
+        }
+        last={!previewsOn}
+      />
       {previewsOn && (
         <Row
           label="exclude from previews"

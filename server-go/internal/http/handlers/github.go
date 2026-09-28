@@ -197,7 +197,7 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 // button.
 func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		writeErr(w, http.StatusServiceUnavailable, "github not configured")
+		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	var body struct {
@@ -245,7 +245,7 @@ func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) 
 // fast path to pre-check checkboxes.
 func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		writeErr(w, http.StatusServiceUnavailable, "github not configured")
+		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	var body struct {
@@ -542,7 +542,7 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 // RefreshInstallations forces a cache refresh from GitHub.
 func (h *GithubHandler) RefreshInstallations(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil || h.Cache == nil {
-		writeErr(w, http.StatusServiceUnavailable, "github not configured")
+		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
@@ -564,7 +564,7 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Client == nil {
-		writeErr(w, http.StatusServiceUnavailable, "github not configured")
+		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
@@ -591,7 +591,7 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 // DetectRuntime auto-detects runtime + port from a service's repo+path.
 func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
 	if h.Client == nil {
-		writeErr(w, http.StatusServiceUnavailable, "github not configured")
+		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	var body struct {

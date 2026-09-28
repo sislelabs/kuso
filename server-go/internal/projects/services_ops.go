@@ -323,6 +323,10 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err := validateDockerfile(req.Dockerfile); err != nil {
 		return nil, err
 	}
+	createWatchPaths, err := normalizeWatchPaths(req.WatchPaths)
+	if err != nil {
+		return nil, err
+	}
 	// Static / Buildpacks / Image specs all carry user-supplied
 	// strings that the build controller interpolates into shell
 	// contexts (the static heredoc, the buildpacks creator argv,
@@ -479,6 +483,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Repository: strings.TrimSpace(req.Image.Repository),
 			Tag:        tag,
 		}
+		if req.Image.PullSecret != nil && strings.TrimSpace(*req.Image.PullSecret) != "" {
+			name, err := s.resolvePullSecret(ctx, project, *req.Image.PullSecret)
+			if err != nil {
+				return nil, err
+			}
+			imgSpec.PullSecret = name
+		}
 	}
 	// Release hook (migrations etc.) at create time. Mirror the patch-path
 	// semantics: a non-empty Command sets the hook (default timeout 900s);
@@ -543,6 +554,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Repo:        &kube.KusoRepoRef{URL: repoURL, DefaultBranch: repoBranch, Path: repoPath, Provider: repoProvider, TokenSecret: repoTokenSecret},
 			Runtime:     req.Runtime,
 			Dockerfile:  req.Dockerfile,
+			WatchPaths:  createWatchPaths,
 			Command:     req.Command,
 			// FromService: only meaningful for runtime=worker, where
 			// the worker reuses a sibling's built image. The build
@@ -2168,6 +2180,9 @@ type PatchServiceRequest struct {
 	// (relative to repo.path). Pointer so omitting leaves it; "" clears
 	// back to the default "Dockerfile".
 	Dockerfile *string `json:"dockerfile,omitempty"`
+	// WatchPaths replaces the push-build watch globs. Pointer so omitting
+	// leaves them; an empty list clears back to the repo.path default.
+	WatchPaths *[]string `json:"watchPaths,omitempty"`
 	// Command replaces the run command. Pointer to a slice so "unset"
 	// (nil, leave alone) is distinguishable from "empty" (clear it).
 	Command *[]string `json:"command,omitempty"`
@@ -2179,6 +2194,9 @@ type PatchServiceRequest struct {
 	// SnapshotBeforeDeploy toggles the pre-deploy postgres snapshot.
 	// Pointer so omitting leaves it as-is; a non-nil pointer sets it.
 	SnapshotBeforeDeploy *bool `json:"snapshotBeforeDeploy,omitempty"`
+	// WaitForCI toggles the wait-for-GitHub-CI build gate. Service-level
+	// only (builds read it off the service CR), so no env propagation.
+	WaitForCI *bool `json:"waitForCI,omitempty"`
 	// BuildArgs / PublicEnv replace the build-time env config wholesale.
 	// Pointer so omitting leaves it alone; a non-nil pointer (even to an
 	// empty map/slice) resets it — declarative reset, matching Static.
@@ -2325,6 +2343,21 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// at render (buildArgsContainerVars re-validates as defense-in-depth).
 	if req.BuildArgs != nil {
 		if err := validateBuildArgs(*req.BuildArgs); err != nil {
+			return nil, err
+		}
+	}
+	var watchPaths []string
+	if req.WatchPaths != nil {
+		var err error
+		if watchPaths, err = normalizeWatchPaths(*req.WatchPaths); err != nil {
+			return nil, err
+		}
+	}
+	// Resolved outside the retry loop: one Secret read, not one per 409.
+	pullSecretRef := ""
+	if req.Image != nil && req.Image.PullSecret != nil && strings.TrimSpace(*req.Image.PullSecret) != "" {
+		var err error
+		if pullSecretRef, err = s.resolvePullSecret(ctx, project, *req.Image.PullSecret); err != nil {
 			return nil, err
 		}
 	}
@@ -2626,15 +2659,26 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			imageChanged = true
 			if strings.TrimSpace(req.Image.Repository) == "" {
+				if pullSecretRef != "" {
+					return fmt.Errorf("%w: image.pullSecret requires image.repository", ErrInvalid)
+				}
 				svc.Spec.Image = nil
 			} else {
 				tag := strings.TrimSpace(req.Image.Tag)
 				if tag == "" {
 					tag = "latest"
 				}
+				pullSecret := ""
+				if svc.Spec.Image != nil {
+					pullSecret = svc.Spec.Image.PullSecret
+				}
+				if req.Image.PullSecret != nil {
+					pullSecret = pullSecretRef
+				}
 				svc.Spec.Image = &kube.KusoImage{
 					Repository: strings.TrimSpace(req.Image.Repository),
 					Tag:        tag,
+					PullSecret: pullSecret,
 				}
 			}
 		}
@@ -2643,6 +2687,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				return err
 			}
 			svc.Spec.Dockerfile = *req.Dockerfile
+		}
+		if req.WatchPaths != nil {
+			svc.Spec.WatchPaths = watchPaths
 		}
 		commandChanged := false
 		if req.Command != nil {
@@ -2673,6 +2720,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.SnapshotBeforeDeploy != nil && svc.Spec.SnapshotBeforeDeploy != *req.SnapshotBeforeDeploy {
 			svc.Spec.SnapshotBeforeDeploy = *req.SnapshotBeforeDeploy
 			snapshotChanged = true
+		}
+		if req.WaitForCI != nil {
+			svc.Spec.WaitForCI = *req.WaitForCI
 		}
 		// Build-time env config. Wholesale replace on a non-nil pointer
 		// (declarative reset); leave alone when omitted.

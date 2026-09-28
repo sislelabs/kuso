@@ -28,3 +28,13 @@ export function isProductionGroup(e: KusoEnvironment): boolean {
   if (label !== undefined) return label === "production";
   return e.spec.kind === "production";
 }
+
+/**
+ * Display + API name of the env-group this env belongs to. Uses the
+ * group label; legacy CRs without it fall back to spec.kind. Never use
+ * spec.kind alone for display: a staging clone has kind "production".
+ */
+export function envGroupName(e: KusoEnvironment | undefined): string {
+  if (!e) return "production";
+  return envGroupLabel(e) ?? e.spec?.kind ?? "production";
+}

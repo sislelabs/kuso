@@ -196,11 +196,24 @@ type PatchServiceRequest struct {
 	Internal          *bool                        `json:"internal,omitempty"`
 	PrivateEgress     *bool                        `json:"privateEgress,omitempty"`
 	PlatformAPIEgress *bool                        `json:"platformApiEgress,omitempty"`
+	WaitForCI         *bool                        `json:"waitForCI,omitempty"`
 	Scale             *PatchScaleRequest           `json:"scale,omitempty"`
 	Repo              *PatchRepoRequest            `json:"repo,omitempty"`
 	SecurityContext   *PatchSecurityContextRequest `json:"securityContext,omitempty"`
 	// Resources replaces spec.resources verbatim; an empty map clears it.
 	Resources *map[string]any `json:"resources,omitempty"`
+	// WatchPaths replaces the push-build watch globs; an empty list clears.
+	WatchPaths *[]string `json:"watchPaths,omitempty"`
+	// Image replaces spec.image (runtime=image services).
+	Image *PatchImageRequest `json:"image,omitempty"`
+}
+
+// PatchImageRequest mirrors the server's projects.ServiceImageSpec.
+// PullSecret nil keeps the current credential; "" clears it.
+type PatchImageRequest struct {
+	Repository string  `json:"repository"`
+	Tag        string  `json:"tag"`
+	PullSecret *string `json:"pullSecret,omitempty"`
 }
 
 // PatchSecurityContextRequest mirrors the server's kube.KusoSecurityContext.

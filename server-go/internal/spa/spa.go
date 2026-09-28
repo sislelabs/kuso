@@ -26,6 +26,8 @@ import (
 	"net/http"
 	pathpkg "path"
 	"strings"
+
+	"kuso/server/internal/httperr"
 )
 
 // Handler returns an http.Handler that serves the SPA from dist.
@@ -41,16 +43,17 @@ func Handler(dist fs.FS, apiPrefixes ...string) (http.Handler, error) {
 	}
 	fileServer := http.FileServer(http.FS(dist))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		// API/webhook routes never fall through to the SPA shell.
+		// API/webhook routes never fall through to the SPA shell. Checked
+		// before the method so a typo'd POST /api/... is a 404, not a 405.
 		for _, p := range apiPrefixes {
 			if strings.HasPrefix(r.URL.Path, p) {
-				http.NotFound(w, r)
+				httperr.Write(w, http.StatusNotFound, "no API route "+r.Method+" "+r.URL.Path)
 				return
 			}
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			httperr.Write(w, http.StatusMethodNotAllowed, "method "+r.Method+" not allowed on "+r.URL.Path)
+			return
 		}
 
 		// Normalise leading + trailing slashes for embed.FS lookups.

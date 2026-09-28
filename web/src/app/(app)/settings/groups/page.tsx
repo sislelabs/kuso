@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
-import { Users, Plus, X, Save, ShieldCheck, Check, UserPlus } from "lucide-react";
+import { Users, Plus, X, Save, ShieldCheck, Check, UserPlus, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -185,7 +186,11 @@ export default function GroupsSettingsPage() {
         {/* Right: editor */}
         <main>
           {selected ? (
-            <GroupEditor groupId={selected} />
+            <GroupEditor
+              groupId={selected}
+              groupName={(groups.data ?? []).find((g) => g.id === selected)?.name ?? selected}
+              onDeleted={() => setSelected(null)}
+            />
           ) : (
             <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-8 text-center text-sm text-[var(--text-tertiary)]">
               Pick a group on the left, or click <span className="font-mono">+ new</span> to create one.
@@ -197,8 +202,28 @@ export default function GroupsSettingsPage() {
   );
 }
 
-function GroupEditor({ groupId }: { groupId: string }) {
+function GroupEditor({
+  groupId,
+  groupName,
+  onDeleted,
+}: {
+  groupId: string;
+  groupName: string;
+  onDeleted: () => void;
+}) {
   const qc = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const del = useMutation({
+    mutationFn: () => api(`/api/groups/${encodeURIComponent(groupId)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(`Group ${groupName} deleted`);
+      setConfirmDelete(false);
+      qc.invalidateQueries({ queryKey: ["admin", "groups"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      onDeleted();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "delete failed"),
+  });
   const tenancy = useQuery({
     queryKey: ["admin", "groups", groupId, "tenancy"],
     queryFn: () => api<GroupTenancy>(`/api/groups/${encodeURIComponent(groupId)}/tenancy`),
@@ -299,6 +324,15 @@ function GroupEditor({ groupId }: { groupId: string }) {
 
       {/* Save bar — sticky at bottom of editor, matches the service settings panel. */}
       <div className="flex items-center justify-end gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mr-auto text-[var(--error)]"
+          onClick={() => setConfirmDelete(true)}
+        >
+          <Trash2 className="h-3 w-3" />
+          Delete group
+        </Button>
         <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
           {dirty ? "unsaved changes" : "saved"}
         </span>
@@ -311,6 +345,23 @@ function GroupEditor({ groupId }: { groupId: string }) {
           {save.isPending ? "Saving…" : "Save"}
         </Button>
       </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete group ${groupName}?`}
+        body={
+          <p>
+            Removes the group and all its memberships. Members lose any access that came
+            only from this group, and their current sessions are signed out. User accounts
+            are not deleted.
+          </p>
+        }
+        typeToConfirm={groupName}
+        confirmLabel="Delete group"
+        destructive
+        pending={del.isPending}
+        onConfirm={() => del.mutate()}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
