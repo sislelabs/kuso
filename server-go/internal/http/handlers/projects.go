@@ -998,7 +998,7 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := spec.PlanFor(ctx, h.Kube, h.Namespace, f)
+	plan, err := spec.PlanFor(ctx, h.Kube, spec.ExecNamespace(ctx, h.Kube, h.Namespace, f.Project), f)
 	if err != nil {
 		h.Logger.Error("apply: plan", "err", err)
 		writeErr(w, http.StatusInternalServerError, "plan failed")

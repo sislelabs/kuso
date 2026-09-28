@@ -1,9 +1,13 @@
 package kusoCli
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -171,30 +175,76 @@ credential. Editor role required.`,
 			}
 			out = name
 		}
-		// Don't silently clobber an existing file — a backup dump is
-		// exactly the kind of thing you don't want to overwrite by
-		// accident. O_EXCL fails if it exists; --force opts out.
-		flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-		if !addonBackupDownloadForce {
-			flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+		var trailer http.Header
+		if resp.RawResponse != nil {
+			trailer = resp.RawResponse.Trailer
 		}
-		f, err := os.OpenFile(out, flags, 0o600)
+		n, err := writeVerifiedBackup(out, resp.Body(), trailer, addonBackupDownloadForce)
 		if err != nil {
-			if os.IsExist(err) {
-				return fmt.Errorf("%s already exists; re-run with --force to overwrite", out)
-			}
-			return fmt.Errorf("open %s: %w", out, err)
-		}
-		n, err := f.Write(resp.Body())
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			return fmt.Errorf("write %s: %w", out, err)
+			return err
 		}
 		fmt.Printf("wrote %d bytes to %s\n", n, out)
 		return nil
 	},
+}
+
+// backupStatusTrailer mirrors the server's completion trailer (see
+// streamGzipCommand in server-go backup_download.go).
+const backupStatusTrailer = "X-Kuso-Backup-Status"
+
+// verifyBackupDownload rejects a download that isn't a complete dump. The
+// server can only discover a failed pg_dump after it has sent 200, so the
+// status code proves nothing: trust the completion trailer when present
+// and always decompress the whole body, since a proxy may strip trailers
+// and the server leaves a failed stream's gzip unterminated. An empty
+// payload is a failure too — pg_dump never emits zero bytes, and that is
+// exactly what pre-fix servers shipped when the dump died.
+func verifyBackupDownload(body []byte, trailer http.Header) error {
+	if st := trailer.Get(backupStatusTrailer); st != "" && st != "ok" {
+		return fmt.Errorf("server reported the dump failed (%s: %s) — check the server log", backupStatusTrailer, st)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("download is not a gzip archive: %w", err)
+	}
+	n, err := io.Copy(io.Discard, zr)
+	if err != nil {
+		return fmt.Errorf("download is incomplete (the dump likely failed mid-stream): %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("download is empty — the dump failed on the server")
+	}
+	return nil
+}
+
+// writeVerifiedBackup verifies body and only then writes it to out, so a
+// failed dump never leaves a success-looking file behind. Without force,
+// an existing file is never overwritten — a backup dump is exactly the
+// kind of thing you don't want to clobber by accident.
+func writeVerifiedBackup(out string, body []byte, trailer http.Header, force bool) (int, error) {
+	if err := verifyBackupDownload(body, trailer); err != nil {
+		return 0, err
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if !force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
+	f, err := os.OpenFile(out, flags, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return 0, fmt.Errorf("%s already exists; re-run with --force to overwrite", out)
+		}
+		return 0, fmt.Errorf("open %s: %w", out, err)
+	}
+	n, err := f.Write(body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(out)
+		return 0, fmt.Errorf("write %s: %w", out, err)
+	}
+	return n, nil
 }
 
 // filenameFromResp pulls the attachment filename out of a

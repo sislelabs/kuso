@@ -159,6 +159,19 @@ func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	return c, ok
 }
 
+// ActorName is the human-readable identity for history/audit rows: the
+// username, falling back to the user id, "" when unauthenticated.
+func ActorName(ctx context.Context) string {
+	c, ok := ClaimsFromContext(ctx)
+	if !ok || c == nil {
+		return ""
+	}
+	if c.Username != "" {
+		return c.Username
+	}
+	return c.UserID
+}
+
 // ContextWithClaims stores already-verified claims under the same key
 // Middleware uses, so downstream code reading ClaimsFromContext works.
 // For handlers on the PUBLIC router that verify the token themselves

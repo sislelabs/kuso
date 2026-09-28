@@ -539,10 +539,7 @@ func main() {
 		// effort — a DB miss never fails the user-facing save.
 		if database != nil {
 			projSvc.RecordRevision = func(ctx context.Context, project, kind, name, summary string, snapshot []byte) {
-				actor := ""
-				if claims, ok := auth.ClaimsFromContext(ctx); ok {
-					actor = claims.UserID
-				}
+				actor := auth.ActorName(ctx)
 				_ = database.InsertRevision(ctx, db.Revision{
 					Project:  project,
 					Kind:     kind,
@@ -610,10 +607,7 @@ func main() {
 		// as service revisions) so the History tab can show + revert them.
 		if database != nil {
 			addonSvc.RecordRevision = func(ctx context.Context, project, kind, name, summary string, snapshot []byte) {
-				actor := ""
-				if claims, ok := auth.ClaimsFromContext(ctx); ok {
-					actor = claims.UserID
-				}
+				actor := auth.ActorName(ctx)
 				_ = database.InsertRevision(ctx, db.Revision{
 					Project: project, Kind: kind, Name: name,
 					Actor: actor, Summary: summary, Snapshot: snapshot,

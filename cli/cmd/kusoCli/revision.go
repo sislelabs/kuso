@@ -45,7 +45,7 @@ var revisionListCmd = &cobra.Command{
 			Project   string `json:"project"`
 			Kind      string `json:"kind"`
 			Name      string `json:"name"`
-			Reason    string `json:"reason"`
+			Summary   string `json:"summary"`
 			Actor     string `json:"actor"`
 			CreatedAt string `json:"createdAt"`
 		}
@@ -64,7 +64,7 @@ var revisionListCmd = &cobra.Command{
 			t := tablewriter.NewWriter(os.Stdout)
 			t.SetHeader([]string{"ID", "ACTOR", "REASON", "AGE"})
 			for _, r := range items {
-				reason := r.Reason
+				reason := r.Summary
 				if len(reason) > 50 {
 					reason = reason[:47] + "..."
 				}

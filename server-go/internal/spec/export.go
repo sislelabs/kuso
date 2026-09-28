@@ -20,6 +20,10 @@ import (
 // into the spec.File shape. It sets APIVersion to "kuso/v1" but never
 // sets Prune — pruning is a destructive opt-in the human makes, not
 // something an export should bake in.
+//
+// namespace is the HOME namespace, where KusoProject CRs live. A project
+// with its own execution namespace (spec.namespace) keeps its service,
+// addon and cron CRs there, so everything below lists from that one.
 func Export(ctx context.Context, k *kube.Client, namespace, project string) (*File, error) {
 	f := &File{APIVersion: "kuso/v1", Project: project}
 
@@ -31,6 +35,7 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 	for _, p := range projects {
 		if p.Name == project {
 			f.BaseDomain = p.Spec.BaseDomain
+			namespace = projectExecNamespace(&p, namespace)
 			break
 		}
 	}
@@ -89,6 +94,25 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 	sort.Slice(f.Crons, func(i, j int) bool { return f.Crons[i].Name < f.Crons[j].Name })
 
 	return f, nil
+}
+
+// ExecNamespace returns the namespace holding project's service, addon
+// and cron CRs: the KusoProject's spec.namespace when set, else homeNS
+// (where the KusoProject itself lives). PlanFor and Export take this,
+// not the home namespace, or a custom-namespace project looks empty.
+func ExecNamespace(ctx context.Context, k *kube.Client, homeNS, project string) string {
+	p, err := k.GetKusoProject(ctx, homeNS, project)
+	if err != nil {
+		return homeNS
+	}
+	return projectExecNamespace(p, homeNS)
+}
+
+func projectExecNamespace(p *kube.KusoProject, homeNS string) string {
+	if p != nil && p.Spec.Namespace != "" {
+		return p.Spec.Namespace
+	}
+	return homeNS
 }
 
 // exportService maps a live KusoService CR back into a ServiceSpec.

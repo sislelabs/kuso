@@ -231,3 +231,59 @@ func TestExport_LeavesOutServiceCrons(t *testing.T) {
 		t.Fatalf("want only the project cron exported, got %+v", f.Crons)
 	}
 }
+
+// A project with its own execution namespace keeps its KusoProject CR in
+// the home namespace but every service/addon/cron CR in spec.namespace.
+// Export listed all of them from the home namespace and returned just
+// apiVersion/project/baseDomain (live: `kuso project export e2e`).
+func TestExport_CustomNamespaceProject(t *testing.T) {
+	inNS := func(s planSeed) planSeed { s.obj.SetNamespace("kuso-e2e"); return s }
+	proj := typedPlanSeed(kube.GVRProjects, "KusoProject", "e2e", &kube.KusoProject{
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e", Namespace: "kuso"},
+		Spec:       kube.KusoProjectSpec{BaseDomain: "e2e.example.com", Namespace: "kuso-e2e"},
+	})
+	k, home := fakeKube(t,
+		proj,
+		inNS(seedFullService("e2e", "api")),
+		inNS(seedFullAddon("e2e", "db")),
+		inNS(seedFullCron("e2e", "nightly")),
+	)
+	f, err := Export(context.Background(), k, home, "e2e")
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if f.BaseDomain != "e2e.example.com" {
+		t.Errorf("baseDomain = %q", f.BaseDomain)
+	}
+	if len(f.Services) != 1 || f.Services[0].Name != "api" {
+		t.Errorf("services = %+v, want [api]", f.Services)
+	}
+	if len(f.Addons) != 1 || f.Addons[0].Name != "db" {
+		t.Errorf("addons = %+v, want [db]", f.Addons)
+	}
+	if len(f.Crons) != 1 || f.Crons[0].Name != "nightly" {
+		t.Errorf("crons = %+v, want [nightly]", f.Crons)
+	}
+}
+
+func TestPlanFor_CustomNamespaceProjectIsNoOp(t *testing.T) {
+	inNS := func(s planSeed) planSeed { s.obj.SetNamespace("kuso-e2e"); return s }
+	proj := typedPlanSeed(kube.GVRProjects, "KusoProject", "e2e", &kube.KusoProject{
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e", Namespace: "kuso"},
+		Spec:       kube.KusoProjectSpec{Namespace: "kuso-e2e"},
+	})
+	k, home := fakeKube(t, proj, inNS(seedFullService("e2e", "api")), inNS(seedFullAddon("e2e", "db")))
+	ctx := context.Background()
+	f, err := Export(ctx, k, home, "e2e")
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	plan, err := PlanFor(ctx, k, ExecNamespace(ctx, k, home, "e2e"), f)
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	if len(plan.ServicesToCreate)+len(plan.AddonsToCreate) != 0 {
+		t.Errorf("re-applying an export would create existing resources: services %v addons %v",
+			plan.ServicesToCreate, plan.AddonsToCreate)
+	}
+}

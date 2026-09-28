@@ -2667,12 +2667,12 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// visible in the logs instead of surfacing only as later drift.
 		slog.ErrorContext(ctx, "propagate: service spec saved but env propagation incomplete",
 			"project", project, "service", service, "err", err)
-		return updated, nil
 	}
 	// Record a revision row so the History tab can render it. Best-
 	// effort: a DB miss here doesn't fail the user-facing save (the
 	// kube write already succeeded). We store the original PATCH body
-	// shape so revert can replay it via the same code path.
+	// shape so revert can replay it via the same code path. Recorded
+	// even when propagation above failed — the spec change is real.
 	if s.RecordRevision != nil {
 		// Wrap the request as {"patch": <req>} so RevertService can
 		// peel it back the same way regardless of which mutator

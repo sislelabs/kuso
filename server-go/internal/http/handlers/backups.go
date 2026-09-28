@@ -750,7 +750,16 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 // keeps the override from becoming an injection surface.
 var validDBName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]{0,62}$`)
 
-func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database string) (*sql.DB, error) {
+// pgTarget is everything pgConn needs to dial an addon: the resolved CR,
+// its execution namespace, and connection parameters from the -conn
+// Secret with the host already qualified for kuso-server's namespace.
+type pgTarget struct {
+	cr                           *kube.KusoAddon
+	ns                           string
+	host, port, user, pass, name string
+}
+
+func (h *BackupsHandler) pgTarget(ctx context.Context, project, addon, database string) (pgTarget, error) {
 	// addon may arrive as either the short name ("pg") or the
 	// fully-qualified CR name ("e2e-test-pg"); both are valid URL
 	// args. ownedAddon collapses to the canonical form (so we don't
@@ -759,46 +768,54 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	// Secret actually lives in.
 	cr, ns, err := h.ownedAddon(ctx, project, addon)
 	if err != nil {
-		return nil, err
+		return pgTarget{}, err
 	}
 	releaseName := cr.Name
 	connSecret := addons.ConnSecretName(releaseName)
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("addon %s/%s has no -conn secret", project, addon)
+		return pgTarget{}, fmt.Errorf("addon %s/%s has no -conn secret", project, addon)
 	}
 	if err != nil {
-		return nil, err
+		return pgTarget{}, err
 	}
-	host := releaseName + "-postgresql"
-	port := "5432"
-	user := "kuso"
-	dbName := "kuso"
+	t := pgTarget{cr: cr, ns: ns, host: releaseName + "-postgresql", port: "5432", user: "kuso", name: "kuso"}
 	if v, ok := sec.Data["POSTGRES_HOST"]; ok && len(v) > 0 {
-		host = string(v)
+		t.host = string(v)
 	}
+	t.host = addons.QualifyInClusterHost(t.host, ns)
 	if v, ok := sec.Data["POSTGRES_PORT"]; ok && len(v) > 0 {
-		port = string(v)
+		t.port = string(v)
 	}
 	if v, ok := sec.Data["POSTGRES_USER"]; ok && len(v) > 0 {
-		user = string(v)
+		t.user = string(v)
 	}
 	if v, ok := sec.Data["POSTGRES_DB"]; ok && len(v) > 0 {
-		dbName = string(v)
+		t.name = string(v)
 	}
-	pass := string(sec.Data["POSTGRES_PASSWORD"])
-	if pass == "" {
-		return nil, errors.New("addon -conn secret missing POSTGRES_PASSWORD")
+	t.pass = string(sec.Data["POSTGRES_PASSWORD"])
+	if t.pass == "" {
+		return pgTarget{}, errors.New("addon -conn secret missing POSTGRES_PASSWORD")
 	}
 	// Optional logical-database override (multi-DB servers: one addon
 	// hosting a database per tenant). The conn secret's credentials are
 	// the server admin, so they can browse every logical DB.
 	if database != "" {
 		if !validDBName.MatchString(database) {
-			return nil, fmt.Errorf("invalid database name %q", database)
+			return pgTarget{}, fmt.Errorf("invalid database name %q", database)
 		}
-		dbName = database
+		t.name = database
 	}
+	return t, nil
+}
+
+func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database string) (*sql.DB, error) {
+	t, err := h.pgTarget(ctx, project, addon, database)
+	if err != nil {
+		return nil, err
+	}
+	cr, ns, releaseName := t.cr, t.ns, t.cr.Name
+	host, port, user, pass, dbName := t.host, t.port, t.user, t.pass, t.name
 	// SQL-browser connections use a dedicated NOSUPERUSER login role
 	// (kuso_browser) rather than the addon's admin user (kuso, which the
 	// stock postgres image makes a superuser). A superuser can run

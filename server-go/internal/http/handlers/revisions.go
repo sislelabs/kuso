@@ -54,7 +54,41 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 	for i := range out {
 		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
 	}
+	resolveRevisionActors(ctx, out, h.usernameForID)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// usernameForID maps a stored actor that is a user id to that user's
+// username. Revisions recorded before actors were stored by name hold
+// the opaque id.
+func (h *ProjectsHandler) usernameForID(ctx context.Context, id string) (string, bool) {
+	u, err := h.DB.FindUserByID(ctx, id)
+	if err != nil || u == nil || u.Username == "" {
+		return "", false
+	}
+	return u.Username, true
+}
+
+// resolveRevisionActors rewrites each actor that lookup recognises as a
+// user id to the username, looking each distinct actor up once. Actors
+// it doesn't recognise (already a username, deleted user) are kept.
+func resolveRevisionActors(ctx context.Context, revs []db.Revision, lookup func(context.Context, string) (string, bool)) {
+	seen := map[string]string{}
+	for i := range revs {
+		a := revs[i].Actor
+		if a == "" {
+			continue
+		}
+		name, done := seen[a]
+		if !done {
+			name = a
+			if u, ok := lookup(ctx, a); ok {
+				name = u
+			}
+			seen[a] = name
+		}
+		revs[i].Actor = name
+	}
 }
 
 // GetRevision returns one revision by id (full snapshot included).
@@ -83,6 +117,9 @@ func (h *ProjectsHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redactRevisionSnapshotIfNeeded(ctx, h.DB, rev.Project, rev)
+	if name, ok := h.usernameForID(ctx, rev.Actor); ok {
+		rev.Actor = name
+	}
 	writeJSON(w, http.StatusOK, rev)
 }
 

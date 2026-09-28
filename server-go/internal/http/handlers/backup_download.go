@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"archive/tar"
+	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -43,9 +46,9 @@ import (
 // differs and is out of scope.
 //
 // Both paths STREAM: nothing is buffered whole in RAM, so a 50 GB dataset
-// won't OOM the server. If the source dies mid-stream, the gzip is
-// truncated and the client errors on decompress — preferable to silently
-// shipping a half-dump (same tradeoff the control-plane handler documents).
+// won't OOM the server. If the source dies mid-stream, the gzip is left
+// unterminated and the X-Kuso-Backup-Status trailer says "failed"; the
+// CLI checks both and refuses to keep the file.
 //
 // Admin-gated (secrets:read): it exfiltrates the ENTIRE dataset — every
 // row of every table, including secret-bearing app tables (password
@@ -113,8 +116,8 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 // downloadPostgres runs pg_dump against the addon's DB and streams the
 // gzipped SQL. Version skew: the bundled client is postgresql16-client,
 // so pg_dump handles PG <=16. A future PG-17+ addon would make pg_dump
-// refuse with "server version too new" — the client sees a failed
-// download (truncated gzip), not a corrupt one. Bump the Dockerfile's
+// refuse with "server version too new" — the client gets a 502 with
+// pg_dump's error, not a corrupt file. Bump the Dockerfile's
 // client version when we ship a newer Postgres addon.
 func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
 	dsn, err := h.addonDSN(ctx, ns, releaseName)
@@ -123,48 +126,115 @@ func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWr
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s-%s-%s.sql.gz"`, project, addon, stamp))
-
 	cmd := exec.CommandContext(ctx, "pg_dump",
 		"--format=plain", "--no-owner", "--no-acl", "--clean", "--if-exists",
 		dsn,
 	)
+	h.streamGzipCommand(ctx, w, cmd, fmt.Sprintf("%s-%s-%s.sql.gz", project, addon, stamp), project, addon)
+}
+
+// backupStatusTrailer is the HTTP trailer a download ends with: "ok"
+// only once the dump tool exited 0 and the gzip was finalised. Anything
+// else — or no trailer and a gzip that doesn't decompress — is a failed
+// download. The CLI checks both, since a proxy may strip trailers.
+const (
+	backupStatusTrailer = "X-Kuso-Backup-Status"
+	backupStatusOK      = "ok"
+	backupStatusFailed  = "failed"
+)
+
+// streamGzipCommand runs cmd and streams its stdout to w as gzip, making
+// a failed dump unmistakable to the client:
+//
+//   - Nothing is sent until the first byte of output arrives. A tool that
+//     dies before producing output (the common case: can't connect, bad
+//     auth, version skew) gets a real 502 carrying its stderr.
+//   - A failure after streaming began leaves the gzip unterminated (no
+//     footer), so it can't decompress, and sets the status trailer to
+//     "failed". Closing the gzip cleanly here is what used to ship a
+//     valid-but-empty .sql.gz that looked like a successful backup.
+func (h *BackupsHandler) streamGzipCommand(ctx context.Context, w http.ResponseWriter, cmd *exec.Cmd, filename, project, addon string) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "pg_dump pipe: "+err.Error())
+		writeErr(w, http.StatusInternalServerError, "dump pipe: "+err.Error())
 		return
 	}
-	stderr, _ := cmd.StderrPipe()
+	var stderr boundedBuffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "pg_dump start: "+err.Error())
+		writeErr(w, http.StatusInternalServerError, "dump start: "+err.Error())
 		return
 	}
+	out := bufio.NewReaderSize(stdout, 64<<10)
+	if _, perr := out.Peek(1); perr != nil {
+		werr := cmd.Wait()
+		msg := strings.TrimSpace(stderr.String())
+		if werr == nil && msg == "" {
+			msg = "dump produced no output"
+		} else if msg == "" {
+			msg = werr.Error()
+		}
+		h.Logger.Error("addon backup: dump failed before output",
+			"project", project, "addon", addon, "err", werr, "stderr", msg)
+		writeErr(w, http.StatusBadGateway, "backup failed: "+msg)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Trailer", backupStatusTrailer)
 	gz := gzip.NewWriter(w)
-	if _, err := io.Copy(gz, stdout); err != nil {
+	if _, err := io.Copy(gz, out); err != nil {
 		h.Logger.Error("addon backup: copy", "project", project, "addon", addon, "err", err)
 		_ = cmd.Process.Kill()
-		_ = gz.Close()
+		_ = cmd.Wait()
+		w.Header().Set(backupStatusTrailer, backupStatusFailed)
 		return
 	}
 	if err := cmd.Wait(); err != nil {
-		// Body is already mid-stream, so we can't change the response
-		// code now. Log stderr for diagnosis; the client will see a
-		// truncated gzip and error on decompress.
-		var buf strings.Builder
-		if stderr != nil {
-			_, _ = io.Copy(&buf, stderr)
-		}
-		h.Logger.Error("addon backup: pg_dump wait",
-			"project", project, "addon", addon, "err", err, "stderr", buf.String())
+		h.Logger.Error("addon backup: dump exited non-zero mid-stream",
+			"project", project, "addon", addon, "err", err, "stderr", stderr.String())
+		w.Header().Set(backupStatusTrailer, backupStatusFailed)
+		return
 	}
-	_ = gz.Close()
+	if err := gz.Close(); err != nil {
+		h.Logger.Error("addon backup: gzip close", "project", project, "addon", addon, "err", err)
+		w.Header().Set(backupStatusTrailer, backupStatusFailed)
+		return
+	}
+	w.Header().Set(backupStatusTrailer, backupStatusOK)
+}
+
+// boundedBuffer keeps the first 8 KiB of a command's stderr — enough for
+// pg_dump's error line without letting a chatty tool grow server memory.
+type boundedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if room := 8<<10 - b.buf.Len(); room > 0 {
+		if len(p) > room {
+			b.buf.Write(p[:room])
+		} else {
+			b.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // downloadS3 lists the addon's bucket and streams every object into a
 // single gzipped tar. The addon's storage endpoint is in-cluster
-// (http://<release>-storage:9000) and reachable from kuso-server.
+// (http://<release>-storage:9000); addonS3Client qualifies it with the
+// addon's namespace so kuso-server can reach it.
 func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
 	cli, bucket, err := h.addonS3Client(ctx, ns, releaseName)
 	if err != nil {
@@ -175,6 +245,7 @@ func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, 
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s-%s-%s.tar.gz"`, project, addon, stamp))
+	w.Header().Set("Trailer", backupStatusTrailer)
 
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
@@ -185,11 +256,11 @@ func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, 
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			// Mid-stream: can't change the status code. Close what we've
-			// written (truncated tar) and let the client error.
+			// Mid-stream: can't change the status code. Leave the gzip
+			// unterminated so it can't pass for a complete archive (see
+			// streamGzipCommand) and flag the trailer.
 			h.Logger.Error("addon backup: s3 list", "project", project, "addon", addon, "err", err)
-			_ = tw.Close()
-			_ = gz.Close()
+			w.Header().Set(backupStatusTrailer, backupStatusFailed)
 			return
 		}
 		for _, obj := range page.Contents {
@@ -197,16 +268,22 @@ func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, 
 			if err := h.streamS3Object(ctx, cli, tw, bucket, key, aws.ToInt64(obj.Size), obj.LastModified); err != nil {
 				h.Logger.Error("addon backup: s3 object",
 					"project", project, "addon", addon, "key", key, "err", err)
-				_ = tw.Close()
-				_ = gz.Close()
+				w.Header().Set(backupStatusTrailer, backupStatusFailed)
 				return
 			}
 		}
 	}
 	if err := tw.Close(); err != nil {
 		h.Logger.Error("addon backup: tar close", "project", project, "addon", addon, "err", err)
+		w.Header().Set(backupStatusTrailer, backupStatusFailed)
+		return
 	}
-	_ = gz.Close()
+	if err := gz.Close(); err != nil {
+		h.Logger.Error("addon backup: gzip close", "project", project, "addon", addon, "err", err)
+		w.Header().Set(backupStatusTrailer, backupStatusFailed)
+		return
+	}
+	w.Header().Set(backupStatusTrailer, backupStatusOK)
 }
 
 // streamS3Object copies one object body into the tar writer. Body is
@@ -257,6 +334,8 @@ func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (
 	if v := sec.Data["POSTGRES_HOST"]; len(v) > 0 {
 		host = string(v)
 	}
+	// Short in-cluster name → resolvable from kuso-server's namespace.
+	host = addons.QualifyInClusterHost(host, ns)
 	if v := sec.Data["POSTGRES_PORT"]; len(v) > 0 {
 		port = string(v)
 	}
@@ -290,7 +369,7 @@ func (h *BackupsHandler) addonS3Client(ctx context.Context, ns, releaseName stri
 		return nil, "", err
 	}
 	bucket := string(sec.Data["S3_BUCKET"])
-	endpoint := string(sec.Data["S3_ENDPOINT"])
+	endpoint := addons.QualifyInClusterHost(string(sec.Data["S3_ENDPOINT"]), ns)
 	region := string(sec.Data["S3_REGION"])
 	akid := string(sec.Data["S3_ACCESS_KEY_ID"])
 	skey := string(sec.Data["S3_SECRET_ACCESS_KEY"])

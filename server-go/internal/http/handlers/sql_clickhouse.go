@@ -60,6 +60,7 @@ func (h *BackupsHandler) clickhouseConnInfo(ctx context.Context, project, addon 
 	if host == "" {
 		return chConnInfo{}, false, nil // not a clickhouse addon
 	}
+	host = addons.QualifyInClusterHost(host, ns)
 	port := string(sec.Data["CLICKHOUSE_HTTP_PORT"])
 	if port == "" {
 		port = "8123"
