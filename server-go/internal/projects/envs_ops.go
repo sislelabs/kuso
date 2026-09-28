@@ -442,17 +442,10 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// GCs once the StatefulSet unmounts.
 	if s.Kube.Clientset != nil {
 		for _, addonFQN := range deletedCloneAddons {
-			pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-				LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
-			})
-			if lerr != nil {
-				cleanupFail("PersistentVolumeClaimList", "app.kubernetes.io/instance="+addonFQN, lerr)
-				continue
-			}
-			for i := range pvcs.Items {
-				if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-					cleanupFail("PersistentVolumeClaim", pvcs.Items[i].Name, derr)
-				}
+			for _, rerr := range s.reclaimCloneAddonData(ctx, ns, addonFQN) {
+				slog.Warn("env delete: clone addon reclaim failed; resource may be orphaned",
+					"project", project, "env", env, "ns", ns, "addon", addonFQN, "err", rerr)
+				cleanupErrs = append(cleanupErrs, rerr)
 			}
 		}
 
@@ -542,9 +535,45 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// re-attempts this cleanup), so the error is "deleted with orphans",
 	// not "delete failed".
 	if len(cleanupErrs) > 0 {
-		return fmt.Errorf("env %s deleted, but cleanup left orphans: %w", env, errors.Join(cleanupErrs...))
+		return fmt.Errorf("%w: env %s deleted, but cleanup left orphans: %w", errEnvCleanupOrphans, env, errors.Join(cleanupErrs...))
 	}
 	return nil
+}
+
+// errEnvCleanupOrphans marks a delete whose env CR is gone but whose
+// cleanup left something behind, so a group delete can carry on with the
+// remaining envs and report the orphans at the end.
+var errEnvCleanupOrphans = errors.New("env cleanup left orphans")
+
+// reclaimCloneAddonData removes what an env-scoped clone addon leaves
+// after its CR is deleted: the data PVCs and the <addon>-conn Secret.
+// The chart marks both helm.sh/resource-policy=keep so a PROJECT addon's
+// data and password survive a delete; a clone is meant to go with its
+// env. Leaving the PVC lets a same-named env recreate mount the old data;
+// leaving the Secret keeps live credentials for a database that no
+// longer exists. Only ever call this for env-scoped clones.
+func (s *Service) reclaimCloneAddonData(ctx context.Context, ns, addonFQN string) []error {
+	if s.Kube.Clientset == nil {
+		return nil
+	}
+	var errs []error
+	pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+	})
+	if lerr != nil {
+		errs = append(errs, fmt.Errorf("list PVCs of %s/%s: %w", ns, addonFQN, lerr))
+	} else {
+		for i := range pvcs.Items {
+			if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, fmt.Errorf("delete PVC %s/%s: %w", ns, pvcs.Items[i].Name, derr))
+			}
+		}
+	}
+	conn := addonFQN + "-conn"
+	if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, conn, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+		errs = append(errs, fmt.Errorf("delete Secret %s/%s: %w", ns, conn, derr))
+	}
+	return errs
 }
 
 // inferServiceFQNFromEnv reconstructs the service FQN when the env CR

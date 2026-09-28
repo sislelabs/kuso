@@ -820,10 +820,19 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if err != nil {
 		return fmt.Errorf("list envs for group %s: %w", name, err)
 	}
+	// Each env goes through the full single-env delete, not a bare CR
+	// delete: that path owns the reclaim of TLS Secrets, service volume
+	// PVCs, per-env Secrets and — once the last env of the scope is gone —
+	// the clone addons with their data PVCs and conn Secrets. Deleting CRs
+	// alone orphaned all of those (scubatony/verify, 2026-09-28).
+	var cleanupErrs []error
 	for i := range envList.Items {
 		n := envList.Items[i].GetName()
-		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete env %s: %w", n, err)
+		if err := s.deleteEnvironment(ctx, project, n, false); err != nil {
+			if !errors.Is(err, errEnvCleanupOrphans) {
+				return fmt.Errorf("delete env %s: %w", n, err)
+			}
+			cleanupErrs = append(cleanupErrs, err)
 		}
 	}
 
@@ -846,11 +855,12 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if err != nil {
 		return fmt.Errorf("list addons for group %s: %w", name, err)
 	}
+	// Backstop for addons the per-env deletes kept (a scope sibling was
+	// still listed, e.g. an env CR lingering without a deletion stamp).
 	// Side-effect cleanup failures (instance DB/role drops) must not stop
 	// the CR cascade — the group is being torn down either way — but they
 	// leave live credentials + DBs orphaned on the shared server, so they
 	// are collected and surfaced instead of `_ =`-swallowed.
-	var cleanupErrs []error
 	for i := range addonList.Items {
 		n := addonList.Items[i].GetName()
 		// Instance-shared addons (spec.useInstanceAddon) back a per-project
@@ -873,6 +883,7 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 		if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete addon %s: %w", n, err)
 		}
+		cleanupErrs = append(cleanupErrs, s.reclaimCloneAddonData(ctx, ns, n)...)
 	}
 
 	if len(cleanupErrs) > 0 {
