@@ -55,6 +55,11 @@ autoscaling:
 sleep:
   enabled: false
 
+# autoSleep: set by kuso-server's scaledown watcher (never by service
+# propagation) on non-production envs that sleep by default. Routes the
+# Ingress through kuso-activator exactly like sleep.enabled does.
+autoSleep: false
+
 # host: primary ingress hostname. Auto-emitted by the server as
 # <service>.<project>.<baseDomain> for production or
 # <service>-pr-<n>.<project>.<baseDomain> for previews.

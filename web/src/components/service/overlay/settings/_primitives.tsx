@@ -50,6 +50,12 @@ export interface FormState {
   // deployment warm — so a Stripe/GitHub webhook on a sleeping service
   // doesn't cold-start-503 the callback. Empty = no exclusions.
   sleepExcludePaths: string;
+  // Sleep: sleepEnabled is spec.sleep.enabled (production env only);
+  // sleepAfter is afterMinutes as a string; sleepNonProduction mirrors
+  // spec.sleep.nonProduction ("" = default on). Read-only in the form.
+  sleepEnabled: boolean;
+  sleepAfter: string;
+  sleepNonProduction: string;
   // Resources (pod CPU/memory requests+limits). Empty string = unset
   // (chart default). e.g. cpuRequest "100m", memRequest "128Mi".
   cpuRequest: string;
@@ -142,6 +148,9 @@ export function fromSvc(svc?: KusoService): FormState {
       (svc?.spec as { sleep?: { wakeOn?: { excludePaths?: string[] } } } | undefined)?.sleep
         ?.wakeOn?.excludePaths ?? []
     ).join("\n"),
+    sleepEnabled: !!svc?.spec.sleep?.enabled,
+    sleepAfter: String(svc?.spec.sleep?.afterMinutes || 30),
+    sleepNonProduction: svc?.spec.sleep?.nonProduction ?? "",
     cpuRequest: svc?.spec.resources?.requests?.cpu ?? "",
     cpuLimit: svc?.spec.resources?.limits?.cpu ?? "",
     memRequest: svc?.spec.resources?.requests?.memory ?? "",

@@ -139,6 +139,12 @@ spec:
                   type: object
                   properties:
                     enabled: { type: boolean, default: false }
+                autoSleep:
+                  type: boolean
+                  description: >-
+                    Server-managed by the scaledown watcher. True on a
+                    non-production env that sleeps by default; routes the
+                    Ingress through kuso-activator like sleep.enabled.
                 host:
                   type: string
                 additionalHosts:

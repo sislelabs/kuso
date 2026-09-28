@@ -1,5 +1,5 @@
 {{- $activatorNs := default "kuso" .Values.activatorNamespace -}}
-{{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.stopped -}}
+{{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.autoSleep .Values.stopped -}}
 {{- if and $useActivator
       (ne .Release.Namespace $activatorNs)
       (not (eq (default "" .Values.runtime) "worker"))

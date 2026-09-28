@@ -293,6 +293,14 @@ spec:
                     afterMinutes:
                       type: integer
                       default: 30
+                    nonProduction:
+                      type: string
+                      enum: ["on", "off"]
+                      description: |
+                        `enabled` governs the production env only. Every
+                        non-production env (named envs, env-group clones,
+                        PR previews) sleeps after afterMinutes idle by
+                        default; "off" keeps them always on.
                     wakeOn:
                       type: object
                       description: |

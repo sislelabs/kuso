@@ -32,9 +32,7 @@ import (
 	"sync"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/scaledown"
@@ -410,67 +408,9 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 }
 
 // doWake restores the env to its pre-sleep replica count (idempotent /
-// level-triggered). It patches the Deployment directly for an immediate
-// effect, then best-effort restores the env CR's spec.replicaCount so the
-// helm-operator's next reconcile doesn't revert it back to 0.
-//
-// The target count comes from the pre-sleep-replicas annotation that
-// scaledown stamped before zeroing (HIGH-5b) — so a service that ran at
-// 3 replicas wakes back at 3, not the hardcoded 1 it used to. Falls back
-// to 1 when no annotation is present (env slept by an older build, or
-// never had the annotation).
+// level-triggered). See scaledown.Wake for the ordering contract.
 func (a *Activator) doWake(ctx context.Context, ns, name string) error {
-	if a.kc == nil || a.kc.Clientset == nil {
-		return fmt.Errorf("activator: no kube client")
-	}
-	want := a.preSleepReplicas(ctx, ns, name)
-
-	// Env CR first, Deployment second. The last-activity stamp has to be
-	// visible before replicas go up: scaledown treats a running env with
-	// no recent stamp as idle, and a tick landing in the cold-start window
-	// would otherwise re-sleep it while we hold the request (-> 503).
-	// Persisting replicaCount stops the helm-operator reverting to 0, and
-	// the consumed pre-sleep annotation is cleared. Best-effort: the
-	// Deployment patch below is the authoritative wake.
-	if _, uerr := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(e *kube.KusoEnvironment) error {
-		if e.Spec.ReplicaCountValue() < want {
-			e.Spec.SetReplicaCount(want)
-		}
-		if e.Annotations == nil {
-			e.Annotations = map[string]string{}
-		}
-		e.Annotations[scaledown.LastActivityAnnotation] = a.now().UTC().Format(time.RFC3339)
-		delete(e.Annotations, scaledown.PreSleepReplicasAnnotation)
-		return nil
-	}); uerr != nil {
-		a.logger.Warn("activator: persist wake on env", "ns", ns, "env", name, "err", uerr)
-	}
-
-	// Direct Deployment scale → instant. The scale subresource avoids a
-	// full update conflict with the operator's reconcile.
-	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, want))
-	_, err := a.kc.Clientset.AppsV1().Deployments(ns).Patch(
-		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("scale deployment: %w", err)
-	}
-	return nil
-}
-
-// preSleepReplicas reads the count scaledown stashed before sleeping the
-// env. Returns 1 when the annotation is missing or unparseable — the safe
-// floor that always yields a serving pod.
-func (a *Activator) preSleepReplicas(ctx context.Context, ns, name string) int {
-	env, err := a.kc.GetKusoEnvironment(ctx, ns, name)
-	if err != nil || env == nil {
-		return 1
-	}
-	if v := env.Annotations[scaledown.PreSleepReplicasAnnotation]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			return n
-		}
-	}
-	return 1
+	return scaledown.Wake(ctx, a.kc, a.logger, ns, name, a.now())
 }
 
 // waitReady polls until the target Service has at least one READY
@@ -523,27 +463,17 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	}
 	a.hostMu.RUnlock()
 
-	// Production envs only — preview envs are short-lived and shouldn't
-	// be scaled to zero (they get GC'd on TTL instead). Empty namespace
-	// lists cluster-wide; the env CR carries its own namespace. Routes
-	// through the cached typed-list (informer-backed when warm → a slice
-	// filter, not a network round-trip).
+	// Every env kind: non-production envs (named, env-group clones,
+	// previews) sleep by default, and a stopped env of any kind routes
+	// here for the branded stopped page. An env that isn't activator-
+	// routed never sends its traffic here, so matching it is harmless.
+	// Empty namespace lists cluster-wide via the cached typed-list.
 	envs, lerr := a.kc.ListKusoEnvironments(ctx, "")
 	if lerr != nil {
 		return "", "", false, lerr
 	}
 	for i := range envs {
 		e := &envs[i]
-		// Production envs are the ones that scale-to-zero (previews get
-		// GC'd on TTL instead, so they don't route here for WAKE). But a
-		// STOPPED preview DOES route to the activator via the ingress
-		// (spec.stopped propagates to every env, incl. previews), so we
-		// must still match it here — otherwise a stopped preview host
-		// 404s instead of serving the branded stopped page. Match a
-		// non-production env only when it's stopped.
-		if e.Spec.Kind != "" && e.Spec.Kind != "production" && !e.Spec.Stopped {
-			continue
-		}
 		if hostMatches(host, e) {
 			a.hostMu.Lock()
 			a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()}

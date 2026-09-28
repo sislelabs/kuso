@@ -2,17 +2,20 @@
 // scale-to-zero (the activator in internal/activator is the "scale-up"
 // half; see docs/design/SCALE_TO_ZERO.md).
 //
-// The Watcher is a leader-elected loop: every tick it finds
-// sleep-enabled services, asks prometheus how many requests their
-// production env served over the idle window, and scales the env's
-// Deployment to 0 when it has been idle longer than
-// sleep.afterMinutes. The activator wakes it back up on the next
-// request.
+// The Watcher is a leader-elected loop: every tick it walks EVERY env of
+// every service, resolves the sleep policy (policy.go), and scales an
+// env's Deployment to 0 once it has been idle longer than the window.
+// Production sleeps only when the service opted in (sleep.enabled);
+// every non-production env (named envs, env-group clones, PR previews)
+// sleeps by default unless the service set sleep.nonProduction=off. The
+// activator wakes a slept env on its next request.
 //
-// Guard: a service with sleep.wakeOn.excludePaths is never scaled to 0
-// (kube can't route per-path inside one Deployment, so "any path must
-// stay warm" means the whole service stays warm — matching
-// effectiveScaleMin's behaviour on the write path).
+// HPA-managed envs sleep too: scaling the target Deployment to 0 puts
+// the HPA into Kubernetes' implicit maintenance mode (ScalingActive=
+// False, "scaling is disabled since the replica count of the target is
+// zero") and it stays paused until the activator raises replicas again.
+// The chart omits spec.replicas whenever the HPA is on, so the operator
+// never re-stamps it either.
 package scaledown
 
 import (
@@ -108,32 +111,52 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// evaluate runs one pass: scale idle sleep-enabled services to 0.
+// evaluate runs one pass over every env.
 func (w *Watcher) evaluate(ctx context.Context) {
-	// Never scale anything to zero unless the thing that wakes it back
-	// up is actually alive. kuso-activator is a SEPARATE Deployment
-	// (deploy/kuso-activator.yaml) that ship/updater don't roll — it has
-	// historically been down without anyone noticing. Scaling to 0 with
-	// no activator turns every idle sleep-enabled service into hard
-	// downtime: nothing is listening to wake them. Fail safe: skip the
-	// whole tick and leave services warm.
+	// Never scale anything to zero, or route anything new through the
+	// activator, unless the thing that wakes it back up is actually
+	// alive. kuso-activator is a SEPARATE Deployment
+	// (deploy/kuso-activator.yaml) that has historically been down
+	// without anyone noticing. Fail safe: skip the whole tick and leave
+	// services warm.
 	if !w.activatorReady(ctx) {
 		w.Logger.Warn("scaledown: kuso-activator has no ready replicas — skipping scale-to-zero this tick (services stay warm; nothing could wake them)")
 		return
 	}
-	// List sleep-enabled services across all kuso namespaces. Empty ns
-	// → cluster-wide; each service carries its own namespace via labels.
+	// Empty ns → cluster-wide; each object carries its own namespace.
 	svcs, err := w.Kube.ListKusoServices(ctx, "")
 	if err != nil {
 		w.Logger.Warn("scaledown: list services", "err", err)
 		return
 	}
+	envs, err := w.Kube.ListKusoEnvironments(ctx, "")
+	if err != nil {
+		w.Logger.Warn("scaledown: list environments", "err", err)
+		return
+	}
+	// Projects carry alwaysOn. A failed list must not read as "not
+	// alwaysOn" (that would sleep an opted-out project), so skip the tick.
+	projs, err := w.Kube.ListKusoProjects(ctx, "")
+	if err != nil {
+		w.Logger.Warn("scaledown: list projects", "err", err)
+		return
+	}
+	projByName := make(map[string]*kube.KusoProject, len(projs))
+	for i := range projs {
+		projByName[projs[i].Name] = &projs[i]
+	}
+	svcByKey := make(map[string]*kube.KusoService, len(svcs))
 	for i := range svcs {
-		svc := &svcs[i]
-		if !sleepEligible(svc) {
-			continue
+		svcByKey[svcs[i].Namespace+"/"+svcs[i].Name] = &svcs[i]
+	}
+	for i := range envs {
+		env := &envs[i]
+		svc, ok := svcByKey[env.Namespace+"/"+env.Spec.Service]
+		if !ok {
+			continue // orphan env: no service, no policy
 		}
-		w.evaluateService(ctx, svc)
+		pol := resolvePolicy(projByName[env.Spec.Project], svc, env)
+		w.evaluateEnv(ctx, svc, env, pol)
 	}
 }
 
@@ -168,94 +191,68 @@ func (w *Watcher) activatorReady(ctx context.Context) bool {
 	return dep.Status.ReadyReplicas >= 1
 }
 
-// sleepEligible reports whether a service is a candidate for scale-to-
-// zero: sleep enabled, and no must-stay-warm paths.
-func sleepEligible(svc *kube.KusoService) bool {
-	if svc.Spec.Sleep == nil || !svc.Spec.Sleep.Enabled {
-		return false
-	}
-	// A hard-stopped service is already pinned to 0 by the operator and
-	// must NOT be woken by traffic; scaledown has nothing to do and
-	// touching its Deployment would only race the operator's pin.
-	if svc.Spec.Stopped {
-		return false
-	}
-	// wakeOn.excludePaths → keep warm (same guard as effectiveScaleMin).
-	if w := svc.Spec.Sleep.WakeOn; w != nil && len(w.ExcludePaths) > 0 {
-		return false
-	}
-	return true
-}
-
-// hpaManaged reports whether the service's env Deployment is owned by an
-// HPA, in which case scale-to-zero must not touch its replica count.
-//
-// The signal is the same one the env chart uses to decide whether to
-// render an HPA (see projects.autoscalingFromScale): autoscaling is ON
-// exactly when the user asked for headroom, i.e. scale.Max is greater
-// than scale.Min. We read it off the service spec — the authoritative
-// source — rather than probing the live HPA, which keeps this a pure,
-// cache-free check on the object we already have in hand.
-func hpaManaged(svc *kube.KusoService) bool {
-	s := svc.Spec.Scale
-	if s == nil {
-		return false
-	}
-	return s.Max > s.MinValue()
-}
-
-func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
-	ns := svc.Namespace
-	if ns == "" {
-		ns = w.Namespace
-	}
-	// Production env name follows the <service>-production convention;
-	// the service CR's own name is the fq <project>-<service>.
-	envName := svc.Name + "-production"
-
-	// Serve the Deployment from the informer cache — this runs per
-	// sleep-enabled service every minute, and the cluster cache already
-	// watches Deployments, so a live Get per service is needless apiserver
-	// chatter that grows with service count. Fall back to a live Get only
-	// when the cache isn't synced.
-	dep, ok := w.Kube.Cache.GetDeployment(ns, envName)
+// deploymentReplicas returns the env Deployment's spec.replicas, served
+// from the informer cache (this runs per env every minute) with a live
+// Get fallback. ok=false when the Deployment doesn't exist or can't be read.
+func (w *Watcher) deploymentReplicas(ctx context.Context, ns, name string) (int32, bool) {
+	dep, ok := w.Kube.Cache.GetDeployment(ns, name)
 	if !ok {
-		d, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, envName, metav1.GetOptions{})
+		d, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
-				w.Logger.Warn("scaledown: get deployment", "env", envName, "err", err)
+				w.Logger.Warn("scaledown: get deployment", "env", name, "err", err)
 			}
-			return
+			return 0, false
 		}
 		dep = d
 	}
-	// Already at 0 (or scaling down) — nothing to do.
-	if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
-		return
+	if dep.Spec.Replicas == nil {
+		return 1, true
 	}
-	// If an HPA owns this Deployment we must not fight it — scale-to-zero
-	// requires autoscaling OFF (the chart only stamps spec.replicas when
-	// the HPA is absent; with an HPA present, patching replicas=0 just gets
-	// reverted on the HPA's next sync and thrashes the Deployment).
-	//
-	// The old check looked for the "autoscaling.alpha.kubernetes.io/
-	// conditions" annotation ON THE DEPLOYMENT — but that annotation only
-	// ever lands on the HPA object, never the target Deployment, so it was
-	// always absent and hpaManaged was always false. Result: an
-	// autoscaling+sleep service got scaled to 0 anyway. Detect ownership
-	// from the SERVICE SPEC instead, which is the exact same signal the
-	// chart uses to decide whether to render an HPA: autoscalingFromScale
-	// returns non-nil (Enabled) precisely when scale.Max > scale.Min. That
-	// mirrors projects.autoscalingFromScale.
-	if hpaManaged(svc) {
+	return *dep.Spec.Replicas, true
+}
+
+func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *kube.KusoEnvironment, pol Policy) {
+	ns := env.Namespace
+	if ns == "" {
+		ns = w.Namespace
+	}
+	envName := env.Name
+
+	// An env asleep under a policy that no longer allows sleep (service
+	// opted out, sleep disabled, project alwaysOn) would otherwise stay
+	// at 0 behind an Ingress that is about to point back at its own
+	// 0-endpoint Service. Wake it BEFORE the routing flips away from the
+	// activator. A stopped env stays down: the operator owns that pin.
+	if !pol.Allowed && !pol.Stopped && env.Annotations[PreSleepReplicasAnnotation] != "" {
+		if r, ok := w.deploymentReplicas(ctx, ns, envName); ok && r == 0 {
+			if err := Wake(ctx, w.Kube, w.Logger, ns, envName, w.now()); err != nil {
+				w.Logger.Warn("scaledown: wake env no longer allowed to sleep", "env", envName, "err", err)
+				return
+			}
+			w.Logger.Info("scaledown: woke env no longer allowed to sleep", "env", envName)
+		}
+	}
+
+	// Reconcile activator routing for the non-production default. On a
+	// flip, stop here: the operator needs to re-render the Ingress before
+	// this env can safely sleep, and turning routing ON also restarts the
+	// idle clock so the env gets a full window behind the activator.
+	if env.Spec.AutoSleep != pol.AutoRoute {
+		if err := w.setAutoSleep(ctx, ns, envName, pol.AutoRoute); err != nil {
+			w.Logger.Warn("scaledown: set autoSleep", "env", envName, "err", err)
+		}
 		return
 	}
 
-	idleMin := svc.Spec.Sleep.AfterMinutes
-	if idleMin <= 0 {
-		idleMin = 30
+	if !pol.Eligible() {
+		return
+	}
+	if r, ok := w.deploymentReplicas(ctx, ns, envName); !ok || r == 0 {
+		return // missing, or already asleep / pre-build hold
 	}
 
+	idleMin := pol.AfterMinutes
 	active, err := w.requestsInWindow(ctx, ns, envName, idleMin)
 	if err != nil {
 		// Prometheus unreachable / no data — fail safe by NOT scaling
@@ -267,34 +264,72 @@ func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 		return // had traffic in the window → still in use
 	}
 
-	// HIGH-5a: the Prometheus query above reads the app's OWN traefik
-	// service, but a sleep-enabled env's ingress backend is kuso-activator
-	// — so the app's counter never increments and `active` is always 0.
-	// The activator, which IS in-path for every request, stamps a
-	// last-activity annotation; honor it so a busy env is not wrongly
-	// slept. If the annotation is within the idle window, the env is live.
+	// HIGH-5a: an activator-routed env's traffic flows through
+	// kuso-activator, not the app's own traefik service, so the counter
+	// above reads 0. The activator stamps a last-activity annotation;
+	// honor it so a busy env is not wrongly slept.
 	if w.recentlyActive(ctx, ns, envName, idleMin) {
 		return
 	}
 
 	// Don't sleep a service while one of its crons/runs is mid-flight.
-	// Cron- and run-spawned Jobs carry kuso.sislelabs.com/service=<fqn>
-	// (svc.Name is the fq <project>-<service>). Scaling the app
-	// Deployment to 0 doesn't kill the Job pod itself, but a kind=service
-	// cron shares the app's conn secrets and may depend on the app being
-	// warm; more importantly, sleeping mid-run makes the "is this service
-	// in use" signal lie. If any labelled Job is still Active, skip.
+	// Cron- and run-spawned Jobs carry kuso.sislelabs.com/service=<fqn>.
 	if w.hasActiveJobs(ctx, ns, svc.Name) {
 		return
 	}
 
-	// Idle. Scale the Deployment to 0 and stamp the env CR so the
-	// operator's reconcile keeps it there until the activator wakes it.
+	// Last gate, checked against the live object rather than the env CR:
+	// the Ingress must already route through the activator. Otherwise
+	// (operator lag, old chart, CRD pruned autoSleep) the next request
+	// hits a 0-endpoint Service and 503s with nothing to wake it.
+	if !w.routedViaActivator(ctx, ns, envName) {
+		w.Logger.Info("scaledown: idle env not yet routed via kuso-activator; leaving it up", "env", envName)
+		return
+	}
+
 	if err := w.scaleToZero(ctx, ns, envName); err != nil {
 		w.Logger.Warn("scaledown: scale to zero", "env", envName, "err", err)
 		return
 	}
-	w.Logger.Info("scaledown: slept idle service", "env", envName, "idleMinutes", idleMin)
+	w.Logger.Info("scaledown: slept idle env", "env", envName, "production", pol.Production, "idleMinutes", idleMin)
+}
+
+// setAutoSleep writes env.spec.autoSleep. Turning it on also stamps
+// last-activity=now so the env gets a full idle window after the Ingress
+// moves onto the activator.
+func (w *Watcher) setAutoSleep(ctx context.Context, ns, envName string, on bool) error {
+	now := w.now()
+	_, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(e *kube.KusoEnvironment) error {
+		e.Spec.AutoSleep = on
+		if on {
+			if e.Annotations == nil {
+				e.Annotations = map[string]string{}
+			}
+			e.Annotations[LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
+		}
+		return nil
+	})
+	return err
+}
+
+// routedViaActivator reports whether the env's main Ingress (named after
+// the env) sends its traffic to kuso-activator. Any read failure → false.
+func (w *Watcher) routedViaActivator(ctx context.Context, ns, envName string) bool {
+	ing, err := w.Kube.Clientset.NetworkingV1().Ingresses(ns).Get(ctx, envName, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	for _, r := range ing.Spec.Rules {
+		if r.HTTP == nil {
+			continue
+		}
+		for _, p := range r.HTTP.Paths {
+			if p.Backend.Service != nil && activatorBackend(p.Backend.Service.Name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // requestsInWindow returns the number of requests the env's traefik

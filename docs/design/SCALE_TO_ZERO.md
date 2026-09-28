@@ -15,6 +15,58 @@
 > timeout that retries the cold-start dial races ("connection refused"
 > AND "i/o timeout" while kube-proxy programs the ClusterIP).
 
+## Current behaviour (2026-09 update)
+
+This section supersedes the rest of the doc where they disagree.
+
+**Which envs sleep.** The scaledown watcher (`internal/scaledown`) walks
+every env of every service each minute, not only production. Policy
+lives in `scaledown/policy.go`:
+
+| Env | Sleeps when idle |
+|---|---|
+| Production (`kind=production`, no env-group label) | only if `spec.sleep.enabled` (or `scale.min=0`) |
+| Named envs (`kind=custom`), env-group clones (service/env labelled `kuso.sislelabs.com/env=<group>`), PR previews | **yes, by default**. `spec.sleep.nonProduction: "off"` opts the service out |
+
+`sleep.afterMinutes` (default 30) is the idle window for both. Nothing
+sleeps if the env is a worker or `internal` (no Ingress, so nothing can
+reach the activator to wake it), if the service has
+`wakeOn.excludePaths`, if it is stopped, or if the project has
+`spec.alwaysOn`. When a policy stops allowing sleep for an env that is
+already asleep, the watcher wakes it before routing moves off the
+activator.
+
+**Routing.** Production routes through kuso-activator via the propagated
+`env.spec.sleep.enabled`. Non-production envs route through it via
+`env.spec.autoSleep`, a field only the watcher writes (service
+propagation owns `spec.sleep`, so the two writers never fight). The
+kusoenvironment chart treats `autoSleep` like `sleep.enabled`. The
+watcher flips `autoSleep` on one tick and restarts the env's idle clock,
+so an env always gets a full window behind the activator. Before scaling
+anything to 0 it also reads the live Ingress and refuses unless the
+backend is already the activator. That covers operator lag, an older
+chart, and a CRD that pruned the field.
+
+**Autoscaled envs.** HPA-managed envs (`scale.max > scale.min`) sleep
+too. Scaledown sets the Deployment to 0, which puts the HPA into
+Kubernetes' implicit maintenance mode: with `minReplicas > 0` and target
+replicas 0, the HPA sets `ScalingActive=False` ("scaling is disabled
+since the replica count of the target is zero") and stops acting. The
+chart never stamps `spec.replicas` on an HPA env, so the helm-operator
+doesn't undo the 0 either (`TestKusoEnvironmentChart_HPAEnvLeavesReplicasToSleep`
+guards this). On wake the activator restores the pre-sleep replica
+count and the HPA resumes.
+
+**Wake.** The activator resolves the request Host against every env,
+not only production, and wakes via `scaledown.Wake` (restore the
+`pre-sleep-replicas` annotation, stamp `last-activity`, then patch the
+Deployment).
+
+**Toggle.** `kuso project service sleep <p> <s> on|off [--after 30m]
+[--non-production on|off]`, or Settings → Sleep in the web UI.
+
+---
+
 **Status:** Draft / proposal
 **Author:** (design doc)
 **Context:** Hosting many mostly-idle apps (e.g. an AI-app-builder backend) requires
