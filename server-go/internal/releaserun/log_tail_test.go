@@ -25,18 +25,12 @@ func TestRun_FailedJobCarriesPodLogTail(t *testing.T) {
 	img := &kube.KusoImage{Repository: "registry/alpha/api", Tag: "abc"}
 	jobName := JobName(env.Name, img.Tag)
 	cs := fake.NewSimpleClientset(
-		&batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "kuso"},
-			Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
-				Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
-				Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit",
-			}}},
-		},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Name: jobName + "-x1", Namespace: "kuso",
 			Labels: map[string]string{"job-name": jobName},
 		}},
 	)
+	finishJobsOnCreate(cs, batchv1.JobFailed, "Job has reached the specified backoff limit")
 	r := New(&kube.Client{Clientset: cs})
 
 	res, err := r.Run(context.Background(), "kuso", env, img)

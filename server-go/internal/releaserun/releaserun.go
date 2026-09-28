@@ -211,8 +211,19 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	// migrations. If the Job exists in any phase, observe it
 	// rather than create a new one.
 	existing, gerr := r.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
-	if gerr == nil {
+	if gerr == nil && !jobFailed(existing) {
 		return r.poll(ctx, ns, jobName, time.Duration(timeout)*time.Second)
+	}
+	if gerr == nil {
+		// A FAILED Job for this (env, tag) is a previous attempt, not a
+		// result to reuse. Manual triggers resolve the real commit SHA, so
+		// redeploying the same commit after fixing the env or the data hits
+		// this name again — reusing the failure made a failed migration
+		// impossible to retry without a new commit. Replace it.
+		if err := r.replaceFailedJob(ctx, ns, jobName); err != nil {
+			return Result{JobName: jobName}, err
+		}
+		gerr = apierrors.NewNotFound(batchv1.Resource("jobs"), jobName)
 	}
 	if !apierrors.IsNotFound(gerr) {
 		return Result{JobName: jobName}, fmt.Errorf("get release job: %w", gerr)
@@ -563,4 +574,38 @@ func (r *Runner) getJobCached(ctx context.Context, ns, name string) (*batchv1.Jo
 		}
 	}
 	return r.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
+// jobFailed reports whether a Job reached its terminal Failed condition.
+func jobFailed(j *batchv1.Job) bool {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceFailedJob deletes a failed release Job (and its pods) and waits
+// for the name to be free, so a retry can be created under it.
+func (r *Runner) replaceFailedJob(ctx context.Context, ns, name string) error {
+	bg := metav1.DeletePropagationBackground
+	if err := r.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &bg}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete failed release job: %w", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		_, err := r.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("failed release job %s still present after delete", name)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
