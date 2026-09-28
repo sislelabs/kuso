@@ -123,6 +123,42 @@ spec:
               effect: NoSchedule
           {{- end }}
           {{- end }}
+          {{- /*
+            wait-for-addons: a brand-new pod's IP isn't in kube-router's
+            NetworkPolicy allow ipsets until the next sync (~5-20s), so a
+            cron whose command connects straight away got `connection
+            refused` from its own project's DB. TCP-wait on whichever of
+            DATABASE_URL / REDIS_URL / NATS_URL the conn secrets carry
+            first; exits 0 at once when none is set. Soft mode: an addon
+            that never answers is logged and the command runs anyway, so a
+            URL the cron never touches can't turn a working cron into a
+            failing one. kind=http is skipped: curlimages/curl probes a URL
+            and does no addon work. No resources, same reason as the
+            kusoenvironment init: a cron with no resources is BestEffort and
+            an init request would change that. Script is a verbatim copy of
+            the Go const — see kusocron.waitForAddonsScript in _helpers.tpl.
+          */}}
+          {{- if ne (default "service" .Values.kind) "http" }}
+          initContainers:
+            - name: wait-for-addons
+              image: busybox:1.36
+              command: ["sh", "-c", {{ include "kusocron.waitForAddonsScript" . | quote }}]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: WAIT_FOR_ADDONS_SOFT
+                  value: "1"
+              {{- with .Values.envFromSecrets }}
+              envFrom:
+                {{- range . }}
+                - secretRef:
+                    name: {{ . | quote }}
+                    optional: true
+                {{- end }}
+              {{- end }}
+          {{- end }}
           containers:
             - name: cron
               securityContext:

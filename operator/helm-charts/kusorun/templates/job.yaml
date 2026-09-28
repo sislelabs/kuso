@@ -62,6 +62,32 @@ spec:
           effect: NoSchedule
       {{- end }}
       {{- end }}
+      {{- /*
+        wait-for-addons: a brand-new pod's IP isn't in kube-router's
+        NetworkPolicy allow ipsets until the next sync (~5-20s), so a run
+        whose command connects straight away got `connection refused` from
+        its own project's DB and exited 1. TCP-wait on whichever of
+        DATABASE_URL / REDIS_URL / NATS_URL the run carries first; exits 0
+        at once when none is set. Soft mode: an addon that never answers is
+        logged and the command runs anyway (a URL the command never touches
+        must not fail the run). Same env as the run container via
+        kusorun.envBlock. Script is a verbatim copy of the Go const — see
+        kusorun.waitForAddonsScript in _helpers.tpl.
+      */}}
+      initContainers:
+        - name: wait-for-addons
+          image: busybox:1.36
+          command: ["sh", "-c", {{ include "kusorun.waitForAddonsScript" . | quote }}]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- with include "kusorun.envBlock" (dict "Values" .Values "waitEnv" true) | trim }}{{ . | nindent 10 }}{{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
       containers:
         - name: run
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -72,35 +98,7 @@ spec:
             {{- range .Values.command }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .Values.env }}
-          env:
-            {{- range . }}
-            - name: {{ .name | quote }}
-              {{- if .valueFrom }}
-              {{- /* A ${{ }} alias (secretKeyRef/configMapKeyRef). Resolves
-                     against the same Secrets mounted via envFromSecrets, so a
-                     run sees the service's aliased env (e.g. DATABASE_URI). */}}
-              valueFrom:
-                {{- toYaml .valueFrom | nindent 16 }}
-              {{- else }}
-              value: {{ .value | quote }}
-              {{- end }}
-            {{- end }}
-          {{- end }}
-          {{- with .Values.envFromSecrets }}
-          envFrom:
-            {{- range . }}
-            # optional=true mirrors the kusoenvironment chart's
-            # rendering — a missing secret (e.g. an addon that's been
-            # uninstalled while a run reference still carries its
-            # conn-secret name) shouldn't pin the pod in
-            # CreateContainerConfigError. The run still starts and
-            # the missing-env-var hint surfaces in the user's code.
-            - secretRef:
-                name: {{ . | quote }}
-                optional: true
-            {{- end }}
-          {{- end }}
+          {{- with include "kusorun.envBlock" (dict "Values" .Values) | trim }}{{ . | nindent 10 }}{{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 {{- end }}
