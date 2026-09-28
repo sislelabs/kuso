@@ -12,10 +12,10 @@ import (
 	"kuso/pkg/kusoApi"
 )
 
-// `kuso shared-secret` — project-level env vars auto-mounted into
-// every service. Use case: cross-service integrations like Resend,
-// Postmark, Stripe — set once, every service in the project picks
-// it up via envFromSecrets.
+// `kuso shared-secret` — project-level env vars that services opt into
+// per key (`kuso env share`). Use case: cross-service integrations like
+// Resend, Postmark, Stripe — set once, share with the services that
+// need it.
 //
 //   kuso shared-secret list <project>
 //   kuso shared-secret set <project> <KEY>=<VALUE>
@@ -58,7 +58,7 @@ func parseShadowed(body []byte) *shadowedResp {
 var sharedSecretCmd = &cobra.Command{
 	Use:     "shared-secret",
 	Aliases: []string{"shared-secrets", "ssec"},
-	Short:   "Manage project-level shared secrets (env vars attached to every service)",
+	Short:   "Manage project-level shared secrets (env vars services subscribe to per key)",
 }
 
 var sharedSecretListCmd = &cobra.Command{
@@ -153,10 +153,15 @@ var sharedSecretSetCmd = &cobra.Command{
 		// not on Secret update, so existing pods were still holding
 		// the old value.
 		var body struct {
-			Rolled int `json:"rolled"`
+			Rolled      int       `json:"rolled"`
+			Subscribers *[]string `json:"subscribers"`
 		}
 		_ = json.Unmarshal(resp.Body(), &body)
-		fmt.Printf("set %s on %s — %s\n", req.Key, args[0], rolloutMsg(body.Rolled))
+		var subs []string
+		if body.Subscribers != nil {
+			subs = append([]string{}, *body.Subscribers...)
+		}
+		fmt.Println(setMsg(args[0], req.Key, body.Rolled, subs))
 		return nil
 	},
 }
@@ -216,6 +221,21 @@ func unsetMsg(rolled, unsubscribed int) string {
 		return "nothing was using it"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// setMsg reports who a shared-secret write reaches. subscribers is nil when
+// the server predates reporting them (only the roll count is known) and
+// empty when no service subscribes — services default to inheriting no
+// shared keys, so a fresh key reaches nobody until it is shared.
+func setMsg(project, key string, rolled int, subscribers []string) string {
+	prefix := fmt.Sprintf("set %s on %s — ", key, project)
+	switch {
+	case subscribers == nil:
+		return prefix + rolloutMsg(rolled)
+	case len(subscribers) == 0:
+		return prefix + fmt.Sprintf("no service subscribes to %s, so no pod receives it; subscribe one with: kuso env share %s <service> %s", key, project, key)
+	}
+	return prefix + fmt.Sprintf("%s (%s), %s", plural(len(subscribers), "subscribing service"), strings.Join(subscribers, ", "), rolloutMsg(rolled))
 }
 
 func plural(n int, noun string) string {

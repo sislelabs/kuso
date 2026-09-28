@@ -27,7 +27,7 @@ This skill is current to **v0.23.1**. Run `kuso version` to confirm what's on th
 - **Project** = the top-level grouping. One repo or many; one base domain.
 - **Service** = one deployable app inside a project. Has a runtime, a port, and env vars.
 - **Environment** = one running instance of a service. Each service auto-gets a `production` env. PR previews AND long-lived named envs (`staging`, `qa`) are extra envs. A named env **tracks a git branch** — pushes to that branch auto-build+deploy it (v0.18.120+). See "Persistent environments".
-- **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. By default (legacy / `subscribedAddons` unset) every addon mounts into every service. Trim per service with `kuso project addon subscribe/unsubscribe` so a public frontend doesn't carry `DATABASE_URL` — see "Env vars & secrets".
+- **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. Which addons a service gets is its `subscribedAddons` list; a new service starts with it unset (mount everything) until the next kuso-server restart freezes it to the addons that existed then. See "Subscriptions" for the exact default and how to subscribe/unsubscribe.
 - **Build** = a kaniko Job that produces an image and patches the env's `image.tag`. One build per `(service, ref)`. Helm-operator rolls the new pod.
 - **Deploy = push.** kuso auto-deploys on `git push` to a branch some env tracks (production tracks the service default, usually `main`): the GitHub webhook fires a build, which promotes and rolls the new pod with zero manual steps. **A merge to `main` is already a production deploy — you do NOT run anything to ship it.** `kuso build trigger` / `kuso redeploy` are only for *out-of-band* rebuilds (rebuild without a new commit, deploy a non-tracked ref, re-run after a transient failure) — not part of the normal ship flow.
 - **Release hook** (v0.16+) = an optional Job that runs **before** the new image is promoted. Heroku-style migration phase. Set via `spec.release.command`.
@@ -125,8 +125,8 @@ kuso project create papelito \
   --repo https://github.com/biznesguys/papelito \
   --domain papelito.example.com
 
-# 2. Addons. Their conn secret auto-injects into every service that
-#    subscribes (default: all — tighten per service in step 5b).
+# 2. Addons. Their conn secret injects into every service that
+#    subscribes (see "Subscriptions" for the default; tighten in step 5b).
 kuso project addon add papelito db --kind postgres --version 16 --size small
 kuso project addon add papelito storage --kind s3
 kuso project addon add papelito cache --kind redis
@@ -610,7 +610,23 @@ that, map it inside the job: `sh -c 'export DATABASE_URI="${DATABASE_URI:-$DATAB
 
 ### Subscriptions — least privilege (don't leak DB creds into a frontend)
 
-By default every shared-secret key and every addon mounts into every service. Lock a service down to only what it needs:
+Each service carries two opt-in lists: `sharedEnvKeys` (which shared-secret
+keys it inherits) and `subscribedAddons` (which addon conn secrets it mounts).
+
+- **New service:** `kuso project service add` leaves both lists unset. Unset
+  means legacy mount-all: the service gets every shared key and every addon
+  conn, including ones added later.
+- **That lasts until the next kuso-server restart** (every upgrade is one).
+  On boot kuso writes each unset list as the keys/addons that exist at that
+  moment, which is `[]` if there were none. From then on, a shared key or
+  addon added later reaches **no** service until you subscribe it.
+- `kuso shared-secret set` reports how many services subscribe to the key.
+  "no service subscribes" means the value landed but no pod sees it; run
+  `kuso env share <p> <service> KEY`.
+
+Check a service's lists with `kuso get services <p> -o json` (the
+`sharedEnvKeys` and `subscribedAddons` fields). Lock a service down to only
+what it needs:
 
 ```bash
 # Shared-secret keys: env share/unshare. After trimming, verify with the UI
@@ -662,15 +678,19 @@ secrets, no DB/Redis/NATS conns. Previews respect subscriptions too.
   (find the install id with `kuso github installations`; the GitHub App must be
   installed on the repo's org). Auto-expire: `--previews-ttl <days>`.
 - On PR open/reopen/sync kuso spawns `<svc>-pr-<N>` envs (+ a cloned, seeded,
-  isolated preview DB `<addon>-pr-<N>`), builds from the PR branch, and tears
-  them down on close/merge (in-flight preview builds are auto-cancelled).
-  Previews are pinned to 1 replica, no autoscaling.
+  isolated preview DB `<addon>-pr-<N>` and an empty per-PR redis), builds from
+  the PR branch, and tears them down on close/merge (in-flight preview builds
+  are auto-cancelled). Previews are pinned to 1 replica, no autoscaling. s3 and
+  other addon kinds stay shared with production.
+- Only production services get previews. Env-group clones (`api-qa` from
+  `kuso env-group create <p> qa`) never do.
 - **Preview host base**: `kuso project update <p> --previews-domain <base>` makes
   preview hosts `<svc>-pr-N.<base>` (e.g. `frontend-pr-35.tickero.bg`) instead of
   the cluster base. Needs wildcard DNS for `*.<base>`.
 - Previews respect each service's subscriptions — a no-addons frontend preview
   correctly carries no addon conns; only db-subscribers get the `<addon>-pr-N`
-  clone (never production, never non-subscribers).
+  clone (never production, never non-subscribers). Shared-secret keys follow
+  `sharedEnvKeys` the same way production does.
 
 ## The commands you'll actually use
 
@@ -922,8 +942,9 @@ nothing else in this skill, read this.
 - **Never paste credentials into a command.** They're already in the pod env;
   `kuso run` inherits them and `kuso db` resolves them server-side.
 - **Subscribe services to only the addons they need**
-  (`kuso project addon subscribe/unsubscribe`). By default every addon mounts
-  into every service, which puts `DATABASE_URL` in your public frontend.
+  (`kuso project addon subscribe/unsubscribe`). A new service mounts every
+  addon until its list is set (see "Subscriptions"), which puts `DATABASE_URL`
+  in your public frontend.
 - **Use `env set` for most values** so they show in the Variables tab and the
   audit trail; reserve `secret set` for values that must stay out of the
   rendered spec.

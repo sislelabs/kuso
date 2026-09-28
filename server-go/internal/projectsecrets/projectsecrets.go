@@ -14,7 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -103,11 +106,20 @@ type SetOptions struct {
 	Force bool
 }
 
+// SetResult says who a SetKey reaches. Rolled counts envs whose pods were
+// restarted to pick the value up (kube resolves envFrom and secretKeyRef at
+// pod start, so a Secret-only update is invisible to running pods).
+// Subscribers are the short names of services that receive the key:
+// subscribed by name in sharedEnvKeys, or nil sharedEnvKeys (legacy
+// mount-all). Never nil, so a JSON client can tell "none" from an older
+// server that doesn't report it.
+type SetResult struct {
+	Rolled      int      `json:"rolled"`
+	Subscribers []string `json:"subscribers"`
+}
+
 // SetKey upserts a single env-var-style entry. Creates the Secret
-// when it doesn't exist yet. Returns the number of KusoEnvironments
-// whose pods were triggered to roll so the new value reaches them —
-// kube's envFrom is evaluated at pod start, so a Secret-only update
-// is invisible to already-running pods until they restart.
+// when it doesn't exist yet, then rolls the envs that consume the key.
 //
 // When any service in the project has the same key in its service-
 // scoped Secret, the new shared value would be silently invisible
@@ -117,15 +129,15 @@ type SetOptions struct {
 // the error to the user with a "unset the service-scoped copy or
 // pass --force" message — silent shadowing is exactly the trap this
 // guard exists to prevent.
-func (s *Service) SetKey(ctx context.Context, project, key, value string, opts SetOptions) (rolled int, err error) {
+func (s *Service) SetKey(ctx context.Context, project, key, value string, opts SetOptions) (SetResult, error) {
 	if key == "" {
-		return 0, fmt.Errorf("%w: key required", ErrInvalid)
+		return SetResult{}, fmt.Errorf("%w: key required", ErrInvalid)
 	}
 	ns := s.nsFor(ctx, project)
 	if !opts.Force {
 		shadow, _ := secrets.CheckSharedSetShadow(ctx, s.Kube, project, ns, key)
 		if shadow != nil {
-			return 0, shadow
+			return SetResult{}, shadow
 		}
 	}
 	name := SecretName(project)
@@ -170,9 +182,39 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 		}
 		return nil
 	}); err != nil {
-		return 0, err
+		return SetResult{}, err
 	}
-	return s.rollDependentEnvs(ctx, project, ns, name)
+	rolled, err := s.rollDependentEnvs(ctx, project, ns, name, key)
+	if err != nil {
+		return SetResult{}, err
+	}
+	subs, err := s.subscribers(ctx, project, ns, key)
+	if err != nil {
+		return SetResult{}, err
+	}
+	return SetResult{Rolled: rolled, Subscribers: subs}, nil
+}
+
+// subscribers returns the sorted short names of the project's services
+// that receive key: nil sharedEnvKeys (legacy mount-all) or key listed.
+func (s *Service) subscribers(ctx context.Context, project, ns, key string) ([]string, error) {
+	svcs, err := s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		return nil, fmt.Errorf("list services: %w", err)
+	}
+	out := []string{}
+	for _, svc := range svcs {
+		if svc.Spec.SharedEnvKeys != nil && !slices.Contains(svc.Spec.SharedEnvKeys, key) {
+			continue
+		}
+		short := svc.Labels[kube.LabelService]
+		if short == "" {
+			short = strings.TrimPrefix(svc.Name, project+"-")
+		}
+		out = append(out, short)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // UnsetKey removes one entry. No-op (rolled=0) when the key (or the
@@ -223,7 +265,9 @@ func (s *Service) UnsetKey(ctx context.Context, project, key string) (UnsetResul
 		}
 		res.Unsubscribed = n
 	}
-	rolled, err := s.rollDependentEnvs(ctx, project, ns, name)
+	// key "" = envFrom mounts only: OnKeyRemoved has already re-propagated
+	// the per-key subscribers without the ref, which restarts them.
+	rolled, err := s.rollDependentEnvs(ctx, project, ns, name, "")
 	if err != nil {
 		return UnsetResult{}, err
 	}
@@ -232,7 +276,9 @@ func (s *Service) UnsetKey(ctx context.Context, project, key string) (UnsetResul
 }
 
 // rollDependentEnvs bumps spec.secretsRev on every KusoEnvironment in
-// the project whose pods consume the named Secret via envFromSecrets.
+// the project whose pods consume the named Secret via envFromSecrets or,
+// when key is non-empty, via a per-key secretKeyRef to that key (a
+// sharedEnvKeys subscription).
 // The kusoenvironment chart projects spec.secretsRev onto the pod
 // template's annotations (kuso.sislelabs.com/secrets-rev), which
 // kubelet treats as a template change → rolling restart.
@@ -248,7 +294,7 @@ func (s *Service) UnsetKey(ctx context.Context, project, key string) (UnsetResul
 // rollout failure would leave the cluster with no path forward.
 //
 // Returns the number of envs successfully rolled.
-func (s *Service) rollDependentEnvs(ctx context.Context, project, ns, secretName string) (int, error) {
+func (s *Service) rollDependentEnvs(ctx context.Context, project, ns, secretName, key string) (int, error) {
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,
 	})
@@ -259,12 +305,12 @@ func (s *Service) rollDependentEnvs(ctx context.Context, project, ns, secretName
 	patch := fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, rev)
 	rolled := 0
 	for _, e := range envs {
-		hasIt := false
-		for _, s := range e.Spec.EnvFromSecrets {
-			if s == secretName {
-				hasIt = true
-				break
-			}
+		hasIt := slices.Contains(e.Spec.EnvFromSecrets, secretName)
+		if !hasIt && key != "" {
+			hasIt = slices.ContainsFunc(e.Spec.EnvVars, func(v kube.KusoEnvVar) bool {
+				ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+				return ref != nil && ref["name"] == secretName && ref["key"] == key
+			})
 		}
 		if !hasIt {
 			continue
