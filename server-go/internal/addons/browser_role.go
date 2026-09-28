@@ -92,13 +92,16 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %[4]s IN SCHEMA public GRANT SELECT, INSERT, U
 ALTER DEFAULT PRIVILEGES FOR ROLE %[4]s IN SCHEMA public GRANT SELECT, USAGE ON SEQUENCES TO %[1]s;
 `, qRole, escPass, qDB, qAdmin, BrowserRole)
 
-	podName := releaseName + "-0"
+	podName, psqlUser, err := s.postgresExecTarget(ctx, ns, releaseName, adminUser)
+	if err != nil {
+		return fmt.Errorf("provision browser role: %w", err)
+	}
 	// psql over the local trust socket as the admin OS user — no password
 	// needed (upstream postgres image enables `local trust` for the
 	// postgres OS user). Try -h /var/run/postgresql first, then the plain
 	// form, matching RepairPassword's fallback.
 	argv := func(hostFlag bool) []string {
-		a := []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", adminUser, "-d", dbName}
+		a := []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", psqlUser, "-d", dbName}
 		if hostFlag {
 			a = append(a, "-h", "/var/run/postgresql")
 		}

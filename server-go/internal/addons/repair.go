@@ -74,10 +74,9 @@ func (s *Service) RepairPassword(ctx context.Context, project, name string) erro
 		return fmt.Errorf("%w: conn secret missing user or password", ErrInvalid)
 	}
 
-	// Pod name follows the StatefulSet convention: <release>-0.
-	podName := fqn + "-0"
-	if _, err := s.Kube.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
-		return fmt.Errorf("addon pod %s/%s not running: %w", ns, podName, err)
+	podName, psqlUser, err := s.postgresExecTarget(ctx, ns, fqn, user)
+	if err != nil {
+		return err
 	}
 
 	// We embed the password as a SQL string literal. The conn-secret
@@ -88,7 +87,7 @@ func (s *Service) RepairPassword(ctx context.Context, project, name string) erro
 	sqlStmt := fmt.Sprintf(`ALTER USER %q WITH PASSWORD '%s';`, user, escaped)
 
 	stdout, stderr, err := s.execInPod(ctx, ns, podName, "postgres", []string{
-		"psql", "-U", user, "-d", "postgres", "-h", "/var/run/postgresql", "-c", sqlStmt,
+		"psql", "-U", psqlUser, "-d", "postgres", "-h", "/var/run/postgresql", "-c", sqlStmt,
 	})
 	if err != nil {
 		// Fall back to local socket without -h flag (some images set
@@ -96,7 +95,7 @@ func (s *Service) RepairPassword(ctx context.Context, project, name string) erro
 		// postgres image enables `local trust` for unix-socket auth
 		// from the postgres OS user.
 		stdout2, stderr2, err2 := s.execInPod(ctx, ns, podName, "postgres", []string{
-			"psql", "-U", user, "-d", "postgres", "-c", sqlStmt,
+			"psql", "-U", psqlUser, "-d", "postgres", "-c", sqlStmt,
 		})
 		if err2 != nil {
 			return fmt.Errorf("psql alter user failed: stdout=%s stderr=%s err=%w (fallback: stdout=%s stderr=%s err=%v)",
@@ -133,4 +132,27 @@ func (s *Service) execInPod(ctx context.Context, ns, podName, container string, 
 		Stderr: &stderr,
 	})
 	return stdout.String(), stderr.String(), err
+}
+
+// postgresExecTarget resolves the pod and psql user for admin commands on
+// a postgres addon. A StatefulSet addon runs in <addon>-0 and its conn user
+// is the superuser. An HA addon is a CloudNativePG cluster: pods are
+// <addon>-1..N, the writable one is labelled cnpg.io/instanceRole=primary
+// (and moves on failover), and local socket auth maps to the postgres
+// superuser, not the app role.
+func (s *Service) postgresExecTarget(ctx context.Context, ns, fqn, connUser string) (pod, psqlUser string, err error) {
+	pods := s.Kube.Clientset.CoreV1().Pods(ns)
+	if _, gerr := pods.Get(ctx, fqn+"-0", metav1.GetOptions{}); gerr == nil {
+		return fqn + "-0", connUser, nil
+	}
+	list, lerr := pods.List(ctx, metav1.ListOptions{
+		LabelSelector: "cnpg.io/cluster=" + fqn + ",cnpg.io/instanceRole=primary",
+	})
+	if lerr != nil {
+		return "", "", fmt.Errorf("find postgres primary for %s/%s: %w", ns, fqn, lerr)
+	}
+	if len(list.Items) == 0 {
+		return "", "", fmt.Errorf("no running postgres pod for addon %s/%s", ns, fqn)
+	}
+	return list.Items[0].Name, "postgres", nil
 }
