@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.22.21] — 2026-08-17
+
+### 🐛 Bug Fixes
+- Fix(security)/fix(cli)/fix(mcp)/fix(web)/feat(resilience): platform-review remediation batch ([8291111](https://github.com/sislelabs/kuso/commit/829111156375eceb055211168fda53fe314cd50e))
+
 ## [0.22.20] — 2026-08-17
 
 ### 🐛 Bug Fixes

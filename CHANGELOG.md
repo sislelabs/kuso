@@ -19,6 +19,16 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.26.10] — 2026-09-28
+
+### Other
+- Wait for addons before kuso run and cron commands start ([c33bb25](https://github.com/sislelabs/kuso/commit/c33bb254fbe31bb61a476a81106fbffd19c5ac15))
+- Put a plain one-line summary in the Discord message content ([7299a57](https://github.com/sislelabs/kuso/commit/7299a57015ba7c51ac7ec0dcc283dd7232e589c9))
+
+### 🐛 Bug Fixes
+- Fix server-side addon access for custom-namespace projects ([80e0988](https://github.com/sislelabs/kuso/commit/80e0988a1f381c2513973700ed328fc3d8d8ec4b))
+- Fix env isolation, seed networking and multi-repo service add ([e2ebf54](https://github.com/sislelabs/kuso/commit/e2ebf54cc3fb01aed168bfb58c024907ee502525))
+
 ## [0.26.9] — 2026-09-28
 
 ### Other
@@ -393,11 +403,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(server): cover KUSO_LOG_LEVEL parsing ([6eba999](https://github.com/sislelabs/kuso/commit/6eba999ba20a14366b0695652bfd2354fd9dc138))
-
-## [0.22.21] — 2026-08-17
-
-### 🐛 Bug Fixes
-- Fix(security)/fix(cli)/fix(mcp)/fix(web)/feat(resilience): platform-review remediation batch ([8291111](https://github.com/sislelabs/kuso/commit/829111156375eceb055211168fda53fe314cd50e))
 
 
 ---
