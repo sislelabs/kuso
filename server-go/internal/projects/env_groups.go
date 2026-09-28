@@ -881,9 +881,13 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if err != nil {
 		return fmt.Errorf("list services for group %s: %w", name, err)
 	}
+	// Cloned services go through the full service delete: it also removes
+	// any env the clone gained outside the group (a PR preview) with its
+	// TLS Secret, and the clone's managed <project>-<service>-secrets.
 	for i := range svcList.Items {
 		n := svcList.Items[i].GetName()
-		if err := s.Kube.DeleteKusoService(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+		short := strings.TrimPrefix(n, project+"-")
+		if err := s.DeleteService(ctx, project, short); err != nil && !apierrors.IsNotFound(err) && !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("delete service %s: %w", n, err)
 		}
 	}
