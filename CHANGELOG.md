@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.4] — 2026-09-29
+
+### Other
+- Simplify the Variables tab into one list ([fde8787](https://github.com/sislelabs/kuso/commit/fde8787b1a8f4dee7b5b7f1d905ea9bfce087f67))
+
 ## [0.27.3] — 2026-09-29
 
 ### Other
@@ -385,11 +390,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): carry externalCredentials through the wire mapping ([8630720](https://github.com/sislelabs/kuso/commit/863072078a9e1f9bec01daaa1543583ce5f79883))
-
-## [0.25.4] — 2026-09-02
-
-### ✨ Features
-- Feat(addon): create the external Secret instead of requiring one ([9fc95e3](https://github.com/sislelabs/kuso/commit/9fc95e33781eec08c711a0eda1b01c6bc125c216))
 
 
 ---

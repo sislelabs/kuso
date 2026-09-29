@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.4] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): create the external Secret instead of requiring one ([9fc95e3](https://github.com/sislelabs/kuso/commit/9fc95e33781eec08c711a0eda1b01c6bc125c216))
+
 ## [0.25.3] — 2026-09-02
 
 ### ✨ Features
