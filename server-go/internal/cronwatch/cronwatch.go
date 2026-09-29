@@ -114,6 +114,9 @@ type Watcher struct {
 	// HTTP overrides the default http.Client for webhook delivery.
 	// Tests inject a stub; production leaves it nil.
 	HTTP *http.Client
+	// Logs is logship's archive, read for the card's log tail when the
+	// failed Job's pods are already gone. Nil = live pods only.
+	Logs LogArchive
 
 	mu sync.Mutex
 	// dispatched records Job UIDs we've already fired for, so a
@@ -124,6 +127,14 @@ type Watcher struct {
 
 	// now is overridable for tests; nil means time.Now.
 	now func() time.Time
+	// emit is a test seam for the notify fan-out; nil = Notify.Emit.
+	emit func(notify.Event)
+}
+
+// LogArchive reads a pod's archived output after the pod is gone.
+// Implemented by *db.LogDB. Lines come back oldest-first.
+type LogArchive interface {
+	PodLogTail(ctx context.Context, project, service, podPrefix string, since time.Time, n int) ([]string, error)
 }
 
 // Run blocks until ctx is cancelled. Dedupe across restarts relies on
@@ -334,10 +345,14 @@ func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) {
 }
 
 func (w *Watcher) emitNotify(ctx context.Context, cron *kube.KusoCron, job *batchv1.Job) {
-	if w.Notify == nil {
-		return
+	emit := w.emit
+	if emit == nil {
+		if w.Notify == nil {
+			return
+		}
+		emit = w.Notify.Emit
 	}
-	w.Notify.Emit(cronFailedEvent(cron, job, w.failedPod(ctx, job)))
+	emit(cronFailedEvent(cron, job, w.failedPod(ctx, job)))
 }
 
 // podFailure is what the failed Job's newest pod says about the run.
@@ -408,15 +423,46 @@ func cronFailedEvent(cron *kube.KusoCron, job *batchv1.Job, pf podFailure) notif
 const logTailLines = 5
 
 // failedPod finds the Job's newest pod and reads its exit code and last
-// few log lines. Best-effort and time-bounded: any failure just leaves
-// the card without them.
+// few log lines, falling back to the log archive for the tail when the
+// pod is gone. Best-effort and time-bounded: any failure just leaves the
+// card without them.
 func (w *Watcher) failedPod(ctx context.Context, job *batchv1.Job) podFailure {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pf := w.livePodFailure(ctx, job)
+	if pf.logTail == "" {
+		pf.logTail = w.archivedTail(ctx, job)
+	}
+	return pf
+}
+
+// archivedTail reads the Job's last lines from logship's archive. A
+// restartPolicy=OnFailure Job that exhausts its backoffLimit has its pod
+// deleted by the Job controller before Failed is set, so by the time we
+// see the failure there's usually no pod left to read.
+func (w *Watcher) archivedTail(ctx context.Context, job *batchv1.Job) string {
+	if w.Logs == nil {
+		return ""
+	}
+	// Pod names are "<job>-<5 char suffix>"; logship stores the pod's
+	// project/service labels, which the kusocron chart copies from the Job.
+	lines, err := w.Logs.PodLogTail(ctx,
+		job.Labels["kuso.sislelabs.com/project"], job.Labels["kuso.sislelabs.com/service"],
+		job.Name+"-", job.CreationTimestamp.Time, logTailLines)
+	if err != nil {
+		if w.Logger != nil {
+			w.Logger.Warn("cronwatch archived log tail", "err", err, "job", job.Name)
+		}
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func (w *Watcher) livePodFailure(ctx context.Context, job *batchv1.Job) podFailure {
 	var pf podFailure
 	if w.Kube == nil || w.Kube.Clientset == nil {
 		return pf
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	pods, err := w.Kube.Clientset.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "job-name=" + job.Name,
 	})

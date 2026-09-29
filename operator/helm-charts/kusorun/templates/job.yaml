@@ -25,6 +25,14 @@ spec:
     metadata:
       labels:
         {{- include "kusorun.labels" . | nindent 8 }}
+        {{- /* Same egress gates as the kusoenvironment pod template;
+               values copied from the owning service by the server. */}}
+        {{- if not .Values.privateEgress }}
+        kuso.sislelabs.com/network-egress-public: "true"
+        {{- end }}
+        {{- if .Values.platformApiEgress }}
+        kuso.sislelabs.com/network-egress-platform-api: "true"
+        {{- end }}
     spec:
       # One-shot task pods run user-supplied commands with the
       # service's real production env. They have no reason to reach the

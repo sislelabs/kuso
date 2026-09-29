@@ -1238,6 +1238,12 @@ type KusoCronSpec struct {
 	// Jobs labeled kuso.sislelabs.com/cron, detects new failures,
 	// and POSTs a signed payload to WebhookURL.
 	OnFailure *KusoCronOnFailure `json:"onFailure,omitempty"`
+	// PrivateEgress / PlatformAPIEgress mirror the owning service's spec
+	// so the kusocron chart can stamp the same NetworkPolicy egress pod
+	// labels the service's pods get. Project-scoped crons (no service)
+	// leave both false: public egress, no platform API.
+	PrivateEgress     bool `json:"privateEgress,omitempty"`
+	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
 }
 
 // KusoCronOnFailure is the wire shape for the cron failure webhook.
@@ -1295,6 +1301,10 @@ type KusoRunSpec struct {
 	// Placement inherits from the parent service so a run lands
 	// on the same node pool.
 	Placement *KusoPlacement `json:"placement,omitempty"`
+	// PrivateEgress / PlatformAPIEgress are snapshotted from the parent
+	// service so the run pod gets the same NetworkPolicy egress labels.
+	PrivateEgress     bool `json:"privateEgress,omitempty"`
+	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
 	// TimeoutSeconds bounds the Pod via the Job's
 	// activeDeadlineSeconds. Past it the Pod is killed and the
 	// run goes phase=failed reason=DeadlineExceeded.

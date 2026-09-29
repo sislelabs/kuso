@@ -72,6 +72,14 @@ spec:
                 suspend:
                   type: boolean
                   default: false
+                privateEgress:
+                  type: boolean
+                  default: false
+                  description: Mirrors the owning service's spec.privateEgress. When false the pod gets the network-egress-public label and may reach the internet.
+                platformApiEgress:
+                  type: boolean
+                  default: false
+                  description: Mirrors the owning service's spec.platformApiEgress. When true the pod may call the kuso API.
                 pinImage:
                   type: boolean
                   default: false

@@ -103,6 +103,37 @@ func (d *LogDB) LatestPodLogTs(ctx context.Context, project, service, pod string
 	return ts.Time, nil
 }
 
+// PodLogTail returns the last n archived lines of the pods whose names
+// start with podPrefix, oldest-first. since bounds the index scan to the
+// pods' lifetime. cronwatch uses it for a failed Job whose pod the Job
+// controller has already deleted.
+func (d *LogDB) PodLogTail(ctx context.Context, project, service, podPrefix string, since time.Time, n int) ([]string, error) {
+	rows, err := d.DB.DB.QueryContext(ctx,
+		`SELECT "line" FROM "LogLine"
+		  WHERE "project" = $1 AND "service" = $2 AND "ts" >= $3 AND "pod" LIKE $4 ESCAPE '\'
+		  ORDER BY "ts" DESC, "id" DESC LIMIT $5`,
+		project, service, since.UTC(), escapeLike(podPrefix)+"%", n)
+	if err != nil {
+		return nil, fmt.Errorf("pod log tail: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return nil, fmt.Errorf("pod log tail scan: %w", err)
+		}
+		out = append(out, line)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pod log tail: %w", err)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
 // MaxLogSearchLimit caps a single page of log search results.
 const MaxLogSearchLimit = 500
 

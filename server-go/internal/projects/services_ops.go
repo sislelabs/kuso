@@ -2801,6 +2801,12 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		slog.ErrorContext(ctx, "propagate: service spec saved but env propagation incomplete",
 			"project", project, "service", service, "err", err)
 	}
+	if changed.PrivateEgress || changed.PlatformAPIEgress {
+		if err := s.propagateEgressToCrons(ctx, ns, project, updated); err != nil {
+			slog.ErrorContext(ctx, "propagate: service egress saved but cron propagation incomplete",
+				"project", project, "service", service, "err", err)
+		}
+	}
 	// Record a revision row so the History tab can render it. Best-
 	// effort: a DB miss here doesn't fail the user-facing save (the
 	// kube write already succeeded). We store the original PATCH body

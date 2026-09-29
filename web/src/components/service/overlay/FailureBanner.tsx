@@ -29,7 +29,8 @@ export type FailureKind =
   | "registry_auth"
   | "clone_ref_missing"
   | "release_failed"
-  | "missing_capability";
+  | "missing_capability"
+  | "migration_lock";
 
 interface CopyPair {
   // headline reads as the bold first line ("Build crashed: missing env
@@ -107,6 +108,10 @@ const COPY: Record<FailureKind, CopyPair> = {
   missing_capability: {
     headline: "The image needs Linux capabilities kuso drops by default.",
     body: "Its startup changes file owners, switches user or binds a port below 1024. Check the logs for the failing call, then add the capabilities it needs with `kuso project service set <project> <service> --cap-add …`.",
+  },
+  migration_lock: {
+    headline: "Migrations timed out waiting for the database lock.",
+    body: "Another migrate is holding Prisma's lock, usually one that went through the connection pooler, or a second replica migrating at start. Run migrations once as a release hook on the direct database URL, not in the start command.",
   },
   generic: {
     headline: "Deploy failed.",

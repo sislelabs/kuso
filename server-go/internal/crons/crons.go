@@ -419,6 +419,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	if parent, gerr := s.Kube.GetKusoService(ctx, ns, serviceFQN); gerr == nil && parent != nil {
 		objMeta.OwnerReferences = []metav1.OwnerReference{kube.OwnerRefForService(parent)}
 	}
+	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, serviceFQN)
 	cr := &kube.KusoCron{
 		ObjectMeta: objMeta,
 		Spec: kube.KusoCronSpec{
@@ -434,6 +435,8 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			Image:                   image,
 			EnvFromSecrets:          envFromSecrets,
 			Placement:               placement,
+			PrivateEgress:           privateEgress,
+			PlatformAPIEgress:       platformAPIEgress,
 		},
 	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
@@ -619,6 +622,22 @@ func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN s
 	return env.Spec.Image, env.Spec.EnvFromSecrets, env.Spec.Placement, nil
 }
 
+// serviceEgress returns the owning service's privateEgress /
+// platformApiEgress so the cron pod gets the same NetworkPolicy egress
+// labels as the service's pods. Falls back to the production env's
+// mirror when the service can't be read, and fails closed (private, no
+// platform API) when neither can — a private service's cron must never
+// gain internet egress because of a transient read error.
+func (s *Service) serviceEgress(ctx context.Context, ns, serviceFQN string) (privateEgress, platformAPIEgress bool) {
+	if svc, err := s.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
+		return svc.Spec.PrivateEgress, svc.Spec.PlatformAPIEgress
+	}
+	if env, err := s.Kube.GetKusoEnvironment(ctx, ns, serviceFQN+"-production"); err == nil && env != nil {
+		return env.Spec.PrivateEgress, env.Spec.PlatformAPIEgress
+	}
+	return true, false
+}
+
 // SyncFromService re-resolves image + envFromSecrets from the
 // current production env and patches the cron CR. Called from the UI
 // "Sync image" button so a cron picks up new builds.
@@ -642,6 +661,7 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 	if err != nil {
 		return nil, err
 	}
+	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, serviceFQN)
 	updated, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
 		if !cronOwnedByProject(cr, project) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
@@ -649,6 +669,8 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		cr.Spec.Image = image
 		cr.Spec.EnvFromSecrets = envFromSecrets
 		cr.Spec.Placement = placement
+		cr.Spec.PrivateEgress = privateEgress
+		cr.Spec.PlatformAPIEgress = platformAPIEgress
 		return nil
 	})
 	if uerr != nil {

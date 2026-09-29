@@ -138,6 +138,16 @@
             },
             "type": "object"
           },
+          "platformApiEgress": {
+            "default": false,
+            "description": "Mirrors the owning service's spec.platformApiEgress. When true the pod may call the kuso API.",
+            "type": "boolean"
+          },
+          "privateEgress": {
+            "default": false,
+            "description": "Mirrors the owning service's spec.privateEgress. When false the pod gets the network-egress-public label and may reach the internet.",
+            "type": "boolean"
+          },
           "project": {
             "type": "string"
           },

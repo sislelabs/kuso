@@ -38,6 +38,10 @@ const (
 	KindPortConflict       Kind = "port_conflict"
 	KindHealthcheckFailed  Kind = "healthcheck_failed"
 	KindBuildCommandFailed Kind = "build_command_failed"
+	// KindMigrationLock: a migration tool (Prisma) timed out waiting for
+	// its advisory lock — another migrate holds it, often leaked through
+	// a transaction-mode pooler, or replicas migrate at start concurrently.
+	KindMigrationLock Kind = "migration_lock"
 	// Build-time (pre-image) failure kinds. These come from the Docker /
 	// buildkit / nixpacks / buildpacks build log, NOT the running pod.
 	// Most carry an actionable Remediation with a copy-pasteable fix
@@ -142,6 +146,11 @@ type Signal struct {
 	// in the first place). Zero value means the caller didn't have it
 	// — Reason takes precedence.
 	ExitCode int32
+	// Runtime marks logs from a running pod rather than a build. Build
+	// detectors are skipped for them: pnpm prints "Command failed with
+	// exit code 1" for any failing script, and a crashing app was being
+	// reported as a failed build.
+	Runtime bool
 }
 
 // Classify inspects pod-status signal + the last N log lines and
@@ -163,7 +172,13 @@ func Classify(logLines []string, sig Signal) Classification {
 	if mc, found := classifyMissingCapability(logLines); found {
 		return mc
 	}
+	// CrashLoopBackOff only says the container keeps dying; a runtime
+	// detector matching its logs (migration lock, missing env, port
+	// conflict…) names the actual cause, so it wins over the bare signal.
 	if ok {
+		if rc, found := matchRuntimeLines(logLines, false); found {
+			return rc
+		}
 		return c
 	}
 	// Log-line regex matches second, in two phases.
@@ -176,29 +191,41 @@ func Classify(logLines []string, sig Signal) Classification {
 	// generic tail line win because it's later in the buffer. So we try
 	// each build-specific detector across ALL lines first: the most
 	// actionable cause wins regardless of where it appears.
-	if c, ok := matchDetectors(logLines, true); ok {
-		return c
+	if !sig.Runtime {
+		if c, ok := matchDetectors(logLines, true); ok {
+			return c
+		}
 	}
 	// Phase 2 — runtime detectors, reverse LINE walk (most-recent line
 	// wins). For the runtime kinds there's no "specific-vs-generic tail"
 	// problem; the freshest line is genuinely the one that took the pod
 	// down, so we preserve most-recent-wins here.
-	for i := len(logLines) - 1; i >= 0; i-- {
-		line := logLines[i]
-		for _, d := range logDetectors {
-			if d.buildTime {
-				continue // handled in phase 1
-			}
-			if d.re.MatchString(line) {
-				return buildClassification(d, line, i, logLines)
-			}
-		}
+	if rc, found := matchRuntimeLines(logLines, true); found {
+		return rc
 	}
 	return Classification{
 		Kind:    KindGeneric,
 		Tab:     TabLogs,
 		Summary: "Deploy failed. See logs for details.",
 	}
+}
+
+// matchRuntimeLines runs the runtime (non-build) detectors over the log
+// tail, most-recent line first. withCrashLoop=false leaves out the
+// crash-loop catch-all, for callers that already fall back to it.
+func matchRuntimeLines(logLines []string, withCrashLoop bool) (Classification, bool) {
+	for i := len(logLines) - 1; i >= 0; i-- {
+		line := logLines[i]
+		for _, d := range logDetectors {
+			if d.buildTime || (!withCrashLoop && d.kind == KindCrashLoop) {
+				continue
+			}
+			if d.re.MatchString(line) {
+				return buildClassification(d, line, i, logLines), true
+			}
+		}
+	}
+	return Classification{}, false
 }
 
 // ClassifyRelease classifies a failed release hook from its pod log tail.
@@ -537,6 +564,25 @@ var logDetectors = []logDetector{
 			return "Container port is already in use."
 		},
 	},
+	// Migration lock timeout — Prisma's migrate takes a session advisory
+	// lock; through a transaction-mode pooler (PgBouncer) the lock can
+	// leak on a pooled server connection and every later migrate waits
+	// on it, and replicas that migrate at start contend for it.
+	{
+		kind: KindMigrationLock,
+		tab:  TabLogs,
+		re:   regexp.MustCompile(`(?i)timed out trying to acquire a postgres advisory lock|pg_advisory_lock\(\d+\).*time(d)? ?out|Error: P1002`),
+		summarize: func(line string) string {
+			return "Migrations timed out waiting for Prisma's database lock."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:  "Run migrations once, on the direct database connection",
+				Detail: "Another migrate is holding the lock, usually one that went through the connection pooler (PgBouncer keeps the lock on a pooled connection) or a second replica migrating at start. Move the migrate command out of the start command into a release hook, and point it at the direct URL.",
+				Fix:    `DATABASE_URL="$DIRECT_URL" npx prisma migrate deploy   # as the service's release hook`,
+			}
+		},
+	},
 	// Healthcheck — readiness/liveness failures echoed by some
 	// frameworks ("Health check failed", "probe failed").
 	{
@@ -550,9 +596,10 @@ var logDetectors = []logDetector{
 	// Build command failed — kaniko / nixpacks / buildpacks usually
 	// echo "command failed with exit code N" or "Error: build failed".
 	{
-		kind: KindBuildCommandFailed,
-		tab:  TabLogs,
-		re:   regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed`),
+		kind:      KindBuildCommandFailed,
+		tab:       TabLogs,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed`),
 		summarize: func(line string) string {
 			return "Build command exited non-zero. " + briefLine(line)
 		},

@@ -37,4 +37,9 @@ startingDeadlineSeconds: 300
 # matching toleration so the kuso.sislelabs.com/region NoSchedule
 # taint doesn't block scheduling.
 placement: {}
+# Egress gates, copied from the owning service's spec. The project
+# NetworkPolicy is default-deny: without the public-egress pod label
+# (stamped unless privateEgress) the job can't reach the internet.
+privateEgress: false
+platformApiEgress: false
 resources: {}

@@ -381,3 +381,90 @@ func TestShortDuration(t *testing.T) {
 		}
 	}
 }
+
+// fakeLogArchive records the archive lookup and serves canned lines.
+type fakeLogArchive struct {
+	lines                     []string
+	calls                     int
+	project, service, podPref string
+	since                     time.Time
+	n                         int
+}
+
+func (f *fakeLogArchive) PodLogTail(_ context.Context, project, service, podPrefix string, since time.Time, n int) ([]string, error) {
+	f.calls++
+	f.project, f.service, f.podPref, f.since, f.n = project, service, podPrefix, since, n
+	return f.lines, nil
+}
+
+// TestFailedPod_FallsBackToLogArchive: a restartPolicy=OnFailure Job that
+// hits its backoffLimit has its pod DELETED by the Job controller before the
+// Failed condition lands (verified live: bukvite newsletter-scheduler Jobs
+// have no pods left at detection time), so the live pod read finds nothing.
+// The card must still carry the tail, read from logship's archive.
+func TestFailedPod_FallsBackToLogArchive(t *testing.T) {
+	created := time.Now().Add(-6 * time.Minute)
+	job := failedJob("sched-29844700", "sched", "uid-s")
+	job.CreationTimestamp = metav1.NewTime(created)
+	job.Labels["kuso.sislelabs.com/project"] = "bukvite"
+	job.Labels["kuso.sislelabs.com/service"] = "bukvite-web"
+	arch := &fakeLogArchive{lines: []string{"curl: (7) Failed to connect", "curl: (7) Failed again"}}
+	w := &Watcher{Kube: &kube.Client{Clientset: fake.NewSimpleClientset()}, Logs: arch}
+
+	pf := w.failedPod(context.Background(), job)
+	if pf.logTail != "curl: (7) Failed to connect\ncurl: (7) Failed again" {
+		t.Errorf("logTail = %q, want the archived lines", pf.logTail)
+	}
+	if arch.project != "bukvite" || arch.service != "bukvite-web" || arch.podPref != "sched-29844700-" {
+		t.Errorf("archive queried with project=%q service=%q prefix=%q", arch.project, arch.service, arch.podPref)
+	}
+	if !arch.since.Equal(created) || arch.n != logTailLines {
+		t.Errorf("archive since=%v n=%d, want %v / %d", arch.since, arch.n, created, logTailLines)
+	}
+}
+
+// TestFailedPod_LivePodWinsOverArchive: when the pod is still around its own
+// log stream is authoritative and the archive isn't touched.
+func TestFailedPod_LivePodWinsOverArchive(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "job-a-x", Namespace: "kuso", Labels: map[string]string{"job-name": "job-a"}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "cron",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}}},
+	}
+	arch := &fakeLogArchive{lines: []string{"archived"}}
+	w := &Watcher{Kube: &kube.Client{Clientset: fake.NewSimpleClientset(pod)}, Logs: arch}
+	pf := w.failedPod(context.Background(), failedJob("job-a", "cron-a", "uid-a"))
+	if pf.logTail == "archived" || arch.calls != 0 {
+		t.Errorf("archive used (%d calls, tail %q) although the pod is live", arch.calls, pf.logTail)
+	}
+}
+
+// TestTick_FreshFailureNotifiesSameTickWithFailureTime pins the BUG-47
+// timing contract: a Job that failed 25s ago is alerted on the very next
+// tick, and the card's "Failed …" token is the Job's failure time — not the
+// emit time. (Live, every cron.failed feed row landed 20-30s after the Job's
+// Failed transition; the "Failed 8 hours ago" text is Discord rendering the
+// <t:…:R> token relative to when the card is READ.)
+func TestTick_FreshFailureNotifiesSameTickWithFailureTime(t *testing.T) {
+	failedAt := time.Now().Add(-25 * time.Second).Truncate(time.Second)
+	cs := fake.NewSimpleClientset(failedJobAt("job-f", "cron-a", "uid-f", failedAt))
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		kube.GVRCrons: "KusoCronList",
+	})
+	seedCronCR(t, dyn, "cron-a", "")
+	var got []notify.Event
+	w := newTestWatcher(t, cs, dyn)
+	w.emit = func(e notify.Event) { got = append(got, e) }
+
+	w.tick(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("events after one tick = %d, want 1", len(got))
+	}
+	if !strings.Contains(got[0].Description, notify.TimeToken(failedAt)) {
+		t.Errorf("Description = %q, want the failure-time token %q", got[0].Description, notify.TimeToken(failedAt))
+	}
+	w.tick(context.Background())
+	if len(got) != 1 {
+		t.Errorf("events after second tick = %d, want still 1", len(got))
+	}
+}

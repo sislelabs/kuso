@@ -530,6 +530,10 @@ func main() {
 		// the background — it lists every project/service and shouldn't
 		// gate boot. Idempotent across replicas and restarts.
 		go projSvc.HealManagedSecretMounts(ctx, logger)
+		// Restamp service crons' egress fields from their service: crons
+		// created before the cron CR carried them would otherwise render
+		// with public egress even when the service is private.
+		go projSvc.HealCronEgress(ctx, logger)
 		secSvc = secrets.New(kc, *namespace)
 		secSvc.NSResolver = nsResolver
 		// Wire the per-env Secret cleanup hook so DeleteEnvironment in
@@ -1430,6 +1434,9 @@ func main() {
 				Notify:  notifyDisp,
 				Logger:  logger.With("component", "cronwatch"),
 				BaseURL: os.Getenv("KUSO_PUBLIC_URL"),
+			}
+			if logDB != nil {
+				cwatcher.Logs = logDB
 			}
 			serverstate.RegisterLoop(serverstate.LoopCronWatch, cronwatch.DefaultTickInterval)
 			goSafe(logger, "cronwatch", func() { cwatcher.Run(workCtx) })

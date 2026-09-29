@@ -656,3 +656,75 @@ func (s *Service) envCloneConnByOrigin(ctx context.Context, ns, project, envScop
 	}
 	return out
 }
+
+// propagateEgressToCrons mirrors the service's privateEgress /
+// platformApiEgress onto every KusoCron that belongs to it. The kusocron
+// chart stamps the NetworkPolicy egress pod labels off the cron CR, so a
+// service-level toggle that stops at the envs leaves its crons on the old
+// egress. Project-scoped crons (kind=http/command, no service) are left
+// alone: they have no service to follow.
+func (s *Service) propagateEgressToCrons(ctx context.Context, ns, project string, svc *kube.KusoService) error {
+	crons, err := s.Kube.ListKusoCrons(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("list crons for egress propagation: %w", err)
+	}
+	short := strings.TrimPrefix(svc.Name, project+"-")
+	var errs []error
+	for i := range crons {
+		c := &crons[i]
+		if c.Spec.Project != project || (c.Spec.Kind != "" && c.Spec.Kind != "service") {
+			continue
+		}
+		if c.Spec.Service != svc.Name && c.Spec.Service != short {
+			continue
+		}
+		if c.Spec.PrivateEgress == svc.Spec.PrivateEgress && c.Spec.PlatformAPIEgress == svc.Spec.PlatformAPIEgress {
+			continue
+		}
+		if _, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, c.Name, func(live *kube.KusoCron) error {
+			live.Spec.PrivateEgress = svc.Spec.PrivateEgress
+			live.Spec.PlatformAPIEgress = svc.Spec.PlatformAPIEgress
+			return nil
+		}); uerr != nil {
+			errs = append(errs, fmt.Errorf("update cron %s: %w", c.Name, uerr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// HealCronEgress is the boot-time sweep for crons created before the cron
+// CR carried egress fields. Those read as privateEgress=false, which the
+// kusocron chart renders as public egress — so a private service's crons
+// would gain internet access on upgrade until restamped. Idempotent;
+// failures are logged and don't block boot.
+func (s *Service) HealCronEgress(ctx context.Context, logger *slog.Logger) {
+	projects, err := s.Kube.ListKusoProjects(ctx, s.Namespace)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("cron egress heal: list projects failed", "err", err)
+		}
+		return
+	}
+	for i := range projects {
+		project := projects[i].Name
+		ns, nerr := s.namespaceFor(ctx, project)
+		if nerr != nil {
+			if logger != nil {
+				logger.Warn("cron egress heal: resolve namespace failed", "project", project, "err", nerr)
+			}
+			continue
+		}
+		services, serr := s.ListServices(ctx, project)
+		if serr != nil {
+			if logger != nil {
+				logger.Warn("cron egress heal: list services failed", "project", project, "err", serr)
+			}
+			continue
+		}
+		for j := range services {
+			if perr := s.propagateEgressToCrons(ctx, ns, project, &services[j]); perr != nil && logger != nil {
+				logger.Warn("cron egress heal: restamp failed", "project", project, "service", services[j].Name, "err", perr)
+			}
+		}
+	}
+}

@@ -59,6 +59,17 @@ spec:
         metadata:
           labels:
             {{- include "kusocron.labels" . | nindent 12 }}
+            {{- /* Same egress gates as the kusoenvironment pod template:
+                   the project NetworkPolicy is default-deny and only
+                   allows public egress for pods carrying this label.
+                   privateEgress/platformApiEgress are copied from the
+                   owning service by the server. */}}
+            {{- if not .Values.privateEgress }}
+            kuso.sislelabs.com/network-egress-public: "true"
+            {{- end }}
+            {{- if .Values.platformApiEgress }}
+            kuso.sislelabs.com/network-egress-platform-api: "true"
+            {{- end }}
         spec:
           # Cron pods run user-supplied commands (kind=command) or probe
           # user-supplied URLs (kind=http). Neither needs to talk to the

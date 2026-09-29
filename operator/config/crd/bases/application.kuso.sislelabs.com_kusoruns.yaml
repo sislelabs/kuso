@@ -154,6 +154,14 @@ spec:
                 placement:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                privateEgress:
+                  type: boolean
+                  default: false
+                  description: Mirrors the owning service's spec.privateEgress. When false the pod gets the network-egress-public label and may reach the internet.
+                platformApiEgress:
+                  type: boolean
+                  default: false
+                  description: Mirrors the owning service's spec.platformApiEgress. When true the pod may call the kuso API.
                 # done is the chart's no-op gate — same shape as
                 # KusoBuild.spec.done. Set to true on terminal
                 # transition so an operator restart's initial cache

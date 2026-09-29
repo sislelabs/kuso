@@ -783,7 +783,12 @@ func (h *BackupsHandler) pgTarget(ctx context.Context, project, addon, database 
 	if v, ok := sec.Data["POSTGRES_HOST"]; ok && len(v) > 0 {
 		t.host = string(v)
 	}
-	t.host = addons.QualifyInClusterHost(t.host, ns)
+	hostNS := ns
+	if isInstanceAddon(cr) {
+		// The shared instance server's Service is in the home namespace.
+		hostNS = h.Namespace
+	}
+	t.host = addons.QualifyInClusterHost(t.host, hostNS)
 	if v, ok := sec.Data["POSTGRES_PORT"]; ok && len(v) > 0 {
 		t.port = string(v)
 	}
@@ -803,6 +808,11 @@ func (h *BackupsHandler) pgTarget(ctx context.Context, project, addon, database 
 	if database != "" {
 		if !validDBName.MatchString(database) {
 			return pgTarget{}, fmt.Errorf("invalid database name %q", database)
+		}
+		// An instance addon's credentials are a tenant role on a shared
+		// server, not a server admin: its only database is its own.
+		if isInstanceAddon(cr) && database != t.name {
+			return pgTarget{}, fmt.Errorf("addon %s/%s is a database on the shared instance server; only %q can be browsed", project, addon, t.name)
 		}
 		t.name = database
 	}
@@ -844,6 +854,11 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	// External managed database: the supplied role is already NOSUPERUSER and
 	// cannot CREATE ROLE, so there is nothing to drop privileges from and no
 	// way to provision kuso_browser. Connect as the supplied user.
+	//
+	// Instance addon: a database on the shared instance server. Its conn role
+	// is a per-database NOSUPERUSER login, so it already is the restricted
+	// role; a server-wide kuso_browser there would span every tenant. The
+	// session is still checked, and refused if the role turns out privileged.
 	if !needsBrowserRole(cr) {
 		db, err := pgOpenAsWithSSL(host, port, user, pass, dbName, sslMode)
 		if err != nil {
@@ -851,7 +866,15 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 		}
 		if perr := db.PingContext(ctx); perr != nil {
 			_ = db.Close()
-			return nil, fmt.Errorf("SQL browser unavailable: could not connect to the external database: %w", perr)
+			return nil, fmt.Errorf("SQL browser unavailable: could not connect to the database: %w", perr)
+		}
+		if isInstanceAddon(cr) {
+			if rerr := requireUnprivilegedRole(ctx, db); rerr != nil {
+				_ = db.Close()
+				h.Logger.Error("sql-browser: instance addon role is privileged — refusing",
+					"project", project, "addon", addon, "err", rerr)
+				return nil, fmt.Errorf("SQL browser unavailable: %w", rerr)
+			}
 		}
 		return db, nil
 	}
@@ -894,12 +917,49 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 // providers withhold CREATEROLE, so provisioning cannot succeed. Keeping the
 // requirement there doesn't harden anything; it just makes the browser
 // permanently unavailable.
+//
+// An instance addon is the same shape: its conn role is a per-database
+// NOSUPERUSER login on the shared instance server (see
+// addons.provisionInstanceAddonDB), and the one global kuso_browser role
+// can't be scoped to a single tenant's database there.
 func needsBrowserRole(addon *kube.KusoAddon) bool {
 	if addon == nil {
 		return true
 	}
-	ext := addon.Spec.External
-	return ext == nil || ext.SecretName == ""
+	return !isExternalAddon(addon) && !isInstanceAddon(addon)
+}
+
+func isExternalAddon(addon *kube.KusoAddon) bool {
+	return addon != nil && addon.Spec.External != nil && addon.Spec.External.SecretName != ""
+}
+
+func isInstanceAddon(addon *kube.KusoAddon) bool {
+	return addon != nil && addon.Spec.UseInstanceAddon != ""
+}
+
+// privilegedRoleQuery is true when the session role is privileged. rolsuper
+// is implied by pg_has_role (a superuser is a member of every role) but
+// stays explicit so the check doesn't hinge on that rule.
+const privilegedRoleQuery = `
+SELECT r.rolsuper OR r.rolcreaterole
+    OR pg_has_role(current_user, 'pg_execute_server_program', 'MEMBER')
+    OR pg_has_role(current_user, 'pg_read_server_files', 'MEMBER')
+    OR pg_has_role(current_user, 'pg_write_server_files', 'MEMBER')
+  FROM pg_roles r WHERE r.rolname = current_user`
+
+// requireUnprivilegedRole refuses a session whose role could reach the
+// server's filesystem or other roles: superuser, CREATEROLE, or membership
+// in the pg_*_server_* roles that unlock COPY … PROGRAM / pg_read_file.
+func requireUnprivilegedRole(ctx context.Context, db *sql.DB) error {
+	var privileged bool
+	err := db.QueryRowContext(ctx, privilegedRoleQuery).Scan(&privileged)
+	if err != nil {
+		return fmt.Errorf("could not verify the connection role is unprivileged: %w", err)
+	}
+	if privileged {
+		return errors.New("the addon's role has superuser-level privileges; refusing to open the browser with it")
+	}
+	return nil
 }
 
 // browserSSLMode picks the wire mode for a browser connection. The in-cluster
@@ -909,7 +969,7 @@ func browserSSLMode(addon *kube.KusoAddon) string {
 	if addon == nil {
 		return "disable"
 	}
-	if !needsBrowserRole(addon) {
+	if isExternalAddon(addon) {
 		return "require"
 	}
 	if addon.Spec.TLS == "require" {

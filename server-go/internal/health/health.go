@@ -304,7 +304,7 @@ func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, 
 	// as a crashloop. Prefer the terminated signal so Classify
 	// reaches KindOOM (and the exit-137 fallback).
 	termReason, exitCode := podTerminatedSignal(p)
-	sig := failures.Signal{Reason: sigReason, ExitCode: exitCode}
+	sig := failures.Signal{Reason: sigReason, ExitCode: exitCode, Runtime: true}
 	if termReason != "" {
 		sig.Reason = termReason
 	}

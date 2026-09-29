@@ -180,6 +180,17 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if envCR.Spec.Image == nil || envCR.Spec.Image.Tag == "" {
 		return nil, fmt.Errorf("%w: production env has no image yet — wait for first deploy", ErrInvalid)
 	}
+	// Egress follows the parent service so the run pod gets the same
+	// NetworkPolicy egress labels as the service's pods. Prefer the
+	// service spec; fall back to the env's mirror; fail closed (private)
+	// if neither is readable — a private service's run must never gain
+	// internet egress because of a transient read error.
+	privateEgress, platformAPIEgress := envCR.Spec.PrivateEgress, envCR.Spec.PlatformAPIEgress
+	if svc, serr := s.Kube.GetKusoService(ctx, ns, fqn); serr == nil && svc != nil {
+		privateEgress, platformAPIEgress = svc.Spec.PrivateEgress, svc.Spec.PlatformAPIEgress
+	} else if !apierrors.IsNotFound(serr) {
+		privateEgress, platformAPIEgress = true, false
+	}
 	run := &kube.KusoRun{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "application.kuso.sislelabs.com/v1alpha1",
@@ -201,16 +212,18 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			},
 		},
 		Spec: kube.KusoRunSpec{
-			Project:         project,
-			Service:         fqn,
-			Command:         append([]string{}, req.Command...),
-			Env:             envOverlay,
-			Image:           envCR.Spec.Image,
-			EnvFromSecrets:  envCR.Spec.EnvFromSecrets,
-			Placement:       envCR.Spec.Placement,
-			TimeoutSeconds:  req.TimeoutSeconds,
-			TriggeredBy:     req.TriggeredBy,
-			TriggeredByUser: req.TriggeredByUser,
+			Project:           project,
+			Service:           fqn,
+			Command:           append([]string{}, req.Command...),
+			Env:               envOverlay,
+			Image:             envCR.Spec.Image,
+			EnvFromSecrets:    envCR.Spec.EnvFromSecrets,
+			Placement:         envCR.Spec.Placement,
+			PrivateEgress:     privateEgress,
+			PlatformAPIEgress: platformAPIEgress,
+			TimeoutSeconds:    req.TimeoutSeconds,
+			TriggeredBy:       req.TriggeredBy,
+			TriggeredByUser:   req.TriggeredByUser,
 		},
 	}
 	out, err := s.Kube.CreateKusoRun(ctx, ns, run)

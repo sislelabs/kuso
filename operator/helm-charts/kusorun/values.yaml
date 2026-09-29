@@ -46,6 +46,11 @@ resources:
 # placement mirrors the service's placement so the run lands on the
 # same node pool. Empty defaults to anywhere schedulable.
 placement: {}
+# Egress gates, copied from the owning service's spec. The project
+# NetworkPolicy is default-deny: without the public-egress pod label
+# (stamped unless privateEgress) the job can't reach the internet.
+privateEgress: false
+platformApiEgress: false
 
 # done is the chart's no-op gate. When true, every template
 # short-circuits to render zero objects — even if helm-operator's
