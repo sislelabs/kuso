@@ -13,9 +13,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
-// Project-level shared secrets card. Each row is one env var that
-// gets auto-mounted into every service in the project via the
-// "<project>-shared" Secret. Used for cross-service integrations
+// Project-level shared secrets card. Each row is one env var in the
+// "<project>-shared" Secret; services opt in per key from their
+// Variables tab. Used for cross-service integrations
 // like Resend, Postmark, Stripe, OpenAI — set once, every service
 // gets it at boot.
 //
@@ -59,8 +59,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
       toast.error("Use SCREAMING_SNAKE_CASE for env var names");
       return;
     }
-    // Overwriting an existing shared key changes a value mounted on
-    // EVERY service in the project — those pods pick up the new value on
+    // Overwriting an existing shared key changes the value for every
+    // service subscribed to it — those pods pick up the new value on
     // their next restart. Confirm before clobbering; adding a brand-new
     // key is friction-free.
     if (stored.includes(k)) {
@@ -83,13 +83,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
       <header>
         <h3 className="font-heading text-sm font-semibold tracking-tight">Project secrets</h3>
         <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
-          Stored in{" "}
-          <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
-            {project}-shared
-          </code>
-          . A service with no subscription list gets every key as an env var; a service with a
-          list gets only the keys it subscribes to on its Variables tab. Use for cross-service
-          integrations like Resend, Postmark, Stripe, OpenAI.
+          Set a value once, then pick it from any service&apos;s Variables tab under Add → Project
+          secret.
         </p>
       </header>
 
@@ -218,9 +213,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
             <span className="font-mono text-[var(--text-primary)]">
               {pendingDelete}
             </span>{" "}
-            is mounted on every service in this project. Removing it will
-            cause services that read the variable to crash on next restart
-            until they're updated.
+            is removed from every service that uses it. A service that reads it
+            will fail on its next restart.
           </p>
         }
         confirmLabel="Delete shared secret"
@@ -241,9 +235,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
             <span className="font-mono text-[var(--text-primary)]">
               {pendingOverwrite}
             </span>{" "}
-            is already mounted on every service in this project. Saving a new
-            value updates it everywhere — each service picks up the change on
-            its next restart.
+            already exists. The new value reaches every service that uses it on
+            that service&apos;s next restart.
           </p>
         }
         confirmLabel="Overwrite"

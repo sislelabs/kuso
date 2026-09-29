@@ -6,6 +6,7 @@ import {
   buildTimePrefix,
   dotenvToRows,
   literalToRef,
+  prefixGroups,
   reservedEnvWarning,
   rowDiffLabel,
   rowsShallowEqual,
@@ -523,5 +524,46 @@ describe("buildTimePrefix", () => {
     expect(buildTimePrefix("DATABASE_URL")).toBe("");
     expect(buildTimePrefix("API_PUBLIC_KEY")).toBe("");
     expect(buildTimePrefix("VITE_")).toBe("");
+  });
+});
+
+describe("prefixGroups", () => {
+  const names = [
+    "BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "DATABASE_URL",
+    "POOLER_HOST", "POOLER_PORT", "POOLER_URL",
+    "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PASSWORD", "POSTGRES_PORT", "POSTGRES_USER",
+    "STRIPE_PRICE_BASIC_T1", "STRIPE_PRICE_BASIC_T2", "STRIPE_PRICE_BASIC_T3",
+    "STRIPE_PRICE_PLUS_T1", "STRIPE_PRICE_PLUS_T2",
+    "STRIPE_PUBLISHABLE_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+  ];
+
+  it("groups the most specific shared prefix with enough members", () => {
+    const g = prefixGroups(names);
+    expect(g.get("STRIPE_PRICE_PLUS_T1")).toBe("STRIPE_PRICE");
+    expect(g.get("POSTGRES_USER")).toBe("POSTGRES");
+  });
+
+  it("leaves small families and the remainder of a split family alone", () => {
+    const g = prefixGroups(names);
+    for (const n of ["POOLER_URL", "STRIPE_SECRET_KEY", "BETTER_AUTH_URL", "DATABASE_URL"]) {
+      expect(g.has(n)).toBe(false);
+    }
+  });
+});
+
+describe("toRow addon ref reveal", () => {
+  it("keeps the ref as the editable value and the plaintext as resolved", () => {
+    const conn = new Map([["p-db-conn", "db"]]);
+    const r = toRow(
+      {
+        name: "DATABASE_URL",
+        value: "postgres://real",
+        valueFrom: { secretKeyRef: { name: "p-db-conn", key: "DATABASE_URL" } },
+      },
+      "p",
+      conn,
+    );
+    expect(r.value).toBe("${{ db.DATABASE_URL }}");
+    expect(r.resolved).toBe("postgres://real");
   });
 });

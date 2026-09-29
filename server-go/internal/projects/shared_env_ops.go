@@ -39,6 +39,9 @@ type SubscribableSharedKeys struct {
 	// Order matches kube.SharedSecretNames(): project first,
 	// instance second.
 	Sources []SubscribableKeyGroup `json:"sources"`
+	// Values holds the plaintext of each subscribed key, set only on a
+	// reveal read by a caller allowed to read secrets.
+	Values map[string]string `json:"values,omitempty"`
 }
 
 type SubscribableKeyGroup struct {
@@ -79,6 +82,31 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 		// drop every key and `env share K` narrow a mount-all service.
 		sort.Strings(all)
 		out.Subscribed = dedupeSorted(all)
+	}
+	return out, nil
+}
+
+// SharedEnvValues resolves keys against the shared secrets with the same
+// precedence the pod sees: project-shared wins over instance-shared. Keys in
+// neither are omitted.
+func (s *Service) SharedEnvValues(ctx context.Context, project string, keys []string) (map[string]string, error) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	names := kube.SharedSecretNames(project)
+	data := make([]map[string]string, len(names))
+	for i, name := range names {
+		data[i] = s.readSecretData(ctx, ns, name)
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		for _, d := range data {
+			if v, ok := d[k]; ok {
+				out[k] = v
+				break
+			}
+		}
 	}
 	return out, nil
 }

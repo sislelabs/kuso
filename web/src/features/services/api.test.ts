@@ -13,6 +13,6 @@ describe("getServiceEnvOverrides", () => {
   it("asks for the selected environment's own overrides", async () => {
     apiMock.mockResolvedValue({ envVars: [] });
     await getServiceEnvOverrides("shop", "api", "staging");
-    expect(apiMock).toHaveBeenCalledWith("/api/projects/shop/services/api/env?env=staging");
+    expect(apiMock).toHaveBeenCalledWith("/api/projects/shop/services/api/env?env=staging&reveal=true");
   });
 });

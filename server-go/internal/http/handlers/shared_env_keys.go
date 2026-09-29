@@ -11,8 +11,8 @@ import (
 
 // GET /api/projects/{project}/services/{service}/shared-env-keys
 // Returns the available keys (grouped by source secret) plus the
-// service's current subscription list. Dashboard renders the chip
-// toggle from this.
+// service's current subscription list. ?reveal=true adds the subscribed
+// keys' values for callers with secrets:read.
 func (h *ProjectsHandler) GetSharedEnvKeys(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
@@ -24,6 +24,12 @@ func (h *ProjectsHandler) GetSharedEnvKeys(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		h.fail(w, "list subscribable shared keys", err)
 		return
+	}
+	if r.URL.Query().Get("reveal") == "true" && callerCanReadSecrets(ctx, h.DB, project) {
+		if out.Values, err = h.Svc.SharedEnvValues(ctx, project, out.Subscribed); err != nil {
+			h.fail(w, "reveal shared keys", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

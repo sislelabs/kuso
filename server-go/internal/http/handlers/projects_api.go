@@ -59,7 +59,7 @@ type ProjectsAPI interface {
 	SetEnvValue(ctx context.Context, project, service, name, value string) (*kube.KusoService, error)
 	UnsetEnvVar(ctx context.Context, project, service, name string) (*kube.KusoService, error)
 	GetEnv(ctx context.Context, project, service string) ([]projects.EnvVar, error)
-	GetEnvScoped(ctx context.Context, project, service, envName string) ([]projects.EnvVar, error)
+	GetEnvScoped(ctx context.Context, project, service, envName string, reveal bool) ([]projects.EnvVar, error)
 	// GetEnvRevealed resolves every value to plaintext (admin-only reveal).
 	GetEnvRevealed(ctx context.Context, project, service string) ([]projects.EnvVar, error)
 	SetEnvWithOpts(ctx context.Context, project, service string, envVars []projects.EnvVar, opts projects.SetEnvOpts) error
@@ -68,6 +68,7 @@ type ProjectsAPI interface {
 	// Per-service shared-secret subscription. See
 	// projects.shared_env_ops.go for the rationale.
 	ListSubscribableSharedKeys(ctx context.Context, project, service string) (*projects.SubscribableSharedKeys, error)
+	SharedEnvValues(ctx context.Context, project string, keys []string) (map[string]string, error)
 	SetSharedEnvKeys(ctx context.Context, project, service string, keys []string) (*kube.KusoService, error)
 	// Per-service addon-conn subscription (v0.16.23). Same opt-in
 	// model as SharedEnvKeys but for addon-conn secrets.

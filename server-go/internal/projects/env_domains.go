@@ -413,10 +413,12 @@ func envCRNameFor(project, service, envName string) string {
 // showed these, so an override was invisible in both the CLI and the
 // Variables tab; the only way to learn it existed was to read the pod.
 //
-// The result is the env CR's own spec.envVars: overrides only, not the merged
-// effective set, so a caller can tell "this env pins X" apart from "X comes
-// from the service".
-func (s *Service) GetEnvScoped(ctx context.Context, project, service, envName string) ([]EnvVar, error) {
+// Propagation stamps every service var and subscribed shared key onto the env
+// CR, so the CR's spec.envVars is NOT the override set. An override is a name
+// the user pinned on this env (spec.envOverrides) or one that exists nowhere
+// upstream (neither a service var nor a subscribed shared key). reveal
+// resolves secretKeyRef overrides to plaintext; the caller gates it.
+func (s *Service) GetEnvScoped(ctx context.Context, project, service, envName string, reveal bool) ([]EnvVar, error) {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -439,9 +441,29 @@ func (s *Service) GetEnvScoped(ctx context.Context, project, service, envName st
 		(envCR.Spec.Service != "" && envCR.Spec.Service != fqn) {
 		return nil, fmt.Errorf("%w: environment %q", ErrNotFound, envName)
 	}
-	out := make([]EnvVar, 0, len(envCR.Spec.EnvVars))
+	svc, err := s.GetService(ctx, project, service)
+	if err != nil {
+		return nil, err
+	}
+	upstream := make(map[string]bool, len(svc.Spec.EnvVars)+len(svc.Spec.SharedEnvKeys))
+	for _, e := range svc.Spec.EnvVars {
+		upstream[e.Name] = true
+	}
+	for _, k := range svc.Spec.SharedEnvKeys {
+		upstream[k] = true
+	}
+	out := make([]EnvVar, 0)
 	for _, e := range envCR.Spec.EnvVars {
-		out = append(out, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
+		if upstream[e.Name] && !slices.Contains(envCR.Spec.EnvOverrides, e.Name) {
+			continue
+		}
+		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom}
+		if reveal {
+			if skr := secretKeyRefOf(e); skr != nil {
+				ev.Value = s.readSecretData(ctx, ns, skr.name)[skr.key]
+			}
+		}
+		out = append(out, ev)
 	}
 	return out, nil
 }

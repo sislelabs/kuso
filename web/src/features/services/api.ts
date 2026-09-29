@@ -28,15 +28,15 @@ export async function getServiceEnv(
 }
 
 // One environment's own overrides (what `kuso env set --env` writes), not
-// the merged effective set. Values are masked for non-admins like the
-// service-level read.
+// the merged effective set. Values are resolved for callers with
+// secrets:read and masked for everyone else, like the service-level read.
 export async function getServiceEnvOverrides(
   project: string,
   service: string,
   env: string,
 ): Promise<{ envVars: KusoEnvVar[]; masked?: boolean }> {
   return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env?env=${encodeURIComponent(env)}`,
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env?env=${encodeURIComponent(env)}&reveal=true`,
   );
 }
 

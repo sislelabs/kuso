@@ -1,17 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
-import { Button } from "@/components/ui/button";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { serviceBlast } from "@/lib/blast-radius";
 import { Input } from "@/components/ui/input";
-import { Trash2, Plus, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
-import { useServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
-import type { DetectedEnv } from "@/features/services/api";
+import { Check, ChevronRight, Eye, EyeOff, Link2, Lock, Search, Trash2 } from "lucide-react";
+import { useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
 import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
+import { setSharedSecret } from "@/features/project-secrets/api";
 import { useProject, useAddons } from "@/features/projects";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { api, ApiError } from "@/lib/api-client";
 import {
@@ -20,23 +19,31 @@ import {
   addonShortByConnSecret,
   buildTimePrefix,
   dotenvToRows,
+  prefixGroups,
   reservedEnvWarning,
   rid,
   rowDiffLabel,
   rowsShallowEqual,
-  rowsToDotenv,
   toRow,
   type Row,
 } from "@/components/service/envVarTransforms";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  AddMenu,
+  DeployStatus,
+  INSTANCE_SHARED_SECRET,
+  PasteEnvDialog,
+  RowMenu,
+  SharedPickerDialog,
+  VarBadge,
+  type SubscribableShape,
+} from "@/components/service/EnvVarParts";
 
 // Row + the pure transform helpers (toRow, literalToRef, the dotenv
 // serializers, ...) live in ./envVarTransforms so they're unit-testable
 // without rendering this component. This file keeps only the stateful
 // editor.
-
-type Mode = "rows" | "bulk";
 
 // PendingSave is the payload the confirm dialog applies as idempotent
 // per-key operations (no wholesale bulk overwrite → no partial-save gap):
@@ -57,6 +64,7 @@ export function EnvVarsEditor({
   project,
   service,
   env: envScope,
+  onAddGithubSignIn,
 }: {
   project: string;
   service: string;
@@ -65,23 +73,14 @@ export function EnvVarsEditor({
   // "missing" (they're mounted on the pod via envFromSecrets) and
   // so the new InheritedPerEnvSection can surface them.
   env: string;
+  onAddGithubSignIn?: () => void;
 }) {
   const qc = useQueryClient();
-  // reveal drives the ?reveal=true env read: the server resolves every
-  // value (managed secrets + addon/shared secretKeyRefs) to plaintext,
-  // admin-only. A non-admin still gets masked values back (server-gated),
-  // so asking for it is always safe.
-  //
-  // ON BY DEFAULT. The server stores nearly every var in the managed
-  // secret, so a lazy reveal meant almost every row loaded blank and
-  // rendered "••••• (type to set a new value)" — including plain config
-  // like STRONG_MODEL=gpt-5.1. Rows looked read-only, values couldn't be
-  // seen, and editing one meant retyping it from memory. Loading the real
-  // values up front makes every row identical and directly editable; the
-  // per-row eye then just toggles masking of a value the editor already
-  // holds, which is what the icon reads as.
-  const [reveal, setReveal] = useState(true);
-  const env = useServiceEnv(project, service, reveal);
+  // Always the reveal read: the server resolves every value to plaintext for
+  // callers with secrets:read and masks it for everyone else, so rows load
+  // with their real values and the eye only toggles masking.
+  const env = useServiceEnv(project, service, true);
+  const overrides = useServiceEnvOverrides(project, service, envScope);
   // The save runs as per-key upserts/deletes (see applyPending), not a
   // single mutation, so we drive the saving/error UI from local state
   // rather than a mutation object.
@@ -118,7 +117,7 @@ export function EnvVarsEditor({
     queryKey: ["projects", project, "services", service, "shared-env-keys"],
     queryFn: () =>
       api<SubscribableShape>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys?reveal=true`,
       ).catch((e: unknown) =>
         e instanceof ApiError && e.status === 403
           ? { subscribed: [], sources: [] }
@@ -126,6 +125,25 @@ export function EnvVarsEditor({
       ),
     staleTime: 30_000,
   });
+  const [subscriptionSaving, setSubscriptionSaving] = useState(false);
+  // Replaces the service's shared-secret subscription. Applied immediately,
+  // not through the SaveBar: it's its own spec field with its own rollout.
+  const setSubscription = async (keys: string[]) => {
+    setSubscriptionSaving(true);
+    try {
+      await api<unknown>(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
+        { method: "PUT", body: { keys } },
+      );
+      await qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "shared-env-keys"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't update project secrets");
+      throw e;
+    } finally {
+      setSubscriptionSaving(false);
+    }
+  };
   // Memoised so the toRow effect below only re-runs when the addon set
   // (or its connectionSecret status fields) actually changes. Without
   // memo, every re-render rebuilds the map and the effect's dep array
@@ -198,33 +216,15 @@ export function EnvVarsEditor({
   // detector can compare incoming refetches against the baseline,
   // not the local (possibly-edited) rows.
   const baselineFromRows = useRef<Row[]>([]);
-  const [mode, setMode] = useState<Mode>("rows");
-  const [bulkText, setBulkText] = useState("");
-  // Sticky "rolled out" window. Tied ONLY to the local savedAt set
-  // in this session's save() — refresh wipes it deliberately.
-  // Showing a banner from server-side lastRolloutAt would lie when
-  // someone else's save (or a build promote, or any pod restart)
-  // happened recently — the user opening the page fresh has no
-  // context for "change is live", they didn't change anything.
-  // Server-side drift.podsStale is the honest signal for that case.
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  // Re-render every 5s while the sticky banner is visible so the
-  // "Ns ago" text ticks and the banner clears 60s after save without
-  // requiring user interaction.
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (savedAt == null) return;
-    const remaining = 60_000 - (Date.now() - savedAt);
-    if (remaining <= 0) return;
-    const t = setInterval(() => setNow(Date.now()), 5_000);
-    const clear = setTimeout(() => setSavedAt(null), remaining);
-    return () => {
-      clearInterval(t);
-      clearTimeout(clear);
-    };
-  }, [savedAt]);
-  const stickySaved = savedAt != null && now - savedAt < 60_000;
-  const ageSec = savedAt != null ? Math.max(0, Math.floor((now - savedAt) / 1000)) : 0;
+  // UI-only state: which rows are open for editing, which values are
+  // unmasked, which prefix groups are expanded.
+  const [editing, setEditing] = useState<Set<string>>(new Set());
+  const [shownValues, setShownValues] = useState<Set<string>>(new Set());
+  const [revealAll, setRevealAll] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [sharedOpen, setSharedOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   // Concurrent-edit guard: when env.data refetches, only re-baseline
   // the rows when the user has nothing dirty. Otherwise we'd silently
@@ -247,6 +247,7 @@ export function EnvVarsEditor({
     if (!dirty) {
       setRows(incoming);
       baselineFromRows.current = incoming;
+      setEditing(new Set());
       setConflictNotified(false);
       return;
     }
@@ -262,29 +263,6 @@ export function EnvVarsEditor({
     // back to the latest server state.
     baselineFromRows.current = incoming;
   }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes]);
-
-  // Rows as they were on entering bulk mode. Every keystroke re-parses
-  // against this snapshot, not the last parse, so a typed-then-deleted
-  // override of an addon key falls back to the original row.
-  const bulkBaseRows = useRef<Row[]>([]);
-  // Bulk text is derived from rows when entering bulk mode and
-  // committed back to rows on every keystroke. We keep them in sync
-  // so the user can flip between modes mid-edit without losing work.
-  const enterBulk = () => {
-    bulkBaseRows.current = rows;
-    setBulkText(rowsToDotenv(rows));
-    setMode("bulk");
-  };
-  const exitBulk = () => {
-    setMode("rows");
-  };
-  const onBulkChange = (text: string) => {
-    setBulkText(text);
-    // dotenvToRows carries the rows the textarea can't represent (secret
-    // refs, addon and managed rows) across the edit untouched.
-    setRows(dotenvToRows(text, bulkBaseRows.current));
-    setDirty(true);
-  };
 
   const update = (idx: number, patch: Partial<Row>) => {
     // Type-ahead trigger: detect the moment the user just typed
@@ -316,11 +294,6 @@ export function EnvVarsEditor({
     setRows((prev) => prev.filter((_, i) => i !== idx));
     setDirty(true);
   };
-  const add = () => {
-    setRows((prev) => [...prev, { id: rid(), name: "", value: "", fromSecret: false, secretBacked: false, visible: true }]);
-    setDirty(true);
-  };
-
   // Two-step save under the "one secret primitive" model. cleanRows()
   // validates + dedups, splitting the result into:
   //   1. envVars — the opaque secret-ref rows (fromSecret) the editor
@@ -478,6 +451,7 @@ export function EnvVarsEditor({
   // SaveBar's Discard button + ESC-prompt confirmation.
   const discard = () => {
     setRows(baselineFromRows.current);
+    setEditing(new Set());
     setDirty(false);
   };
   // Re-point the refs every render so the overlay hook fires the
@@ -518,7 +492,6 @@ export function EnvVarsEditor({
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
       toast.success("Env vars saved");
       setDirty(false);
-      setSavedAt(Date.now());
       setPendingPayload(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save env vars";
@@ -529,10 +502,157 @@ export function EnvVarsEditor({
     }
   };
 
-  const visibleCount = useMemo(
-    () => rows.filter((r) => !r.fromSecret || r.name).length,
-    [rows]
+  // ── Display model ────────────────────────────────────────────────────
+  // One list for everything the pod gets: the editable service vars (incl.
+  // addon-injected keys), subscribed project/instance secrets, this env's
+  // pinned overrides, and ghost rows for vars the code wants but nobody set.
+  const sharedValues = sharedSub.data?.values;
+  const sharedSourceOf = useMemo(() => {
+    const m = new Map<string, "project" | "instance">();
+    for (const src of sharedSub.data?.sources ?? []) {
+      const kind = src.secret === INSTANCE_SHARED_SECRET ? "instance" : "project";
+      // Project wins over instance on a key in both (same as the pod).
+      for (const k of src.keys) if (!m.has(k) || kind === "project") m.set(k, kind);
+    }
+    return m;
+  }, [sharedSub.data]);
+  const overrideVars = useMemo(
+    () => (overrides.data?.envVars ?? []).filter((v): v is typeof v & { name: string } => !!v.name),
+    [overrides.data],
   );
+  const overrideNames = useMemo(() => new Set(overrideVars.map((v) => v.name)), [overrideVars]);
+  const rowNames = useMemo(() => new Set(rows.map((r) => r.name.trim()).filter(Boolean)), [rows]);
+  const subscribed = useMemo(() => sharedSub.data?.subscribed ?? [], [sharedSub.data]);
+  const baselineById = useMemo(() => {
+    const m = new Map<string, Row>();
+    for (const b of baselineFromRows.current) m.set(b.id, b);
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseline changes with rows
+  }, [rows]);
+  const isChanged = (r: Row) => {
+    const b = baselineById.get(r.id);
+    return !b || b.name !== r.name || b.value !== r.value;
+  };
+
+  type Item =
+    | { kind: "var"; name: string; row: Row; index: number }
+    | { kind: "shared"; name: string; source: "project" | "instance" }
+    | { kind: "override"; name: string; value: string; ref: boolean };
+
+  const items = useMemo<Item[]>(() => {
+    const out: Item[] = [];
+    rows.forEach((row, index) => {
+      if (row.name.trim()) out.push({ kind: "var", name: row.name, row, index });
+    });
+    for (const k of subscribed) {
+      // A service var of the same name wins on the pod; the var row says so.
+      if (!rowNames.has(k)) out.push({ kind: "shared", name: k, source: sharedSourceOf.get(k) ?? "project" });
+    }
+    for (const v of overrideVars) {
+      out.push({ kind: "override", name: v.name, value: v.value ?? "", ref: !!v.valueFrom });
+    }
+    return out.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  }, [rows, subscribed, rowNames, sharedSourceOf, overrideVars]);
+
+  // Rows added this session with no name yet render on top, in edit mode.
+  const blankRows = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => !row.name.trim());
+
+  const missing = useMemo(() => {
+    const have = new Set<string>();
+    for (const r of rows) if (r.name) have.add(r.name.toUpperCase());
+    for (const k of subscribed) have.add(k.toUpperCase());
+    for (const k of perEnvSecrets.data?.keys ?? []) have.add(k.toUpperCase());
+    for (const k of overrideNames) have.add(k.toUpperCase());
+    const out = new Map<string, string | undefined>();
+    for (const h of detected.data?.hints ?? []) {
+      if (h.name && !have.has(h.name.toUpperCase())) out.set(h.name, h.lastLine);
+    }
+    for (const n of detected.data?.names ?? []) {
+      if (n && !have.has(n.toUpperCase()) && !out.has(n)) out.set(n, undefined);
+    }
+    return Array.from(out, ([name, crash]) => ({ name, crash }));
+  }, [rows, subscribed, perEnvSecrets.data, overrideNames, detected.data]);
+
+  const q = search.trim().toUpperCase();
+  const shown = q ? items.filter((i) => i.name.toUpperCase().includes(q)) : items;
+  const groupOf = useMemo(() => (q ? new Map<string, string>() : prefixGroups(items.map((i) => i.name))), [items, q]);
+
+  const isVisible = (key: string) => revealAll || shownValues.has(key);
+  const toggleVisible = (key: string) =>
+    setShownValues((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const copy = (value: string) => {
+    void navigator.clipboard.writeText(value).then(
+      () => toast.success("Copied"),
+      () => toast.error("Couldn't copy"),
+    );
+  };
+  const startEdit = (id: string) => setEditing((prev) => new Set(prev).add(id));
+  const stopEdit = (id: string) =>
+    setEditing((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+
+  const addRow = (name = "") => {
+    const row: Row = { id: rid(), name, value: "", fromSecret: false, secretBacked: false, visible: true };
+    setRows((prev) => [...prev, row]);
+    setEditing((prev) => new Set(prev).add(row.id));
+    setDirty(true);
+  };
+  const applyPaste = (text: string) => {
+    const parsed = dotenvToRows(text, []);
+    if (parsed.length === 0) {
+      toast.error("No KEY=value lines found");
+      return;
+    }
+    setRows((prev) => {
+      const next = [...prev];
+      for (const p of parsed) {
+        const i = next.findIndex((r) => r.name === p.name);
+        if (i >= 0) {
+          next[i] = { ...next[i], value: p.value, fromSecret: false, origValueFrom: undefined };
+        } else {
+          next.push({ ...p, visible: true });
+        }
+      }
+      return next;
+    });
+    setDirty(true);
+    setPasteOpen(false);
+    toast(`${parsed.length} ${parsed.length === 1 ? "variable" : "variables"} staged. Save to apply.`);
+  };
+
+  // Promote a service var to a project secret: write it to <project>-shared,
+  // subscribe this service, then drop the service var. The service var wins
+  // on the pod until the last step, so there's no window without the value.
+  const moveToShared = async (r: Row) => {
+    if (dirty) {
+      toast.error("Save or discard your changes first");
+      return;
+    }
+    if (sharedSourceOf.get(r.name) === "project") {
+      toast.error(`${r.name} already exists in project secrets`);
+      return;
+    }
+    try {
+      await setSharedSecret(project, { key: r.name, value: r.value });
+      await setSubscription(Array.from(new Set([...subscribed, r.name])).sort());
+      await unsetServiceEnvVar(project, service, r.name);
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "shared-secrets"] });
+      toast.success(`${r.name} moved to project secrets`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `Couldn't move ${r.name}`);
+    }
+  };
 
   if (env.isPending) {
     return <div className="text-sm text-[var(--text-tertiary)]">loading…</div>;
@@ -545,332 +665,379 @@ export function EnvVarsEditor({
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {/* Mode toggle — segmented control flips between per-row chips
-          and a dotenv textarea. Both write to the same `rows` state
-          so flipping is lossless. */}
-      <div className="flex items-center justify-between">
-        <div className="inline-flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5 text-[11px]">
+  const settingsHref = (source: "project" | "instance") =>
+    source === "instance" ? "/settings/instance-secrets" : `/projects/${encodeURIComponent(project)}/settings`;
+
+  const masking = (key: string, value: string | undefined, canReveal: boolean) => {
+    if (masked || !canReveal || value === undefined) return <span className="text-[var(--text-tertiary)]">••••••••</span>;
+    if (!isVisible(key)) return <span className="text-[var(--text-tertiary)]">••••••••</span>;
+    return <span className="break-all text-[var(--text-primary)]">{value === "" ? "(empty)" : value}</span>;
+  };
+
+  const eye = (key: string, name: string, canReveal: boolean) =>
+    !masked && canReveal ? (
+      <button
+        type="button"
+        aria-label={isVisible(key) ? `Hide value of ${name}` : `Show value of ${name}`}
+        onClick={() => toggleVisible(key)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        {isVisible(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+      </button>
+    ) : (
+      <span className="h-7 w-7" />
+    );
+
+  const rowShell = "grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-0.5 px-2 py-1 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto_auto]";
+  const nameCell = (name: string, badges: ReactNode) => (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={name}>
+        {name}
+      </span>
+      {badges}
+    </div>
+  );
+  const valueCell = (content: ReactNode, onClick?: () => void) => (
+    <div
+      onClick={onClick}
+      className={cn(
+        "col-span-3 row-start-2 min-w-0 truncate font-mono text-[12px] sm:col-span-1 sm:col-start-2 sm:row-start-1",
+        onClick && "cursor-text",
+      )}
+    >
+      {content}
+    </div>
+  );
+
+  const renderEditRow = (r: Row, i: number) => (
+    <div key={r.id} className="space-y-1 border-l-2 border-[var(--accent)] bg-[var(--bg-secondary)]/60 px-2 py-2">
+      <div className="flex flex-col gap-1.5 sm:grid sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto_auto_auto] sm:items-center">
+        <Input
+          autoFocus={!r.name}
+          placeholder="KEY"
+          aria-label={r.name ? `Name of variable ${r.name}` : `Name of variable ${i + 1}`}
+          value={r.name}
+          onChange={(e) => update(i, { name: e.target.value })}
+          className={cn("h-8 font-mono text-[12px]", reservedEnvWarning(r.name) && "border-amber-500/60")}
+          disabled={r.fromSecret}
+          spellCheck={false}
+        />
+        <Input
+          autoFocus={!!r.name}
+          placeholder={r.fromSecret ? "secret reference (pick a new one with 🔗)" : "value or ${{ ref }}"}
+          aria-label={r.name ? `Value of ${r.name}` : `Value of variable ${i + 1}`}
+          value={r.value}
+          onChange={(e) => update(i, { value: e.target.value })}
+          className="h-8 min-w-0 font-mono text-[12px]"
+          disabled={r.fromSecret}
+          spellCheck={false}
+        />
+        <div className="flex items-center justify-end gap-0.5 sm:contents">
+          <ReferencePicker
+            project={project}
+            excludeService={service}
+            onPick={(ref) =>
+              update(i, { value: ref, visible: true, fromSecret: false, secretBacked: false, origValueFrom: undefined })
+            }
+            forceOpen={pickerOpenForIndex === i}
+            onForceCloseConsumed={() => setPickerOpenForIndex(null)}
+          />
+          {!r.addon ? (
+            <button
+              type="button"
+              aria-label={r.name ? `Remove ${r.name}` : "Remove variable"}
+              onClick={() => remove(i)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <span className="h-8 w-8" />
+          )}
           <button
             type="button"
-            onClick={() => mode === "bulk" && exitBulk()}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded px-2 py-1 transition-colors",
-              mode === "rows"
-                ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            )}
+            aria-label="Done editing"
+            onClick={() => stopEdit(r.id)}
+            disabled={!r.name.trim()}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
           >
-            <List className="h-3 w-3" />
-            Rows
-          </button>
-          <button
-            type="button"
-            onClick={() => mode === "rows" && enterBulk()}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded px-2 py-1 transition-colors",
-              mode === "bulk"
-                ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            )}
-          >
-            <FileText className="h-3 w-3" />
-            Bulk
+            <Check className="h-3.5 w-3.5" />
           </button>
         </div>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {visibleCount} {visibleCount === 1 ? "var" : "vars"}
+      </div>
+      {reservedEnvWarning(r.name) && (
+        <p className="font-mono text-[10px] text-amber-400">{reservedEnvWarning(r.name)}</p>
+      )}
+    </div>
+  );
+
+  const renderItem = (it: Item) => {
+    if (it.kind === "var") {
+      const r = it.row;
+      if (canWrite && editing.has(r.id)) return renderEditRow(r, it.index);
+      const isRef = r.value.startsWith("${{");
+      const key = `var:${r.id}`;
+      const plaintext = isRef ? r.resolved : r.value;
+      const badges = (
+        <>
+          {r.addon && <VarBadge title={`From the ${r.addon} addon`}>{r.addon}</VarBadge>}
+          {buildTimePrefix(r.name) && (
+            <VarBadge title="Inlined into the browser bundle at build time. A change needs a rebuild.">build</VarBadge>
+          )}
+          {sharedSourceOf.has(r.name) && subscribed.includes(r.name) && (
+            <VarBadge tone="warn" title="This service value wins over the project secret of the same name.">
+              overrides {sharedSourceOf.get(r.name)}
+            </VarBadge>
+          )}
+          {overrideNames.has(r.name) && (
+            <VarBadge tone="warn" title={`${envScope} uses its own value; see the ${envScope} row.`}>
+              overridden
+            </VarBadge>
+          )}
+        </>
+      );
+      const value = isRef && !isVisible(key) ? (
+        <span className="inline-flex items-center gap-1 text-[var(--text-secondary)]">
+          <Link2 className="h-3 w-3" />
+          {r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")}
         </span>
+      ) : (
+        masking(key, plaintext, !r.fromSecret || !!r.value || !!r.resolved)
+      );
+      return (
+        <div key={r.id} className={cn(rowShell, isChanged(r) && "border-l-2 border-[var(--accent)]")}>
+          {nameCell(r.name, badges)}
+          {valueCell(value, canWrite ? () => startEdit(r.id) : undefined)}
+          {eye(key, r.name, plaintext !== undefined && plaintext !== "" || !isRef)}
+          <RowMenu
+            label={`Actions for ${r.name}`}
+            items={[
+              { label: "Edit", onSelect: () => startEdit(r.id), disabled: !canWrite },
+              { label: "Copy value", onSelect: () => copy(plaintext ?? ""), disabled: masked || !plaintext },
+              {
+                label: "Move to project secrets",
+                onSelect: () => void moveToShared(r),
+                disabled: !canWrite || isRef || !!r.addon || r.fromSecret || !r.value || !r.origName,
+              },
+              { label: "Delete", onSelect: () => remove(it.index), destructive: true, disabled: !canWrite || !!r.addon },
+            ]}
+          />
+        </div>
+      );
+    }
+    if (it.kind === "shared") {
+      const key = `shared:${it.name}`;
+      const v = sharedValues?.[it.name];
+      return (
+        <div key={key} className={rowShell}>
+          {nameCell(
+            it.name,
+            <VarBadge tone="accent" title={`Shared ${it.source} secret. Edit it in ${it.source} settings.`}>
+              {it.source}
+            </VarBadge>,
+          )}
+          {valueCell(masking(key, v, v !== undefined))}
+          {eye(key, it.name, v !== undefined)}
+          <RowMenu
+            label={`Actions for ${it.name}`}
+            items={[
+              { label: "Copy value", onSelect: () => copy(v ?? ""), disabled: masked || v === undefined },
+              { label: `Edit in ${it.source} settings`, href: settingsHref(it.source) },
+              {
+                label: "Remove from this service",
+                onSelect: () => void setSubscription(subscribed.filter((k) => k !== it.name)).catch(() => undefined),
+                destructive: true,
+                disabled: !canWrite,
+              },
+            ]}
+          />
+        </div>
+      );
+    }
+    const key = `override:${it.name}`;
+    return (
+      <div key={key} className={rowShell}>
+        {nameCell(
+          it.name,
+          <VarBadge
+            tone="warn"
+            title={`Only on ${envScope}. Change with: kuso env set ${project} ${service} ${it.name}=… --env ${envScope}`}
+          >
+            {envScope}
+          </VarBadge>,
+        )}
+        {valueCell(masking(key, it.value, it.value !== "" || !it.ref))}
+        {eye(key, it.name, it.value !== "" || !it.ref)}
+        <RowMenu
+          label={`Actions for ${it.name}`}
+          items={[{ label: "Copy value", onSelect: () => copy(it.value), disabled: masked || !it.value }]}
+        />
+      </div>
+    );
+  };
+
+  // Walk the sorted items, collapsing each prefix family into one header row
+  // unless it's expanded or holds a row being edited.
+  const body: ReactNode[] = [];
+  const doneGroups = new Set<string>();
+  for (const it of shown) {
+    const g = groupOf.get(it.name);
+    if (!g) {
+      body.push(renderItem(it));
+      continue;
+    }
+    if (doneGroups.has(g)) continue;
+    doneGroups.add(g);
+    const members = shown.filter((m) => groupOf.get(m.name) === g);
+    const forcedOpen = members.some((m) => m.kind === "var" && (editing.has(m.row.id) || isChanged(m.row)));
+    const open = forcedOpen || openGroups.has(g);
+    const sources = Array.from(
+      new Set(members.map((m) => (m.kind === "var" ? m.row.addon : m.kind === "shared" ? m.source : envScope)).filter(Boolean)),
+    );
+    body.push(
+      <button
+        key={`group:${g}`}
+        type="button"
+        onClick={() =>
+          !forcedOpen &&
+          setOpenGroups((prev) => {
+            const next = new Set(prev);
+            if (next.has(g)) next.delete(g);
+            else next.add(g);
+            return next;
+          })
+        }
+        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left hover:bg-[var(--bg-secondary)]/60"
+      >
+        <ChevronRight
+          className={cn("h-3 w-3 text-[var(--text-tertiary)] transition-transform", open && "rotate-90")}
+        />
+        <span className="font-mono text-[12px] text-[var(--text-primary)]">{g}_*</span>
+        <span className="font-mono text-[11px] text-[var(--text-tertiary)]">{members.length}</span>
+        {sources.map((s) => (
+          <VarBadge key={s}>{s}</VarBadge>
+        ))}
+      </button>,
+    );
+    if (open) {
+      body.push(
+        <div key={`group-body:${g}`} className="divide-y divide-[var(--border-subtle)] bg-[var(--bg-secondary)]/40">
+          {members.map(renderItem)}
+        </div>,
+      );
+    }
+  }
+
+  const empty = blankRows.length === 0 && items.length === 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold tracking-tight text-[var(--text-primary)]">Variables</h3>
+        {envScope !== "production" && (
+          <VarBadge
+            tone="warn"
+            title={`Service variables apply to every environment. Values only for ${envScope} show a ${envScope} badge.`}
+          >
+            all environments
+          </VarBadge>
+        )}
+        {masked && (
+          <span title="Values are hidden. Reading them needs the admin role." className="text-[var(--text-tertiary)]">
+            <Lock className="h-3.5 w-3.5" />
+          </span>
+        )}
+        <DeployStatus drift={drift.data} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-tertiary)]" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search"
+              aria-label="Search variables"
+              className="h-8 w-36 pl-7 text-[12px]"
+            />
+          </div>
+          {!masked && (
+            <button
+              type="button"
+              aria-label={revealAll ? "Hide all values" : "Show all values"}
+              title={revealAll ? "Hide all values" : "Show all values"}
+              onClick={() => {
+                setRevealAll((v) => !v);
+                setShownValues(new Set());
+              }}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            >
+              {revealAll ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          {canWrite && (
+            <AddMenu
+              onNew={() => addRow()}
+              onShared={() => setSharedOpen(true)}
+              onPaste={() => setPasteOpen(true)}
+              onGithub={onAddGithubSignIn}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Masked-values banner — non-admins (viewer/editor) can see which
-          env keys exist but not their values, which the server replaces
-          with a sentinel. The editor is read-only in this mode so the
-          sentinel can't be saved over the real values. */}
-      {masked && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
-          Env var <span className="font-semibold">values are hidden</span> — reading them
-          requires the admin role. You can see the keys but the values are masked, and this
-          editor is read-only. To change a value without seeing the current one, an admin can
-          grant access or use a blind per-key set.
+      {empty ? (
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-8 text-center text-xs text-[var(--text-tertiary)]">
+          No variables yet.
+        </p>
+      ) : (
+        <div className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
+          {blankRows.map(({ row, index }) => renderEditRow(row, index))}
+          {body}
+          {shown.length === 0 && q && (
+            <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">No match.</p>
+          )}
         </div>
       )}
 
-      {/* Inherited env vars — keys that flow in from project-level
-          and instance-level shared secrets. Read-only display with a
-          link to the place to edit. Helps users understand WHY their
-          service has DATABASE_URL or SENTRY_DSN without having defined
-          it locally. Show even when empty so the affordance is
-          discoverable on day 1. */}
-      <InheritedSection project={project} service={service} />
-
-      {/* Per-env Secrets (kuso secret set --env <env>) were
-          previously surfaced here as a separate section, but they're
-          a low-level escape hatch — the primary primitive for any
-          env var, sensitive or not, is the row editor below
-          (kuso env set). We still consume the per-env Secret KEY
-          list as an extraSetNames signal in DetectedEnvBanner so
-          legacy entries don't get flagged as missing, but we no
-          longer render them as a separate UI section. Users who
-          want to view legacy per-env Secret keys can grep them via
-          `kuso secret list <p> <s> --env <env>` from the CLI;
-          everything new should go through the row editor. */}
-
-      {/* Status banner — single source of truth derived from kube
-          timestamps. Replaces the previous 3-state chip
-          (rolling/stale/saved) which flickered between states during
-          a rollout and disagreed with itself across refresh.
-          See driftBanner() for the state machine. */}
-      <DriftBanner drift={drift.data} stickySaved={stickySaved} ageSec={ageSec} />
-      {/* Hide the legacy `now` re-render when no banner is up — the
-          interval still ticks for the sticky window. */}
-      <span className="sr-only">{now}</span>
-
-      {/* Detected env vars — names kuso noticed are referenced by
-          the source repo (build-time scan) or that crashed the pod
-          at runtime (log shipper hints), but aren't set here yet.
-          One-click add seeds an empty row the user fills with the
-          actual value. The banner stays out of the way unless we
-          have something to suggest. */}
-      <DetectedEnvBanner
-        detected={detected.data}
-        rows={rows}
-        // Keys present in the per-env Secret OR in the shared
-        // subscription count as "set" — both flow into the pod's
-        // env via envFromSecrets / valueFrom, just not via the
-        // editor's row list. Without merging both signals, every
-        // subscribed shared key + every per-env NEXT_PUBLIC_* got
-        // flagged as "referenced in source but not set" even when
-        // the pod had them in process.env.
-        extraSetNames={[
-          ...(perEnvSecrets.data?.keys ?? []),
-          ...(sharedSub.data?.subscribed ?? []),
-        ]}
-        onAdd={(names) => {
-          // Append empty rows for each missing name. dedupe against
-          // existing entries (case-insensitive — env vars are
-          // canonically uppercase but humans type sloppily).
-          const existing = new Set(rows.map((r) => r.name.toUpperCase()));
-          const adds: Row[] = [];
-          for (const n of names) {
-            if (!existing.has(n.toUpperCase())) {
-              adds.push({ id: rid(), name: n, value: "", fromSecret: false, secretBacked: false, visible: false });
-              existing.add(n.toUpperCase());
-            }
-          }
-          if (adds.length) {
-            setRows((prev) => [...prev, ...adds]);
-            setDirty(true);
-          }
-        }}
-      />
-
-      {mode === "rows" ? (
-        <div className="space-y-1.5">
-          {rows.length === 0 && (
-            <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
-              No env vars. Click <span className="font-mono">Add</span> or paste a{" "}
-              <span className="font-mono">.env</span> file via Bulk mode.
-            </p>
-          )}
-          {rows.map((r, i) => (
-            // Stable per-row id so typing into the name field doesn't
-            // change the key (which would unmount the row and steal
-            // focus from the input — every keystroke blurred). Also
-            // keeps deletes from the middle correct since the survivor
-            // keeps its id.
-            // Mobile (<sm): name + value stack full-width, the three
-            // actions sit on their own row — a 180px name column plus
-            // three buttons crushes the value field to ~100px at 375px.
-            // At sm+ this collapses back to the exact desktop single-row
-            // grid so nothing changes on a laptop.
-            <div
-              key={r.id}
-              className={cn(
-                // One row = one value. Three actions: 🔗 wire a ref,
-                // 👁 reveal, 🗑 remove.
-                "flex flex-col gap-1.5 rounded-md border p-1.5 sm:grid sm:grid-cols-[180px_1fr_auto_auto_auto] sm:items-center sm:rounded-none sm:border-0 sm:p-0",
-                // Opaque secret-ref rows (fromSecret) get a subtle tint so
-                // they read as "wired to a secret — edit with 🔗" vs a
-                // typed value. On desktop the border collapses
-                // (sm:border-0) so the placeholder carries the distinction.
-                r.fromSecret
-                  ? "border-amber-500/30 bg-amber-500/5"
-                  : "border-[var(--border-subtle)]",
+      {missing.length > 0 && !q && (
+        <div className="rounded-md border border-dashed border-[var(--border-subtle)]">
+          {missing.map((m) => (
+            <div key={m.name} className="flex items-center gap-2 px-2 py-1.5">
+              <span className="truncate font-mono text-[12px] text-[var(--text-tertiary)]">{m.name}</span>
+              {m.crash ? (
+                <VarBadge tone="warn" title={m.crash}>
+                  crashed without it
+                </VarBadge>
+              ) : (
+                <VarBadge title="Referenced in your code but not set">missing</VarBadge>
               )}
-            >
-              <div className="flex flex-col gap-0.5">
-                <Input
-                  placeholder="KEY"
-                  aria-label={r.name ? `Name of variable ${r.name}` : `Name of variable ${i + 1}`}
-                  value={r.name}
-                  onChange={(e) => update(i, { name: e.target.value })}
-                  className={cn(
-                    "h-8 font-mono text-[12px]",
-                    reservedEnvWarning(r.name) && "border-amber-500/60",
-                  )}
-                  // Opaque secretKeyRef rows can't be renamed — the value is
-                  // a pointer we can't re-key. Managed secret-backed rows CAN
-                  // be: the unified write re-keys them like any other value,
-                  // and greying them out made half the list look inertly
-                  // read-only for no reason.
-                  disabled={r.fromSecret}
-                  spellCheck={false}
-                />
-                {reservedEnvWarning(r.name) && (
-                  <span className="font-mono text-[10px] text-amber-400">
-                    {reservedEnvWarning(r.name)}
-                  </span>
-                )}
-                {buildTimePrefix(r.name) && (
-                  <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                    {buildTimePrefix(r.name)}* is inlined at build time: a change reaches the
-                    browser after the next build, unless the key is in publicEnv (kuso.yml).
-                  </span>
-                )}
-                {/* The addon origin used to render as a "from <addon>" caption
-                    under every injected row. It repeated down the whole list
-                    and crowded out the keys themselves; the 🔗 affordance and
-                    the row's own tooltip already say where a value comes from. */}
-              </div>
-              <Input
-                placeholder={
-                  r.fromSecret
-                    ? "→ secret ref (use 🔗 to change)"
-                    : // Only a genuinely EMPTY secret-backed row needs the
-                      // "type to set" hint. With reveal on, a stored value is
-                      // already in the field, so showing that hint everywhere
-                      // made every row look blank and read-only.
-                      r.secretBacked && r.value === ""
-                      ? "••••• (type to set a new value)"
-                      : "value or ${{ ref }}"
-                }
-                // Values are masked by default and unmasked per row via the
-                // eye. The editor already holds the plaintext (reveal read),
-                // so this is display-only — no refetch needed to unmask.
-                type={r.visible || r.fromSecret ? "text" : "password"}
-                aria-label={r.name ? `Value of ${r.name}` : `Value of variable ${i + 1}`}
-                value={r.value}
-                onChange={(e) => update(i, { value: e.target.value })}
-                className="h-8 min-w-0 font-mono text-[12px]"
-                // Opaque refs aren't type-editable — the value is a resolved
-                // secret we can't render; the 🔗 picker re-wires them.
-                disabled={r.fromSecret}
-                spellCheck={false}
-              />
-              {/* On mobile the actions share one row (justify-end); on
-                  desktop they are grid cells (contents unwraps this flex so
-                  each button lands in its own column). */}
-              <div className="flex items-center justify-end gap-1 sm:contents">
-                <ReferencePicker
-                  project={project}
-                  excludeService={service}
-                  // Picking a ref sets the value AND turns the row into an
-                  // editable ${{ ref }} value — a fromSecret/secret-backed
-                  // row becomes a plain editable ref the user can re-pick.
-                  onPick={(ref) =>
-                    update(i, {
-                      value: ref,
-                      visible: true,
-                      fromSecret: false,
-                      secretBacked: false,
-                      origValueFrom: undefined,
-                    })
-                  }
-                  forceOpen={pickerOpenForIndex === i}
-                  onForceCloseConsumed={() => setPickerOpenForIndex(null)}
-                />
+              {canWrite && (
                 <button
                   type="button"
-                  aria-label={
-                    r.visible ? `Hide value of ${r.name || "variable"}` : `Show value of ${r.name || "variable"}`
-                  }
-                  onClick={() => {
-                    // Reveal path: secret-backed / opaque-ref values aren't
-                    // loaded on the default read. First time the user opens
-                    // one, ask the server to resolve plaintext (?reveal=true,
-                    // admin-only). Guard on !dirty so the reveal refetch
-                    // doesn't collide with in-progress edits.
-                    if (
-                      !r.visible &&
-                      (r.secretBacked || r.fromSecret) &&
-                      r.value === "" &&
-                      !reveal &&
-                      !dirty
-                    ) {
-                      setReveal(true);
-                    }
-                    update(i, { visible: !r.visible });
-                  }}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
+                  onClick={() => addRow(m.name)}
+                  className="ml-auto rounded px-2 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
                 >
-                  {r.visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  Add
                 </button>
-                <button
-                  type="button"
-                  aria-label={r.name ? `Remove ${r.name}` : "Remove variable"}
-                  onClick={() => remove(i)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400 disabled:opacity-30"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
+              )}
             </div>
           ))}
         </div>
-      ) : (
-        <div className="space-y-1.5">
-          <textarea
-            value={bulkText}
-            onChange={(e) => onBulkChange(e.target.value)}
-            spellCheck={false}
-            placeholder={"DATABASE_URL=postgres://...\nREDIS_URL=redis://...\nNODE_ENV=production"}
-            rows={Math.max(8, Math.min(20, bulkText.split("\n").length + 1))}
-            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
-          />
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-            One <span className="text-[var(--text-secondary)]">KEY=value</span> per line. Quote
-            values with whitespace. Secret-backed entries appear as comments and stay attached.
-          </p>
-        </div>
       )}
 
-      {mode === "rows" && (
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          Use <span className="text-[var(--text-secondary)]">{"${{ <name>.<KEY> }}"}</span> to
-          reference another service or addon. The icon to the right of any value picks
-          the right ref for you.
-        </p>
-      )}
-
-      <div className="flex items-center gap-2">
-        {mode === "rows" && (
-          <Button variant="outline" size="sm" onClick={add} type="button">
-            <Plus className="h-3.5 w-3.5" /> Add
-          </Button>
-        )}
-        {!canWrite && (
-          <span
-            className="font-mono text-[10px] text-[var(--text-tertiary)]"
-            title="secrets:write permission required"
-          >
-            read-only
-          </span>
-        )}
-        {dirty && canWrite && (
-          <span
-            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-200"
-            title="Saving env-var changes triggers a rolling restart of the deployment."
-          >
-            redeploys on save
-          </span>
-        )}
-        {/* Save / Discard moved to the unified SaveBar at the bottom
-            of ServiceOverlay (U-P0-D). The bar sits above the panel
-            scroll so it's always reachable on long env-var lists,
-            and the keyboard shortcut (⌘S) wires to it directly. */}
-      </div>
+      <SharedPickerDialog
+        open={sharedOpen}
+        onOpenChange={setSharedOpen}
+        project={project}
+        shape={sharedSub.data}
+        saving={subscriptionSaving}
+        onApply={(keys) =>
+          void setSubscription(keys).then(
+            () => setSharedOpen(false),
+            () => undefined,
+          )
+        }
+      />
+      <PasteEnvDialog open={pasteOpen} onOpenChange={setPasteOpen} onApply={applyPaste} />
       <DiffConfirmDialog
         open={pendingPayload != null}
         title="Apply env-var changes?"
@@ -1103,414 +1270,3 @@ function AddonRefRow({
   );
 }
 
-// InheritedSection renders the read-only "inherited from" panel
-// at the top of the env editor. Two stacked groups:
-//
-//   - From <project>-shared (links to /projects/<p>/settings)
-//   - From kuso-instance-shared (links to /settings/instance-secrets)
-//
-// Each shows the keys; values are write-only on the server and we
-// don't even ask for them — just the existence is the signal we
-// surface. Clicking the "edit →" link takes the user to the proper
-// settings page. Empty groups still render the affordance in muted
-// text so the discoverability story is "open the env editor, see
-// what's inherited" without needing to read docs.
-// DetectedEnvBanner shows the merged build-scan + crash-hint set,
-// minus anything already in the editor's rows. Two visual states:
-//
-//   - Crash-hint present (a recent pod log matched the missing-env
-//     regex): orange-bordered alert with the var name + the log line
-//     that triggered, plus "Add" to seed an empty row.
-//   - Build-scan only (.env.example or source grep referenced X but
-//     it isn't set): muted suggestion strip with all candidates as
-//     chips and a single "Add all missing" affordance.
-//
-// Hidden when both lists are empty or every detected name is already
-// in the rows. Clicking Add doesn't save — the row is added in
-// dirty state, the user fills the value, then hits the existing Save.
-function DetectedEnvBanner({
-  detected,
-  rows,
-  extraSetNames,
-  onAdd,
-}: {
-  detected: DetectedEnv | undefined;
-  rows: Row[];
-  // Additional key names that count as "satisfied" but live OUTSIDE
-  // the editor's row list — typically the keys in a per-env Secret
-  // mounted via envFromSecrets. The editor's rows + extraSetNames
-  // together form the full "is this key actually set on the pod?"
-  // signal.
-  extraSetNames?: string[];
-  onAdd: (names: string[]) => void;
-}) {
-  if (!detected) return null;
-  const haveSet = new Set(rows.map((r) => r.name.toUpperCase()).filter(Boolean));
-  for (const n of extraSetNames ?? []) {
-    if (n) haveSet.add(n.toUpperCase());
-  }
-  const missing = (detected.names ?? []).filter(
-    (n) => n && !haveSet.has(n.toUpperCase()),
-  );
-  const hints = (detected.hints ?? []).filter(
-    (h) => h.name && !haveSet.has(h.name.toUpperCase()),
-  );
-  if (missing.length === 0 && hints.length === 0) return null;
-
-  return (
-    <div className="space-y-2">
-      {hints.length > 0 && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <div className="flex-1 space-y-1.5">
-              <div className="text-amber-200">
-                Recent crash mentions{" "}
-                {hints.length === 1 ? "an env var" : `${hints.length} env vars`} that
-                {hints.length === 1 ? " isn't" : " aren't"} set:
-              </div>
-              <div className="space-y-1">
-                {hints.slice(0, 5).map((h) => (
-                  <div
-                    key={h.name}
-                    className="flex items-center justify-between gap-2 rounded bg-[var(--bg-tertiary)]/40 px-2 py-1"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-mono text-[11px] text-amber-300">{h.name}</div>
-                      <div className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
-                        {h.lastLine}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onAdd([h.name])}
-                      className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200 hover:bg-amber-500/20"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Add
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {missing.length > 0 && (
-        <div className="rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-[12px]">
-          <div className="flex items-start gap-2">
-            <Wand2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-            <div className="flex-1">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="text-[var(--text-secondary)]">
-                  {missing.length} env{" "}
-                  {missing.length === 1 ? "var" : "vars"} referenced in source but not set
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onAdd(missing)}
-                  className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <Plus className="h-3 w-3" />
-                  Add all
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {missing.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => onAdd([n])}
-                    className="rounded bg-[var(--bg-tertiary)]/60 px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface SubscribableShape {
-  subscribed: string[];
-  sources: { secret: string; keys: string[] }[];
-}
-
-function InheritedSection({ project, service }: { project: string; service: string }) {
-  const qc = useQueryClient();
-  const sub = useQuery<SubscribableShape>({
-    queryKey: ["projects", project, "services", service, "shared-env-keys"],
-    queryFn: () =>
-      api<SubscribableShape>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
-      ).catch((e: unknown) =>
-        e instanceof ApiError && e.status === 403
-          ? { subscribed: [], sources: [] }
-          : Promise.reject(e),
-      ),
-    staleTime: 30_000,
-  });
-  const mut = useMutation({
-    // api() stringifies opts.body itself — pass the object, not a
-    // JSON string. Double-stringifying produced `"{\"keys\":[...]}"`
-    // which the server rejected as malformed JSON (400), making the
-    // chip clicks silently no-op in the UI.
-    mutationFn: (keys: string[]) =>
-      api<unknown>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
-        { method: "PUT", body: { keys } },
-      ),
-    onSuccess: () =>
-      qc.invalidateQueries({
-        queryKey: ["projects", project, "services", service, "shared-env-keys"],
-      }),
-  });
-
-  const sources = sub.data?.sources ?? [];
-  const subscribed = new Set(sub.data?.subscribed ?? []);
-  const totalAvailable = sources.reduce((n, s) => n + s.keys.length, 0);
-
-  if (totalAvailable === 0) {
-    return (
-      <details className="group rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-1.5">
-        <summary className="cursor-pointer list-none font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
-          inherited env vars · none available
-        </summary>
-        <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-          Project-level vars are configured in{" "}
-          <a
-            href={`/projects/${encodeURIComponent(project)}/settings`}
-            className="text-[var(--accent)] hover:underline"
-          >
-            project settings
-          </a>
-          . Instance-level vars are admin-only at{" "}
-          <a href="/settings/instance-secrets" className="text-[var(--accent)] hover:underline">
-            /settings/instance-secrets
-          </a>
-          .
-        </p>
-      </details>
-    );
-  }
-
-  const toggle = (key: string) => {
-    const next = new Set(subscribed);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    mut.mutate(Array.from(next).sort());
-  };
-  const addAll = () => {
-    const all = sources.flatMap((s) => s.keys);
-    mut.mutate(Array.from(new Set(all)).sort());
-  };
-  const clearAll = () => mut.mutate([]);
-
-  return (
-    <details
-      open
-      className="group rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40"
-    >
-      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        <span>
-          inherited env vars · {subscribed.size}/{totalAvailable} subscribed
-        </span>
-        <span className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              addAll();
-            }}
-            className="rounded px-1.5 py-0.5 text-[10px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
-            title="Subscribe to every available key"
-          >
-            +all
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              clearAll();
-            }}
-            className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-            title="Unsubscribe from every key"
-          >
-            clear
-          </button>
-          <span className="text-[var(--text-tertiary)] group-open:rotate-90 transition-transform">
-            ›
-          </span>
-        </span>
-      </summary>
-      <div className="space-y-2 border-t border-[var(--border-subtle)] px-3 py-2">
-        {sources.map((src) => (
-          <SubscribableGroup
-            key={src.secret}
-            label={`from ${src.secret}`}
-            editHref={
-              src.secret === "kuso-instance-shared"
-                ? "/settings/instance-secrets"
-                : `/projects/${encodeURIComponent(project)}/settings`
-            }
-            keys={src.keys}
-            effective={subscribed}
-            onToggle={toggle}
-            saving={mut.isPending}
-          />
-        ))}
-      </div>
-    </details>
-  );
-}
-
-
-function SubscribableGroup({
-  label,
-  editHref,
-  keys,
-  effective,
-  onToggle,
-  saving,
-}: {
-  label: string;
-  editHref: string;
-  keys: string[];
-  effective: Set<string>;
-  onToggle: (key: string) => void;
-  saving: boolean;
-}) {
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">{label}</p>
-        <a
-          href={editHref}
-          className="font-mono text-[10px] text-[var(--accent)] hover:underline"
-        >
-          edit source →
-        </a>
-      </div>
-      {keys.length === 0 ? (
-        <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]/60">
-          (none)
-        </p>
-      ) : (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {[...keys].sort().map((k) => {
-            const on = effective.has(k);
-            return (
-              <button
-                key={k}
-                type="button"
-                disabled={saving}
-                onClick={() => onToggle(k)}
-                className={
-                  on
-                    ? "inline-flex items-center gap-1 rounded-md border border-[var(--accent)]/60 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--text-primary)] hover:bg-[var(--accent)]/25 disabled:opacity-60"
-                    : "inline-flex items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] bg-transparent px-2 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:border-[var(--text-secondary)] hover:text-[var(--text-secondary)] disabled:opacity-60"
-                }
-                title={on ? "Click to unsubscribe" : "Click to subscribe"}
-              >
-                <span>{on ? "✓" : "+"}</span>
-                {k}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// DriftBanner picks one banner state from the drift report instead of
-// the previous flicker-prone 3-state chip. Decision tree, in order:
-//
-//   1. helmError != ""   → red "deploy failed" with the error message
-//   2. lastSpecMutation set AND lastRolloutAt set AND
-//      rolloutDelta >= 0 AND age < 60s → green "saved Ns ago, rolled
-//      out Ms after save". This is the success confirmation.
-//   3. rolloutPending OR podsStale.length > 0 → blue "rolling out N
-//      seconds in (pod hasn't caught up)". One signal, not two.
-//   4. else → null
-//
-// All durations are computed from server timestamps so a hard refresh
-// keeps the same banner.
-function DriftBanner({
-  drift,
-  stickySaved,
-  ageSec,
-}: {
-  drift: import("@/features/services/api").DriftReport | undefined;
-  stickySaved: boolean;
-  ageSec: number;
-}) {
-  if (!drift) return null;
-  const helmErr = drift.helmError?.trim();
-  if (helmErr) {
-    return (
-      <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-[12px]">
-        <div className="flex items-start gap-2">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-          <div className="flex-1">
-            <div className="font-medium text-red-200">Deploy failed</div>
-            <div className="mt-1 break-words font-mono text-[11px] text-[var(--text-tertiary)]">
-              {helmErr}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  const editedAt = drift.lastSpecMutation ? Date.parse(drift.lastSpecMutation) : NaN;
-  const rolledAt = drift.lastRolloutAt ? Date.parse(drift.lastRolloutAt) : NaN;
-  const rolling = drift.rolloutPending || (drift.podsStale?.length ?? 0) > 0;
-  const now = Date.now();
-  if (rolling) {
-    const ago = Number.isFinite(editedAt) ? Math.max(0, Math.round((now - editedAt) / 1000)) : null;
-    return (
-      <div className="rounded-md border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-[12px]">
-        <div className="flex items-start gap-2">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-400" />
-          <div className="flex-1 text-blue-200">
-            Rolling out{ago != null ? ` (saved ${ago}s ago)` : "…"}. The new pod
-            won&apos;t serve traffic until it&apos;s Ready.
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (Number.isFinite(editedAt) && Number.isFinite(rolledAt) && rolledAt >= editedAt) {
-    const sinceSave = Math.max(0, Math.round((now - editedAt) / 1000));
-    if (sinceSave < 120) {
-      const rolloutDelta = Math.max(0, Math.round((rolledAt - editedAt) / 1000));
-      return (
-        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-            <div className="text-emerald-200">
-              Saved {sinceSave}s ago — pod started {rolloutDelta}s after save.
-            </div>
-          </div>
-        </div>
-      );
-    }
-  }
-  if (stickySaved && ageSec < 5) {
-    return (
-      <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
-        <div className="flex items-start gap-2">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-          <div className="text-emerald-200">
-            Saved. Waiting for the rollout to start…
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return null;
-}

@@ -70,6 +70,9 @@ export interface Row {
   // row saves like any other — as a normal service var that overrides the
   // addon's envFrom mount — so nothing about the write path branches on it.
   addon?: string;
+  // resolved is the plaintext behind a ${{ addon.KEY }} ref row, filled on a
+  // reveal read. Display-only: `value` stays the ref so saving keeps the wiring.
+  resolved?: string;
 }
 
 // rid mints a fresh id for a Row. Math.random is fine — these
@@ -193,7 +196,16 @@ export function toRow(
   if (ref) {
     // A resolved addon/shared ref. Editable as a ${{ addon.KEY }} value;
     // secret-backed so the eye can reveal the underlying plaintext.
-    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, secretBacked: true, visible: false, origName: v.name ?? "" };
+    return {
+      id: rid(),
+      name: v.name ?? "",
+      value: ref,
+      fromSecret: false,
+      secretBacked: true,
+      visible: false,
+      origName: v.name ?? "",
+      resolved: v.value || undefined,
+    };
   }
   const fromSecret = !!v.valueFrom;
   // On a reveal read the server populates `value` even for a secretKeyRef
@@ -462,4 +474,26 @@ export function rowsShallowEqual(a: Row[], b: Row[]): boolean {
     if (a[i].secretBacked !== b[i].secretBacked) return false;
   }
   return true;
+}
+
+// prefixGroups picks families of vars to collapse under one row, mapping each
+// member name to its group prefix. A two-token prefix is tried first so
+// STRIPE_PRICE_* groups without swallowing STRIPE_SECRET_KEY; the leftovers
+// then try a one-token prefix. A family needs `min` members to collapse.
+export function prefixGroups(names: readonly string[], min = 4): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const depth of [2, 1]) {
+    const members = new Map<string, string[]>();
+    for (const n of names) {
+      if (out.has(n)) continue;
+      const parts = n.split("_");
+      if (parts.length <= depth) continue;
+      const prefix = parts.slice(0, depth).join("_");
+      members.set(prefix, [...(members.get(prefix) ?? []), n]);
+    }
+    for (const [prefix, list] of members) {
+      if (list.length >= min) for (const n of list) out.set(n, prefix);
+    }
+  }
+  return out;
 }
