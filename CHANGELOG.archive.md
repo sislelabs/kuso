@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.3] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): let the postgres pooler front an external database ([245a0ac](https://github.com/sislelabs/kuso/commit/245a0ac803a8aeeccc29b746ab4d9f182a8f788a))
+
 ## [0.25.2] — 2026-09-01
 
 ### 🐛 Bug Fixes

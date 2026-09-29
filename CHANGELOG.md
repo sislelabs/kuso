@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.3] — 2026-09-29
+
+### Other
+- Give cron and run pods public egress, fix instance SQL browser ([a9c5591](https://github.com/sislelabs/kuso/commit/a9c559118ed2567868a031c22a9f355896c36bfc))
+
 ## [0.27.2] — 2026-09-28
 
 ### Other
@@ -385,11 +390,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(addon): create the external Secret instead of requiring one ([9fc95e3](https://github.com/sislelabs/kuso/commit/9fc95e33781eec08c711a0eda1b01c6bc125c216))
-
-## [0.25.3] — 2026-09-02
-
-### ✨ Features
-- Feat(addon): let the postgres pooler front an external database ([245a0ac](https://github.com/sislelabs/kuso/commit/245a0ac803a8aeeccc29b746ab4d9f182a8f788a))
 
 
 ---
