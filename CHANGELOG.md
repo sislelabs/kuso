@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.6] — 2026-09-30
+
+### Other
+- Find node-local data from PVCs instead of listing PersistentVolumes ([4c00978](https://github.com/sislelabs/kuso/commit/4c00978aec4b94f113d8e7af303014b4267bd4ec))
+
 ## [0.27.5] — 2026-09-30
 
 ### Other
@@ -400,11 +405,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(addon): make external addons behave like external addons ([680cf1a](https://github.com/sislelabs/kuso/commit/680cf1af332272ada59cd158dddaa2dfefbe336b))
-
-## [0.25.6] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): plumb pooler externalBackend/host/port end to end ([4177a3c](https://github.com/sislelabs/kuso/commit/4177a3c73bd0902180987889c55735ae6362fc60))
 
 
 ---

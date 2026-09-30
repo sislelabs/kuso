@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.6] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): plumb pooler externalBackend/host/port end to end ([4177a3c](https://github.com/sislelabs/kuso/commit/4177a3c73bd0902180987889c55735ae6362fc60))
+
 ## [0.25.5] — 2026-09-02
 
 ### 🐛 Bug Fixes
