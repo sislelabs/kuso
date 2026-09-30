@@ -372,6 +372,19 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	} else if serviceAddFromService != "" {
 		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
+	if req.Runtime == "" && req.Repo != nil {
+		det, derr := detectServiceRuntime(args[0], req.Repo.URL, req.Repo.DefaultBranch, req.Repo.Path)
+		if derr != nil {
+			req.Runtime = "nixpacks"
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: couldn't detect runtime (%v); using nixpacks — pass --runtime to override\n", derr)
+		} else {
+			req.Runtime = det.Runtime
+			if req.Port == 0 && det.Port > 0 {
+				req.Port = int32(det.Port)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "detected runtime: %s (%s)\n", det.Runtime, det.Reason)
+		}
+	}
 	res, err := serviceAddResources(cmd)
 	if err != nil {
 		return err
@@ -398,6 +411,124 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Print(serviceAddedSummary(args[0], args[1], host, created.FirstBuild))
 	return nil
+}
+
+type detectedRuntime struct {
+	Runtime string `json:"runtime"`
+	Port    int    `json:"port"`
+	Reason  string `json:"reason"`
+}
+
+type githubRepoEntry struct {
+	FullName       string `json:"fullName"`
+	DefaultBranch  string `json:"defaultBranch"`
+	InstallationID int64  `json:"installationId"`
+}
+
+// githubFullName extracts "owner/repo" from a github.com URL, or "" when
+// the URL isn't a GitHub repo.
+func githubFullName(repoURL string) string {
+	u := strings.TrimSpace(repoURL)
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "www.")
+	var ok bool
+	if u, ok = strings.CutPrefix(u, "github.com/"); !ok {
+		if u, ok = strings.CutPrefix(u, "git@github.com:"); !ok {
+			return ""
+		}
+	}
+	u = strings.TrimSuffix(strings.TrimSuffix(u, "/"), ".git")
+	parts := strings.Split(u, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
+}
+
+// normalizeRepoSubpath maps the --path flag ("." default) onto the
+// detect-runtime path shape: "" for the repo root, no leading "./" or "/".
+func normalizeRepoSubpath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "." {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "./")
+	return strings.Trim(p, "/")
+}
+
+func findGithubRepo(repos []githubRepoEntry, fullName string) (githubRepoEntry, bool) {
+	for _, r := range repos {
+		if strings.EqualFold(r.FullName, fullName) {
+			return r, true
+		}
+	}
+	return githubRepoEntry{}, false
+}
+
+// detectServiceRuntime asks the server to detect runtime + port the same
+// way the web add-service flow does. repoURL/branch fall back to the
+// project's default repo when empty.
+func detectServiceRuntime(project, repoURL, branch, path string) (*detectedRuntime, error) {
+	if strings.TrimSpace(repoURL) == "" || branch == "" {
+		resp, err := api.GetProject(project)
+		if err := checkRespErr(resp, err); err != nil {
+			return nil, fmt.Errorf("read project: %w", err)
+		}
+		var pr struct {
+			Project struct {
+				Spec struct {
+					DefaultRepo struct {
+						URL           string `json:"url"`
+						DefaultBranch string `json:"defaultBranch"`
+					} `json:"defaultRepo"`
+				} `json:"spec"`
+			} `json:"project"`
+		}
+		_ = json.Unmarshal(resp.Body(), &pr)
+		if strings.TrimSpace(repoURL) == "" {
+			repoURL = pr.Project.Spec.DefaultRepo.URL
+			if branch == "" {
+				branch = pr.Project.Spec.DefaultRepo.DefaultBranch
+			}
+		}
+	}
+	full := githubFullName(repoURL)
+	if full == "" {
+		return nil, fmt.Errorf("not a GitHub repo")
+	}
+	resp, err := api.RawGet("/api/github/repos")
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, fmt.Errorf("list GitHub repos: %w", err)
+	}
+	var repos []githubRepoEntry
+	if err := json.Unmarshal(resp.Body(), &repos); err != nil {
+		return nil, fmt.Errorf("decode GitHub repos: %w", err)
+	}
+	repo, ok := findGithubRepo(repos, full)
+	if !ok {
+		return nil, fmt.Errorf("the GitHub App can't see %s", full)
+	}
+	if branch == "" {
+		branch = repo.DefaultBranch
+	}
+	owner, name, _ := strings.Cut(repo.FullName, "/")
+	body, _ := json.Marshal(map[string]any{
+		"installationId": repo.InstallationID,
+		"owner":          owner,
+		"repo":           name,
+		"branch":         branch,
+		"path":           normalizeRepoSubpath(path),
+	})
+	resp, err = api.RawPost("/api/github/detect-runtime", body, "application/json")
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, err
+	}
+	var out detectedRuntime
+	if err := json.Unmarshal(resp.Body(), &out); err != nil || out.Runtime == "" {
+		return nil, fmt.Errorf("unexpected detect-runtime response")
+	}
+	return &out, nil
 }
 
 // serviceFirstBuild mirrors the create-service response's optional
@@ -1527,7 +1658,7 @@ func init() {
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
 	serviceAddCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "", "nixpacks|dockerfile|buildpacks|static|worker|image (default: detected from the repo — Dockerfile → dockerfile, else nixpacks); worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
@@ -1609,7 +1740,7 @@ func init() {
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
-	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "", "nixpacks|dockerfile|buildpacks|static|worker|image (default: detected from the repo — Dockerfile → dockerfile, else nixpacks); worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")

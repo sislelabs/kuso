@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useRef } from "react";
+import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
-import { env } from "@/lib/env";
+import { api, ApiError } from "@/lib/api-client";
+import { applyConfig, type ConfigStepError } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileUp, CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
@@ -50,6 +51,10 @@ export default function ImportComposePage() {
   const [project, setProject] = useState("");
   const [composeText, setComposeText] = useState("");
   const [applied, setApplied] = useState(false);
+  // Set when POST /api/projects 409s: the user must pick another name
+  // or explicitly opt into importing into the existing project.
+  const [nameTaken, setNameTaken] = useState<string | null>(null);
+  const [stepErrors, setStepErrors] = useState<ConfigStepError[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const preview = useMutation<ComposeResponse, Error>({
@@ -58,40 +63,41 @@ export default function ImportComposePage() {
         method: "POST",
         body: { project, compose: composeText },
       }),
-    onSuccess: () => setApplied(false),
+    onSuccess: () => {
+      setApplied(false);
+      setNameTaken(null);
+      setStepErrors([]);
+    },
     onError: (err) => toast.error(err.message),
   });
 
-  // Apply feeds the generated YAML to the config-as-code endpoint. It
-  // can't go through api() (which JSON-wraps every body) — /apply reads
-  // a raw kuso.yaml body — so this is a direct fetch.
-  const apply = useMutation<void, Error, string>({
-    mutationFn: async (yaml: string) => {
+  // Apply feeds the generated YAML to the config-as-code endpoint.
+  // /apply answers 200 even when individual steps fail, so the per-step
+  // errors are the real outcome. Resolves "conflict" when the project
+  // name is taken and the caller hasn't opted into merging.
+  const apply = useMutation<"applied" | "conflict", Error, { yaml: string; merge: boolean }>({
+    meta: { skipGlobalErrorToast: true },
+    mutationFn: async ({ yaml, merge }) => {
       const proj = preview.data?.project ?? project;
       // spec.Apply creates services/addons/crons but not the project
-      // itself — ensure it exists first. 409 (already exists) is fine.
-      await api("/api/projects", { method: "POST", body: { name: proj } }).catch(
-        (e) => {
-          const status = (e as { status?: number })?.status;
-          if (status !== 409) throw e;
-        },
-      );
-      const res = await fetch(
-        `${env.apiBase}/api/projects/${encodeURIComponent(proj)}/apply`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-yaml" },
-          body: yaml,
-          credentials: "include",
-        },
-      );
-      if (!res.ok) {
-        throw new Error(`${res.status}: ${await res.text()}`);
+      // itself — ensure it exists first.
+      try {
+        await api("/api/projects", { method: "POST", body: { name: proj } });
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 409)) throw e;
+        if (!merge) {
+          setNameTaken(proj);
+          return "conflict";
+        }
       }
+      setNameTaken(null);
+      const res = await applyConfig(proj, yaml, false);
+      setStepErrors(res.errors ?? []);
+      return "applied";
     },
-    onSuccess: () => {
+    onSuccess: (outcome) => {
+      if (outcome === "conflict") return;
       setApplied(true);
-      toast.success("Resources created — check the project dashboard");
     },
     onError: (err) => toast.error(err.message),
   });
@@ -147,7 +153,10 @@ export default function ImportComposePage() {
           </span>
           <Input
             value={project}
-            onChange={(e) => setProject(e.target.value)}
+            onChange={(e) => {
+            setProject(e.target.value);
+            setNameTaken(null);
+          }}
             placeholder="my-app"
             className="mt-1 h-8 font-mono text-[13px]"
             required
@@ -190,7 +199,9 @@ export default function ImportComposePage() {
           data={preview.data}
           applied={applied}
           applyPending={apply.isPending}
-          onApply={() => apply.mutate(preview.data!.yaml)}
+          nameTaken={nameTaken}
+          stepErrors={stepErrors}
+          onApply={(merge) => apply.mutate({ yaml: preview.data!.yaml, merge })}
         />
       )}
     </div>
@@ -201,12 +212,16 @@ function ResultView({
   data,
   applied,
   applyPending,
+  nameTaken,
+  stepErrors,
   onApply,
 }: {
   data: ComposeResponse;
   applied: boolean;
   applyPending: boolean;
-  onApply: () => void;
+  nameTaken: string | null;
+  stepErrors: ConfigStepError[];
+  onApply: (merge: boolean) => void;
 }) {
   const serviceCount = data.notes.filter((n) => n.action === "service" && n.detail.includes("→ runtime")).length;
   const addonCount = data.notes.filter((n) => n.action === "addon" && n.detail.includes("→ addon")).length;
@@ -266,13 +281,65 @@ function ResultView({
         </pre>
       </details>
 
+      {nameTaken && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">
+            Project <span className="font-mono">{nameTaken}</span> already exists. Pick another
+            name and preview again, or import into it.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => onApply(true)} disabled={applyPending}>
+            Import into {nameTaken}
+          </Button>
+        </div>
+      )}
+
+      {applied && stepErrors.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-3 text-[12px]"
+        >
+          <p className="mb-2 font-medium text-[var(--error)]">
+            {stepErrors.length} step{stepErrors.length === 1 ? "" : "s"} failed
+          </p>
+          <ul className="space-y-1">
+            {stepErrors.map((e, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
+                  {e.op} {e.resource}
+                </span>
+                <span className="text-[var(--error)]">{e.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="flex items-center justify-end gap-3">
         {applied && (
-          <span className="flex items-center gap-1 text-[12px] text-[var(--success)]">
-            <CheckCircle2 className="h-3.5 w-3.5" /> applied
+          <span
+            className={`flex items-center gap-1 text-[12px] ${stepErrors.length > 0 ? "text-[var(--warning)]" : "text-[var(--success)]"}`}
+          >
+            {stepErrors.length > 0 ? (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            )}
+            {stepErrors.length > 0 ? "partly applied" : "applied"}
           </span>
         )}
-        <Button size="sm" onClick={onApply} disabled={applyPending || applied}>
+        {applied && (
+          <Link
+            href={`/projects/${encodeURIComponent(data.project)}`}
+            className="text-[12px] text-[var(--text-secondary)] underline-offset-2 hover:underline"
+          >
+            Open project
+          </Link>
+        )}
+        <Button size="sm" onClick={() => onApply(false)} disabled={applyPending || applied}>
           {applyPending ? "Applying…" : applied ? "Applied" : "Apply to kuso"}
         </Button>
       </div>

@@ -2,6 +2,8 @@ export {
   useInstallURL,
   useInstallations,
   useInstallationRepos,
+  useGithubRepos,
+  announceGithubInstalled,
   useDetectRuntime,
   useScanAddons,
   useSetupStatus,
@@ -11,6 +13,7 @@ export { getGithubManifest } from "./api";
 export type {
   GithubInstallation,
   GithubRepo,
+  GithubRepoRef,
   DetectRuntimeResponse,
   AddonSuggestion,
   SetupStatusResponse,

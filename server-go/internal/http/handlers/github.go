@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 )
@@ -43,6 +44,46 @@ type GithubHandler struct {
 	// preview-env spam. Lazy-init on first webhook.
 	limiterMu       sync.Mutex
 	installLimiters map[int64]*ghTokenBucket
+
+	// refreshFn overrides the installation-cache refresh in tests.
+	refreshFn     func(context.Context) error
+	refreshMu     sync.Mutex
+	lastRefreshAt time.Time
+}
+
+// setupCallbackRefreshDebounce bounds how often the unauthenticated
+// setup-callback can make us hit the GitHub API.
+const setupCallbackRefreshDebounce = 30 * time.Second
+
+func (h *GithubHandler) canRefresh() bool {
+	return h.refreshFn != nil || (h.Client != nil && h.Cache != nil)
+}
+
+func (h *GithubHandler) refreshInstallations(ctx context.Context) error {
+	var err error
+	if h.refreshFn != nil {
+		err = h.refreshFn(ctx)
+	} else {
+		err = h.Client.RefreshInstallations(ctx, h.Cache)
+	}
+	if err == nil {
+		h.refreshMu.Lock()
+		h.lastRefreshAt = time.Now()
+		h.refreshMu.Unlock()
+	}
+	return err
+}
+
+// claimDebouncedRefresh reports whether the caller may refresh now,
+// stamping the slot so concurrent callbacks don't all pass.
+func (h *GithubHandler) claimDebouncedRefresh() bool {
+	h.refreshMu.Lock()
+	defer h.refreshMu.Unlock()
+	if !h.lastRefreshAt.IsZero() && time.Since(h.lastRefreshAt) < setupCallbackRefreshDebounce {
+		return false
+	}
+	h.lastRefreshAt = time.Now()
+	return true
 }
 
 // ghTokenBucket is a tiny per-installation token bucket. 60 tokens,
@@ -173,8 +214,10 @@ func (h *GithubHandler) MountPublic(r chi.Router) {
 //   - /api/github/installations/refresh (POST)
 //   - /api/github/installations/{id}/repos/{owner}/{repo}/tree  (admin — disclosure)
 //   - /api/github/detect-runtime (POST)
+//   - /api/github/repos                      (projects:create — flat repo list, no trees/tokens)
 func (h *GithubHandler) MountAuthed(r chi.Router) {
 	r.Get("/api/github/install-url", h.InstallURL)
+	r.Get("/api/github/repos", h.ListRepos)
 	r.Get("/api/github/installations", h.ListInstallations)
 	r.Get("/api/github/installations/{id}/repos", h.InstallationRepos)
 	r.Post("/api/github/installations/refresh", h.RefreshInstallations)
@@ -438,16 +481,16 @@ func (h *GithubHandler) SetupCallback(w http.ResponseWriter, r *http.Request) {
 	installID := r.URL.Query().Get("installation_id")
 	action := r.URL.Query().Get("setup_action")
 	h.Logger.Info("github setup-callback", "installation_id", installID, "action", action)
-	if h.Client != nil && h.Cache != nil {
+	if h.canRefresh() && h.claimDebouncedRefresh() {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		if err := h.Client.RefreshInstallations(ctx, h.Cache); err != nil {
+		if err := h.refreshInstallations(ctx); err != nil {
 			h.Logger.Warn("github: refresh after setup-callback failed", "err", err)
 			// Don't 500 — the install itself happened on GitHub. The next
 			// view in the UI can re-trigger the refresh.
 		}
 	}
-	http.Redirect(w, r, "/projects/new?github=installed", http.StatusFound)
+	http.Redirect(w, r, "/github/installed", http.StatusFound)
 }
 
 // InstallURL returns the public install URL + configured-flag.
@@ -507,6 +550,41 @@ func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, rs)
 }
 
+// ListRepos is the non-admin repo picker source: anyone who may create
+// projects gets a flat {fullName, defaultBranch, installationId} list —
+// no account ids, file trees, or tokens.
+func (h *GithubHandler) ListRepos(w http.ResponseWriter, r *http.Request) {
+	if !requirePerm(w, r, auth.PermProjectsCreate) {
+		return
+	}
+	type wireRepo struct {
+		FullName       string `json:"fullName"`
+		DefaultBranch  string `json:"defaultBranch"`
+		InstallationID int64  `json:"installationId"`
+	}
+	out := []wireRepo{}
+	if h.Cache == nil {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	insts, err := h.Cache.List(ctx)
+	if err != nil {
+		h.Logger.Error("github: list repos", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	for _, ins := range insts {
+		var repos []db.GithubRepo
+		_ = json.Unmarshal([]byte(ins.RepositoriesJSON), &repos)
+		for _, rp := range repos {
+			out = append(out, wireRepo{FullName: rp.FullName, DefaultBranch: rp.DefaultBranch, InstallationID: ins.ID})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // InstallationRepos returns the cached repo list for one installation.
 func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request) {
 	// Admin-only: lists every repo an installation can see — a disclosure
@@ -541,13 +619,16 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 
 // RefreshInstallations forces a cache refresh from GitHub.
 func (h *GithubHandler) RefreshInstallations(w http.ResponseWriter, r *http.Request) {
-	if h.Client == nil || h.Cache == nil {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if !h.canRefresh() {
 		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	if err := h.Client.RefreshInstallations(ctx, h.Cache); err != nil {
+	if err := h.refreshInstallations(ctx); err != nil {
 		h.Logger.Error("github: refresh", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return

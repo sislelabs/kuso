@@ -11,17 +11,57 @@ import { toast } from "sonner";
 import {
   useInstallURL,
   useInstallations,
+  useGithubRepos,
   useDetectRuntime,
-  type GithubRepo,
+  useScanAddons,
   type DetectRuntimeResponse,
+  type AddonSuggestion,
 } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
-import { useProject, useServices } from "@/features/projects";
+import { addAddon, useAddons, useProject, useServices } from "@/features/projects";
+import { Perms, useCan, useSession } from "@/features/auth";
+import { useRegistryCredentials } from "@/features/registry-credentials";
+import { addonLabel } from "@/components/addon/AddonIcon";
 import { triggerBuild } from "@/features/services";
 import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { slugifyServiceName } from "@/features/services/slug";
+
+// A repo pick, normalised across the admin (installations) and
+// non-admin (flat /api/github/repos) sources.
+interface PickableRepo {
+  fullName: string;
+  defaultBranch: string;
+  private?: boolean;
+}
+
+type DetectState = "idle" | "detecting" | "done" | "failed";
+
+// Addon kinds a scan suggestion can turn into with one click — the
+// scanner also reports kinds kuso has no chart for (kafka, memcached…).
+const SUGGESTABLE_ADDON_KINDS = new Set(["postgres", "mysql", "mongodb", "redis", "rabbitmq", "clickhouse"]);
+
+// detectedLabel turns the detector's reason into short UI text,
+// e.g. "nixpacks (no Dockerfile)".
+function detectedLabel(res: DetectRuntimeResponse): string {
+  const why = res.reason === "fallback" ? "no Dockerfile" : res.reason.replace(/ detected$/, "");
+  return why ? `${res.runtime} (${why})` : res.runtime;
+}
+
+// imageRegistryHost mirrors registrycreds.NormalizeRegistry's view of
+// which registry an image reference points at.
+export function imageRegistryHost(image: string): string {
+  const ref = image.trim().toLowerCase();
+  const slash = ref.indexOf("/");
+  if (slash > 0) {
+    const first = ref.slice(0, slash);
+    if (first.includes(".") || first.includes(":") || first === "localhost") {
+      return first === "index.docker.io" || first === "registry-1.docker.io" ? "docker.io" : first;
+    }
+  }
+  return "docker.io";
+}
 
 // AddServiceView is the per-project add-service flow. Pick a repo,
 // kuso detects the runtime + port, you confirm name + path, click
@@ -34,8 +74,19 @@ export function AddServiceView() {
   const project = params.project ?? "";
 
   const installURL = useInstallURL();
-  const installs = useInstallations();
+  const session = useSession();
+  const isAdmin = useCan(Perms.SettingsAdmin);
+  const sessionReady = !!session.data;
+  // Admins read installations (carries the private flag); everyone else
+  // gets the projects:create-gated flat list.
+  const installs = useInstallations({ enabled: sessionReady && isAdmin });
+  const flatRepos = useGithubRepos({ enabled: sessionReady && !isAdmin });
+  const reposQuery = isAdmin ? installs : flatRepos;
+  const reposForbidden = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
   const detect = useDetectRuntime();
+  const scan = useScanAddons();
+  const projectAddons = useAddons(project);
+  const registryCreds = useRegistryCredentials(project);
 
   // Source mode: "repo" wires a GitHub repo + kaniko/buildkit build.
   // "image" deploys a pre-built OCI image directly (no build, no
@@ -48,8 +99,17 @@ export function AddServiceView() {
   const [source, setSource] = useState<"repo" | "image">("repo");
   const [imageRepo, setImageRepo] = useState("");
   const [imageTag, setImageTag] = useState("latest");
+  // Registry credential secretName for image.pullSecret; "" = public
+  // pull. `null` means "follow the image host" until the user picks.
+  const [pullSecretChoice, setPullSecretChoice] = useState<string | null>(null);
+  const autoPullSecret = useMemo(() => {
+    if (!imageRepo.trim()) return "";
+    const host = imageRegistryHost(imageRepo);
+    return (registryCreds.data ?? []).find((c) => c.registry === host)?.secretName ?? "";
+  }, [imageRepo, registryCreds.data]);
+  const pullSecret = pullSecretChoice ?? autoPullSecret;
 
-  const [picked, setPicked] = useState<{ installationId: number; repo: GithubRepo } | null>(null);
+  const [picked, setPicked] = useState<{ installationId: number; repo: PickableRepo } | null>(null);
   // Display name is the free-form label the user types (e.g. "Todo
   // API"). It's stored as-is on the CR and shown in the canvas /
   // overlay header. The URL slug is auto-derived via slugifyServiceName
@@ -59,7 +119,14 @@ export function AddServiceView() {
   const [name, setName] = useState("");
   const slug = useMemo(() => slugifyServiceName(name), [name]);
   const [path, setPath] = useState("");
-  const [runtime, setRuntime] = useState<string>("dockerfile");
+  // "" until detection lands (or the user picks one).
+  const [runtime, setRuntime] = useState<string>("");
+  const [detectState, setDetectState] = useState<DetectState>("idle");
+  // Web service vs worker — a worker isn't a build runtime, it reuses a
+  // sibling's image with a different command.
+  const [kind, setKind] = useState<"web" | "worker">("web");
+  const [suggestions, setSuggestions] = useState<AddonSuggestion[]>([]);
+  const [addonPicks, setAddonPicks] = useState<Set<string>>(new Set());
   // dockerfile overrides the Dockerfile filename for runtime=dockerfile
   // (relative to the repo path). Empty = "Dockerfile".
   const [dockerfile, setDockerfile] = useState<string>("");
@@ -81,6 +148,7 @@ export function AddServiceView() {
     name?: string;
     image?: string;
     repo?: string;
+    runtime?: string;
     fromService?: string;
   }>({});
   const clearFieldError = (key: keyof typeof fieldErrors) =>
@@ -92,11 +160,17 @@ export function AddServiceView() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const repoSearchRef = useRef<HTMLInputElement>(null);
 
-  const allRepos = useMemo(() => {
-    return (installs.data ?? []).flatMap((inst) =>
-      inst.repositories.map((r) => ({ installationId: inst.id, repo: r, owner: inst.accountLogin }))
-    );
-  }, [installs.data]);
+  const allRepos = useMemo((): { installationId: number; repo: PickableRepo }[] => {
+    if (isAdmin) {
+      return (installs.data ?? []).flatMap((inst) =>
+        inst.repositories.map((r) => ({ installationId: inst.id, repo: r })),
+      );
+    }
+    return (flatRepos.data ?? []).map((r) => ({
+      installationId: r.installationId,
+      repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
+    }));
+  }, [isAdmin, installs.data, flatRepos.data]);
 
   const filteredRepos = useMemo(() => {
     const q = repoQuery.trim().toLowerCase();
@@ -159,24 +233,39 @@ export function AddServiceView() {
     if (!picked) return;
     const [owner, repoOnly] = picked.repo.fullName.split("/");
     const seq = ++detectSeq.current;
+    setDetectState("detecting");
+    setReason(null);
     const timer = setTimeout(
       () => {
+        const target = {
+          installationId: picked.installationId,
+          owner: owner ?? "",
+          repo: repoOnly ?? "",
+          branch: picked.repo.defaultBranch,
+          path: path.trim(),
+        };
         detect
-          .mutateAsync({
-            installationId: picked.installationId,
-            owner: owner ?? "",
-            repo: repoOnly ?? "",
-            branch: picked.repo.defaultBranch,
-            path: path.trim(),
-          })
+          .mutateAsync(target)
           .then((res: DetectRuntimeResponse) => {
             if (seq !== detectSeq.current) return; // stale — a newer pick/path superseded this
-            setRuntime(res.runtime ?? "dockerfile");
+            setRuntime(res.runtime);
+            clearFieldError("runtime");
             if (res.port) setPort(String(res.port));
-            setReason(res.reason ?? null);
+            setReason(detectedLabel(res));
+            setDetectState("done");
           })
           .catch(() => {
-            /* leave defaults */
+            if (seq !== detectSeq.current) return;
+            setDetectState("failed");
+          });
+        scan
+          .mutateAsync(target)
+          .then((res) => {
+            if (seq !== detectSeq.current) return;
+            setSuggestions(res.suggestions ?? []);
+          })
+          .catch(() => {
+            if (seq === detectSeq.current) setSuggestions([]);
           });
       },
       path.trim() ? 500 : 0,
@@ -184,6 +273,21 @@ export function AddServiceView() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked, path]);
+
+  const addonSuggestions = useMemo(() => {
+    const have = new Set((projectAddons.data ?? []).map((a) => a.spec.kind));
+    return suggestions.filter((s) => SUGGESTABLE_ADDON_KINDS.has(s.kind) && !have.has(s.kind));
+  }, [suggestions, projectAddons.data]);
+
+  const toggleAddonPick = (k: string) =>
+    setAddonPicks((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+
+  const effectiveRuntime = kind === "worker" ? "worker" : runtime;
 
   const onAdd = async () => {
     // Client-side validation → inline per-field errors + focus the
@@ -202,8 +306,11 @@ export function AddServiceView() {
     if (source === "image" && !imageRepo.trim()) {
       errs.image = "Image repository is required — e.g. ghcr.io/owner/app.";
     }
-    if (source === "repo" && runtime === "worker" && !fromService) {
+    if (source === "repo" && kind === "worker" && !fromService) {
       errs.fromService = "Pick the service whose image this worker runs.";
+    }
+    if (source === "repo" && picked && kind === "web" && !runtime) {
+      errs.runtime = "Pick a runtime.";
     }
     setFieldErrors(errs);
     if (Object.keys(errs).some((k) => errs[k as keyof typeof errs])) {
@@ -233,6 +340,7 @@ export function AddServiceView() {
           image: {
             repository: imageRepo.trim(),
             tag: imageTag.trim() || "latest",
+            ...(pullSecret ? { pullSecret } : {}),
           },
           ...(port ? { port: parseInt(port, 10) } : {}),
         };
@@ -245,20 +353,33 @@ export function AddServiceView() {
             defaultBranch: picked!.repo.defaultBranch,
             ...(path.trim() ? { path: path.trim() } : {}),
           },
-          runtime,
-          ...(runtime === "dockerfile" && dockerfile.trim()
+          runtime: effectiveRuntime,
+          ...(effectiveRuntime === "dockerfile" && dockerfile.trim()
             ? { dockerfile: dockerfile.trim() }
             : {}),
-          ...(runtime === "worker" && command.trim()
+          ...(effectiveRuntime === "worker" && command.trim()
             ? { command: command.trim().split(/\s+/).filter(Boolean) }
             : {}),
           // fromService is REQUIRED server-side for runtime=worker
           // (the worker reuses this sibling's built image). Validated
           // above so we never submit a worker without it.
-          ...(runtime === "worker" ? { fromService } : {}),
-          ...(port ? { port: parseInt(port, 10) } : {}),
+          ...(effectiveRuntime === "worker" ? { fromService } : {}),
+          ...(port && effectiveRuntime !== "worker" ? { port: parseInt(port, 10) } : {}),
           github: { installationId: picked!.installationId },
         };
+      }
+      // Create picked addons before the service: a service with no
+      // explicit subscription list mounts every project addon, so the
+      // new service boots with DATABASE_URL etc. already set.
+      if (source === "repo") {
+        for (const addonKind of addonPicks) {
+          if (!addonSuggestions.some((s) => s.kind === addonKind)) continue;
+          try {
+            await addAddon(project, { name: addonKind, kind: addonKind });
+          } catch (ae) {
+            if (!(ae instanceof ApiError && ae.status === 409)) throw ae;
+          }
+        }
       }
       // Land on the new service's Deployments tab so the first build is
       // the first thing the user sees, not the bare canvas.
@@ -313,7 +434,7 @@ export function AddServiceView() {
       // trigger must not read as a failed creation. We surface it as a
       // warning with the manual next step instead of throwing.
       let buildStarted = false;
-      if (source === "repo" && runtime !== "worker") {
+      if (source === "repo" && kind !== "worker") {
         try {
           await triggerBuild(project, slug, { branch: picked!.repo.defaultBranch });
           buildStarted = true;
@@ -327,7 +448,7 @@ export function AddServiceView() {
       }
       if (buildStarted) {
         toast.success(`Service ${name} added — building from ${picked!.repo.defaultBranch}`);
-      } else if (source === "repo" && runtime !== "worker") {
+      } else if (source === "repo" && kind !== "worker") {
         // A warning toast already explained why; don't double-report.
       } else {
         toast.success(`Service ${name} added`);
@@ -477,9 +598,34 @@ export function AddServiceView() {
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
+            <Field
+              label="registry login"
+              hint={
+                (registryCreds.data ?? []).length === 0
+                  ? "none saved — public images only"
+                  : pullSecretChoice === null && autoPullSecret
+                    ? `matched ${imageRegistryHost(imageRepo)}`
+                    : undefined
+              }
+              htmlFor="svc-pull-secret"
+            >
+              <select
+                id="svc-pull-secret"
+                value={pullSecret}
+                onChange={(e) => setPullSecretChoice(e.target.value)}
+                disabled={(registryCreds.data ?? []).length === 0}
+                className="block h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
+              >
+                <option value="">none (public image)</option>
+                {(registryCreds.data ?? []).map((c) => (
+                  <option key={c.secretName} value={c.secretName}>
+                    {c.registry} · {c.username}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              kuso pulls this image directly — no build, no kaniko, no GitHub App. Push a new
-              image via your own CI, then bump the tag here to roll the service.
+              Pulled as-is, no build. Push a new tag from your CI, then bump it here.
             </p>
           </div>
           <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
@@ -504,22 +650,45 @@ export function AddServiceView() {
           <h2 className="text-sm font-semibold tracking-tight">Repository</h2>
         </div>
         <div className="px-4 py-3">
-          {installURL.isPending || installs.isPending ? (
+          {!sessionReady || installURL.isPending || reposQuery.isLoading ? (
             <Skeleton className="h-24 w-full" />
           ) : !installURL.data?.configured ? (
-            <div className="space-y-2">
+            isAdmin ? (
+              <div className="space-y-2">
+                <p className="text-sm text-[var(--text-secondary)]">
+                  GitHub App not configured on this kuso instance.
+                </p>
+                <a
+                  href="/settings/github"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+                >
+                  <Github className="h-3.5 w-3.5" />
+                  Configure GitHub App
+                </a>
+              </div>
+            ) : (
               <p className="text-sm text-[var(--text-secondary)]">
-                GitHub App not configured on this kuso instance.
+                GitHub isn&apos;t set up yet. Ask an admin to connect the GitHub App, or use a
+                pre-built image.
               </p>
-              <a
-                href="/settings/github"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
-              >
-                <Github className="h-3.5 w-3.5" />
-                Configure GitHub App
-              </a>
-            </div>
-          ) : (installs.data ?? []).length === 0 ? (
+            )
+          ) : reposForbidden ? (
+            <p className="text-sm text-[var(--text-secondary)]">
+              You can&apos;t browse repositories. Ask an admin for project-create access, or use a
+              pre-built image.
+            </p>
+          ) : reposQuery.isError ? (
+            <p role="alert" className="text-sm text-[var(--error)]">
+              Couldn&apos;t load repositories.{" "}
+              <button type="button" className="underline" onClick={() => void reposQuery.refetch()}>
+                retry
+              </button>
+            </p>
+          ) : allRepos.length === 0 && !isAdmin ? (
+            <p className="text-sm text-[var(--text-secondary)]">
+              No repositories connected. Ask an admin to install the GitHub App.
+            </p>
+          ) : allRepos.length === 0 ? (
             <div className="space-y-2">
               <p className="text-sm text-[var(--text-secondary)]">
                 No GitHub installations yet.
@@ -602,6 +771,10 @@ export function AddServiceView() {
                   setName("");
                   setPath("");
                   setReason(null);
+                  setRuntime("");
+                  setDetectState("idle");
+                  setSuggestions([]);
+                  setAddonPicks(new Set());
                 }}
                 className="font-mono text-[10px] text-[var(--text-secondary)] underline"
               >
@@ -616,7 +789,7 @@ export function AddServiceView() {
         <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
           <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
             <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-              <RuntimeIcon runtime={runtime} />
+              <RuntimeIcon runtime={effectiveRuntime || "dockerfile"} />
               Service
             </h2>
           </div>
@@ -644,16 +817,18 @@ export function AddServiceView() {
                   className="h-8 text-[12px]"
                 />
               </Field>
-              <Field label="port" hint="container port" htmlFor="svc-port">
-                <Input
-                  id="svc-port"
-                  type="number"
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  placeholder="auto"
-                  className="h-8 font-mono text-[12px]"
-                />
-              </Field>
+              {kind === "web" && (
+                <Field label="port" hint="container port" htmlFor="svc-port">
+                  <Input
+                    id="svc-port"
+                    type="number"
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                    placeholder="auto"
+                    className="h-8 font-mono text-[12px]"
+                  />
+                </Field>
+              )}
             </div>
             <Field label="path" hint="monorepo subdir; root if empty" htmlFor="svc-path">
               <Input
@@ -664,27 +839,68 @@ export function AddServiceView() {
                 className="h-8 font-mono text-[12px]"
               />
             </Field>
-            <Field label="runtime">
+            <Field label="type">
               <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
-                {["dockerfile", "nixpacks", "static", "buildpacks", "worker"].map((r) => (
+                {([
+                  ["web", "web service"],
+                  ["worker", "worker"],
+                ] as const).map(([k, label]) => (
                   <button
-                    key={r}
+                    key={k}
                     type="button"
-                    aria-pressed={runtime === r}
-                    onClick={() => setRuntime(r)}
+                    aria-pressed={kind === k}
+                    onClick={() => {
+                      setKind(k);
+                      clearFieldError("fromService");
+                      clearFieldError("runtime");
+                    }}
                     className={
                       "rounded px-2 py-1 font-mono text-[11px] " +
-                      (runtime === r
+                      (kind === k
                         ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                         : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]")
                     }
                   >
-                    {r}
+                    {label}
                   </button>
                 ))}
               </div>
             </Field>
-            {runtime === "dockerfile" && (
+            {kind === "web" && (
+              <Field label="runtime" error={fieldErrors.runtime}>
+                <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+                  {["dockerfile", "nixpacks", "static", "buildpacks"].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      aria-pressed={runtime === r}
+                      onClick={() => {
+                        setRuntime(r);
+                        clearFieldError("runtime");
+                      }}
+                      className={
+                        "rounded px-2 py-1 font-mono text-[11px] " +
+                        (runtime === r
+                          ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                          : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]")
+                      }
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+                {detectState === "detecting" ? (
+                  <p className="font-mono text-[10px] text-[var(--text-tertiary)]">Detecting…</p>
+                ) : detectState === "failed" ? (
+                  <p role="alert" className="font-mono text-[10px] text-[var(--error)]">
+                    Couldn&apos;t detect the runtime — pick one.
+                  </p>
+                ) : reason ? (
+                  <p className="font-mono text-[10px] text-[var(--text-tertiary)]">detected: {reason}</p>
+                ) : null}
+              </Field>
+            )}
+            {kind === "web" && runtime === "dockerfile" && (
               <Field label="dockerfile" hint="path to Dockerfile; default if empty" htmlFor="svc-dockerfile">
                 <Input
                   id="svc-dockerfile"
@@ -699,7 +915,7 @@ export function AddServiceView() {
                 </p>
               </Field>
             )}
-            {runtime === "worker" && (
+            {kind === "worker" && (
               <Field
                 label="runs image of"
                 hint="sibling service whose built image this worker reuses"
@@ -735,7 +951,7 @@ export function AddServiceView() {
                 )}
               </Field>
             )}
-            {runtime === "worker" && (
+            {kind === "worker" && (
               <Field label="command" htmlFor="svc-command">
                 <Input
                   id="svc-command"
@@ -750,10 +966,32 @@ export function AddServiceView() {
                 </p>
               </Field>
             )}
-            {reason && (
-              <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                detected: {reason}
-              </p>
+            {addonSuggestions.length > 0 && (
+              <Field label="needs">
+                <div className="flex flex-wrap gap-1.5">
+                  {addonSuggestions.map((sug) => {
+                    const on = addonPicks.has(sug.kind);
+                    return (
+                      <button
+                        key={sug.kind}
+                        type="button"
+                        aria-pressed={on}
+                        title={sug.reason}
+                        onClick={() => toggleAddonPick(sug.kind)}
+                        className={
+                          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] " +
+                          (on
+                            ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                            : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]")
+                        }
+                      >
+                        {on ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                        Add {addonLabel(sug.kind)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
             )}
           </div>
           <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
@@ -769,7 +1007,11 @@ export function AddServiceView() {
               onClick={onAdd}
               // Workers can't submit without a source service — the
               // server hard-rejects runtime=worker with no fromService.
-              disabled={submitting || (runtime === "worker" && !fromService)}
+              disabled={
+                submitting ||
+                (kind === "web" && detectState === "detecting") ||
+                (kind === "worker" && !fromService)
+              }
             >
               <Plus className="h-3.5 w-3.5" />
               {submitting ? "Adding…" : "Add service"}

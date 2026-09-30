@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { useRenderApp, type MarketplaceApp, type RenderResult } from "@/features/marketplace";
 import { applyConfig, type ConfigStepError } from "@/features/projects";
 
@@ -16,6 +16,9 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   const [preview, setPreview] = useState<RenderResult | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [applyErrors, setApplyErrors] = useState<ConfigStepError[] | null>(null);
+  // The target project already exists: deploying into it must be an
+  // explicit choice, never a silent merge.
+  const [projectExists, setProjectExists] = useState(false);
   const render = useRenderApp(app.name);
 
   const missing = app.prompts.some((p) => p.required && !answers[p.key]);
@@ -23,6 +26,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   function invalidatePreview() {
     setPreview(null);
     setApplyErrors(null);
+    setProjectExists(false);
   }
 
   async function onPreview() {
@@ -34,16 +38,20 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
     }
   }
 
-  async function onDeploy() {
+  async function onDeploy(intoExisting: boolean) {
     if (!preview) return;
     setDeploying(true);
     try {
       try {
         // spec.Apply doesn't create the project; create it first.
-        // 409 already-exists is fine; anything else re-throws.
         await api("/api/projects", { method: "POST", body: { name: project } });
       } catch (e) {
-        if (!/409|exists/i.test((e as Error).message)) throw e;
+        if (!(e instanceof ApiError && e.status === 409)) throw e;
+        if (!intoExisting) {
+          setProjectExists(true);
+          setDeploying(false);
+          return;
+        }
       }
       const result = await applyConfig(project, preview.yaml, false);
       if (result.errors && result.errors.length > 0) {
@@ -83,7 +91,21 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
             setProject(e.target.value);
             invalidatePreview();
           }}
+          aria-invalid={projectExists ? true : undefined}
         />
+        {projectExists && (
+          <div role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--error)]">
+            <span>Project exists. Rename it, or</span>
+            <button
+              type="button"
+              onClick={() => onDeploy(true)}
+              disabled={deploying}
+              className="font-medium underline underline-offset-2 hover:text-[var(--text-primary)]"
+            >
+              deploy into existing project
+            </button>
+          </div>
+        )}
 
         {app.prompts.map((p) => (
           <div key={p.key} className="mt-3">
@@ -142,7 +164,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
               {render.isPending ? "Rendering…" : "Preview"}
             </Button>
           ) : (
-            <Button onClick={onDeploy} disabled={deploying}>
+            <Button onClick={() => onDeploy(false)} disabled={deploying || projectExists}>
               {deploying ? "Deploying…" : "Deploy"}
             </Button>
           )}

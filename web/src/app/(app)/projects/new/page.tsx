@@ -6,10 +6,11 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
+import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
-import { Plus, ArrowRight, Globe, Store } from "lucide-react";
+import { Plus, ArrowRight, Globe, Store, FileUp } from "lucide-react";
 
 // Route segments the app owns. A project with one of these names would
 // collide with a static page (/projects/new) or be stripped by the
@@ -36,6 +37,8 @@ const RESERVED_NAMES = new Set([
 export default function NewProjectPage() {
   const router = useRouter();
   const create = useCreateProject();
+  // The compose importer is admin-only server-side.
+  const isAdmin = useCan(Perms.SettingsAdmin);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -99,7 +102,7 @@ export default function NewProjectPage() {
         previews: { enabled: previewsEnabled, ttlDays: 7 },
       });
       toast.success("Project created");
-      router.replace(`/projects/${encodeURIComponent(trimmed)}`);
+      router.replace(`/projects/${encodeURIComponent(trimmed)}/services/new`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create project");
     } finally {
@@ -112,8 +115,7 @@ export default function NewProjectPage() {
       <header className="mb-6">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">New project</h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          A project is a container for services. Add services from the canvas — each can come
-          from its own GitHub repo.
+          A project groups services. Each service can come from its own GitHub repo.
         </p>
       </header>
 
@@ -137,6 +139,26 @@ export default function NewProjectPage() {
         </span>
         <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
       </Link>
+
+      {isAdmin && (
+        <Link
+          href="/settings/import-compose"
+          className="group mb-4 flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 transition hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)]"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
+            <FileUp className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+              Import docker-compose
+            </span>
+            <span className="block text-[12px] text-[var(--text-secondary)]">
+              Turn a docker-compose.yml into services and databases.
+            </span>
+          </span>
+          <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
+        </Link>
+      )}
 
       <div className="mb-4 flex items-center gap-3">
         <div className="h-px flex-1 bg-[var(--border-subtle)]" />
@@ -242,11 +264,6 @@ export default function NewProjectPage() {
           </Button>
         </footer>
       </form>
-
-      <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
-        next: open the project canvas → right-click → <span className="text-[var(--text-secondary)]">Add service</span>{" "}
-        <ArrowRight className="inline h-2.5 w-2.5" /> connect a repo and configure the runtime.
-      </p>
     </div>
   );
 }
