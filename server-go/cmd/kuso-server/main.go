@@ -542,6 +542,14 @@ func main() {
 		// it trivial to no-op in tests).
 		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
 		projSvc.SecretsCleanupForService = secSvc.DeleteForService
+		if database != nil {
+			projSvc.BuildHistoryCleanupForService = func(ctx context.Context, project, service string) error {
+				return errors.Join(
+					database.DeleteBuildRecordsForService(ctx, project, service),
+					database.DeleteBuildLogsForService(ctx, project, service),
+				)
+			}
+		}
 		// Revision history: log every successful spec mutation so the
 		// History tab + revert path have something to show. Best-
 		// effort — a DB miss never fails the user-facing save.
