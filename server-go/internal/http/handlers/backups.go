@@ -225,6 +225,17 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	if n, err := h.Kube.HealBackupSecrets(ctx); err != nil {
 		h.Logger.Warn("backup: sync secret copies", "synced", n, "err", err)
 	}
+	keyNote := ""
+	if req.SecretAccessKey != "" {
+		keyNote = ", secret key changed"
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "backup.settings",
+		Resource: backupSecretName,
+		Message:  "backup storage set to " + req.Endpoint + "/" + req.Bucket + keyNote,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

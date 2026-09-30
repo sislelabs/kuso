@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/pkgupdates"
 )
 
@@ -62,6 +63,17 @@ func (h *KubernetesHandler) ApplyNodeUpdates(w http.ResponseWriter, r *http.Requ
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, "apply updates: "+err.Error())
 	default:
+		msg := "host package updates started"
+		if body.AllowReboot {
+			msg += " (reboot allowed)"
+		}
+		h.Audit.Log(r.Context(), audit.Entry{
+			User:     auditUser(r.Context()),
+			Severity: "critical",
+			Action:   "node.patch",
+			Resource: node,
+			Message:  msg,
+		})
 		writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "node": node, "allowReboot": body.AllowReboot})
 	}
 }

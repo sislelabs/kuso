@@ -207,6 +207,9 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		if secs, ok := s.connSecrets(ctx, ns); ok {
 			rep.Issues = append(rep.Issues, detectOrphanConnSecrets(secs, liveAddons)...)
 		}
+		if pvcs, ok := s.addonPVCs(ctx, ns); ok {
+			rep.Issues = append(rep.Issues, detectOrphanAddonPVCs(pvcs, liveAddons)...)
+		}
 
 		envs, err := s.Kube.ListKusoEnvironments(ctx, ns)
 		if err != nil {

@@ -89,6 +89,9 @@ const (
 	// tab by default — refund-deadline sweeps, voucher expiry, etc.
 	// need to ping an oncall channel directly.
 	EventCronFailed EventType = "cron.failed"
+	// EventUpdateAvailable fires once per new kuso release the updater
+	// poll sees. Nothing installs until an admin presses Update.
+	EventUpdateAvailable EventType = "update.available"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -136,6 +139,7 @@ var EventCatalogue = []EventTypeInfo{
 	{EventNodeUpdatesApplied, "Host updates applied", "nodes", ""},
 	{EventBackupOK, "Backup succeeded", "backups", ""},
 	{EventBackupFailed, "Backup failed", "backups", "@here"},
+	{EventUpdateAvailable, "kuso update available", "other", ""},
 }
 
 // AllEventTypes is the canonical list of every event type the notify

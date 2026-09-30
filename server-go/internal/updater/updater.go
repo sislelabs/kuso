@@ -119,6 +119,10 @@ type Service struct {
 	Current   string // server's running version, baked at build time
 	Logger    *slog.Logger
 	Interval  time.Duration
+	// Notify receives update.available once per new version. nil = off.
+	Notify EventEmitter
+
+	settings settingStore // test seam; defaults to DB
 
 	mu     sync.RWMutex
 	state  State
@@ -192,6 +196,13 @@ func (s *Service) Refresh(ctx context.Context) State {
 }
 
 func (s *Service) tick(ctx context.Context) {
+	if s.pollOnce(ctx) {
+		s.maybeNotifyAvailable(ctx, s.State())
+	}
+}
+
+// pollOnce refreshes state from GitHub; reports whether the poll succeeded.
+func (s *Service) pollOnce(ctx context.Context) bool {
 	tag, manifest, err := s.fetchLatest(ctx)
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -200,7 +211,7 @@ func (s *Service) tick(ctx context.Context) {
 	if err != nil {
 		s.state.LastCheckError = err.Error()
 		s.Logger.Warn("updater: poll", "err", err)
-		return
+		return false
 	}
 	s.state.LastCheckError = ""
 	s.state.Latest = tag
@@ -209,6 +220,7 @@ func (s *Service) tick(ctx context.Context) {
 	can, reason := canAutoUpgrade(manifest)
 	s.state.CanAutoUpgrade = can
 	s.state.BlockedReason = reason
+	return true
 }
 
 // fetchLatest queries the GH releases endpoint then downloads the
