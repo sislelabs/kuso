@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
@@ -22,6 +24,7 @@ import (
 type BuildsHandler struct {
 	Svc    *builds.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -38,6 +41,8 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 	// without ssh. Returns 400 if the build is already in a terminal
 	// phase (succeeded/failed/cancelled) — there's nothing to stop.
 	r.Post("/api/projects/{project}/services/{service}/builds/{build}/cancel", h.Cancel)
+	r.Post("/api/projects/{project}/services/{service}/builds/{build}/retry-release", h.RetryRelease)
+	r.Post("/api/projects/{project}/services/{service}/restart", h.Restart)
 	// Project-scoped "latest build per service" — used by the canvas
 	// to color service nodes by their pending/failed/succeeded build
 	// status without N round-trips. Returns a map keyed by short
@@ -214,24 +219,58 @@ func (h *BuildsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// rollbackRequest is the optional rollback body. env may also come from
+// ?env= (the pre-body contract); force skips the same-branch check.
+type rollbackRequest struct {
+	Env   string `json:"env,omitempty"`
+	Force bool   `json:"force,omitempty"`
+}
+
 func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
+	var req rollbackRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+			return
+		}
+	}
+	if q := r.URL.Query().Get("env"); q != "" {
+		req.Env = q
+	}
+	if r.URL.Query().Get("force") == "true" {
+		req.Force = true
+	}
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+	project, service, build := chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	// Env scope from ?env=<name>. Empty defaults to "production" in
-	// the service layer, matching pre-v0.17.1 callers that always
-	// rolled back the production env.
-	envName := r.URL.Query().Get("env")
-	out, err := h.Svc.Rollback(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), envName, chi.URLParam(r, "build"))
+	out, err := h.Svc.Rollback(ctx, project, service, req.Env, build, builds.RollbackOptions{
+		Force: req.Force,
+		Actor: actorName(ctx),
+	})
 	if err != nil {
-		// Reuse the existing fail() — handles phase + missing-image
-		// errors as 400, missing build as 404.
 		h.fail(w, "rollback build", err)
 		return
 	}
-	maskEnvIfNeeded(ctx, h.DB, chi.URLParam(r, "project"), out)
+	if h.Audit != nil {
+		env := req.Env
+		if env == "" {
+			env = "production"
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "build.rollback",
+			Pipeline: project,
+			Phase:    env,
+			App:      service,
+			Resource: "build",
+			Message:  fmt.Sprintf("rolled %s back to build %s (env CR %s, force=%v)", env, build, out.Name, req.Force),
+		})
+	}
+	maskEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -280,6 +319,20 @@ type buildSummary struct {
 	// not promoted until every same-repo sibling build of the same
 	// commit is green. Present only while held.
 	PromoteHold string `json:"promoteHold,omitempty"`
+	// LiveEnvs names the env groups this build is currently promoted to
+	// (the env's promoted-build annotation). Set by List only.
+	LiveEnvs []string `json:"liveEnvs,omitempty"`
+	// WaitingFor names what a queued build waits on beyond the queue
+	// (e.g. "GitHub CI checks").
+	WaitingFor string `json:"waitingFor,omitempty"`
+	// NotPromotedReason explains a succeeded build that reached no env.
+	NotPromotedReason string `json:"notPromotedReason,omitempty"`
+	// CancelReason is the recorded reason of a cancelled build.
+	CancelReason string `json:"cancelReason,omitempty"`
+	// ReleaseJob + ReleaseLogTail describe a release-failed build's
+	// release hook: the Job name and up to 200 redacted log lines.
+	ReleaseJob     string `json:"releaseJob,omitempty"`
+	ReleaseLogTail string `json:"releaseLogTail,omitempty"`
 }
 
 // stampQueuePositions fills QueuePosition on any queued summaries in
@@ -371,6 +424,18 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	if out.Status == "" {
 		out.Status = "pending"
 	}
+	out.WaitingFor = builds.WaitingFor(&b)
+	switch out.Status {
+	case "cancelled":
+		out.CancelReason = out.ErrorMessage
+	case "release-failed":
+		out.ReleaseJob = b.Annotations[builds.AnnReleaseJob]
+		out.ReleaseLogTail = b.Annotations[builds.AnnReleaseLogTail]
+	case "succeeded":
+		if b.Spec.DryRun {
+			out.NotPromotedReason = "dry run: image was not pushed or promoted"
+		}
+	}
 	// Fallback: a running build that hasn't had its build-started-at
 	// annotation stamped yet (kaniko Job hasn't gone Active) still
 	// has a CR creationTimestamp. Use that as the lower bound so the
@@ -448,11 +513,27 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stampQueuePositions(ctx, h.Svc, out)
+	if idx, ierr := h.Svc.PromotionIndex(ctx, project, service); ierr != nil {
+		h.Logger.Warn("list builds: promotion index", "project", project, "service", service, "err", ierr)
+	} else {
+		stampPromotion(out, idx)
+	}
 	out, truncated, next := paginateBuildSummaries(out, limitQ, offsetQ)
 	if truncated {
 		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(next))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// stampPromotion fills LiveEnvs, and NotPromotedReason for green builds
+// that are live nowhere because no env deploys their branch.
+func stampPromotion(out []buildSummary, idx *builds.PromotionIndex) {
+	for i := range out {
+		out[i].LiveEnvs = idx.LiveEnvs(out[i].ID)
+		if out[i].Status == "succeeded" && len(out[i].LiveEnvs) == 0 && out[i].NotPromotedReason == "" {
+			out[i].NotPromotedReason = idx.NotPromotedReason(out[i].Branch)
+		}
+	}
 }
 
 // paginateBuildSummaries windows the assembled newest-first build list.

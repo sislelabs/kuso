@@ -43,6 +43,7 @@ var (
 	buildTriggerRef    string
 	buildTriggerDryRun bool
 	buildTriggerFollow bool
+	buildTriggerEnv    string
 )
 
 // pollBuildToTerminal polls ListBuilds until the build with id buildID
@@ -113,6 +114,7 @@ var buildTriggerCmd = &cobra.Command{
 			Branch: buildTriggerBranch,
 			Ref:    buildTriggerRef,
 			DryRun: buildTriggerDryRun,
+			Env:    buildTriggerEnv,
 		}
 		resp, err := api.CreateBuild(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -169,6 +171,75 @@ var (
 	buildListOffset int
 )
 
+// buildRow is the server's flat BuildSummary wire shape. The old code
+// decoded []KusoBuild and printed an empty table because
+// metadata/spec/status were never populated.
+type buildRow struct {
+	ID           string `json:"id"`
+	Branch       string `json:"branch"`
+	CommitSha    string `json:"commitSha"`
+	ImageTag     string `json:"imageTag"`
+	Status       string `json:"status"`
+	StartedAt    string `json:"startedAt"`
+	FinishedAt   string `json:"finishedAt"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	// QueuePosition is the 1-based place in the cluster-wide
+	// build queue; only set while status=queued.
+	QueuePosition int `json:"queuePosition,omitempty"`
+	// PromoteHold: the atomic same-repo promotion gate's hold
+	// reason — Job green, image not rolled until every sibling
+	// build of this commit is green. Set only while held.
+	PromoteHold string `json:"promoteHold,omitempty"`
+	// LiveEnvs: env groups this build is currently promoted to.
+	LiveEnvs          []string `json:"liveEnvs,omitempty"`
+	WaitingFor        string   `json:"waitingFor,omitempty"`
+	NotPromotedReason string   `json:"notPromotedReason,omitempty"`
+	CancelReason      string   `json:"cancelReason,omitempty"`
+	ReleaseJob        string   `json:"releaseJob,omitempty"`
+	ReleaseLogTail    string   `json:"releaseLogTail,omitempty"`
+}
+
+// rowReason is the one-line "why" for a build row, or "".
+func rowReason(b buildRow) string {
+	for _, r := range []string{b.ErrorMessage, b.PromoteHold, b.NotPromotedReason} {
+		if r != "" {
+			return r
+		}
+	}
+	if b.WaitingFor != "" {
+		return "waiting for " + b.WaitingFor
+	}
+	return ""
+}
+
+// previousBuild picks the rollback target for `build rollback --previous`:
+// the newest succeeded build, older than the one live on env, from the
+// same branch. items must be newest-first (the server's order).
+func previousBuild(items []buildRow, env string) (string, error) {
+	live := -1
+	for i, b := range items {
+		for _, e := range b.LiveEnvs {
+			if e == env {
+				live = i
+				break
+			}
+		}
+		if live >= 0 {
+			break
+		}
+	}
+	if live < 0 {
+		return "", fmt.Errorf("no build is live on %s — name the build to roll back to", env)
+	}
+	branch := items[live].Branch
+	for _, b := range items[live+1:] {
+		if b.Status == "succeeded" && b.Branch == branch && b.ImageTag != "" {
+			return b.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no earlier succeeded build of branch %q to roll %s back to", branch, env)
+}
+
 var buildListCmd = &cobra.Command{
 	Use:     "list <project> <service>",
 	Aliases: []string{"ls"},
@@ -188,26 +259,6 @@ var buildListCmd = &cobra.Command{
 			if next := resp.Header().Get("X-Kuso-Next-Offset"); next != "" {
 				fmt.Fprintf(os.Stderr, "note: result truncated — more builds exist; continue with --offset %s\n", next)
 			}
-		}
-		// Server returns []BuildSummary (flat wire shape). The old code
-		// decoded as []KusoBuild and printed an empty table because
-		// metadata/spec/status were never populated.
-		type buildRow struct {
-			ID           string `json:"id"`
-			Branch       string `json:"branch"`
-			CommitSha    string `json:"commitSha"`
-			ImageTag     string `json:"imageTag"`
-			Status       string `json:"status"`
-			StartedAt    string `json:"startedAt"`
-			FinishedAt   string `json:"finishedAt"`
-			ErrorMessage string `json:"errorMessage,omitempty"`
-			// QueuePosition is the 1-based place in the cluster-wide
-			// build queue; only set while status=queued.
-			QueuePosition int `json:"queuePosition,omitempty"`
-			// PromoteHold: the atomic same-repo promotion gate's hold
-			// reason — Job green, image not rolled until every sibling
-			// build of this commit is green. Set only while held.
-			PromoteHold string `json:"promoteHold,omitempty"`
 		}
 		var items []buildRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
@@ -237,13 +288,13 @@ var buildListCmd = &cobra.Command{
 			// have to ssh to the cluster to find out why.
 			showReason := false
 			for _, b := range items {
-				if b.ErrorMessage != "" || b.PromoteHold != "" {
+				if rowReason(b) != "" {
 					showReason = true
 					break
 				}
 			}
 			t := tablewriter.NewWriter(os.Stdout)
-			header := []string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"}
+			header := []string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "LIVE", "AGE"}
 			if showReason {
 				header = append(header, "REASON")
 			}
@@ -268,13 +319,11 @@ var buildListCmd = &cobra.Command{
 					sha,
 					b.ImageTag,
 					status,
+					strings.Join(b.LiveEnvs, ","),
 					relativeAge(b.StartedAt),
 				}
 				if showReason {
-					reason := b.ErrorMessage
-					if reason == "" && b.PromoteHold != "" {
-						reason = b.PromoteHold
-					}
+					reason := rowReason(b)
 					// Cap to one line; the full text is in `-o json` for
 					// scripts and in the archived build log for humans.
 					if i := indexNewline(reason); i >= 0 {
@@ -365,6 +414,7 @@ func init() {
 	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA to build")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "compile + assemble image but skip push and env promotion")
 	buildTriggerCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
+	buildTriggerCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
@@ -438,36 +488,94 @@ per service regardless of branch.`,
 	buildLatestCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	buildCmd.AddCommand(buildLatestCmd)
 
-	var buildRollbackEnv string
+	var (
+		buildRollbackEnv      string
+		buildRollbackPrevious bool
+		buildRollbackForce    bool
+	)
 	rollbackCmd := &cobra.Command{
-		Use:   "rollback <project> <service> <build>",
+		Use:   "rollback <project> <service> [build]",
 		Short: "Re-point an environment at a previous successful build's image",
 		Long: `Re-point an environment at a previous successful build's image.
 
 Defaults to the production env. Pass --env to roll back a named env
 (staging, qa, preview-pr-N) instead — without it a rollback aimed at
-staging would silently roll PRODUCTION back.`,
+staging would silently roll PRODUCTION back.
+
+--previous picks the build for you: the newest succeeded build of the
+same branch older than the one live on the env. The server refuses a
+build from a different branch than the env deploys unless --force.`,
 		Example: `  kuso build rollback tickero api tickero-api-3abf9b99
-  kuso build rollback tickero api tickero-api-3abf9b99 --env staging`,
-		Args: cobra.ExactArgs(3),
+  kuso build rollback tickero api tickero-api-3abf9b99 --env staging
+  kuso build rollback tickero api --previous`,
+		Args: cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if api == nil {
 				return fmt.Errorf("not logged in; run 'kuso login' first")
-			}
-			resp, err := api.RollbackBuild(args[0], args[1], args[2], buildRollbackEnv)
-			if err := checkRespErr(resp, err); err != nil {
-				return err
 			}
 			target := buildRollbackEnv
 			if target == "" {
 				target = "production"
 			}
-			fmt.Printf("rolled %s/%s (%s) back to build %s\n", args[0], args[1], target, args[2])
+			var build string
+			switch {
+			case len(args) == 3 && buildRollbackPrevious:
+				return fmt.Errorf("pass a build or --previous, not both")
+			case len(args) == 3:
+				build = args[2]
+			case buildRollbackPrevious:
+				resp, err := api.ListBuilds(args[0], args[1])
+				if err := checkRespErr(resp, err); err != nil {
+					return fmt.Errorf("list builds: %w", err)
+				}
+				var items []buildRow
+				if err := json.Unmarshal(resp.Body(), &items); err != nil {
+					return fmt.Errorf("decode builds: %w", err)
+				}
+				if build, err = previousBuild(items, target); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("name the build to roll back to, or pass --previous")
+			}
+			resp, err := api.RollbackBuild(args[0], args[1], build, buildRollbackEnv, buildRollbackForce)
+			if err := checkRespErr(resp, err); err != nil {
+				return err
+			}
+			fmt.Printf("rolled %s/%s (%s) back to build %s\n", args[0], args[1], target, build)
 			return nil
 		},
 	}
 	rollbackCmd.Flags().StringVar(&buildRollbackEnv, "env", "", "environment to roll back (default production)")
+	rollbackCmd.Flags().BoolVar(&buildRollbackPrevious, "previous", false, "roll back to the build before the one live on the env")
+	rollbackCmd.Flags().BoolVar(&buildRollbackForce, "force", false, "allow a build from a different branch than the env deploys")
 	buildCmd.AddCommand(rollbackCmd)
+
+	retryReleaseCmd := &cobra.Command{
+		Use:   "retry-release <project> <service> <build>",
+		Short: "Re-run a release-failed build's release hook and promote it on success",
+		Long: `Re-run the release hook (migration) of a build whose image built fine
+but whose release hook failed. On success the image is promoted exactly
+as a fresh green build would be. Follow the outcome with
+'kuso build list'.`,
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if api == nil {
+				return fmt.Errorf("not logged in; run 'kuso login' first")
+			}
+			resp, err := api.RetryRelease(args[0], args[1], args[2])
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("retry release: %w", err)
+			}
+			var out struct {
+				Job string `json:"job"`
+			}
+			_ = json.Unmarshal(resp.Body(), &out)
+			fmt.Printf("release hook of %s queued for retry (job %s)\n", args[2], out.Job)
+			return nil
+		},
+	}
+	buildCmd.AddCommand(retryReleaseCmd)
 
 	cancelCmd := &cobra.Command{
 		Use:   "cancel <project> <service> <build>",
@@ -510,5 +618,6 @@ staging would silently roll PRODUCTION back.`,
 	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")
 	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "resolve the ref and print what would build, without creating a build")
 	redeployCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
+	redeployCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 	rootCmd.AddCommand(redeployCmd)
 }

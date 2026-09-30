@@ -495,7 +495,7 @@ func mountAuthenticatedRoutes(
 			secH.Mount(r)
 		}
 		if d.Builds != nil {
-			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, DB: d.DB, Logger: d.Logger}
+			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			buildH.Mount(r)
 		}
 		if d.Logs != nil {

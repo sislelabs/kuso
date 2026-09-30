@@ -76,10 +76,11 @@ type EnvelopeField struct {
 // with notify.Event* — covered by the notify package's
 // AllEventTypes table.
 const (
-	eventBuildCancelled  = "build.cancelled"
-	eventBuildSuperseded = "build.superseded"
-	eventBuildSucceeded  = "build.succeeded"
-	eventBuildFailed     = "build.failed"
+	eventBuildCancelled   = "build.cancelled"
+	eventBuildSuperseded  = "build.superseded"
+	eventBuildSucceeded   = "build.succeeded"
+	eventBuildFailed      = "build.failed"
+	eventDeployRolledBack = "deploy.rolledback"
 )
 
 // EventEmitter is the (notify.Dispatcher.Emit) signature the poller
