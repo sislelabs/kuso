@@ -31,8 +31,14 @@ async function updateProject(name: string, body: UpdateProjectBody): Promise<unk
   });
 }
 
-async function deleteProject(name: string): Promise<void> {
-  return api(`/api/projects/${encodeURIComponent(name)}`, { method: "DELETE" });
+export interface DeleteProjectArgs {
+  name: string;
+  purgeData?: boolean;
+}
+
+async function deleteProject({ name, purgeData }: DeleteProjectArgs): Promise<{ warnings?: string[] } | undefined> {
+  const qs = purgeData ? "?purgeData=true" : "";
+  return api(`/api/projects/${encodeURIComponent(name)}${qs}`, { method: "DELETE" });
 }
 
 export interface CreateProjectBody {
@@ -83,8 +89,8 @@ export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
     meta: { skipGlobalErrorToast: true },
-    mutationFn: (name: string) => deleteProject(name),
-    onSuccess: (_data, name) => {
+    mutationFn: (args: DeleteProjectArgs) => deleteProject(args),
+    onSuccess: (_data, { name }) => {
       qc.invalidateQueries({ queryKey: projectsQueryKey });
       qc.removeQueries({ queryKey: projectQueryKey(name) });
     },

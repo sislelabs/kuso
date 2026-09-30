@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
 import { CheckCircle2, AlertTriangle, RefreshCw, Clock, Package } from "lucide-react";
 import { toast } from "sonner";
@@ -40,6 +42,7 @@ interface UpdateStatus {
 export default function UpdatesPage() {
   const qc = useQueryClient();
   const canUpdate = useCan(Perms.SystemUpdate);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const version = useQuery({
     queryKey: ["system", "version"],
@@ -55,8 +58,9 @@ export default function UpdatesPage() {
 
   const start = useMutation({
     mutationFn: () => api<{ job: string }>("/api/system/update", { method: "POST" }),
-    onSuccess: (res) => {
-      toast.success(`Update started: ${res.job}`);
+    onSuccess: () => {
+      setConfirmOpen(false);
+      toast.success("Update started");
       qc.invalidateQueries({ queryKey: ["system", "update-status"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
@@ -102,6 +106,7 @@ export default function UpdatesPage() {
     );
   }
   const v = version.data;
+  const pollFailed = !!v.lastCheckError;
   const inFlight = !!status.data?.phase && status.data.phase !== "" && status.data.phase !== "done" && status.data.phase !== "failed";
 
   return (
@@ -111,8 +116,7 @@ export default function UpdatesPage() {
         <div className="min-w-0 flex-1">
           <h1 className="font-heading text-xl font-semibold tracking-tight">Updates</h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Self-update the kuso server + operator. Polls{" "}
-            <span className="font-mono">github.com/sislelabs/kuso/releases</span> every 6h.
+            Checks for new releases every 6h. Nothing installs until you press Update.
           </p>
         </div>
         {/* Manual poll trigger: bypasses the 6h ticker so an admin who
@@ -137,11 +141,15 @@ export default function UpdatesPage() {
             ? v.canAutoUpgrade
               ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
               : "border-[var(--warning)]/30 bg-[var(--warning-subtle)]"
-            : "border-emerald-500/30 bg-emerald-500/5"
+            : pollFailed
+              ? "border-[var(--error)]/30 bg-[var(--error-subtle)]"
+              : "border-emerald-500/30 bg-emerald-500/5"
         )}
       >
         <div className="flex items-start gap-3">
-          {v.needsUpdate ? (
+          {pollFailed && !v.needsUpdate ? (
+            <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--error)]" />
+          ) : v.needsUpdate ? (
             <AlertTriangle className={cn("h-5 w-5 shrink-0", v.canAutoUpgrade ? "text-[var(--accent)]" : "text-[var(--warning)]")} />
           ) : (
             <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--success)]" />
@@ -152,7 +160,9 @@ export default function UpdatesPage() {
                 ? v.canAutoUpgrade
                   ? `Update available: ${v.latest}`
                   : `Update available: ${v.latest} — manual upgrade required`
-                : "Up to date"}
+                : pollFailed
+                  ? "Couldn't check for updates"
+                  : "Up to date"}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-3 font-mono text-[10px] text-[var(--text-tertiary)]">
               <span>current {v.current || "—"}</span>
@@ -172,12 +182,36 @@ export default function UpdatesPage() {
             )}
           </div>
           {v.needsUpdate && v.canAutoUpgrade && canUpdate && (
-            <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending || inFlight}>
+            <Button size="sm" onClick={() => setConfirmOpen(true)} disabled={start.isPending || inFlight}>
               <RefreshCw className={cn("h-3 w-3", (start.isPending || inFlight) && "animate-spin")} />
               {inFlight ? "Updating…" : start.isPending ? "Starting…" : "Update"}
             </Button>
           )}
         </div>
+
+        <ConfirmDialog
+          open={confirmOpen}
+          title={`Update kuso to ${v.latest}?`}
+          body={
+            <div className="space-y-2">
+              <p>
+                <span className="font-mono">{v.current || "—"}</span> →{" "}
+                <span className="font-mono">{v.latest}</span>
+                {v.manifest?.breaking && (
+                  <span className="ml-2 rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-[var(--warning)]">
+                    breaking
+                  </span>
+                )}
+              </p>
+              <p>The UI disconnects briefly while kuso restarts.</p>
+            </div>
+          }
+          confirmLabel="Update"
+          destructive={!!v.manifest?.breaking}
+          pending={start.isPending}
+          onConfirm={() => start.mutate()}
+          onCancel={() => setConfirmOpen(false)}
+        />
 
         {/* Components table when we have a manifest. */}
         {v.manifest?.components && (

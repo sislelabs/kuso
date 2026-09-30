@@ -146,10 +146,11 @@ export function TopNav() {
       <Link
         href="/settings"
         aria-label="Settings"
-        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        className="relative inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
         <Settings className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">Settings</span>
+        <UpdateDot />
       </Link>
       <div className="hidden sm:flex">
         <ServersPopover />
@@ -557,6 +558,26 @@ interface FeedEvent {
     lineHint?: string;
     lineNum?: number;
   };
+}
+
+// UpdateDot marks the Settings link when a newer kuso release exists.
+// Shares the updates page's query key so both stay in sync.
+function UpdateDot() {
+  const isAdmin = useCan(Perms.SettingsAdmin);
+  const version = useQuery<{ needsUpdate: boolean; latest: string }>({
+    queryKey: ["system", "version"],
+    queryFn: () => api("/api/system/version"),
+    enabled: isAdmin,
+    staleTime: 5 * 60_000,
+  });
+  if (!isAdmin || !version.data?.needsUpdate) return null;
+  return (
+    <span
+      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[var(--accent)]"
+      title={`Update available: ${version.data.latest}`}
+      aria-label="Update available"
+    />
+  );
 }
 
 function NotificationsButton() {

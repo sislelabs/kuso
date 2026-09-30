@@ -13,7 +13,7 @@ import {
 } from "@/features/projects";
 import type { KusoAddon } from "@/types/projects";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -112,8 +112,8 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
       // user typed in the dialog — auto-supplying it here would defeat
       // the server's type-the-name safeguard.
       restoreBackup(project, addon, key, into, confirm),
-    onSuccess: (res) => {
-      toast.success(`Restore job started: ${res.job}`);
+    onSuccess: () => {
+      toast.success("Restore started");
       qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
@@ -255,124 +255,54 @@ function ConfirmRestore({
   onConfirm: (key: string, into?: string, confirm?: string) => void;
 }) {
   const [target, setTarget] = useState<string>("");
-  // Typed-name gate for the destructive in-place path. Mirrors
-  // ConfirmDialog's typeToConfirm: the restore button stays disabled
-  // until the user types the addon name, and we send exactly what
-  // they typed so the server's own confirm check stays meaningful.
-  const [typed, setTyped] = useState("");
   const inPlace = target === "";
-  // Reset target to in-place every time a new backup gets picked so
-  // the user explicitly opts into the cross-addon path each time.
-  // The typed confirmation resets alongside it — a prior dialog's
-  // input must never pre-satisfy the gate.
+  // Reset to in-place every time a new backup is picked so the user
+  // explicitly opts into the cross-addon path each time.
   useEffect(() => {
-    if (item) {
-      setTarget("");
-      setTyped("");
-    }
+    if (item) setTarget("");
   }, [item]);
-  const allow = !pending && (!inPlace || typed === sourceAddon);
   return (
-    <Dialog
+    <ConfirmDialog
       open={item !== null}
-      onOpenChange={(next) => {
-        if (!next && !pending) onCancel();
-      }}
-      disablePointerDismissal={pending}
-    >
-      {item && (
-          <DialogContent
-            showCloseButton={false}
-            className={cn(
-              "block rounded-md bg-[var(--bg-elevated)] p-5 sm:max-w-md",
-              target === "" ? "border-red-500/40" : "border-amber-500/40",
+      title="Restore this backup?"
+      body={
+        item && (
+          <div className="space-y-2">
+            <p>
+              Loads <span className="font-mono">{tail(item.key)}</span> into:
+            </p>
+            <select
+              id="restore-target"
+              aria-label="Restore into"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px]"
+            >
+              <option value="">{sourceAddon} (overwrite)</option>
+              {siblings.map((s) => (
+                <option key={s} value={s}>
+                  {s} ({sourceAddon} untouched)
+                </option>
+              ))}
+            </select>
+            {inPlace ? (
+              <p className="text-[var(--error)]">Existing tables in {sourceAddon} are overwritten.</p>
+            ) : (
+              <p className="text-[var(--text-tertiary)]">{target} must be an existing postgres addon.</p>
             )}
-          >
-            <DialogTitle>Restore this backup?</DialogTitle>
-            <DialogDescription className="mt-2 text-xs text-[var(--text-secondary)]">
-              Pipes <span className="font-mono">{tail(item.key)}</span> into the chosen
-              target database via <span className="font-mono">psql</span>.
-            </DialogDescription>
-            <div className="mt-4 space-y-2">
-              <label
-                htmlFor="restore-target"
-                className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-              >
-                Restore into
-              </label>
-              <select
-                id="restore-target"
-                value={target}
-                onChange={(e) => {
-                  setTarget(e.target.value);
-                  // Path switch invalidates any typed confirmation.
-                  setTyped("");
-                }}
-                className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px]"
-              >
-                <option value="">{sourceAddon} (overwrite — destructive)</option>
-                {siblings.map((s) => (
-                  <option key={s} value={s}>
-                    {s} (non-destructive — leaves {sourceAddon} alone)
-                  </option>
-                ))}
-              </select>
-              {target === "" ? (
-                <>
-                  <p className="font-mono text-[10px] text-red-400">
-                    Existing tables in {sourceAddon} will be overwritten. Cannot be
-                    undone.
-                  </p>
-                  <div className="space-y-1 pt-1">
-                    <label
-                      htmlFor="restore-confirm"
-                      className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-                    >
-                      type{" "}
-                      <span className="text-[var(--text-primary)]">{sourceAddon}</span>{" "}
-                      to confirm
-                    </label>
-                    <Input
-                      id="restore-confirm"
-                      value={typed}
-                      onChange={(e) => setTyped(e.target.value)}
-                      spellCheck={false}
-                      className="h-8 font-mono text-[12px]"
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="font-mono text-[10px] text-amber-400">
-                  {sourceAddon} stays as-is; the dump goes into {target}. {target} must
-                  already exist + be a postgres addon.
-                </p>
-              )}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
-                Cancel
-              </Button>
-              <Button
-                variant={target === "" ? "destructive" : "default"}
-                size="sm"
-                onClick={() =>
-                  onConfirm(
-                    item.key,
-                    target || undefined,
-                    // Only the destructive in-place path carries the
-                    // typed confirmation; cross-restore doesn't need it.
-                    inPlace ? typed : undefined,
-                  )
-                }
-                disabled={!allow}
-              >
-                <RotateCcw className="h-3 w-3" />
-                {pending ? "Starting…" : `Restore into ${target || sourceAddon}`}
-              </Button>
-            </div>
-          </DialogContent>
-      )}
-    </Dialog>
+          </div>
+        )
+      }
+      confirmLabel={`Restore into ${target || sourceAddon}`}
+      // The server re-checks the typed name for the in-place path.
+      typeToConfirm={inPlace ? sourceAddon : undefined}
+      destructive={inPlace}
+      pending={pending}
+      onConfirm={() => {
+        if (item) onConfirm(item.key, target || undefined, inPlace ? sourceAddon : undefined);
+      }}
+      onCancel={onCancel}
+    />
   );
 }
 

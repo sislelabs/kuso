@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { toast } from "sonner";
+import { relativeTime } from "@/lib/format";
 import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 
 interface HealthEntry {
@@ -16,9 +17,111 @@ interface HealthEntry {
   lastSuccessAt?: string;
   detail: string;
 }
+interface AddonBackupRow {
+  addon: string;
+  project?: string;
+  namespace: string;
+  kind?: string;
+  covered: boolean;
+  healthy: boolean;
+  lastSuccessAt?: string;
+  lastScheduleAt?: string;
+  detail?: string;
+}
+interface ServiceVolumeRow {
+  service: string;
+  project?: string;
+  volumes: string[];
+  detail?: string;
+}
 interface BackupHealthResp {
   backup: HealthEntry;
   registryGC: HealthEntry;
+  addonBackups?: AddonBackupRow[];
+  addonBackupsComplete?: boolean;
+  serviceVolumes?: ServiceVolumeRow[];
+}
+
+type CoverageBadge = "ok" | "failing" | "not covered";
+
+function badgeFor(row: AddonBackupRow): CoverageBadge {
+  if (!row.covered) return "not covered";
+  return row.healthy ? "ok" : "failing";
+}
+
+const BADGE_TONE: Record<CoverageBadge, string> = {
+  ok: "bg-[var(--success-subtle)] text-[var(--success)]",
+  failing: "bg-[var(--error-subtle)] text-[var(--error)]",
+  "not covered": "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
+};
+
+function CoverageRow({
+  name,
+  badge,
+  age,
+  detail,
+}: {
+  name: string;
+  badge: CoverageBadge;
+  age?: string;
+  detail?: string;
+}) {
+  return (
+    <li className="flex items-center gap-2 px-3 py-1.5 text-[12px]" title={detail}>
+      <span className="min-w-0 flex-1 truncate font-mono">{name}</span>
+      {age && (
+        <span className="font-mono text-[10px] text-[var(--text-tertiary)]" title="last run exited OK">
+          {age}
+        </span>
+      )}
+      <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${BADGE_TONE[badge]}`}>{badge}</span>
+    </li>
+  );
+}
+
+function AddonBackupList({
+  addons,
+  volumes,
+  complete,
+}: {
+  addons: AddonBackupRow[];
+  volumes: ServiceVolumeRow[];
+  complete: boolean;
+}) {
+  if (addons.length === 0 && volumes.length === 0) return null;
+  const rank: Record<CoverageBadge, number> = { failing: 0, "not covered": 1, ok: 2 };
+  const sorted = [...addons].sort(
+    (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
+  );
+  return (
+    <div className="mb-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <h2 className="border-b border-[var(--border-subtle)] px-3 py-2 text-[12px] font-semibold">
+        Addon backups
+        {!complete && (
+          <span className="ml-2 font-mono text-[10px] font-normal text-[var(--warning)]">partial list</span>
+        )}
+      </h2>
+      <ul className="divide-y divide-[var(--border-subtle)]">
+        {sorted.map((a) => (
+          <CoverageRow
+            key={`${a.namespace}/${a.addon}`}
+            name={a.addon}
+            badge={badgeFor(a)}
+            age={a.lastSuccessAt ? relativeTime(a.lastSuccessAt) : undefined}
+            detail={a.detail}
+          />
+        ))}
+        {volumes.map((v) => (
+          <CoverageRow
+            key={`${v.project ?? ""}/${v.service}`}
+            name={`${v.service} · ${v.volumes.join(", ")}`}
+            badge="not covered"
+            detail={v.detail}
+          />
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function HealthBanner({ title, h }: { title: string; h: HealthEntry }) {
@@ -69,10 +172,17 @@ function MaintenanceHealthBanners() {
   }
   const { backup, registryGC } = health.data;
   return (
-    <div className="mb-6 space-y-2.5">
-      <HealthBanner title="Control-plane database backup" h={backup} />
-      <HealthBanner title="Registry garbage-collection" h={registryGC} />
-    </div>
+    <>
+      <div className="mb-6 space-y-2.5">
+        <HealthBanner title="Control-plane database backup" h={backup} />
+        <HealthBanner title="Registry garbage-collection" h={registryGC} />
+      </div>
+      <AddonBackupList
+        addons={health.data.addonBackups ?? []}
+        volumes={health.data.serviceVolumes ?? []}
+        complete={health.data.addonBackupsComplete !== false}
+      />
+    </>
   );
 }
 
