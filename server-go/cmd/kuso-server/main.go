@@ -627,6 +627,8 @@ func main() {
 		// builds packages stay decoupled (each takes a small
 		// interface, main.go is the composition root).
 		logsSvc.BuildLogs = database
+		logsSvc.BuildHistory = database
+		logsSvc.BuildLogRetentionDays = envInt("KUSO_BUILD_LOG_RETENTION_DAYS", 30)
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
@@ -1773,14 +1775,28 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			}
 		}
 		// Build log archive prune: anything older than KUSO_BUILD_LOG_
-		// RETENTION_DAYS (default = same as KUSO_LOG_RETENTION_DAYS).
-		// The BuildLog table is keyed on build name, so DELETE-by-age
-		// uses createdAt directly.
-		buildLogDays := envInt("KUSO_BUILD_LOG_RETENTION_DAYS", logDays)
-		if n, err := database.PruneBuildLogs(c, now.AddDate(0, 0, -buildLogDays)); err != nil {
-			logger.Warn("daily-cleanup build-logs", "err", err)
-		} else if n > 0 {
-			logger.Info("daily-cleanup build-logs pruned", "rows", n, "days", buildLogDays)
+		// RETENTION_DAYS (default 30 — rows are ~25 KB, so this is cheap)
+		// except the builds live on some env right now. Tying it to the
+		// 7-day pod-log retention deleted the live build's log a week
+		// after every deploy. If the live set can't be read, skip the
+		// prune rather than guess.
+		buildLogDays := envInt("KUSO_BUILD_LOG_RETENTION_DAYS", 30)
+		var liveBuilds []string
+		liveOK := true
+		if buildSvc != nil {
+			lb, err := buildSvc.LiveBuildNames(c, buildSvc.ScanNamespaces(c))
+			if err != nil {
+				logger.Warn("daily-cleanup build-logs: skipped, live builds unknown", "err", err)
+				liveOK = false
+			}
+			liveBuilds = lb
+		}
+		if liveOK {
+			if n, err := database.PruneBuildLogs(c, now.AddDate(0, 0, -buildLogDays), liveBuilds); err != nil {
+				logger.Warn("daily-cleanup build-logs", "err", err)
+			} else if n > 0 {
+				logger.Info("daily-cleanup build-logs pruned", "rows", n, "days", buildLogDays, "keptLive", len(liveBuilds))
+			}
 		}
 	}
 	// Run once at startup so a fresh deploy doesn't have to wait 24h

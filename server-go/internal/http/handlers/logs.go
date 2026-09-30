@@ -55,7 +55,11 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, logs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, h.Svc.MissingTarget(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env))
+			msg := h.Svc.MissingTarget(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
+			if notice, ok := h.Svc.BuildLogExpired(ctx, chi.URLParam(r, "project"), env); ok {
+				msg = notice
+			}
+			writeErr(w, http.StatusNotFound, msg)
 		default:
 			h.Logger.Error("tail logs", "err", err)
 			writeErr(w, http.StatusInternalServerError, "internal")

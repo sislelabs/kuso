@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ReconnectingWS, type WSStatus } from "@/lib/ws-client";
 
 export interface LogFrame {
-  type: "log" | "ping" | "phase" | "error";
+  type: "log" | "ping" | "phase" | "error" | "notice";
   pod?: string;
   stream?: string;
   line?: string;
@@ -25,6 +25,7 @@ export interface UseLogStreamResult {
   phase: string | null;
   status: WSStatus;
   error: string | null;
+  notice: string | null;
   clear: () => void;
 }
 
@@ -40,6 +41,9 @@ export function useLogStream(
   const [phase, setPhase] = useState<string | null>(null);
   const [status, setStatus] = useState<WSStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
+  // notice is an informational end-of-stream message (e.g. an expired
+  // build log), shown in place of the log body rather than as an error.
+  const [notice, setNotice] = useState<string | null>(null);
   const wsRef = useRef<ReconnectingWS<LogFrame> | null>(null);
 
   // Track end-of-stream so the close handler can distinguish a
@@ -55,6 +59,7 @@ export function useLogStream(
     if (!project || !service) return;
     setLines([]);
     setError(null);
+    setNotice(null);
     setStatus("connecting");
     completedRef.current = false;
 
@@ -93,6 +98,9 @@ export function useLogStream(
           }
         } else if (f.type === "error") {
           setError(f.message ?? "stream error");
+        } else if (f.type === "notice") {
+          completedRef.current = true;
+          setNotice(f.message ?? "");
         }
         // ping is ignored — its purpose is keep-alive
       },
@@ -111,6 +119,7 @@ export function useLogStream(
     phase,
     status,
     error,
+    notice,
     clear: () => setLines([]),
   };
 }

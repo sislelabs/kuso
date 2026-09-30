@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"kuso/server/internal/kube"
 )
@@ -70,4 +71,28 @@ func WaitingFor(b *kube.KusoBuild) string {
 		return "GitHub CI checks"
 	}
 	return ""
+}
+
+// LiveBuildNames lists the builds currently promoted on any env in the
+// given namespaces, sorted and deduplicated. The daily build-log prune
+// keeps these whatever their age.
+func (s *Service) LiveBuildNames(ctx context.Context, namespaces []string) ([]string, error) {
+	seen := map[string]bool{}
+	for _, ns := range namespaces {
+		envs, err := s.Kube.ListKusoEnvironments(ctx, ns)
+		if err != nil {
+			return nil, fmt.Errorf("list envs in %s: %w", ns, err)
+		}
+		for i := range envs {
+			if b := envs[i].Annotations[annPromotedBuild]; b != "" {
+				seen[b] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for b := range seen {
+		out = append(out, b)
+	}
+	sort.Strings(out)
+	return out, nil
 }

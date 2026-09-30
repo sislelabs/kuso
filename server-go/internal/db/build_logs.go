@@ -18,6 +18,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // SaveBuildLog upserts the log tail for a build. Called from the build
@@ -119,11 +121,16 @@ func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service str
 // monotonically — a busy install accumulates ~25 KB per build × N
 // builds; over months that compounds into 100s of MB the user
 // usually doesn't need (failed-build logs older than the retention
-// window are not actionable).
-func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time) (int, error) {
+// window are not actionable). Builds named in keep survive regardless of
+// age: those are the builds currently live, whose log is the one you
+// reach for when production misbehaves.
+func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time, keep []string) (int, error) {
+	if keep == nil {
+		keep = []string{}
+	}
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "BuildLog" WHERE "createdAt" < $1`,
-		before.UTC(),
+		`DELETE FROM "BuildLog" WHERE "createdAt" < $1 AND NOT ("buildName" = ANY($2))`,
+		before.UTC(), pq.Array(keep),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("PruneBuildLogs: %w", err)

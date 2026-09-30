@@ -15,7 +15,7 @@ interface Props {
 }
 
 export function LogStream({ project, service, env = "production", height = "40vh" }: Props) {
-  const { lines, phase, status, error, clear } = useLogStream(project, service, env, 200);
+  const { lines, phase, status, error, notice, clear } = useLogStream(project, service, env, 200);
   const [follow, setFollow] = useState(true);
   const [wrap, setWrap] = useState(false);
   const [filter, setFilter] = useState("");
@@ -200,7 +200,9 @@ export function LogStream({ project, service, env = "production", height = "40vh
       >
         {lines.length === 0 && (
           <p className="text-[var(--text-tertiary)]">
-            {status === "connecting"
+            {notice
+              ? notice
+              : status === "connecting"
               ? "connecting…"
               : status === "open"
                 ? "waiting for logs…"

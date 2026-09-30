@@ -42,6 +42,16 @@ type Service struct {
 	// after the kaniko Job pod has been TTL'd. Nil = no fallback (the
 	// stream returns the "pod not found" message as before).
 	BuildLogs BuildLogReader
+	// BuildHistory knows builds whose archived log may already be pruned,
+	// so an expired log can be told apart from a build that never existed.
+	BuildHistory          BuildHistoryReader
+	BuildLogRetentionDays int
+}
+
+// BuildHistoryReader is the build-record lookup; ok is false unless the
+// build exists for that project.
+type BuildHistoryReader interface {
+	GetBuildImage(ctx context.Context, project, buildName string) (service, tag, phase string, ok bool, err error)
 }
 
 // New constructs a logs.Service.
@@ -402,6 +412,23 @@ func containerNames(in []corev1.Container) []string {
 		out[i] = in[i].Name
 	}
 	return out
+}
+
+// BuildLogExpired reports whether a build:<name> stream failed because its
+// archived log was pruned while the build itself is still in this
+// project's history, and returns the notice to show instead of an error.
+func (s *Service) BuildLogExpired(ctx context.Context, project, env string) (string, bool) {
+	name, isBuild := strings.CutPrefix(env, "build:")
+	if !isBuild || s.BuildHistory == nil {
+		return "", false
+	}
+	if _, _, _, ok, err := s.BuildHistory.GetBuildImage(ctx, project, name); err != nil || !ok {
+		return "", false
+	}
+	if s.BuildLogRetentionDays > 0 {
+		return fmt.Sprintf("Log expired. Build logs are kept for %d days.", s.BuildLogRetentionDays), true
+	}
+	return "Log expired.", true
 }
 
 // MissingTarget turns a Tail ErrNotFound into a message naming what is

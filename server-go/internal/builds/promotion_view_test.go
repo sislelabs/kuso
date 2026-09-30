@@ -51,3 +51,30 @@ func TestPromotionIndex_LiveEnvsFromPromotedBuildAnnotation(t *testing.T) {
 		t.Error("no env deploys branch orphan; want a reason")
 	}
 }
+
+// The build-log prune keeps these, so every env's live build must be
+// listed across every namespace it scans, and envs never promoted add
+// nothing.
+func TestLiveBuildNames(t *testing.T) {
+	t.Parallel()
+	env := func(name, ns, build string) *kube.KusoEnvironment {
+		e := &kube.KusoEnvironment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if build != "" {
+			e.Annotations = map[string]string{annPromotedBuild: build}
+		}
+		return e
+	}
+	s := fakeService(t,
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env("alpha-web-production", "kuso", "alpha-web-b1")),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env("alpha-web-pr-7", "kuso", "alpha-web-b1")),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env("beta-api-production", "kuso", "beta-api-b9")),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env("gamma-new-production", "kuso", "")),
+	)
+	got, err := s.LiveBuildNames(context.Background(), []string{"kuso", "kuso-beta"})
+	if err != nil {
+		t.Fatalf("LiveBuildNames: %v", err)
+	}
+	if len(got) != 2 || got[0] != "alpha-web-b1" || got[1] != "beta-api-b9" {
+		t.Errorf("LiveBuildNames = %v, want [alpha-web-b1 beta-api-b9]", got)
+	}
+}
