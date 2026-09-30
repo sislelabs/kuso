@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.5] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): carry externalCredentials through the wire mapping ([8630720](https://github.com/sislelabs/kuso/commit/863072078a9e1f9bec01daaa1543583ce5f79883))
+
 ## [0.25.4] — 2026-09-02
 
 ### ✨ Features

@@ -19,6 +19,26 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.5] — 2026-09-30
+
+### Other
+- Harden rollback, add restart and release retry, surface build state ([a476045](https://github.com/sislelabs/kuso/commit/a47604599c321af0f288d58cb783e2478650f20b))
+- Purge stale data when creating a PR preview addon clone ([3907802](https://github.com/sislelabs/kuso/commit/3907802913ee16b8f7398d9b8cc3f636bef3cf78))
+- Confirm destructive maintenance actions and show backup, orphan and update state ([734ef6f](https://github.com/sislelabs/kuso/commit/734ef6f61a0f8a7f684ac15ec84b3481613a7060))
+- Guard addon data on re-add, node removal and orphan cleanup ([8e88f8b](https://github.com/sislelabs/kuso/commit/8e88f8b64f8e079699d4b8617c130fe8aae9d3d4))
+- Make non-production sleep a toggle in service settings ([b9d3a40](https://github.com/sislelabs/kuso/commit/b9d3a40b03d5ac94ab72f499e7f50661f2d402c3))
+- Open onboarding to editors and tidy GitHub and addon flows ([89a0921](https://github.com/sislelabs/kuso/commit/89a0921b103d8b3a4897b39b41ea71db09524790))
+- Wire build-history cleanup into service delete ([07ee3f3](https://github.com/sislelabs/kuso/commit/07ee3f3329281c1c437e282d7e3c839731678898))
+- Mask cron failure webhooks and audit destructive deletes ([bfd31f3](https://github.com/sislelabs/kuso/commit/bfd31f3e9b42fd65f766f1478384366e2048c065))
+- Reclaim preview volumes, external addon secrets and build history on delete ([3ff2414](https://github.com/sislelabs/kuso/commit/3ff2414e879d9bc02a03877610576b52e304e6ed))
+- Show live build, release failures and config history on Deployments ([7ac6bf7](https://github.com/sislelabs/kuso/commit/7ac6bf75272dc93c906b3e55538aae30daa865e2))
+
+### ✨ Features
+- Add restart, wake and crash banner to the service overlay ([41e5b9d](https://github.com/sislelabs/kuso/commit/41e5b9d031f246ad1d9b3fd1e47ad895d55e7c3b))
+
+### 🐛 Bug Fixes
+- Fix the overlay render loop and tidy live-build and backup rows ([e0949e8](https://github.com/sislelabs/kuso/commit/e0949e8c754643fcacf95c01f106764e814596ad))
+
 ## [0.27.4] — 2026-09-29
 
 ### Other
@@ -385,11 +405,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): plumb pooler externalBackend/host/port end to end ([4177a3c](https://github.com/sislelabs/kuso/commit/4177a3c73bd0902180987889c55735ae6362fc60))
-
-## [0.25.5] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): carry externalCredentials through the wire mapping ([8630720](https://github.com/sislelabs/kuso/commit/863072078a9e1f9bec01daaa1543583ce5f79883))
 
 
 ---
