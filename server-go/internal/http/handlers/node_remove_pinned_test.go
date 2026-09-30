@@ -18,43 +18,37 @@ import (
 	"kuso/server/internal/kube"
 )
 
-func localPV(name, node, ns, pvc string) *corev1.PersistentVolume {
-	return &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: corev1.PersistentVolumeSpec{
+// localPVC is a claim the scheduler bound to node. kuso-server may not list
+// PersistentVolumes (cluster-scoped, outside its RBAC), so the node comes
+// from the claim's selected-node annotation.
+func localPVC(ns, name, node string, labels map[string]string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: name, Labels: labels,
+			Annotations: map[string]string{selectedNodeAnnotation: node},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
 			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("5Gi")},
-			ClaimRef: &corev1.ObjectReference{Namespace: ns, Name: pvc},
-			NodeAffinity: &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
-					Key: corev1.LabelHostname, Operator: corev1.NodeSelectorOpIn, Values: []string{node},
-				}}}},
-			}},
 		},
 	}
 }
 
 func TestPinnedVolumesOnNode(t *testing.T) {
 	t.Parallel()
-	pvs := []corev1.PersistentVolume{
-		*localPV("pv-a", "worker-1", "kuso", "data-alpha-pg-0"),
-		*localPV("pv-b", "worker-1", "kuso", "alpha-web-production-uploads"),
-		*localPV("pv-c", "worker-2", "kuso", "data-alpha-redis-0"),
-		// Network storage: no node affinity, survives node removal.
-		{ObjectMeta: metav1.ObjectMeta{Name: "pv-d"}, Spec: corev1.PersistentVolumeSpec{
-			ClaimRef: &corev1.ObjectReference{Namespace: "kuso", Name: "nfs-claim"},
-		}},
-	}
-	pvcs := map[string]*corev1.PersistentVolumeClaim{
-		"kuso/data-alpha-pg-0": {ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+	pvcs := []corev1.PersistentVolumeClaim{
+		*localPVC("kuso", "data-alpha-pg-0", "worker-1", map[string]string{
 			"app.kubernetes.io/name": "kusoaddon", "app.kubernetes.io/instance": "alpha-pg",
-		}}},
-		"kuso/alpha-web-production-uploads": {ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		}),
+		*localPVC("kuso", "alpha-web-production-uploads", "worker-1", map[string]string{
 			"kuso.sislelabs.com/project": "alpha", "kuso.sislelabs.com/service": "alpha-web",
 			"kuso.sislelabs.com/volume": "uploads",
-		}}},
+		}),
+		*localPVC("kuso", "data-alpha-redis-0", "worker-2", nil),
+		// Never scheduled: no node, nothing to strand.
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "kuso", Name: "pending-claim"}},
 	}
 
-	got := pinnedVolumesOnNode(pvs, pvcs, "worker-1")
+	got := pinnedVolumesOnNode(pvcs, "worker-1")
 	if len(got) != 2 {
 		t.Fatalf("got %d pinned, want 2: %+v", len(got), got)
 	}
@@ -83,7 +77,7 @@ func TestRemoveNode_RefusesWhenDataPinned(t *testing.T) {
 	t.Parallel()
 	cs := kubefake.NewSimpleClientset(
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}},
-		localPV("pv-a", "worker-1", "kuso", "data-alpha-pg-0"),
+		localPVC("kuso", "data-alpha-pg-0", "worker-1", nil),
 	)
 	rec := removeNodeRequest(t, cs, "")
 	if rec.Code != http.StatusConflict {
@@ -101,7 +95,7 @@ func TestRemoveNode_ForceRemovesDespitePinnedData(t *testing.T) {
 	t.Parallel()
 	cs := kubefake.NewSimpleClientset(
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}},
-		localPV("pv-a", "worker-1", "kuso", "data-alpha-pg-0"),
+		localPVC("kuso", "data-alpha-pg-0", "worker-1", nil),
 	)
 	rec := removeNodeRequest(t, cs, "?force=true")
 	if rec.Code != http.StatusOK {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"slices"
 	"sort"
 	"time"
 
@@ -482,32 +481,36 @@ type PinnedVolume struct {
 	Size  string `json:"size,omitempty"`
 }
 
-// pinnedVolumesOnNode returns the bound PVCs whose PV's required node
-// affinity pins it to node (local-path / local PVs). pvcs is keyed by
-// "<namespace>/<name>".
-func pinnedVolumesOnNode(pvs []corev1.PersistentVolume, pvcs map[string]*corev1.PersistentVolumeClaim, node string) []PinnedVolume {
+// selectedNodeAnnotation is stamped on a claim by the scheduler when its
+// volume is provisioned for a node (WaitForFirstConsumer, as local-path
+// does). kuso-server can't list PersistentVolumes — they're cluster-scoped
+// and outside its RBAC, which the updater can't widen — so the claim's
+// annotation is how we know which node holds the data.
+const selectedNodeAnnotation = "volume.kubernetes.io/selected-node"
+
+// pinnedVolumesOnNode returns the claims whose volume was provisioned on
+// node. Over-reports network storage bound under WaitForFirstConsumer,
+// which is the safe direction for a removal guard.
+func pinnedVolumesOnNode(pvcs []corev1.PersistentVolumeClaim, node string) []PinnedVolume {
 	var out []PinnedVolume
-	for i := range pvs {
-		pv := &pvs[i]
-		if pv.Spec.ClaimRef == nil || !pvPinnedToNode(pv, node) {
+	for i := range pvcs {
+		pvc := &pvcs[i]
+		if pvc.Annotations[selectedNodeAnnotation] != node {
 			continue
 		}
-		ns, name := pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
-		pin := PinnedVolume{Namespace: ns, PVC: name, Kind: "other"}
-		if q, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok {
+		pin := PinnedVolume{Namespace: pvc.Namespace, PVC: pvc.Name, Kind: "other"}
+		if q, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
 			pin.Size = q.String()
 		}
-		if pvc := pvcs[ns+"/"+name]; pvc != nil {
-			l := pvc.Labels
-			pin.Project = l["kuso.sislelabs.com/project"]
-			switch {
-			case l["app.kubernetes.io/name"] == "kusoaddon":
-				pin.Kind = "addon"
-				pin.Owner = l["app.kubernetes.io/instance"]
-			case l["kuso.sislelabs.com/volume"] != "":
-				pin.Kind = "volume"
-				pin.Owner = l["kuso.sislelabs.com/service"] + "/" + l["kuso.sislelabs.com/volume"]
-			}
+		l := pvc.Labels
+		pin.Project = l["kuso.sislelabs.com/project"]
+		switch {
+		case l["app.kubernetes.io/name"] == "kusoaddon":
+			pin.Kind = "addon"
+			pin.Owner = l["app.kubernetes.io/instance"]
+		case l["kuso.sislelabs.com/volume"] != "":
+			pin.Kind = "volume"
+			pin.Owner = l["kuso.sislelabs.com/service"] + "/" + l["kuso.sislelabs.com/volume"]
 		}
 		out = append(out, pin)
 	}
@@ -520,38 +523,12 @@ func pinnedVolumesOnNode(pvs []corev1.PersistentVolume, pvcs map[string]*corev1.
 	return out
 }
 
-func pvPinnedToNode(pv *corev1.PersistentVolume, node string) bool {
-	if pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
-		return false
-	}
-	for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
-		for _, expr := range term.MatchExpressions {
-			if expr.Key != corev1.LabelHostname || expr.Operator != corev1.NodeSelectorOpIn {
-				continue
-			}
-			if slices.Contains(expr.Values, node) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (h *KubernetesHandler) listPinnedVolumes(ctx context.Context, node string) ([]PinnedVolume, error) {
-	pvs, err := h.Kube.Clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list persistent volumes: %w", err)
-	}
 	pvcList, err := h.Kube.Clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list persistent volume claims: %w", err)
 	}
-	pvcs := make(map[string]*corev1.PersistentVolumeClaim, len(pvcList.Items))
-	for i := range pvcList.Items {
-		p := &pvcList.Items[i]
-		pvcs[p.Namespace+"/"+p.Name] = p
-	}
-	return pinnedVolumesOnNode(pvs.Items, pvcs, node), nil
+	return pinnedVolumesOnNode(pvcList.Items, node), nil
 }
 
 // RemoveNodePreflight lists the data that lives only on this node.
