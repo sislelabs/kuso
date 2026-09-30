@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,13 +17,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/crons"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 type CronsHandler struct {
 	Svc    *crons.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -58,12 +62,16 @@ func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
+	if req.OnFailure != nil && req.OnFailure.WebhookURL == envMaskSentinel {
+		writeErr(w, http.StatusBadRequest, "onFailure.webhookURL is the mask placeholder; send the real URL")
+		return
+	}
 	out, err := h.Svc.AddProject(ctx, project, req)
 	if err != nil {
 		h.fail(w, "add project cron", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, out)
+	writeJSON(w, http.StatusCreated, maskCronIfNeeded(ctx, h.DB, project, out))
 }
 
 // UpdateProject patches a project-scoped cron. Service-attached
@@ -81,12 +89,30 @@ func (h *CronsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
+	if req.OnFailure != nil && !req.OnFailure.Clear && req.OnFailure.WebhookURL == envMaskSentinel {
+		var existing *kube.KusoCronOnFailure
+		all, err := h.Svc.List(ctx, project)
+		if err != nil {
+			h.fail(w, "update project cron", err)
+			return
+		}
+		for i := range all {
+			if all[i].Name == project+"-"+name {
+				existing = all[i].Spec.OnFailure
+				break
+			}
+		}
+		if err := resolveCronWebhookSentinel(req.OnFailure, existing); err != nil {
+			h.fail(w, "update project cron", err)
+			return
+		}
+	}
 	out, err := h.Svc.UpdateProject(ctx, project, name, req)
 	if err != nil {
 		h.fail(w, "update project cron", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, maskCronIfNeeded(ctx, h.DB, project, out))
 }
 
 // DeleteProject removes a project-scoped cron. Service-attached crons
@@ -103,6 +129,7 @@ func (h *CronsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "delete project cron", err)
 		return
 	}
+	h.auditCronDelete(ctx, project, "", name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -117,7 +144,7 @@ func (h *CronsHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "sync cron", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, maskCronIfNeeded(ctx, h.DB, chi.URLParam(r, "project"), out))
 }
 
 func cronsCtx(r *http.Request) (context.Context, context.CancelFunc) {
@@ -130,12 +157,13 @@ func (h *CronsHandler) ListForProject(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.List(ctx, chi.URLParam(r, "project"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.List(ctx, project)
 	if err != nil {
 		h.fail(w, "list crons", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, maskCronsIfNeeded(ctx, h.DB, project, out))
 }
 
 func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -144,12 +172,13 @@ func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.ListForService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.ListForService(ctx, project, chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "list crons", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, maskCronsIfNeeded(ctx, h.DB, project, out))
 }
 
 func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +187,13 @@ func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.Get(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.Get(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "name"))
 	if err != nil {
 		h.fail(w, "get cron", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, maskCronIfNeeded(ctx, h.DB, project, out))
 }
 
 func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
@@ -227,14 +257,37 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+	project, service, name := chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name")); err != nil {
+	if err := h.Svc.Delete(ctx, project, service, name); err != nil {
 		h.fail(w, "delete cron", err)
 		return
 	}
+	h.auditCronDelete(ctx, project, service, name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditCronDelete records a cron delete; service is empty for a
+// project-scoped cron.
+func (h *CronsHandler) auditCronDelete(ctx context.Context, project, service, name string) {
+	if h.Audit == nil {
+		return
+	}
+	target := project + "/" + name
+	if service != "" {
+		target = project + "/" + service + "/" + name
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "info",
+		Action:   "cron.delete",
+		Pipeline: project,
+		App:      service,
+		Resource: "kusocron",
+		Message:  "deleted cron " + target,
+	})
 }
 
 func (h *CronsHandler) fail(w http.ResponseWriter, op string, err error) {
@@ -251,4 +304,55 @@ func (h *CronsHandler) fail(w http.ResponseWriter, op string, err error) {
 		h.Logger.Error("crons handler", "op", op, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 	}
+}
+
+// maskCronsIfNeeded hides each cron's failure-webhook URL (Slack/Discord
+// hook URLs embed their token in the path) from callers without
+// secrets:read. Returns copies; the OnFailure block is cloned so the
+// informer-cache objects are never mutated.
+func maskCronsIfNeeded(ctx context.Context, dbConn *db.DB, project string, in []kube.KusoCron) []kube.KusoCron {
+	if callerCanReadSecrets(ctx, dbConn, project) {
+		return in
+	}
+	out := make([]kube.KusoCron, len(in))
+	for i := range in {
+		out[i] = in[i]
+		out[i].Spec.OnFailure = maskedOnFailure(in[i].Spec.OnFailure)
+	}
+	return out
+}
+
+func maskCronIfNeeded(ctx context.Context, dbConn *db.DB, project string, in *kube.KusoCron) *kube.KusoCron {
+	if in == nil || callerCanReadSecrets(ctx, dbConn, project) {
+		return in
+	}
+	out := *in
+	out.Spec.OnFailure = maskedOnFailure(in.Spec.OnFailure)
+	return &out
+}
+
+func maskedOnFailure(of *kube.KusoCronOnFailure) *kube.KusoCronOnFailure {
+	if of == nil {
+		return nil
+	}
+	c := *of
+	if c.WebhookURL != "" {
+		c.WebhookURL = envMaskSentinel
+	}
+	return &c
+}
+
+// resolveCronWebhookSentinel swaps a read-back mask in an update for the
+// stored URL, so a client editing only the signing secretRef doesn't
+// overwrite the real webhook with the placeholder. A mask with nothing
+// stored behind it is rejected rather than saved as the URL.
+func resolveCronWebhookSentinel(req *crons.OnFailureUpdate, existing *kube.KusoCronOnFailure) error {
+	if req == nil || req.Clear || req.WebhookURL != envMaskSentinel {
+		return nil
+	}
+	if existing == nil || existing.WebhookURL == "" {
+		return fmt.Errorf("%w: onFailure.webhookURL is the mask placeholder and no webhook is stored", crons.ErrInvalid)
+	}
+	req.WebhookURL = existing.WebhookURL
+	return nil
 }

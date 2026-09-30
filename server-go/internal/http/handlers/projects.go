@@ -1716,9 +1716,21 @@ func (h *ProjectsHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Reque
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	if err := h.Svc.DeleteEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env")); err != nil {
+	project, env := chi.URLParam(r, "project"), chi.URLParam(r, "env")
+	if err := h.Svc.DeleteEnvironment(ctx, project, env); err != nil {
 		h.fail(w, "delete env", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "environment.delete",
+			Pipeline: project,
+			Phase:    env,
+			Resource: "kusoenvironment",
+			Message:  fmt.Sprintf("deleted environment %s/%s", project, env),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1798,6 +1810,17 @@ func (h *ProjectsHandler) DeleteEnvGroup(w http.ResponseWriter, r *http.Request)
 	if err := h.Svc.DeleteEnvGroup(ctx, project, name); err != nil {
 		h.fail(w, "delete env-group", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "envgroup.delete",
+			Pipeline: project,
+			Phase:    name,
+			Resource: "kusoenvironment",
+			Message:  fmt.Sprintf("deleted env-group %s/%s and its environments", project, name),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

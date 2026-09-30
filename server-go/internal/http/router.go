@@ -606,7 +606,7 @@ func mountAuthenticatedRoutes(
 				exportH.Mount(r)
 			}
 			if d.Crons != nil {
-				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Logger: d.Logger}
+				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 				cronsH.Mount(r)
 			}
 			if d.Runs != nil {
@@ -628,7 +628,7 @@ func mountAuthenticatedRoutes(
 				isH.Mount(r)
 			}
 			if d.InstancePG != nil {
-				ipgH := &httphandlers.InstancePGHandler{Svc: d.InstancePG}
+				ipgH := &httphandlers.InstancePGHandler{Svc: d.InstancePG, Audit: d.Audit}
 				ipgH.Mount(r)
 			}
 			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}

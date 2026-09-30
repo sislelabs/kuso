@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/instancepg"
 )
 
@@ -14,7 +15,8 @@ import (
 // indirectly via the addon-add dialog's instance picker but should
 // not see the host/user details that the GET endpoint exposes.
 type InstancePGHandler struct {
-	Svc *instancepg.Service
+	Svc   *instancepg.Service
+	Audit *audit.Service
 }
 
 // Mount wires the routes onto an admin-bearer router. Caller has
@@ -102,6 +104,15 @@ func (h *InstancePGHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	if err := h.Svc.Disable(r.Context()); err != nil {
 		h.fail(w, "disable", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(r.Context(), audit.Entry{
+			User:     auditUser(r.Context()),
+			Severity: "warn",
+			Action:   "instancepg.disable",
+			Resource: "instance-pg",
+			Message:  "disabled the instance-shared Postgres",
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

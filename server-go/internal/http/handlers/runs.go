@@ -239,9 +239,21 @@ func (h *RunsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	if err := h.Svc.Delete(ctx, project, chi.URLParam(r, "run")); err != nil {
+	run := chi.URLParam(r, "run")
+	if err := h.Svc.Delete(ctx, project, run); err != nil {
 		h.fail(w, "delete", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "run.delete",
+			Pipeline: project,
+			App:      run,
+			Resource: "kusorun",
+			Message:  fmt.Sprintf("deleted run %s/%s", project, run),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
