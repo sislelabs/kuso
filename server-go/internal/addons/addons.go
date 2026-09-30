@@ -452,8 +452,15 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	// A deleted native addon keeps its data PVC; re-adding the name would
 	// silently mount that old data (and crash-loop a new engine version
 	// against an old data directory).
+	// A PR preview clone is the exception: an earlier PR's leftovers are
+	// stale by definition, so purge them rather than leave the preview
+	// without a database.
 	if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
-		return nil, fmt.Errorf("%w: data from a previous %s still exists — pick another name or delete it with purge", ErrConflict, req.Name)
+		if req.ExtraLabels["kuso.sislelabs.com/preview-pr"] == "" {
+			return nil, fmt.Errorf("%w: data from a previous %s still exists — pick another name or delete it with purge", ErrConflict, req.Name)
+		}
+		s.deleteCloneDataPVCs(ctx, ns, fqn)
+		s.deleteCloneConnSecret(ctx, ns, fqn)
 	}
 
 	size := req.Size

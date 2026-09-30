@@ -41,6 +41,31 @@ func TestAdd_RefusesWhenRetainedDataPVCExists(t *testing.T) {
 	}
 }
 
+// A PR preview clone must never inherit an earlier PR's data, and refusing
+// would leave the preview without a database. Its leftovers are stale by
+// definition, so the create purges them and proceeds.
+func TestAdd_PreviewClonePurgesLeftoverData(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProj("alpha"))
+	stale := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "alpha-pg-pr-7-conn", Namespace: "kuso"}}
+	s.Kube.Clientset = kubefake.NewSimpleClientset(addonPVC("data-alpha-pg-pr-7-0", "alpha-pg-pr-7"), stale)
+
+	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
+		Name: "pg-pr-7", Kind: "postgres",
+		ExtraLabels: map[string]string{"kuso.sislelabs.com/preview-pr": "7"},
+	})
+	if err != nil {
+		t.Fatalf("Add preview clone: %v", err)
+	}
+	cs := s.Kube.Clientset.CoreV1()
+	if _, err := cs.PersistentVolumeClaims("kuso").Get(context.Background(), "data-alpha-pg-pr-7-0", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("stale preview PVC survived: err=%v", err)
+	}
+	if _, err := cs.Secrets("kuso").Get(context.Background(), "alpha-pg-pr-7-conn", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("stale preview conn secret survived: err=%v", err)
+	}
+}
+
 // A different addon's leftover data must not block an unrelated name.
 func TestAdd_OtherAddonsPVCDoesNotBlock(t *testing.T) {
 	t.Parallel()
