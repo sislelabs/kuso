@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/config"
@@ -1378,7 +1379,7 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	// through DeleteEnvironment (per-env secret + clone/volume PVC + TLS
 	// reclaim) and cleans the service-level secret, so a single call
 	// fully tears down the old service.
-	if err := s.DeleteService(ctx, project, oldName); err != nil {
+	if err := s.deleteService(ctx, project, oldName, false); err != nil {
 		// We've already created the new service + envs, so the
 		// rename is half-done. Surface this to the caller — they
 		// might need to delete the old one manually.
@@ -1420,6 +1421,12 @@ func copyLabelsWithService(in map[string]string, project, service string) map[st
 // namespace is shared, recreating a service at the same name silently
 // inherited the dead one's secrets/volumes (HIGH-6b/HIGH-6c).
 func (s *Service) DeleteService(ctx context.Context, project, service string) error {
+	return s.deleteService(ctx, project, service, true)
+}
+
+// deleteService is DeleteService with the build/run-history drop made
+// optional: a rename tears the old service down but keeps its history.
+func (s *Service) deleteService(ctx context.Context, project, service string, dropHistory bool) error {
 	if _, err := s.GetService(ctx, project, service); err != nil {
 		return err
 	}
@@ -1458,10 +1465,54 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 			firstErr = fmt.Errorf("service secret cleanup: %w", serr)
 		}
 	}
-	if err := s.Kube.DeleteKusoService(ctx, ns, serviceCRName(project, service)); err != nil && !apierrors.IsNotFound(err) {
+	// Build + run history: without this a service recreated at the same
+	// name shows the dead one's deployments, and a queued KusoBuild could
+	// still push an image for it.
+	fqn := serviceCRName(project, service)
+	if dropHistory {
+		for _, gvr := range []schema.GroupVersionResource{kube.GVRBuilds, kube.GVRRuns} {
+			if derr := s.deleteServiceCRs(ctx, gvr, ns, project, fqn); derr != nil && firstErr == nil {
+				firstErr = derr
+			}
+		}
+	}
+	if dropHistory && s.BuildHistoryCleanupForService != nil {
+		if herr := s.BuildHistoryCleanupForService(ctx, project, service); herr != nil && firstErr == nil {
+			firstErr = fmt.Errorf("build history cleanup: %w", herr)
+		}
+	}
+	if err := s.Kube.DeleteKusoService(ctx, ns, fqn); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete service: %w", err)
 	}
 	return firstErr
+}
+
+// deleteServiceCRs deletes every CR of gvr in ns whose spec.service names
+// the service. Builds and runs store the FQN; the short form is matched
+// too for CRs written before that was consistent. Lists live, like
+// deleteProjectCRs.
+func (s *Service) deleteServiceCRs(ctx context.Context, gvr schema.GroupVersionResource, ns, project, fqn string) error {
+	list, err := s.Kube.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("list %s: %w", gvr.Resource, err)
+	}
+	short := strings.TrimPrefix(fqn, project+"-")
+	for i := range list.Items {
+		item := &list.Items[i]
+		specProject, _, _ := unstructured.NestedString(item.Object, "spec", "project")
+		specService, _, _ := unstructured.NestedString(item.Object, "spec", "service")
+		if specProject != project || (specService != fqn && specService != short) {
+			continue
+		}
+		if derr := s.Kube.Dynamic.Resource(gvr).Namespace(ns).
+			Delete(ctx, item.GetName(), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete %s %s: %w", gvr.Resource, item.GetName(), derr)
+		}
+	}
+	return nil
 }
 
 // GetEnv returns the plain env vars on a service. Secret-backed entries
