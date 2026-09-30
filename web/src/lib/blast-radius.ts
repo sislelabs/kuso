@@ -52,6 +52,15 @@ const SERVICE_BLAST: Record<string, BlastInfo> = {
     level: "info",
     message: "Affects idle behaviour only; pods wake on the next request.",
   },
+  resources: {
+    level: "warn",
+    message:
+      "Rewrites the pod spec → rolling restart of every environment. Pods may fail to schedule if no node has room for the new requests.",
+  },
+  securityContext: {
+    level: "warn",
+    message: "Rewrites the pod spec → rolling restart of every environment.",
+  },
   port: {
     level: "warn",
     message:

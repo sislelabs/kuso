@@ -6,6 +6,8 @@ import { Cpu, MemoryStick, Activity, AlertTriangle, Timer } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import type { KusoEnvironment } from "@/types/projects";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { MEMORY_WARN_RATIO, memoryPressure, parseMemoryQuantity } from "@/features/services";
 
 const RANGES = ["1h", "6h", "1d", "7d", "30d"] as const;
 type Range = (typeof RANGES)[number];
@@ -19,6 +21,9 @@ interface Props {
   // the envs list is loading (or when no env exists yet) — the
   // queries stay disabled and the empty-state note renders.
   env?: KusoEnvironment;
+  // Per-pod memory limit (k8s quantity) from the service spec. Unset =
+  // no limit, so memory shows as a plain total.
+  memoryLimit?: string;
 }
 
 interface PodMetric {
@@ -43,7 +48,7 @@ interface TimeseriesResponse {
   };
 }
 
-export function ServiceMetricsPanel({ env }: Props) {
+export function ServiceMetricsPanel({ env, memoryLimit }: Props) {
   const [range, setRange] = useState<Range>("1h");
 
   const envName = env?.metadata.name ?? "";
@@ -70,6 +75,12 @@ export function ServiceMetricsPanel({ env }: Props) {
   const totalCpu = (podMetrics.data?.pods ?? []).reduce((acc, p) => acc + p.cpuMillicores, 0);
   const totalMem = (podMetrics.data?.pods ?? []).reduce((acc, p) => acc + p.memBytes, 0);
   const podCount = (podMetrics.data?.pods ?? []).length;
+  const limitBytes = parseMemoryQuantity(memoryLimit);
+  const pressure = memoryPressure(
+    (podMetrics.data?.pods ?? []).map((p) => p.memBytes),
+    limitBytes,
+  );
+  const memWarn = pressure !== undefined && pressure > MEMORY_WARN_RATIO;
 
   return (
     <div className="space-y-4">
@@ -94,6 +105,21 @@ export function ServiceMetricsPanel({ env }: Props) {
         </div>
       </div>
 
+      {podMetrics.isError && (
+        <QueryErrorState
+          what="pod metrics"
+          error={podMetrics.error}
+          onRetry={() => void podMetrics.refetch()}
+        />
+      )}
+      {traffic.isError && (
+        <QueryErrorState
+          what="traffic metrics"
+          error={traffic.error}
+          onRetry={() => void traffic.refetch()}
+        />
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <ResourceCard
           title="CPU"
@@ -102,7 +128,9 @@ export function ServiceMetricsPanel({ env }: Props) {
           subtitle={
             podCount > 0
               ? `across ${podCount} pod${podCount === 1 ? "" : "s"}`
-              : "no pods running"
+              : podMetrics.isError
+                ? "unavailable"
+                : "no pods running"
           }
           rows={(podMetrics.data?.pods ?? []).map((p) => ({
             label: p.pod,
@@ -112,15 +140,26 @@ export function ServiceMetricsPanel({ env }: Props) {
         <ResourceCard
           title="Memory"
           icon={MemoryStick}
-          primary={podCount > 0 ? formatBytes(totalMem) : "—"}
+          primary={
+            podCount > 0
+              ? limitBytes
+                ? `${formatBytes(totalMem)} / ${formatBytes(limitBytes * podCount)}`
+                : formatBytes(totalMem)
+              : "—"
+          }
+          warn={memWarn}
           subtitle={
             podCount > 0
-              ? `across ${podCount} pod${podCount === 1 ? "" : "s"}`
-              : "no pods running"
+              ? `across ${podCount} pod${podCount === 1 ? "" : "s"}${
+                  pressure !== undefined ? ` · peak ${Math.round(pressure * 100)}% of limit` : ""
+                }`
+              : podMetrics.isError
+                ? "unavailable"
+                : "no pods running"
           }
           rows={(podMetrics.data?.pods ?? []).map((p) => ({
             label: p.pod,
-            value: formatBytes(p.memBytes),
+            value: limitBytes ? `${formatBytes(p.memBytes)} / ${formatBytes(limitBytes)}` : formatBytes(p.memBytes),
           }))}
         />
 
@@ -130,6 +169,7 @@ export function ServiceMetricsPanel({ env }: Props) {
           unit="req/s"
           points={traffic.data?.series.requests ?? []}
           loading={traffic.isPending}
+          failed={traffic.isError}
         />
         <SeriesCard
           title="Error rate"
@@ -138,6 +178,7 @@ export function ServiceMetricsPanel({ env }: Props) {
           format={(v) => (v * 100).toFixed(2)}
           points={traffic.data?.series.errors ?? []}
           loading={traffic.isPending}
+          failed={traffic.isError}
           danger
         />
         <SeriesCard
@@ -147,6 +188,7 @@ export function ServiceMetricsPanel({ env }: Props) {
           format={(v) => v.toFixed(0)}
           points={traffic.data?.series.p95ms ?? []}
           loading={traffic.isPending}
+          failed={traffic.isError}
         />
       </div>
 
@@ -165,15 +207,23 @@ function ResourceCard({
   primary,
   subtitle,
   rows,
+  warn,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   primary: string;
   subtitle: string;
   rows: { label: string; value: string }[];
+  // A pod is close to its limit (OOM-kill risk).
+  warn?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+    <div
+      className={cn(
+        "rounded-md border bg-[var(--bg-secondary)] p-4",
+        warn ? "border-[var(--warning)]/50" : "border-[var(--border-subtle)]",
+      )}
+    >
       <header className="flex items-center justify-between">
         <h4 className="flex items-center gap-1.5 text-sm font-medium">
           <Icon className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
@@ -182,8 +232,17 @@ function ResourceCard({
         <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">live</span>
       </header>
       <div className="mt-3">
-        <div className="font-mono text-2xl font-semibold tracking-tight">{primary}</div>
-        <div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">{subtitle}</div>
+        <div
+          className={cn(
+            "font-mono text-2xl font-semibold tracking-tight",
+            warn && "text-[var(--warning)]",
+          )}
+        >
+          {primary}
+        </div>
+        <div className={cn("mt-0.5 text-[11px]", warn ? "text-[var(--warning)]" : "text-[var(--text-tertiary)]")}>
+          {subtitle}
+        </div>
       </div>
       {rows.length > 1 && (
         <ul className="mt-3 space-y-0.5 border-t border-[var(--border-subtle)] pt-2">
@@ -211,12 +270,14 @@ function SeriesCard({
   loading,
   format,
   danger,
+  failed,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   unit: string;
   points: [number, number][];
   loading?: boolean;
+  failed?: boolean;
   format?: (v: number) => string;
   danger?: boolean;
 }) {
@@ -245,7 +306,7 @@ function SeriesCard({
             )}
           </div>
           <div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-            {points.length > 0 ? `${points.length} points` : "no data yet"}
+            {failed ? "unavailable" : points.length > 0 ? `${points.length} points` : "no data yet"}
           </div>
         </div>
         {points.length > 1 && (

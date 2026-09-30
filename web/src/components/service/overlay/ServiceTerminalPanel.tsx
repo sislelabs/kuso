@@ -19,8 +19,11 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { RefreshCw, TerminalSquare } from "lucide-react";
+import { Moon, RefreshCw, Sun, TerminalSquare } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useWakeService } from "@/features/services";
+import { useCanOnProject, Perms } from "@/features/auth";
 
 type Status = "connecting" | "open" | "closed";
 
@@ -28,17 +31,27 @@ export function ServiceTerminalPanel({
   project,
   service,
   env = "production",
+  blocked,
+  canWake = false,
 }: {
   project: string;
   service: string;
   env?: string;
+  // No pod to exec into. The WS would 503 before the upgrade, which
+  // the browser only reports as "connection closed", so don't connect.
+  blocked?: "asleep" | "stopped";
+  // Wake only exists for the production env server-side.
+  canWake?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
   // sessionKey is bumped by "New session" to tear down + remount.
   const [sessionKey, setSessionKey] = useState(0);
+  const wake = useWakeService(project, service);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
   useEffect(() => {
+    if (blocked) return;
     const host = hostRef.current;
     if (!host) return;
 
@@ -126,7 +139,41 @@ export function ServiceTerminalPanel({
       ws.close();
       term.dispose();
     };
-  }, [project, service, env, sessionKey]);
+  }, [project, service, env, sessionKey, blocked]);
+
+  if (blocked) {
+    const onWake = async () => {
+      try {
+        await wake.mutateAsync();
+        toast.success(`Waking ${service}`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Wake failed");
+      }
+    };
+    return (
+      <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-10 text-center">
+        <Moon className="h-5 w-5 text-[var(--text-tertiary)]" />
+        <p className="text-sm text-[var(--text-secondary)]">
+          {blocked === "stopped" ? "Service is stopped" : "Service is asleep"}
+        </p>
+        {blocked === "asleep" && canWake ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={wake.isPending || !canWrite}
+            onClick={onWake}
+            title={canWrite ? undefined : "Requires editor access on this project"}
+          >
+            <Sun className="h-3.5 w-3.5" /> {wake.isPending ? "Waking…" : "Wake"}
+          </Button>
+        ) : (
+          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            {blocked === "stopped" ? "Start it from the header to open a shell." : "It wakes on the next request."}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

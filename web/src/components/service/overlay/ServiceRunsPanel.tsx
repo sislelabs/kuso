@@ -80,7 +80,11 @@ function triggerLabel(r: KusoRun): string {
 
 export function ServiceRunsPanel({ project, service }: Props) {
   const runs = useRuns(project, service);
-  const canRun = useCanOnProject(project, Perms.ServicesWrite);
+  // A run executes an arbitrary command with the service's secrets
+  // mounted, so the server gates creation on secrets:read (admin).
+  // Cancelling stays editor-level.
+  const canRun = useCanOnProject(project, Perms.SecretsRead);
+  const canCancel = useCanOnProject(project, Perms.ServicesWrite);
   const [openRun, setOpenRun] = useState<string | null>(null);
 
   return (
@@ -89,7 +93,7 @@ export function ServiceRunsPanel({ project, service }: Props) {
         <NewRunComposer project={project} service={service} />
       ) : (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-3 font-mono text-[11px] text-[var(--text-tertiary)]">
-          services:write required to fire runs. Read-only listing below.
+          Starting a run requires the admin role.
         </p>
       )}
 
@@ -102,8 +106,7 @@ export function ServiceRunsPanel({ project, service }: Props) {
         <QueryErrorState what="runs" error={runs.error} onRetry={() => void runs.refetch()} />
       ) : (runs.data ?? []).length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-          No runs yet. Fire one above to execute a migration, seed, or one-off
-          script against this service&apos;s most-recent built image.
+          No runs yet.{canRun ? " Start one above for a migration, seed or one-off script." : ""}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -113,7 +116,7 @@ export function ServiceRunsPanel({ project, service }: Props) {
               project={project}
               service={service}
               run={r}
-              canCancel={canRun}
+              canCancel={canCancel}
               isOpen={openRun === r.metadata.name}
               onToggle={() =>
                 setOpenRun((cur) => (cur === r.metadata.name ? null : r.metadata.name))

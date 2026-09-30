@@ -12,6 +12,8 @@ import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 interface Props {
   project: string;
@@ -32,8 +34,11 @@ interface Props {
 // up the new image.
 export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
   const qc = useQueryClient();
+  // Delete/sync are editor-level; creating a service cron mounts the
+  // service's secrets, so the server requires secrets:read (admin).
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
-  const [adding, setAdding] = useState(!!defaultAdding && canWrite);
+  const canCreate = useCanOnProject(project, Perms.SecretsRead);
+  const [adding, setAdding] = useState(!!defaultAdding && canCreate);
 
   // Shared with the overlay shell's tab-visibility logic: same query
   // key + queryFn, so opening the Crons tab doesn't double-fetch the
@@ -49,7 +54,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
             Recurring jobs that run the parent service&apos;s image with a custom command.
           </p>
         </div>
-        {canWrite && !adding && (
+        {canCreate && !adding && (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
             <Plus className="h-3.5 w-3.5" /> Add cron
           </Button>
@@ -73,13 +78,20 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
       {list.isPending ? (
         <Skeleton className="h-24 w-full" />
       ) : list.isError ? (
-        <p className="font-mono text-[11px] text-red-400">
-          Failed to load: {list.error instanceof Error ? list.error.message : "unknown error"}
-        </p>
+        <QueryErrorState what="crons" error={list.error} onRetry={() => void list.refetch()} />
       ) : (list.data ?? []).length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
-          No crons yet. Click <span className="font-mono">Add cron</span> to schedule one.
-        </p>
+        adding ? null : (
+          <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+            No crons yet.
+            {canCreate ? (
+              <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+                <Plus className="h-3.5 w-3.5" /> Add cron
+              </Button>
+            ) : (
+              <span className="font-mono text-[10px]">Adding a cron requires the admin role.</span>
+            )}
+          </div>
+        )
       ) : (
         <ul className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
           {(list.data ?? []).map((c) => (
@@ -114,9 +126,13 @@ function CronRow({
     mutationFn: () => deleteCron(project, service, fqn),
     onSuccess: () => {
       toast.success(`Cron ${short} deleted`);
+      setConfirming(false);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "crons"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+      setConfirming(false);
+    },
   });
 
   const sync = useMutation({
@@ -155,37 +171,24 @@ function CronRow({
           >
             <RefreshCw className={cn("h-3.5 w-3.5", sync.isPending && "animate-spin")} />
           </button>
-          {!confirming ? (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
-              title="Delete cron"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <div className="inline-flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={del.isPending}
-                onClick={() => del.mutate()}
-                className="h-6 px-2 text-[10px] text-red-400"
-              >
-                {del.isPending ? "…" : "yes"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setConfirming(false)}
-                disabled={del.isPending}
-                className="h-6 px-2 text-[10px]"
-              >
-                no
-              </Button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={del.isPending}
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+            title="Delete cron"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <ConfirmDialog
+            open={confirming}
+            title={`Delete cron ${short}`}
+            body={`No more runs on ${cron.spec.schedule}.`}
+            confirmLabel="Delete cron"
+            pending={del.isPending}
+            onConfirm={() => del.mutate()}
+            onCancel={() => setConfirming(false)}
+          />
         </div>
       )}
     </li>

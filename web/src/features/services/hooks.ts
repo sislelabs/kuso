@@ -18,6 +18,7 @@ import {
   listRuns,
   listServiceCrons,
   patchService,
+  restartService,
   runPhase,
   setServiceEnv,
   startService,
@@ -205,8 +206,23 @@ export function useLogsTail(project: string, service: string, env = "production"
 export function useWakeService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
+    meta: selfHandledErrors,
     mutationFn: () => wakeService(project, service),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+    },
+  });
+}
+
+// env is the env-group name (production / staging / preview-pr-N).
+export function useRestartService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: selfHandledErrors,
+    mutationFn: (env: string) => restartService(project, service, env),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
+      qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
     },
   });
