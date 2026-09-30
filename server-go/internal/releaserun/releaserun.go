@@ -58,10 +58,19 @@ type Result struct {
 	// condition Message is k8s boilerplate ("Job has reached the specified
 	// backoff limit"); this is where the migration says why it failed.
 	LogTail string
+	// LogTailLong is the same log with up to logTailLongLines lines, for
+	// the build detail view (LogTail stays short for notification cards).
+	LogTailLong string
 }
 
 // logTailLines is how many log lines a failed Result carries.
 const logTailLines = 10
+
+// logTailLongLines bounds LogTailLong; logTailLongBytes bounds the read.
+const (
+	logTailLongLines = 200
+	logTailLongBytes = 32 << 10
+)
 
 // waitForAddonsScript is the wait-for-addons initContainer body. It
 // derives host:port from whichever of DATABASE_URL / REDIS_URL / NATS_URL
@@ -433,29 +442,20 @@ func (r *Runner) poll(ctx context.Context, ns, jobName string, timeout time.Dura
 			case batchv1.JobFailed:
 				if c.Status == corev1.ConditionTrue {
 					if strings.EqualFold(c.Reason, "DeadlineExceeded") {
-						return Result{
-							Outcome: OutcomeTimedOut,
-							JobName: jobName,
-							Message: c.Message,
-							LogTail: r.logTail(ctx, ns, jobName),
-						}, nil
+						res := Result{Outcome: OutcomeTimedOut, JobName: jobName, Message: c.Message}
+						res.LogTail, res.LogTailLong = r.logTail(ctx, ns, jobName)
+						return res, nil
 					}
-					return Result{
-						Outcome: OutcomeFailed,
-						JobName: jobName,
-						Message: c.Message,
-						LogTail: r.logTail(ctx, ns, jobName),
-					}, nil
+					res := Result{Outcome: OutcomeFailed, JobName: jobName, Message: c.Message}
+					res.LogTail, res.LogTailLong = r.logTail(ctx, ns, jobName)
+					return res, nil
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return Result{
-				Outcome: OutcomeTimedOut,
-				JobName: jobName,
-				Message: "release-runner: poll deadline exceeded",
-				LogTail: r.logTail(ctx, ns, jobName),
-			}, nil
+			res := Result{Outcome: OutcomeTimedOut, JobName: jobName, Message: "release-runner: poll deadline exceeded"}
+			res.LogTail, res.LogTailLong = r.logTail(ctx, ns, jobName)
+			return res, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -507,14 +507,15 @@ func (r *Runner) Logs(ctx context.Context, ns, envName, imageTag string) (string
 	return b.String(), nil
 }
 
-// logTail returns the last logTailLines non-empty lines of the newest
-// release pod's "release" container. Best-effort: any error (pod GC'd,
-// kubelet unreachable) yields "" and the caller falls back to the Job
-// condition message. Bounded in time and bytes so a stuck log stream
-// can't hold up marking the build.
-func (r *Runner) logTail(ctx context.Context, ns, jobName string) string {
+// logTail returns the last logTailLines (short) and logTailLongLines
+// (long) non-empty lines of the newest release pod's "release"
+// container. Best-effort: any error (pod GC'd, kubelet unreachable)
+// yields "" and the caller falls back to the Job condition message.
+// Bounded in time and bytes so a stuck log stream can't hold up marking
+// the build.
+func (r *Runner) logTail(ctx context.Context, ns, jobName string) (short, long string) {
 	if r.Kube == nil || r.Kube.Clientset == nil {
-		return ""
+		return "", ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -522,7 +523,7 @@ func (r *Runner) logTail(ctx context.Context, ns, jobName string) string {
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})
 	if err != nil || len(pods.Items) == 0 {
-		return ""
+		return "", ""
 	}
 	pick := pods.Items[0]
 	for _, p := range pods.Items[1:] {
@@ -530,22 +531,22 @@ func (r *Runner) logTail(ctx context.Context, ns, jobName string) string {
 			pick = p
 		}
 	}
-	tail := int64(logTailLines * 3) // headroom for blank lines
-	limit := int64(16 << 10)
+	tail := int64(logTailLongLines * 2) // headroom for blank lines
+	limit := int64(logTailLongBytes)
 	stream, err := r.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pick.Name, &corev1.PodLogOptions{
 		Container:  "release",
 		TailLines:  &tail,
 		LimitBytes: &limit,
 	}).Stream(ctx)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer stream.Close()
 	raw, err := io.ReadAll(io.LimitReader(stream, limit))
 	if err != nil && len(raw) == 0 {
-		return ""
+		return "", ""
 	}
-	return lastLines(string(raw), logTailLines)
+	return lastLines(string(raw), logTailLines), lastLines(string(raw), logTailLongLines)
 }
 
 // lastLines returns the last n non-empty lines of s, newline-joined.

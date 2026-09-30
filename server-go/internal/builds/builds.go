@@ -648,9 +648,12 @@ type CreateBuildRequest struct {
 	// image layers. When PreviewEnv is set, Create resolves spec.BuildEnv
 	// from the PREVIEW env's own already-isolated vars (subscription-
 	// filtered + PG-clone-swapped by ensurePreviewEnv) instead of the
-	// parent service's production vars. Production builds (PreviewEnv=="")
-	// keep the existing behaviour exactly.
+	// parent service's production vars.
 	PreviewEnv string `json:"-"`
+	// Env targets one environment by env-group label ("staging",
+	// "preview-pr-7"): the build uses that env's branch when Branch is
+	// empty and bakes that env's build-time vars instead of production's.
+	Env string `json:"env,omitempty"`
 }
 
 // shaRE matches a full 40-char git SHA.
@@ -820,13 +823,24 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		return nil, false, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
 
+	defaultBranch := "main"
+	if proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+		defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
+	}
+	var targetEnv *kube.KusoEnvironment
+	if req.Env != "" {
+		if targetEnv, err = s.resolveEnv(ctx, ns, project, service, req.Env); err != nil {
+			return nil, false, err
+		}
+		want := envBranch(targetEnv, defaultBranch)
+		if req.Branch != "" && req.Branch != want {
+			return nil, false, fmt.Errorf("%w: environment %s deploys branch %q, not %q — drop the branch or the env", ErrInvalid, req.Env, want, req.Branch)
+		}
+		req.Branch = want
+	}
 	branch := req.Branch
 	if branch == "" {
-		if proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
-			branch = proj.Spec.DefaultRepo.DefaultBranch
-		} else {
-			branch = "main"
-		}
+		branch = defaultBranch
 	}
 	if err := ValidateGitRef(branch); err != nil {
 		return nil, false, fmt.Errorf("%w: branch: %s", ErrInvalid, err.Error())
@@ -1122,6 +1136,15 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// own preview DB creds (or nothing) exposed to the build — never
 	// production's.
 	buildEnvVars := svcCR.Spec.EnvVars
+	if req.PreviewEnv == "" {
+		// A redeploy of a staging / custom / preview env (branch-matched or
+		// asked for by name) bakes that env's vars, not production's.
+		if envs, lerr := s.serviceEnvs(ctx, ns, project, service); lerr != nil {
+			slog.Default().Warn("build: list envs for build-env source; using service vars", "project", project, "service", service, "err", lerr)
+		} else if src := buildEnvSource(envs, branch, defaultBranch, targetEnv); src != nil {
+			buildEnvVars = src.Spec.EnvVars
+		}
+	}
 	if req.PreviewEnv != "" {
 		if penv, perr := s.Kube.GetKusoEnvironment(ctx, ns, req.PreviewEnv); perr == nil && penv != nil {
 			// Use the preview env's isolated, post-swap vars.
@@ -1781,6 +1804,10 @@ func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 	}
 	for i := range raw {
 		b := &raw[i]
+		if b.Annotations[annRetryRelease] != "" {
+			_ = p.promoteDetached(ctx, ns, b, p.retryRelease)
+			continue
+		}
 		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
 			continue
 		}
@@ -2280,7 +2307,7 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 			combined.Write(data)
 		}
 	}
-	logs := combined.String()
+	logs := redactSecrets(combined.String(), p.Svc.secretValuesForBuild(lctx, ns, b))
 	// Extract detected-env BEFORE the tail truncation: the env-detect
 	// init container emits its sentinel block early in the build, so
 	// it'd get cut off when a long kaniko stage drowns the tail.
@@ -2744,7 +2771,9 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// diverted to CANCELLED instead — the ref was deleted/force-pushed
 	// while the build sat queued, nothing is actually broken, and a
 	// build.failed here would page @here for a non-event.
-	classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
+	secretVals := p.Svc.secretValuesForBuild(ctx, ns, b)
+	classifyLines := redactLines(p.tailBuildLogLines(ctx, ns, b, 50), secretVals)
+	msg = redactSecrets(msg, secretVals)
 	var sig failures.Signal
 	if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
@@ -3607,6 +3636,12 @@ func (p *Poller) markReleaseFailedWithSnapshot(ctx context.Context, ns string, b
 // patched).
 func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoBuild, e *kube.KusoEnvironment, res releaserun.Result) {
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Migrations print connection strings and tokens on failure; scrub
+	// before anything is stamped or sent to a channel.
+	secretVals := p.Svc.secretValuesForBuild(ctx, ns, b)
+	res.LogTail = redactSecrets(res.LogTail, secretVals)
+	res.LogTailLong = redactSecrets(res.LogTailLong, secretVals)
+	res.Message = redactSecrets(res.Message, secretVals)
 	// The release pod's log tail says why the hook failed; the Job
 	// condition message is k8s boilerplate ("backoff limit"), so it is
 	// only the fallback.
@@ -3618,10 +3653,13 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 		msg = string(res.Outcome)
 	}
 	annotations := map[string]string{
-		annPhase:                         "release-failed",
-		annCompletedAt:                   now,
-		annMessage:                       msg,
-		"kuso.sislelabs.com/release-job": res.JobName,
+		annPhase:       "release-failed",
+		annCompletedAt: now,
+		annMessage:     msg,
+		annReleaseJob:  res.JobName,
+	}
+	if res.LogTailLong != "" {
+		annotations[annReleaseLogTail] = res.LogTailLong
 	}
 	if res.LogTail != "" {
 		if cj, err := json.Marshal(failures.ClassifyRelease(strings.Split(res.LogTail, "\n"))); err == nil {
@@ -3751,6 +3789,12 @@ const promoteAsyncTimeout = 30 * time.Minute
 // Returns nil always: errors are logged on the worker, and retry is the
 // next tick's job.
 func (p *Poller) markSucceededAsync(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	return p.promoteDetached(ctx, ns, b, p.markSucceeded)
+}
+
+// promoteDetached runs a promotion step (markSucceeded, or retryRelease)
+// on a detached goroutine, deduped per build via the promoting set.
+func (p *Poller) promoteDetached(ctx context.Context, ns string, b *kube.KusoBuild, step func(context.Context, string, *kube.KusoBuild) error) error {
 	key := ns + "/" + b.Name
 	p.promotingMu.Lock()
 	if p.promoting == nil {
@@ -3779,7 +3823,7 @@ func (p *Poller) markSucceededAsync(ctx context.Context, ns string, b *kube.Kuso
 		// context so leadership loss unwinds it.
 		wctx, cancel := context.WithTimeout(ctx, promoteAsyncTimeout)
 		defer cancel()
-		if err := p.markSucceeded(wctx, ns, build); err != nil && !apierrors.IsNotFound(err) {
+		if err := step(wctx, ns, build); err != nil && !apierrors.IsNotFound(err) {
 			// Non-terminal build + logged error: the next tick retries.
 			p.logger().Warn("build promote (async) failed; will retry next tick",
 				"build", build.Name, "ns", ns, "err", err)

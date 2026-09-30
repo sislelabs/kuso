@@ -98,6 +98,10 @@ const (
 	EventTestPing EventType = "test.ping"
 )
 
+// EventDeployRolledBack fires when a user re-points an env at an earlier
+// build (builds.Rollback).
+const EventDeployRolledBack EventType = "deploy.rolledback"
+
 // EventTypeInfo is one entry of the subscribable-event catalogue served
 // at GET /api/notifications/event-types. The JSON shape is a contract
 // with the web settings UI.
@@ -125,6 +129,7 @@ var EventCatalogue = []EventTypeInfo{
 	{EventBuildFailed, "Build failed", "build", "@here"}, // production only; other envs are warn
 	{EventBuildCancelled, "Build cancelled", "build", ""},
 	{EventBuildSuperseded, "Build superseded", "build", ""},
+	{EventDeployRolledBack, "Deploy rolled back", "build", ""},
 	{EventPodCrashed, "Pod crashed", "runtime", "@here"}, // production only; other envs are warn
 	{EventPodRecovered, "Pod recovered", "runtime", ""},
 	{EventAddonCrashed, "Addon crashed", "runtime", "@here"},

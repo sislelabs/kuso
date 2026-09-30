@@ -16,6 +16,10 @@ type CreateBuildRequest struct {
 	// push and env promotion. Use for "does this PR even build?"
 	// without burning storage or rolling prod.
 	DryRun bool `json:"dryRun,omitempty"`
+	// Env targets an environment by env-group label (staging,
+	// preview-pr-7): the server builds that env's branch and bakes that
+	// env's build-time vars.
+	Env string `json:"env,omitempty"`
 }
 
 func (k *KusoClient) ListBuilds(project, service string) (*resty.Response, error) {
@@ -53,12 +57,28 @@ func (k *KusoClient) CreateBuild(project, service string, req CreateBuildRequest
 // roll production back — a bad staging build was un-rollbackable, and
 // worse, `kuso build rollback` aimed at staging silently rolled
 // PRODUCTION back instead. The server has read ?env= since v0.17.1.
-func (k *KusoClient) RollbackBuild(project, service, build, env string) (*resty.Response, error) {
+// force rolls back even when the build's branch differs from the one the
+// env deploys (the server refuses that with 400 otherwise).
+func (k *KusoClient) RollbackBuild(project, service, build, env string, force bool) (*resty.Response, error) {
 	url := "/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/rollback"
 	if env != "" {
 		url += "?env=" + esc(env)
 	}
+	k.client.SetBody(map[string]any{"env": env, "force": force})
 	return k.client.Post(url)
+}
+
+// RetryRelease re-runs the release hook of a release-failed build and
+// promotes it on success. 202 {"job": "<release job>"}.
+func (k *KusoClient) RetryRelease(project, service, build string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/retry-release")
+}
+
+// RestartService rolls an env's pods on their current image, without a
+// build. env empty = production. 202 {"restartedAt": RFC3339}.
+func (k *KusoClient) RestartService(project, service, env string) (*resty.Response, error) {
+	k.client.SetBody(map[string]string{"env": env})
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/restart")
 }
 
 // CancelBuild stops an in-flight build. The build CR is preserved

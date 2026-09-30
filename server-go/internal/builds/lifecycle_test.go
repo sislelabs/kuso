@@ -43,7 +43,7 @@ func TestRollback_SucceededBuildPatchesEnvImage(t *testing.T) {
 		seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
 	)
 
-	env, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-oldsha")
+	env, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-oldsha", RollbackOptions{})
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRollback_DefaultsToProductionEnv(t *testing.T) {
 		seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
 	)
 	// Empty envName must resolve to "production".
-	env, err := s.Rollback(context.Background(), "alpha", "web", "", "alpha-web-oldsha")
+	env, err := s.Rollback(context.Background(), "alpha", "web", "", "alpha-web-oldsha", RollbackOptions{})
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestRollback_RefusesNonSucceededBuild(t *testing.T) {
 		seedProductionEnv("alpha", "web"),
 		seedBuild(b),
 	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-failed"); err == nil {
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-failed", RollbackOptions{}); err == nil {
 		t.Fatal("expected Rollback to refuse a non-succeeded build, got nil error")
 	}
 }
@@ -117,7 +117,7 @@ func TestRollback_RefusesBuildWithNoImage(t *testing.T) {
 		seedProductionEnv("alpha", "web"),
 		seedBuild(b),
 	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-noimg"); err == nil {
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-noimg", RollbackOptions{}); err == nil {
 		t.Fatal("expected Rollback to refuse a succeeded build with no image, got nil error")
 	}
 }
@@ -130,7 +130,7 @@ func TestRollback_MissingBuildErrors(t *testing.T) {
 		seedService("alpha", "web"),
 		seedProductionEnv("alpha", "web"),
 	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-ghost"); err == nil {
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-ghost", RollbackOptions{}); err == nil {
 		t.Fatal("expected Rollback to error on a missing build, got nil")
 	}
 }
@@ -142,7 +142,7 @@ func TestRollback_RefusesOtherProjectsBuild(t *testing.T) {
 		seedProductionEnv("alpha", "web"),
 		seedSucceededBuild("beta", "api", "beta-api-abc", "reg/beta/api", "abcdef012345"),
 	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "beta-api-abc"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "beta-api-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Rollback of beta's build via alpha: want ErrNotFound, got %v", err)
 	}
 	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
@@ -161,7 +161,7 @@ func TestRollback_RefusesSameProjectOtherServiceBuild(t *testing.T) {
 		seedProductionEnv("alpha", "web"),
 		seedSucceededBuild("alpha", "worker", "alpha-worker-abc", "reg/alpha/worker", "abcdef012345"),
 	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-worker-abc"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-worker-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
@@ -175,7 +175,7 @@ func TestRollback_RefusesEnvOwnedByOverlappingProject(t *testing.T) {
 		seedProductionEnv("foo-bar", "api"),
 		seedSucceededBuild("foo", "bar-api", "foo-bar-api-abc", "reg/foo/bar-api", "abcdef012345"),
 	)
-	if _, err := s.Rollback(context.Background(), "foo", "bar-api", "production", "foo-bar-api-abc"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Rollback(context.Background(), "foo", "bar-api", "production", "foo-bar-api-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "foo-bar-api-production")

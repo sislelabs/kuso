@@ -182,27 +182,28 @@ func (s *Service) CancelBuildsForRef(ctx context.Context, project, branch, reaso
 	return n, nil
 }
 
+// RollbackOptions tunes a Rollback. Force skips the branch check (a
+// deliberate cross-branch rollback); Actor names who asked, for the
+// notification card.
+type RollbackOptions struct {
+	Force bool
+	Actor string
+}
+
 // Rollback re-points an env at a previous build's image tag. The
 // build must be in phase=succeeded — rolling to a failed build would
-// land a broken pod. envName is the env short name (e.g. "production",
-// "staging"); empty defaults to "production" for backward compat with
-// pre-v0.17.1 callers. Returns the patched env.
-//
-// Pre-v0.17.1 the envName was hardcoded to "production" — rolling
-// back staging was either impossible (no UI path) OR if the caller
-// passed a staging build name it silently patched production with
-// staging code. The handler now passes the env from the URL so
-// rolling back staging affects staging only.
-func (s *Service) Rollback(ctx context.Context, project, service, envName, buildName string) (*kube.KusoEnvironment, error) {
-	if envName == "" {
-		envName = "production"
-	}
+// land a broken pod — and, unless opts.Force, built from the branch the
+// env tracks: rolling a feature-branch image onto production is almost
+// always a misclick. envName is the env-group label ("production",
+// "staging", "preview-pr-7") or the CR name; empty means production.
+// Returns the patched env.
+func (s *Service) Rollback(ctx context.Context, project, service, envName, buildName string, opts RollbackOptions) (*kube.KusoEnvironment, error) {
 	ns := s.nsFor(ctx, project)
 	// Resolve the build's image. Prefer the live CR; if retention has
 	// GC'd it, fall back to the archived BuildRecord (whose image may
 	// still exist in the registry within imageRetentionWindow). Either
 	// path yields (repo, tag) for a SUCCEEDED build, or an error.
-	var imageRepo, imageTag string
+	var imageRepo, imageTag, buildBranch string
 	bRaw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
 	switch {
 	case err == nil:
@@ -214,45 +215,55 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 			return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
 		}
 		if buildPhase(&b) != "succeeded" {
-			return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, buildPhase(&b))
+			return nil, fmt.Errorf("%w: build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", ErrInvalid, buildName, buildPhase(&b))
 		}
-		if b.Spec.Image == nil {
-			return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
+		if b.Spec.Image == nil || b.Spec.Image.Tag == "" {
+			return nil, fmt.Errorf("%w: build %s has no image to roll back to", ErrInvalid, buildName)
 		}
-		imageRepo, imageTag = b.Spec.Image.Repository, b.Spec.Image.Tag
+		imageRepo, imageTag, buildBranch = b.Spec.Image.Repository, b.Spec.Image.Tag, b.Spec.Branch
 	case apierrors.IsNotFound(err) && s.RecordLookup != nil:
-		// CR gone — try the archive.
+		// CR gone — try the archive. The archive carries no branch, so
+		// the branch check below cannot run for these.
 		repo, tag, phase, ok, lerr := s.RecordLookup.GetBuildImage(ctx, project, buildName)
 		if lerr != nil {
 			return nil, fmt.Errorf("get build record: %w", lerr)
 		}
-		if !ok {
+		// The lookup is keyed by project only; the repo names the
+		// service, so a sibling's archived build can't be rolled here.
+		if !ok || repo != fmt.Sprintf("%s/%s/%s", RegistryHost, project, service) {
 			return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
 		}
 		if phase != "succeeded" {
-			return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, phase)
+			return nil, fmt.Errorf("%w: build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", ErrInvalid, buildName, phase)
 		}
 		if tag == "" {
-			return nil, fmt.Errorf("build %s has no archived image to roll back to (image was pruned past the retention window)", buildName)
+			return nil, fmt.Errorf("%w: build %s has no archived image to roll back to (image was pruned past the retention window)", ErrInvalid, buildName)
 		}
 		imageRepo, imageTag = repo, tag
+	case apierrors.IsNotFound(err):
+		return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
 	default:
 		return nil, fmt.Errorf("get build: %w", err)
 	}
-	// Patch the addressed env's image to the build's image. Stamp
-	// promotedAt to *now* (not the build's createdAt) so a stray
+	cur, err := s.resolveEnv(ctx, ns, project, service, envName)
+	if err != nil {
+		return nil, err
+	}
+	envCRName := cur.Name
+	group := envGroupName(cur, project+"-"+service)
+	if !opts.Force && buildBranch != "" {
+		defaultBranch := s.defaultBranchOf(ctx, project)
+		if !promotionBranchMatches(buildBranch, cur.Spec.Branch, defaultBranch) {
+			return nil, fmt.Errorf("%w: build %s was built from branch %q but %s deploys %q — pass force to roll back across branches",
+				ErrInvalid, buildName, buildBranch, group, envBranch(cur, defaultBranch))
+		}
+	}
+	// Stamp promotedAt to *now* (not the build's createdAt) so a stray
 	// concurrent auto-promote of an older build can't silently
 	// overwrite the user's rollback decision — last-trigger-wins
 	// would otherwise let a stale auto-promote shadow the manual
 	// rollback if its build CR happened to have a newer createdAt.
-	envCRName := project + "-" + service + "-" + envName
-	cur, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRName)
-	if apierrors.IsNotFound(err) || (err == nil && !envOwnedBy(cur, project)) {
-		return nil, fmt.Errorf("%w: environment %s", ErrNotFound, envCRName)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get env %s: %w", envCRName, err)
-	}
+	prevBuild := cur.Annotations[annPromotedBuild]
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := fmt.Sprintf(
 		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
@@ -272,5 +283,39 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e); err != nil {
 		return nil, fmt.Errorf("decode rolled-back env %s: %w", envCRName, err)
 	}
+	s.emitRolledBack(project, service, group, buildName, prevBuild, imageTag, opts)
 	return &e, nil
+}
+
+func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, imageTag string, opts RollbackOptions) {
+	if s.Notifier == nil {
+		return
+	}
+	who := opts.Actor
+	if who == "" {
+		who = "someone"
+	}
+	desc := fmt.Sprintf("%s rolled %s back to build `%s` (image `%s`).", who, group, buildName, imageTag)
+	if prevBuild != "" {
+		desc += fmt.Sprintf("\nPreviously live: `%s`.", prevBuild)
+	}
+	if opts.Force {
+		desc += "\nForced across branches."
+	}
+	targets := []buildTarget{{Env: group}}
+	s.Notifier.Emit(EventEnvelope{
+		Type:        eventDeployRolledBack,
+		Title:       fmt.Sprintf("↩ Rolled back · %s / %s → %s", project, service, group),
+		Description: desc,
+		Body:        desc,
+		Project:     project,
+		Service:     service,
+		Env:         group,
+		URL:         withEnvParam(buildEventURL(project, service), targets),
+		Severity:    "warn",
+		Fields: []EnvelopeField{
+			{Name: "Build", Value: "`" + buildName + "`", Inline: true},
+			{Name: "By", Value: who, Inline: true},
+		},
+	})
 }
