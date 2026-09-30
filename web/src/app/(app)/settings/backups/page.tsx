@@ -22,6 +22,7 @@ interface AddonBackupRow {
   project?: string;
   namespace: string;
   kind?: string;
+  instanceShared?: boolean;
   covered: boolean;
   healthy: boolean;
   lastSuccessAt?: string;
@@ -42,16 +43,17 @@ interface BackupHealthResp {
   serviceVolumes?: ServiceVolumeRow[];
 }
 
-type CoverageBadge = "ok" | "failing" | "not covered";
+type CoverageBadge = "ok" | "failing" | "via instance" | "not covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
-  if (!row.covered) return "not covered";
+  if (!row.covered) return row.instanceShared ? "via instance" : "not covered";
   return row.healthy ? "ok" : "failing";
 }
 
 const BADGE_TONE: Record<CoverageBadge, string> = {
   ok: "bg-[var(--success-subtle)] text-[var(--success)]",
   failing: "bg-[var(--error-subtle)] text-[var(--error)]",
+  "via instance": "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
   "not covered": "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
 };
 
@@ -89,7 +91,7 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { failing: 0, "not covered": 1, ok: 2 };
+  const rank: Record<CoverageBadge, number> = { failing: 0, ok: 1, "via instance": 2, "not covered": 3 };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );

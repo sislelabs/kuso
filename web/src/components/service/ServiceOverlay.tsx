@@ -94,17 +94,29 @@ export function useOverlayDirty(
   }
 ) {
   const api = useContext(OverlayDirtyContext);
+  // Panels pass fresh closures every render. Registering those directly
+  // made the effect re-run on every render, and each run sets overlay
+  // state, which re-renders the panel: an infinite update loop. The
+  // registered handlers read the latest closure through refs instead.
+  const onSaveRef = useRef(opts?.onSave);
+  const onDiscardRef = useRef(opts?.onDiscard);
+  useEffect(() => {
+    onSaveRef.current = opts?.onSave;
+    onDiscardRef.current = opts?.onDiscard;
+  });
+  const hasSave = !!opts?.onSave;
+  const hasDiscard = !!opts?.onDiscard;
   useEffect(() => {
     if (!api) return;
     api.setPanel(panelKey, {
       dirty,
-      onSave: opts?.onSave,
-      onDiscard: opts?.onDiscard,
+      onSave: hasSave ? () => onSaveRef.current?.() : undefined,
+      onDiscard: hasDiscard ? () => onDiscardRef.current?.() : undefined,
       saving: opts?.saving,
       saveError: opts?.saveError,
     });
     return () => api.clearPanel(panelKey);
-  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
+  }, [api, panelKey, dirty, hasSave, hasDiscard, opts?.saving, opts?.saveError]);
 }
 
 type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "shell" | "crons" | "runs" | "settings";

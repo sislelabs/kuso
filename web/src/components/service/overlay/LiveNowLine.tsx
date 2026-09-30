@@ -14,7 +14,7 @@ export function LiveNowLine({
   rolledBack: boolean;
   branch: string;
 }) {
-  const sha = (build.commitSha ?? "").slice(0, 7);
+  const sha = (build.commitSha ?? "").slice(0, 12);
   const when = relativeTime(build.finishedAt ?? build.startedAt);
   const who = triggerLabel(build);
   return (

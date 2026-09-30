@@ -195,8 +195,11 @@ type AddonBackupStatus struct {
 	Project   string `json:"project,omitempty"`
 	Namespace string `json:"namespace"`
 	// Kind is the addon's datastore kind (postgres/redis/mysql/…).
-	Kind     string `json:"kind,omitempty"`
-	Schedule string `json:"schedule"`
+	Kind string `json:"kind,omitempty"`
+	// InstanceShared marks an addon backed by the instance addon, whose
+	// own backups cover it; the UI must not report it as a gap.
+	InstanceShared bool   `json:"instanceShared,omitempty"`
+	Schedule       string `json:"schedule"`
 	// ScheduleConfigured: spec.backup.schedule is set on the addon CR.
 	// False rows exist so "this addon has NO scheduled backups" is
 	// visible — previously unscheduled addons were silently omitted
@@ -287,10 +290,11 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			ns = a.Namespace
 		}
 		st := AddonBackupStatus{
-			Addon:     a.Name,
-			Project:   project,
-			Namespace: ns,
-			Kind:      a.Spec.Kind,
+			Addon:          a.Name,
+			Project:        project,
+			Namespace:      ns,
+			Kind:           a.Spec.Kind,
+			InstanceShared: a.Spec.UseInstanceAddon != "",
 		}
 		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
 			// No schedule → not covered by scheduled backups. This row
