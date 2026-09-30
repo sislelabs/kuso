@@ -54,7 +54,7 @@ export interface FormState {
   sleepExcludePaths: string;
   // Sleep: sleepEnabled is spec.sleep.enabled (production env only);
   // sleepAfter is afterMinutes as a string; sleepNonProduction mirrors
-  // spec.sleep.nonProduction ("" = default on). Read-only in the form.
+  // spec.sleep.nonProduction ("" = default on).
   sleepEnabled: boolean;
   sleepAfter: string;
   sleepNonProduction: string;

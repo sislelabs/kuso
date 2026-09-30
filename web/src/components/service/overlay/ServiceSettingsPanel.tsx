@@ -322,8 +322,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       state.scaleMax !== baseline.scaleMax ||
       state.scaleCPU !== baseline.scaleCPU;
     const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
+    const nonProdChanged = state.sleepNonProduction !== baseline.sleepNonProduction;
     const sleepChanged =
-      state.sleepEnabled !== baseline.sleepEnabled || state.sleepAfter !== baseline.sleepAfter;
+      state.sleepEnabled !== baseline.sleepEnabled ||
+      state.sleepAfter !== baseline.sleepAfter ||
+      nonProdChanged;
     if (scaleChanged || excludeChanged || sleepChanged) {
       const min = Number(state.scaleMin);
       const max = Number(state.scaleMax);
@@ -349,6 +352,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             return;
           }
           body.sleep.afterMinutes = after;
+        }
+        if (nonProdChanged) {
+          body.sleep.nonProduction = state.sleepNonProduction === "off" ? "off" : "on";
         }
         if (excludeChanged) {
           // Paths that must stay reachable (webhooks/callbacks) keep the

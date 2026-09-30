@@ -7,7 +7,7 @@ import { Section, Row, type SectionProps } from "./_primitives";
 // SleepSection edits scale-to-zero. sleep.enabled governs the production
 // env only; every non-production env (named envs, env-group clones, PR
 // previews) sleeps by default unless the service sets
-// sleep.nonProduction=off, which is CLI-only for now.
+// sleep.nonProduction=off.
 export function SleepSection({ state, setState }: SectionProps) {
   const minZero = Number(state.scaleMin) === 0;
   const prodOn = minZero || state.sleepEnabled;
@@ -18,49 +18,23 @@ export function SleepSection({ state, setState }: SectionProps) {
     : `after ${state.sleepAfter || "30"}m idle`;
   return (
     <Section id="sleep" title="Sleep" icon={Moon} hint={hint}>
-      <Row
+      <SleepSwitch
         label="production"
         hint={
           minZero
             ? "min replicas is 0, so production always sleeps when idle"
             : "scale to zero when idle; the next request wakes it (cold start of a few seconds)"
         }
-        control={
-          <button
-            type="button"
-            role="switch"
-            aria-checked={prodOn}
-            aria-label="Sleep production when idle"
-            disabled={minZero}
-            onClick={() => setState((s) => ({ ...s, sleepEnabled: !s.sleepEnabled }))}
-            className="group inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-1 py-0.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span
-              className={`relative inline-block h-5 w-10 rounded-full transition-colors ${
-                prodOn
-                  ? "bg-[var(--accent)]"
-                  : "border border-[var(--border)] bg-[var(--bg-tertiary)]"
-              }`}
-            >
-              <span
-                className={`absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-                  prodOn ? "translate-x-[22px]" : "translate-x-[2px]"
-                }`}
-              />
-            </span>
-            <span className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
-              {prodOn ? "Sleeps when idle" : "Always on"}
-            </span>
-          </button>
-        }
+        on={prodOn}
+        disabled={minZero}
+        onToggle={() => setState((s) => ({ ...s, sleepEnabled: !s.sleepEnabled }))}
       />
-      <Row
+      <SleepSwitch
         label="non-production"
-        hint="named envs, env-group clones and PR previews sleep by default · opt out with kuso project service sleep … --non-production off"
-        control={
-          <span className="font-mono text-[12px] text-[var(--text-secondary)]">
-            {nonProdOn ? "sleeps when idle (default)" : "always on"}
-          </span>
+        hint="named envs, env-group clones and PR previews"
+        on={nonProdOn}
+        onToggle={() =>
+          setState((s) => ({ ...s, sleepNonProduction: s.sleepNonProduction === "off" ? "on" : "off" }))
         }
       />
       <Row
@@ -97,5 +71,52 @@ export function SleepSection({ state, setState }: SectionProps) {
         last
       />
     </Section>
+  );
+}
+
+function SleepSwitch({
+  label,
+  hint,
+  on,
+  disabled,
+  onToggle,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Row
+      label={label}
+      hint={hint}
+      control={
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label={`Sleep ${label} when idle`}
+          disabled={disabled}
+          onClick={onToggle}
+          className="group inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-1 py-0.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span
+            className={`relative inline-block h-5 w-10 rounded-full transition-colors ${
+              on ? "bg-[var(--accent)]" : "border border-[var(--border)] bg-[var(--bg-tertiary)]"
+            }`}
+          >
+            <span
+              className={`absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                on ? "translate-x-[22px]" : "translate-x-[2px]"
+              }`}
+            />
+          </span>
+          <span className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
+            {on ? "Sleeps when idle" : "Always on"}
+          </span>
+        </button>
+      }
+    />
   );
 }
