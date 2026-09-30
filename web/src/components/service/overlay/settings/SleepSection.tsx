@@ -78,20 +78,24 @@ export function SleepSection({ state, setState }: SectionProps) {
             <span className="font-mono text-[11px] text-[var(--text-tertiary)]">min</span>
           </div>
         }
-        last={!keptWarm}
       />
-      {keptWarm && (
-        <Row
-          label="keep-warm paths"
-          hint="set under Scale; while any are set, no env of this service sleeps"
-          control={
-            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
-              {state.sleepExcludePaths.split("\n").filter(Boolean).length} path(s)
-            </span>
-          }
-          last
-        />
-      )}
+      {/* Any request to a listed path keeps the WHOLE deployment warm,
+          so a webhook/callback doesn't hit a cold start. */}
+      <Row
+        label="keep-warm paths"
+        hint="one per line · while any are set, this service never sleeps"
+        control={
+          <textarea
+            value={state.sleepExcludePaths}
+            onChange={(e) => setState((s) => ({ ...s, sleepExcludePaths: e.target.value }))}
+            placeholder={"/api/webhooks/stripe\n/api/callbacks/github"}
+            rows={2}
+            aria-label="Keep-warm paths"
+            className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
+          />
+        }
+        last
+      />
     </Section>
   );
 }

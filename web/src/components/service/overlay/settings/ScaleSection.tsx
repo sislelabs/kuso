@@ -1,8 +1,14 @@
 "use client";
 
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Layers3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { listPodSizes } from "@/features/cluster-config/api";
+import { matchPodSize, podSizeFields } from "@/features/services";
 import { Section, Row, type SectionProps } from "./_primitives";
+
+const CUSTOM = "__custom";
 
 export function ScaleSection({ state, setState }: SectionProps) {
   const min = Number(state.scaleMin);
@@ -14,6 +20,32 @@ export function ScaleSection({ state, setState }: SectionProps) {
     : autoscales
       ? `autoscales ${min} → ${max} on CPU`
       : `keeps ${min} pod${min === 1 ? "" : "s"} warm`;
+
+  // Same cache key as the admin DefaultPodSizeSection.
+  const sizes = useQuery({ queryKey: ["admin", "podsizes"], queryFn: listPodSizes });
+  const presets = sizes.data ?? [];
+  const matched = matchPodSize(presets, state);
+  const [customOpen, setCustomOpen] = useState(false);
+  const showCustom = customOpen || matched === null;
+  const selectValue = showCustom ? CUSTOM : (matched ?? "");
+
+  const onPick = (v: string) => {
+    if (v === CUSTOM) {
+      setCustomOpen(true);
+      return;
+    }
+    setCustomOpen(false);
+    const preset = presets.find((p) => p.Name === v);
+    setState((s) => ({
+      ...s,
+      ...(preset
+        ? podSizeFields(preset)
+        : { cpuRequest: "", cpuLimit: "", memRequest: "", memLimit: "" }),
+    }));
+  };
+
+  const selectedPreset = presets.find((p) => p.Name === matched);
+
   return (
     <Section id="scale" title="Scale" icon={Layers3} hint={hint}>
       <Row
@@ -59,70 +91,83 @@ export function ScaleSection({ state, setState }: SectionProps) {
           </div>
         }
       />
-      {/* Wake-on exclude paths. Any request to a listed path keeps the
-          WHOLE deployment warm, so a webhook/callback on a sleeping service
-          doesn't cold-start-503. Always shown: non-production envs sleep by
-          default whatever min is. */}
       <Row
-        label="keep-warm paths"
-        hint="requests to these paths block sleep (webhooks/callbacks) — one per line"
+        label="pod size"
+        hint={
+          selectedPreset
+            ? `${selectedPreset.CPURequest || "-"} / ${selectedPreset.MemoryRequest || "-"} guaranteed · ${selectedPreset.CPULimit || "-"} / ${selectedPreset.MemoryLimit || "-"} max`
+            : matched === ""
+              ? "no requests or limits set"
+              : "CPU and memory per pod"
+        }
         control={
-          <textarea
-            value={state.sleepExcludePaths}
-            onChange={(e) => setState((s) => ({ ...s, sleepExcludePaths: e.target.value }))}
-            placeholder={"/api/webhooks/stripe\n/api/callbacks/github"}
-            rows={2}
-            className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
+          <select
+            value={selectValue}
+            onChange={(e) => onPick(e.target.value)}
+            aria-label="Pod size"
+            className="h-7 w-44 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+          >
+            <option value="">None</option>
+            {presets.map((p) => (
+              <option key={p.ID} value={p.Name}>
+                {p.Name}
+              </option>
+            ))}
+            <option value={CUSTOM}>Custom…</option>
+          </select>
+        }
+        last={!showCustom}
+      />
+      {showCustom && (
+        <>
+          {/* k8s quantity syntax: cpu "100m"/"0.5"/"2", memory "128Mi"/"1Gi".
+              Request = guaranteed floor (scheduling + HPA %); limit =
+              hard ceiling (OOM-kill / CPU-throttle past it). */}
+          <Row
+            label="cpu request / limit"
+            hint='e.g. "100m" / "1"'
+            control={
+              <div className="inline-flex items-center gap-1.5">
+                <Input
+                  value={state.cpuRequest}
+                  onChange={(e) => setState((s) => ({ ...s, cpuRequest: e.target.value }))}
+                  placeholder="auto"
+                  className="h-7 w-20 font-mono text-[12px]"
+                />
+                <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+                <Input
+                  value={state.cpuLimit}
+                  onChange={(e) => setState((s) => ({ ...s, cpuLimit: e.target.value }))}
+                  placeholder="auto"
+                  className="h-7 w-20 font-mono text-[12px]"
+                />
+              </div>
+            }
           />
-        }
-      />
-      {/* Pod resources. Blank = chart default. Request = guaranteed
-          floor (drives scheduling + HPA %); limit = hard ceiling
-          (OOM-kill / CPU-throttle past it). k8s quantity syntax:
-          cpu "100m"/"0.5"/"2", memory "128Mi"/"1Gi". */}
-      <Row
-        label="cpu request / limit"
-        hint='guaranteed / max — e.g. "100m" / "1"'
-        control={
-          <div className="inline-flex items-center gap-1.5">
-            <Input
-              value={state.cpuRequest}
-              onChange={(e) => setState((s) => ({ ...s, cpuRequest: e.target.value }))}
-              placeholder="auto"
-              className="h-7 w-20 font-mono text-[12px]"
-            />
-            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
-            <Input
-              value={state.cpuLimit}
-              onChange={(e) => setState((s) => ({ ...s, cpuLimit: e.target.value }))}
-              placeholder="auto"
-              className="h-7 w-20 font-mono text-[12px]"
-            />
-          </div>
-        }
-      />
-      <Row
-        label="memory request / limit"
-        hint='guaranteed / max — e.g. "128Mi" / "512Mi"'
-        control={
-          <div className="inline-flex items-center gap-1.5">
-            <Input
-              value={state.memRequest}
-              onChange={(e) => setState((s) => ({ ...s, memRequest: e.target.value }))}
-              placeholder="auto"
-              className="h-7 w-20 font-mono text-[12px]"
-            />
-            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
-            <Input
-              value={state.memLimit}
-              onChange={(e) => setState((s) => ({ ...s, memLimit: e.target.value }))}
-              placeholder="auto"
-              className="h-7 w-20 font-mono text-[12px]"
-            />
-          </div>
-        }
-        last
-      />
+          <Row
+            label="memory request / limit"
+            hint='e.g. "128Mi" / "512Mi"'
+            control={
+              <div className="inline-flex items-center gap-1.5">
+                <Input
+                  value={state.memRequest}
+                  onChange={(e) => setState((s) => ({ ...s, memRequest: e.target.value }))}
+                  placeholder="auto"
+                  className="h-7 w-20 font-mono text-[12px]"
+                />
+                <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+                <Input
+                  value={state.memLimit}
+                  onChange={(e) => setState((s) => ({ ...s, memLimit: e.target.value }))}
+                  placeholder="auto"
+                  className="h-7 w-20 font-mono text-[12px]"
+                />
+              </div>
+            }
+            last
+          />
+        </>
+      )}
     </Section>
   );
 }

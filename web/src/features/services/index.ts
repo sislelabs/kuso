@@ -9,6 +9,7 @@ export {
   useTriggerBuild,
   useLogsTail,
   useWakeService,
+  useRestartService,
   useStopService,
   useStartService,
   useDeleteService,
@@ -32,6 +33,7 @@ export {
   deleteCron,
   syncCron,
   rollbackBuild,
+  restartService,
   cancelBuild,
   searchServiceLogs,
   listErrors,
@@ -41,6 +43,17 @@ export {
   runCompletedAt,
 } from "./api";
 export { buildTriggerMessage } from "./buildTrigger";
+export {
+  pickRollbackTarget,
+  healthProblem,
+  needsRestart,
+  parseMemoryQuantity,
+  memoryPressure,
+  MEMORY_WARN_RATIO,
+  matchPodSize,
+  podSizeFields,
+  type HealthProblem,
+} from "./overlayState";
 export type {
   BuildSummary,
   TriggerBuildResult,

@@ -38,6 +38,8 @@ interface CopyPair {
   // paste a ${{ addon.KEY }} reference.").
   headline: string;
   body: string;
+  // Optional in-overlay jump rendered as a link under the body.
+  action?: { label: string; tab: string; anchor?: string };
 }
 
 const COPY: Record<FailureKind, CopyPair> = {
@@ -107,7 +109,8 @@ const COPY: Record<FailureKind, CopyPair> = {
   },
   missing_capability: {
     headline: "The image needs Linux capabilities kuso drops by default.",
-    body: "Its startup changes file owners, switches user or binds a port below 1024. Check the logs for the failing call, then add the capabilities it needs with `kuso project service set <project> <service> --cap-add …`.",
+    body: "Its startup changes file owners, switches user or binds a port below 1024. Check the logs for the failing call, then add the capabilities it needs.",
+    action: { label: "Open Settings → Security", tab: "settings", anchor: "security" },
   },
   migration_lock: {
     headline: "Migrations timed out waiting for the database lock.",
@@ -142,6 +145,9 @@ interface Props {
   // service overlay implicitly dismisses; clicking the X dismisses
   // explicitly without closing.
   onDismiss?: () => void;
+  // onNavigate switches the overlay to another tab (and optionally
+  // scrolls to a settings section) for kinds with an in-app fix.
+  onNavigate?: (tab: string, anchor?: string) => void;
 }
 
 // FailureRemediation mirrors the server's failures.Remediation and the
@@ -166,7 +172,7 @@ export interface FailureRemediation {
 // dismisses or navigates away. Inline placement also keeps the
 // affordance scoped to the right tab — variables tab shows env-var
 // hints, logs tab shows crash hints, etc.
-export function FailureBanner({ kind, lineHint, remediation, onDismiss }: Props) {
+export function FailureBanner({ kind, lineHint, remediation, onDismiss, onNavigate }: Props) {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
   const key = (kind && (COPY as Record<string, CopyPair>)[kind])
@@ -183,6 +189,15 @@ export function FailureBanner({ kind, lineHint, remediation, onDismiss }: Props)
         <div className="min-w-0 flex-1">
           <div className="font-medium">{copy.headline}</div>
           <div className="mt-0.5 text-[var(--text-secondary)]">{copy.body}</div>
+          {copy.action && onNavigate ? (
+            <button
+              type="button"
+              onClick={() => onNavigate(copy.action!.tab, copy.action!.anchor)}
+              className="mt-1 font-mono text-[0.7rem] underline underline-offset-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              {copy.action.label} →
+            </button>
+          ) : null}
           {lineHint ? (
             <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[0.75rem] text-[var(--text-secondary)]">
               {lineHint}

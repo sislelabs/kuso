@@ -322,6 +322,19 @@ export async function startService(project: string, service: string): Promise<vo
   );
 }
 
+// restartService rolls the env's pods in place (same image, fresh
+// pods) so they pick up config that changed without a rollout.
+export async function restartService(
+  project: string,
+  service: string,
+  env: string,
+): Promise<{ restartedAt: string }> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/restart`,
+    { method: "POST", body: { env } }
+  );
+}
+
 export async function deleteService(project: string, service: string): Promise<void> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`,
@@ -371,6 +384,8 @@ export interface PatchServiceBody {
   sleep?: {
     enabled?: boolean;
     afterMinutes?: number;
+    // "on" (default) | "off": whether non-production envs sleep.
+    nonProduction?: "on" | "off";
     // wakeOn.excludePaths: any request to a listed path keeps the whole
     // deployment warm even when scale.min=0 (webhooks/callbacks on a
     // sleeping service). Send {clear:true} to drop them.

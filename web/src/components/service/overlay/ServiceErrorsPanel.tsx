@@ -12,13 +12,16 @@ import { cn } from "@/lib/utils";
 interface Props {
   project: string;
   service: string;
+  // Switches the overlay to the Logs tab. The Logs tab has no time
+  // anchor yet, so this lands on its default (latest) view.
+  onViewLogs?: () => void;
 }
 
 const SINCE_OPTIONS: { id: string; label: string }[] = [
   { id: "1h", label: "1 hour" },
   { id: "24h", label: "24 hours" },
+  // Log retention is 7 days, so a longer window would only look empty.
   { id: "7d", label: "7 days" },
-  { id: "30d", label: "30 days" },
 ];
 
 // ServiceErrorsPanel renders the Sentry-style error feed for a
@@ -31,7 +34,7 @@ const SINCE_OPTIONS: { id: string; label: string }[] = [
 //   [icon] <message>                   <count>
 //          first seen X ago · last Y ago · env / pod
 //          (expanded) raw line
-export function ServiceErrorsPanel({ project, service }: Props) {
+export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
   const [since, setSince] = useState("24h");
   const [expanded, setExpanded] = useState<string | null>(null);
   const errors = useErrors(project, service, since);
@@ -90,6 +93,7 @@ export function ServiceErrorsPanel({ project, service }: Props) {
               group={g}
               isOpen={expanded === g.fingerprint}
               onToggle={() => setExpanded(expanded === g.fingerprint ? null : g.fingerprint)}
+              onViewLogs={onViewLogs}
             />
           ))}
         </ul>
@@ -102,10 +106,12 @@ function ErrorRow({
   group,
   isOpen,
   onToggle,
+  onViewLogs,
 }: {
   group: ErrorGroup;
   isOpen: boolean;
   onToggle: () => void;
+  onViewLogs?: () => void;
 }) {
   return (
     <li className="overflow-hidden rounded-md border border-red-500/20 bg-red-500/[0.03]">
@@ -147,8 +153,18 @@ function ErrorRow({
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-xs text-[var(--text-secondary)]">
             {group.sampleLine}
           </pre>
-          <div className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-            fingerprint: {group.fingerprint}
+          <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="truncate">fingerprint: {group.fingerprint}</span>
+            {onViewLogs ? (
+              <button
+                type="button"
+                onClick={onViewLogs}
+                title={`Last seen ${relativeTime(group.lastSeen)}`}
+                className="shrink-0 underline underline-offset-2 hover:text-[var(--text-primary)]"
+              >
+                View in logs →
+              </button>
+            ) : null}
           </div>
         </div>
       )}

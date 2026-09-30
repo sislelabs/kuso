@@ -576,6 +576,9 @@ export function ProjectCanvas({
   // viewers get read-only, editors+ get the write set.
   const canServicesWrite = useCanOnProject(project, Perms.ServicesWrite);
   const canAddonsWrite = useCanOnProject(project, Perms.AddonsWrite);
+  // Service crons/runs mount the service's secrets, so creating one is
+  // admin-only (secrets:read) server-side.
+  const canCreateJobs = useCanOnProject(project, Perms.SecretsRead);
 
   // editorGate: context-menu affordance for gated items. Disabled
   // items stay visible (discoverability) with a right-aligned hint
@@ -850,7 +853,7 @@ export function ProjectCanvas({
       // Crons + Runs deep-links. The service-overlay panels for both
       // tabs render their create-composer at the top of the panel
       // (CronsPanel has an "Add cron" button; RunsPanel always shows
-      // NewRunComposer when the user has services:write), so landing
+      // NewRunComposer for admins), so landing
       // on the tab is enough — no separate dialog needed. The overlay
       // surfaces these tabs even when empty if the user explicitly
       // routed to them (see MAIN_TABS in ServiceOverlay) so the
@@ -859,6 +862,7 @@ export function ProjectCanvas({
         id: "add-cron",
         label: "Add cron…",
         icon: Clock,
+        ...(canCreateJobs ? {} : { disabled: true, shortcut: "needs admin" }),
         onSelect: () => {
           onSelectService?.(short, "crons");
         },
@@ -867,6 +871,7 @@ export function ProjectCanvas({
         id: "run-command",
         label: "Run command…",
         icon: Terminal,
+        ...(canCreateJobs ? {} : { disabled: true, shortcut: "needs admin" }),
         onSelect: () => {
           onSelectService?.(short, "runs");
         },
