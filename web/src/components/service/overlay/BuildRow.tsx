@@ -1,32 +1,31 @@
 "use client";
 
-// Per-build row + inline expand/collapse log viewer + per-row action
-// chips (rollback / cancel). Extracted from ServiceDeploymentsPanel
-// in the v0.12 refactor so the panel itself can stay close to its
-// data-fetching + filtering logic without sprawling into row-level
-// presentation. No behaviour change vs the pre-split shape.
+// Per-build row + inline expand/collapse log viewer + per-row actions
+// (rollback / cancel / retry release).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
 import { LogStream } from "@/components/logs/LogStream";
-import { rollbackBuild, cancelBuild } from "@/features/services";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { cancelBuild } from "@/features/services";
 import type { BuildSummary, BuildFailureClass } from "@/features/services/api";
+import {
+  buildNote,
+  isBranchMismatch,
+  useRetryRelease,
+  useRollbackToBuild,
+  type BuildRowStatus,
+  type DeployBuild,
+} from "@/features/builds";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, Undo2, X, Copy, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, Undo2, X, Copy, Check, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
-export type BuildRowStatus =
-  | "active"
-  | "superseded"
-  | "failed"
-  | "release-failed"
-  | "running"
-  | "pending"
-  | "queued"
-  | "cancelled"
-  | "unknown";
+export type { BuildRowStatus };
+
+const CHIP =
+  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] disabled:opacity-50";
 
 // statusBadge renders the small mono pill on the left of each row.
 // Kept here so the row + the badge live in one file (the panel only
@@ -71,7 +70,7 @@ export function StatusBadge({ s, queuePos }: { s: BuildRowStatus; queuePos?: num
 //   - source=webhook (no user)  → "via webhook"
 //   - source=api / system       → "via API" / "via system"
 //   - none                      → "" (renderer skips the suffix)
-function triggerLabel(b: BuildSummary): string {
+export function triggerLabel(b: BuildSummary): string {
   const src = b.triggeredBy ?? "";
   const user = b.triggeredByUser ?? "";
   if (src === "user") return user ? `by ${user}` : "by you";
@@ -88,7 +87,7 @@ export interface BuildRowProps {
   // the rollback POST scopes to the right env CR. Empty defaults
   // to production server-side (pre-v0.17.1 behaviour).
   env: string;
-  build: BuildSummary;
+  build: DeployBuild;
   status: BuildRowStatus;
   duration: string;
   isOpen: boolean;
@@ -111,6 +110,7 @@ export function BuildRow({
   const branch = b.branch ?? "—";
   const ts = b.startedAt ?? b.finishedAt;
   const created = ts ? relativeTime(ts) : "—";
+  const note = buildNote(b, s);
   return (
     <li
       className={cn(
@@ -143,12 +143,22 @@ export function BuildRow({
                 ⏸ promotion held — {b.promoteHold}
               </div>
             )}
-            {(b.status === "failed" || b.status === "release-failed") && b.errorMessage && (
+            {s === "release-failed" && (
+              <div className="truncate text-xs text-orange-400" title={b.errorMessage}>
+                Migration failed — previous version still live
+              </div>
+            )}
+            {s === "failed" && b.errorMessage && (
               <div
                 className="truncate font-mono text-[11px] text-red-300/90"
                 title={b.errorMessage}
               >
                 ✗ {b.errorMessage}
+              </div>
+            )}
+            {note && (
+              <div className="truncate text-xs text-[var(--text-tertiary)]" title={note}>
+                {note}
               </div>
             )}
             <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -183,6 +193,9 @@ export function BuildRow({
             image pruned
           </span>
         )}
+        {s === "release-failed" && canDeploy && (
+          <RetryReleaseButton project={project} service={service} buildId={b.id} sha={sha} />
+        )}
         {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
           <CancelButton project={project} service={service} buildId={b.id} />
         )}
@@ -202,15 +215,21 @@ export function BuildRow({
       </div>
       {isOpen && (
         <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
-          <BuildErrorBanner
-            message={
-              b.status === "failed" || b.status === "release-failed" ? b.errorMessage : undefined
-            }
-            failureClass={
-              b.status === "failed" || b.status === "release-failed" ? b.failureClass : undefined
-            }
-          />
-          <BuildLogs project={project} service={service} buildId={b.id} />
+          {s === "release-failed" ? (
+            <>
+              <ReleaseFailure message={b.errorMessage} job={b.releaseJob} logTail={b.releaseLogTail} />
+              {/* Older servers don't send the release log; the build log is all we have. */}
+              {!b.releaseLogTail && <BuildLogs project={project} service={service} buildId={b.id} />}
+            </>
+          ) : (
+            <>
+              <BuildErrorBanner
+                message={s === "failed" ? b.errorMessage : undefined}
+                failureClass={s === "failed" ? b.failureClass : undefined}
+              />
+              <BuildLogs project={project} service={service} buildId={b.id} />
+            </>
+          )}
         </div>
       )}
     </li>
@@ -383,9 +402,81 @@ function CancelButton({
   );
 }
 
-// RollbackButton — tiny inline confirm/yes/no flow that POSTs the
-// build's rollback endpoint. Server validates phase=succeeded so the
-// only client-side check is "we're on a superseded build" gate.
+// ReleaseFailure replaces the build-failure banner for release-failed
+// builds: the image built fine, the release hook (migration) didn't.
+function ReleaseFailure({ message, job, logTail }: { message?: string; job?: string; logTail?: string }) {
+  return (
+    <div className="border-b border-orange-500/40 bg-orange-500/10 px-3 py-2 text-[12px]">
+      <div
+        className="font-mono text-[10px] uppercase tracking-widest text-orange-300/80"
+        title={job ? `job ${job}` : undefined}
+      >
+        release failed
+      </div>
+      {message && (
+        <div className="mt-0.5 break-words font-mono text-[11px] leading-snug text-orange-200">{message}</div>
+      )}
+      {logTail && (
+        <pre className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+          {logTail}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function RetryReleaseButton({
+  project,
+  service,
+  buildId,
+  sha,
+}: {
+  project: string;
+  service: string;
+  buildId: string;
+  sha: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const m = useRetryRelease(project, service);
+  const run = () =>
+    m.mutate(buildId, {
+      onSuccess: (res) =>
+        toast.success(res.job ? `Release retry started (${res.job})` : "Release retry started"),
+      onError: (e) => toast.error(e instanceof Error ? e.message : "Retry failed"),
+      onSettled: () => setOpen(false),
+    });
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        disabled={m.isPending}
+        title="Re-run the release hook for this build"
+        className={cn(CHIP, "hover:border-orange-500/40 hover:bg-orange-500/5 hover:text-orange-400")}
+      >
+        <RefreshCw className="h-3 w-3" />
+        retry release
+      </button>
+      <ConfirmDialog
+        open={open}
+        title={`Retry release for ${sha || buildId}?`}
+        destructive={false}
+        confirmLabel="Retry release"
+        body="Re-runs the release hook (migration). The build goes live if it succeeds."
+        pending={m.isPending}
+        onConfirm={run}
+        onCancel={() => setOpen(false)}
+      />
+    </>
+  );
+}
+
+// RollbackButton re-points the env at this build. The server refuses a
+// build from another branch with a 400; we surface its message and let
+// the user force it.
 function RollbackButton({
   project,
   service,
@@ -399,63 +490,66 @@ function RollbackButton({
   buildId: string;
   sha: string;
 }) {
-  const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  const m = useMutation({
-    mutationFn: () => rollbackBuild(project, service, buildId, env),
-    onSuccess: () => {
-      toast.success(`Rolled back to ${sha || buildId}`);
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
-      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
-      setConfirming(false);
-    },
-    onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Rollback failed");
-      setConfirming(false);
-    },
-  });
-  if (!confirming) {
-    return (
+  const [step, setStep] = useState<"idle" | "confirm" | "mismatch">("idle");
+  const [mismatch, setMismatch] = useState("");
+  const m = useRollbackToBuild(project, service, env);
+  const target = env || "production";
+  const run = (force: boolean) =>
+    m.mutate(
+      { build: buildId, force },
+      {
+        onSuccess: () => {
+          toast.success(`Rolled back to ${sha || buildId}`);
+          setStep("idle");
+        },
+        onError: (e) => {
+          if (!force && isBranchMismatch(e)) {
+            setMismatch(e.message);
+            setStep("mismatch");
+            return;
+          }
+          toast.error(e instanceof Error ? e.message : "Rollback failed");
+          setStep("idle");
+        },
+      },
+    );
+  return (
+    <>
       <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          setConfirming(true);
+          setStep("confirm");
         }}
-        title={`Roll ${env || "production"} back to ${sha || buildId}`}
-        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400"
+        title={`Roll ${target} back to ${sha || buildId}`}
+        className={cn(CHIP, "hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400")}
       >
         <Undo2 className="h-3 w-3" />
         rollback
       </button>
-    );
-  }
-  return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/5 px-1.5 py-1"
-    >
-      <span className="font-mono text-[10px] text-amber-400">
-        rollback to {sha || buildId.slice(0, 8)}?
-      </span>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={m.isPending}
-        onClick={() => m.mutate()}
-        className="h-5 px-2 text-[10px] text-amber-400"
-      >
-        {m.isPending ? "…" : "yes"}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => setConfirming(false)}
-        disabled={m.isPending}
-        className="h-5 px-2 text-[10px]"
-      >
-        no
-      </Button>
-    </div>
+      <ConfirmDialog
+        open={step === "confirm"}
+        title={`Roll ${target} back to ${sha || buildId}?`}
+        destructive={false}
+        confirmLabel="Roll back"
+        body={
+          <span>
+            <strong>{target}</strong> switches to this build&apos;s image. The next push deploys over it.
+          </span>
+        }
+        pending={m.isPending}
+        onConfirm={() => run(false)}
+        onCancel={() => setStep("idle")}
+      />
+      <ConfirmDialog
+        open={step === "mismatch"}
+        title="Different branch"
+        confirmLabel="Roll back anyway"
+        body={<span className="break-words">{mismatch}</span>}
+        pending={m.isPending}
+        onConfirm={() => run(true)}
+        onCancel={() => setStep("idle")}
+      />
+    </>
   );
 }

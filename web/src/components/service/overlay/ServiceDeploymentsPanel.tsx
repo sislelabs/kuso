@@ -8,11 +8,21 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { buildTriggerMessage, useBuilds, useService, useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
+import {
+  classifyBuild,
+  hasLiveInfo,
+  isRolledBack,
+  liveBuildId,
+  type DeployBuild,
+} from "@/features/builds";
+import { envRevisionName, interleaveTimeline, useRevisions } from "@/features/revisions";
 import type { KusoEnvironment } from "@/types/projects";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { BuildRow, type BuildRowStatus } from "./BuildRow";
+import { LiveNowLine } from "./LiveNowLine";
+import { RevisionRow } from "./RevisionRow";
 
 interface Props {
   project: string;
@@ -62,41 +72,6 @@ function useNowTick(running: boolean) {
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, [running]);
-}
-
-// classify maps the raw build status string to the row's visual
-// status. ACTIVE is reserved for the build whose imageTag matches the
-// env's current image — older successes become SUPERSEDED so the
-// "currently live" build is unambiguous.
-//
-// When the env has no resolvable image tag (activeImageTag absent), we
-// can't match on tag, so we fall back to marking exactly ONE succeeded
-// build active — the caller passes fallbackActiveId (the most-recent
-// succeeded build's id). Every other succeeded build is SUPERSEDED. This
-// avoids the old bug where a missing env tag marked EVERY succeeded build
-// active.
-function classify(
-  b: BuildSummary,
-  activeImageTag?: string,
-  fallbackActiveId?: string,
-): BuildRowStatus {
-  const s = (b.status ?? "").toLowerCase();
-  if (s === "succeeded") {
-    if (activeImageTag) {
-      return b.imageTag && b.imageTag === activeImageTag ? "active" : "superseded";
-    }
-    return b.id === fallbackActiveId ? "active" : "superseded";
-  }
-  if (s === "failed") return "failed";
-  // release-failed: build succeeded but the release hook (migration) failed,
-  // so the image was NOT promoted. Without this case it fell through to
-  // "unknown" and rendered as a bare UNKNOWN badge.
-  if (s === "release-failed") return "release-failed";
-  if (s === "running") return "running";
-  if (s === "pending") return "pending";
-  if (s === "queued") return "queued";
-  if (s === "cancelled") return "cancelled";
-  return "unknown";
 }
 
 export function ServiceDeploymentsPanel({ project, service, env }: Props) {
@@ -234,10 +209,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   );
 }
 
-// BuildsList does the env-branch filter, computes the current
-// active image tag, and renders a BuildRow per build. Extracted out
-// of the panel body so the panel's data-fetching + redeploy bar are
-// readable without scrolling past 100 lines of rendering.
+// BuildsList renders the "live now" line, then the env's builds
+// (branch-filtered) interleaved with config revisions by time.
 function BuildsList({
   project,
   service,
@@ -249,18 +222,40 @@ function BuildsList({
 }: {
   project: string;
   service: string;
-  builds: BuildSummary[];
+  builds: DeployBuild[];
   env?: KusoEnvironment;
   expanded: string | null;
   setExpanded: (id: string | null) => void;
   canDeploy: boolean;
 }) {
+  const group = envGroupName(env);
+  const envCRName = env?.metadata?.name;
+  const serviceRevs = useRevisions(project, "service", service);
+  const envRevs = useRevisions(
+    project,
+    "environment",
+    envCRName ? envRevisionName(project, envCRName) : undefined,
+  );
+
+  const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
   // Filter to builds matching the active env's branch. Without this
-  // filter the deployments tab would list every build for the
-  // service across every env, so a PR-branch build would appear
-  // under production.
+  // filter a PR-branch build would appear under production.
   const envBranch = env?.spec?.branch;
   const visible = envBranch ? builds.filter((b) => (b.branch ?? "") === envBranch) : builds;
+  // With liveEnvs the live build is looked up across all branches (a
+  // forced rollback can leave the env on another branch's image). The
+  // old-server fallback guesses from this env's own branch only.
+  const liveId = liveBuildId(hasLiveInfo(builds) ? builds : visible, group, envImage?.tag);
+  const live = builds.find((b) => b.id === liveId);
+
+  const liveLine = live ? (
+    <LiveNowLine
+      build={live}
+      rolledBack={isRolledBack(builds, live)}
+      branch={envBranch || live.branch || "the branch"}
+    />
+  ) : null;
+
   if (visible.length === 0) {
     const total = builds.length;
     if (envBranch && total > 0) {
@@ -268,18 +263,21 @@ function BuildsList({
         (b) => b !== envBranch
       );
       return (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-          No builds on branch{" "}
-          <span className="font-mono text-[var(--text-secondary)]">{envBranch}</span> yet — service has{" "}
-          {total} build{total === 1 ? "" : "s"} on{" "}
-          {otherBranches.slice(0, 3).map((b, i) => (
-            <span key={b}>
-              {i > 0 ? ", " : ""}
-              <span className="font-mono text-[var(--text-secondary)]">{b}</span>
-            </span>
-          ))}
-          {otherBranches.length > 3 ? `, +${otherBranches.length - 3} more` : ""}.
-        </p>
+        <div className="space-y-2">
+          {liveLine}
+          <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+            No builds on branch{" "}
+            <span className="font-mono text-[var(--text-secondary)]">{envBranch}</span> yet — service has{" "}
+            {total} build{total === 1 ? "" : "s"} on{" "}
+            {otherBranches.slice(0, 3).map((b, i) => (
+              <span key={b}>
+                {i > 0 ? ", " : ""}
+                <span className="font-mono text-[var(--text-secondary)]">{b}</span>
+              </span>
+            ))}
+            {otherBranches.length > 3 ? `, +${otherBranches.length - 3} more` : ""}.
+          </p>
+        </div>
       );
     }
     return (
@@ -288,35 +286,44 @@ function BuildsList({
       </p>
     );
   }
-  const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
-  const activeTag = envImage?.tag;
-  // Fallback "active" when the env has no resolvable image tag: builds
-  // arrive newest-first, so the first succeeded build in the (already
-  // branch-filtered) list is the most-recent success — the only one we
-  // mark active. Older successes become superseded rather than all
-  // showing active.
-  const fallbackActiveId = activeTag
-    ? undefined
-    : visible.find((b) => (b.status ?? "").toLowerCase() === "succeeded")?.id;
+
+  const timeline = interleaveTimeline(visible, [
+    ...(serviceRevs.data ?? []),
+    ...(envRevs.data ?? []),
+  ]);
   return (
-    <ul className="space-y-2">
-      {visible.map((b) => {
-        const s = classify(b, activeTag, fallbackActiveId);
-        return (
-          <BuildRow
-            key={b.id}
-            project={project}
-            service={service}
-            env={envGroupName(env)}
-            build={b}
-            status={s}
-            duration={buildDuration(b, s)}
-            isOpen={expanded === b.id}
-            canDeploy={canDeploy}
-            onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
-          />
-        );
-      })}
-    </ul>
+    <div className="space-y-2">
+      {liveLine}
+      <ul className="space-y-2">
+        {timeline.map((item) => {
+          if (item.type === "revision") {
+            return (
+              <RevisionRow
+                key={`rev-${item.revision.id}`}
+                project={project}
+                revision={item.revision}
+                canRevert={canDeploy}
+              />
+            );
+          }
+          const b = item.build;
+          const s = classifyBuild(b, liveId);
+          return (
+            <BuildRow
+              key={b.id}
+              project={project}
+              service={service}
+              env={group}
+              build={b}
+              status={s}
+              duration={buildDuration(b, s)}
+              isOpen={expanded === b.id}
+              canDeploy={canDeploy}
+              onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
+            />
+          );
+        })}
+      </ul>
+    </div>
   );
 }
