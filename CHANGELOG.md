@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.7] — 2026-09-30
+
+### Other
+- Keep live build logs and say when a build log has expired ([8c60ba3](https://github.com/sislelabs/kuso/commit/8c60ba319b6895cc91520cc2cec2bebc122e3661))
+- Let kuso-server read cert-manager Certificates ([ddb9308](https://github.com/sislelabs/kuso/commit/ddb9308a70af6961022ba06b0853a94a7b1cffc0))
+
 ## [0.27.6] — 2026-09-30
 
 ### Other
@@ -400,11 +406,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(addon): expose the pods backing an addon ([3a02231](https://github.com/sislelabs/kuso/commit/3a02231120999fe7b0a1736aaad8485b9398ab41))
-
-## [0.25.7] — 2026-09-02
-
-### ✨ Features
-- Feat(addon): make external addons behave like external addons ([680cf1a](https://github.com/sislelabs/kuso/commit/680cf1af332272ada59cd158dddaa2dfefbe336b))
 
 
 ---

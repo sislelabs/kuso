@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.7] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): make external addons behave like external addons ([680cf1a](https://github.com/sislelabs/kuso/commit/680cf1af332272ada59cd158dddaa2dfefbe336b))
+
 ## [0.25.6] — 2026-09-02
 
 ### 🐛 Bug Fixes
