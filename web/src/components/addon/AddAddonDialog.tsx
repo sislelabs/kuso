@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { addAddon } from "@/features/projects";
+import { connectionURLKey, createAddon, type CreateAddonBody } from "@/features/addons";
 import { api } from "@/lib/api-client";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { Input } from "@/components/ui/input";
@@ -58,12 +58,31 @@ const KINDS = [
 // kuso.yml.
 type Mode = "managed" | "external" | "instance";
 
+interface FieldErrors {
+  kind?: string;
+  name?: string;
+  extURL?: string;
+  instName?: string;
+  submit?: string;
+}
+
+function FieldError({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return (
+    <p role="alert" className="text-[11px] text-[var(--error)]">
+      {msg}
+    </p>
+  );
+}
+
 export function AddAddonDialog({ project, open, onClose }: Props) {
   const [kind, setKind] = useState<string>("");
   const [name, setName] = useState<string>("");
   const [mode, setMode] = useState<Mode>("managed");
-  const [extSecret, setExtSecret] = useState<string>("");
-  const [extKeys, setExtKeys] = useState<string>("");
+  const [extURL, setExtURL] = useState<string>("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const clearError = (k: keyof FieldErrors) =>
+    setFieldErrors((prev) => (prev[k] ? { ...prev, [k]: undefined } : prev));
   const [instName, setInstName] = useState<string>("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [version, setVersion] = useState<string>("");
@@ -97,8 +116,8 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       setKind("");
       setName("");
       setMode("managed");
-      setExtSecret("");
-      setExtKeys("");
+      setExtURL("");
+      setFieldErrors({});
       setInstName("");
       setShowAdvanced(false);
       setVersion("");
@@ -137,16 +156,9 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
 
   const create = useMutation({
     mutationFn: () => {
-      const body: Parameters<typeof addAddon>[1] = { name, kind };
+      const body: CreateAddonBody = { name, kind };
       if (mode === "external") {
-        const keys = extKeys
-          .split(/[,\s]+/)
-          .map((k) => k.trim())
-          .filter(Boolean);
-        body.external = {
-          secretName: extSecret.trim(),
-          ...(keys.length ? { secretKeys: keys } : {}),
-        };
+        body.externalCredentials = { [connectionURLKey(kind)]: extURL.trim() };
       } else if (mode === "instance") {
         body.useInstanceAddon = instName.trim();
       }
@@ -156,7 +168,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
         if (storageSize.trim()) body.storageSize = storageSize.trim();
         if (kind === "postgres" && requireTLS) body.tls = "require";
       }
-      return addAddon(project, body);
+      return createAddon(project, body);
     },
     onSuccess: () => {
       const verb =
@@ -166,34 +178,29 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to create addon"),
+    onError: (e) =>
+      setFieldErrors((prev) => ({
+        ...prev,
+        submit: e instanceof Error ? e.message : "Failed to create addon",
+      })),
   });
 
   const onSubmit = () => {
-    if (!kind) {
-      toast.error("Pick an addon type first");
-      return;
+    const errs: FieldErrors = {};
+    if (!kind) errs.kind = "Pick an addon type.";
+    if (!name.trim()) errs.name = "Name is required.";
+    else if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name.trim()))
+      errs.name = "Lowercase letters, digits and dashes, up to 32 characters.";
+    if (mode === "external") {
+      const u = extURL.trim();
+      if (!u) errs.extURL = "Connection URL is required.";
+      else if (kind !== "redpanda" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(u))
+        errs.extURL = "Must be a URL, e.g. postgres://user:pass@host:5432/db";
     }
-    if (!name.trim()) {
-      toast.error("Give the addon a name");
-      return;
-    }
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name.trim())) {
-      toast.error("Name: lowercase, dashes, ≤32 chars");
-      return;
-    }
-    if (mode === "external" && !extSecret.trim()) {
-      toast.error("External: name an existing kube Secret to mirror");
-      return;
-    }
-    if (mode === "instance" && !instName.trim()) {
-      toast.error("Instance: name the registered shared addon");
-      return;
-    }
-    if (mode === "instance" && kind !== "postgres") {
-      toast.error("Shared-server mode only supports Postgres");
-      return;
-    }
+    if (mode === "instance" && !instName.trim()) errs.instName = "Pick a shared server.";
+    if (mode === "instance" && kind !== "postgres") errs.instName = "Shared servers support Postgres only.";
+    setFieldErrors(errs);
+    if (Object.values(errs).some(Boolean)) return;
     create.mutate();
   };
 
@@ -211,12 +218,8 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
             <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
               <DialogTitle className="font-heading">Add addon</DialogTitle>
               <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
-                Services in{" "}
-                <span className="font-mono text-[var(--text-secondary)]">{project}</span>{" "}
-                that have no explicit addon list get its connection env vars
-                automatically. Services with an explicit list get them only
-                after you subscribe them (
-                <code className="font-mono">kuso project addon subscribe</code>).
+                Add a database or service to{" "}
+                <span className="font-mono text-[var(--text-secondary)]">{project}</span>.
               </DialogDescription>
             </DialogHeader>
 
@@ -230,6 +233,8 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                     type="button"
                     onClick={() => {
                       setKind(k);
+                      clearError("kind");
+                      clearError("name");
                       // Auto-fill the name with the kind for the
                       // common one-of-each case. Don't overwrite if
                       // the user already typed something.
@@ -247,6 +252,11 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   </button>
                 );
               })}
+              {fieldErrors.kind && (
+                <div className="col-span-3">
+                  <FieldError msg={fieldErrors.kind} />
+                </div>
+              )}
             </div>
 
             {/* Name field */}
@@ -260,24 +270,32 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               <Input
                 id="addon-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  clearError("name");
+                }}
                 placeholder={kind || "db"}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") onSubmit();
                 }}
+                aria-invalid={fieldErrors.name ? true : undefined}
                 className="h-8 font-mono text-[12px]"
                 spellCheck={false}
                 autoFocus={!!kind}
               />
-              <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                Lowercase letters, digits and dashes, up to 32 characters.
-              </p>
+              {fieldErrors.name ? (
+                <FieldError msg={fieldErrors.name} />
+              ) : (
+                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Lowercase letters, digits and dashes, up to 32 characters.
+                </p>
+              )}
             </div>
 
             {/* Mode picker: kuso-managed / external / instance-shared.
                 Three approaches to where the actual datastore lives.
                 Managed = a fresh per-addon StatefulSet; External =
-                connect to a managed cloud DB by mirroring its Secret;
+                connect to a managed cloud DB by its connection URL;
                 Instance = provision a database on an admin-registered
                 shared server (Model 2). */}
             <div className="space-y-3 border-b border-[var(--border-subtle)] p-3">
@@ -291,7 +309,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   };
                   const subMap: Record<Mode, string> = {
                     managed: "kuso provisions",
-                    external: "mirror a Secret",
+                    external: "connection URL",
                     instance: "shared server",
                   };
                   // Instance-shared mode is postgres-only today (chart
@@ -303,7 +321,11 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                     <button
                       key={m}
                       type="button"
-                      onClick={() => !disabled && setMode(m)}
+                      onClick={() => {
+                        if (disabled) return;
+                        setMode(m);
+                        setFieldErrors((prev) => ({ kind: prev.kind, name: prev.name }));
+                      }}
                       disabled={disabled}
                       title={disabled ? "Instance-shared mode is postgres-only" : undefined}
                       className={cn(
@@ -322,47 +344,35 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               </div>
 
               {mode === "external" && (
-                <div className="space-y-2">
-                  <p className="text-[11px] leading-snug text-[var(--text-tertiary)]">
-                    For managed Postgres / Redis (Hetzner Cloud, Neon, RDS,
-                    Upstash). kuso mirrors the Secret's keys into{" "}
-                    <code className="font-mono">{name || "<name>"}-conn</code>.
-                  </p>
-                  <div>
-                    <label
-                      htmlFor="addon-ext-secret"
-                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-                    >
-                      source secret
-                    </label>
-                    <Input
-                      id="addon-ext-secret"
-                      value={extSecret}
-                      onChange={(e) => setExtSecret(e.target.value)}
-                      placeholder="hetzner-pg-creds"
-                      className="mt-1 h-7 font-mono text-[11px]"
-                      spellCheck={false}
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="addon-ext-keys"
-                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-                    >
-                      keys (optional, comma-separated)
-                    </label>
-                    <Input
-                      id="addon-ext-keys"
-                      value={extKeys}
-                      onChange={(e) => setExtKeys(e.target.value)}
-                      placeholder="DATABASE_URL, POSTGRES_HOST"
-                      className="mt-1 h-7 font-mono text-[11px]"
-                      spellCheck={false}
-                    />
-                    <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-                      Empty = mirror every key from the source.
+                <div className="space-y-1">
+                  <label
+                    htmlFor="addon-ext-url"
+                    className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                  >
+                    connection URL
+                  </label>
+                  <Input
+                    id="addon-ext-url"
+                    type="password"
+                    autoComplete="off"
+                    value={extURL}
+                    onChange={(e) => {
+                      setExtURL(e.target.value);
+                      clearError("extURL");
+                    }}
+                    placeholder={kind === "redpanda" ? "broker-1:9092" : "postgres://user:pass@host:5432/db"}
+                    aria-invalid={fieldErrors.extURL ? true : undefined}
+                    className="h-7 font-mono text-[11px]"
+                    spellCheck={false}
+                  />
+                  {fieldErrors.extURL ? (
+                    <FieldError msg={fieldErrors.extURL} />
+                  ) : (
+                    <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                      Services get it as{" "}
+                      <span className="text-[var(--text-secondary)]">{connectionURLKey(kind)}</span>.
                     </p>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -486,6 +496,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         spellCheck={false}
                       />
                     )}
+                    <FieldError msg={fieldErrors.instName} />
                     <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
                       {availableInstanceNames.length > 0
                         ? `${availableInstanceNames.length} ${kind} server${availableInstanceNames.length === 1 ? "" : "s"} registered for this instance.`
@@ -496,6 +507,11 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               )}
             </div>
 
+            {fieldErrors.submit && (
+              <div className="px-4 pt-3">
+                <FieldError msg={fieldErrors.submit} />
+              </div>
+            )}
             <DialogFooter className="m-0 rounded-b-2xl px-4 py-3">
               <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
                 Cancel
@@ -503,7 +519,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               <Button
                 size="sm"
                 onClick={onSubmit}
-                disabled={create.isPending || !kind || !name.trim()}
+                disabled={create.isPending}
               >
                 <Plus className="h-3 w-3" />
                 {create.isPending

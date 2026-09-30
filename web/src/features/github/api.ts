@@ -45,6 +45,18 @@ export async function listInstallations(): Promise<GithubInstallation[]> {
   return api("/api/github/installations");
 }
 
+// GithubRepoRef is the flat, non-admin repo list (GET /api/github/repos,
+// gated on projects:create).
+export interface GithubRepoRef {
+  fullName: string;
+  defaultBranch: string;
+  installationId: number;
+}
+
+export async function listRepos(): Promise<GithubRepoRef[]> {
+  return api("/api/github/repos");
+}
+
 export async function listInstallationRepos(installationId: number): Promise<GithubRepo[]> {
   return api(`/api/github/installations/${installationId}/repos`);
 }

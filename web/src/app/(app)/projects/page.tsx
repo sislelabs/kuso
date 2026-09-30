@@ -11,7 +11,7 @@ import {
   type ProjectSummaryItem,
 } from "@/features/projects";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { useInstallations } from "@/features/github";
+import { useGithubRepos } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
 import { useProjectPrefs, useSetProjectPref } from "@/features/userprefs";
 import { Button } from "@/components/ui/button";
@@ -35,40 +35,32 @@ import type { KusoEnvironment, KusoService } from "@/types/projects";
 export default function ProjectsPage() {
   const router = useRouter();
   const { data, isPending, isError, error, refetch } = useProjects();
-  // Project creation is an instance-admin action in role-system v2
-  // (editors are granted access to EXISTING projects; only admins make
-  // new ones). Non-admins still see + open projects they're granted —
-  // the server filters /api/projects to their grants.
-  const canCreate = useCan(Perms.SettingsAdmin);
-  const installations = useInstallations();
+  // Instance editors carry projects:create alongside admins; the
+  // server filters /api/projects to each caller's grants.
+  const canCreate = useCan("projects:create");
+  const isAdmin = useCan(Perms.SettingsAdmin);
+  // /api/github/repos is the projects:create-gated flat repo list, so
+  // editors get a real "is GitHub installed" signal too (the
+  // installations endpoint is admin-only and 403s for them).
+  const githubRepos = useGithubRepos({ enabled: canCreate });
 
-  // First-run redirect: a freshly-logged-in user landing on /projects
-  // with zero projects AND zero GitHub installations gets bounced to
-  // the guided onboarding. Only fires for users who can create
-  // projects.
-  //
-  // Loop trap: the user can leave /welcome via "skip to dashboard,"
-  // which routes back to /projects. Without a memo we'd bounce them
-  // straight back to /welcome — the back button becomes a trap and
-  // the only escape is closing the tab. Remember in sessionStorage
-  // that we've redirected once this tab-session and don't fire again
-  // even if the no-projects/no-installations precondition still
-  // holds. Cleared on next login (sessionStorage scope).
+  // First-run redirect: a user who can create projects, has none, and
+  // has no GitHub repos connected gets the guided onboarding — once.
+  // The memo lives in localStorage so "skip to dashboard" sticks across
+  // sessions instead of re-bouncing on every login. A failed repos
+  // check means "unknown", which never redirects.
   useEffect(() => {
-    if (isPending || installations.isPending) return;
-    if (!canCreate) return;
+    if (!canCreate || isPending || !githubRepos.isSuccess) return;
     if ((data?.length ?? 0) > 0) return;
-    if ((installations.data?.length ?? 0) > 0) return;
+    if (githubRepos.data.length > 0) return;
     try {
-      if (sessionStorage.getItem("kuso.welcome.redirected") === "1") return;
-      sessionStorage.setItem("kuso.welcome.redirected", "1");
+      if (localStorage.getItem("kuso.welcome.redirected") === "1") return;
+      localStorage.setItem("kuso.welcome.redirected", "1");
     } catch {
-      // Storage may throw in private-browsing modes; fall through
-      // and redirect anyway. Worst case is one extra loop, which
-      // is the same as today's behaviour.
+      // Storage may throw in private-browsing modes; redirect anyway.
     }
     router.replace("/welcome");
-  }, [isPending, installations.isPending, canCreate, data, installations.data, router]);
+  }, [isPending, githubRepos.isSuccess, githubRepos.data, canCreate, data, router]);
 
   return (
     <div className="mx-auto max-w-6xl p-6 lg:p-8">
@@ -116,7 +108,7 @@ export default function ProjectsPage() {
           description={
             canCreate
               ? "Connect a GitHub repo and kuso will build, deploy, and give you a live URL. Already running Coolify? Import from there in one step."
-              : "You don't have access to any projects yet. Only an admin can create projects; ask one to create a project or grant you access to an existing one."
+              : "You don't have access to any projects yet. Ask an admin to grant you access."
           }
           action={
             canCreate ? (
@@ -128,12 +120,14 @@ export default function ProjectsPage() {
                 <Plus className="h-3.5 w-3.5" />
                 Create your first project
               </Link>
+              {isAdmin && (
               <Link
                 href="/settings/import"
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-transparent px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
               >
                 Import from Coolify
               </Link>
+              )}
             </div>
             ) : undefined
           }

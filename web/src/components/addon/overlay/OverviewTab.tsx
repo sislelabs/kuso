@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, Check } from "lucide-react";
-import { addonSecret } from "@/features/projects";
+import { addonSecret, useServices } from "@/features/projects";
+import { useSubscribedAddonsForServices, useToggleAddonSubscription } from "@/features/addons";
 import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
 
@@ -38,9 +39,9 @@ export function OverviewTab({
   cr?: import("@/types/projects").KusoAddon;
 }) {
   const canReadSecrets = useCanOnProject(project, Perms.SecretsRead);
-  // The connection secret is provisioned async by helm-operator; it
-  // can take a few seconds after the addon is created. Refetch slowly
-  // when it isn't ready yet so the panel auto-fills.
+  // The connection secret is provisioned async by the operator; it can
+  // take a few seconds after the addon is created. Refetch slowly when
+  // it isn't ready yet so the panel auto-fills.
   const conn = useQuery({
     queryKey: ["addons", project, addon, "secret"],
     queryFn: () => addonSecret(project, addon),
@@ -53,7 +54,7 @@ export function OverviewTab({
     <div className="space-y-4 p-5">
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <Row label="kind" value={kind || "—"} />
-        <Row label="release" value={addon} />
+        <Row label="name" value={addon} />
         <Row
           label="storage"
           value={
@@ -66,34 +67,18 @@ export function OverviewTab({
         />
       </section>
 
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-        Data persists on the cluster node&apos;s disk via a PVC. Survives pod
-        restarts, deployments, and helm upgrades. Does NOT survive
-        node failure. For off-cluster copies, schedule backups on this
-        addon&apos;s Backups tab. The S3 credentials they upload to live in{" "}
-        <a href="/settings/backups" className="text-[var(--accent)] underline">
-          Settings → Backups
-        </a>{" "}
-        (admin).
-      </p>
+      <UsedBy project={project} addon={serviceShortName(project, addon)} />
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
           <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
             Connection
           </h3>
-          <div className="flex items-center gap-2">
-            <PublicAccessBadge publicTCP={cr?.spec.publicTCP} />
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              mounted on services without an explicit addon list
-            </span>
-          </div>
+          <PublicAccessBadge publicTCP={cr?.spec.publicTCP} />
         </header>
         {!canReadSecrets ? (
           <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">
-            need{" "}
-            <span className="text-[var(--text-secondary)]">secrets:read</span>{" "}
-            to view connection details — your role doesn&apos;t carry it.
+            only project admins can view connection details.
           </p>
         ) : conn.isPending ? (
           <LoadingState kind="inline" className="px-3 py-3" />
@@ -103,22 +88,79 @@ export function OverviewTab({
           </p>
         ) : Object.keys(conn.data?.values ?? {}).length === 0 ? (
           <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">
-            connection secret not generated yet — give helm-operator a few seconds.
+            connection details are still being generated…
           </p>
         ) : (
           <ConnectionRows values={conn.data!.values} publicTCP={cr?.spec.publicTCP} />
         )}
       </section>
-
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-        Services with no explicit addon list get these as env vars automatically.
-        Services with an explicit list get them only once subscribed (
-        <span className="text-[var(--text-secondary)]">kuso project addon subscribe</span>).
-        Copy <span className="text-[var(--text-secondary)]">DATABASE_URL</span> to
-        connect from <span className="font-mono">psql</span> /{" "}
-        <span className="font-mono">kubectl port-forward</span>.
-      </p>
     </div>
+  );
+}
+
+// UsedBy lists the project's services as chips; a filled chip means the
+// service gets this addon's connection env vars. Editors toggle in place.
+function UsedBy({ project, addon }: { project: string; addon: string }) {
+  const services = useServices(project);
+  const names = (services.data ?? []).map((s) => serviceShortName(project, s.metadata.name));
+  const subs = useSubscribedAddonsForServices(project, names);
+  const toggle = useToggleAddonSubscription(project);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
+  const [pending, setPending] = useState<string | null>(null);
+
+  return (
+    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <div className="flex items-start justify-between gap-3 px-3 py-2">
+        <span className="pt-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          used by
+        </span>
+        {services.isPending ? (
+          <LoadingState kind="inline" />
+        ) : names.length === 0 ? (
+          <span className="font-mono text-[11px] text-[var(--text-tertiary)]">no services yet</span>
+        ) : (
+          <div className="flex flex-wrap justify-end gap-1">
+            {names.map((svc, i) => {
+              const q = subs[i];
+              const on = !!q?.data?.subscribed.includes(addon);
+              const busy = pending === svc || !q?.data;
+              return (
+                <button
+                  key={svc}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={!canWrite || busy}
+                  title={canWrite ? (on ? "Disconnect" : "Connect") : undefined}
+                  onClick={() => {
+                    if (!q?.data) return;
+                    setPending(svc);
+                    toggle.mutate(
+                      { service: svc, addon, on: !on, current: q.data },
+                      {
+                        onError: (e) =>
+                          toast.error(e instanceof Error ? e.message : "Update failed"),
+                        onSettled: () => setPending(null),
+                      },
+                    );
+                  }}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors",
+                    on
+                      ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                      : "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
+                    canWrite && !busy && "hover:border-[var(--accent)]/60",
+                    busy && "opacity-60",
+                  )}
+                >
+                  {on && <Check className="h-3 w-3" />}
+                  {svc}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
