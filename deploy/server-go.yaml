@@ -52,6 +52,11 @@ rules:
        kusoaddons/status, kusobuilds/status, kusocrons/status,
        kusoruns/status, kusoes/status]
     verbs: [get, update, patch]
+  # Read-only: the "TLS certificates" alert rule and hostcheck list
+  # cert-manager Certificates to catch expiring or failed certs.
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, list, watch]
   # Kube-native resources we read/write to manage tenants.
   # delete: project delete --purge-data removes a namespace kuso created
   # for the project. The server only deletes namespaces carrying the
