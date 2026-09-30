@@ -1375,6 +1375,21 @@ func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN s
 	// instead, so the same reclaim has to happen here.
 	if d.Kube != nil && d.Kube.Clientset != nil {
 		ns := d.nsFor(ctx, project)
+		// Service-volume PVCs carry helm.sh/resource-policy=keep, and the
+		// preview env name is deterministic, so a leftover
+		// <svc>-pr-N-<vol> would be mounted verbatim by the next PR #N.
+		// Same selector projects.deleteEnvironment uses (the github
+		// package can't import projects without a cycle).
+		volSel := "app.kubernetes.io/instance=" + envName + ",kuso.sislelabs.com/volume"
+		if pvcs, lerr := d.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{LabelSelector: volSel}); lerr != nil {
+			d.Logger.Warn("preview volume PVC list failed; volumes may be orphaned", "env", envName, "err", lerr)
+		} else {
+			for i := range pvcs.Items {
+				if derr := d.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					d.Logger.Warn("preview volume PVC delete failed", "env", envName, "pvc", pvcs.Items[i].Name, "err", derr)
+				}
+			}
+		}
 		_ = d.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, envName+"-tls", metav1.DeleteOptions{})
 		prefix := envName + "-tls-extra-"
 		if secs, lerr := d.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {

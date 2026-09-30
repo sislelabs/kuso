@@ -45,6 +45,12 @@ type Service struct {
 	// (HIGH-6b). nil = no-op. Backed by secrets.Service.DeleteForService.
 	SecretsCleanupForService func(ctx context.Context, project, service string) error
 
+	// BuildHistoryCleanupForService drops the archived build records +
+	// logs (Postgres) for (project, short service name) on service and
+	// project delete, so a recreated service doesn't show the dead one's
+	// deployment history. nil = no-op (no DB wired).
+	BuildHistoryCleanupForService func(ctx context.Context, project, service string) error
+
 	// AddonConnSecrets returns the project's addon connection-secret
 	// names so a freshly-created env starts with envFromSecrets
 	// already pointing at every existing addon (DATABASE_URL etc.

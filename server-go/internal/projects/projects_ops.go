@@ -506,6 +506,11 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		if err := s.Kube.DeleteKusoService(ctx, ns, svc.Name); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete service %s: %w", svc.Name, err)
 		}
+		if s.BuildHistoryCleanupForService != nil {
+			if herr := s.BuildHistoryCleanupForService(ctx, name, shortServiceName(name, svc.Name)); herr != nil {
+				cleanupFail("BuildHistory", svc.Name, herr)
+			}
+		}
 	}
 	// Addons — operator owns the StatefulSet + PVC + connection Secret
 	// behind each KusoAddon CR; deleting the CR triggers the helm
@@ -532,6 +537,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			}
 			if derr := s.Kube.DeleteKusoAddon(ctx, ns, a.Name); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("delete addon %s: %w", a.Name, derr)
+			}
+			if a.Spec.External != nil && a.Spec.External.SecretName != "" {
+				s.deleteExternalAddonSecrets(ctx, ns, a.Name, a.Spec.External.SecretName, cleanupFail)
 			}
 		}
 	}
@@ -729,6 +737,34 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		return fmt.Errorf("%w: project %s deleted, but cleanup left orphans: %w", ErrCleanupOrphans, name, errors.Join(cleanupErrs...))
 	}
 	return nil
+}
+
+// deleteExternalAddonSecrets mirrors addons.deleteExternalSecrets for the
+// project-delete cascade, which deletes addon CRs directly. An external
+// addon's Secrets carry no project label, so the label sweep misses them:
+// the mirrored <addon>-conn is always kuso's; the source Secret is removed
+// only when kuso created it from --set (external-source=true for this
+// addon) — one the user adopted with --secret is theirs and stays.
+func (s *Service) deleteExternalAddonSecrets(ctx context.Context, ns, addonFQN, sourceName string, fail func(kind, name string, err error)) {
+	if s.Kube.Clientset == nil {
+		return
+	}
+	del := func(name string) {
+		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			fail("Secret", name, err)
+		}
+	}
+	del(addonFQN + "-conn")
+	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, sourceName, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			fail("Secret", sourceName, err)
+		}
+		return
+	}
+	if src.Labels["kuso.sislelabs.com/external-source"] == "true" && src.Labels["kuso.sislelabs.com/addon"] == addonFQN {
+		del(sourceName)
+	}
 }
 
 // deleteProjectCRs deletes every CR of gvr in ns that belongs to project
