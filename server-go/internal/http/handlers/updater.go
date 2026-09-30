@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/updater"
 )
@@ -21,6 +22,7 @@ import (
 // route table.
 type UpdaterHandler struct {
 	Svc    *updater.Service
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -102,6 +104,17 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	shown := target
+	if shown == "" {
+		shown = "latest"
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "system.update",
+		Resource: "kuso",
+		Message:  "update to " + shown + " started (job " + jobName + ")",
+	})
 	writeJSON(w, http.StatusAccepted, map[string]string{"job": jobName})
 }
 

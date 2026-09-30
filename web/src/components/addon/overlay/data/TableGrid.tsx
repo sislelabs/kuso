@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { CellEditor } from "./CellEditor";
 import { InsertRowDialog } from "./InsertRowDialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 const PAGE = 100;
 
@@ -39,6 +40,7 @@ export function TableGrid({
   const [orderBy, setOrderBy] = useState<string>("");
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [insertOpen, setInsertOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Record<string, SQLCellValue> | null>(null);
 
   // Reset paging/sort when the selected table changes.
   const tableKey = `${schema}.${table}`;
@@ -83,6 +85,7 @@ export function TableGrid({
     mutationFn: (pkVals: Record<string, SQLCellValue>) =>
       deleteSQLRow(project, addon, schema, table, pkVals, database),
     onSuccess: () => {
+      setPendingDelete(null);
       toast.success("row deleted");
       invalidate();
     },
@@ -218,7 +221,7 @@ export function TableGrid({
                       type="button"
                       onClick={() => {
                         const k = safePkOf(ri);
-                        if (k && confirm("Delete this row?")) del.mutate(k);
+                        if (k) setPendingDelete(k);
                       }}
                       className="opacity-0 transition-opacity group-hover:opacity-100"
                       title="delete row"
@@ -301,6 +304,26 @@ export function TableGrid({
           </button>
         </div>
       </footer>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this row?"
+        body={
+          pendingDelete && (
+            <p className="font-mono text-[11px]">
+              {Object.entries(pendingDelete)
+                .map(([k, v]) => `${k} = ${v.isNull ? "NULL" : String(v.value)}`)
+                .join(", ")}
+            </p>
+          )
+        }
+        confirmLabel="Delete row"
+        pending={del.isPending}
+        onConfirm={() => {
+          if (pendingDelete) del.mutate(pendingDelete);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
 
       {insertOpen && cols.data && (
         <InsertRowDialog

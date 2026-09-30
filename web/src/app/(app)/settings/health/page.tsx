@@ -25,11 +25,15 @@ import {
   Wrench,
   Copy,
   Check,
+  Trash2,
 } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import {
+  reconcileHealthQueryKey,
   useReconcileHealth,
   useRemediate,
   type ReconcileIssue,
@@ -39,6 +43,14 @@ import { cn } from "@/lib/utils";
 type Severity = ReconcileIssue["severity"];
 
 const SEVERITY_ORDER: Severity[] = ["critical", "warning", "info"];
+
+// Leftovers of deleted addons. Listed on their own with a Delete button
+// instead of among reconcile problems.
+const ORPHAN_KINDS: Record<string, string> = {
+  orphan_conn_secret: "credentials",
+  orphan_addon_pvc: "data",
+};
+const isOrphan = (i: ReconcileIssue) => !!i.kind && i.kind in ORPHAN_KINDS;
 
 const SEVERITY_META: Record<
   Severity,
@@ -113,16 +125,23 @@ export default function HealthPage() {
 }
 
 function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useReconcileHealth>["data"]> }) {
-  const grouped = useMemo(() => {
+  const { grouped, issues, orphans } = useMemo(() => {
     const by: Record<Severity, ReconcileIssue[]> = { critical: [], warning: [], info: [] };
+    const rest: ReconcileIssue[] = [];
+    const orph: ReconcileIssue[] = [];
     for (const issue of report.issues ?? []) {
+      if (isOrphan(issue)) {
+        orph.push(issue);
+        continue;
+      }
+      rest.push(issue);
       const sev = SEVERITY_META[issue.severity] ? issue.severity : "info";
       by[sev].push(issue);
     }
-    return by;
+    return { grouped: by, issues: rest, orphans: orph };
   }, [report.issues]);
 
-  const hasIssues = (report.issues?.length ?? 0) > 0;
+  const hasIssues = issues.length > 0;
 
   return (
     <div className="space-y-6">
@@ -147,15 +166,17 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
               </div>
               <div className="mt-0.5 font-mono text-[11px] text-[var(--text-tertiary)]">
                 {hasIssues
-                  ? `${report.issues.length} issue${report.issues.length === 1 ? "" : "s"} need attention`
+                  ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need attention`
                   : "all resources reconciling cleanly"}
               </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {report.critical > 0 && <SeverityPill severity="critical" count={report.critical} />}
-            {report.warning > 0 && <SeverityPill severity="warning" count={report.warning} />}
-            {report.info > 0 && <SeverityPill severity="info" count={report.info} />}
+            {SEVERITY_ORDER.map((sev) =>
+              grouped[sev].length > 0 ? (
+                <SeverityPill key={sev} severity={sev} count={grouped[sev].length} />
+              ) : null,
+            )}
           </div>
         </div>
       </section>
@@ -190,7 +211,84 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
           })}
         </div>
       )}
+
+      {orphans.length > 0 && <OrphansSection orphans={orphans} />}
     </div>
+  );
+}
+
+function OrphansSection({ orphans }: { orphans: ReconcileIssue[] }) {
+  const qc = useQueryClient();
+  const [target, setTarget] = useState<ReconcileIssue | null>(null);
+  const [deleted, setDeleted] = useState<Set<string>>(new Set());
+  const keyOf = (o: ReconcileIssue) => `${o.namespace ?? ""}/${o.resource}`;
+  const del = useMutation({
+    mutationFn: (o: ReconcileIssue) => {
+      const q = new URLSearchParams({
+        kind: o.kind ?? "",
+        namespace: o.namespace ?? "",
+        name: o.resource,
+      });
+      return api(`/api/admin/orphans?${q.toString()}`, { method: "DELETE" });
+    },
+    onSuccess: (_res, o) => {
+      toast.success(`Deleted ${o.resource}`);
+      // The report is cached server-side for 30s; hide the row now.
+      setDeleted((prev) => new Set(prev).add(keyOf(o)));
+      setTarget(null);
+      qc.invalidateQueries({ queryKey: reconcileHealthQueryKey });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+  });
+  const visible = orphans.filter((o) => !deleted.has(keyOf(o)));
+  if (visible.length === 0) return null;
+  return (
+    <section>
+      <header className="mb-2 flex items-center gap-2">
+        <h2 className="text-sm font-semibold">Orphans</h2>
+        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          left over from deleted addons
+        </span>
+      </header>
+      <ul className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        {visible.map((o) => (
+          <li key={keyOf(o)} className="flex items-center gap-2 px-3 py-2 text-[12px]" title={o.summary}>
+            <span className="min-w-0 flex-1 truncate font-mono">{o.resource}</span>
+            {o.project && (
+              <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{o.project}</span>
+            )}
+            <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+              {ORPHAN_KINDS[o.kind ?? ""]}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5 text-[var(--error)]"
+              onClick={() => setTarget(o)}
+              aria-label={`Delete ${o.resource}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={!!target}
+        title={`Delete ${target?.resource ?? ""}?`}
+        body={
+          <p>
+            {target?.kind === "orphan_addon_pvc"
+              ? "The data in this volume is deleted. No undo."
+              : "These credentials are deleted. No undo."}
+          </p>
+        }
+        typeToConfirm={target?.resource}
+        confirmLabel="Delete"
+        pending={del.isPending}
+        onConfirm={() => target && del.mutate(target)}
+        onCancel={() => setTarget(null)}
+      />
+    </section>
   );
 }
 

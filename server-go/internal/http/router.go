@@ -522,7 +522,9 @@ func mountAuthenticatedRoutes(
 				}
 				incSettingsH.Mount(r)
 			}
-			httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger).Mount(r)
+			backupH := httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger)
+			backupH.Audit = d.Audit
+			backupH.Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
@@ -585,6 +587,7 @@ func mountAuthenticatedRoutes(
 				Logger:     d.Logger,
 			}
 			rhH.Mount(r)
+			(&httphandlers.OrphansHandler{Kube: d.Kube, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 		}
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
@@ -676,8 +679,10 @@ func mountAuthenticatedRoutes(
 			bootstrapH.MountAdmin(r)
 		}
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
-			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Logger: d.Logger}
+			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			kubeH.Mount(r)
+			r.Get("/api/kubernetes/nodes/{name}/remove-preflight", kubeH.RemoveNodePreflight)
+			r.Post("/api/kubernetes/nodes/{name}/uncordon", kubeH.UncordonNode)
 			// Addons is the ownership + per-project-namespace resolver for
 			// every addon-scoped backup/SQL route; without it the handler
 			// falls back to home-namespace-only resolution.
@@ -685,7 +690,7 @@ func mountAuthenticatedRoutes(
 			backupsH.Mount(r)
 		}
 		if d.Updater != nil {
-			upH := &httphandlers.UpdaterHandler{Svc: d.Updater, Logger: d.Logger}
+			upH := &httphandlers.UpdaterHandler{Svc: d.Updater, Audit: d.Audit, Logger: d.Logger}
 			upH.Mount(r)
 		}
 		if ghHandler != nil {

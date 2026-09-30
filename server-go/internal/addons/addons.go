@@ -449,6 +449,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight addon: %w", err)
 	}
+	// A deleted native addon keeps its data PVC; re-adding the name would
+	// silently mount that old data (and crash-loop a new engine version
+	// against an old data directory).
+	if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
+		return nil, fmt.Errorf("%w: data from a previous %s still exists — pick another name or delete it with purge", ErrConflict, req.Name)
+	}
 
 	size := req.Size
 	if size == "" {
@@ -869,7 +875,7 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		// idempotent re-saves still pass. To move versions: back up, delete,
 		// recreate at the new version, then restore.
 		if req.Version != nil && *req.Version != addon.Spec.Version {
-			return fmt.Errorf("%w: changing the version on a live addon is not supported — a new-version engine crash-loops against the old data directory; back up, delete, recreate at the new version, then restore", ErrConflict)
+			return fmt.Errorf("%w: changing the version on a live addon is not supported — a new-version engine crash-loops against the old data directory; back up, recreate under a new name, then restore", ErrConflict)
 		}
 		// Size drives the VCT storage request when storageSize is empty
 		// (see kusoaddon.storageSize helper: small=5Gi, medium=20Gi,
@@ -884,7 +890,7 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		if req.Size != nil && *req.Size != addon.Spec.Size {
 			if addon.Spec.StorageSize == "" &&
 				storageForSize(*req.Size) != storageForSize(addon.Spec.Size) {
-				return fmt.Errorf("%w: changing size from %q to %q would move the effective storage request (%s → %s) but the StatefulSet PVC template is immutable; pin storageSize to keep the current volume, or back up, delete, recreate at the new size, then restore", ErrConflict, addon.Spec.Size, *req.Size, storageForSize(addon.Spec.Size), storageForSize(*req.Size))
+				return fmt.Errorf("%w: changing size from %q to %q would move the effective storage request (%s → %s) but the StatefulSet PVC template is immutable; pin storageSize to keep the current volume, or back up, recreate under a new name, then restore", ErrConflict, addon.Spec.Size, *req.Size, storageForSize(addon.Spec.Size), storageForSize(*req.Size))
 			}
 			addon.Spec.Size = *req.Size
 		}
@@ -898,7 +904,7 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		// change HA: back up, delete, recreate at the new HA setting,
 		// restore.
 		if req.HA != nil && *req.HA != addon.Spec.HA {
-			return fmt.Errorf("%w: changing HA on a live addon is not supported — it abandons the existing data PVC and bootstraps an empty DB; back up, delete, recreate at the new HA setting, then restore", ErrConflict)
+			return fmt.Errorf("%w: changing HA on a live addon is not supported — it abandons the existing data PVC and bootstraps an empty DB; back up, recreate under a new name, then restore", ErrConflict)
 		}
 		// storageSize and database are likewise immutable post-creation
 		// (EDIT_SAFETY.md): the StatefulSet PVC template can't be resized
@@ -906,10 +912,10 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		// data. Refuse an actual change; allow a no-op so revert/re-save
 		// round-trips cleanly.
 		if req.StorageSize != nil && *req.StorageSize != addon.Spec.StorageSize {
-			return fmt.Errorf("%w: changing storageSize on a live addon is not supported — the StatefulSet PVC template is immutable; back up, delete, recreate at the new size, then restore", ErrConflict)
+			return fmt.Errorf("%w: changing storageSize on a live addon is not supported — the StatefulSet PVC template is immutable; back up, recreate under a new name, then restore", ErrConflict)
 		}
 		if req.Database != nil && *req.Database != addon.Spec.Database {
-			return fmt.Errorf("%w: changing the database name on a live addon is not supported — it orphans the existing data; back up, delete, recreate with the new database name, then restore", ErrConflict)
+			return fmt.Errorf("%w: changing the database name on a live addon is not supported — it orphans the existing data; back up, recreate under a new name, then restore", ErrConflict)
 		}
 		if req.Backup != nil {
 			// Lazy-init the spec.backup struct so we can patch a single
@@ -1089,9 +1095,20 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
 }
 
+// DeleteOptions tunes DeleteWith. PurgeData also removes the data PVCs
+// and conn Secret a native addon otherwise keeps.
+type DeleteOptions struct {
+	PurgeData bool
+}
+
 // Delete removes a KusoAddon CR and refreshes every env's
-// envFromSecrets list.
+// envFromSecrets list. The addon's data is retained.
 func (s *Service) Delete(ctx context.Context, project, name string) error {
+	return s.DeleteWith(ctx, project, name, DeleteOptions{})
+}
+
+// DeleteWith is Delete with options.
+func (s *Service) DeleteWith(ctx context.Context, project, name string, opts DeleteOptions) error {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
 	cr, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
@@ -1119,7 +1136,7 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// cluster before anyone noticed. A project's OWN addon still retains
 	// its data, matching native-addon PVC retain semantics: an accidental
 	// delete must not nuke a production database.
-	if cr.Spec.UseInstanceAddon != "" && shouldDropInstanceDB(cr.Labels) {
+	if cr.Spec.UseInstanceAddon != "" && (shouldDropInstanceDB(cr.Labels) || opts.PurgeData) {
 		if adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon); derr == nil {
 			if err := s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn)); err != nil {
 				// Non-fatal: log via the orphan-trail mechanism below; the
@@ -1175,8 +1192,11 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// re-adding an addon with the same name will REUSE the old PVC's
 	// stale data. Log it loudly so an operator has a trail to either
 	// reclaim the space or know the data will come back on re-add.
-	if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
-		slog.Default().Warn("addon deleted; data PVC(s) RETAINED (resource-policy=keep) — delete manually to reclaim, or re-adding this addon name will reuse the old data",
+	if opts.PurgeData {
+		s.deleteCloneConnSecret(ctx, ns, fqn)
+		s.deleteCloneDataPVCs(ctx, ns, fqn)
+	} else if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
+		slog.Default().Warn("addon deleted; data PVC(s) RETAINED (resource-policy=keep) — re-adding this name is refused until they are purged",
 			"project", project, "addon", name, "fqn", fqn, "pvcs", pvcs)
 	}
 	// Un-subscribe every service in the project from this addon
@@ -1221,6 +1241,9 @@ func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) []st
 	}
 	out := make([]string, 0, len(list.Items))
 	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp != nil {
+			continue
+		}
 		out = append(out, list.Items[i].Name)
 	}
 	return out

@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
+	"sort"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/nodejoin"
+	"kuso/server/internal/nodewatch"
 )
 
 // Mutating node lifecycle: SSH-driven join, pre-flight validate,
@@ -194,6 +200,22 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Node-local volumes (local-path) die with the node. Refuse unless
+	// the caller explicitly accepts that with ?force=true (distinct from
+	// the body's drain force).
+	pinned, err := h.listPinnedVolumes(r.Context(), name)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "preflight: "+err.Error())
+		return
+	}
+	if len(pinned) > 0 && r.URL.Query().Get("force") != "true" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  fmt.Sprintf("%d volume(s) store data only on %s — move or back them up, or retry with force=true", len(pinned), name),
+			"pinned": pinned,
+		})
+		return
+	}
+
 	body := struct {
 		Credentials *nodejoin.Credentials `json:"credentials"`
 		Force       bool                  `json:"force"`
@@ -228,6 +250,17 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 			h.Logger.Warn("uninstall ssh", "node", name, "err", uerr)
 		}
 	}
+	msg := "node removed"
+	if len(pinned) > 0 {
+		msg = fmt.Sprintf("node removed with %d node-local volume(s) stranded", len(pinned))
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "node.remove",
+		Resource: name,
+		Message:  msg,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"removed":      name,
 		"uninstallOut": uninstallOut,
@@ -434,4 +467,143 @@ func drainNode(ctx context.Context, k *kube.Client, name string, force bool) err
 		}
 	}
 	return nil
+}
+
+// PinnedVolume is a PVC whose PersistentVolume is node-local storage on
+// the node being removed. Removing the node strands its data.
+type PinnedVolume struct {
+	Namespace string `json:"namespace"`
+	PVC       string `json:"pvc"`
+	// Kind is "addon", "volume" (a service volume) or "other".
+	Kind    string `json:"kind"`
+	Project string `json:"project,omitempty"`
+	// Owner is the addon CR name or "<service>/<volume>".
+	Owner string `json:"owner,omitempty"`
+	Size  string `json:"size,omitempty"`
+}
+
+// pinnedVolumesOnNode returns the bound PVCs whose PV's required node
+// affinity pins it to node (local-path / local PVs). pvcs is keyed by
+// "<namespace>/<name>".
+func pinnedVolumesOnNode(pvs []corev1.PersistentVolume, pvcs map[string]*corev1.PersistentVolumeClaim, node string) []PinnedVolume {
+	var out []PinnedVolume
+	for i := range pvs {
+		pv := &pvs[i]
+		if pv.Spec.ClaimRef == nil || !pvPinnedToNode(pv, node) {
+			continue
+		}
+		ns, name := pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
+		pin := PinnedVolume{Namespace: ns, PVC: name, Kind: "other"}
+		if q, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok {
+			pin.Size = q.String()
+		}
+		if pvc := pvcs[ns+"/"+name]; pvc != nil {
+			l := pvc.Labels
+			pin.Project = l["kuso.sislelabs.com/project"]
+			switch {
+			case l["app.kubernetes.io/name"] == "kusoaddon":
+				pin.Kind = "addon"
+				pin.Owner = l["app.kubernetes.io/instance"]
+			case l["kuso.sislelabs.com/volume"] != "":
+				pin.Kind = "volume"
+				pin.Owner = l["kuso.sislelabs.com/service"] + "/" + l["kuso.sislelabs.com/volume"]
+			}
+		}
+		out = append(out, pin)
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Namespace != out[b].Namespace {
+			return out[a].Namespace < out[b].Namespace
+		}
+		return out[a].PVC < out[b].PVC
+	})
+	return out
+}
+
+func pvPinnedToNode(pv *corev1.PersistentVolume, node string) bool {
+	if pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
+		return false
+	}
+	for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
+		for _, expr := range term.MatchExpressions {
+			if expr.Key != corev1.LabelHostname || expr.Operator != corev1.NodeSelectorOpIn {
+				continue
+			}
+			if slices.Contains(expr.Values, node) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (h *KubernetesHandler) listPinnedVolumes(ctx context.Context, node string) ([]PinnedVolume, error) {
+	pvs, err := h.Kube.Clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list persistent volumes: %w", err)
+	}
+	pvcList, err := h.Kube.Clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list persistent volume claims: %w", err)
+	}
+	pvcs := make(map[string]*corev1.PersistentVolumeClaim, len(pvcList.Items))
+	for i := range pvcList.Items {
+		p := &pvcList.Items[i]
+		pvcs[p.Namespace+"/"+p.Name] = p
+	}
+	return pinnedVolumesOnNode(pvs.Items, pvcs, node), nil
+}
+
+// RemoveNodePreflight lists the data that lives only on this node.
+//
+// GET /api/kubernetes/nodes/{name}/remove-preflight → {"pinned":[PinnedVolume]}
+func (h *KubernetesHandler) RemoveNodePreflight(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if h.Kube == nil || h.Kube.Clientset == nil {
+		writeErr(w, http.StatusServiceUnavailable, "kube client not wired")
+		return
+	}
+	pinned, err := h.listPinnedVolumes(r.Context(), chiURLParam(r, "name"))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if pinned == nil {
+		pinned = []PinnedVolume{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pinned": pinned})
+}
+
+// UncordonNode makes a node schedulable again and drops the nodewatch
+// marker, so the watcher no longer treats it as a node it cordoned.
+//
+// POST /api/kubernetes/nodes/{name}/uncordon
+func (h *KubernetesHandler) UncordonNode(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if h.Kube == nil || h.Kube.Clientset == nil {
+		writeErr(w, http.StatusServiceUnavailable, "kube client not wired")
+		return
+	}
+	name := chiURLParam(r, "name")
+	patch := []byte(`{"spec":{"unschedulable":false},"metadata":{"annotations":{"` + nodewatch.CordonAnnotation + `":null}}}`)
+	if _, err := h.Kube.Clientset.CoreV1().Nodes().Patch(r.Context(), name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeErr(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeErr(w, http.StatusBadGateway, "uncordon: "+err.Error())
+		return
+	}
+	h.Audit.Log(r.Context(), audit.Entry{
+		User:     auditUser(r.Context()),
+		Severity: "warn",
+		Action:   "node.uncordon",
+		Resource: name,
+		Message:  "node uncordoned",
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"uncordoned": name})
 }

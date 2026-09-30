@@ -91,6 +91,7 @@ export function NodesView() {
   const advisoryByNode = new Map((updates.data ?? []).map((a) => [a.node, a]));
 
   const [addOpen, setAddOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   // Cleanup mutation — deletes finished pods + jobs across the
   // cluster. Admin-only on the server; the UI just hides the
   // button when the user lacks the perm.
@@ -101,6 +102,7 @@ export function NodesView() {
         { method: "POST" },
       ),
     onSuccess: (res) => {
+      setCleanupOpen(false);
       const errs = res.errors?.length ?? 0;
       const summary = `Cleaned up ${res.podsDeleted} pod${res.podsDeleted === 1 ? "" : "s"} + ${res.jobsDeleted} job${res.jobsDeleted === 1 ? "" : "s"}`;
       if (errs) {
@@ -212,7 +214,7 @@ export function NodesView() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => cleanup.mutate()}
+            onClick={() => setCleanupOpen(true)}
             disabled={cleanup.isPending}
             className="shrink-0"
             title="Delete finished pods + jobs across the cluster. Frees up scheduling slots and cgroup state on a packed host."
@@ -232,6 +234,15 @@ export function NodesView() {
           <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
         </div>
       </header>
+      <ConfirmDialog
+        open={cleanupOpen}
+        title="Clean up finished pods and jobs?"
+        body={<p>Deletes finished pods and jobs on every node, along with their logs.</p>}
+        confirmLabel="Clean up"
+        pending={cleanup.isPending}
+        onConfirm={() => cleanup.mutate()}
+        onCancel={() => setCleanupOpen(false)}
+      />
       {addOpen && (
         <AddNodeModal
           onClose={() => setAddOpen(false)}
@@ -383,6 +394,7 @@ function NodeCard({
             ) : !node.schedulable ? (
               <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">cordoned</span>
             ) : null}
+            {!node.schedulable && !node.unreachable && <UncordonButton node={node.name} />}
             {isDirty && (
               <span className="ml-auto rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">
                 unsaved
@@ -538,8 +550,8 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
         body={
           <div className="space-y-2">
             <p>
-              Runs <span className="font-mono">apt-get upgrade</span> on the host{" "}
-              <span className="font-mono">{advisory.node}</span>.
+              Installs host package updates on <span className="font-mono">{advisory.node}</span>
+              {advisory.pkgMgr ? <> using <span className="font-mono">{advisory.pkgMgr}</span></> : null}.
             </p>
             {advisory.rebootRequired && (
               <p className="text-[var(--warning)]">
@@ -930,64 +942,122 @@ interface HistoryResponse {
   samples: HistorySample[] | null;
 }
 
-// RemoveNodeButton ships the cordon/drain/delete flow as a single
-// confirm-then-go affordance. We skip the optional SSH uninstall
-// (no creds round-trip from the row) — the user can re-enter the VM
-// manually if they want to wipe k3s. Force=false by default so a
-// stuck-evicting pod blocks removal; the operator can re-issue with
-// force=true after diagnosing.
+interface PinnedVolume {
+  namespace: string;
+  pvc: string;
+  kind: "addon" | "volume" | "other";
+  project?: string;
+  owner?: string;
+  size?: string;
+}
+
+// UncordonButton makes a cordoned node schedulable again.
+function UncordonButton({ node }: { node: string }) {
+  const qc = useQueryClient();
+  const uncordon = useMutation({
+    mutationFn: () =>
+      api(`/api/kubernetes/nodes/${encodeURIComponent(node)}/uncordon`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success(`${node} is schedulable again`);
+      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Uncordon failed"),
+  });
+  return (
+    <button
+      type="button"
+      onClick={() => uncordon.mutate()}
+      disabled={uncordon.isPending}
+      className="rounded border border-[var(--border-subtle)] px-1.5 py-0.5 hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+    >
+      {uncordon.isPending ? "…" : "uncordon"}
+    </button>
+  );
+}
+
+// RemoveNodeButton: cordon → drain → delete, behind a typed-name
+// confirm. Data on node-local volumes is listed first; removing anyway
+// sends force=true.
 function RemoveNodeButton({ node }: { node: NodeSummary }) {
   const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
+  const preflight = useQuery({
+    queryKey: ["kubernetes", "nodes", node.name, "remove-preflight"],
+    queryFn: () =>
+      api<{ pinned: PinnedVolume[] }>(
+        `/api/kubernetes/nodes/${encodeURIComponent(node.name)}/remove-preflight`,
+      ).then((r) => r.pinned ?? []),
+    enabled: open,
+    staleTime: 0,
+  });
+  const pinned = preflight.data ?? [];
   const remove = useMutation({
     mutationFn: () =>
-      api(`/api/kubernetes/nodes/${encodeURIComponent(node.name)}/remove`, {
-        method: "POST",
-        body: { force: false },
-      }),
+      api(
+        `/api/kubernetes/nodes/${encodeURIComponent(node.name)}/remove${pinned.length > 0 ? "?force=true" : ""}`,
+        { method: "POST", body: { force: false } },
+      ),
     onSuccess: () => {
       toast.success(`Removed ${node.name}`);
+      setOpen(false);
       qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Remove failed");
     },
   });
-  if (!confirming) {
-    return (
+  return (
+    <>
       <button
         type="button"
-        onClick={() => setConfirming(true)}
+        onClick={() => setOpen(true)}
         className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
         aria-label={`Remove ${node.name}`}
-        title="Cordon, drain, and delete this node"
+        title="Remove this node"
       >
         <X className="h-3.5 w-3.5" />
       </button>
-    );
-  }
-  return (
-    <div className="inline-flex items-center gap-1 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-1.5 py-0.5">
-      <span className="font-mono text-[10px] text-[var(--error)]">remove?</span>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => remove.mutate()}
-        disabled={remove.isPending}
-        className="h-5 px-1 text-[10px] text-[var(--error)] hover:bg-[var(--error-subtle)]"
-      >
-        {remove.isPending ? "…" : "yes"}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => setConfirming(false)}
-        disabled={remove.isPending}
-        className="h-5 px-1 text-[10px]"
-      >
-        no
-      </Button>
-    </div>
+      <ConfirmDialog
+        open={open}
+        title={`Remove ${node.name}?`}
+        body={
+          <div className="space-y-2">
+            <p>Workloads move to other nodes, then the node leaves the cluster.</p>
+            {preflight.isPending ? (
+              <p className="text-[11px] text-[var(--text-tertiary)]">Checking for data on this node…</p>
+            ) : preflight.isError ? (
+              <p className="text-[11px] text-[var(--warning)]">
+                Couldn&apos;t check for data on this node:{" "}
+                {preflight.error instanceof Error ? preflight.error.message : "unknown error"}
+              </p>
+            ) : pinned.length > 0 ? (
+              <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-2">
+                <p className="text-[12px] font-medium text-[var(--error)]">
+                  This data lives only on {node.name} and will be lost:
+                </p>
+                <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                  {pinned.map((p) => (
+                    <li key={`${p.namespace}/${p.pvc}`} className="flex gap-2">
+                      <span className="truncate">
+                        {p.project ? `${p.project} · ` : ""}
+                        {p.owner || p.pvc}
+                      </span>
+                      <span className="text-[var(--text-tertiary)]">{p.kind}</span>
+                      {p.size && <span className="ml-auto text-[var(--text-tertiary)]">{p.size}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        }
+        typeToConfirm={node.name}
+        confirmLabel={pinned.length > 0 ? "Remove and lose data" : "Remove node"}
+        pending={remove.isPending || preflight.isPending}
+        onConfirm={() => remove.mutate()}
+        onCancel={() => setOpen(false)}
+      />
+    </>
   );
 }
 

@@ -483,7 +483,8 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "addon delete requires ?confirm=<addon-name> to acknowledge data loss")
 		return
 	}
-	if err := h.Svc.Delete(ctx, project, addon); err != nil {
+	purge := r.URL.Query().Get("purgeData") == "true"
+	if err := h.Svc.DeleteWith(ctx, project, addon, addons.DeleteOptions{PurgeData: purge}); err != nil {
 		h.fail(w, "delete addon", err)
 		return
 	}
@@ -492,14 +493,18 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
 			uid = c.UserID
 		}
+		sev, msg := "warn", "addon deleted; data kept"
+		if purge {
+			sev, msg = "critical", "addon deleted with its data"
+		}
 		h.Audit.Log(ctx, audit.Entry{
 			User:     uid,
-			Severity: "warn",
+			Severity: sev,
 			Action:   "addon.delete",
 			Pipeline: project,
 			App:      addon,
 			Resource: "kusoaddon",
-			Message:  "addon deleted (data PVC reclaim depends on StorageClass)",
+			Message:  msg,
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)

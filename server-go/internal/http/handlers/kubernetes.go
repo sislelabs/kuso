@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -35,6 +36,7 @@ type KubernetesHandler struct {
 	Kube      *kube.Client
 	Namespace string
 	DB        *db.DB
+	Audit     *audit.Service
 	Logger    *slog.Logger
 
 	ingress ingressCache

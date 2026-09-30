@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -46,6 +47,7 @@ type BackupHandler struct {
 	DB        *db.DB
 	Kube      *kube.Client
 	Namespace string // kuso-server namespace, default "kuso"
+	Audit     *audit.Service
 	Logger    *slog.Logger
 
 	// restoreLimitMu + restoreLimitTokens implement a simple per-
@@ -241,6 +243,13 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "controlplane.restore",
+		Resource: "kuso-postgres",
+		Message:  fmt.Sprintf("control-plane restore started (job %s, %d bytes)", jobName, len(body)),
+	})
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"jobName":    jobName,
 		"secretName": secretName,

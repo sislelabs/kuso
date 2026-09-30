@@ -757,6 +757,7 @@ func main() {
 			// API against one shared rate limit and patches the operator
 			// Deployment, so running it on every replica multiplies both.
 			updaterSvc = updater.New(database, kc, *namespace, version.Version(), logger)
+			updaterSvc.Notify = notifyDisp
 		}
 		goSafe(logger, "config", func() {
 			cfgSvc.Run(ctx, 60*time.Second, func(err error) {

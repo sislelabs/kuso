@@ -69,9 +69,15 @@ export function SettingsTab({
 }) {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
-  const [text, setText] = useState("");
+  const [purgeData, setPurgeData] = useState(false);
   const del = useMutation({
-    mutationFn: () => deleteAddon(project, addon),
+    mutationFn: () =>
+      purgeData
+        ? api(
+            `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}?confirm=${encodeURIComponent(addon)}&purgeData=true`,
+            { method: "DELETE" },
+          )
+        : deleteAddon(project, addon),
     onSuccess: () => {
       toast.success(`Addon ${addon} deleted`);
       qc.invalidateQueries({ queryKey: ["projects", project] });
@@ -105,52 +111,53 @@ export function SettingsTab({
         </h4>
         <p className="mt-1 text-xs text-[var(--text-secondary)]">
           {isExternal
-            ? "Removes the addon and the connection secret kuso mirrors from it. The external database and its data are untouched — kuso only ever held credentials. Services in this project lose the connection immediately."
-            : "Removes the addon and tears down the Helm release. The PVC + data go with it unless your storage class retains it. There is no undo."}
+            ? "Removes the connection. The external database is untouched."
+            : "Removes the addon. Its data is kept unless you also delete it."}
         </p>
-        {!confirming ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => setConfirming(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />{" "}
-            {isExternal ? "Disconnect addon" : "Delete addon"}
-          </Button>
-        ) : (
-          <div className="mt-3 space-y-2">
-            <p className="text-xs">
-              Type <span className="font-mono">{addon}</span> to confirm.
-            </p>
-            <Input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              className="font-mono text-sm"
-              autoFocus
-            />
-            <div className="flex gap-2">
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={text !== addon || del.isPending}
-                onClick={() => del.mutate()}
-              >
-                {del.isPending ? "Deleting…" : "Confirm delete"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setConfirming(false);
-                  setText("");
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() => {
+            setPurgeData(false);
+            setConfirming(true);
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />{" "}
+          {isExternal ? "Disconnect addon" : "Delete addon"}
+        </Button>
+        <ConfirmDialog
+          open={confirming}
+          title={isExternal ? `Disconnect ${addon}?` : `Delete ${addon}?`}
+          body={
+            isExternal ? (
+              <p>Services in this project lose the connection immediately.</p>
+            ) : (
+              <div className="space-y-2">
+                <p>Services in this project lose the connection immediately.</p>
+                <label className="flex items-center gap-2 text-[12px]">
+                  <input
+                    type="checkbox"
+                    checked={purgeData}
+                    onChange={(e) => setPurgeData(e.target.checked)}
+                    className="h-3.5 w-3.5"
+                  />
+                  Also delete data
+                </label>
+                <p className="text-[11px] text-[var(--text-tertiary)]">
+                  {purgeData
+                    ? "Data and credentials are deleted. No undo."
+                    : `Data is kept. The name ${addon} can't be reused until it's deleted.`}
+                </p>
+              </div>
+            )
+          }
+          typeToConfirm={addon}
+          confirmLabel={isExternal ? "Disconnect" : purgeData ? "Delete with data" : "Delete"}
+          pending={del.isPending}
+          onConfirm={() => del.mutate()}
+          onCancel={() => setConfirming(false)}
+        />
       </section>
     </div>
   );

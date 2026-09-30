@@ -57,6 +57,7 @@ export function ProjectSettingsView() {
   const [previewsTtl, setPreviewsTtl] = useState("7");
   const [alwaysOn, setAlwaysOn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
+  const [purgeData, setPurgeData] = useState(false);
   // Notification mute is NOT part of the project spec (it lives in the
   // control-plane DB and takes effect immediately), so the toggle acts
   // on change instead of waiting for Save. null = still loading.
@@ -129,8 +130,13 @@ export function ProjectSettingsView() {
       return;
     }
     try {
-      await del.mutateAsync(projectName);
-      toast.success("Project deleted");
+      const res = await del.mutateAsync({ name: projectName, purgeData });
+      const warnings = res?.warnings ?? [];
+      if (warnings.length > 0) {
+        toast.warning("Project deleted with leftovers", { description: warnings.join("\n") });
+      } else {
+        toast.success("Project deleted");
+      }
       router.replace("/projects");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete");
@@ -399,10 +405,22 @@ export function ProjectSettingsView() {
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4">
-          <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
-            Deleting this project also deletes all services, environments, addons, and pods. This
-            action cannot be undone.
-          </p>
+          <ul className="space-y-0.5 text-[12px] text-[var(--text-secondary)]">
+            <li>Deleted: services, environments, addons, builds, secrets.</li>
+            <li>
+              {purgeData ? "Also deleted" : "Kept"}: addon data and database credentials
+              {purgeData ? " — cannot be undone." : " (reusable or removable later)."}
+            </li>
+          </ul>
+          <label className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+            <input
+              type="checkbox"
+              checked={purgeData}
+              onChange={(e) => setPurgeData(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Also delete data
+          </label>
           <div className="space-y-1.5">
             <Label htmlFor="confirmDelete" className="text-[12px]">
               Type{" "}

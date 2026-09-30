@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"kuso/server/internal/audit"
 )
 
 // cleanupPageLimit caps how many objects we fetch per list page. The
@@ -206,6 +209,13 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 	}
 	out.Namespaces = sortedNamespaces
 
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "node.cleanup",
+		Resource: "cluster",
+		Message:  fmt.Sprintf("deleted %d finished pods and %d jobs", out.PodsDeleted, out.JobsDeleted),
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 

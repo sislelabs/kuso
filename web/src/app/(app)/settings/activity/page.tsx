@@ -166,7 +166,7 @@ export default function ActivityPage() {
           </table>
           {query.data && query.data.count > filtered.length && (
             <p className="border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-              showing {filtered.length} of {query.data.count} entries — narrow filters to see older rows
+              showing {filtered.length} of {query.data.count} entries — user and action filters search the latest {rows.length} only
             </p>
           )}
         </div>
