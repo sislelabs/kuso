@@ -73,12 +73,14 @@ export function ProjectSettingsView() {
   // on change instead of waiting for Save. null = still loading.
   const [muted, setMuted] = useState<boolean | null>(null);
   const [muteBusy, setMuteBusy] = useState(false);
+  const [muteLoadError, setMuteLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectName) return;
+    setMuteLoadError(null);
     getProjectNotificationMute(projectName)
       .then((m) => setMuted(m.muted))
-      .catch(() => setMuted(false));
+      .catch((e: unknown) => setMuteLoadError(e instanceof Error ? e.message : "request failed"));
   }, [projectName]);
 
   const spec = project.data?.project?.spec;
@@ -366,6 +368,11 @@ export function ProjectSettingsView() {
               </span>
             </span>
           </label>
+          {muteLoadError && (
+            <p role="alert" className="mt-2 text-[11px] text-[var(--error)]">
+              Couldn&apos;t load the current mute state: {muteLoadError}
+            </p>
+          )}
         </div>
       </section>
 

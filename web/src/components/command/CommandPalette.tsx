@@ -34,6 +34,7 @@ import {
   Variable,
   Clock,
   Bell,
+  Store,
 } from "lucide-react";
 import { buildTriggerMessage, triggerBuild } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
@@ -311,6 +312,10 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/projects")} value="all projects list dashboard home">
             <LayoutGrid className="h-4 w-4 text-[var(--text-tertiary)]" />
             All projects
+          </CommandItem>
+          <CommandItem onSelect={() => go("/marketplace")} value="marketplace apps templates one-click deploy">
+            <Store className="h-4 w-4 text-[var(--text-tertiary)]" />
+            Marketplace
           </CommandItem>
           <CommandItem onSelect={() => go("/settings")} value="settings index">
             <Settings className="h-4 w-4 text-[var(--text-tertiary)]" />

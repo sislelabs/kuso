@@ -10,6 +10,7 @@ import { X, Database, HardDrive, Settings, Info, ExternalLink } from "lucide-rea
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 import { OverviewTab } from "./overlay/OverviewTab";
 import { BackupsTab } from "./overlay/BackupsTab";
@@ -282,7 +283,15 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
 
             <div className="relative min-h-0 flex-1 overflow-y-auto">
               <AddonOverlayDirtyContext.Provider value={dirtyAPI}>
-                {!data ? (
+                {!data && addons.isError ? (
+                  <div className="p-6">
+                    <QueryErrorState
+                      what="addon"
+                      error={addons.error}
+                      onRetry={() => void addons.refetch()}
+                    />
+                  </div>
+                ) : !data ? (
                   <div className="space-y-3 p-6">
                     <Skeleton className="h-8 w-48" />
                     <Skeleton className="h-32 w-full" />

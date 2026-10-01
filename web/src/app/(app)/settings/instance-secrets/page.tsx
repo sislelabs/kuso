@@ -27,7 +27,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 // avoids a footgun where an
 // admin deletes the addon admin DSN by mistake.
 function isInstanceAddonAdminKey(k: string): boolean {
-  return /^INSTANCE_ADDON_[A-Z0-9_]+_DSN_ADMIN$/.test(k);
+  return /^INSTANCE_ADDON_[A-Z0-9_-]+_DSN_ADMIN$/.test(k);
 }
 
 export default function InstanceSecretsPage() {

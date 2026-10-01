@@ -497,7 +497,8 @@ export interface KusoCron {
     project: string;
     service: string;
     schedule: string;
-    command: string[];
+    // kind=http crons have no command.
+    command?: string[];
     suspend?: boolean;
     concurrencyPolicy?: string;
     activeDeadlineSeconds?: number;

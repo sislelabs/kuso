@@ -668,7 +668,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             <EnvBranchSection project={project} env={env} service={service} svc={svc} />
           )}
           <SourceSection state={state} setState={setState} project={project} service={service} />
-          <NetworkingSection state={state} setState={setState} autoHost={autoHost} />
+          <NetworkingSection state={state} setState={setState} autoHost={autoHost} envName={env || "production"} />
           <ScaleSection state={state} setState={setState} />
           <SleepSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />

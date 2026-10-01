@@ -11,6 +11,8 @@ import { useCan, Perms } from "@/features/auth";
 import { CheckCircle2, AlertTriangle, RefreshCw, Clock, Package } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { relativeTime } from "@/lib/format";
+import { isUpdateInFlight } from "./updatePhase";
 
 interface VersionState {
   current: string;
@@ -56,8 +58,7 @@ export default function UpdatesPage() {
     // Fast only while a rollout runs; idle, the status only changes
     // when someone presses Update (which invalidates this query).
     refetchInterval: (q) => {
-      const phase = q.state.data?.phase ?? "";
-      return phase !== "" && phase !== "done" && phase !== "failed" ? 5_000 : 60_000;
+      return isUpdateInFlight(q.state.data?.phase) ? 5_000 : 60_000;
     },
   });
 
@@ -112,7 +113,7 @@ export default function UpdatesPage() {
   }
   const v = version.data;
   const pollFailed = !!v.lastCheckError;
-  const inFlight = !!status.data?.phase && status.data.phase !== "" && status.data.phase !== "done" && status.data.phase !== "failed";
+  const inFlight = isUpdateInFlight(status.data?.phase);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4 p-6 lg:p-8">
@@ -175,7 +176,7 @@ export default function UpdatesPage() {
               {v.lastChecked && !isZeroTime(v.lastChecked) && (
                 <span title={v.lastChecked}>
                   <Clock className="mr-1 inline h-2.5 w-2.5" />
-                  checked {relTime(v.lastChecked)}
+                  checked {relativeTime(v.lastChecked)}
                 </span>
               )}
             </div>
@@ -255,7 +256,7 @@ export default function UpdatesPage() {
             )}
             {status.data.started && (
               <div className="mt-0.5 text-[var(--text-tertiary)]">
-                started {relTime(status.data.started)}
+                started {relativeTime(status.data.started)}
               </div>
             )}
           </div>
@@ -269,12 +270,22 @@ export default function UpdatesPage() {
       {status.data?.phase === "done" && !v.needsUpdate && (
         <section className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-[11px]">
           Last upgrade completed{" "}
-          {status.data.updated ? <span className="font-mono">{relTime(status.data.updated)}</span> : ""}.
+          {status.data.updated ? <span className="font-mono">{relativeTime(status.data.updated)}</span> : ""}.
         </section>
       )}
       {status.data?.phase === "failed" && (
         <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 text-[11px] text-[var(--error)]">
           Last upgrade failed: {status.data.message || "(no message)"}
+        </section>
+      )}
+      {status.data?.phase === "rolled-back" && (
+        <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[11px] text-[var(--warning)]">
+          Last upgrade was rolled back: {status.data.message || "(no message)"}
+        </section>
+      )}
+      {status.data?.phase === "rollback-failed" && (
+        <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 text-[11px] text-[var(--error)]">
+          Last upgrade failed and its rollback failed too: {status.data.message || "(no message)"}
         </section>
       )}
 
@@ -296,19 +307,6 @@ export default function UpdatesPage() {
       )}
     </div>
   );
-}
-
-function relTime(iso: string): string {
-  try {
-    const t = new Date(iso).getTime();
-    const ago = Math.max(0, (Date.now() - t) / 1000);
-    if (ago < 60) return "just now";
-    if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
-    if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
-    return `${Math.floor(ago / 86400)}d ago`;
-  } catch {
-    return iso;
-  }
 }
 
 // The server serialises an unset Go time.Time as 0001-01-01; treat it as

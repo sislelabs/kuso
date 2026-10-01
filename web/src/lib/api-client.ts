@@ -27,34 +27,6 @@ export class ApiError extends Error {
   }
 }
 
-// captureJwtFromFragment runs once on first load. The OAuth callback
-// redirects to "/#token=<jwt>"; we drop it on the floor — the
-// HttpOnly cookie the server set in the same response carries the
-// session. We just scrub the fragment so the token doesn't linger
-// in browser history or get copied into a chat.
-function captureJwtFromFragment() {
-  if (typeof window === "undefined") return;
-  const hash = window.location.hash;
-  if (!hash || !hash.startsWith("#")) return;
-  const params = new URLSearchParams(hash.slice(1));
-  if (!params.has("token")) return;
-  const clean = window.location.pathname + window.location.search;
-  window.history.replaceState(null, "", clean);
-}
-
-// getJwt is a no-op for the SPA — sessions live in the HttpOnly
-// cookie, JS can't read them. Kept on the API surface only because
-// the WebSocket log-tail handshake needs to pass the token in
-// Sec-WebSocket-Protocol (browsers can't set Authorization on the
-// upgrade); that path now reads document.cookie's non-HttpOnly
-// fallback. New installs return "" here and the WS path falls
-// through to cookie-mode auth.
-export function getJwt(): string | null {
-  if (typeof window === "undefined") return null;
-  captureJwtFromFragment();
-  return null;
-}
-
 // clearJwt asks the server to drop the session cookie. POST /auth/logout
 // sets Max-Age=-1 so the browser evicts it. The previous local-storage
 // path is gone.
@@ -69,12 +41,6 @@ export async function clearJwt() {
     /* network — UI clears state regardless */
   }
 }
-
-// setJwt is a kept-name shim for the local-login flow. The server
-// also sets the HttpOnly cookie in the same response; this function
-// exists only so the auth hook's onSuccess can call it without a
-// conditional. No-op in v0.10.
-export function setJwt(_token: string) { /* cookie-managed */ }
 
 // Cache-bust on server roll. Every API response carries
 // X-Kuso-Server-Version. We pin the first value seen for the session

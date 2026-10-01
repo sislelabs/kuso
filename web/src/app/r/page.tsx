@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
+import { normalizeReviewerView, type ReviewerView } from "./reviewerView";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
 // token is the only credential, so kuso login isn't required. Layout
@@ -18,24 +19,6 @@ import { toast } from "sonner";
 //   https://<kuso-domain>/r/#abc123...
 //
 // Backend: GET /api/reviews/<token> + POST /api/reviews/<token>/decision
-
-interface ReviewerView {
-  project: string;
-  prNumber: number;
-  prTitle: string;
-  prBody: string;
-  prAuthor: string;
-  baseRef: string;
-  headRef: string;
-  services: { service: string; url: string }[];
-  seedPhase: string;
-  seedError?: string;
-  decision: string;
-  decisionComment?: string;
-  decidedAt?: string;
-  decidedBy?: string;
-  closed: boolean;
-}
 
 export default function ReviewerPage() {
   const [token, setToken] = useState<string>("");
@@ -83,8 +66,7 @@ export default function ReviewerPage() {
     try {
       const res = await fetch(`/api/reviews/${token}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ReviewerView = await res.json();
-      setView(data);
+      setView(normalizeReviewerView(await res.json()));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "load failed");
@@ -106,8 +88,7 @@ export default function ReviewerPage() {
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ReviewerView = await res.json();
-      setView(data);
+      setView(normalizeReviewerView(await res.json()));
     } catch (e) {
       toast.error(e instanceof Error ? `Couldn't submit: ${e.message}` : "Couldn't submit");
     } finally {

@@ -9,6 +9,7 @@ import { X, Users as UsersIcon, User as UserIcon, ChevronRight, UserPlus } from 
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 // ProjectAccessPanel — the role-system-v2 per-project access list.
 // Admins add users or groups to a project, each with an optional role
@@ -292,6 +293,13 @@ function GrantRow({
         <div className="border-t border-[var(--border-subtle)]/50 bg-[var(--bg-primary)]/40 px-3 py-1.5 pl-[34px]">
           {members.isPending ? (
             <p className="text-[10px] text-[var(--text-tertiary)]">Loading members…</p>
+          ) : members.isError ? (
+            <QueryErrorState
+              what="group members"
+              error={members.error}
+              onRetry={() => void members.refetch()}
+              className="p-2 text-xs"
+            />
           ) : (members.data ?? []).length === 0 ? (
             <p className="text-[10px] text-[var(--text-tertiary)]">
               No members. Add users to this group in Settings → Groups.

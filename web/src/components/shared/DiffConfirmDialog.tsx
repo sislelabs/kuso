@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import type { BlastInfo, BlastLevel } from "@/lib/blast-radius";
 import { claimEscape } from "@/lib/escape-layer";
+import { useModalFocus } from "@/lib/use-modal-focus";
 import { worstLevel, summaryFor } from "@/lib/blast-radius";
 
 // DiffEntry is a single row in the "you're about to change" list.
@@ -50,6 +51,10 @@ export function DiffConfirmDialog({
   confirmLabel = "Apply",
   confirming = false,
 }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const descId = useId();
+  useModalFocus(open, panelRef);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -66,18 +71,25 @@ export function DiffConfirmDialog({
     <div
       role="dialog"
       aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={descId}
       className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onCancel}
     >
       <div
+        ref={panelRef}
         className="m-3 max-h-[80vh] w-full max-w-xl overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start gap-3 border-b border-[var(--border-subtle)] px-5 py-4">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
           <div className="min-w-0 flex-1">
-            <h2 className="font-heading text-sm font-semibold tracking-tight">{title}</h2>
-            <p className="mt-0.5 text-[12px] text-[var(--text-secondary)]">{description}</p>
+            <h2 id={titleId} className="font-heading text-sm font-semibold tracking-tight">
+              {title}
+            </h2>
+            <p id={descId} className="mt-0.5 text-[12px] text-[var(--text-secondary)]">
+              {description}
+            </p>
           </div>
         </header>
         {(() => {

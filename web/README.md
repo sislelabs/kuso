@@ -5,17 +5,18 @@ Next.js 16 frontend for kuso. Static export embedded into the Go server.
 ## Dev
 
 ```bash
-# Terminal 1: backend
-cd ../server-go && JWT_SECRET=dev go run ./cmd/kuso-server
+# From the repo root.
+# Terminal 1: backend on :8080 (its default, :3000, collides with Next dev)
+cd server-go && JWT_SECRET=dev KUSO_HTTP_ADDR=:8080 go run ./cmd/kuso-server
 
-# Terminal 2: frontend (proxies /api and /ws to :3000 via next.config.ts rewrites)
-cd web && npm run dev
+# Terminal 2: frontend
+cd web && pnpm install && pnpm dev
 ```
 
-Open http://localhost:3000 (Next dev). The dev server runs on port 3000, the
-Go server runs on port 3000 too by default — set `KUSO_HTTP_ADDR=:8080` on
-the Go server and `NEXT_PUBLIC_KUSO_API_URL=http://localhost:8080` for the
-frontend if you want them simultaneous.
+Open http://localhost:3000. `pnpm dev` runs `next dev --turbopack -p 3000`, and
+the dev-only rewrites in `next.config.ts` proxy `/api`, `/ws` and `/healthz` to
+`http://localhost:8080`. Set `NEXT_PUBLIC_KUSO_API_URL` to point them at a
+different backend.
 
 ## Build
 
@@ -41,6 +42,6 @@ routes. The Dockerfile's `web-build` stage runs the same script.
 The existing Go backend issues JWTs against `/api/auth/login`. The frontend
 uses a `useSession()` hook in `src/features/auth/hooks.ts` that calls
 `/api/auth/session` + `/api/users/profile` and reshapes them into a
-Better-Auth-shaped object so robiv0 components port unmodified. JWT is
-stored in localStorage (`kuso.jwt`) and a cookie (`kuso.JWT_TOKEN`) for
-backend middleware that reads the cookie on browser-driven routes.
+Better-Auth-shaped object so robiv0 components port unmodified. The session
+lives in the HttpOnly `kuso.JWT_TOKEN` cookie the server sets on login; the
+frontend never reads or stores the JWT itself.

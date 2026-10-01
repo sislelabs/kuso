@@ -22,16 +22,16 @@ export function useProjectPrefs() {
     queryFn: listProjectPrefs,
     staleTime: 60_000,
   });
-  // Rebuild the lookup Map only when the underlying prefs data actually
-  // changes (dataUpdatedAt advances), not on every render — otherwise the
-  // fresh Map ref defeats downstream useMemo deps (e.g. the projects-grid
-  // cards memo) that depend on this Map.
+  // Rebuild the lookup Map only when the prefs data changes, not on every
+  // render — a fresh Map ref would defeat downstream useMemo deps (e.g. the
+  // projects-grid cards memo). query.data keeps its reference across
+  // refetches that return equal data (structural sharing).
+  const data = query.data;
   const byProject = useMemo(() => {
     const m = new Map<string, ProjectPref>();
-    for (const p of query.data ?? []) m.set(p.project, p);
+    for (const p of data ?? []) m.set(p.project, p);
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.dataUpdatedAt]);
+  }, [data]);
   return { ...query, byProject };
 }
 

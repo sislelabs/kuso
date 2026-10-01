@@ -895,7 +895,7 @@ export function ProjectCanvas({
       // Hard-stop toggle. Reads spec.stopped off the node's service.
       // Stopped → "Start service"; running → "Stop service" (confirmed
       // via the shared ConfirmDialog since it takes the service offline).
-      (data.service.spec as { stopped?: boolean } | undefined)?.stopped
+      data.service.spec?.stopped
         ? {
             id: "start",
             label: "Start service",

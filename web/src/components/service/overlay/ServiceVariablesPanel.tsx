@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
 import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { useEnvironments } from "@/features/projects";
+import { isProductionGroup } from "@/lib/env-group";
 
 export function ServiceVariablesPanel({
   project,
@@ -26,8 +27,8 @@ export function ServiceVariablesPanel({
     const list = envs.data ?? [];
     const prod = list.find(
       (e) =>
-        e.spec.service === service ||
-        e.spec.service === `${project}-${service}`,
+        (e.spec.service === service || e.spec.service === `${project}-${service}`) &&
+        isProductionGroup(e),
     );
     return prod?.spec.host ?? "";
   }, [envs.data, project, service]);

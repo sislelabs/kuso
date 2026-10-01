@@ -1,12 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ApiError } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLogin } from "../hooks";
 import { loginSchema } from "../schemas";
+import { loginErrorMessage } from "../loginError";
 
 export function LoginForm() {
   const login = useLogin();
@@ -39,11 +39,7 @@ export function LoginForm() {
     try {
       await login.mutateAsync(parsed.data);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        setFormError("invalid credentials");
-      } else {
-        setFormError("login failed");
-      }
+      setFormError(loginErrorMessage(e));
     }
   }
 

@@ -29,6 +29,7 @@ import {
   BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
+import { relativeTime } from "@/lib/format";
 
 interface Props {
   project: string;
@@ -202,7 +203,7 @@ function MobileServiceCard({
   // service.spec.domains?.[0]` fallback interpolated the domain
   // OBJECT ({ host, tls }) into the href, producing
   // "https://[object Object]".
-  const internal = !!(service.spec as { internal?: boolean }).internal;
+  const internal = !!service.spec.internal;
   const envTLS = env?.spec?.tlsEnabled ?? true;
   const envCustomHost = env?.spec?.additionalHosts?.find((h) => !!h);
   const envHost = env?.spec?.host;
@@ -370,18 +371,4 @@ function statusTone(s: string): "ok" | "warn" | "danger" | "muted" {
   if (["fail", "error", "crash", "stopped"].some((k) => v.includes(k))) return "danger";
   if (["pending", "queued", "building", "progress", "unknown"].some((k) => v.includes(k))) return "warn";
   return "muted";
-}
-
-// relativeTime renders a compact "3m"/"2h"/"5d" ago string. Kept local
-// and dependency-free — the incident view shouldn't pull a date lib.
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }

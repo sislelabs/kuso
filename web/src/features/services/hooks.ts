@@ -11,16 +11,13 @@ import {
   getService,
   getServiceEnv,
   getServiceEnvOverrides,
-  getServiceLogs,
   listBuilds,
   listErrors,
-  listAddonSecretKeys,
   listRuns,
   listServiceCrons,
   patchService,
   restartService,
   runPhase,
-  setServiceEnv,
   startService,
   stopService,
   triggerBuild,
@@ -28,7 +25,6 @@ import {
   type CreateRunRequest,
   type PatchServiceBody,
 } from "./api";
-import type { KusoEnvVar } from "@/types/projects";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 
 // selfHandledErrors marks a mutation whose call sites handle their own
@@ -43,9 +39,6 @@ export const serviceEnvQueryKey = (project: string, service: string) =>
   ["projects", project, "services", service, "env"] as const;
 export const buildsQueryKey = (project: string, service: string) =>
   ["projects", project, "services", service, "builds"] as const;
-export const logsTailQueryKey = (project: string, service: string, env: string) =>
-  ["projects", project, "services", service, "logs", env] as const;
-
 export function useService(project: string, service: string) {
   return useQuery({
     queryKey: serviceQueryKey(project, service),
@@ -107,23 +100,6 @@ export function useDetectedEnv(project: string, service: string) {
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     staleTime: 15_000,
-  });
-}
-
-export function useSetServiceEnv(project: string, service: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    meta: selfHandledErrors,
-    mutationFn: (envVars: KusoEnvVar[]) => setServiceEnv(project, service, envVars),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: serviceEnvQueryKey(project, service) });
-      // Drift report compares env CR ↔ live Deployment; the save
-      // we just made invalidates that comparison. Force a refetch
-      // so the "out of date — restart needed" banner appears
-      // within the cycle the user just clicked Save in, not 10s
-      // later when the periodic poll fires.
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
-    },
   });
 }
 
@@ -196,14 +172,6 @@ export function useTriggerBuild(project: string, service: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: buildsQueryKey(project, service) });
     },
-  });
-}
-
-export function useLogsTail(project: string, service: string, env = "production") {
-  return useQuery({
-    queryKey: logsTailQueryKey(project, service, env),
-    queryFn: () => getServiceLogs(project, service, env),
-    enabled: !!project && !!service,
   });
 }
 
@@ -290,15 +258,6 @@ export function useDeleteService(project: string, service: string) {
       // anything keyed under this project.
       qc.invalidateQueries({ queryKey: ["projects", project] });
     },
-  });
-}
-
-export function useAddonSecretKeys(project: string, addon: string) {
-  return useQuery({
-    queryKey: ["projects", project, "addons", addon, "secret-keys"] as const,
-    queryFn: () => listAddonSecretKeys(project, addon),
-    enabled: !!project && !!addon,
-    staleTime: 5 * 60_000,
   });
 }
 

@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { ApiError, clearJwt, setJwt } from "@/lib/api-client";
+import { ApiError, clearJwt } from "@/lib/api-client";
 import { getAuthMethods, getProfile, getSession, login as loginApi } from "./api";
 import type { LoginInput } from "./schemas";
 
@@ -90,8 +90,7 @@ export function useLogin() {
     // LoginForm shows the error inline (mutateAsync + catch).
     meta: { skipGlobalErrorToast: true },
     mutationFn: (input: LoginInput) => loginApi(input),
-    onSuccess: async (data) => {
-      setJwt(data.access_token);
+    onSuccess: async () => {
       // Identity boundary: start from a clean cache. If a previous user
       // signed out in this tab without a full reload, their cached
       // queries (projects, users, audit, tokens…) would otherwise be

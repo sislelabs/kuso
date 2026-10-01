@@ -27,7 +27,12 @@ import { Section, Row, type SectionProps } from "./_primitives";
 // users to guess the auto-domain from the canvas tooltip. The
 // 502-Bad-Gateway / "I changed it but nothing happened" support
 // volume came from this gap; the auto-domain row closes it.
-export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
+export function NetworkingSection({
+  state,
+  setState,
+  autoHost,
+  envName,
+}: SectionProps & { envName: string }) {
   const lines = state.domains.split("\n").map((s) => s.trim());
   const hosts = lines.filter((s) => s.length > 0);
 
@@ -142,11 +147,11 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
       )}
       <Row
         label="custom domains"
-        hint={
+        hint={`${envName} environment only · ${
           hosts.length === 0
             ? "point a DNS A record at the cluster, then add the host below · auto-TLS via Let's Encrypt"
             : `${hosts.length} bound · DNS must point at the cluster · if your app redirects to the auto-domain, set NEXTAUTH_URL / AUTH_URL / APP_URL / etc. to the custom host`
-        }
+        }`}
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
             {rows.map((host, i) => (

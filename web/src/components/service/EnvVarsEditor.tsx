@@ -835,7 +835,8 @@ export function EnvVarsEditor({
       return (
         <div key={r.id} className={cn(rowShell, isChanged(r) && "border-l-2 border-[var(--accent)]")}>
           {nameCell(r.name, badges)}
-          {valueCell(value, canWrite ? () => startEdit(r.id) : undefined)}
+          {/* A masked cell must not open the editor: the input shows plaintext. */}
+          {valueCell(value, canWrite && (isRef || isVisible(key)) ? () => startEdit(r.id) : undefined)}
           {eye(key, r.name, plaintext !== undefined && plaintext !== "" || !isRef)}
           <RowMenu
             label={`Actions for ${r.name}`}

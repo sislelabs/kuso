@@ -133,7 +133,7 @@ export function fromSvc(svc?: KusoService): FormState {
   // type may not declare it yet (we ship that as a non-breaking
   // addition), so cast through unknown to read it without forcing a
   // type-system rev.
-  const ghSpec = (svc?.spec as { github?: { installationId?: number } } | undefined)?.github;
+  const ghSpec = svc?.spec?.github;
   // provider may be surfaced on spec.repo.provider once the server
   // detects/stores it. It's non-secret, so we DO seed it into the
   // baseline (unlike the token) — an explicit value here means the
@@ -151,14 +151,11 @@ export function fromSvc(svc?: KusoService): FormState {
     watchPaths: (svc?.spec.watchPaths ?? []).join("\n"),
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
-    internal: !!(svc?.spec as { internal?: boolean } | undefined)?.internal,
+    internal: !!svc?.spec?.internal,
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),
-    sleepExcludePaths: (
-      (svc?.spec as { sleep?: { wakeOn?: { excludePaths?: string[] } } } | undefined)?.sleep
-        ?.wakeOn?.excludePaths ?? []
-    ).join("\n"),
+    sleepExcludePaths: (svc?.spec?.sleep?.wakeOn?.excludePaths ?? []).join("\n"),
     sleepEnabled: !!svc?.spec.sleep?.enabled,
     sleepAfter: String(svc?.spec.sleep?.afterMinutes || 30),
     sleepNonProduction: svc?.spec.sleep?.nonProduction ?? "",
@@ -186,7 +183,7 @@ export function fromSvc(svc?: KusoService): FormState {
     // Per-service preview opt-out lives on spec.previews.disabled. The
     // KusoService type may not declare it (newer field), so cast.
     previewsDisabled:
-      !!(svc?.spec as { previews?: { disabled?: boolean } } | undefined)?.previews?.disabled,
+      !!svc?.spec?.previews?.disabled,
     waitForCI: !!svc?.spec.waitForCI,
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,

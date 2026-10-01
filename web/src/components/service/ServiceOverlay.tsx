@@ -539,16 +539,12 @@ export function ServiceOverlay({
   //   env.spec.host        → the env's primary host (auto-domain)
   //   service custom       → service-level domains[0] when env.host is empty
   //   env.status.url       → legacy fallback for old data
-  const svcInternal = !!(svc.data?.spec as { internal?: boolean } | undefined)?.internal;
+  const svcInternal = !!svc.data?.spec?.internal;
   const envHost = env?.spec?.host;
-  const envTLS = (env?.spec as { tlsEnabled?: boolean } | undefined)?.tlsEnabled ?? true;
-  const envCustomHost = (env?.spec as { additionalHosts?: string[] } | undefined)
-    ?.additionalHosts?.find((h) => !!h);
-  const customDomain = (svc.data?.spec as { domains?: { host?: string; tls?: boolean }[] } | undefined)
-    ?.domains?.find((d) => d?.host)?.host;
-  const customTLS =
-    (svc.data?.spec as { domains?: { host?: string; tls?: boolean }[] } | undefined)
-      ?.domains?.find((d) => d?.host)?.tls ?? true;
+  const envTLS = env?.spec?.tlsEnabled ?? true;
+  const envCustomHost = env?.spec?.additionalHosts?.find((h) => !!h);
+  const customDomain = svc.data?.spec?.domains?.find((d) => d?.host)?.host;
+  const customTLS = svc.data?.spec?.domains?.find((d) => d?.host)?.tls ?? true;
   const url = svcInternal
     ? undefined
     : envCustomHost
@@ -591,7 +587,7 @@ export function ServiceOverlay({
               : "unknown";
 
   const envGroup = env ? envGroupName(env) : envParam;
-  const stopped = !!(svc.data?.spec as { stopped?: boolean } | undefined)?.stopped;
+  const stopped = !!svc.data?.spec?.stopped;
   const problem = healthProblem(env?.status?.state, status);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
   const failureBannerVisible = !!failureKind && tab === failureTab;

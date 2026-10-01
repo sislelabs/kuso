@@ -150,6 +150,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
         imageRepo,
         imageTag,
         cmd,
+        initialCommand: cron.spec.command ?? [],
       };
       if (isProjectScoped) {
         return api(

@@ -38,6 +38,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { envGroupLabel } from "@/lib/env-group";
 import { pullRequestUrl } from "@/lib/pull-request-url";
 import { toast } from "sonner";
+import { relativeTime } from "@/lib/format";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {
@@ -674,7 +675,8 @@ function NotificationsButton() {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
       qc.invalidateQueries({ queryKey: feedKey });
     },
-    onError: () => {
+    onError: (e) => {
+      toast.error(e instanceof Error ? `Couldn't clear notifications: ${e.message}` : "Couldn't clear notifications");
       qc.invalidateQueries({ queryKey: feedKey });
     },
   });
@@ -855,7 +857,7 @@ function NotificationRow({
           {event.project && ` · ${event.project}`}
           {event.service && `/${event.service}`}
           {" · "}
-          {relativeFromNow(event.createdAt)}
+          {relativeTime(event.createdAt)}
         </p>
       </div>
     </div>
@@ -891,22 +893,6 @@ function NotificationRow({
   return <li className="px-3 py-2">{body}</li>;
 }
 
-// relativeFromNow renders a UTC timestamp as "5m ago" / "2h ago" /
-// "3d ago" without pulling in date-fns. Good enough for a feed
-// where rough chronology beats precise.
-function relativeFromNow(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "just now";
-  const diff = Date.now() - t;
-  const m = Math.floor(diff / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
-}
-
 function UserMenu() {
   const { data: session } = useSession();
   const signOut = useSignOut();
@@ -914,6 +900,10 @@ function UserMenu() {
   const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
   const perms = session?.session.permissions ?? [];
   const canAdmin = perms.includes("user:write");
+  // Controlled so a row click closes it: client-side navigation keeps
+  // TopNav mounted, so an uncontrolled popover stayed open on the new page.
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
 
   // Popover (not DropdownMenu) — base-ui's Menu primitive was the only
   // thing in the app using that API surface; it had a hydration/portal
@@ -923,7 +913,7 @@ function UserMenu() {
   // <Link> or <button>, no special focus-trap logic — the popover
   // closes via outside-click.
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label="Account menu"
         className="inline-flex h-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
@@ -954,11 +944,11 @@ function UserMenu() {
             {user?.email ?? ""}
           </p>
         </div>
-        <MenuRow href="/settings/profile" icon={UserIcon}>Profile</MenuRow>
-        <MenuRow href="/settings/tokens" icon={KeyRound}>API tokens</MenuRow>
+        <MenuRow href="/settings/profile" icon={UserIcon} onNavigate={close}>Profile</MenuRow>
+        <MenuRow href="/settings/tokens" icon={KeyRound} onNavigate={close}>API tokens</MenuRow>
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
-        <MenuRow href="/settings" icon={Settings}>Settings…</MenuRow>
-        {canAdmin && <MenuRow href="/settings/users" icon={Users}>Users &amp; groups</MenuRow>}
+        <MenuRow href="/settings" icon={Settings} onNavigate={close}>Settings…</MenuRow>
+        {canAdmin && <MenuRow href="/settings/users" icon={Users} onNavigate={close}>Users &amp; groups</MenuRow>}
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
         <button
           type="button"
@@ -978,15 +968,18 @@ function UserMenu() {
 function MenuRow({
   href,
   icon: Icon,
+  onNavigate,
   children,
 }: {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  onNavigate: () => void;
   children: React.ReactNode;
 }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
     >
       <Icon className="h-3.5 w-3.5" />

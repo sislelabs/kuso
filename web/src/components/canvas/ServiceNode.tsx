@@ -139,7 +139,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   // regardless of what the env phase / build state say. Distinct from
   // sleeping (which wakes on traffic): a stopped service stays down.
   const stopped =
-    !!(data.service.spec as { stopped?: boolean } | undefined)?.stopped;
+    !!data.service.spec?.stopped;
   const status = stopped ? "stopped" : statusFor(data.env, data.latestBuild);
   const showFooter = true;
   // Visibility, in priority order:
@@ -168,7 +168,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   //                           operator-side default fills it).
   //   else                 → env.status.url, the auto-domain.
   const internal =
-    !!(data.service.spec as { internal?: boolean } | undefined)?.internal;
+    !!data.service.spec?.internal;
   const envHost = data.env?.spec?.host;
   const envTLS = data.env?.spec?.tlsEnabled ?? true;
   // The env's custom domain wins over its auto-host. Same TLS flag as

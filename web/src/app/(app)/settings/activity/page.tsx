@@ -53,7 +53,7 @@ export default function ActivityPage() {
     retry: false,
   });
 
-  const rows = query.data?.audit ?? [];
+  const audit = query.data?.audit;
 
   // Client-side filters layer on top of server-side project filter.
   // Server doesn't index on user/action, so filtering across 250
@@ -61,12 +61,12 @@ export default function ActivityPage() {
   const filtered = useMemo(() => {
     const u = user.trim().toLowerCase();
     const a = action.trim().toLowerCase();
-    return rows.filter((r) => {
+    return (audit ?? []).filter((r) => {
       if (u && !r.user.toLowerCase().includes(u)) return false;
       if (a && !r.action.toLowerCase().includes(a)) return false;
       return true;
     });
-  }, [rows, user, action]);
+  }, [audit, user, action]);
 
   return (
     <div className="mx-auto max-w-5xl p-6 lg:p-8">
@@ -166,7 +166,7 @@ export default function ActivityPage() {
           </table>
           {query.data && query.data.count > filtered.length && (
             <p className="border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-              showing {filtered.length} of {query.data.count} entries — user and action filters search the latest {rows.length} only
+              showing {filtered.length} of {query.data.count} entries — user and action filters search the latest {audit?.length ?? 0} only
             </p>
           )}
         </div>

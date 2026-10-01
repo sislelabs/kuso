@@ -100,6 +100,23 @@ const SERVICE_BLAST: Record<string, BlastInfo> = {
     message:
       "Affects only future PR opens; existing preview environments survive until their TTL.",
   },
+  dockerfile: {
+    level: "info",
+    message: "Only the next build uses it; running pods are untouched until that build deploys.",
+  },
+  buildArgs: {
+    level: "info",
+    message: "Build-time only; no effect on running pods until you trigger a rebuild.",
+  },
+  watchPaths: {
+    level: "info",
+    message: "Only changes which future pushes trigger a build.",
+  },
+  release: {
+    level: "info",
+    message:
+      "Runs on the next deploy. If the release Job fails, the new image is not promoted.",
+  },
 };
 
 // ADDON_BLAST maps an addon patch field to its blast radius. Most

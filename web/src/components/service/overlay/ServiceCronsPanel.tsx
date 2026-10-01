@@ -152,7 +152,7 @@ function CronRow({
         <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
           <span className="text-[var(--text-secondary)]">{cron.spec.schedule}</span>
           {" · "}
-          {cron.spec.command.join(" ")}
+          {(cron.spec.command ?? []).join(" ")}
         </p>
       </div>
       {cron.spec.suspend && (

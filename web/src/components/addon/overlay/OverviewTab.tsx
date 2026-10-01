@@ -274,7 +274,7 @@ function ConnectionRows({
           accent && "bg-amber-500/[0.04]",
         )}
       >
-        <div className="grid grid-cols-[180px_1fr_auto] items-center gap-2">
+        <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
           <span
             className={cn(
               "truncate font-mono text-[10px] uppercase tracking-widest",

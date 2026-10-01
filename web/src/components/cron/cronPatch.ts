@@ -15,10 +15,20 @@ export interface CronForm {
   imageRepo: string;
   imageTag: string;
   cmd: string;
+  // The argv the form was seeded with. `cmd` is a whitespace-joined
+  // rendering of it, so re-splitting an untouched field would mangle
+  // quoted args like ["sh", "-c", "a b"].
+  initialCommand?: string[];
 }
 
 function argv(cmd: string): string[] {
   return cmd.trim().split(/\s+/).filter(Boolean);
+}
+
+// Omitted from the PATCH (server keeps spec.command) unless edited.
+function editedCommand(form: CronForm): string[] | undefined {
+  if (form.initialCommand && form.cmd === form.initialCommand.join(" ")) return undefined;
+  return argv(form.cmd);
 }
 
 // Body for PATCH /api/projects/{p}/crons/{name} (kind=http|command).
@@ -41,18 +51,21 @@ export function projectCronPatch(form: CronForm, current?: CronImage): Record<st
       if (current?.pullSecret) image.pullSecret = current.pullSecret;
       body.image = image;
     }
-    body.command = argv(form.cmd);
+    const command = editedCommand(form);
+    if (command) body.command = command;
   }
   return body;
 }
 
 // Body for PATCH /api/projects/{p}/services/{svc}/crons/{name}.
 export function serviceCronPatch(form: CronForm): Record<string, unknown> {
-  return {
+  const body: Record<string, unknown> = {
     displayName: form.displayName.trim(),
     schedule: form.schedule.trim(),
     suspend: form.suspend,
     pinImage: form.pinImage,
-    command: argv(form.cmd),
   };
+  const command = editedCommand(form);
+  if (command) body.command = command;
+  return body;
 }

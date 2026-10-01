@@ -91,15 +91,10 @@ export function InviteRedeemView() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await api<{ access_token: string }>("/api/invites/redeem", {
+      await api<{ access_token: string }>("/api/invites/redeem", {
         method: "POST",
         body: { token, username, email, password },
       });
-      // Persist the JWT the same way the login page does. setJwt
-      // writes both localStorage + the kuso.JWT_TOKEN cookie so the
-      // server-side middleware sees it on the next request.
-      const { setJwt } = await import("@/lib/api-client");
-      setJwt(res.access_token);
       // Mirror useLogin's identity boundary: without invalidating the
       // session query, the mounted session observer still holds its
       // cached "logged out" result and bounces the freshly-created

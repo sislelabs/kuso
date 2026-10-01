@@ -39,3 +39,21 @@ describe("serviceCronPatch", () => {
     });
   });
 });
+
+describe("command round-trip", () => {
+  const quoted = ["sh", "-c", "echo a  b"];
+  const seeded: CronForm = { ...base, cmd: quoted.join(" "), initialCommand: quoted };
+
+  it("omits an untouched command so quoted argv survives", () => {
+    expect(projectCronPatch(seeded)).not.toHaveProperty("command");
+    expect(serviceCronPatch({ ...seeded, kind: "service" })).not.toHaveProperty("command");
+  });
+
+  it("sends an edited command", () => {
+    expect(projectCronPatch({ ...seeded, cmd: "echo hi" }).command).toEqual(["echo", "hi"]);
+    expect(serviceCronPatch({ ...seeded, kind: "service", cmd: "echo hi" }).command).toEqual([
+      "echo",
+      "hi",
+    ]);
+  });
+});
