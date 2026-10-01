@@ -116,6 +116,7 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 		PRAuthor:        review.PRAuthor,
 		BaseRef:         review.BaseRef,
 		HeadRef:         review.HeadRef,
+		Services:        []PublicReviewerService{},
 		Decision:        review.Decision,
 		DecisionComment: review.DecisionComment,
 		DecidedAt:       review.DecidedAt,

@@ -293,7 +293,7 @@ func RewriteEnvVarWithOpts(in EnvVar, svcResolver ServiceRefResolver, addonResol
 			// it here with a clearer error so the user fixes the
 			// ref instead of seeing an opaque admission failure.
 			if !addonRefDNSSafe(ref.Name) {
-				return EnvVar{}, fmt.Errorf("env var %q: addon ref %q must be lowercase letters/digits/dashes for pending-mode resolution", in.Name, ref.Name)
+				return EnvVar{}, fmt.Errorf("%w: env var %q: addon ref %q must be lowercase letters/digits/dashes for pending-mode resolution", ErrInvalid, in.Name, ref.Name)
 			}
 			pendingName := ref.SecretName()
 			if opts.Project != "" && !strings.HasPrefix(ref.Name, opts.Project+"-") {

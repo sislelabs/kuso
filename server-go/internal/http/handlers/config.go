@@ -58,9 +58,18 @@ func cfgCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
-// GetSettings returns the cached Kuso CR spec, or {} when admin disabled.
+// callerIsSettingsAdmin reports whether the request carries settings:admin.
+// The raw Kuso CR spec can hold registry credentials and the OAuth2
+// client secret, so non-admins only ever see an allowlisted slice of it.
+func callerIsSettingsAdmin(r *http.Request) bool {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	return ok && auth.Has(claims.Permissions, auth.PermSettingsAdmin)
+}
+
+// GetSettings returns the cached Kuso CR spec, or {} when admin disabled
+// or the caller isn't a settings admin.
 func (h *ConfigHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	if h.Cfg.Features().AdminDisabled {
+	if h.Cfg.Features().AdminDisabled || !callerIsSettingsAdmin(r) {
 		writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]any{}})
 		return
 	}
@@ -125,7 +134,17 @@ func (h *ConfigHandler) Banner(w http.ResponseWriter, r *http.Request) {
 // Registry returns the registry config from the CR spec.
 func (h *ConfigHandler) Registry(w http.ResponseWriter, r *http.Request) {
 	if reg, ok := h.Cfg.Settings()["registry"].(map[string]any); ok {
-		writeJSON(w, http.StatusOK, reg)
+		if callerIsSettingsAdmin(r) {
+			writeJSON(w, http.StatusOK, reg)
+			return
+		}
+		public := map[string]any{"enabled": false}
+		for _, k := range []string{"enabled", "host"} {
+			if v, ok := reg[k]; ok {
+				public[k] = v
+			}
+		}
+		writeJSON(w, http.StatusOK, public)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false})

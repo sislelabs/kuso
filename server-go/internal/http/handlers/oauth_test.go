@@ -758,3 +758,18 @@ func TestOAuth_InviteRedemption_DoesNotPromoteToAdmin(t *testing.T) {
 		t.Errorf("usedCount: %d (want 1)", inv.UsedCount)
 	}
 }
+
+// kuso_oauth_state used to outlive the callback for its full 10 minutes.
+func TestOAuth_CallbackClearsStateCookie(t *testing.T) {
+	r, _, gm, _ := newOAuthHarness(t)
+	rr := drive(t, r, gm)
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "kuso_oauth_state" {
+			if c.MaxAge >= 0 {
+				t.Fatalf("state cookie not expired: MaxAge=%d", c.MaxAge)
+			}
+			return
+		}
+	}
+	t.Fatalf("callback did not clear kuso_oauth_state: %+v", rr.Result().Cookies())
+}

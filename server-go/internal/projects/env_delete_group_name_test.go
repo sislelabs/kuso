@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -129,5 +132,41 @@ func TestDeleteEnvironment_ResumesWhenCRAlreadyGone(t *testing.T) {
 	}
 	if _, gerr := dyn.Resource(kube.GVREnvironments).Namespace(ns).Get(context.Background(), "tickero-api-production", metav1.GetOptions{}); gerr != nil {
 		t.Errorf("an unrelated env must survive a resumed delete: %v", gerr)
+	}
+}
+
+// A failed group probe used to fall through to the destructive cascade,
+// which can tear down a per-PR DB while the group's env CRs keep running.
+func TestDeleteEnvironment_GroupProbeErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+	const ns = "kuso"
+	clone := typedSeed(kube.GVRAddons, "KusoAddon", "tickero-db-pr-52", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tickero-db-pr-52",
+			Namespace: ns,
+			Labels: map[string]string{
+				labelProject:                    "tickero",
+				labelEnv:                        "preview-pr-52",
+				"kuso.sislelabs.com/preview-pr": "52",
+			},
+		},
+		Spec: kube.KusoAddonSpec{Project: "tickero", Kind: "postgres"},
+	})
+	svc, dyn, _ := newCascadeFixture(t, []seed{seedProject("tickero", kube.KusoProjectSpec{}), clone})
+	// Fail only the first env LIST (the group probe); the later scope
+	// check must succeed so a fall-through would really reach the cascade.
+	var lists atomic.Int32
+	dyn.PrependReactor("list", "kusoenvironments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) == 1 {
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+
+	if err := svc.DeleteEnvironment(context.Background(), "tickero", "preview-pr-52"); err == nil {
+		t.Fatal("DeleteEnvironment must fail when the env-group probe errors")
+	}
+	if _, gerr := dyn.Resource(kube.GVRAddons).Namespace(ns).Get(context.Background(), "tickero-db-pr-52", metav1.GetOptions{}); gerr != nil {
+		t.Errorf("per-PR DB must not be cascaded when the probe failed: %v", gerr)
 	}
 }

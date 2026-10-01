@@ -233,8 +233,7 @@ const addonBackupLateGrace = 6 * time.Hour
 // the backup Secret's presence, and for everything else an honest
 // "not covered by scheduled backups" row (Covered=false, Detail says
 // why) — unscheduled addons, kinds with no dump path (clickhouse,
-// meilisearch, rabbitmq, …), HA postgres (CNPG owns backups),
-// external and instance-shared addons. Coverage gaps are Healthy=true
+// meilisearch, rabbitmq, …), external and instance-shared addons. Coverage gaps are Healthy=true
 // so they surface without paging. Addon CRs live in their project's EXECUTION
 // namespace (custom-namespace projects — the koreni pattern), so the
 // listing fans out over home + every project spec.namespace; a
@@ -313,15 +312,9 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 		if !kube.AddonBackupCronJobRendered(a) {
 			// The chart deliberately renders no CronJob for this
 			// shape — nothing to monitor, and paging would be a false
-			// alarm. The HA-postgres case is still worth surfacing
-			// (kuso doesn't plumb CNPG barman itself), but as detail
-			// on a healthy row, not a page.
+			// alarm.
 			st.Healthy = true
-			if kube.AddonBackupSuppressedHA(a) {
-				st.Detail = "schedule set but kuso renders no CronJob in HA mode (CNPG owns backups) — verify CNPG barman backups are configured, or this addon has none"
-			} else {
-				st.Detail = "no backup CronJob for this addon shape (instance-shared or unsupported kind) — schedule is inert"
-			}
+			st.Detail = "no backup CronJob for this addon shape (instance-shared or unsupported kind) — schedule is inert"
 			out = append(out, st)
 			continue
 		}
@@ -392,8 +385,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 
 // uncoveredDetail explains WHY an addon with no backup schedule is not
 // covered by scheduled backups. The classification reuses the chart's
-// canonical render matrix (kube.AddonBackupCronJobRendered /
-// AddonBackupSuppressedHA) via a probe copy with a synthetic schedule,
+// canonical render matrix (kube.AddonBackupCronJobRendered) via a probe copy with a synthetic schedule,
 // so this can never drift from what the chart actually renders.
 func uncoveredDetail(a *kube.KusoAddon) string {
 	probe := *a
@@ -408,8 +400,6 @@ func uncoveredDetail(a *kube.KusoAddon) string {
 	switch {
 	case kube.AddonBackupCronJobRendered(&probe):
 		return "no backup schedule — not covered by scheduled backups; set spec.backup.schedule to enable " + a.Spec.Kind + " dumps"
-	case kube.AddonBackupSuppressedHA(&probe):
-		return "not covered by kuso scheduled backups (HA postgres — CNPG owns backups); verify CNPG barman backups are configured out-of-band, or this addon has none"
 	case a.Spec.UseInstanceAddon != "":
 		return "instance-shared addon — backups (if any) belong to the instance addon, not this CR"
 	case external:

@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -197,5 +198,40 @@ func TestKusoEnvironmentChart_HPACPURequest(t *testing.T) {
 				t.Errorf("expected resources to contain %q, got:\n%s", tc.wantCPUReq, out)
 			}
 		})
+	}
+}
+
+// TestCharts_NullBlocksRender pins O5: a hand-edited CR with `backup: null`,
+// `github: null`, `repo: null` etc. reaches the chart as a nil value, and an
+// unguarded `.Values.x.field` nil-derefs and wedges the release for good.
+// Every block below must stay `(.Values.x).field`- or `default dict`-guarded.
+func TestCharts_NullBlocksRender(t *testing.T) {
+	t.Parallel()
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not found on PATH; skipping chart render test")
+	}
+	charts := filepath.Dir(chartDir(t))
+	cases := map[string][]string{
+		"kusoaddon":   {"backup"},
+		"kusoproject": {"github", "defaultRepo", "previews", "quota", "networkPolicy"},
+		"kusoservice": {"repo", "scale", "sleep"},
+		"kusocron":    {"image"},
+		"kusorun":     {"image"},
+	}
+	for chart, keys := range cases {
+		for _, key := range keys {
+			t.Run(chart+"/"+key, func(t *testing.T) {
+				t.Parallel()
+				vals := filepath.Join(t.TempDir(), "values.yaml")
+				if err := os.WriteFile(vals, []byte(key+": null\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				out, err := exec.Command(helmBin, "template", "r", filepath.Join(charts, chart), "-f", vals).CombinedOutput()
+				if err != nil {
+					t.Fatalf("helm template with %s: null failed: %v\n%s", key, err, out)
+				}
+			})
+		}
 	}
 }

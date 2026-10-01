@@ -276,3 +276,16 @@ func TestRewriteEnvVar_AllowPendingSpeculativeSecretRef(t *testing.T) {
 		t.Error("strict mode should error on an unresolvable ref (the old apply bug kept it literal via a different path)")
 	}
 }
+
+// The pending-mode name check had no %w ErrInvalid, so handlers mapped it
+// to a bare 500 and the user never saw why the ref was refused.
+func TestRewriteEnvVar_PendingBadNameIsErrInvalid(t *testing.T) {
+	noAddon := func(string) (string, bool) { return "", false }
+	_, err := RewriteEnvVarWithOpts(
+		EnvVar{Name: "DATABASE_URL", Value: "${{ My_DB.DATABASE_URL }}"},
+		nil, noAddon, RewriteOpts{AllowPending: true},
+	)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}

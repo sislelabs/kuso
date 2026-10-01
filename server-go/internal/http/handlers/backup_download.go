@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -150,6 +151,12 @@ const (
 //     "failed". Closing the gzip cleanly here is what used to ship a
 //     valid-but-empty .sql.gz that looked like a successful backup.
 func (h *BackupsHandler) streamGzipCommand(ctx context.Context, w http.ResponseWriter, cmd *exec.Cmd, filename, project, addon string) {
+	streamGzipDump(h.Logger.With("project", project, "addon", addon), w, cmd, filename)
+}
+
+// streamGzipDump is streamGzipCommand without the addon framing; the
+// control-plane backup (BackupHandler.Download) shares it.
+func streamGzipDump(logger *slog.Logger, w http.ResponseWriter, cmd *exec.Cmd, filename string) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "dump pipe: "+err.Error())
@@ -170,8 +177,7 @@ func (h *BackupsHandler) streamGzipCommand(ctx context.Context, w http.ResponseW
 		} else if msg == "" {
 			msg = werr.Error()
 		}
-		h.Logger.Error("addon backup: dump failed before output",
-			"project", project, "addon", addon, "err", werr, "stderr", msg)
+		logger.Error("backup: dump failed before output", "err", werr, "stderr", msg)
 		writeErr(w, http.StatusBadGateway, "backup failed: "+msg)
 		return
 	}
@@ -181,20 +187,19 @@ func (h *BackupsHandler) streamGzipCommand(ctx context.Context, w http.ResponseW
 	w.Header().Set("Trailer", backupStatusTrailer)
 	gz := gzip.NewWriter(w)
 	if _, err := io.Copy(gz, out); err != nil {
-		h.Logger.Error("addon backup: copy", "project", project, "addon", addon, "err", err)
+		logger.Error("backup: copy", "err", err)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		w.Header().Set(backupStatusTrailer, backupStatusFailed)
 		return
 	}
 	if err := cmd.Wait(); err != nil {
-		h.Logger.Error("addon backup: dump exited non-zero mid-stream",
-			"project", project, "addon", addon, "err", err, "stderr", stderr.String())
+		logger.Error("backup: dump exited non-zero mid-stream", "err", err, "stderr", stderr.String())
 		w.Header().Set(backupStatusTrailer, backupStatusFailed)
 		return
 	}
 	if err := gz.Close(); err != nil {
-		h.Logger.Error("addon backup: gzip close", "project", project, "addon", addon, "err", err)
+		logger.Error("backup: gzip close", "err", err)
 		w.Header().Set(backupStatusTrailer, backupStatusFailed)
 		return
 	}

@@ -31,11 +31,3 @@ func AddonBackupCronJobRendered(a *KusoAddon) bool {
 		return false
 	}
 }
-
-// AddonBackupSuppressedHA used to flag HA postgres, whose pg_dump
-// CronJob the chart suppressed. The chart now renders it for HA too
-// (against <name>-rw), so no combination is suppressed. Kept so the
-// health callers compile until their HA branches are removed.
-func AddonBackupSuppressedHA(a *KusoAddon) bool {
-	return false
-}

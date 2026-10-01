@@ -261,7 +261,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 		if bearer != "" {
 			if claims, err := h.Issuer.Verify(bearer); err == nil && claims != nil && claims.ID != "" {
-				exp := time.Now().Add(24 * time.Hour) // fallback if no exp claim
+				// No exp claim = a never-expiring token; the zero time makes
+				// RevokeToken keep the row so the daily prune can't resurrect it.
+				var exp time.Time
 				if claims.ExpiresAt != nil {
 					exp = claims.ExpiresAt.Time
 				}

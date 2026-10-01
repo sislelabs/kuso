@@ -637,7 +637,12 @@ type writeRowRequest struct {
 // ClickHouse addon — the row editor's transactional single-row write model
 // doesn't apply (UPDATE/DELETE are async ALTER mutations; INSERT bypasses the
 // intended-pipeline ingestion). The data browser is read-only for ClickHouse.
+// The access gate runs first so a caller without sql:read can't use the
+// 422 as an oracle for which addons exist and what kind they are.
 func (h *BackupsHandler) rejectIfClickHouseWrite(ctx context.Context, w http.ResponseWriter, r *http.Request) bool {
+	if !h.sqlBrowserGate(ctx, w, r) {
+		return true
+	}
 	_, isCH, err := h.clickhouseConnInfo(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 	if err == nil && isCH {
 		writeErr(w, http.StatusUnprocessableEntity, "the data browser is read-only for ClickHouse addons (row edits map to async ALTER mutations, not transactional writes) — use the SQL query runner for DDL")

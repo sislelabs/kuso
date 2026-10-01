@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -112,9 +111,8 @@ func (h *BackupHandler) Mount(r chi.Router) {
 // image must bundle postgresql-client (Dockerfile dependency).
 //
 // Streaming so we don't buffer 50 GB of dump in memory on a big
-// install. If pg_dump fails mid-stream, the gzip will be truncated
-// and the client will error on decompress — preferable to silently
-// shipping a half-dump.
+// install. Failure semantics (502 before first byte, unterminated gzip
+// + X-Kuso-Backup-Status trailer after) are streamGzipDump's.
 func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -129,41 +127,11 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="kuso-backup-%s.sql.gz"`, stamp))
-
 	cmd := exec.CommandContext(ctx, "pg_dump",
 		"--format=plain", "--no-owner", "--no-acl", "--clean", "--if-exists",
 		dsn,
 	)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "pg_dump pipe: "+err.Error())
-		return
-	}
-	stderr, _ := cmd.StderrPipe()
-	if err := cmd.Start(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "pg_dump start: "+err.Error())
-		return
-	}
-	gz := gzip.NewWriter(w)
-	if _, err := io.Copy(gz, stdout); err != nil {
-		h.Logger.Error("backup: copy", "err", err)
-		_ = cmd.Process.Kill()
-		_ = gz.Close()
-		return
-	}
-	if err := cmd.Wait(); err != nil {
-		// Slurp stderr for the log; the body is mid-stream so we
-		// can't change response code now.
-		var buf strings.Builder
-		if stderr != nil {
-			_, _ = io.Copy(&buf, stderr)
-		}
-		h.Logger.Error("backup: pg_dump wait", "err", err, "stderr", buf.String())
-	}
-	_ = gz.Close()
+	streamGzipDump(h.Logger, w, cmd, fmt.Sprintf("kuso-backup-%s.sql.gz", stamp))
 }
 
 // Upload accepts a gzipped pg_dump and runs a one-shot Job to apply

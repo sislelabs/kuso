@@ -14,9 +14,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
+	"kuso/server/internal/auth"
+	"kuso/server/internal/kube"
 )
 
 func serveDump(t *testing.T, script string) (*http.Response, []byte) {
@@ -88,5 +97,36 @@ func TestStreamGzipCommand_SuccessHasOKTrailerAndValidGzip(t *testing.T) {
 	}
 	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "p-db.sql.gz") {
 		t.Errorf("Content-Disposition = %q", cd)
+	}
+}
+
+// The control-plane download used to send 200 + a cleanly closed gzip
+// even when pg_dump failed, so `kuso backup` saved a valid empty file.
+func TestBackupDownload_PgDumpFailureIs502(t *testing.T) {
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho 'pg_dump: error: server version mismatch' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "pg_dump"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	cs := k8sfake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "kuso-postgres-conn", Namespace: "kuso"},
+		Data:       map[string][]byte{"dsn": []byte("postgres://u:p@h/db")},
+	})
+	h := &BackupHandler{
+		Kube: &kube.Client{Clientset: cs}, Namespace: "kuso",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/backup", nil)
+	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
+		&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
+	rr := httptest.NewRecorder()
+	h.Download(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body %q", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "server version mismatch") {
+		t.Errorf("body should carry pg_dump stderr, got %q", rr.Body.String())
 	}
 }

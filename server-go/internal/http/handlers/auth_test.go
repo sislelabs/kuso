@@ -13,6 +13,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/http/handlers"
 )
 
 func newTestServer(t *testing.T) (http.Handler, *db.DB, *auth.Issuer) {
@@ -209,5 +210,36 @@ func TestSession_AfterLogin(t *testing.T) {
 	_ = json.NewDecoder(sessRR.Body).Decode(&s)
 	if s["isAuthenticated"] != true || s["userId"] != "u1" {
 		t.Errorf("session body: %+v", s)
+	}
+}
+
+// Logging out a never-expire session wrote the revocation row with a
+// now+24h bound, so the daily prune dropped it and the stolen cookie
+// verified again the next day.
+func TestLogout_NeverExpireTokenStaysRevoked(t *testing.T) {
+	d := openHandlerTestDB(t)
+	ctx := context.Background()
+	if _, err := d.ExecContext(ctx, `TRUNCATE TABLE "RevokedToken"`); err != nil {
+		t.Fatalf("truncate RevokedToken: %v", err)
+	}
+	iss, err := auth.NewIssuer("test-secret", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := iss.SignWithExpiry(auth.Claims{UserID: "u1"}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers.AuthHandler{DB: d, Issuer: iss, Logger: slog.Default()}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	h.Logout(httptest.NewRecorder(), req)
+
+	var exp time.Time
+	if err := d.QueryRowContext(ctx, `SELECT "expiresAt" FROM "RevokedToken" WHERE "userId" = $1`, "u1").Scan(&exp); err != nil {
+		t.Fatalf("revocation row: %v", err)
+	}
+	if exp.Before(time.Now().Add(365 * 24 * time.Hour)) {
+		t.Fatalf("revocation for a never-expire token expires at %s; the prune will drop it", exp)
 	}
 }

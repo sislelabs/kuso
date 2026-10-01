@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
@@ -135,5 +136,35 @@ func TestAdd_ExternalCredentials_ValidatesBeforeWritingSecret(t *testing.T) {
 	}
 	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), "alpha-cache-external", metav1.GetOptions{}); err == nil {
 		t.Fatal("credential Secret written although the request was rejected")
+	}
+}
+
+// A user's own Secret that happens to be named <fqn>-external was
+// overwritten and relabelled as kuso's, so a later addon delete removed it.
+func TestAdd_ExternalCredentials_RefusesForeignSourceSecret(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, seedProj("alpha"))
+	foreign := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-psdb-external", Namespace: "kuso"},
+		Data:       map[string][]byte{"MINE": []byte("keep")},
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
+		Name:                "psdb",
+		Kind:                "postgres",
+		ExternalCredentials: map[string]string{"DATABASE_URL": "postgres://u:p@h:5432/d"},
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Add err = %v, want ErrConflict", err)
+	}
+	got, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), "alpha-psdb-external", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Data["MINE"]) != "keep" || got.Labels["kuso.sislelabs.com/external-source"] != "" {
+		t.Errorf("foreign secret was modified: data=%v labels=%v", got.Data, got.Labels)
 	}
 }

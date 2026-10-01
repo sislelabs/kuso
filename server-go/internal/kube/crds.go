@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -317,6 +318,10 @@ func updateWithRetry[T any](
 		if gerr != nil {
 			return gerr
 		}
+		before, berr := toUnstructured(latest, gvr, kind)
+		if berr != nil {
+			return berr
+		}
 		if merr := mutate(latest); merr != nil {
 			// Don't retry — the callback decided this op is done.
 			return merr
@@ -324,6 +329,11 @@ func updateWithRetry[T any](
 		u, terr := toUnstructured(latest, gvr, kind)
 		if terr != nil {
 			return terr
+		}
+		if equality.Semantic.DeepEqual(before.Object, u.Object) {
+			// Nothing changed: skip the write. Callers like the addon
+			// env refresh run this per env on every event.
+			return fromUnstructured(u, &out)
 		}
 		updated, uerr := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
 		if uerr != nil {

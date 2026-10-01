@@ -1878,6 +1878,13 @@ func (s *Service) createExternalSecret(ctx context.Context, ns, addonFQN string,
 		Data: data,
 	}
 	if existing, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		// Only overwrite a Secret kuso minted for this addon. Relabelling a
+		// user's own Secret would also make a later addon delete remove it.
+		if existing.Labels["kuso.sislelabs.com/external-source"] != "true" ||
+			existing.Labels["kuso.sislelabs.com/addon"] != addonFQN {
+			return "", fmt.Errorf("%w: secret %s/%s already exists and was not created by kuso — "+
+				"rename it, or adopt it with external.secretName instead", ErrConflict, ns, name)
+		}
 		existing.Data = data
 		if existing.Labels == nil {
 			existing.Labels = map[string]string{}

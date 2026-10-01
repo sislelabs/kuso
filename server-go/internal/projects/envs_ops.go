@@ -321,8 +321,13 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 			kube.LabelProject: project,
 			kube.LabelEnv:     env,
 		})
-		if grp, lerr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-			List(ctx, metav1.ListOptions{LabelSelector: groupSel}); lerr == nil && len(grp.Items) > 0 {
+		grp, lerr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			List(ctx, metav1.ListOptions{LabelSelector: groupSel})
+		if lerr != nil {
+			// Can't rule out a group, and the cascade below is destructive.
+			return fmt.Errorf("probe env group %q: %w", env, lerr)
+		}
+		if len(grp.Items) > 0 {
 			names := make([]string, 0, len(grp.Items))
 			for i := range grp.Items {
 				names = append(names, grp.Items[i].GetName())

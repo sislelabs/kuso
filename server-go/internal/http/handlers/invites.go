@@ -58,13 +58,13 @@ func (h *InvitesHandler) Mount(r chi.Router) {
 // the invitee hasn't created an account yet, so we can't bearer-gate
 // these. Token entropy is the security boundary instead.
 func (h *InvitesHandler) MountPublic(r chi.Router) {
-	r.Get("/api/invites/lookup/{token}", h.Lookup)
 	// Rate-limit redemption + lookup-by-token to keep an unauthenticated
 	// attacker from brute-forcing invite tokens. 128-bit entropy already
 	// makes this hard, but the limiter caps the attempt rate to drown
 	// out timing-based oracle attacks.
+	r.Get("/api/invites/lookup/{token}", RateLimitedInvite(h.Lookup))
 	r.Post("/api/invites/redeem", RateLimitedInvite(h.RedeemLocal))
-	r.Get("/api/invites/redeem/oauth/start", h.RedeemOAuthStart)
+	r.Get("/api/invites/redeem/oauth/start", RateLimitedInvite(h.RedeemOAuthStart))
 }
 
 func invCtx(r *http.Request) (context.Context, context.CancelFunc) {

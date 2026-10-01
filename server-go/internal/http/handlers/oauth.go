@@ -109,6 +109,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "state mismatch")
 		return
 	}
+	clearStateCookie(w, r)
 	// Single-use enforcement — replay protection. ConsumeOAuthState
 	// is atomic in Postgres (UPDATE … WHERE consumed=false); the
 	// second callback for the same state lands here with 0 rows
@@ -193,6 +194,7 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "state mismatch")
 		return
 	}
+	clearStateCookie(w, r)
 	{
 		state := r.URL.Query().Get("state")
 		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
@@ -610,6 +612,16 @@ func setStateCookie(w http.ResponseWriter, r *http.Request, state string) {
 		// dev hosts (LAN-IP, un-TLS'd) the same way password login does
 		// (auth.go uses isHTTPS); production stays TLS-terminated → Secure.
 		Secure: isHTTPS(r),
+	})
+}
+
+// clearStateCookie expires the state cookie once a callback has checked
+// it; the server-side row is single-use, the cookie should be too.
+func clearStateCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: stateCookie, Value: "", Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		MaxAge: -1, Secure: isHTTPS(r),
 	})
 }
 

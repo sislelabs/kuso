@@ -8,9 +8,13 @@ package handlers
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +25,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/kube"
 )
 
@@ -137,5 +142,22 @@ func TestAddonS3Endpoint_QualifiesHostForCustomNamespace(t *testing.T) {
 	}
 	if !strings.Contains(got, "e2e-db-storage.kuso-e2e.svc:9000") {
 		t.Fatalf("s3 endpoint = %q, want host qualified with %s", got, customNS)
+	}
+}
+
+// The ClickHouse write refusal ran before the sql:read gate, so any JWT
+// could probe addon existence/kind via 422-vs-other responses.
+func TestSQLWrite_GateRunsBeforeClickHouseCheck(t *testing.T) {
+	t.Parallel()
+	h := customNSBackupsHandler(t, "clickhouse", map[string]string{"CLICKHOUSE_HOST": "e2e-db"})
+	r := chi.NewRouter()
+	r.Post("/api/projects/{project}/addons/{addon}/sql/rows", h.SQLInsertRow)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/e2e/addons/db/sql/rows",
+		strings.NewReader(`{"schema":"default","table":"t","values":{}}`))
+	req = req.WithContext(auth.WithClaimsForTest(req.Context(), &auth.Claims{UserID: "outsider"}))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 before any addon-kind check; body %s", rr.Code, rr.Body.String())
 	}
 }

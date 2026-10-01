@@ -9,7 +9,4 @@ func TestAddonBackupCronJobRendered_HAPostgres(t *testing.T) {
 	if !AddonBackupCronJobRendered(a) {
 		t.Fatal("HA postgres with a schedule renders a backup CronJob")
 	}
-	if AddonBackupSuppressedHA(a) {
-		t.Fatal("nothing is suppressed for HA postgres any more")
-	}
 }
