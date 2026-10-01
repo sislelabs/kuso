@@ -41,6 +41,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -236,7 +237,14 @@ func (w *Watcher) tick(ctx context.Context) {
 		wg.Add(1)
 		go func(j *batchv1.Job) {
 			defer wg.Done()
-			w.handleFailure(ctx, j)
+			if !w.handleFailure(ctx, j) {
+				// Transient cron lookup failure: leave the Job unmarked
+				// so the next tick retries; staleFailureAge bounds it.
+				w.mu.Lock()
+				delete(w.dispatched, j.UID)
+				w.mu.Unlock()
+				return
+			}
 			w.markNotified(ctx, j)
 		}(job)
 	}
@@ -313,10 +321,12 @@ func isFailed(job *batchv1.Job) bool {
 	return false
 }
 
-func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) {
+// handleFailure alerts on one failed Job. It returns false only when the
+// alert could not be sent for a reason worth retrying.
+func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) bool {
 	cronName := job.Labels["kuso.sislelabs.com/cron"]
 	if cronName == "" {
-		return
+		return true
 	}
 	// Bound the CR read — same reasoning as the tick LIST: a hung
 	// apiserver must not wedge the handler goroutine.
@@ -325,7 +335,7 @@ func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) {
 	cancel()
 	if err != nil {
 		w.Logger.Warn("cronwatch resolve cron", "err", err, "cron", cronName, "ns", job.Namespace)
-		return
+		return apierrors.IsNotFound(err)
 	}
 	project := cron.Spec.Project
 	service := cron.Spec.Service
@@ -342,6 +352,7 @@ func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) {
 			w.Logger.Warn("cronwatch webhook", "err", err, "cron", cronName)
 		}
 	}
+	return true
 }
 
 func (w *Watcher) emitNotify(ctx context.Context, cron *kube.KusoCron, job *batchv1.Job) {

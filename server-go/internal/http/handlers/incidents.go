@@ -73,7 +73,8 @@ func incidentCtx(r *http.Request) (context.Context, context.CancelFunc) {
 
 // --- operator endpoints ---
 
-// List returns the newest incidents (UI feed). Admin-only.
+// List returns the newest incidents (UI feed), paged by ?limit= and
+// ?offset=; a cut page carries the X-Kuso-Truncated headers. Admin-only.
 func (h *IncidentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -81,7 +82,11 @@ func (h *IncidentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := incidentCtx(r)
 	defer cancel()
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := h.DB.ListIncidents(ctx, limit, r.URL.Query().Get("state"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	rows, truncated, err := h.DB.ListIncidents(ctx, limit, offset, r.URL.Query().Get("state"))
 	if err != nil {
 		h.log().Error("incidents: list", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
@@ -89,6 +94,9 @@ func (h *IncidentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	if rows == nil {
 		rows = []db.Incident{}
+	}
+	if truncated {
+		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(offset+len(rows)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"incidents": rows})
 }

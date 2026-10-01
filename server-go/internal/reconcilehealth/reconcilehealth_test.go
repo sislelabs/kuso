@@ -107,3 +107,17 @@ func TestClassifyEnv_FailedIsCritical(t *testing.T) {
 		t.Errorf("env failure should be critical, got %q", iss.Severity)
 	}
 }
+
+func TestClassifyProject(t *testing.T) {
+	ok := &kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Status: cond("ReleaseFailed", "False", "")}
+	if _, bad := ClassifyProject(ok); bad {
+		t.Error("healthy project flagged")
+	}
+	for _, ct := range []string{"ReleaseFailed", "Irreconcilable"} {
+		p := &kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "kuso"}, Status: cond(ct, "True", "boom")}
+		iss, bad := ClassifyProject(p)
+		if !bad || iss.Type != "project" || iss.Detail != "boom" || iss.Action != ActionNone {
+			t.Errorf("%s: got %+v, %v", ct, iss, bad)
+		}
+	}
+}

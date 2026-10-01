@@ -191,3 +191,24 @@ func TestLookupNotification_FallsThroughStaleCache(t *testing.T) {
 		t.Fatalf("missing channel err = %v, want errChannelNotFound", err)
 	}
 }
+
+// A replica without the singletons lease must still enqueue to the
+// durable outbox (the leader's workers deliver it) but must not run the
+// leader-only event hook.
+func TestEmit_NonLeaderEnqueuesButSkipsHook(t *testing.T) {
+	d := openNotifyTestDB(t)
+	addChannel(t, d, "all", nil)
+
+	disp := New(d, quietLogger(), 0)
+	disp.SetLeaderHook(func() bool { return false })
+	hookCalls := 0
+	disp.SetEventHook(func(Event) { hookCalls++ })
+	disp.Emit(BuildFailed("shop", "web", "abc", "boom"))
+
+	if got := outboxChannels(t, d); len(got) != 1 || got[0] != "all" {
+		t.Fatalf("non-leader outbox rows = %v, want [all]", got)
+	}
+	if hookCalls != 0 {
+		t.Errorf("event hook ran %d times on a non-leader, want 0", hookCalls)
+	}
+}

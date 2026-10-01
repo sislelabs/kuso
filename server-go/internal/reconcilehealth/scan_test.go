@@ -51,7 +51,8 @@ func fixtureEnv(name, ns, project, tag string, status map[string]any) *kube.Kuso
 
 // scanFixture is a two-namespace cluster covering every scan branch that
 // does not need a backup schedule: a failed addon release, a failed env
-// release, missing registry images, live/orphan/platform conn Secrets, and
+// release, a failed project release, missing registry images,
+// live/orphan/platform conn Secrets, and
 // a payload-heavy helm release Secret that must never influence the result.
 func scanFixture(t *testing.T) (*dynamicfake.FakeDynamicClient, *fake.Clientset) {
 	t.Helper()
@@ -70,7 +71,7 @@ func scanFixture(t *testing.T) (*dynamicfake.FakeDynamicClient, *fake.Clientset)
 		gvr schema.GroupVersionResource
 		obj *unstructured.Unstructured
 	}{
-		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("alpha", "kuso", "alpha")})},
+		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("alpha", "kuso", "alpha"), Status: cond("Irreconcilable", "True", "chart render failed")})},
 		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("beta", "kuso", "beta"), Spec: kube.KusoProjectSpec{Namespace: "kuso-beta"}})},
 		{kube.GVRAddons, toUnstructured(t, "KusoAddon", &kube.KusoAddon{ObjectMeta: meta("alpha-db", "kuso", "alpha"), Status: failed})},
 		{kube.GVRAddons, toUnstructured(t, "KusoAddon", &kube.KusoAddon{ObjectMeta: meta("alpha-cache", "kuso", "alpha")})},
@@ -146,6 +147,7 @@ var wantFixtureIssues = []issueKey{
 	{"alpha-web-production", KindImageMissingFromRegistry, SeverityCritical},
 	{"alpha-worker-production", KindReleaseFailed, SeverityCritical},
 	{"beta-web-production", KindImageMissingFromRegistry, SeverityCritical},
+	{"alpha", KindReleaseFailed, SeverityWarning},
 	{"alpha-db", KindReleaseFailed, SeverityWarning},
 	{"alpha-old-conn", KindOrphanConnSecret, SeverityWarning},
 	{"beta-gone-conn", KindOrphanConnSecret, SeverityWarning},
@@ -160,8 +162,8 @@ func checkFixtureReport(t *testing.T, rep *Report) {
 	if !reflect.DeepEqual(got, wantFixtureIssues) {
 		t.Errorf("issues:\n got  %v\n want %v", got, wantFixtureIssues)
 	}
-	if rep.Scanned != 7 || rep.Healthy != 3 || rep.Critical != 3 || rep.Warning != 3 || rep.Info != 0 || len(rep.SkippedNamespaces) != 0 {
-		t.Errorf("counts: scanned=%d healthy=%d critical=%d warning=%d info=%d skipped=%v; want 7/3/3/3/0/none",
+	if rep.Scanned != 9 || rep.Healthy != 4 || rep.Critical != 3 || rep.Warning != 4 || rep.Info != 0 || len(rep.SkippedNamespaces) != 0 {
+		t.Errorf("counts: scanned=%d healthy=%d critical=%d warning=%d info=%d skipped=%v; want 9/4/3/4/0/none",
 			rep.Scanned, rep.Healthy, rep.Critical, rep.Warning, rep.Info, rep.SkippedNamespaces)
 	}
 }

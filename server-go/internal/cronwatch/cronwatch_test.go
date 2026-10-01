@@ -2,6 +2,7 @@ package cronwatch
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
@@ -466,5 +468,40 @@ func TestTick_FreshFailureNotifiesSameTickWithFailureTime(t *testing.T) {
 	w.tick(context.Background())
 	if len(got) != 1 {
 		t.Errorf("events after second tick = %d, want still 1", len(got))
+	}
+}
+
+// A transient cron GET failure must not consume the alert: the Job stays
+// unstamped and the next tick delivers it.
+func TestTick_TransientCronLookupFailureRetriesNextTick(t *testing.T) {
+	cs := fake.NewSimpleClientset(failedJobAt("job-t", "cron-a", "uid-t", time.Now().Add(-time.Minute)))
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		kube.GVRCrons: "KusoCronList",
+	})
+	seedCronCR(t, dyn, "cron-a", "")
+	var fail atomic.Bool
+	fail.Store(true)
+	dyn.PrependReactor("get", "kusocrons", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if fail.Load() {
+			return true, nil, errors.New("apiserver timeout")
+		}
+		return false, nil, nil
+	})
+	var got []notify.Event
+	w := newTestWatcher(t, cs, dyn)
+	w.emit = func(e notify.Event) { got = append(got, e) }
+
+	w.tick(context.Background())
+	if len(got) != 0 {
+		t.Fatalf("events during outage = %d, want 0", len(got))
+	}
+	j, _ := cs.BatchV1().Jobs("kuso").Get(context.Background(), "job-t", metav1.GetOptions{})
+	if j.Annotations[notifiedAnnotation] != "" {
+		t.Fatal("Job stamped notified although no alert was sent")
+	}
+	fail.Store(false)
+	w.tick(context.Background())
+	if len(got) != 1 {
+		t.Errorf("events after recovery = %d, want 1", len(got))
 	}
 }

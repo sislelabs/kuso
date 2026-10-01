@@ -219,3 +219,19 @@ func TestHandler_NonGETRejected(t *testing.T) {
 		t.Errorf("POST /: %d (want 405)", code)
 	}
 }
+
+func TestHandler_NextStaticIsImmutable(t *testing.T) {
+	h, _ := Handler(nextExportFS(), "/api/")
+	req := httptest.NewRequest(http.MethodGet, "/_next/static/chunks/main.js", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got := rr.Header().Get("Cache-Control"); !strings.Contains(got, "immutable") {
+		t.Errorf("_next/static Cache-Control = %q, want immutable", got)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got := rr.Header().Get("Cache-Control"); strings.Contains(got, "immutable") {
+		t.Errorf("favicon must not be immutable, got %q", got)
+	}
+}

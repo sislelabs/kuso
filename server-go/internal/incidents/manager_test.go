@@ -1,6 +1,7 @@
 package incidents
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -114,4 +115,42 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+type blockingConfig struct {
+	release chan struct{}
+	gotCtx  chan context.Context
+}
+
+func (b *blockingConfig) Get(ctx context.Context) db.IncidentAgentConfig {
+	b.gotCtx <- ctx
+	<-b.release
+	return db.DefaultIncidentAgentConfig()
+}
+
+// A stalled config read (Postgres on a cache miss) must not block the
+// emitting loop's goroutine, and must run under a deadline.
+func TestHook_DoesNotBlockOnConfigRead(t *testing.T) {
+	t.Parallel()
+	bc := &blockingConfig{release: make(chan struct{}), gotCtx: make(chan context.Context, 1)}
+	defer close(bc.release)
+	m := &Manager{Config: bc}
+	done := make(chan struct{})
+	go func() {
+		m.Hook(notify.Event{Type: notify.EventPodCrashed, Project: "p", Service: "s"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Hook blocked on the config read")
+	}
+	select {
+	case ctx := <-bc.gotCtx:
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("config read has no deadline")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("config was never read for a triggerable event")
+	}
 }

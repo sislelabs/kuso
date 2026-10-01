@@ -32,6 +32,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/safego"
 	"kuso/server/internal/serverstate"
 )
 
@@ -273,13 +274,13 @@ func (s *Shipper) Run(ctx context.Context) {
 	// Periodic flusher — drain the buffer every flushInterval so
 	// lines hit SQLite without us waiting for a 500-line batch from
 	// a quiet service.
-	go s.runFlusher(ctx)
+	safego.Go(s.Logger, "logship-flusher", func() { s.runFlusher(ctx) })
 	// Periodic pruner — drop rows past retention. 30 min ticker
 	// keeps the table bounded without hammering DELETE.
-	go s.runPruner(ctx)
+	safego.Go(s.Logger, "logship-pruner", func() { s.runPruner(ctx) })
 	// Per-service rate-cap counter reset — every rateWindow, zero the
 	// counters and warn about any service that got throttled.
-	go s.resetRateCounters(ctx)
+	safego.Go(s.Logger, "logship-rate-reset", func() { s.resetRateCounters(ctx) })
 
 	// Pod watcher — list pods on a slow ticker, start follow
 	// streams for new ones, drop streams for vanished pods.
@@ -389,7 +390,10 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 		streamCtx, cancel := context.WithCancel(ctx)
 		st.streaming, st.cancel = true, cancel
 		s.mu.Unlock()
-		go s.streamContainer(streamCtx, ns, *p, container, st, terminated, restarts)
+		pod := *p
+		safego.Go(s.Logger, "logship-stream", func() {
+			s.streamContainer(streamCtx, ns, pod, container, st, terminated, restarts)
+		})
 	}
 	// Drop state (and any stream) for vanished pods.
 	s.mu.Lock()
@@ -430,6 +434,11 @@ func containerTerminated(p *corev1.Pod, container string) (bool, int32) {
 func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod, container string, st *containerState, terminated bool, restarts int32) {
 	defer func() {
 		s.mu.Lock()
+		// Release the child context, or every self-ended stream stays
+		// registered under the long-lived Run context forever.
+		if st.cancel != nil {
+			st.cancel()
+		}
 		st.streaming, st.cancel = false, nil
 		s.mu.Unlock()
 	}()
@@ -726,10 +735,10 @@ func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind strin
 		// already covered — spawning another would only add a second
 		// goroutine contending for the same connection pool.
 		if s.flushing.CompareAndSwap(false, true) {
-			go func() {
+			safego.Go(s.Logger, "logship-flush", func() {
 				defer s.flushing.Store(false)
 				s.flush(s.runCtx)
-			}()
+			})
 		}
 	}
 }

@@ -67,10 +67,8 @@ const (
 	// surface.
 	KindBackupSecretMissing Kind = "backup_secret_missing"
 	// KindBackupUnrendered: a backup schedule is set on an addon shape
-	// the chart deliberately renders NO CronJob for. The HA-postgres
-	// case is the dangerous one — CNPG owns backups there and kuso
-	// doesn't plumb barman, so unless the operator configured CNPG
-	// backups out-of-band the schedule is a false comfort.
+	// the chart deliberately renders NO CronJob for (instance-backed,
+	// external non-postgres, or unsupported kinds), so it does nothing.
 	KindBackupUnrendered Kind = "backup_unrendered"
 	// KindImageMissingFromRegistry: a live env points at an image tag the
 	// in-cluster registry no longer has. The pod keeps running only while its
@@ -168,6 +166,12 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 			if pns := projects[i].Spec.Namespace; pns != "" && !seenNS[pns] {
 				seenNS[pns] = true
 				namespaces = append(namespaces, pns)
+			}
+			rep.Scanned++
+			if iss, ok := ClassifyProject(&projects[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else {
+				rep.Healthy++
 			}
 		}
 	}
@@ -399,10 +403,8 @@ func (s *Scanner) newBackupSecretCheck(ctx context.Context, namespace string) fu
 		}
 		if !kube.AddonBackupCronJobRendered(a) {
 			// The chart renders no CronJob for this shape — a missing
-			// Secret is irrelevant. Surface the HA-postgres trap
-			// (schedule set, CNPG owns backups, kuso doesn't plumb
-			// barman) as a warning; other inert schedules as info.
-			iss := Issue{
+			// Secret is irrelevant, but the schedule is inert.
+			return Issue{
 				Resource:  a.Name,
 				Namespace: a.Namespace,
 				Project:   a.Labels["kuso.sislelabs.com/project"],
@@ -412,13 +414,7 @@ func (s *Scanner) newBackupSecretCheck(ctx context.Context, namespace string) fu
 				Severity:  SeverityInfo,
 				Summary:   "Backup schedule is set but this addon shape gets no backup CronJob — the schedule is inert.",
 				Fix:       "Remove the schedule, or move backups to a supported shape.",
-			}
-			if kube.AddonBackupSuppressedHA(a) {
-				iss.Severity = SeverityWarning
-				iss.Summary = "Backup schedule is set but HA postgres backups are CNPG's job — kuso renders no CronJob and does not configure CNPG barman."
-				iss.Fix = "Configure CNPG barman-cloud backups on the Cluster CR (out-of-band), or this addon has NO backups despite the schedule."
-			}
-			return iss, true
+			}, true
 		}
 		if execNS == nil {
 			execNS = map[string]string{}
@@ -491,6 +487,32 @@ func ClassifyEnv(e *kube.KusoEnvironment) (Issue, bool) {
 			Action:    ActionForceReconcile,
 			Safe:      true,
 			Fix:       "Force a reconcile to retry the rollout. If it persists, roll back to the last good build from Deployments.",
+		}, true
+	}
+	return Issue{}, false
+}
+
+// ClassifyProject inspects one project CR for a failed release. The
+// project chart renders the namespace-level plumbing (network policy,
+// shared secrets), so a broken chart there silently freezes those for
+// every service in the project. Surface-only: the remediator's reconcile
+// bump only knows addon and environment CRs.
+func ClassifyProject(p *kube.KusoProject) (Issue, bool) {
+	for _, ct := range []string{"ReleaseFailed", "Irreconcilable"} {
+		st, msg := conditionStatus(p.Status, ct)
+		if !truthy(st) {
+			continue
+		}
+		return Issue{
+			Resource:  p.Name,
+			Namespace: p.Namespace,
+			Project:   p.Name,
+			Type:      "project",
+			Kind:      KindReleaseFailed,
+			Severity:  SeverityWarning,
+			Summary:   "Project helm release is failing (" + ct + ") — project-level resources won't update until this clears.",
+			Detail:    msg,
+			Fix:       "Read the helm error in Detail and fix the project spec or chart; the operator retries on its next reconcile.",
 		}, true
 	}
 	return Issue{}, false

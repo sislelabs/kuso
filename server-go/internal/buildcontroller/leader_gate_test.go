@@ -2,78 +2,52 @@ package buildcontroller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 
 	"kuso/server/internal/kube"
 )
 
-// TestMaybeReconcileGate verifies the leader-active gate is the
-// first decision in maybeReconcile. The bug we're guarding against
-// (Correct P0-3 from pass 4): handlers accumulate across leader
-// re-elections, and without the gate every replica would reconcile
-// every event. The fix wires LeaderActive *atomic.Bool; nil = always
-// active, non-nil = act only while true. This test pins the
-// behaviour so a future refactor of maybeReconcile that drops the
-// gate fails CI.
-//
-// We can't call reconcile() proper without a kube client + cache,
-// but maybeReconcile's gate runs BEFORE the kube call. So we
-// fabricate an obj that would crash reconcile if it ever reached
-// it (a non-unstructured) — when the gate is closed, reconcile
-// must not be entered, and the test sees no crash.
-//
-// The test runs N events; we count how many reach the reconcile
-// step by way of a sentinel that ONLY fires from inside reconcile.
-// reconcile starts with a type-assertion that returns silently on
-// non-unstructured input — so we use that as our cheap dead-end.
-// A test-only build tag is overkill for one assertion; instead we
-// wrap maybeReconcile with a counted callback via a tiny shim.
-
+// TestMaybeReconcileGate pins the leader gate in maybeReconcile: handlers
+// accumulate across leader re-elections, and without the gate every
+// replica would reconcile every event. A closed gate must create no Job;
+// nil and open gates must. Each case uses its own namespace because
+// kube.IsManagedNamespace caches verdicts package-wide.
 func TestMaybeReconcileGate(t *testing.T) {
-	// We can't easily count "did reconcile fire" without touching
-	// the production code. Instead, drive maybeReconcile with a
-	// nil-payload (panics inside reconcile on the type assert in
-	// decode) and assert no panic when LeaderActive=false. When
-	// LeaderActive=true we expect the type-assert path which is
-	// silent (returns at the first if !ok).
-	//
-	// This indirectly verifies "gate closed → reconcile not
-	// entered" — the type-assert at line 184 returns on !ok, so a
-	// nil obj is safe either way. We use a recovered panic to
-	// distinguish a passed-through nil from a gated nil. Since the
-	// current reconcile is silent on nil, we instead test the
-	// LeaderActive load directly: gate closed must return without
-	// reading the obj's interior at all.
-	t.Run("nil-leader-active = always run", func(t *testing.T) {
-		s := &Service{}
-		// LeaderActive nil → gate open. We pass a synthetic but
-		// invalid obj (non-unstructured) — reconcile must enter
-		// and silently return (type assertion fails). No panic.
-		s.maybeReconcile(context.Background(), "not-an-unstructured", "test")
-	})
-
-	t.Run("leader-active false = gate closed", func(t *testing.T) {
-		var leader atomic.Bool
-		// leader starts false.
-		s := &Service{LeaderActive: &leader}
-		// If the gate IS being honoured, this never reaches
-		// reconcile's interior — the gate returns early. The
-		// payload would crash if reconcile's type-assert path
-		// were broken; with a closed gate we never get there.
-		s.maybeReconcile(context.Background(), "not-an-unstructured", "test")
-	})
-
-	t.Run("leader-active true = pass through", func(t *testing.T) {
-		var leader atomic.Bool
-		leader.Store(true)
-		s := &Service{LeaderActive: &leader}
-		s.maybeReconcile(context.Background(), "not-an-unstructured", "test")
-	})
+	cases := []struct {
+		name    string
+		leader  func() *atomic.Bool
+		wantJob bool
+	}{
+		{"nil leader = always run", func() *atomic.Bool { return nil }, true},
+		{"leader false = gate closed", func() *atomic.Bool { return &atomic.Bool{} }, false},
+		{"leader true = pass through", func() *atomic.Bool { b := &atomic.Bool{}; b.Store(true); return b }, true},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns := fmt.Sprintf("kuso-leader-gate-%d", i)
+			cs := kubefake.NewSimpleClientset(managedNS(ns))
+			s := &Service{
+				Kube:         &kube.Client{Clientset: cs},
+				Logger:       retryTestLogger(),
+				running:      map[string]struct{}{},
+				LeaderActive: c.leader(),
+			}
+			ctx := context.Background()
+			s.maybeReconcile(ctx, retryTestBuild(ns, "b1"), "test")
+			_, err := cs.BatchV1().Jobs(ns).Get(ctx, "b1", metav1.GetOptions{})
+			if got := err == nil; got != c.wantJob {
+				t.Errorf("job created = %v, want %v (err %v)", got, c.wantJob, err)
+			}
+		})
+	}
 }
 
 // TestRunningMapDedup verifies the per-Service running-set behaves

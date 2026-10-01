@@ -165,12 +165,16 @@ WHERE "state" IN ('investigating','awaiting_feedback','implementing','pr_open')`
 	return n, err
 }
 
-// ListIncidents returns the newest `limit` incidents (UI feed). When state
-// is non-empty, only incidents in that state are returned (the Discord bot
-// filters to "awaiting_feedback").
-func (d *DB) ListIncidents(ctx context.Context, limit int, state string) ([]Incident, error) {
+// ListIncidents returns the newest `limit` incidents after skipping
+// `offset` (UI feed). When state is non-empty, only incidents in that
+// state are returned (the Discord bot filters to "awaiting_feedback").
+// truncated reports that more rows exist past this page.
+func (d *DB) ListIncidents(ctx context.Context, limit, offset int, state string) (out []Incident, truncated bool, err error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	q := `SELECT ` + incidentCols + ` FROM "Incident"`
 	args := []any{}
@@ -178,22 +182,29 @@ func (d *DB) ListIncidents(ctx context.Context, limit int, state string) ([]Inci
 		args = append(args, state)
 		q += ` WHERE "state" = $1`
 	}
-	args = append(args, limit)
-	q += fmt.Sprintf(` ORDER BY "createdAt" DESC LIMIT $%d`, len(args))
+	// One extra row tells us whether the page was cut short. id breaks
+	// createdAt ties so pages never overlap or skip.
+	args = append(args, limit+1, offset)
+	q += fmt.Sprintf(` ORDER BY "createdAt" DESC, "id" DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
 	rows, err := d.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
-	var out []Incident
 	for rows.Next() {
 		in, err := scanIncident(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, in)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
 // StaleInvestigatingIncidents returns incidents still in "investigating"

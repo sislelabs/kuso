@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/safego"
 )
 
 // outboxDefaultWorkers is the per-replica worker count. Each worker
@@ -69,7 +70,8 @@ func (d *Dispatcher) StartOutboxWorkers(ctx context.Context, workers int) {
 		workers = outboxDefaultWorkers
 	}
 	for i := 0; i < workers; i++ {
-		go d.outboxWorker(ctx, i)
+		i := i
+		safego.Go(d.logger, "notify-outbox-worker", func() { d.outboxWorker(ctx, i) })
 	}
 }
 

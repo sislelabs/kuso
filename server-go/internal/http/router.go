@@ -979,6 +979,8 @@ func compressJSON() func(http.Handler) http.Handler {
 		"text/html",
 		"text/css",
 		"application/javascript",
+		// Go's mime table serves .js as text/javascript.
+		"text/javascript",
 		"image/svg+xml",
 	)
 	gz := compressor.Handler

@@ -166,3 +166,36 @@ func TestIncidentNotFound(t *testing.T) {
 		t.Errorf("want ErrIncidentNotFound, got %v", err)
 	}
 }
+
+func TestListIncidentsPaging(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		id := "inc-p" + string(rune('a'+i))
+		if err := d.CreateIncident(ctx, Incident{
+			ID: id, EventType: "pod.crashed", TargetKey: "k|" + id,
+			State: IncidentResolved, Title: id, Severity: "warn",
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	seen := map[string]bool{}
+	for off, wantTrunc := range map[int]bool{0: true, 2: true, 4: false} {
+		page, trunc, err := d.ListIncidents(ctx, 2, off, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if trunc != wantTrunc {
+			t.Errorf("offset %d: truncated = %v, want %v", off, trunc, wantTrunc)
+		}
+		for _, in := range page {
+			if seen[in.ID] {
+				t.Errorf("incident %s returned on two pages", in.ID)
+			}
+			seen[in.ID] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Errorf("pages covered %d incidents, want 5", len(seen))
+	}
+}

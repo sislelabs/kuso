@@ -92,3 +92,28 @@ func TestRevocation_DBErrorUsesStaleFallback(t *testing.T) {
 		t.Error("stale non-revoked cache should keep the user authed during a DB outage")
 	}
 }
+
+func TestRevocationCache_EvictsExpiredEntries(t *testing.T) {
+	c := newRevocationCache()
+	c.putJTI("old", false)
+	c.putWatermark("old-user", time.Now())
+	c.mu.Lock()
+	past := time.Now().Add(-time.Second)
+	c.jti["old"] = cachedBool{freshUntil: past, staleUntil: past}
+	c.watermark["old-user"] = cachedTime{freshUntil: past, staleUntil: past}
+	c.lastSweep = time.Now().Add(-2 * revocationOutageTTL)
+	c.mu.Unlock()
+
+	c.putJTI("new", false)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if _, ok := c.jti["old"]; ok {
+		t.Error("expired jti entry survived the sweep")
+	}
+	if _, ok := c.watermark["old-user"]; ok {
+		t.Error("expired watermark entry survived the sweep")
+	}
+	if _, ok := c.jti["new"]; !ok {
+		t.Error("fresh entry missing")
+	}
+}

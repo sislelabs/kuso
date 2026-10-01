@@ -348,3 +348,31 @@ func TestBackoffLadder(t *testing.T) {
 		}
 	}
 }
+
+// TestNamespaceCheckErrorRetries: a transient namespace GET failure must
+// go through the retry ladder rather than silently dropping the build.
+func TestNamespaceCheckErrorRetries(t *testing.T) {
+	ns := "kuso-retry-nscheck"
+	cs := kubefake.NewSimpleClientset(managedNS(ns))
+	var nsGets atomic.Int32
+	cs.PrependReactor("get", "namespaces", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		if nsGets.Add(1) == 1 {
+			return true, nil, fmt.Errorf("simulated apiserver blip")
+		}
+		return false, nil, nil
+	})
+	s := &Service{
+		Kube:      &kube.Client{Clientset: cs},
+		Logger:    retryTestLogger(),
+		running:   map[string]struct{}{},
+		retryBase: 2 * time.Millisecond,
+	}
+	ctx := context.Background()
+	s.reconcile(ctx, retryTestBuild(ns, "b1"), "add")
+	if !waitFor(t, 5*time.Second, func() bool {
+		_, err := cs.BatchV1().Jobs(ns).Get(ctx, "b1", metav1.GetOptions{})
+		return err == nil
+	}) {
+		t.Fatalf("job never created after a transient namespace-check error (ns gets: %d)", nsGets.Load())
+	}
+}

@@ -67,6 +67,11 @@ func Handler(dist fs.FS, apiPrefixes ...string) (http.Handler, error) {
 		//    /projects/new.html when the client asks for it explicitly).
 		info, statErr := fs.Stat(dist, urlPath)
 		if statErr == nil && !info.IsDir() {
+			// Next content-hashes everything under _next/static, so a
+			// cached copy can never go stale.
+			if strings.HasPrefix(urlPath, "_next/static/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		} else if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {

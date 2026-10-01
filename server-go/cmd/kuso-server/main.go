@@ -529,11 +529,11 @@ func main() {
 		// values sat in the Secret while pods ran without them). Runs in
 		// the background — it lists every project/service and shouldn't
 		// gate boot. Idempotent across replicas and restarts.
-		go projSvc.HealManagedSecretMounts(ctx, logger)
+		goSafe(logger, "heal-managed-secret-mounts", func() { projSvc.HealManagedSecretMounts(ctx, logger) })
 		// Restamp service crons' egress fields from their service: crons
 		// created before the cron CR carried them would otherwise render
 		// with public egress even when the service is private.
-		go projSvc.HealCronEgress(ctx, logger)
+		goSafe(logger, "heal-cron-egress", func() { projSvc.HealCronEgress(ctx, logger) })
 		secSvc = secrets.New(kc, *namespace)
 		secSvc.NSResolver = nsResolver
 		// Wire the per-env Secret cleanup hook so DeleteEnvironment in
@@ -968,7 +968,13 @@ func main() {
 				go runPreviewCleanup(workCtx, projSvc, logger)
 			}
 			if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
-				go runFinalizerSweep(workCtx, kc, *namespace, logger)
+				sweepNamespaces := func(c context.Context) []string {
+					if buildSvc == nil {
+						return []string{*namespace}
+					}
+					return buildSvc.ScanNamespaces(c)
+				}
+				goSafe(logger, "finalizer-sweep", func() { runFinalizerSweep(workCtx, kc, sweepNamespaces, logger) })
 			}
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 				go runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger)
@@ -1924,11 +1930,12 @@ func envInt(key string, fallback int) int {
 // runFinalizerSweep ticks every 5 minutes and clears the
 // uninstall-helm-release finalizer from CRs stuck with a
 // deletionTimestamp set but no helm release Secret. See §6.5.
-func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, logger *slog.Logger) {
+// namespaces covers per-project custom namespaces, not just the home one.
+func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespaces func(context.Context) []string, logger *slog.Logger) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
 	logFn := func(msg string, kv ...any) { logger.Info(msg, kv...) }
-	tick := func() {
+	sweepNS := func(namespace string) {
 		c, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		// All CRDs the helm-operator manages get this finalizer, even
@@ -1955,12 +1962,20 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 		} {
 			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
 			if err != nil {
-				logger.Warn("finalizer-sweep list", "kind", item.label, "err", err)
+				logger.Warn("finalizer-sweep list", "kind", item.label, "namespace", namespace, "err", err)
 				continue
 			}
 			if cleared > 0 {
-				logger.Info("finalizer-sweep cleared", "kind", item.label, "count", cleared)
+				logger.Info("finalizer-sweep cleared", "kind", item.label, "namespace", namespace, "count", cleared)
 			}
+		}
+	}
+	tick := func() {
+		lc, cancel := context.WithTimeout(ctx, 30*time.Second)
+		nss := namespaces(lc)
+		cancel()
+		for _, ns := range nss {
+			sweepNS(ns)
 		}
 	}
 	tick()

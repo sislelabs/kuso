@@ -330,9 +330,12 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 		nsCancel()
 		if mErr != nil {
 			if s.Logger != nil {
-				s.Logger.Warn("buildcontroller: namespace check failed; skipping",
+				s.Logger.Warn("buildcontroller: namespace check failed; will retry",
 					"err", mErr, "ns", ns, "build", u.GetName())
 			}
+			// No informer event re-delivers a fresh CR nobody patches, so
+			// dropping it here would strand the build until a resync.
+			s.scheduleRetry(ctx, ns+"/"+u.GetName(), u)
 			return
 		}
 		if !managed {

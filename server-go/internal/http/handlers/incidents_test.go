@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
@@ -95,5 +99,41 @@ func TestResolveFeedbackAction(t *testing.T) {
 				t.Fatalf("resolveFeedbackAction(%q) = %d, want %d", tt.decision, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIncidentsList_PagesWithTruncationHeaders(t *testing.T) {
+	d := openTestDB(t)
+	if _, err := d.DB.Exec(`TRUNCATE TABLE "Incident"`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("inc-h%d", i)
+		if err := d.CreateIncident(ctx, db.Incident{ID: id, EventType: "pod.crashed", TargetKey: "k|" + id,
+			State: db.IncidentResolved, Title: id, Severity: "warn"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &IncidentsHandler{DB: d}
+	admin := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}
+	get := func(q string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/incidents"+q, nil)
+		r = r.WithContext(auth.WithClaimsForTest(r.Context(), admin))
+		w := httptest.NewRecorder()
+		h.List(w, r)
+		return w
+	}
+	w := get("?limit=2")
+	if w.Code != http.StatusOK || w.Header().Get(headerTruncated) != "true" || w.Header().Get(headerNextOffset) != "2" {
+		t.Fatalf("first page: code=%d truncated=%q next=%q", w.Code, w.Header().Get(headerTruncated), w.Header().Get(headerNextOffset))
+	}
+	w = get("?limit=2&offset=2")
+	var body struct{ Incidents []db.Incident }
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Incidents) != 1 || w.Header().Get(headerTruncated) != "" {
+		t.Errorf("last page: %d rows, truncated=%q; want 1 row, no header", len(body.Incidents), w.Header().Get(headerTruncated))
 	}
 }

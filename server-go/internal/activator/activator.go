@@ -19,8 +19,10 @@
 package activator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -330,13 +332,34 @@ type retryTransport struct {
 	wait time.Duration
 }
 
+// maxRetryBodyBytes caps how much request body retryTransport buffers so
+// it can be replayed. Larger bodies are streamed once with no retry.
+const maxRetryBodyBytes = 1 << 20
+
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	for {
-		resp, err := t.base.RoundTrip(req)
+	// The base transport closes req.Body on every RoundTrip, errors
+	// included, so a retry must get a fresh body from GetBody.
+	// RoundTrippers must not mutate the caller's request, so work on a copy.
+	req = req.Clone(req.Context())
+	canRetry, err := ensureGetBody(req)
+	if err != nil {
+		return nil, err
+	}
+	for attempt := 0; ; attempt++ {
+		r := req
+		if attempt > 0 && req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			r = req.Clone(req.Context())
+			r.Body = body
+		}
+		resp, err := t.base.RoundTrip(r)
 		if err == nil {
 			return resp, nil
 		}
-		if !retriableDialErr(err) {
+		if !canRetry || !retriableDialErr(err) {
 			return nil, err
 		}
 		select {
@@ -345,6 +368,33 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		case <-time.After(t.wait):
 		}
 	}
+}
+
+// ensureGetBody makes req's body replayable when it is small enough,
+// reporting whether the request can be safely re-sent.
+func ensureGetBody(req *http.Request) (bool, error) {
+	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
+		return true, nil
+	}
+	orig := req.Body
+	buf, err := io.ReadAll(io.LimitReader(orig, maxRetryBodyBytes+1))
+	if err != nil {
+		_ = orig.Close()
+		return false, fmt.Errorf("activator: buffer request body: %w", err)
+	}
+	if len(buf) > maxRetryBodyBytes {
+		req.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(buf), orig), orig}
+		return false, nil
+	}
+	_ = orig.Close()
+	req.Body = io.NopCloser(bytes.NewReader(buf))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf)), nil
+	}
+	return true, nil
 }
 
 // retriableDialErr reports whether err is a cold-start CONNECTION-

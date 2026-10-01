@@ -183,3 +183,19 @@ func TestIsStreamingPath(t *testing.T) {
 		}
 	}
 }
+
+// Go's mime table serves .js as "text/javascript; charset=utf-8"; the SPA
+// bundle went out uncompressed while only application/javascript was listed.
+func TestCompressJSON_CompressesTextJavascript(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Repeat("function a(){return 1};", 200))
+	})
+	req := httptest.NewRequest(http.MethodGet, "/_next/static/chunks/main.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	compressJSON()(h).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+}

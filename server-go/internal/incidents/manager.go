@@ -20,6 +20,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/safego"
 )
 
 // Cooldown / max-concurrent / which event types trigger are now runtime
@@ -118,19 +119,18 @@ func triggerEnabled(cfg db.IncidentAgentConfig, t notify.EventType) bool {
 }
 
 // Hook is registered via dispatcher.SetEventHook. It runs leader-only on
-// the Emit path, so it must return fast: it does the cheap DB checks
-// inline but hands the (slower) Job spawn to a goroutine. Gated on the live
-// config — disabled feature or a disabled trigger type is a no-op.
+// the Emit path of every emitting loop, so it must not block: even the
+// config read can hit Postgres on a cache miss, and a stalled DB would
+// stop the emitters' heartbeats. Everything past the event-type filter
+// runs in handle's goroutine under a deadline.
 func (m *Manager) Hook(e notify.Event) {
 	if m == nil {
 		return
 	}
-	cfg := m.cfg(context.Background())
-	if !cfg.Enabled || !triggerEnabled(cfg, e.Type) {
+	if !triggerEnabled(db.IncidentAgentConfig{TriggerPod: true, TriggerAlert: true, TriggerNode: true}, e.Type) {
 		return
 	}
-	// Copy what we need; the event is reused by the caller.
-	go m.handle(context.Background(), e)
+	safego.Go(m.log(), "incident-handle", func() { m.handle(context.Background(), e) })
 }
 
 // targetKeyFor is the dedup identity for an event. Pure.
@@ -188,6 +188,9 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 	key := targetKeyFor(e)
 	log := m.log().With("event", string(e.Type), "target", key)
 	cfg := m.cfg(ctx)
+	if !cfg.Enabled || !triggerEnabled(cfg, e.Type) {
+		return
+	}
 
 	// Per-project opt-in. The agent only investigates project-scoped
 	// events (pod crash, alert) for projects that have explicitly opted

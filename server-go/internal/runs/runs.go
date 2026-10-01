@@ -34,8 +34,10 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/kube"
 )
@@ -114,11 +116,14 @@ func New(k *kube.Client, namespace string, logger *slog.Logger) *Service {
 // CreateRunRequest is the body of POST /api/projects/{p}/services/{s}/runs.
 // Trigger fields are server-stamped from request context (auth claims).
 type CreateRunRequest struct {
-	Command         []string  `json:"command"`
-	Env             []EnvVar  `json:"env,omitempty"`
-	TimeoutSeconds  int       `json:"timeoutSeconds,omitempty"`
-	TriggeredBy     string    `json:"-"`
-	TriggeredByUser string    `json:"-"`
+	Command        []string `json:"command"`
+	Env            []EnvVar `json:"env,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	// Resources overrides the run container's requests/limits; nil keeps
+	// the chart default. Quantities are validated by JSON decoding.
+	Resources       *corev1.ResourceRequirements `json:"resources,omitempty"`
+	TriggeredBy     string                       `json:"-"`
+	TriggeredByUser string                       `json:"-"`
 }
 
 // EnvVar mirrors kube.KusoRunEnv on the wire. Kept here so the
@@ -153,6 +158,19 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 	if req.TimeoutSeconds == 0 {
 		req.TimeoutSeconds = 1800
+	}
+	var resources map[string]any
+	if req.Resources != nil {
+		if len(req.Resources.Claims) > 0 {
+			return nil, fmt.Errorf("%w: resources.claims is not supported", ErrInvalid)
+		}
+		m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(req.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("%w: resources: %v", ErrInvalid, err)
+		}
+		if len(m) > 0 {
+			resources = m
+		}
 	}
 	fqn := project + "-" + service
 	name := genRunName(project, service)
@@ -221,6 +239,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			Placement:         envCR.Spec.Placement,
 			PrivateEgress:     privateEgress,
 			PlatformAPIEgress: platformAPIEgress,
+			Resources:         resources,
 			TimeoutSeconds:    req.TimeoutSeconds,
 			TriggeredBy:       req.TriggeredBy,
 			TriggeredByUser:   req.TriggeredByUser,

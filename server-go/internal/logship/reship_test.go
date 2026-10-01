@@ -228,3 +228,32 @@ func TestRunningPodBurstBetweenTicksIsNotTruncated(t *testing.T) {
 
 	assertExactlyOnce(t, shipped(s), want...)
 }
+
+func TestSelfEndedStreamReleasesItsContext(t *testing.T) {
+	logs := &fakeLogs{lines: map[string][]fakeLine{}}
+	logs.add("a", "main", time.Now(), "hello")
+	s, _ := newTestShipper(logs, testPod("a", corev1.PodRunning, false))
+	var streamCtx context.Context
+	s.openLogs = func(ctx context.Context, ns, pod string, o *corev1.PodLogOptions) (io.ReadCloser, error) {
+		streamCtx = ctx
+		return logs.open(ctx, ns, pod, o)
+	}
+	tick(t, s)
+	if streamCtx == nil {
+		t.Fatal("no stream was opened")
+	}
+	if streamCtx.Err() == nil {
+		t.Error("stream ended on EOF but its context was never cancelled (leaked CancelFunc)")
+	}
+}
+
+// A panic inside one container's stream (e.g. parsing tenant output) must
+// end that stream, not the control plane.
+func TestStreamPanicIsContained(t *testing.T) {
+	logs := &fakeLogs{lines: map[string][]fakeLine{}}
+	s, _ := newTestShipper(logs, testPod("a", corev1.PodRunning, false))
+	s.openLogs = func(context.Context, string, string, *corev1.PodLogOptions) (io.ReadCloser, error) {
+		panic("tenant output broke the parser")
+	}
+	tick(t, s)
+}

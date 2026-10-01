@@ -42,6 +42,28 @@ type revocationCache struct {
 	mu        sync.RWMutex
 	jti       map[string]cachedBool
 	watermark map[string]cachedTime
+	lastSweep time.Time
+}
+
+// sweepLocked drops entries past their stale window. Lookups already
+// ignore them, but without this every JTI ever seen stays in memory for
+// the life of the process. Amortised: at most once per outage TTL.
+// Caller holds c.mu for writing.
+func (c *revocationCache) sweepLocked(now time.Time) {
+	if now.Sub(c.lastSweep) < revocationOutageTTL {
+		return
+	}
+	c.lastSweep = now
+	for k, e := range c.jti {
+		if !now.Before(e.staleUntil) {
+			delete(c.jti, k)
+		}
+	}
+	for k, e := range c.watermark {
+		if !now.Before(e.staleUntil) {
+			delete(c.watermark, k)
+		}
+	}
 }
 
 type cachedBool struct {
@@ -94,6 +116,7 @@ func (c *revocationCache) putJTI(k string, v bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
+	c.sweepLocked(now)
 	c.jti[k] = cachedBool{v: v, freshUntil: now.Add(revocationFreshTTL), staleUntil: now.Add(revocationOutageTTL)}
 }
 
@@ -119,6 +142,7 @@ func (c *revocationCache) putWatermark(k string, v time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
+	c.sweepLocked(now)
 	c.watermark[k] = cachedTime{v: v, freshUntil: now.Add(revocationFreshTTL), staleUntil: now.Add(revocationOutageTTL)}
 }
 
