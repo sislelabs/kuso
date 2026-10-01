@@ -40,15 +40,14 @@ var initCmd = &cobra.Command{
 	Example: `  kuso init
   kuso init --runtime nixpacks --port 3000
   kuso init --template payload        # Payload CMS / Next.js, fully wired`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		path := manifestNamePrimary
 		// Refuse when EITHER manifest spelling exists — writing kuso.yml
 		// next to an existing kuso.yaml would leave two manifests and
 		// every reader preferring the freshly-scaffolded one.
 		if existing, _, err := resolveManifestPath("."); err == nil && !initForce {
-			fmt.Fprintf(os.Stderr, "%s already exists; pass --force to overwrite (kuso init writes %s)\n",
+			return fmt.Errorf("%s already exists; pass --force to overwrite (kuso init writes %s)",
 				filepath.Base(existing), path)
-			os.Exit(1)
 		}
 
 		project := initProject
@@ -60,8 +59,7 @@ var initCmd = &cobra.Command{
 		switch initRuntime {
 		case "", "nixpacks", "dockerfile", "static", "buildpacks":
 		default:
-			fmt.Fprintf(os.Stderr, "unknown --runtime %q (known: nixpacks, dockerfile, static, buildpacks)\n", initRuntime)
-			os.Exit(1)
+			return fmt.Errorf("unknown --runtime %q (known: nixpacks, dockerfile, static, buildpacks)", initRuntime)
 		}
 		if initRuntime == "" {
 			initRuntime = "nixpacks"
@@ -77,12 +75,10 @@ var initCmd = &cobra.Command{
 		case "payload":
 			body = renderPayloadTemplate(project, repo)
 		default:
-			fmt.Fprintf(os.Stderr, "unknown template %q (known: payload)\n", initTemplate)
-			os.Exit(1)
+			return fmt.Errorf("unknown template %q (known: payload)", initTemplate)
 		}
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, "write:", err)
-			os.Exit(1)
+			return fmt.Errorf("write: %w", err)
 		}
 		if initTemplate == "payload" {
 			fmt.Printf("wrote kuso.yml (project=%s, template=payload)\n", project)
@@ -97,6 +93,7 @@ var initCmd = &cobra.Command{
 			fmt.Println("  kuso apply --dry-run # review the plan")
 			fmt.Println("  kuso apply           # push")
 		}
+		return nil
 	},
 }
 

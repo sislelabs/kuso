@@ -19,7 +19,7 @@ spec:
      hardcodes curlimages/curl below), so the no-image guard would
      otherwise pin every http cron suspended forever. Only apply the
      guard to non-http kinds, which do carry a service/command image. */}}
-  suspend: {{ if and (ne (default "service" .Values.kind) "http") (not .Values.image.repository) }}true{{ else }}{{ .Values.suspend }}{{ end }}
+  suspend: {{ if and (ne (default "service" .Values.kind) "http") (not (.Values.image).repository) }}true{{ else }}{{ .Values.suspend }}{{ end }}
   concurrencyPolicy: {{ .Values.concurrencyPolicy }}
   {{- /* startingDeadlineSeconds bounds how far behind the controller
      will look for missed schedules. Without it, a CronJob that misses
@@ -79,7 +79,7 @@ spec:
           # which has disabled automount since the pod-hardening pass.
           automountServiceAccountToken: false
           restartPolicy: OnFailure
-          {{- with .Values.image.pullSecret }}
+          {{- with (.Values.image).pullSecret }}
           imagePullSecrets:
             - name: {{ . | quote }}
           {{- end }}
@@ -237,8 +237,8 @@ spec:
                   curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" "$PROBE_URL"
                   echo "==> ok"
               {{- else }}
-              image: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest") | quote }}
-              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              image: {{ printf "%s:%s" (.Values.image).repository ((.Values.image).tag | default "latest") | quote }}
+              imagePullPolicy: {{ (.Values.image).pullPolicy }}
               command:
                 {{- range .Values.command }}
                 - {{ . | quote }}

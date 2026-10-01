@@ -9,9 +9,8 @@
 # loud enough to catch "added /api/notify/test, forgot to wire it"
 # before review.
 #
-# Exit code 0 always — output is informational. Wire as a `make verify`
-# helper, not a hard CI gate, until we have a typed registry both
-# sides import.
+# The noun report is informational (the mapping is fuzzy). The curated
+# verb table in section 5 is exact, so a verb gap exits 1.
 #
 # Tunables: env var KUSO_PARITY_VERBOSE=1 prints the matched pairs too.
 
@@ -175,6 +174,7 @@ if [[ ${#verb_gaps[@]} -gt 0 ]]; then
   echo
   echo "A managed resource is missing a key verb. Wire it, or update the"
   echo "verb_specs table in hack/verify-parity.sh if intentionally unsupported."
+  exit 1
 else
   echo "verify-parity: all curated resources expose their key verbs."
 fi

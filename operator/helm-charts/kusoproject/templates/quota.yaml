@@ -1,4 +1,4 @@
-{{- if .Values.quota.enabled }}
+{{- if (.Values.quota).enabled }}
 # Per-project ResourceQuota. Caps the total CPU, memory, pod count, and
 # PVC count any one tenant can consume. Without this, a runaway
 # autoscaling rule or a fork bomb in one project starves the rest of
@@ -15,13 +15,13 @@ metadata:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
   hard:
-    requests.cpu: {{ .Values.quota.cpu | quote }}
-    requests.memory: {{ .Values.quota.memory | quote }}
-    limits.cpu: {{ .Values.quota.cpu | quote }}
-    limits.memory: {{ .Values.quota.memory | quote }}
-    pods: {{ .Values.quota.pods | quote }}
-    persistentvolumeclaims: {{ .Values.quota.pvcs | quote }}
-    services: {{ .Values.quota.services | quote }}
+    requests.cpu: {{ (.Values.quota).cpu | quote }}
+    requests.memory: {{ (.Values.quota).memory | quote }}
+    limits.cpu: {{ (.Values.quota).cpu | quote }}
+    limits.memory: {{ (.Values.quota).memory | quote }}
+    pods: {{ (.Values.quota).pods | quote }}
+    persistentvolumeclaims: {{ (.Values.quota).pvcs | quote }}
+    services: {{ (.Values.quota).services | quote }}
 ---
 # LimitRange supplies defaults for pods that don't set their own
 # requests/limits. Without it, a user image without a resources block
@@ -39,9 +39,9 @@ spec:
   limits:
     - type: Container
       default:
-        cpu: {{ .Values.quota.defaultPodCPULimit | quote }}
-        memory: {{ .Values.quota.defaultPodMemoryLimit | quote }}
+        cpu: {{ (.Values.quota).defaultPodCPULimit | quote }}
+        memory: {{ (.Values.quota).defaultPodMemoryLimit | quote }}
       defaultRequest:
-        cpu: {{ .Values.quota.defaultPodCPURequest | quote }}
-        memory: {{ .Values.quota.defaultPodMemoryRequest | quote }}
+        cpu: {{ (.Values.quota).defaultPodCPURequest | quote }}
+        memory: {{ (.Values.quota).defaultPodMemoryRequest | quote }}
 {{- end }}

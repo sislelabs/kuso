@@ -1,4 +1,4 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- if (.Values.networkPolicy).enabled }}
 {{- /*
   podSelector scopes every rule to pods labelled
   `kuso.sislelabs.com/project=<release>`. The chart used to use
@@ -136,7 +136,7 @@ spec:
                steps could then reach any project's addons. */}}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
           podSelector:
             matchExpressions:
               - key: app.kubernetes.io/name
@@ -160,7 +160,7 @@ spec:
         # Extra trusted namespaces, configurable per install for
         # operators whose ingress controller / cert tooling lives
         # somewhere non-standard.
-        {{- range .Values.networkPolicy.extraIngressNamespaces }}
+        {{- range (.Values.networkPolicy).extraIngressNamespaces }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ . | quote }}
@@ -213,7 +213,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
           podSelector:
             matchLabels:
               app.kubernetes.io/name: kuso-registry
@@ -259,7 +259,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
           podSelector:
             matchLabels:
               app.kubernetes.io/name: kuso-buildkitd
@@ -308,7 +308,7 @@ spec:
               - 169.254.0.0/16   # link-local + cloud metadata
               - 127.0.0.0/8
               - 100.64.0.0/10    # CGNAT / k3s pod CIDR on some installs
-              {{- range .Values.networkPolicy.extraBlockCIDRs }}
+              {{- range (.Values.networkPolicy).extraBlockCIDRs }}
               - {{ . | quote }}
               {{- end }}
 ---
@@ -346,7 +346,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
           podSelector:
             matchLabels:
               app.kubernetes.io/name: kuso-server
@@ -389,7 +389,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
           podSelector:
             matchLabels:
               kuso.sislelabs.com/project: kuso-instance

@@ -1,6 +1,8 @@
 package kusoApi
 
 import (
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -36,9 +38,22 @@ type Incident struct {
 	ClosedAt      *time.Time         `json:"closedAt,omitempty"`
 }
 
-// ListIncidents returns the newest incidents (UI/feed list).
-func (k *KusoClient) ListIncidents() (*resty.Response, error) {
-	return k.client.Get("/api/incidents")
+// ListIncidents returns the newest incidents (UI/feed list). limit <= 0
+// and an empty state are omitted; the server then returns its default
+// window (newest 100, max 500). The server sends no truncation header.
+func (k *KusoClient) ListIncidents(limit int, state string) (*resty.Response, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if state != "" {
+		q.Set("state", state)
+	}
+	path := "/api/incidents"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return k.client.Get(path)
 }
 
 // GetIncident returns one incident by id.

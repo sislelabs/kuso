@@ -325,7 +325,12 @@ var envUnsetCmd = &cobra.Command{
 			case resp.StatusCode() < 300:
 				removed++
 			case resp.StatusCode() == 404:
-				// Already absent — not an error, just not counted.
+				// A missing key and a missing service both 404. Only the
+				// first is "already absent"; a typo'd service must not
+				// report success.
+				if sr, serr := api.GetService(project, service); serr == nil && sr.StatusCode() == 404 {
+					return fmt.Errorf("service %s/%s not found", project, service)
+				}
 			default:
 				return fmt.Errorf("unset %s: %w", k, checkRespErr(resp, nil))
 			}

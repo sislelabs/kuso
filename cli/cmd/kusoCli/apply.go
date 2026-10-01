@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,7 +49,7 @@ deletions, apply prints the plan and asks for confirmation first; pass
   kuso apply kuso.yaml --dry-run
   kuso apply -f config/kuso.yml --dry-run`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		path := applyFile
 		explicit := cmd.Flags().Changed("file")
 		if len(args) == 1 {
@@ -62,8 +63,7 @@ deletions, apply prints the plan and asks for confirmation first; pass
 		if !explicit {
 			resolved, note, rerr := resolveManifestPath(".")
 			if rerr != nil {
-				fmt.Fprintln(os.Stderr, "error:", rerr)
-				os.Exit(1)
+				return rerr
 			}
 			if note != "" {
 				fmt.Fprintln(os.Stderr, "note:", note)
@@ -72,8 +72,7 @@ deletions, apply prints the plan and asks for confirmation first; pass
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "read %s: %v\n", path, err)
-			os.Exit(1)
+			return fmt.Errorf("read %s: %w", path, err)
 		}
 
 		// Pull project name out of the YAML so we don't make the user
@@ -81,27 +80,23 @@ deletions, apply prints the plan and asks for confirmation first; pass
 		// fails this lookup as an "is this even kuso.yml?" error.
 		project := readProjectFromYAML(body)
 		if project == "" {
-			fmt.Fprintln(os.Stderr, "error: kuso.yml must declare a top-level `project:` field")
-			os.Exit(1)
+			return errors.New("kuso.yml must declare a top-level `project:` field")
 		}
 
 		if !applyDryRun && !applyYes {
 			if err := confirmApplyDeletes(project, body); err != nil {
-				fmt.Fprintln(os.Stderr, "apply:", err)
-				os.Exit(1)
+				return fmt.Errorf("apply: %w", err)
 			}
 		}
 
 		resp, err := api.ApplyConfig(project, body, applyDryRun, applyRotateSecrets)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "apply:", err)
-			os.Exit(1)
+			return fmt.Errorf("apply: %w", err)
 		}
 		if resp.StatusCode() >= 400 {
-			fmt.Fprintf(os.Stderr, "apply failed (%d): %s\n", resp.StatusCode(), resp.String())
-			os.Exit(1)
+			return fmt.Errorf("apply failed (%d): %s", resp.StatusCode(), resp.String())
 		}
-		printApplyResult(resp.Body(), applyDryRun)
+		return printApplyResult(resp.Body(), applyDryRun)
 	},
 }
 
@@ -208,10 +203,15 @@ func trimTrailing(s, cut string) string {
 	return s
 }
 
-func printApplyResult(body []byte, dryRun bool) {
+// errApplyFailed is returned after renderApplyResult has already printed
+// the failing steps, so the message only needs to set the exit code.
+var errApplyFailed = errors.New("apply: one or more steps failed (see above)")
+
+func printApplyResult(body []byte, dryRun bool) error {
 	if renderApplyResult(os.Stdout, os.Stderr, body, dryRun) {
-		os.Exit(1)
+		return errApplyFailed
 	}
+	return nil
 }
 
 type applyFieldChange struct {

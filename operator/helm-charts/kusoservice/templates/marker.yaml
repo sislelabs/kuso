@@ -12,12 +12,12 @@ metadata:
     {{- include "kusoservice.labels" . | nindent 4 }}
 data:
   project: {{ .Values.project | quote }}
-  repoUrl: {{ .Values.repo.url | quote }}
-  repoPath: {{ .Values.repo.path | quote }}
+  repoUrl: {{ (.Values.repo).url | quote }}
+  repoPath: {{ (.Values.repo).path | quote }}
   runtime: {{ .Values.runtime | quote }}
   port: {{ .Values.port | quote }}
-  scaleMin: {{ .Values.scale.min | quote }}
-  scaleMax: {{ .Values.scale.max | quote }}
-  scaleTargetCPU: {{ .Values.scale.targetCPU | quote }}
-  sleepEnabled: {{ .Values.sleep.enabled | quote }}
-  sleepAfterMinutes: {{ .Values.sleep.afterMinutes | quote }}
+  scaleMin: {{ (.Values.scale).min | quote }}
+  scaleMax: {{ (.Values.scale).max | quote }}
+  scaleTargetCPU: {{ (.Values.scale).targetCPU | quote }}
+  sleepEnabled: {{ (.Values.sleep).enabled | quote }}
+  sleepAfterMinutes: {{ (.Values.sleep).afterMinutes | quote }}

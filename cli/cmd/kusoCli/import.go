@@ -141,8 +141,7 @@ data, users and init scripts are NOT migrated — override with
 		if resp.StatusCode() >= 400 {
 			return fmt.Errorf("apply failed: %w", checkRespErr(resp, nil))
 		}
-		printApplyResult(resp.Body(), importDryRun)
-		return nil
+		return printApplyResult(resp.Body(), importDryRun)
 	},
 }
 

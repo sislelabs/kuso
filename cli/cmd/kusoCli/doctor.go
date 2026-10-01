@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -47,7 +48,7 @@ var doctorCmd = &cobra.Command{
 
 Use it after a fresh install or when something feels off — the
 output names the next concrete step for every finding.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -85,10 +86,7 @@ output names the next concrete step for every finding.`,
 		serverURL := strings.TrimRight(resolveAPIURL(), "/")
 		if serverURL == "" {
 			report("server URL", "no instance configured — run: kuso login --api https://<your-instance>", "fail")
-			if fail {
-				os.Exit(1)
-			}
-			return
+			return errDoctorFailed
 		}
 		report("server URL", serverURL, "pass")
 
@@ -244,8 +242,10 @@ output names the next concrete step for every finding.`,
 		_ = any // suppress unused warning in case all checks short-circuit
 		if fail {
 			fmt.Println()
-			fmt.Println("doctor: failures above — fix the FAIL lines and re-run.")
-			os.Exit(1)
+			return errDoctorFailed
 		}
+		return nil
 	},
 }
+
+var errDoctorFailed = errors.New("doctor: failures above — fix the FAIL lines and re-run")

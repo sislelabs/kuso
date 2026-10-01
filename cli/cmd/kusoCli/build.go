@@ -465,7 +465,7 @@ func init() {
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
-	buildListCmd.Flags().IntVar(&buildListLimit, "limit", 0, "max builds to return (0 = full list)")
+	buildListCmd.Flags().IntVar(&buildListLimit, "limit", 0, "max builds to return (0 = server default; the archive keeps only the newest 100)")
 	buildListCmd.Flags().IntVar(&buildListOffset, "offset", 0, "builds to skip (from X-Kuso-Next-Offset when a page was truncated)")
 
 	// `kuso build latest <project>` — the newest build per service in a

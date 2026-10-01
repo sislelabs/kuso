@@ -17,7 +17,7 @@ notify (the Job-failed alert from the health watcher).
        claim that CNPG's barman backups own HA — but nothing configured
        barman, so choosing HA silently meant no backups at all. A logical
        pg_dump does not conflict with barman if one is added later. */}}
-{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
 {{- /*
   Note (v0.7.x bugfix): POSTGRES_HOST used to be "<release>-postgresql"
   but the actual Service is just <release> (see postgres.yaml service
@@ -37,7 +37,7 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
     kuso.sislelabs.com/role: backup
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -72,7 +72,7 @@ spec:
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               # Always: the tag is :latest, and IfNotPresent pins each node to
               # whatever it pulled first. After the pg_dump-18 image shipped,
@@ -253,7 +253,7 @@ spec:
                 # the same precedence chain:
                 #   .Values.database → .Values.project → "kuso"
                 - { name: POSTGRES_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 - name: POSTGRES_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -271,8 +271,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}
@@ -301,7 +301,7 @@ that hand you separate host/user/pass keys need the user to compose
 DATABASE_URL=postgres://... in their source Secret. Documented in
 docs/EXTERNAL_DB_BACKUPS.md.
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "postgres") .Values.external }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "postgres") .Values.external }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -312,7 +312,7 @@ metadata:
     kuso.sislelabs.com/role: backup
     kuso.sislelabs.com/external: "true"
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -345,7 +345,7 @@ spec:
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           containers:
             - name: dump
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: Always
               command: [sh, -c]
@@ -433,7 +433,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
@@ -449,8 +449,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}
@@ -471,7 +471,7 @@ SAVE-equivalent on the server and streams the snapshot down to the
 client; we never need to copy a file out of the addon pod, so this
 works even when the addon is on a different node.
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "redis") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "redis") (not .Values.external) (not .Values.useInstanceAddon) }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -481,7 +481,7 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
     kuso.sislelabs.com/role: backup
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -516,7 +516,7 @@ spec:
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: Always
               command: [sh, -c]
@@ -569,7 +569,7 @@ spec:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
                 - { name: REDIS_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 - name: REDIS_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -585,8 +585,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}
@@ -602,7 +602,7 @@ archive to /tmp, we sha256 + upload it plus a manifest, same key shape
 (<project>/<addon>/<ts>.archive.gz) and prune logic as the others.
 MONGO_URL is the full connection URI from the addon's -conn Secret.
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "mongodb") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "mongodb") (not .Values.external) (not .Values.useInstanceAddon) }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -612,7 +612,7 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
     kuso.sislelabs.com/role: backup
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -647,7 +647,7 @@ spec:
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: Always
               command: [sh, -c]
@@ -696,7 +696,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 - name: MONGO_URL
                   valueFrom:
                     secretKeyRef:
@@ -709,8 +709,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}
@@ -725,7 +725,7 @@ MySQL backup. mysqldump | gzip to /tmp, sha256 + upload artifact +
 manifest, same key shape (<project>/<addon>/<ts>.sql.gz) + prune as the
 others. MYSQL_PASSWORD from the conn Secret; host/user/db are known.
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "mysql") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "mysql") (not .Values.external) (not .Values.useInstanceAddon) }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -735,7 +735,7 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
     kuso.sislelabs.com/role: backup
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -770,7 +770,7 @@ spec:
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: dump
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: Always
               command: [sh, -c]
@@ -819,7 +819,7 @@ spec:
                 - { name: MYSQL_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
                 - { name: MYSQL_USER, value: {{ default "kuso" .Values.username | quote }} }
                 - { name: MYSQL_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 - name: MYSQL_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -829,8 +829,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}
@@ -849,7 +849,7 @@ mirror that loses history on a tenant-side delete).
 
 Retention prunes whole timestamped prefixes older than RETENTION_DAYS.
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "s3") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (eq .Values.kind "s3") (not .Values.external) (not .Values.useInstanceAddon) }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -859,7 +859,7 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
     kuso.sislelabs.com/role: backup
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ (.Values.backup).schedule | quote }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
@@ -894,7 +894,7 @@ spec:
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
             - name: sync
-              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" (.Values.backup).image | quote }}
               {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: Always
               command: [sh, -c]
@@ -959,7 +959,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
                 # Source bucket: the in-cluster MinIO that this addon manages.
                 - name: SRC_BUCKET
                   valueFrom:
@@ -992,8 +992,8 @@ spec:
                        the instance-wide bucket in the kuso-backup-s3 Secret.
                        Only the bucket differs — endpoint/region/credentials
                        below always come from that Secret. */}}
-                {{- if .Values.backup.bucket }}
-                - { name: BUCKET,        value: {{ .Values.backup.bucket | quote }} }
+                {{- if (.Values.backup).bucket }}
+                - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 {{- end }}

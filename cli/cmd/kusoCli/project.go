@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -260,9 +261,18 @@ var projectDescribeCmd = &cobra.Command{
 
 			services, _ := data["services"].([]any)
 			envs, _ := data["environments"].([]any)
-			addons, _ := data["addons"].([]any)
-			fmt.Printf("services (%d), environments (%d), addons (%d)\n",
-				len(services), len(envs), len(addons))
+			// The describe rollup carries no addons; count them from the
+			// addons endpoint and say so when that call fails rather than
+			// printing a confident 0.
+			addonCount := "?"
+			if ar, err := api.GetAddonsForProject(args[0]); err == nil && ar.StatusCode() < 300 {
+				var addons []json.RawMessage
+				if json.Unmarshal(ar.Body(), &addons) == nil {
+					addonCount = strconv.Itoa(len(addons))
+				}
+			}
+			fmt.Printf("services (%d), environments (%d), addons (%s)\n",
+				len(services), len(envs), addonCount)
 			return nil
 		}
 	},

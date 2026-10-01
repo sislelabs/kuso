@@ -50,7 +50,7 @@ The script fetched by `GET /bootstrap?token=<jti>` runs in this order:
    the node can't pull build images (see Troubleshooting). Both files
    are idempotent and survive reboot.
 7. Runs `curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC="agent --node-label …" sh -`.
-8. Logs `done.` — the new node should appear in `kuso get nodes`
+8. Logs `done.` — the new node should appear in `kuso node list`
    within ~30 seconds as kubelet registers.
 
 The k3s shared secret is never logged in plain text. Operator-visible

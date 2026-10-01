@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -23,10 +24,43 @@ import (
 	"github.com/sislelabs/kuso/mcp/internal/tools"
 )
 
-const (
-	serverName    = "kuso-mcp"
-	serverVersion = "v0.1.0-dev"
-)
+const serverName = "kuso-mcp"
+
+// serverVersion is stamped at release time with
+// -ldflags "-X main.serverVersion=vX.Y.Z". Unstamped builds fall back to
+// the module version or VCS revision so a client can still tell two
+// builds apart.
+var serverVersion = ""
+
+func resolveVersion(stamped string, bi *debug.BuildInfo) string {
+	if stamped != "" {
+		return stamped
+	}
+	if bi == nil {
+		return "dev"
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	var rev, dirty string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		}
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if rev == "" {
+		return "dev"
+	}
+	return "dev-" + rev + dirty
+}
 
 func main() {
 	readOnly := flag.Bool("read-only", false, "disable mutating tools")
@@ -39,9 +73,10 @@ func main() {
 	}
 	cfg.ReadOnly = *readOnly
 
+	bi, _ := debug.ReadBuildInfo()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
-		Version: serverVersion,
+		Version: resolveVersion(serverVersion, bi),
 	}, nil)
 
 	tools.Register(server, cfg)

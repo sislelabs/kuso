@@ -16,8 +16,8 @@ metadata:
 data:
   description: {{ .Values.description | quote }}
   baseDomain: {{ .Values.baseDomain | quote }}
-  defaultRepoUrl: {{ .Values.defaultRepo.url | quote }}
-  defaultBranch: {{ .Values.defaultRepo.defaultBranch | quote }}
-  githubInstallationId: {{ .Values.github.installationId | quote }}
-  previewsEnabled: {{ .Values.previews.enabled | quote }}
-  previewsTtlDays: {{ .Values.previews.ttlDays | quote }}
+  defaultRepoUrl: {{ (.Values.defaultRepo).url | quote }}
+  defaultBranch: {{ (.Values.defaultRepo).defaultBranch | quote }}
+  githubInstallationId: {{ (.Values.github).installationId | quote }}
+  previewsEnabled: {{ (.Values.previews).enabled | quote }}
+  previewsTtlDays: {{ (.Values.previews).ttlDays | quote }}

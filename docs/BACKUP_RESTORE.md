@@ -22,12 +22,7 @@ The `kuso` CLI ships with `backup` and `restore` verbs that pull / push a `pg_du
 kuso backup --file /backups/kuso-$(date -u +%Y%m%d).sql.gz
 ```
 
-If you have a regulated workload that mandates disabling network-accessible backup endpoints, set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
-
-```bash
-kubectl -n kuso set env deployment/kuso-server KUSO_BACKUP_DISABLED=1
-kubectl -n kuso rollout status deployment/kuso-server
-```
+The backup and restore routes (`GET /api/admin/backup`, `POST /api/admin/restore`) are always mounted and require an admin. There is no switch to turn them off, so anyone holding an admin token can download a full `pg_dump`. If your compliance rules forbid a network-reachable dump endpoint, block `/api/admin/backup` and `/api/admin/restore` at your ingress or proxy and keep admin accounts to a minimum.
 
 Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Concrete cron example:
 

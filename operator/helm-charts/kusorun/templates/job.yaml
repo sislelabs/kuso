@@ -3,7 +3,7 @@
    pre-first-build service (empty repository, defaulted tag) render
    `image: ":latest"`, which kube rejects as InvalidImageName — the
    same gap kusocron had. */}}
-{{- if and .Values.image.repository .Values.image.tag }}
+{{- if and (.Values.image).repository (.Values.image).tag }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -40,7 +40,7 @@ spec:
       # rule the kusoenvironment deployment and kusocron apply.
       automountServiceAccountToken: false
       restartPolicy: Never
-      {{- with .Values.image.pullSecret }}
+      {{- with (.Values.image).pullSecret }}
       imagePullSecrets:
         - name: {{ . | quote }}
       {{- end }}
@@ -117,8 +117,8 @@ spec:
               memory: 64Mi
       containers:
         - name: run
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: "{{ (.Values.image).repository }}:{{ (.Values.image).tag }}"
+          imagePullPolicy: {{ (.Values.image).pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           command:

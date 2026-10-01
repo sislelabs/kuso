@@ -27,6 +27,19 @@ import (
 // (it doesn't talk to the kuso API — it prints the kubectl the operator
 // runs to seed the agent's Claude Code OAuth creds into the cluster).
 
+var (
+	incidentListLimit int
+	incidentListState string
+)
+
+// incidentWindow mirrors the server's clamp in db.ListIncidents.
+func incidentWindow(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 100
+	}
+	return limit
+}
+
 var incidentCmd = &cobra.Command{
 	Use:   "incident",
 	Short: "Inspect and resolve incident-agent incidents",
@@ -41,7 +54,7 @@ var incidentListCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.ListIncidents()
+		resp, err := api.ListIncidents(incidentListLimit, incidentListState)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
@@ -54,6 +67,12 @@ var incidentListCmd = &cobra.Command{
 			return fmt.Errorf("decode: %w", err)
 		}
 		incidents := envelope.Incidents
+		// The server caps the window and sends no truncation header, so a
+		// full window is the only signal that older incidents exist.
+		// Stderr keeps `-o json` stdout clean.
+		if len(incidents) > 0 && len(incidents) == incidentWindow(incidentListLimit) {
+			fmt.Fprintf(os.Stderr, "note: showing the newest %d incidents; older ones may exist (raise --limit, max 500)\n", len(incidents))
+		}
 		switch outputFormat {
 		case "json":
 			return jsonOut(incidents)
@@ -345,6 +364,8 @@ func init() {
 	rootCmd.AddCommand(incidentCmd)
 	incidentCmd.AddCommand(incidentListCmd)
 	incidentListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	incidentListCmd.Flags().IntVar(&incidentListLimit, "limit", 0, "max incidents to return (0 = server default of 100, max 500)")
+	incidentListCmd.Flags().StringVar(&incidentListState, "state", "", "only incidents in this state (investigating, awaiting_feedback, implementing, pr_open, resolved, rejected)")
 	incidentCmd.AddCommand(incidentShowCmd)
 	incidentShowCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	incidentCmd.AddCommand(incidentResolveCmd)

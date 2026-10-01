@@ -26,7 +26,7 @@ The service is served at `web.shop.example.com`: each service gets `<service>.<p
 
 ## Why kuso?
 
-- **Agent-native, not bolted on.** Every UI action has a typed CLI command (~50 top-level commands, `-o json` everywhere) and a first-party MCP server. There's a [drop-in Claude Code skill](./skills/kuso/) that teaches an agent the full operating surface — deploy, debug, migrate, backup — so "fix the failing deploy" is a one-line request.
+- **Agent-native, not bolted on.** Every UI action has a typed CLI command (~50 top-level commands, `-o json` on the list and get commands) and a first-party MCP server. There's a [drop-in Claude Code skill](./skills/kuso/) that teaches an agent the full operating surface — deploy, debug, migrate, backup — so "fix the failing deploy" is a one-line request.
 - **Deploy = push.** GitHub webhooks drive builds; a merge to `main` *is* the production deploy. Release hooks run your migrations as a gated Job before the new image is promoted — a failed migration never takes down running pods.
 - **Environments that match how teams work.** PR previews with cloned, seeded, isolated databases. Long-lived `staging`/`qa` envs that track their own branch and auto-deploy on push. Per-env config overrides that can't rewrite production.
 - **Sleep, wake, stop.** Idle services scale to zero and wake on the next request via the activator. Payment-webhook paths can pin a service warm. Or hard-stop a service (or a whole project) — deliberately off, with a clean "stopped" page, until you say otherwise.
@@ -100,7 +100,7 @@ kuso marketplace deploy uptime-kuma --project tools
 kuso upgrade --check                              # is a newer kuso out?
 ```
 
-Everything supports `--help` with examples and `-o json` for scripting.
+Every command has `--help`, and the list and get commands take `-o json` for scripting. A few don't yet: `logs`, `version`, `doctor`, `remote` and `marketplace` print text only.
 
 ## How a deploy flows
 

@@ -40,6 +40,8 @@ type listBuildsArgs struct {
 // requires tool output schemas to be objects, not bare arrays.
 type listBuildsResult struct {
 	Builds []buildSummary `json:"builds"`
+	// More is true when older builds exist beyond the returned window.
+	More bool `json:"more,omitempty"`
 }
 
 // rollbackResult is the slice of the KusoEnvironment CR the rollback
@@ -102,7 +104,8 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 		if err := client.GetJSON(ctx, path, &out); err != nil {
 			return nil, listBuildsResult{}, fmt.Errorf("list builds: %w", err)
 		}
-		if len(out) > limit {
+		more := len(out) > limit
+		if more {
 			out = out[:limit]
 		}
 		var b strings.Builder
@@ -123,11 +126,14 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 				}
 				b.WriteString("\n")
 			}
+			if more {
+				fmt.Fprintf(&b, "Older builds exist beyond these %d; raise limit (max 50) to see them.\n", len(out))
+			}
 			b.WriteString("Only a build with status=succeeded can be a rollback target.")
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
-		}, listBuildsResult{Builds: out}, nil
+		}, listBuildsResult{Builds: out, More: more}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

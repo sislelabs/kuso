@@ -104,7 +104,7 @@ var inviteListCmd = &cobra.Command{
 					asString(inv["id"]),
 					asString(inv["maxUses"]),
 					asString(inv["usedCount"]),
-					asString(inv["expiresAt"]),
+					inviteExpiry(inv["expiresAt"]),
 					asString(inv["url"]),
 				})
 			}
@@ -183,4 +183,17 @@ func init() {
 	inviteListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 
 	inviteRevokeCmd.Flags().BoolVarP(&inviteYes, "yes", "y", false, "skip the confirmation prompt")
+}
+
+// inviteExpiry renders expiresAt, which the server sends as a raw
+// sql.NullTime object ({"Time": ..., "Valid": bool}).
+func inviteExpiry(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return asString(v)
+	}
+	if valid, _ := m["Valid"].(bool); !valid {
+		return "never"
+	}
+	return asString(m["Time"])
 }

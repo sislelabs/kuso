@@ -413,3 +413,46 @@ func rowHas(out string, cells ...string) bool {
 	return false
 }
 
+// A 404 from the per-key DELETE used to be read as "already absent" even
+// when the service itself didn't exist, so `env unset` on a typo'd service
+// printed success.
+func TestEnvUnset_MissingServiceErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":"service not found"}`)
+	}))
+	defer srv.Close()
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	defer func() { api = nil }()
+	origYes := envUnsetYes
+	envUnsetYes = true
+	t.Cleanup(func() { envUnsetYes = origYes })
+
+	err := envUnsetCmd.RunE(envUnsetCmd, []string{"alpha", "wbe", "KEY"})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("want service-not-found error, got %v", err)
+	}
+}
+
+func TestEnvUnset_MissingKeyOnExistingServiceIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"not found: env var \"KEY\""}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"metadata":{"name":"alpha-web"}}`)
+	}))
+	defer srv.Close()
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	defer func() { api = nil }()
+	origYes := envUnsetYes
+	envUnsetYes = true
+	t.Cleanup(func() { envUnsetYes = origYes })
+
+	if err := envUnsetCmd.RunE(envUnsetCmd, []string{"alpha", "web", "KEY"}); err != nil {
+		t.Fatalf("missing key should stay idempotent, got %v", err)
+	}
+}

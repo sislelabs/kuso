@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -93,10 +94,18 @@ audit logs — treat the output like a credential. To restore:
 		if resp.StatusCode() >= 300 {
 			return checkRespErr(resp, nil)
 		}
-		if err := os.WriteFile(out, resp.Body(), 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", out, err)
+		var trailer http.Header
+		if resp.RawResponse != nil {
+			trailer = resp.RawResponse.Trailer
 		}
-		fmt.Printf("wrote %d bytes to %s\n", len(resp.Body()), out)
+		// force=true keeps this command's overwrite behaviour; the
+		// verification is what's new — a failed server-side pg_dump
+		// must not leave a success-looking file behind.
+		n, err := writeVerifiedBackup(out, resp.Body(), trailer, true)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("wrote %d bytes to %s\n", n, out)
 		return nil
 	},
 }

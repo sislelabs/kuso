@@ -116,3 +116,22 @@ func TestRollback_DecodesEnvironmentResponse(t *testing.T) {
 		t.Fatalf("structured output missing imageTag: %s", raw)
 	}
 }
+
+// list_builds used to cut the server's list to `limit` without saying so,
+// so an agent hunting for a rollback target couldn't tell older ones existed.
+func TestListBuilds_SaysWhenOlderBuildsExist(t *testing.T) {
+	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
+		return http.StatusOK, `[{"id":"b3","status":"succeeded"},{"id":"b2","status":"succeeded"},{"id":"b1","status":"failed"}]`
+	})
+	text, isErr, err := callText(t, sess, "list_builds", map[string]any{"project": "shop", "service": "api", "limit": 2})
+	if err != nil || isErr {
+		t.Fatalf("list_builds failed: err=%v text=%s", err, text)
+	}
+	if !strings.Contains(text, "Older builds exist") {
+		t.Fatalf("want an older-builds note, got:\n%s", text)
+	}
+	text, _, _ = callText(t, sess, "list_builds", map[string]any{"project": "shop", "service": "api", "limit": 5})
+	if strings.Contains(text, "Older builds exist") {
+		t.Fatalf("no note expected when everything fits, got:\n%s", text)
+	}
+}
