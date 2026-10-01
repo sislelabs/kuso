@@ -3,6 +3,9 @@ package placement
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -218,5 +221,25 @@ func TestCountMatches(t *testing.T) {
 				t.Errorf("CountMatches() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMatchesSchedulable_SkipsCordonedAndNotReady(t *testing.T) {
+	p := &kube.KusoPlacement{Nodes: []string{"n1"}}
+	ready := corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}
+	notReady := corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown}}}
+
+	ok := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: ready}
+	if !MatchesSchedulable(p, ok) {
+		t.Fatal("ready, uncordoned node should match")
+	}
+	cordoned := ok.DeepCopy()
+	cordoned.Spec.Unschedulable = true
+	if MatchesSchedulable(p, cordoned) {
+		t.Fatal("cordoned node must not match")
+	}
+	down := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: notReady}
+	if MatchesSchedulable(p, down) {
+		t.Fatal("NotReady node must not match")
 	}
 }

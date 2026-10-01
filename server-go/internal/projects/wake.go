@@ -4,24 +4,31 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/scaledown"
 )
 
-// WakeService nudges a sleeping service awake by patching its
-// production environment's spec.replicas back up. Sleep state is
-// driven by the operator's HPA scale-to-zero — we just bump the
-// desired count so the next reconcile loop wakes the deployment.
-//
-// Behaviour:
-//   - If the production env is already running (replicas > 0), this is
-//     a no-op (returns nil).
-//   - Replica count is set to the service's spec.scale.min (default 1).
-//   - Returns ErrNotFound if the service or its production env doesn't
-//     exist.
+// WakeService wakes the service's production environment. See
+// WakeServiceEnv.
 func (s *Service) WakeService(ctx context.Context, project, service string) error {
+	return s.WakeServiceEnv(ctx, project, service, "")
+}
+
+// WakeServiceEnv wakes one environment of a service. envName is the short
+// env name ("production", "staging", "pr-12"), the full env CR name, or ""
+// for production.
+//
+// It goes through scaledown.Wake — the same path the activator uses — so
+// the env gets its pre-sleep replica count back, a fresh last-activity
+// stamp (otherwise the next scaledown tick re-sleeps it immediately), and
+// a Deployment patch, which is what reactivates an HPA env whose chart
+// omits spec.replicas. A hard-stopped service or env is refused: wake must
+// not silently undo `kuso stop`.
+func (s *Service) WakeServiceEnv(ctx context.Context, project, service, envName string) error {
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
 		return err
@@ -31,48 +38,46 @@ func (s *Service) WakeService(ctx context.Context, project, service string) erro
 		return err
 	}
 
-	// Compose the production env CR name following the existing convention:
-	// <project>-<service>-production.
 	fqn := service
 	if !strings.HasPrefix(service, project+"-") {
 		fqn = project + "-" + service
 	}
-	envName := fqn + "-production"
+	crName := envCRNameFor(project, service, "production")
+	if envName != "" && envName != "production" {
+		if strings.HasPrefix(envName, fqn+"-") {
+			crName = envName
+		} else {
+			crName = envCRNameFor(project, service, envName)
+		}
+	}
 
-	// Confirm the production env exists (maps to ErrNotFound for the
-	// handler); the RMW below re-reads it for the actual mutation.
-	if _, err := s.Kube.GetKusoEnvironment(ctx, ns, envName); err != nil {
+	env, err := s.Kube.GetKusoEnvironment(ctx, ns, crName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return ErrNotFound
+			return fmt.Errorf("%w: environment %s", ErrNotFound, crName)
 		}
-		return fmt.Errorf("get production env: %w", err)
+		return fmt.Errorf("get env %s: %w", crName, err)
+	}
+	if svc.Spec.Stopped || env.Spec.Stopped {
+		return fmt.Errorf("%w: service %s/%s is stopped — start it instead of waking it", ErrConflict, project, service)
 	}
 
-	// Wake always brings replicas to at least 1 — even if the user
-	// asked for scale-to-zero, a manual wake means they want it running
-	// now.
-	min := svc.Spec.Scale.MinValue()
-	if min < 1 {
-		min = 1
+	if err := scaledown.Wake(ctx, s.Kube, nil, ns, crName, time.Now()); err != nil {
+		return fmt.Errorf("wake env %s: %w", crName, err)
 	}
 
-	// Scale the env back up via spec.replicaCount — the exact inverse of
-	// scaledown's SetReplicaCount(0), and what the kusoenvironment chart's
-	// Deployment reads (`replicas: {{ .Values.replicaCount }}`).
-	//
-	// The previous implementation stamped status.wakeReplicas and did a
-	// plain Update — but KusoEnvironment.status is a SUBRESOURCE, so the
-	// main-resource Update silently dropped the status write, AND nothing
-	// (operator chart or server) ever read wakeReplicas. So wake was a
-	// no-op that returned success. Use the RMW helper (avoids a stale-read
-	// overwrite) and write spec, which actually reconciles.
-	if _, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(e *kube.KusoEnvironment) error {
-		if e.Spec.ReplicaCountValue() < min {
-			e.Spec.SetReplicaCount(min)
+	// scaledown.Wake restores the pre-sleep count (1 when unknown); keep
+	// the service's own floor too so a scale.min=3 service doesn't come
+	// back at 1.
+	if min := svc.Spec.Scale.MinValue(); min > 1 {
+		if _, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, crName, func(e *kube.KusoEnvironment) error {
+			if e.Spec.ReplicaCountValue() < min {
+				e.Spec.SetReplicaCount(min)
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("wake env %s: %w", crName, err)
 		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("wake env %s: %w", envName, err)
 	}
 	return nil
 }

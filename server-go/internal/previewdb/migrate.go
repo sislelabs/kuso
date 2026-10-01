@@ -320,3 +320,99 @@ func (c *Cloner) waitForJobComplete(ctx context.Context, ns, jobName string, tim
 		}
 	}
 }
+
+// migrateWatchWindow bounds how long a push waits for its build to be
+// promoted before giving up on migrating it.
+const migrateWatchWindow = 45 * time.Minute
+
+// startMigrateOnNewImage runs the release hook against an existing (kept,
+// not re-seeded) preview clone each time a preview env that mounts it gets a
+// new image. The build poller never runs release Jobs for preview envs, so
+// without this a push that skips the re-seed would deploy un-migrated. One
+// watcher per clone: a newer push cancels the previous one and restarts the
+// window.
+func (c *Cloner) startMigrateOnNewImage(ns, project, envScope, cloneFQN string) {
+	if c.Kube == nil || c.Kube.Clientset == nil || c.BaseCtx == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.BaseCtx, migrateWatchWindow)
+	c.seedMu.Lock()
+	if prev := c.migrateWatch[cloneFQN]; prev != nil {
+		prev()
+	}
+	if c.migrateWatch == nil {
+		c.migrateWatch = map[string]context.CancelFunc{}
+	}
+	c.migrateWatch[cloneFQN] = cancel
+	c.seedMu.Unlock()
+
+	baseline := c.migrateTargetTags(ctx, ns, envScope, cloneFQN)
+	go func() {
+		defer cancel()
+		c.watchAndMigrate(ctx, ns, project, envScope, cloneFQN, baseline, 10*time.Second)
+	}()
+}
+
+// migrateTargetTags snapshots env name -> current image tag for every env in
+// scope that mounts the clone and has a release hook.
+func (c *Cloner) migrateTargetTags(ctx context.Context, ns, envScope, cloneFQN string) map[string]string {
+	out := map[string]string{}
+	envs, err := c.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelEnv: envScope})
+	if err != nil {
+		c.Logger.Warn("preview migrate: list envs", "clone", cloneFQN, "scope", envScope, "err", err)
+		return out
+	}
+	conn := addons.ConnSecretName(cloneFQN)
+	for i := range envs {
+		if !envNeedsMigrate(&envs[i], conn) {
+			continue
+		}
+		tag := ""
+		if envs[i].Spec.Image != nil {
+			tag = envs[i].Spec.Image.Tag
+		}
+		out[envs[i].Name] = tag
+	}
+	return out
+}
+
+// watchAndMigrate polls until ctx ends, running a migrate Job for each target
+// env whose image tag moved off its baseline.
+func (c *Cloner) watchAndMigrate(ctx context.Context, ns, project, envScope, cloneFQN string, baseline map[string]string, every time.Duration) {
+	var ownerUID types.UID
+	if clone, err := c.Kube.GetKusoAddon(ctx, ns, cloneFQN); err == nil && clone != nil {
+		ownerUID = clone.UID
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+		envs, err := c.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelEnv: envScope})
+		if err != nil {
+			continue
+		}
+		conn := addons.ConnSecretName(cloneFQN)
+		for i := range envs {
+			env := &envs[i]
+			if !envNeedsMigrate(env, conn) || env.Spec.Image == nil || env.Spec.Image.Tag == "" {
+				continue
+			}
+			if env.Spec.Image.Tag == baseline[env.Name] {
+				continue
+			}
+			baseline[env.Name] = env.Spec.Image.Tag
+			job := buildMigrateJob(ns, project, cloneFQN, env, ownerUID, time.Now().Unix())
+			if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+				c.Logger.Warn("preview migrate: create job", "env", env.Name, "clone", cloneFQN, "err", err)
+				continue
+			}
+			if err := c.waitForJobComplete(ctx, ns, job.Name, 10*time.Minute); err != nil {
+				c.Logger.Warn("preview migrate failed", "env", env.Name, "clone", cloneFQN, "job", job.Name, "err", err)
+				continue
+			}
+			c.Logger.Info("preview migrate applied", "env", env.Name, "clone", cloneFQN, "job", job.Name)
+		}
+	}
+}

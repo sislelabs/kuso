@@ -93,7 +93,7 @@ type EnvGroupSummary struct {
 	// Warnings lists literals that still name a host under the project's
 	// domain that isn't any service's production host, so they couldn't be
 	// mapped and may still reach production. Only set on create.
-	Warnings []string `json:"warnings,omitempty"`
+	Warnings []string `json:"warnings"`
 }
 
 // labelEnv constant lives in projects.go (kuso.sislelabs.com/env).
@@ -237,6 +237,7 @@ func (s *Service) ListEnvGroups(ctx context.Context, project string) ([]EnvGroup
 			Addons:      setToSorted(g.addons),
 			AddonPolicy: g.policy,
 			CreatedAt:   g.createdAt,
+			Warnings:    []string{},
 		}
 		if sum.Kind == "" {
 			if name == "production" {
@@ -367,6 +368,37 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 	}
 
+	// Preflight, before anything is created: every derived name must fit
+	// helm's release limit, external addons can't be copied, and a fresh
+	// clone must not land on data a previous same-named clone left behind.
+	for _, a := range prodAddons {
+		short := strings.TrimPrefix(a.Name, project+"-")
+		if short == "" {
+			short = a.Name
+		}
+		if policy[short] != AddonFresh {
+			continue
+		}
+		if a.Spec.External != nil && a.Spec.External.SecretName != "" {
+			return nil, fmt.Errorf("%w: addon %q is external — kuso can't make a copy of an externally managed database; set its addon policy to %q to use production's deliberately, or add a native addon for this env", ErrInvalid, short, AddonShared)
+		}
+		cloneCR := fmt.Sprintf("%s-%s-%s", project, short, req.Name)
+		if err := kube.ValidateReleaseName(cloneCR); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if pvcs, err := s.retainedAddonPVCs(ctx, ns, cloneCR); err != nil {
+			return nil, err
+		} else if len(pvcs) > 0 {
+			return nil, fmt.Errorf("%w: data from a previous addon %s still exists (%s) — pick another env name or delete that data first", ErrConflict, cloneCR, strings.Join(pvcs, ", "))
+		}
+	}
+	for i := range services {
+		short := strings.TrimPrefix(services[i].Name, project+"-")
+		if err := kube.ValidateReleaseName(fmt.Sprintf("%s-%s-%s-production", project, short, req.Name)); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+	}
+
 	// Track what we created so we can roll back on partial failure.
 	var createdAddons, createdServices, createdEnvs []string
 	// provisionedInstanceAddons records the SHORT name of every fresh
@@ -464,6 +496,15 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// the cloned env-group (isolated credentials from prod).
 		clone.Spec.PasswordSecret = nil
 		clone.Spec.Project = project
+		// A copy is a single-replica, private, unbacked-up instance: a
+		// copied publicTCP port would put a second IngressRouteTCP on
+		// production's entrypoint, and HA/backups multiply cost for a
+		// non-production env. (External sources were refused above.)
+		clone.Spec.PublicTCP = nil
+		clone.Spec.HA = false
+		clone.Spec.SingleNode = false
+		clone.Spec.Backup = nil
+		clone.Spec.External = nil
 		if _, err := s.Kube.CreateKusoAddon(ctx, ns, clone); err != nil {
 			return nil, failCreate(fmt.Errorf("clone addon %s: %w", short, err))
 		}
@@ -857,8 +898,31 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 
 		RewrittenEnvVars: rewrittenKeys,
-		Warnings:         hostWarnings,
+		Warnings:         append([]string{}, hostWarnings...),
 	}, nil
+}
+
+// retainedAddonPVCs lists live PVCs a deleted addon named fqn left behind
+// (the data PVC survives an addon delete). An error is returned rather than
+// swallowed: this is the only guard against a new clone silently mounting
+// a previous clone's data.
+func (s *Service) retainedAddonPVCs(ctx context.Context, ns, fqn string) ([]string, error) {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return nil, nil
+	}
+	list, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=kusoaddon,app.kubernetes.io/instance=" + fqn,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("check retained data for %s: %w", fqn, err)
+	}
+	var out []string
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp == nil {
+			out = append(out, list.Items[i].Name)
+		}
+	}
+	return out, nil
 }
 
 // DeleteEnvGroup tears down a custom env. Production is refused; preview

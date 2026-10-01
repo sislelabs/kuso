@@ -53,6 +53,14 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "list revisions", err)
 		return
 	}
+	// History outlives a deleted project, so only an empty result for a
+	// project that doesn't exist is a 404 (a typo, not "no revisions").
+	if len(out) == 0 && h.Svc != nil {
+		if _, gerr := h.Svc.Get(ctx, project); errors.Is(gerr, projects.ErrNotFound) {
+			h.fail(w, "list revisions", gerr)
+			return
+		}
+	}
 	for i := range out {
 		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
 	}

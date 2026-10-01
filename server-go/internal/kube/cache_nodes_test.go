@@ -109,3 +109,43 @@ func TestCache_ListNodes_ReturnsInformerSnapshot(t *testing.T) {
 		t.Errorf("node-b Ready=%v, want False", b.Status.Conditions[0].Status)
 	}
 }
+
+// Completed Job pods keep spec.nodeName; counting them made `kuso node
+// list` show 137/110 on a node running 40.
+func TestCache_PodCountsByNode_SkipsFinishedPods(t *testing.T) {
+	t.Parallel()
+	pod := func(name string, phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+			Spec:       corev1.PodSpec{NodeName: "node-a"},
+			Status:     corev1.PodStatus{Phase: phase},
+		}
+	}
+	clientset := kubefake.NewSimpleClientset(
+		pod("run", corev1.PodRunning), pod("pend", corev1.PodPending),
+		pod("done", corev1.PodSucceeded), pod("fail", corev1.PodFailed),
+	)
+	listKinds := map[schema.GroupVersionResource]string{
+		GVRKuso: "KusoList", GVRProjects: "KusoProjectList",
+		GVRServices: "KusoServiceList", GVREnvironments: "KusoEnvironmentList",
+		GVRAddons: "KusoAddonList", GVRBuilds: "KusoBuildList",
+		GVRCrons: "KusoCronList", GVRRuns: "KusoRunList",
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	c := &Client{Clientset: clientset, Dynamic: dyn}
+	c.Cache = NewCache(c)
+	c.Cache.Start()
+	t.Cleanup(c.Cache.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !c.Cache.WaitForSync(ctx) {
+		t.Fatal("Cache.WaitForSync timed out")
+	}
+	counts, ok := c.Cache.PodCountsByNode()
+	if !ok {
+		t.Fatal("PodCountsByNode not ready after sync")
+	}
+	if counts["node-a"] != 2 {
+		t.Fatalf("node-a count = %d, want 2 (running + pending only)", counts["node-a"])
+	}
+}

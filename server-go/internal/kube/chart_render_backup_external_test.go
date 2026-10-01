@@ -2,7 +2,6 @@ package kube
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,7 +118,7 @@ func runExternalBackup(t *testing.T, script, pgIsReady, psql string) (string, bo
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("sh", "-c", script)
+	cmd := pipefailShell(t, script)
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),

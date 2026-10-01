@@ -15,16 +15,16 @@ import (
 // This is the layout the spa Handler must resolve correctly.
 func nextExportFS() fstest.MapFS {
 	return fstest.MapFS{
-		"index.html":                                          {Data: []byte("<html>landing</html>")},
-		"login.html":                                          {Data: []byte("<html>login</html>")},
-		"login/__next._head.txt":                              {Data: []byte("rsc")},
-		"projects/new.html":                                   {Data: []byte("<html>new project</html>")},
-		"projects/new/__next._head.txt":                       {Data: []byte("rsc")},
-		"projects/new/__next.!KGFwcCk.projects.new.txt":       {Data: []byte("rsc")},
-		"projects/_.html":                                     {Data: []byte("<html>project detail</html>")},
-		"projects/_/services/_.html":                          {Data: []byte("<html>service detail</html>")},
-		"_next/static/chunks/main.js":                         {Data: []byte("// js")},
-		"favicon.ico":                                         {Data: []byte("ico")},
+		"index.html":                    {Data: []byte("<html>landing</html>")},
+		"login.html":                    {Data: []byte("<html>login</html>")},
+		"login/__next._head.txt":        {Data: []byte("rsc")},
+		"projects/new.html":             {Data: []byte("<html>new project</html>")},
+		"projects/new/__next._head.txt": {Data: []byte("rsc")},
+		"projects/new/__next.!KGFwcCk.projects.new.txt": {Data: []byte("rsc")},
+		"projects/_.html":             {Data: []byte("<html>project detail</html>")},
+		"projects/_/services/_.html":  {Data: []byte("<html>service detail</html>")},
+		"_next/static/chunks/main.js": {Data: []byte("// js")},
+		"favicon.ico":                 {Data: []byte("ico")},
 	}
 }
 
@@ -152,19 +152,45 @@ func TestHandler_NestedDynamicWithSecondSegmentMissingClimbsUp(t *testing.T) {
 	}
 }
 
-func TestHandler_NoFallbackFallsToRootIndex(t *testing.T) {
-	// fs without any dynamic placeholders — only root index. Anything
-	// unknown falls through to the root SPA shell.
-	fs := fstest.MapFS{
-		"index.html": {Data: []byte("<html>landing</html>")},
+func TestHandler_UnknownURLIs404(t *testing.T) {
+	fsys := nextExportFS()
+	fsys["404.html"] = &fstest.MapFile{Data: []byte("<html>not found page</html>")}
+	h, _ := Handler(fsys, "/api/")
+	for _, p := range []string{"/totally/bogus", "/some/deep/unknown/path", "/login/bogus", "/bogus.txt"} {
+		code, body := drive(t, h, http.MethodGet, p)
+		if code != http.StatusNotFound {
+			t.Errorf("%s: status %d (want 404)", p, code)
+		}
+		if strings.Contains(body, "landing") {
+			t.Errorf("%s: served the landing page", p)
+		}
 	}
-	h, _ := Handler(fs, "/api/")
-	code, body := drive(t, h, http.MethodGet, "/some/deep/unknown/path")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
+	if _, body := drive(t, h, http.MethodGet, "/totally/bogus"); !strings.Contains(body, "not found page") {
+		t.Errorf("expected the export's 404.html, got %q", body)
 	}
-	if !strings.Contains(body, "landing") {
-		t.Errorf("body: %q", body)
+}
+
+func TestHandler_DynamicRSCPayloadsResolveToPlaceholder(t *testing.T) {
+	fsys := nextExportFS()
+	fsys["projects/_.txt"] = &fstest.MapFile{Data: []byte("rsc project")}
+	fsys["projects/_/__next._tree.txt"] = &fstest.MapFile{Data: []byte("rsc tree")}
+	fsys["projects/_/settings.txt"] = &fstest.MapFile{Data: []byte("rsc settings")}
+	h, _ := Handler(fsys, "/api/")
+	cases := map[string]string{
+		"/projects/tickero.txt":              "rsc project",
+		"/projects/tickero/__next._tree.txt": "rsc tree",
+		"/projects/tickero/settings.txt":     "rsc settings",
+	}
+	for path, want := range cases {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 || rr.Body.String() != want {
+			t.Errorf("%s: %d %q (want 200 %q)", path, rr.Code, rr.Body.String(), want)
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Errorf("%s: content-type %q", path, ct)
+		}
 	}
 }
 

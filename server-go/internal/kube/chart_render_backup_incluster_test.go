@@ -2,7 +2,6 @@ package kube
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,7 +112,7 @@ func runInClusterBackup(t *testing.T, script, nc, psql string) (string, bool, er
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("sh", "-c", script)
+	cmd := pipefailShell(t, script)
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),

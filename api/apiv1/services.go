@@ -17,6 +17,9 @@ type CreateServiceRequest struct {
 	DisplayName string           `json:"displayName,omitempty"`
 	Repo        *ServiceRepoSpec `json:"repo,omitempty"`
 	Runtime     string           `json:"runtime,omitempty"`
+	// GitHub pins the GitHub App installation that can clone Repo, for
+	// a private repo behind a different installation than the project's.
+	GitHub *GitHubInstallationRef `json:"github,omitempty"`
 	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
 	// for runtime=dockerfile. Empty = "Dockerfile". For monorepos with a
 	// non-standard name, e.g. "apps/web/Dockerfile.dev".
@@ -183,6 +186,9 @@ type ServiceBuildpacks struct {
 type ServiceImage struct {
 	Repository string `json:"repository,omitempty"`
 	Tag        string `json:"tag,omitempty"`
+	// PullSecret names a project registry credential by registry host
+	// ("ghcr.io") or Secret name, for private images.
+	PullSecret string `json:"pullSecret,omitempty"`
 }
 
 // AddDomainRequest is the body of POST .../services/{s}/domains.

@@ -416,3 +416,34 @@ func TestAddEnvironment_RescopeLeavesUndroppedConnRefs(t *testing.T) {
 	}
 	t.Fatalf("REDIS_URL missing: %+v", env.Spec.EnvVars)
 }
+
+// --seed-from was validated and then dropped: the cloner always seeded
+// from production.
+func TestAddEnvironment_PassesSeedFromToCloner(t *testing.T) {
+	stagingPG := seedAddon("alpha", "pg-staging", "postgres")
+	stagingPG.obj.SetLabels(map[string]string{labelProject: "alpha", labelEnv: "staging"})
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Runtime: "dockerfile", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedAddon("alpha", "pg", "postgres"),
+		stagingPG,
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	var gotSeedFrom string
+	s.EnvAddonsFrom = func(_ context.Context, _, _ string, _ []string, seedAll bool, seedFrom string) ([]string, map[string]string, error) {
+		if !seedAll {
+			t.Errorf("seedAll = false with --seed-from")
+		}
+		gotSeedFrom = seedFrom
+		return []string{"alpha-pg-qa-conn"}, map[string]string{"alpha-pg-conn": "alpha-pg-qa-conn"}, nil
+	}
+	if _, err := s.AddEnvironment(context.Background(), "alpha", "web", CreateEnvRequest{Name: "qa", Branch: "qa", SeedFrom: "staging"}); err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+	if gotSeedFrom != "staging" {
+		t.Fatalf("seedFrom passed to cloner = %q, want staging", gotSeedFrom)
+	}
+}

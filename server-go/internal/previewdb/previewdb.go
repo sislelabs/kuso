@@ -69,6 +69,10 @@ type Cloner struct {
 	// clone. Guarded by seedMu. See tryAcquireSeed/releaseSeed.
 	seedMu       sync.Mutex
 	seedInFlight map[string]bool
+
+	// migrateWatch holds the cancel func of the running new-image migrate
+	// watcher per clone FQN; a newer push replaces it. Guarded by seedMu.
+	migrateWatch map[string]context.CancelFunc
 }
 
 func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespace string, logger *slog.Logger) *Cloner {
@@ -94,8 +98,9 @@ func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespac
 // normal state for a fresh preview. s3 stays shared: preview DBs are seeded
 // from production and reference its objects, which an empty bucket lacks.
 //
-// Idempotent: re-running for the same PR finds the existing clones
-// and re-issues seed Jobs (so the reviewer can resync data).
+// Idempotent: re-running for the same PR (every push) reuses the existing
+// clones without re-seeding them; the new image's release hook is run
+// against the clone once it is promoted (migrateOnNewImage).
 func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error) {
 	// Postgres clones seed from the project's source addon; everything
 	// below is the env-scope-keyed core (EnsureEnvAddonsMapped).
@@ -124,6 +129,14 @@ type EnvAddonOpts struct {
 	// labels (kuso.sislelabs.com/preview-pr + preview-source) so the existing
 	// preview-delete sweep keeps working. Empty for named envs.
 	PreviewPR string
+	// SeedFromScope names the env whose postgres clone seeds this env's new
+	// clone ("" / "production" = the project's source addon). Only consulted
+	// when SeedAll is set.
+	SeedFromScope string
+	// Resync re-seeds clones that already exist. Without it an existing clone
+	// is never re-seeded: re-dumping on every PR push wiped reviewers' data
+	// and put a full-database read on production per push.
+	Resync bool
 	// NameSuffix overrides the clone NAME suffix ("<base><NameSuffix>"). It
 	// decouples the clone name from the env-label scope: PR previews keep their
 	// historical "<base>-pr-N" name while being labeled env=preview-pr-N (the
@@ -223,9 +236,11 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 			extraAnnotations = map[string]string{envGroupSourceAddonAnnotation: s.Name}
 		}
 
-		// Create the clone if it doesn't exist. We don't update an existing
-		// clone — re-running just re-seeds it (when SeedAll).
+		// Create the clone if it doesn't exist. An existing clone is reused
+		// as-is and only re-seeded on an explicit Resync.
+		created := false
 		if existing, _ := c.Kube.GetKusoAddon(ctx, ns, cloneFQN); existing == nil {
+			created = true
 			if _, err := c.Addons.Add(ctx, project, addons.CreateAddonRequest{
 				Name:    cloneShort,
 				Kind:    s.Spec.Kind,
@@ -261,6 +276,25 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		if s.Spec.Kind != "postgres" || !opts.SeedAll {
 			continue
 		}
+		if !created && !opts.Resync {
+			// Previews: the poller skips release Jobs for preview envs (the
+			// seed path owns them), so with no re-seed the push's new image
+			// still needs its migration run against the kept clone.
+			if opts.PreviewPR != "" {
+				c.startMigrateOnNewImage(ns, project, envScope, cloneFQN)
+			}
+			continue
+		}
+		seedSrcFQN := addons.CRName(project, s.Name)
+		if opts.SeedFromScope != "" && opts.SeedFromScope != "production" {
+			src := seedSourceForScope(sources, project, s, opts.SeedFromScope)
+			if src == "" {
+				c.Logger.Warn("env addon seed: no clone of source in seed-from env; leaving clone empty",
+					"source", shortSrc, "seedFrom", opts.SeedFromScope, "clone", cloneShort)
+				continue
+			}
+			seedSrcFQN = src
+		}
 		// Dedupe: EnsureEnvAddons runs once per service, so several services
 		// sharing this DB addon would each spawn a seed+migrate for the same
 		// clone. Only the first in-flight spawn proceeds; the conn secret is
@@ -274,15 +308,39 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		// evidence a seed is still owed. ResumePendingSeeds sweeps for it
 		// on leader acquisition and re-kicks the seed; seedAsync clears it
 		// once the seed lands.
-		c.markSeedPending(ctx, ns, cloneFQN, addons.CRName(project, s.Name))
+		c.markSeedPending(ctx, ns, cloneFQN, seedSrcFQN)
 		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
 			defer c.releaseSeed(clone)
 			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, envScope)
-		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
+		}(seedSrcFQN, cloneFQN, instancePG)
 	}
 	return connSecrets, cloneByOrigin, nil
+}
+
+// seedSourceForScope returns the FQN of the env-scoped clone of source that
+// belongs to env scope, or "" when that env has no clone of it. Pairing is by
+// the clone's recorded source (annotation for named envs, preview-source label
+// for previews), with the deterministic clone name as a legacy fallback.
+func seedSourceForScope(all []kube.KusoAddon, project string, source *kube.KusoAddon, scope string) string {
+	shortSrc := addons.ShortName(project, source.Name)
+	byName := addons.CRName(project, shortSrc+"-"+scope)
+	fallback := ""
+	for i := range all {
+		a := &all[i]
+		if a.Labels[kube.LabelEnv] != scope || a.Spec.Kind != source.Spec.Kind {
+			continue
+		}
+		if a.Annotations[envGroupSourceAddonAnnotation] == source.Name ||
+			a.Labels["kuso.sislelabs.com/preview-source"] == shortSrc {
+			return a.Name
+		}
+		if a.Name == byName {
+			fallback = a.Name
+		}
+	}
+	return fallback
 }
 
 // envGroupSourceAddonAnnotation records a named-env clone's source addon

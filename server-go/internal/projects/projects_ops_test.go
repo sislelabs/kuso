@@ -1,8 +1,11 @@
 package projects
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"kuso/server/internal/kube"
 )
 
 func TestValidateProjectName(t *testing.T) {
@@ -22,5 +25,40 @@ func TestValidateProjectName(t *testing.T) {
 		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("validateProjectName(%q) err not ErrInvalid: %v", n, err)
 		}
+	}
+}
+
+// Settings could not clear these: description/baseDomain clear on "",
+// and defaultRepo had no clear at all (empty fields meant "leave alone").
+func TestUpdateProject_ClearsDescriptionBaseDomainDefaultRepo(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		Description: "d",
+		BaseDomain:  "example.com",
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/a/b", DefaultBranch: "main"},
+	}))
+	empty := ""
+	out, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		Description: &empty, BaseDomain: &empty, ClearDefaultRepo: true,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if out.Spec.Description != "" || out.Spec.BaseDomain != "" || out.Spec.DefaultRepo != nil {
+		t.Fatalf("not cleared: %+v", out.Spec)
+	}
+}
+
+func TestUpdateProject_EmptyDefaultRepoClears(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/a/b", DefaultBranch: "main"},
+	}))
+	out, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{DefaultRepo: &CreateProjectRepoSpec{}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if out.Spec.DefaultRepo != nil {
+		t.Fatalf("defaultRepo {url:\"\"} should clear, got %+v", out.Spec.DefaultRepo)
 	}
 }

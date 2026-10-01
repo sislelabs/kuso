@@ -393,10 +393,11 @@ func TestSetEnvVar_RejectsForeignSecretRef(t *testing.T) {
 }
 
 // TestSetEnvPending_RejectsForeignAddonRef closes the apply-path variant
-// of the cross-project theft vector: `kuso apply` uses AllowPending, which
-// rewrites an unresolved `${{ beta-pg.PASSWORD }}` into a speculative
-// `beta-pg-conn` secretKeyRef — another project's real conn secret. The
-// SetEnvWithOpts ownership guard must reject it.
+// of the cross-project theft vector. A pending ref is now prefixed with
+// the project (`${{ beta-pg.X }}` in alpha → alpha-beta-pg-conn), so it can
+// no longer name project beta's beta-pg-conn. Names are only prefix-unique
+// though: project "alpha-beta" addon "pg" is also alpha-beta-pg, so the
+// guard must still reject a pending name whose addon belongs elsewhere.
 func TestSetEnvPending_RejectsForeignAddonRef(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
@@ -404,17 +405,68 @@ func TestSetEnvPending_RejectsForeignAddonRef(t *testing.T) {
 		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
 		seedAddon("alpha", "pg", "postgres"),
+		seedAddon("alpha-beta", "pg", "postgres"),
 	)
-	// alpha owns only alpha-pg-conn.
 	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
-		return []string{"alpha-pg-conn"}, nil
+		return []string{project + "-pg-conn"}, nil
 	}
-	// A pending ref to project beta's addon → speculative beta-pg-conn.
 	err := s.SetEnvPending(context.Background(), "alpha", "web", []EnvVar{
 		{Name: "STOLEN", Value: "${{ beta-pg.PASSWORD }}"},
 	})
 	if !errors.Is(err, ErrInvalid) {
-		t.Fatalf("apply-path foreign addon ref must be rejected, got %v", err)
+		t.Fatalf("pending ref onto a sibling-prefix project's addon must be rejected, got %v", err)
+	}
+}
+
+// A pending ref to an addon not created yet (kuso apply right after the
+// addon create, informer lagging) must be accepted and must name the real
+// conn Secret <project>-<addon>-conn — it used to emit <addon>-conn and
+// then fail the ownership guard, so the first apply always errored.
+func TestSetEnvPending_PendingRefUsesProjectPrefix(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) { return nil, nil }
+	if err := s.SetEnvPending(context.Background(), "alpha", "web", []EnvVar{
+		{Name: "CACHE", Value: "${{ cache.URL }}"},
+	}); err != nil {
+		t.Fatalf("pending ref to a not-yet-created own addon: %v", err)
+	}
+	svc, _ := s.GetService(context.Background(), "alpha", "web")
+	for _, e := range svc.Spec.EnvVars {
+		if e.Name == "CACHE" {
+			if name, _ := secretRefNameOf(e.ValueFrom); name != "alpha-cache-conn" {
+				t.Fatalf("pending secretKeyRef name = %q, want alpha-cache-conn", name)
+			}
+			return
+		}
+	}
+	t.Fatalf("CACHE not written: %+v", svc.Spec.EnvVars)
+}
+
+// `${{ db-staging.X }}` resolved through ReferenceableConnSecrets (which
+// includes env-scoped clones) and was then rejected by the ownership guard,
+// which only consulted AddonConnSecrets.
+func TestSetEnv_CloneRefIsOwned(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("tk", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("tk", "api", kube.KusoServiceSpec{Project: "tk", Port: 8080}),
+		seedEnv("tk", "api", "production", "main", "tk-api-production"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"tk-db-conn"}, nil
+	}
+	s.ReferenceableConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"tk-db-conn", "tk-db-staging-conn"}, nil
+	}
+	if err := s.SetEnv(context.Background(), "tk", "api", []EnvVar{
+		{Name: "DATABASE_URL", Value: "${{ db-staging.DATABASE_URL }}"},
+	}); err != nil {
+		t.Fatalf("clone ref must be accepted, got %v", err)
 	}
 }
 

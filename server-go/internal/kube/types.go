@@ -74,6 +74,33 @@ type KusoProjectSpec struct {
 	// project doesn't burn agent runs. Defaults to false (not monitored).
 	// Gated additionally by the global KUSO_INCIDENT_AGENT enable.
 	IncidentMonitoring bool `json:"incidentMonitoring,omitempty"`
+	// NetworkPolicy and Quota feed the kusoproject chart. nil (and every
+	// unset field) keeps the chart defaults.
+	NetworkPolicy *KusoProjectNetworkPolicy `json:"networkPolicy,omitempty"`
+	Quota         *KusoProjectQuota         `json:"quota,omitempty"`
+}
+
+// KusoProjectNetworkPolicy is spec.networkPolicy on KusoProject.
+type KusoProjectNetworkPolicy struct {
+	Enabled                *bool    `json:"enabled,omitempty"`
+	PlatformNamespace      string   `json:"platformNamespace,omitempty"`
+	ExtraBlockCIDRs        []string `json:"extraBlockCIDRs,omitempty"`
+	ExtraIngressNamespaces []string `json:"extraIngressNamespaces,omitempty"`
+}
+
+// KusoProjectQuota is spec.quota on KusoProject (ResourceQuota +
+// LimitRange). Quantities are kube quantity strings.
+type KusoProjectQuota struct {
+	Enabled                 *bool  `json:"enabled,omitempty"`
+	CPU                     string `json:"cpu,omitempty"`
+	Memory                  string `json:"memory,omitempty"`
+	Pods                    string `json:"pods,omitempty"`
+	PVCs                    string `json:"pvcs,omitempty"`
+	Services                string `json:"services,omitempty"`
+	DefaultPodCPURequest    string `json:"defaultPodCPURequest,omitempty"`
+	DefaultPodMemoryRequest string `json:"defaultPodMemoryRequest,omitempty"`
+	DefaultPodCPULimit      string `json:"defaultPodCPULimit,omitempty"`
+	DefaultPodMemoryLimit   string `json:"defaultPodMemoryLimit,omitempty"`
 }
 
 // KusoConfigAsCode is the spec.configAsCode block on KusoProject.
@@ -1230,6 +1257,10 @@ type KusoCronSpec struct {
 	Image          *KusoImage     `json:"image,omitempty"`
 	EnvFromSecrets []string       `json:"envFromSecrets,omitempty"`
 	Placement      *KusoPlacement `json:"placement,omitempty"`
+	// Env is the owning env's resolved envVars (plain values and ${{ }}
+	// aliases as secretKeyRef/configMapKeyRef), same shape as
+	// KusoRunSpec.Env. kind=service only.
+	Env []KusoRunEnv `json:"env,omitempty"`
 	// DisplayName lets the canvas show a friendly label. Optional;
 	// UI falls back to the cron's short name when empty.
 	DisplayName string `json:"displayName,omitempty"`
@@ -1305,6 +1336,9 @@ type KusoRunSpec struct {
 	// service so the run pod gets the same NetworkPolicy egress labels.
 	PrivateEgress     bool `json:"privateEgress,omitempty"`
 	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
+	// Resources overrides the run container's requests/limits
+	// (ResourceRequirements shape). nil = chart default.
+	Resources map[string]any `json:"resources,omitempty"`
 	// TimeoutSeconds bounds the Pod via the Job's
 	// activeDeadlineSeconds. Past it the Pod is killed and the
 	// run goes phase=failed reason=DeadlineExceeded.

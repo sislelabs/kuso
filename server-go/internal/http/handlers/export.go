@@ -473,14 +473,22 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			// user-facing Delete handler, which does clean up grants:
 			// there the name becomes free for an UNRELATED project,
 			// and stale grants would silently re-attach to it.
+			oldNS := h.nsFor(ctx, desiredName)
 			if err := h.Kube.DeleteKusoProject(ctx, h.Namespace, desiredName); err != nil && !apierrors.IsNotFound(err) {
 				writeErr(w, http.StatusInternalServerError, fmt.Sprintf("overwrite: delete existing project: %v", err))
 				return
 			}
-			// Give the operator a beat to finalise the helm uninstall.
-			// Without this, the create below races the delete and
-			// gets AlreadyExists.
-			time.Sleep(2 * time.Second)
+			// The finalizer + GC of the old project's children can take
+			// far longer than a fixed sleep; recreating before they are
+			// gone either 500s on AlreadyExists or lets GC delete the
+			// freshly imported children.
+			if err := h.waitProjectGone(ctx, desiredName, oldNS, importOverwriteWait); err != nil {
+				writeErr(w, http.StatusConflict, fmt.Sprintf("overwrite: project %q is still being deleted (%v); retry the import once it is gone", desiredName, err))
+				return
+			}
+			if h.NSResolver != nil {
+				h.NSResolver.Invalidate(desiredName)
+			}
 		}
 	}
 
@@ -810,6 +818,37 @@ func stripServerMeta(m *metav1.ObjectMeta) {
 	m.ManagedFields = nil
 	m.OwnerReferences = nil
 	m.Finalizers = nil
+}
+
+// importOverwriteWait bounds how long an overwrite import waits for
+// the old project and its services/envs to be deleted.
+var importOverwriteWait = 90 * time.Second
+
+// waitProjectGone polls until the project CR and every service/env
+// labelled with it are gone, or the budget runs out.
+func (h *ExportHandler) waitProjectGone(ctx context.Context, project, ns string, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	sel := map[string]string{kube.LabelProject: project}
+	for {
+		_, err := h.Kube.GetKusoProject(ctx, h.Namespace, project)
+		gone := apierrors.IsNotFound(err)
+		if gone {
+			svcs, serr := h.Kube.ListKusoServicesByLabels(ctx, ns, sel)
+			envs, eerr := h.Kube.ListKusoEnvironmentsByLabels(ctx, ns, sel)
+			gone = serr == nil && eerr == nil && len(svcs) == 0 && len(envs) == 0
+		}
+		if gone {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("not gone after %s", budget)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // nsFor resolves the execution namespace for a project, falling back

@@ -42,7 +42,7 @@
 //	addons:
 //	  - { name: db, kind: postgres }
 //	crons:
-//	  - { name: nightly, kind: service, schedule: "0 3 * * *", service: api }
+//	  - { name: nightly, kind: command, schedule: "0 3 * * *", image: ghcr.io/acme/jobs:1, command: [./nightly] }
 package spec
 
 import (
@@ -345,8 +345,8 @@ type AddonExternalSpec struct {
 	SecretName string `yaml:"secretName"`
 }
 
-// CronSpec mirrors crons.CreateProjectCronRequest. kind is
-// service|http|command.
+// CronSpec mirrors crons.CreateProjectCronRequest. kind is http or
+// command; service crons are managed with `kuso cron add`, not kuso.yml.
 type CronSpec struct {
 	Name     string   `yaml:"name"`
 	Kind     string   `yaml:"kind"`
@@ -410,8 +410,22 @@ func Parse(raw []byte) (*File, error) {
 		if !cronExpr5.MatchString(c.Schedule) {
 			return nil, fmt.Errorf("%w: cron %s has invalid schedule %q (want 5-field cron)", ErrInvalid, c.Name, c.Schedule)
 		}
-		if c.Kind != "service" && c.Kind != "http" && c.Kind != "command" {
-			return nil, fmt.Errorf("%w: cron %s has invalid kind %q", ErrInvalid, c.Name, c.Kind)
+		// apply manages crons through the project cron routes, which take
+		// only http and command; accepting kind=service here made a file
+		// that parses (and plans) fail at apply time.
+		switch c.Kind {
+		case "http":
+			if c.URL == "" {
+				return nil, fmt.Errorf("%w: cron %s: kind http needs url", ErrInvalid, c.Name)
+			}
+		case "command":
+			if c.Image == "" || len(c.Command) == 0 {
+				return nil, fmt.Errorf("%w: cron %s: kind command needs image and command", ErrInvalid, c.Name)
+			}
+		case "service":
+			return nil, fmt.Errorf("%w: cron %s: kind service is not supported in kuso.yml; create service crons with `kuso cron add <project> <service>`", ErrInvalid, c.Name)
+		default:
+			return nil, fmt.Errorf("%w: cron %s has invalid kind %q (want http or command)", ErrInvalid, c.Name, c.Kind)
 		}
 	}
 	return &f, nil

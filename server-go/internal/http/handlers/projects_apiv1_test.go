@@ -123,3 +123,25 @@ func TestApiv1CreateServiceCarriesSleepNonProduction(t *testing.T) {
 		t.Fatalf("sleep = %+v, want afterMinutes 10 + nonProduction off", out.Sleep)
 	}
 }
+
+// The web wizard sends image.pullSecret; it was dropped here, so private
+// images hit ImagePullBackOff on the first deploy.
+func TestApiv1CreateServiceCarriesImagePullSecret(t *testing.T) {
+	got := apiv1CreateServiceToDomain(apiv1.CreateServiceRequest{
+		Name:  "web",
+		Image: &apiv1.ServiceImage{Repository: "ghcr.io/acme/web", Tag: "v1", PullSecret: "ghcr.io"},
+	})
+	if got.Image == nil || got.Image.PullSecret == nil || *got.Image.PullSecret != "ghcr.io" {
+		t.Fatalf("pullSecret not mapped: %+v", got.Image)
+	}
+}
+
+func TestApiv1CreateServiceCarriesGitHubInstallation(t *testing.T) {
+	got := apiv1CreateServiceToDomain(apiv1.CreateServiceRequest{
+		Name:   "web",
+		GitHub: &apiv1.GitHubInstallationRef{InstallationID: 42},
+	})
+	if got.GitHub == nil || got.GitHub.InstallationID != 42 {
+		t.Fatalf("github.installationId not mapped: %+v", got.GitHub)
+	}
+}

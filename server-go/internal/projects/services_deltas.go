@@ -82,6 +82,12 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		}
 	}
 
+	// Refuse a host another env already serves before writing anything;
+	// the production mirror below would otherwise reject it after the
+	// service spec was already saved.
+	if err := s.checkDomainsFree(ctx, project, service, nil, []ServiceDomain{{Host: host}}); err != nil {
+		return nil, err
+	}
 	ctx, rev := s.beginRevision(ctx)
 	// In-process mutex guards same-replica races. Multi-replica
 	// races land on the kube optimistic-concurrency check below:

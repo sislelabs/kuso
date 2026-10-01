@@ -1,11 +1,11 @@
 // Package spa serves the embedded SPA bundle. Targets a Next.js static
 // export (App Router with output: "export"), which lays files out as:
 //
-//   index.html
-//   login.html         + login/        (the dir holds RSC .txt streams)
-//   projects/new.html  + projects/new/ (same — both the html and a dir)
-//   _next/static/...
-//   _next/data/...
+//	index.html
+//	login.html         + login/        (the dir holds RSC .txt streams)
+//	projects/new.html  + projects/new/ (same — both the html and a dir)
+//	_next/static/...
+//	_next/data/...
 //
 // So a request for /projects/new must serve projects/new.html. A request
 // with a trailing slash (/projects/new/) must do the same — Next's
@@ -14,9 +14,8 @@
 // (which doesn't exist), 301 to a trailing-slash URL, and then 500.
 //
 // Asset requests (/_next/..., /favicon.ico, etc.) are served verbatim.
-// Anything that doesn't match a file or a directory-with-html falls
-// through to index.html so the App Router's client-side navigation
-// keeps working for routes the export didn't pre-render.
+// Dynamic routes resolve to the export's "_" placeholder; anything else
+// gets the export's 404 page with a 404 status.
 package spa
 
 import (
@@ -107,17 +106,91 @@ func Handler(dist fs.FS, apiPrefixes ...string) (http.Handler, error) {
 		//    Without this, /projects/kuso-hello-go fell through to the
 		//    root index.html (the marketing landing) which then bounced
 		//    authenticated users back to /projects.
+		//
+		//    RSC payloads (`.txt`) for a dynamic route resolve the same
+		//    way to the placeholder's payload. Answering those with HTML
+		//    made the client router fall back to a full page load on
+		//    every project/service navigation.
+		if strings.HasSuffix(urlPath, ".txt") {
+			if txt := dynamicPayloadFallback(dist, urlPath); txt != "" {
+				serveStaticFile(w, dist, txt)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		if html := dynamicFallback(dist, urlPath); html != "" {
 			serveStaticFile(w, dist, html)
 			return
 		}
 
-		// 5. Root SPA fallback — landing/marketing shell. Reached only
-		//    for deep links the export didn't pre-render AND for which
-		//    no dynamic-segment placeholder exists (which shouldn't
-		//    happen in practice; this is the safety net).
-		serveIndex(w, indexBytes)
+		// 5. Nothing matches: a real 404 (the export's not-found page),
+		//    not the marketing landing with 200.
+		serveNotFound(w, dist)
 	}), nil
+}
+
+// resolveDynamicDirs maps each segment of a directory path to its
+// literal name when that directory exists in dist, else to the "_"
+// placeholder Next emits for dynamic segments.
+func resolveDynamicDirs(dist fs.FS, parts []string) []string {
+	resolved := make([]string, len(parts))
+	prefix := ""
+	for i, seg := range parts {
+		trial := seg
+		if prefix != "" {
+			trial = prefix + "/" + seg
+		}
+		if info, err := fs.Stat(dist, trial); err == nil && info.IsDir() {
+			resolved[i] = seg
+		} else {
+			resolved[i] = "_"
+		}
+		prefix = strings.Join(resolved[:i+1], "/")
+	}
+	return resolved
+}
+
+// dynamicPayloadFallback resolves an RSC payload request under a
+// dynamic route to the placeholder's payload:
+//
+//	projects/tickero.txt                  → projects/_.txt
+//	projects/tickero/__next._tree.txt     → projects/_/__next._tree.txt
+//	projects/tickero/settings.txt         → projects/_/settings.txt
+func dynamicPayloadFallback(dist fs.FS, urlPath string) string {
+	parts := strings.Split(urlPath, "/")
+	dirs := resolveDynamicDirs(dist, parts[:len(parts)-1])
+	leaf := parts[len(parts)-1]
+	base := strings.Join(dirs, "/")
+	join := func(name string) string {
+		if base == "" {
+			return name
+		}
+		return base + "/" + name
+	}
+	for _, name := range []string{leaf, "_.txt"} {
+		candidate := join(name)
+		if info, err := fs.Stat(dist, candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func serveNotFound(w http.ResponseWriter, dist fs.FS) {
+	for _, name := range []string{"404.html", "_not-found.html"} {
+		b, err := fs.ReadFile(dist, name)
+		if err != nil {
+			continue
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		applyHTMLSecurityHeaders(w)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(b)
+		return
+	}
+	http.Error(w, "not found", http.StatusNotFound)
 }
 
 // dynamicFallback resolves an unknown URL path to the deepest matching
@@ -129,10 +202,10 @@ func Handler(dist fs.FS, apiPrefixes ...string) (http.Handler, error) {
 //
 // Examples (with FS containing projects/_.html and projects/_/services/_.html):
 //
-//   /projects/kuso-hello-go      → projects/_.html
-//   /projects/abc/services/web   → projects/_/services/_.html
-//   /projects/abc/unknown-leaf   → projects/_.html (climbs up since
-//                                  projects/_/unknown-leaf.html isn't there)
+//	/projects/kuso-hello-go      → projects/_.html
+//	/projects/abc/services/web   → projects/_/services/_.html
+//	/projects/abc/unknown-leaf   → projects/_.html (climbs up since
+//	                               projects/_/unknown-leaf.html isn't there)
 //
 // Empty string when no fallback exists; caller falls back to the
 // root index.html.
@@ -167,6 +240,11 @@ func dynamicFallback(dist fs.FS, urlPath string) string {
 	// trailing N segments with "_". This handles "/projects/abc/missing-leaf"
 	// where projects/_/missing-leaf.html doesn't exist but projects/_.html does.
 	for depth := len(resolved); depth >= 1; depth-- {
+		// Only climb to a dynamic placeholder; climbing to a static
+		// page would render e.g. /settings for /settings/bogus.
+		if depth < len(resolved) && resolved[depth-1] != "_" {
+			continue
+		}
 		candidate := strings.Join(resolved[:depth], "/") + ".html"
 		if info, err := fs.Stat(dist, candidate); err == nil && !info.IsDir() {
 			return candidate
@@ -232,6 +310,8 @@ func serveStaticFile(w http.ResponseWriter, dist fs.FS, name string) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		applyHTMLSecurityHeaders(w)
+	} else if strings.HasSuffix(name, ".txt") {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)

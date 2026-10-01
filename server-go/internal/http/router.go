@@ -332,7 +332,7 @@ func NewRouter(d Deps) http.Handler {
 	// IS the credential — no kuso auth required. Mount BEFORE the
 	// bearer-gated subrouter below.
 	if d.DB != nil {
-		reviewH := &httphandlers.PreviewReviewHandler{DB: d.DB, Kube: d.Kube}
+		reviewH := &httphandlers.PreviewReviewHandler{DB: d.DB, Kube: d.Kube, Namespace: d.Namespace}
 		reviewH.Mount(r)
 	}
 
@@ -531,7 +531,7 @@ func mountAuthenticatedRoutes(
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
-			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
+			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			grantsH.Mount(r)
 			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			invitesH.Mount(r)
@@ -640,7 +640,7 @@ func mountAuthenticatedRoutes(
 			logSearchH.Mount(r)
 			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
 			alertsH.Mount(r)
-			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger}
+			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			errH.Mount(r)
 		}
 		if d.Audit != nil {

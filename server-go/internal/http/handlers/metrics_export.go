@@ -109,14 +109,30 @@ func (h *MetricsExportHandler) envRefs(ctx context.Context) ([]drains.EnvRef, er
 		return nil, err
 	}
 	nsOf := map[string]string{}
+	// Env CRs of a custom-namespace project live in that namespace, so
+	// listing the home namespace alone exported nothing for them.
+	scan := []string{h.Namespace}
+	seen := map[string]bool{h.Namespace: true}
 	for _, p := range projs {
 		if p.Spec.Namespace != "" {
 			nsOf[p.Name] = p.Spec.Namespace
+			if !seen[p.Spec.Namespace] {
+				seen[p.Spec.Namespace] = true
+				scan = append(scan, p.Spec.Namespace)
+			}
 		}
 	}
-	envs, err := h.Kube.ListKusoEnvironments(ctx, h.Namespace)
-	if err != nil {
-		return nil, err
+	var envs []kube.KusoEnvironment
+	for _, ns := range scan {
+		got, err := h.Kube.ListKusoEnvironments(ctx, ns)
+		if err != nil {
+			if ns == h.Namespace {
+				return nil, err
+			}
+			h.logger().Debug("metrics export: list envs", "namespace", ns, "err", err)
+			continue
+		}
+		envs = append(envs, got...)
 	}
 	out := make([]drains.EnvRef, 0, len(envs))
 	for _, e := range envs {

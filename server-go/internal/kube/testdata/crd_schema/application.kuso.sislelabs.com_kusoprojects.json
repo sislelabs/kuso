@@ -74,6 +74,30 @@
             "description": "Optional execution namespace for this project's child\nresources (services, environments, addons, builds,\nplus their per-service Secrets). The KusoProject CR\nitself always lives in the server's home namespace;\nthis field controls only child routing. Empty = home.\n",
             "type": "string"
           },
+          "networkPolicy": {
+            "description": "Per-project NetworkPolicy knobs read by the kusoproject\nchart (see its values.yaml). Without this schema the\napiserver pruned the block, so e.g. extraBlockCIDRs (the\ncontrol-plane public IP on cloud installs) could never\nbe set. Unset fields keep the chart defaults.\n",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "extraBlockCIDRs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "extraIngressNamespaces": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "platformNamespace": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "placement": {
             "description": "Project-default node-pinning policy. Services\nwithout their own placement inherit it; new\nenvironments derived from a service inherit the\nservice's effective placement (with project as\nfallback). Empty = schedule anywhere.\n",
             "properties": {
@@ -135,6 +159,42 @@
               "ttlDays": {
                 "default": 7,
                 "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "quota": {
+            "description": "Per-project ResourceQuota + LimitRange (kusoproject\nchart). Off unless enabled; unset fields keep the chart\ndefaults.\n",
+            "properties": {
+              "cpu": {
+                "type": "string"
+              },
+              "defaultPodCPULimit": {
+                "type": "string"
+              },
+              "defaultPodCPURequest": {
+                "type": "string"
+              },
+              "defaultPodMemoryLimit": {
+                "type": "string"
+              },
+              "defaultPodMemoryRequest": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "memory": {
+                "type": "string"
+              },
+              "pods": {
+                "type": "string"
+              },
+              "pvcs": {
+                "type": "string"
+              },
+              "services": {
+                "type": "string"
               }
             },
             "type": "object"

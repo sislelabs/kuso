@@ -136,10 +136,15 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 
 	// 2) Cluster-wide pod metrics. metrics-server's
 	// /apis/metrics.k8s.io/v1beta1/pods is cheap (one round-trip,
-	// returns every pod in one shot). Empty when metrics-server isn't
-	// installed — we still write zero-rows for known projects so the
-	// chart doesn't have a hole.
-	usage := s.podUsage(ctx)
+	// returns every pod in one shot). When it doesn't answer, write
+	// nothing: a zero-usage row reads as "this project used nothing"
+	// and drags the cost rollup down for the whole outage. A gap in the
+	// series is the honest record (same as nodemetrics).
+	usage, ok := s.podUsage(ctx)
+	if !ok {
+		s.Logger.Warn("projectmetrics: no metrics-server usage; skipped sample", "projects", len(knownProjects))
+		return nil
+	}
 
 	// 3) Sum by project.
 	type agg struct {
@@ -147,10 +152,10 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		memBytes int64
 		pods     int
 	}
+	// Only projects with at least one sampled pod get a row: a project
+	// whose running pods have no sample yet (just started) would
+	// otherwise record a false zero.
 	totals := make(map[string]*agg, len(knownProjects))
-	for k := range knownProjects {
-		totals[k] = &agg{}
-	}
 	for k, u := range usage {
 		project, ok := podProject[k]
 		if !ok {
@@ -166,9 +171,7 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		a.pods++
 	}
 
-	// 4) Write one row per project. Iterating totals (not
-	// knownProjects) so we catch projects whose pods are running but
-	// happen to have zero metrics-server samples this tick.
+	// 4) Write one row per sampled project.
 	for project, a := range totals {
 		row := db.ProjectMetric{
 			Project: project, Ts: now,
@@ -192,20 +195,19 @@ type podUsageVal struct {
 // (deliberate duplication — neither package should depend on the
 // other and the parser is small).
 //
-// Returns an empty map when metrics-server is missing or slow; the
-// caller still writes zero-rows so the rollup curve is honest about
-// "we tried, the cluster didn't answer."
-func (s *Sampler) podUsage(ctx context.Context) map[struct{ ns, name string }]podUsageVal {
+// ok is false when metrics-server is missing, slow, or returned junk;
+// the caller then skips the tick.
+func (s *Sampler) podUsage(ctx context.Context) (map[struct{ ns, name string }]podUsageVal, bool) {
 	out := map[struct{ ns, name string }]podUsageVal{}
 	rest := s.Kube.Clientset.Discovery().RESTClient()
 	if rest == nil {
-		return out
+		return out, false
 	}
 	mctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	body, err := rest.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/pods").DoRaw(mctx)
 	if err != nil {
-		return out
+		return out, false
 	}
 	var resp struct {
 		Items []struct {
@@ -222,7 +224,7 @@ func (s *Sampler) podUsage(ctx context.Context) map[struct{ ns, name string }]po
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return out
+		return out, false
 	}
 	for _, it := range resp.Items {
 		var cpuMilli, memBytes int64
@@ -235,7 +237,7 @@ func (s *Sampler) podUsage(ctx context.Context) map[struct{ ns, name string }]po
 			memBytes: memBytes,
 		}
 	}
-	return out
+	return out, true
 }
 
 // parseCPU + parseQuantity are intentionally duplicated from

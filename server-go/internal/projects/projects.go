@@ -108,6 +108,10 @@ type Service struct {
 	// source-conn -> clone-conn map. nil = the env shares the project's addons
 	// (the legacy behavior). Backed by previewdb.Cloner.EnsureEnvAddonsMapped.
 	EnvAddons func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) (clones []string, cloneByOrigin map[string]string, err error)
+	// EnvAddonsFrom is EnvAddons that also names the env whose data seeds
+	// the clones (--seed-from). Preferred over EnvAddons when wired; without
+	// it --seed-from always seeds from production.
+	EnvAddonsFrom func(ctx context.Context, project, envScope string, kinds []string, seedAll bool, seedFrom string) (clones []string, cloneByOrigin map[string]string, err error)
 
 	// RunEnvRelease runs an env's release hook (migrations) against its
 	// current image. MUST return immediately — the implementation runs the

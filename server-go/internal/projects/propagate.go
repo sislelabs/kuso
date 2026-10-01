@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"strings"
 
+	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/kube"
 	"slices"
 )
@@ -306,6 +307,12 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if svc.Spec.Image != nil &&
 					svc.Spec.Release != nil && len(svc.Spec.Release.Command) > 0 {
 					env.Spec.PendingImage = svc.Spec.Image
+					// Setting the image again is how a user retries a
+					// release the watcher gave up on; drop its give-up
+					// marker or the same tag is skipped forever.
+					delete(env.Annotations, imagerelease.AnnFailedImage)
+					delete(env.Annotations, imagerelease.AnnFailedAttempts)
+					delete(env.Annotations, imagerelease.AnnFailedAt)
 				} else {
 					env.Spec.Image = svc.Spec.Image
 					env.Spec.PendingImage = nil

@@ -95,6 +95,12 @@ func (s *Service) ListKeys(ctx context.Context, project string) ([]string, error
 	sec, err := s.read(ctx, s.nsFor(ctx, project), SecretName(project))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// No Secret yet is normal for a fresh project, but for an
+			// unknown project it must be a 404, not an empty list that
+			// reads as "no secrets" on a typo.
+			if _, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); apierrors.IsNotFound(perr) {
+				return nil, fmt.Errorf("%w: project %s", ErrNotFound, project)
+			}
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("read shared secret: %w", err)

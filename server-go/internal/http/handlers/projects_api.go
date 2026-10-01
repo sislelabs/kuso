@@ -45,6 +45,7 @@ type ProjectsAPI interface {
 	RevertServiceSnapshot(ctx context.Context, project, service string, raw []byte) error
 	RevertEnvironmentSnapshot(ctx context.Context, project, name string, raw []byte) error
 	WakeService(ctx context.Context, project, service string) error
+	WakeServiceEnv(ctx context.Context, project, service, env string) error
 	StopService(ctx context.Context, project, service string) error
 	StartService(ctx context.Context, project, service string) error
 	StopProject(ctx context.Context, project string) error

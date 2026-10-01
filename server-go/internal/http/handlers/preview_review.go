@@ -38,6 +38,20 @@ import (
 type PreviewReviewHandler struct {
 	DB   *db.DB
 	Kube *kube.Client
+	// Namespace is the home namespace (KusoProject CRs). Envs and
+	// services live in the project's spec.namespace when set.
+	Namespace string
+}
+
+func (h *PreviewReviewHandler) projectNamespace(ctx context.Context, project string) string {
+	home := h.Namespace
+	if home == "" {
+		home = "kuso"
+	}
+	if p, err := h.Kube.GetKusoProject(ctx, home, project); err == nil && p != nil && p.Spec.Namespace != "" {
+		return p.Spec.Namespace
+	}
+	return home
 }
 
 // PublicReviewerView is the shape the reviewer page consumes. Strips
@@ -113,7 +127,8 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 	// view without services rather than erroring (reviewer page
 	// already shows enough PR meta to start the conversation).
 	if h.Kube != nil {
-		envs, _ := h.Kube.ListKusoEnvironmentsByLabels(ctx, "kuso", map[string]string{
+		ns := h.projectNamespace(ctx, review.Project)
+		envs, _ := h.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 			"kuso.sislelabs.com/project": review.Project,
 			"kuso.sislelabs.com/env":     "preview-pr-" + itoa(review.PRNumber),
 		})
@@ -123,7 +138,7 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 			// view. Need to fetch the parent service CR to check the
 			// flag — cheap enough at the rare-frequency this page is
 			// hit.
-			svc, err := h.Kube.GetKusoService(ctx, "kuso", env.Spec.Service)
+			svc, err := h.Kube.GetKusoService(ctx, ns, env.Spec.Service)
 			if err != nil || svc == nil {
 				continue
 			}

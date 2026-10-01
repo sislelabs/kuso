@@ -37,6 +37,65 @@
             "description": "Free-form label shown in the UI. Optional; falls back to the cron's short name.",
             "type": "string"
           },
+          "env": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "properties": {
+                    "configMapKeyRef": {
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "key"
+                      ],
+                      "type": "object"
+                    },
+                    "secretKeyRef": {
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "pattern": "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$",
+                          "type": "string",
+                          "x-kubernetes-validations": [
+                            {
+                              "message": "control-plane secrets (kuso-*) cannot be referenced from workload CRs",
+                              "rule": "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "key"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "envFromSecrets": {
             "items": {
               "pattern": "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$",

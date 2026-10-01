@@ -323,7 +323,16 @@ func (c *Cache) PodCountsByNode() (map[string]int, bool) {
 		if err != nil {
 			continue
 		}
-		out[key] = len(objs)
+		// Completed Job pods keep their nodeName but use no capacity;
+		// counting them showed 137/110 on a node running 40.
+		n := 0
+		for _, o := range objs {
+			if p, ok := o.(*corev1.Pod); ok && (p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed) {
+				continue
+			}
+			n++
+		}
+		out[key] = n
 	}
 	return out, true
 }

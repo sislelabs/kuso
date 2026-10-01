@@ -215,6 +215,10 @@ type RewriteOpts struct {
 	// CreateContainerConfigError, which the UI surfaces as
 	// "addon pending."
 	AllowPending bool
+	// Project, when set, is prefixed onto speculative pending refs so
+	// they name the real conn Secret (<project>-<addon>-conn) instead of
+	// the bare <addon>-conn no addon ever creates.
+	Project string
 }
 
 // RewriteEnvVar maps a wire-shape EnvVar through the var-ref parser.
@@ -291,11 +295,15 @@ func RewriteEnvVarWithOpts(in EnvVar, svcResolver ServiceRefResolver, addonResol
 			if !addonRefDNSSafe(ref.Name) {
 				return EnvVar{}, fmt.Errorf("env var %q: addon ref %q must be lowercase letters/digits/dashes for pending-mode resolution", in.Name, ref.Name)
 			}
+			pendingName := ref.SecretName()
+			if opts.Project != "" && !strings.HasPrefix(ref.Name, opts.Project+"-") {
+				pendingName = opts.Project + "-" + pendingName
+			}
 			return EnvVar{
 				Name: in.Name,
 				ValueFrom: map[string]any{
 					"secretKeyRef": map[string]any{
-						"name": ref.SecretName(),
+						"name": pendingName,
 						"key":  ref.Key,
 					},
 				},
@@ -390,10 +398,17 @@ func (s *Service) validateSecretRefName(ctx context.Context, project, service, n
 // (non-nil) set when AddonConnSecrets isn't wired.
 func (s *Service) ownedAddonConnSet(ctx context.Context, project string) (map[string]struct{}, error) {
 	set := map[string]struct{}{}
-	if s.AddonConnSecrets == nil {
+	// Env-scoped clones (db-staging) are this project's too; validating
+	// against the narrower mount list rejected refs the resolver had
+	// just accepted.
+	lookup := s.ReferenceableConnSecrets
+	if lookup == nil {
+		lookup = s.AddonConnSecrets
+	}
+	if lookup == nil {
 		return set, nil
 	}
-	owned, err := s.AddonConnSecrets(ctx, project)
+	owned, err := lookup(ctx, project)
 	if err != nil {
 		return nil, fmt.Errorf("resolve addon secrets: %w", err)
 	}

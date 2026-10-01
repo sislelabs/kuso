@@ -32,6 +32,9 @@ type UpdateProjectRequest struct {
 	// IncidentMonitoring=true opts the project into the incident-
 	// response agent. Omitted = leave unchanged.
 	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
+	// ClearDefaultRepo=true removes the project's default repository.
+	// An omitted or empty defaultRepo leaves it unchanged.
+	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
 }
 
 // RepoRef pairs a repo URL with optional branch + path. Used by

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -836,39 +837,106 @@ func TestPatchService_PortPropagatesToEnvironments(t *testing.T) {
 	}
 }
 
-// TestPatchService_DomainsDoNotPropagateToEnvironments asserts that
-// editing the service-level spec.domains field DOES NOT touch existing
-// envs' AdditionalHosts. v0.16.19 made spec.domains a seed-only
-// template — once an env exists, custom domains live exclusively on
-// the env CR. The propagation that used to mirror the field caused
-// production tab → staging Ingress claiming the same hostname →
-// cross-env Ingress conflict.
-//
-// Per-env edits go through AddEnvDomain / RemoveEnvDomain /
-// SetEnvDomains; those write directly to env.Spec.AdditionalHosts and
-// are covered by env_domains_test.go.
-func TestPatchService_DomainsDoNotPropagateToEnvironments(t *testing.T) {
+// TestPatchService_DomainsReachProductionOnly: routing reads the env CR,
+// so a service-level domains PATCH must mirror its diff onto the
+// production env (like AddDomain) — otherwise PATCH and `kuso apply`
+// report success while no Ingress changes. Other envs must not inherit
+// production's hosts (the v0.16.19 cross-env Ingress conflict).
+func TestPatchService_DomainsReachProductionOnly(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
 		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
 	)
+	ctx := context.Background()
 	add := []ServiceDomain{
 		{Host: "api.example.com", TLS: true},
-		{Host: "alt.example.com", TLS: true},
+		{Host: "Alt.Example.com", TLS: true},
 	}
-	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Domains: &add}); err != nil {
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Domains: &add}); err != nil {
 		t.Fatalf("PatchService add domains: %v", err)
 	}
-	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	prod, err := s.GetEnvironment(ctx, "alpha", "alpha-web-production")
 	if err != nil {
 		t.Fatalf("GetEnvironment: %v", err)
 	}
-	// Env's AdditionalHosts is whatever it was seeded with at create
-	// time (empty here); the new service-level domains do NOT leak.
-	if len(env.Spec.AdditionalHosts) != 0 {
-		t.Errorf("after svc-level PatchService domains: env.AdditionalHosts=%+v, want empty (svc spec.domains is no longer propagated)", env.Spec.AdditionalHosts)
+	if got := strings.Join(prod.Spec.AdditionalHosts, ","); got != "api.example.com,alt.example.com" {
+		t.Errorf("production additionalHosts = %q, want both hosts", got)
+	}
+	staging, _ := s.GetEnvironment(ctx, "alpha", "alpha-web-staging")
+	if len(staging.Spec.AdditionalHosts) != 0 {
+		t.Errorf("staging inherited production hosts: %v", staging.Spec.AdditionalHosts)
+	}
+
+	keep := []ServiceDomain{{Host: "api.example.com", TLS: true}}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Domains: &keep}); err != nil {
+		t.Fatalf("PatchService remove domain: %v", err)
+	}
+	prod, _ = s.GetEnvironment(ctx, "alpha", "alpha-web-production")
+	if got := strings.Join(prod.Spec.AdditionalHosts, ","); got != "api.example.com" {
+		t.Errorf("after removal production additionalHosts = %q, want api.example.com", got)
+	}
+}
+
+func TestPatchService_RejectsInvalidFields(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "api", "production", "main", "alpha-api-production"),
+	)
+	ctx := context.Background()
+	zero, neg := int32(0), int32(-5)
+	bogus := "bogus"
+	minNeg := -3
+	badHost := []ServiceDomain{{Host: "Not A Host!!"}}
+	cases := map[string]PatchServiceRequest{
+		"port 0":     {Port: &zero},
+		"port -5":    {Port: &neg},
+		"runtime":    {Runtime: &bogus},
+		"scale.min":  {Scale: &PatchScaleRequest{Min: &minNeg}},
+		"bad host":   {Domains: &badHost},
+		"masked arg": {BuildArgs: &map[string]string{"NPM_TOKEN": EnvMaskSentinel}},
+	}
+	for name, req := range cases {
+		if _, err := s.PatchService(ctx, "alpha", "web", req); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want ErrInvalid, got %v", name, err)
+		}
+	}
+	// A host already served by another service's env is a conflict, and
+	// nothing is written.
+	if _, err := s.AddEnvDomain(ctx, "alpha", "api", "production", "shop.example.com", ""); err != nil {
+		t.Fatalf("seed api domain: %v", err)
+	}
+	taken := []ServiceDomain{{Host: "shop.example.com", TLS: true}}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Domains: &taken}); !errors.Is(err, ErrConflict) {
+		t.Errorf("taken host: want ErrConflict, got %v", err)
+	}
+	svc, _ := s.GetService(ctx, "alpha", "web")
+	if len(svc.Spec.Domains) != 0 {
+		t.Errorf("conflicting host was written to the service spec: %v", svc.Spec.Domains)
+	}
+}
+
+// Reverting an apply revision used to write the "••••••••" mask as the
+// real value of every build arg.
+func TestRevertService_KeepsMaskedBuildArgs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", BuildArgs: map[string]string{"NPM_TOKEN": "real-token"}}),
+	)
+	ctx := context.Background()
+	snap := []byte(`{"patch":{"buildArgs":{"NPM_TOKEN":"` + EnvMaskSentinel + `","NODE_ENV":"production"}}}`)
+	if err := s.RevertServiceSnapshot(ctx, "alpha", "web", snap); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	svc, _ := s.GetService(ctx, "alpha", "web")
+	if svc.Spec.BuildArgs["NPM_TOKEN"] != "real-token" || svc.Spec.BuildArgs["NODE_ENV"] != "production" {
+		t.Fatalf("buildArgs after revert = %v", svc.Spec.BuildArgs)
 	}
 }
 
@@ -1304,5 +1372,72 @@ func TestPatchService_PlatformAPIEgressPropagatesToEnvironments(t *testing.T) {
 	env, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
 	if !env.Spec.PlatformAPIEgress {
 		t.Errorf("env spec should mirror platformApiEgress=true")
+	}
+}
+
+// The web settings panel PATCHes volumes as {name, mountPath, sizeGi}
+// only; that used to reset an RWX volume to the RWO default class.
+func TestPatchService_VolumesKeepStorageClassAndAccessMode(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Volumes: []kube.KusoVolume{
+			{Name: "data", MountPath: "/data", SizeGi: 5, StorageClass: "longhorn", AccessMode: "RWX"},
+		}}),
+	)
+	vols := []VolumePatch{{Name: "data", MountPath: "/data", SizeGi: 10}}
+	out, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Volumes: &vols})
+	if err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	v := out.Spec.Volumes[0]
+	if v.StorageClass != "longhorn" || v.AccessMode != "ReadWriteMany" || v.SizeGi != 10 {
+		t.Fatalf("volume = %+v, want longhorn/RWX/10", v)
+	}
+}
+
+func TestPatchService_PreviewToggleKeepsSeedAndReviewURL(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Previews: &kube.KusoServicePreviews{ReviewURL: true, Seed: "npm run seed"}}),
+	)
+	out, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Previews: &PatchPreviewsRequest{Disabled: true}})
+	if err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	p := out.Spec.Previews
+	if p == nil || !p.Disabled || !p.ReviewURL || p.Seed != "npm run seed" {
+		t.Fatalf("previews = %+v", p)
+	}
+}
+
+// The env chart silently drops bad volumes and malformed quantities, so
+// they must fail at write time with a message the user can act on.
+func TestPatchService_RejectsBadVolumesAndQuantities(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+	)
+	ctx := context.Background()
+	vols := map[string][]VolumePatch{
+		"bad name": {{Name: "Data_1", MountPath: "/data"}},
+		"relative": {{Name: "data", MountPath: "data"}},
+		"dup name": {{Name: "data", MountPath: "/a"}, {Name: "data", MountPath: "/b"}},
+		"dup path": {{Name: "a", MountPath: "/data"}, {Name: "b", MountPath: "/data"}},
+	}
+	for name, v := range vols {
+		if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Volumes: &v}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want ErrInvalid, got %v", name, err)
+		}
+	}
+	bad := map[string]any{"limits": map[string]any{"memory": "lots"}}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Resources: &bad}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad quantity: want ErrInvalid, got %v", err)
+	}
+	good := map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "256Mi"}, "limits": map[string]any{"memory": "1Gi"}}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Resources: &good}); err != nil {
+		t.Errorf("valid resources rejected: %v", err)
 	}
 }

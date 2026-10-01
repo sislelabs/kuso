@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -113,8 +114,15 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 			LifecycleImage: in.Buildpacks.LifecycleImage,
 		}
 	}
+	if in.GitHub != nil && in.GitHub.InstallationID > 0 {
+		out.GitHub = &projects.CreateProjectGithubSpec{InstallationID: in.GitHub.InstallationID}
+	}
 	if in.Image != nil {
 		out.Image = &projects.ServiceImageSpec{Repository: in.Image.Repository, Tag: in.Image.Tag}
+		if in.Image.PullSecret != "" {
+			ps := in.Image.PullSecret
+			out.Image.PullSecret = &ps
+		}
 	}
 	// Release hook, build args, public env, and security context were
 	// silently DROPPED by this conversion before — the wire DTO didn't
@@ -162,6 +170,7 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 		BaseDomain:         in.BaseDomain,
 		AlwaysOn:           in.AlwaysOn,
 		IncidentMonitoring: in.IncidentMonitoring,
+		ClearDefaultRepo:   in.ClearDefaultRepo,
 	}
 	if in.DefaultRepo != nil {
 		out.DefaultRepo = &projects.CreateProjectRepoSpec{
@@ -354,6 +363,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 // projectCtx pulls a 5-second timeout context from the request. Same
 // budget as the auth handler — kube round-trips against the live cluster
 // can occasionally stall and the caller is on a synchronous HTTP request.
+// projectDeleteBudget bounds the whole project-delete fan-out.
+const projectDeleteBudget = 2 * time.Minute
+
 func projectCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
@@ -540,6 +552,9 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		redactProjectRepoIfNeeded(ctx, h.DB, &out[i])
 	}
+	// The informer-backed list comes back in map order; sort so raw API
+	// callers get a stable order.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -758,7 +773,10 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := projectCtx(r)
+	// The fan-out (DB drops, envs, addons, builds, secrets) outlives the
+	// 5s projectCtx on a big project and left it half-deleted with a 500.
+	// Detached so a client disconnect doesn't abort it midway either.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), projectDeleteBudget)
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	// Admin, not editor: this is the single most destructive op in the
@@ -1226,7 +1244,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	// it, so the "your last crash mentioned X" pip should disappear
 	// without waiting for the next crash to confirm. Best-effort.
 	if h.DB != nil {
-		_ = h.DB.DeleteEnvHint(ctx, project, service, name)
+		_ = h.DB.DeleteEnvHint(ctx, project, project+"-"+service, name)
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
@@ -1408,7 +1426,9 @@ func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request)
 	}
 	var hints any
 	if h.DB != nil {
-		hints, _ = h.DB.ListEnvHints(ctx, project, service)
+		// The log shipper records hints under the pod's service label,
+		// which is the FQN "<project>-<service>", not the short name.
+		hints, _ = h.DB.ListEnvHints(ctx, project, project+"-"+service)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"names":      names,
@@ -1530,7 +1550,8 @@ func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	if err := h.Svc.WakeService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
+	// ?env= wakes that environment; omitted means production.
+	if err := h.Svc.WakeServiceEnv(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), r.URL.Query().Get("env")); err != nil {
 		h.fail(w, "wake service", err)
 		return
 	}

@@ -6,9 +6,9 @@ package kube
 // health surfaces (reconcilehealth scanner, backuphealth watcher) must
 // agree with the chart about WHICH addons get a `<name>-backup`
 // CronJob at all — expecting one where the chart deliberately renders
-// none (HA postgres → CNPG barman; instance-shared addons → backed up
-// via the instance addon; unsupported kinds) produced permanent false
-// "backups failing" pages.
+// none (instance-shared addons → backed up via the instance addon;
+// unsupported kinds) produced permanent false "backups failing" pages.
+// HA postgres does get one: it pg_dumps from the CNPG <name>-rw Service.
 func AddonBackupCronJobRendered(a *KusoAddon) bool {
 	if a == nil || a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
 		return false
@@ -24,7 +24,7 @@ func AddonBackupCronJobRendered(a *KusoAddon) bool {
 		if external {
 			return true // external-postgres variant has no ha/instance gate
 		}
-		return !a.Spec.HA && a.Spec.UseInstanceAddon == ""
+		return a.Spec.UseInstanceAddon == ""
 	case "redis", "mongodb", "mysql", "s3":
 		return !external && a.Spec.UseInstanceAddon == ""
 	default:
@@ -32,18 +32,10 @@ func AddonBackupCronJobRendered(a *KusoAddon) bool {
 	}
 }
 
-// AddonBackupSuppressedHA reports the one genuinely dangerous
-// non-rendered combination: a backup schedule on an HA postgres. The
-// chart suppresses the pg_dump CronJob there (CNPG barman would
-// conflict) but kuso does NOT plumb barman itself — so unless the
-// operator configured CNPG backups out-of-band, this addon LOOKS
-// scheduled and has zero backups.
+// AddonBackupSuppressedHA used to flag HA postgres, whose pg_dump
+// CronJob the chart suppressed. The chart now renders it for HA too
+// (against <name>-rw), so no combination is suppressed. Kept so the
+// health callers compile until their HA branches are removed.
 func AddonBackupSuppressedHA(a *KusoAddon) bool {
-	if a == nil || a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
-		return false
-	}
-	external := a.Spec.External != nil &&
-		(a.Spec.External.SecretName != "" || len(a.Spec.External.SecretKeys) > 0)
-	return a.Spec.Kind == "postgres" && a.Spec.HA &&
-		!external && a.Spec.UseInstanceAddon == ""
+	return false
 }

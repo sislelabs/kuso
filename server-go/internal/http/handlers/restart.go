@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -23,8 +25,11 @@ type restartRequest struct {
 // {"restartedAt": RFC3339}.
 func (h *BuildsHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	var req restartRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Decode whenever a body is present, not only when ContentLength > 0:
+	// a chunked body (ContentLength -1) naming a staging env used to be
+	// skipped and restart production instead.
+	if r.Body != nil && r.Body != http.NoBody {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 			return
 		}

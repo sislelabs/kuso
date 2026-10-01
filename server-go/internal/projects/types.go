@@ -58,6 +58,8 @@ type UpdateProjectRequest struct {
 	// IncidentMonitoring opts the project into the incident-response
 	// agent. Pointer-typed so an omitted key leaves the value alone.
 	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
+	// ClearDefaultRepo removes spec.defaultRepo. Wins over DefaultRepo.
+	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
 }
 
 type UpdateProjectPreviewsSpec struct {
@@ -132,6 +134,8 @@ type CreateServiceRequest struct {
 	// Size names a pod-size preset used when Resources is nil. Beats the
 	// instance default; an unknown preset falls back to the default.
 	Size string `json:"size,omitempty"`
+	// GitHub stamps spec.github.installationId on the new service.
+	GitHub *CreateProjectGithubSpec `json:"github,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

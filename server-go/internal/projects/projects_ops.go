@@ -288,6 +288,11 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// captured from the object as it was just before this write so the
 	// post-update baseDomain-change propagation below is accurate.
 	var prevBaseDomain, prevDefaultBranch string
+	// An explicit flag, or a defaultRepo with every field empty
+	// ({"url":""}), clears it; otherwise empty fields mean "leave alone".
+	if req.DefaultRepo != nil && req.DefaultRepo.URL == "" && req.DefaultRepo.DefaultBranch == "" && req.DefaultRepo.Path == "" {
+		req.ClearDefaultRepo = true
+	}
 	out, err := s.Kube.UpdateKusoProjectWithRetry(ctx, s.Namespace, name, func(cur *kube.KusoProject) error {
 		if req.Description != nil {
 			cur.Spec.Description = *req.Description
@@ -304,7 +309,9 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			}
 			cur.Spec.BaseDomain = v
 		}
-		if req.DefaultRepo != nil {
+		if req.ClearDefaultRepo {
+			cur.Spec.DefaultRepo = nil
+		} else if req.DefaultRepo != nil {
 			if cur.Spec.DefaultRepo == nil {
 				cur.Spec.DefaultRepo = &kube.KusoRepoRef{}
 			}
@@ -392,7 +399,7 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// branch. Build promotion filters on env.Spec.Branch, so skipping
 	// this leaves every existing env deploying nothing, silently. Same
 	// best-effort contract as the baseDomain propagation above.
-	if req.DefaultRepo != nil && req.DefaultRepo.DefaultBranch != "" {
+	if !req.ClearDefaultRepo && req.DefaultRepo != nil && req.DefaultRepo.DefaultBranch != "" {
 		newBranch := ""
 		if out.Spec.DefaultRepo != nil {
 			newBranch = out.Spec.DefaultRepo.DefaultBranch
@@ -510,6 +517,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			if herr := s.BuildHistoryCleanupForService(ctx, name, shortServiceName(name, svc.Name)); herr != nil {
 				cleanupFail("BuildHistory", svc.Name, herr)
 			}
+		}
+		if derr := s.deleteRepoTokenSecret(ctx, ns, name, shortServiceName(name, svc.Name)); derr != nil {
+			cleanupFail("Secret", repoTokenSecretName(name, shortServiceName(name, svc.Name)), derr)
 		}
 	}
 	// Addons — operator owns the StatefulSet + PVC + connection Secret

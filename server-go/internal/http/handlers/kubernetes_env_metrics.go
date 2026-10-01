@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +67,8 @@ func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 	// on project A could read project B's pod CPU/mem. Now we
 	// resolve the env CR → spec.project and gate on the caller's
 	// ProjectMembership before listing metrics.
-	if !h.requireEnvAccess(ctx, w, envName, db.ProjectRoleViewer) {
+	envNS, ok := h.requireEnvAccessAnyNS(ctx, w, envName, db.ProjectRoleViewer)
+	if !ok {
 		return
 	}
 
@@ -75,7 +77,7 @@ func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 	// the project card this is a single deliberate view rather than a
 	// fan-out, so the win here is smaller — but when a card poll has
 	// just warmed the entry, opening the overlay costs nothing upstream.
-	items, ok := listPodMetricsCached(ctx, h.Kube, h.Namespace)
+	items, ok := listPodMetricsCached(ctx, h.Kube, envNS)
 	if !ok {
 		// metrics-server not installed → return empty so the UI shows
 		// a "no metrics yet" state rather than an error banner.
@@ -165,7 +167,8 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 	// metrics-server pods matches the env CR name, so once we have the
 	// list we filter pod metrics by `app.kubernetes.io/instance in
 	// (env1, env2, ...)`.
-	envs, err := h.Kube.ListKusoEnvironmentsByLabels(ctx, h.Namespace, map[string]string{
+	projectNS := h.projectNamespace(ctx, project)
+	envs, err := h.Kube.ListKusoEnvironmentsByLabels(ctx, projectNS, map[string]string{
 		"kuso.sislelabs.com/project": project,
 	})
 	if err != nil {
@@ -202,7 +205,7 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 	// metrics.k8s.io has no watch verb (it's an aggregated API over an
 	// in-memory window), so a TTL cache is the right tool here rather
 	// than an informer.
-	items, ok := listPodMetricsCached(ctx, h.Kube, h.Namespace)
+	items, ok := listPodMetricsCached(ctx, h.Kube, projectNS)
 	if !ok {
 		// metrics-server missing or transient API outage — return zeros
 		// rather than 500ing the card. The UI renders a "—" state.
@@ -240,7 +243,8 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	}
 	tsCtx, tsCancel := kubeCtx(r)
 	defer tsCancel()
-	if !h.requireEnvAccess(tsCtx, w, envName, db.ProjectRoleViewer) {
+	envNS, ok := h.requireEnvAccessAnyNS(tsCtx, w, envName, db.ProjectRoleViewer)
+	if !ok {
 		return
 	}
 	rangeStr := r.URL.Query().Get("range")
@@ -263,10 +267,9 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	//   service="<namespace>-<envname>-http@kubernetes"
 	// (with namespace prefix and -http suffix for the typical http
 	// backend). The Ingress's underlying k8s Service is named after
-	// the env CR. We grab the namespace from h.Namespace; everything
-	// in kuso lives in one ns by default.
-	prefix := h.Namespace + "-" + envName
-	matcher := escapePromLabel(prefix) + ".*@kubernetes"
+	// the env CR, in the env's namespace. The trailing "-" anchors the
+	// env name so preview pr-1 doesn't also count pr-10..pr-19.
+	matcher := envTraefikMatcher(envNS, envName)
 
 	// The rate window scales with the step. A fixed [1m] window at the
 	// 1h step a 7d range uses would sample one minute per hour, so most
@@ -311,6 +314,64 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 		out.Series[name] = points
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// envTraefikMatcher is the PromQL regex for an env's Traefik service
+// label, "<namespace>-<envname>-<port>@kubernetes".
+func envTraefikMatcher(namespace, envName string) string {
+	return escapePromLabel(regexp.QuoteMeta(namespace+"-"+envName+"-")) + ".*@kubernetes"
+}
+
+// projectNamespace is the namespace a project's env CRs and pods live
+// in: spec.namespace when set, else the home namespace.
+func (h *KubernetesHandler) projectNamespace(ctx context.Context, project string) string {
+	if h.Kube != nil {
+		if p, err := h.Kube.GetKusoProject(ctx, h.Namespace, project); err == nil && p != nil && p.Spec.Namespace != "" {
+			return p.Spec.Namespace
+		}
+	}
+	return h.Namespace
+}
+
+// requireEnvAccessAnyNS is requireEnvAccess for an env that may live in
+// a project's custom namespace: it looks in the home namespace, then in
+// every project namespace, and returns the namespace it found the env in.
+func (h *KubernetesHandler) requireEnvAccessAnyNS(ctx context.Context, w http.ResponseWriter, envName string, role db.ProjectRole) (string, bool) {
+	if h.Kube == nil || h.DB == nil {
+		writeErr(w, http.StatusNotFound, "environment not found")
+		return "", false
+	}
+	envCR, ns := h.findEnv(ctx, envName)
+	if envCR == nil || envCR.Spec.Project == "" {
+		writeErr(w, http.StatusNotFound, "environment not found")
+		return "", false
+	}
+	if !requireProjectAccess(ctx, w, h.DB, envCR.Spec.Project, role) {
+		return "", false
+	}
+	return ns, true
+}
+
+func (h *KubernetesHandler) findEnv(ctx context.Context, envName string) (*kube.KusoEnvironment, string) {
+	if e, err := h.Kube.GetKusoEnvironment(ctx, h.Namespace, envName); err == nil && e != nil {
+		return e, h.Namespace
+	}
+	projs, err := h.Kube.ListKusoProjects(ctx, h.Namespace)
+	if err != nil {
+		return nil, ""
+	}
+	seen := map[string]bool{h.Namespace: true}
+	for _, p := range projs {
+		ns := p.Spec.Namespace
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		if e, err := h.Kube.GetKusoEnvironment(ctx, ns, envName); err == nil && e != nil {
+			return e, ns
+		}
+	}
+	return nil, ""
 }
 
 // pickStep chooses a reasonable scrape step for the range so the

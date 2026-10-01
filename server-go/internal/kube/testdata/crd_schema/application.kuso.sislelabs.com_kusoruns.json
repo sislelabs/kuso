@@ -122,6 +122,10 @@
             "description": "Project the run belongs to.",
             "type": "string"
           },
+          "resources": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
           "service": {
             "description": "Service whose latest succeeded build image + env this\nrun inherits. CR name shape: \u003cproject\u003e-\u003cservice\u003e.\n",
             "type": "string"

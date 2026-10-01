@@ -10,6 +10,8 @@
 package placement
 
 import (
+	corev1 "k8s.io/api/core/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -86,4 +88,26 @@ func CountMatches(p *kube.KusoPlacement, nodes []NodeIdentity) int {
 		}
 	}
 	return n
+}
+
+// Schedulable reports whether new pods can land on the node right now:
+// not cordoned and Ready. A placement whose only matches are cordoned or
+// NotReady nodes (nodewatch auto-cordons a node NotReady > 5 min) would
+// pass Matches yet leave every pod Pending.
+func Schedulable(n *corev1.Node) bool {
+	if n == nil || n.Spec.Unschedulable {
+		return false
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// MatchesSchedulable is Matches restricted to nodes that can take new
+// pods. Save-time placement validation should use this.
+func MatchesSchedulable(p *kube.KusoPlacement, n *corev1.Node) bool {
+	return Schedulable(n) && Matches(p, n.Name, n.Labels)
 }
