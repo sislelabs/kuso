@@ -335,13 +335,18 @@ func (w *Watcher) routedViaActivator(ctx context.Context, ns, envName string) bo
 // requestsInWindow returns the number of requests the env's traefik
 // service handled over the last idleMin minutes. 0 means idle.
 func (w *Watcher) requestsInWindow(ctx context.Context, ns, envName string, idleMin int) (float64, error) {
-	// Matches the label format the env-metrics endpoint uses:
-	//   service="<namespace>-<envname>-http@kubernetes"
-	matcher := escapePromLabel(ns+"-"+envName) + ".*@kubernetes"
 	q := fmt.Sprintf(
 		`sum(increase(traefik_service_requests_total{service=~"%s"}[%dm])) or vector(0)`,
-		matcher, idleMin)
+		traefikServiceMatcher(ns, envName), idleMin)
 	return w.promInstant(ctx, q)
+}
+
+// traefikServiceMatcher matches an env's traefik service label,
+// "<namespace>-<envname>-<port>@kubernetes". The "-" after the env name
+// keeps preview pr-1 from also counting pr-10..pr-19's traffic (and so
+// never going idle).
+func traefikServiceMatcher(ns, envName string) string {
+	return escapePromLabel(ns+"-"+envName+"-") + ".*@kubernetes"
 }
 
 // PreSleepReplicasAnnotation records the replica count an env had just

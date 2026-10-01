@@ -227,7 +227,21 @@ func (s *Service) UpdateSettings(ctx context.Context, spec map[string]any) error
 		return ErrNotFound
 	}
 	cr := &kusoes[0]
-	cr.Spec = spec
+	// Merge top-level keys instead of replacing the spec: a settings
+	// form that sends only the keys it edits used to wipe the rest
+	// (banner, registry, templates). A null value removes a key.
+	merged := make(map[string]any, len(cr.Spec)+len(spec))
+	for k, v := range cr.Spec {
+		merged[k] = v
+	}
+	for k, v := range spec {
+		if v == nil {
+			delete(merged, k)
+			continue
+		}
+		merged[k] = v
+	}
+	cr.Spec = merged
 	if _, err := s.Kube.Dynamic.Resource(kube.GVRKuso).Namespace(s.Namespace).
 		Update(ctx, toUnstructuredKuso(cr), metav1Update()); err != nil {
 		if apierrors.IsNotFound(err) {

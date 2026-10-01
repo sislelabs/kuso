@@ -105,3 +105,19 @@ func TestRegistryCreds_RequiresAuth(t *testing.T) {
 		t.Errorf("unauthenticated list status = %d, want 401", rec.Code)
 	}
 }
+
+// encodeURIComponent turns host:port into host%3Aport, and chi returns
+// the raw segment, so a port-qualified credential could never be deleted.
+func TestRegistryCreds_LogoutAcceptsEncodedHostPort(t *testing.T) {
+	t.Parallel()
+	h := registryCredsRouter(t)
+	rec := adminDo(t, h, http.MethodPost, "/api/projects/shop/registry-credentials",
+		`{"registry":"registry.example.com:5000","username":"octo","password":"pw"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("login status = %d body=%s", rec.Code, rec.Body)
+	}
+	rec = adminDo(t, h, http.MethodDelete, "/api/projects/shop/registry-credentials/registry.example.com%3A5000", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d body=%s", rec.Code, rec.Body)
+	}
+}

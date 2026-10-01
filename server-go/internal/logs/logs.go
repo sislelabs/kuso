@@ -11,7 +11,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -78,10 +80,14 @@ var (
 type Line struct {
 	Pod  string `json:"pod"`
 	Line string `json:"line"`
+
+	// ts is kubelet's timestamp for the line, used to merge pods in time
+	// order. Zero when it couldn't be parsed.
+	ts time.Time
 }
 
-// Tail returns up to lines log lines combined across pods, balancing per
-// pod. env="" defaults to "production". env may be either the short name
+// Tail returns the newest lines log lines across all pods, merged in
+// time order. env="" defaults to "production". env may be either the short name
 // ("production", "preview-pr-7") or the fully-qualified env CR name.
 func (s *Service) Tail(ctx context.Context, project, service, env string, lines int) ([]Line, string, error) {
 	if lines <= 0 {
@@ -187,15 +193,13 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	if len(pods.Items) == 0 {
 		return []Line{}, envName, nil
 	}
-	perPod := int64(lines / len(pods.Items))
-	if perPod < 1 {
-		perPod = 1
-	}
-
+	// Take the full count from every pod, then keep the newest N after
+	// merging. Splitting N across pods returned fewer lines than asked
+	// (--lines 3 on two replicas gave 2) and interleaved pods unordered.
 	out := make([]Line, 0, lines)
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		podLines, err := s.tailOnePod(ctx, ns, pod, perPod)
+		podLines, err := s.tailOnePod(ctx, ns, pod, int64(lines))
 		if err != nil {
 			// Skip the pod rather than failing the whole tail — partial
 			// data beats no data when one container is restarting.
@@ -203,10 +207,38 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		}
 		out = append(out, podLines...)
 	}
+	out = mergeByTime(out)
 	if len(out) > lines {
 		out = out[len(out)-lines:]
 	}
 	return out, envName, nil
+}
+
+// mergeByTime orders lines from several pods by timestamp. If any line
+// lacks one, the per-pod order is kept as is: sorting a mix of dated and
+// undated lines would scramble them.
+func mergeByTime(lines []Line) []Line {
+	for _, l := range lines {
+		if l.ts.IsZero() {
+			return lines
+		}
+	}
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].ts.Before(lines[j].ts) })
+	return lines
+}
+
+// splitTimestamp separates kubelet's "<RFC3339Nano> " prefix (requested
+// with PodLogOptions.Timestamps) from the log line.
+func splitTimestamp(raw string) (time.Time, string) {
+	sp := strings.IndexByte(raw, ' ')
+	if sp <= 0 {
+		return time.Time{}, raw
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw[:sp])
+	if err != nil {
+		return time.Time{}, raw
+	}
+	return t, raw[sp+1:]
 }
 
 // tailOnePod issues a single GetLogs request against the pod's primary
@@ -228,7 +260,7 @@ func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, ta
 	if podRestartTotal(pod) > 0 {
 		if prev := s.tailPodStream(ctx, ns, pod, tailLines, true); len(prev) > 0 {
 			out = append(out, prev...)
-			out = append(out, Line{Pod: pod.Name, Line: "── pod restarted; logs below are from the current container ──"})
+			out = append(out, Line{Pod: pod.Name, Line: "── pod restarted; logs below are from the current container ──", ts: prev[len(prev)-1].ts})
 		}
 	}
 
@@ -254,8 +286,9 @@ func podRestartTotal(p *corev1.Pod) int32 {
 // result.
 func (s *Service) tailPodStream(ctx context.Context, ns string, pod *corev1.Pod, tailLines int64, previous bool) []Line {
 	req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
-		TailLines: &tailLines,
-		Previous:  previous,
+		TailLines:  &tailLines,
+		Previous:   previous,
+		Timestamps: true,
 	})
 	stream, err := req.Stream(ctx)
 	if err != nil {
@@ -267,11 +300,11 @@ func (s *Service) tailPodStream(ctx context.Context, ns string, pod *corev1.Pod,
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
+		ts, line := splitTimestamp(scanner.Text())
 		if line == "" {
 			continue
 		}
-		out = append(out, Line{Pod: pod.Name, Line: line})
+		out = append(out, Line{Pod: pod.Name, Line: line, ts: ts})
 	}
 	return out
 }

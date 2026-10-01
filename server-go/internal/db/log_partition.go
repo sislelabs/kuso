@@ -258,6 +258,7 @@ func (d *DB) MigrateLogLineToPartitioned(ctx context.Context, logger *slog.Logge
 	// secondary indexes are dead weight from this point on.
 	for _, idx := range []string{
 		"LogLine_project_service_ts_idx",
+		"LogLine_project_service_id_idx",
 		"LogLine_ts_idx",
 		"LogLine_line_trgm_idx",
 	} {
@@ -288,8 +289,24 @@ func (d *DB) MigrateLogLineToPartitioned(ctx context.Context, logger *slog.Logge
 	if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_project_service_ts_idx" ON "LogLine"("project","service","ts" DESC)`); err != nil {
 		return fmt.Errorf("create idx project_service_ts: %w", err)
 	}
+	// Migration 0012's keyset-paging index: without it log search falls
+	// back to ~1s per page.
+	if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_project_service_id_idx" ON "LogLine"("project","service","id" DESC)`); err != nil {
+		return fmt.Errorf("create idx project_service_id: %w", err)
+	}
 	if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_ts_idx" ON "LogLine"("ts")`); err != nil {
 		return fmt.Errorf("create idx ts: %w", err)
+	}
+	// Start the new sequence above every legacy id BEFORE the copy.
+	// Lines shipped during the copy otherwise got ids from 1 up, below
+	// the error scanner's id watermark (skipped) and duplicating copied
+	// ids (the PK is (id, ts), so nothing rejected them).
+	if _, err := d.ExecContext(ctx, `
+		SELECT setval(pg_get_serial_sequence('"LogLine"', 'id'),
+		              COALESCE((SELECT MAX("id") FROM "LogLine_legacy"), 0) + 1,
+		              false)
+	`); err != nil {
+		return fmt.Errorf("seed serial above legacy ids: %w", err)
 	}
 	if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_line_trgm_idx" ON "LogLine" USING GIN ("line" gin_trgm_ops)`); err != nil {
 		// pg_trgm missing → the schema apply also skipped it. Not

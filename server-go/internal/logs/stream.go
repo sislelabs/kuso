@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // Caps. maxTailLinesPerPod bounds the historical tail kube returns
@@ -50,6 +51,11 @@ type Frame struct {
 	Ts      string `json:"ts,omitempty"`
 	Value   string `json:"value,omitempty"`
 	Message string `json:"message,omitempty"`
+
+	// backlog marks a line from the historical tail requested at stream
+	// open (or a newly attached pod's tail), as opposed to a live line.
+	// Only backlog counts toward maxAggregateTailFrames.
+	backlog bool
 }
 
 // Sink is the writer side of a streaming session. The handler implements
@@ -72,10 +78,10 @@ type Sink interface {
 //   - per-pod: 1000 lines (was 5000). 5000 × 50 pods × ~4 KB/line was
 //     ~1 GB buffered before the first frame shipped — enough to OOM
 //     a 768 MiB pod with one greedy client.
-//   - aggregate: streamPods enforces a maxAggregateTailFrames ceiling
-//     across all pod goroutines combined so 100 pods × 1000 doesn't
-//     blow memory either. New frames after the cap is reached drop
-//     with a one-shot warning frame instead of silently truncating.
+//   - aggregate: streamPods caps the historical backlog at
+//     maxAggregateTailFrames across all pods combined so 100 pods × 1000
+//     doesn't blow memory either; backlog past the cap drops with a
+//     one-shot warning frame. Live lines are not capped.
 func (s *Service) Stream(ctx context.Context, project, service, env string, tailLines int, sink Sink) (string, error) {
 	if tailLines <= 0 {
 		tailLines = 100
@@ -205,7 +211,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 				})
 				if err == nil && len(pods2.Items) > 0 {
 					_ = sink.Write(Frame{Type: "phase", Value: "starting"})
-					err = s.streamPods(ctx, ns, pods2.Items, tailLines, sink)
+					err = s.streamPods(ctx, ns, pods2.Items, tailLines, sink, nil)
 					_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 					return env, err
 				}
@@ -218,7 +224,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		// completes mid-stream), send a phase=completed frame so the
 		// client closes the WS cleanly instead of showing
 		// "connection lost".
-		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink)
+		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink, nil)
 		_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 		return env, err
 	}
@@ -254,7 +260,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 			_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 			return env, nil
 		}
-		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink)
+		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink, nil)
 		_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 		return env, err
 	}
@@ -285,140 +291,139 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	if err != nil {
 		return envName, fmt.Errorf("list pods: %w", err)
 	}
-	if len(pods.Items) == 0 {
-		// No pods yet — just keep the WS open so the client sees frames
-		// the moment the first pod boots. We retry the listing on a slow
-		// loop until ctx is done.
-		return envName, s.streamWaitForPods(ctx, ns, envName, tailLines, sink)
+	// Env tails outlive any one pod: with no pods yet, or after a
+	// redeploy replaces them, re-listing attaches the new pods so the
+	// socket doesn't sit open and silent.
+	relist := func(ctx context.Context) ([]corev1.Pod, error) {
+		return s.listEnvPods(ctx, ns, envName)
 	}
-
-	return envName, s.streamPods(ctx, ns, pods.Items, tailLines, sink)
+	return envName, s.streamPods(ctx, ns, pods.Items, tailLines, sink, relist)
 }
 
-// streamWaitForPods polls every 3s for new pods. As soon as one shows
-// up, it transitions into streamPods.
-func (s *Service) streamWaitForPods(ctx context.Context, ns, envName string, tailLines int, sink Sink) error {
-	t := time.NewTicker(3 * time.Second)
-	defer t.Stop()
-	heartbeat := time.NewTicker(20 * time.Second)
-	defer heartbeat.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-heartbeat.C:
-			if err := sink.Write(Frame{Type: "ping"}); err != nil {
-				return err
+// listEnvPods lists an env's pods, from the pod informer when it's synced.
+func (s *Service) listEnvPods(ctx context.Context, ns, envName string) ([]corev1.Pod, error) {
+	sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": envName})
+	if s.Kube.Cache != nil {
+		if cached, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
+			out := make([]corev1.Pod, 0, len(cached))
+			for _, p := range cached {
+				if p.Namespace == ns {
+					out = append(out, *p)
+				}
 			}
-		case <-t.C:
-			pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-				LabelSelector: "app.kubernetes.io/instance=" + envName,
-			})
-			if err != nil {
-				continue
-			}
-			if len(pods.Items) > 0 {
-				return s.streamPods(ctx, ns, pods.Items, tailLines, sink)
-			}
+			return out, nil
 		}
 	}
+	list, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
 
-// streamPods spawns one goroutine per pod, fans into sink, returns when
-// all goroutines finish or ctx is canceled.
-func (s *Service) streamPods(ctx context.Context, ns string, pods []corev1.Pod, tailLines int, sink Sink) error {
+// streamPodsRelistInterval is how often an env tail re-lists pods to
+// attach ones created after the stream opened. A var so tests can shorten it.
+var streamPodsRelistInterval = 3 * time.Second
+
+// streamPods spawns one goroutine per pod and fans their frames into sink.
+// With relist nil (build and run pods) it returns once every pod stream
+// has ended, so the caller can send phase=completed. With relist set (env
+// tails) it runs until ctx ends, attaching pods that appear later.
+func (s *Service) streamPods(ctx context.Context, ns string, pods []corev1.Pod, tailLines int, sink Sink, relist func(context.Context) ([]corev1.Pod, error)) error {
 	var wg sync.WaitGroup
 	frames := make(chan Frame, 64)
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Aggregate cap. Counted at sink-write time below so a misbehaving
-	// pod can't burn through the whole budget by itself — the reader
-	// loop is the choke point, applying back-pressure naturally.
-	var totalEmitted int
+	// Aggregate cap on backlog lines, counted at sink-write time so a
+	// misbehaving pod can't burn the whole budget by itself. Live lines
+	// aren't capped: a long-lived tail legitimately streams far more.
+	var backlogEmitted int
 
-	for i := range pods {
-		pod := pods[i]
+	seen := map[string]bool{}
+	start := func(pod corev1.Pod, tail int) {
+		seen[pod.Namespace+"/"+pod.Name+"/"+string(pod.UID)] = true
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.streamOnePod(streamCtx, ns, pod, tailLines, frames)
+			s.streamOnePod(streamCtx, ns, pod, tail, frames)
 		}()
 	}
+	for i := range pods {
+		start(pods[i], tailLines)
+	}
 
-	// Heartbeat into the same fan-in channel so the handler doesn't need
-	// a separate timer.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		t := time.NewTicker(20 * time.Second)
+	// The heartbeat runs in this loop, not in the WaitGroup: counting it
+	// there meant wg never drained, so build/run streams never returned
+	// and never sent phase=completed.
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+
+	var done chan struct{}
+	var relistC <-chan time.Time
+	if relist == nil {
+		done = make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+	} else {
+		t := time.NewTicker(streamPodsRelistInterval)
 		defer t.Stop()
-		for {
-			select {
-			case <-streamCtx.Done():
-				return
-			case <-t.C:
-				select {
-				case frames <- Frame{Type: "ping"}:
-				case <-streamCtx.Done():
-					return
-				}
-			}
-		}
-	}()
+		relistC = t.C
+	}
 
-	// Closer: when every pod goroutine + heartbeat exits, close the
-	// channel so the writer loop drains and returns.
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
+	write := func(f Frame) error {
+		if f.Type == "log" && f.backlog {
+			if backlogEmitted >= maxAggregateTailFrames {
+				if backlogEmitted == maxAggregateTailFrames {
+					backlogEmitted++
+					return sink.Write(Frame{
+						Type:    "error",
+						Message: fmt.Sprintf("log backlog cap reached (%d lines); reduce tail or filter pods", maxAggregateTailFrames),
+					})
+				}
+				return nil
+			}
+			backlogEmitted++
+		}
+		return sink.Write(f)
+	}
 
 	for {
 		select {
-		case f, ok := <-frames:
-			if !ok {
-				return nil
-			}
-			// Drop log frames once the aggregate cap is hit. The first
-			// drop emits a one-shot notice frame so the user knows
-			// further history was truncated; pings still flow so the
-			// connection stays warm.
-			if f.Type == "log" && totalEmitted >= maxAggregateTailFrames {
-				if totalEmitted == maxAggregateTailFrames {
-					_ = sink.Write(Frame{
-						Type:    "error",
-						Message: fmt.Sprintf("log buffer cap reached (%d frames); reduce tail or filter pods", maxAggregateTailFrames),
-					})
-					totalEmitted++
-				}
-				continue
-			}
-			if err := sink.Write(f); err != nil {
+		case f := <-frames:
+			if err := write(f); err != nil {
 				cancel()
 				return err
 			}
-			if f.Type == "log" {
-				totalEmitted++
+		case <-heartbeat.C:
+			if err := sink.Write(Frame{Type: "ping"}); err != nil {
+				cancel()
+				return err
+			}
+		case <-relistC:
+			current, err := relist(streamCtx)
+			if err != nil {
+				continue
+			}
+			for i := range current {
+				p := current[i]
+				if seen[p.Namespace+"/"+p.Name+"/"+string(p.UID)] || p.DeletionTimestamp != nil {
+					continue
+				}
+				// Everything a pod logged since it appeared is new to
+				// this viewer, so take its full tail, not the opener's.
+				start(p, maxTailLinesPerPod)
 			}
 		case <-done:
-			// Drain remaining buffered frames before returning. The
-			// aggregate cap still applies — a 50-pod env that flushed
-			// late could otherwise emit a second burst here that
-			// blew past the budget the main arm is enforcing.
+			// Drain frames buffered before the last pod stream ended.
 			for {
 				select {
 				case f := <-frames:
-					if f.Type == "log" && totalEmitted >= maxAggregateTailFrames {
-						continue
-					}
-					if err := sink.Write(f); err != nil {
+					if err := write(f); err != nil {
 						return err
-					}
-					if f.Type == "log" {
-						totalEmitted++
 					}
 				default:
 					return nil
@@ -514,7 +519,9 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	read := 0
 	for scanner.Scan() {
+		read++
 		text := scanner.Text()
 		if text == "" {
 			continue
@@ -528,11 +535,12 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 		}
 		select {
 		case frames <- Frame{
-			Type:   "log",
-			Pod:    podName,
-			Line:   line,
-			Stream: "stdout",
-			Ts:     time.Now().UTC().Format(time.RFC3339),
+			Type:    "log",
+			Pod:     podName,
+			Line:    line,
+			Stream:  "stdout",
+			Ts:      time.Now().UTC().Format(time.RFC3339),
+			backlog: isInit || read <= tailLines,
 		}:
 		case <-ctx.Done():
 			return

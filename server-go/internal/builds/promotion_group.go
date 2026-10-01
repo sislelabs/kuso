@@ -161,7 +161,14 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 	for _, svc := range svcs {
 		s := latestOf(waveBySvc[svc])
 		short := strings.TrimPrefix(svc, b.Spec.Project+"-")
-		switch buildPhase(s) {
+		phase := buildPhase(s)
+		if phase == "cancelled" && s.Annotations[annCIGate] == ciGateFailed {
+			// Cancelled by the CI gate because this commit's CI failed:
+			// that's a failure of the wave, not an operator skip, or the
+			// siblings would promote alone exactly for a red commit.
+			phase = "failed"
+		}
+		switch phase {
 		case "succeeded":
 			continue // green
 		case "cancelled":

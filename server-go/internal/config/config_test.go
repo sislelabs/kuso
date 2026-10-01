@@ -130,3 +130,24 @@ func TestDefaultBaseDomain(t *testing.T) {
 		t.Errorf("with KUSO_DOMAIN unset: got %q, want fallback %q", got, fallbackBaseDomain)
 	}
 }
+
+// The cluster config form PUT only the keys it edits, and UpdateSettings
+// replaced the whole spec, wiping banner/registry/templates.
+func TestUpdateSettings_MergesTopLevelKeys(t *testing.T) {
+	t.Parallel()
+	s := newService(t, map[string]any{
+		"clusterissuer": "letsencrypt-prod",
+		"registry":      map[string]any{"enabled": true},
+	}, false)
+	_ = s.Reload(context.Background())
+	if err := s.UpdateSettings(context.Background(), map[string]any{"clusterissuer": "letsencrypt-staging"}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Settings()
+	if got["clusterissuer"] != "letsencrypt-staging" {
+		t.Errorf("clusterissuer = %v", got["clusterissuer"])
+	}
+	if got["registry"] == nil {
+		t.Errorf("registry wiped by an update that didn't mention it: %+v", got)
+	}
+}

@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -91,10 +93,15 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Version string `json:"version"`
 	}
-	// Decode best-effort. An empty body is fine — we treat "" as
-	// "use latest". Unknown fields are tolerated.
-	if r.ContentLength > 0 && r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+	// An empty body means "latest"; unknown fields are tolerated. A body
+	// that is present but malformed is a 400: decoding only when
+	// ContentLength > 0 and ignoring the error turned a chunked or broken
+	// "roll back to vX" request into "update to latest".
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+			return
+		}
 	}
 	target := strings.TrimSpace(body.Version)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)

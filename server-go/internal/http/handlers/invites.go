@@ -116,9 +116,11 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var expiresAt *time.Time
 	if req.ExpiresIn != "" {
-		d, err := time.ParseDuration(req.ExpiresIn)
-		if err != nil || d <= 0 {
-			writeErr(w, http.StatusBadRequest, "expiresIn: invalid duration")
+		// parseRangeDuration also takes days/weeks ("7d"), which
+		// time.ParseDuration rejects.
+		d, err := parseRangeDuration(req.ExpiresIn)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "expiresIn: invalid duration (e.g. 72h, 7d, 2w)")
 			return
 		}
 		t := time.Now().Add(d)

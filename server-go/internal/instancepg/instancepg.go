@@ -628,9 +628,11 @@ func (s *Service) readAdminDSN(ctx context.Context) (string, error) {
 
 // listConsumers returns the project names of every KusoAddon CR with
 // spec.useInstanceAddon = "pg". Used by Disable as a teardown gate +
-// by GetStatus.ProjectsUsing.
+// by GetStatus.ProjectsUsing. Lists cluster-wide: projects with their own
+// namespace keep their addon CRs there, and missing them would let Disable
+// tear down a DB they still use.
 func (s *Service) listConsumers(ctx context.Context) ([]string, error) {
-	addons, err := s.Kube.ListKusoAddons(ctx, s.Namespace)
+	addons, err := s.Kube.ListKusoAddons(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
 	}

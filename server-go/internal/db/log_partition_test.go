@@ -158,6 +158,27 @@ func TestMigrateLogLineToPartitioned_HappyPath(t *testing.T) {
 		t.Errorf("row count after migration = %d, want 2", rowCount)
 	}
 
+	// The keyset-paging index must survive the cutover.
+	var idx int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'LogLine_project_service_id_idx'`).Scan(&idx); err != nil {
+		t.Fatal(err)
+	}
+	if idx == 0 {
+		t.Error("LogLine_project_service_id_idx lost in the migration")
+	}
+	// A line shipped after the cutover must get an id above every
+	// copied one.
+	if err := logDB.InsertLogLines(ctx, []LogLine{{Ts: today, Pod: "p1", Project: "alpha", Service: "web", Line: "after"}}); err != nil {
+		t.Fatal(err)
+	}
+	var dupIDs int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) - COUNT(DISTINCT "id") FROM "LogLine"`).Scan(&dupIDs); err != nil {
+		t.Fatal(err)
+	}
+	if dupIDs != 0 {
+		t.Errorf("%d duplicate ids after migration", dupIDs)
+	}
+
 	// A second migration call should be a no-op (already partitioned).
 	if err := d.MigrateLogLineToPartitioned(ctx, slog.Default()); err != nil {
 		t.Fatalf("second MigrateLogLineToPartitioned: %v", err)

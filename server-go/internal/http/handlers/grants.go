@@ -14,6 +14,7 @@ import (
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // GrantsHandler manages the role-system-v2 access surfaces that the
@@ -41,6 +42,9 @@ type GrantsHandler struct {
 	DB     *db.DB
 	Audit  *audit.Service
 	Logger *slog.Logger
+	// Kube + Namespace let ListGrants 404 an unknown project. Optional.
+	Kube      *kube.Client
+	Namespace string
 }
 
 // auditGrant writes one grant-surface audit row. Severity is "warn" for
@@ -218,6 +222,9 @@ func (h *GrantsHandler) ListGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := grantsCtx(r)
 	defer cancel()
+	if !requireParent(ctx, w, h.Kube, h.Namespace, chi.URLParam(r, "project"), "") {
+		return
+	}
 	grants, err := h.DB.ListProjectGrants(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.Logger.Error("list project grants", "err", err)

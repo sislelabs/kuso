@@ -81,8 +81,10 @@ func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 // ListUsers returns the slim user-list shape.
+// ListUsers and ListGroups also admit user:write: the users page is where
+// a delegated user manager does their job.
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
+	if !requireUserListRead(w, r) {
 		return
 	}
 	ctx, cancel := adminCtx(r)
@@ -182,7 +184,7 @@ func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
+	if !requireUserListRead(w, r) {
 		return
 	}
 	ctx, cancel := adminCtx(r)
@@ -367,7 +369,10 @@ func (h *AdminHandler) DeleteMyToken(w http.ResponseWriter, r *http.Request) {
 func summariseUsers(in []db.UserSummary) []map[string]any {
 	out := make([]map[string]any, 0, len(in))
 	for _, u := range in {
-		out = append(out, map[string]any{
+		if u.Groups == nil {
+			u.Groups = []string{}
+		}
+		row := map[string]any{
 			"id":        u.ID,
 			"username":  u.Username,
 			"email":     u.Email,
@@ -379,7 +384,16 @@ func summariseUsers(in []db.UserSummary) []map[string]any {
 			// inherit from groups). The Users admin UI edits this via
 			// PUT /api/users/:id/instance-role.
 			"instanceRole": nullStr(u.InstanceRole),
-		})
+			"provider":     nullStr(u.Provider),
+			"groups":       u.Groups,
+		}
+		if !u.CreatedAt.IsZero() {
+			row["createdAt"] = u.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		if u.LastLogin.Valid {
+			row["lastLogin"] = u.LastLogin.Time.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
 	}
 	return out
 }

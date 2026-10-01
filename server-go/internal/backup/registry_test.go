@@ -2,10 +2,11 @@ package backup
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kuso/server/internal/testsh"
 )
 
 func TestRegistryResolvesKnownKinds(t *testing.T) {
@@ -141,7 +142,7 @@ func TestMongoMysqlRestore_WaitForServerBeforeApply(t *testing.T) {
 		t.Run(tc.kind, func(t *testing.T) {
 			p, _ := NewDefaultRegistry().For(tc.kind)
 			s := p.RestoreScript()
-			if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
+			if out, err := testsh.Command(t, s, "-n").CombinedOutput(); err != nil {
 				t.Fatalf("restore script does not parse: %v\n%s", err, out)
 			}
 			wait := strings.Index(s, "nc -z")
@@ -195,7 +196,7 @@ func runRestoreScript(t *testing.T, script, apply, ncBody, connEnv string) (stri
 		}
 	}
 	script = strings.ReplaceAll(script, "/tmp/", dir+"/")
-	cmd := exec.Command("sh", "-c", script)
+	cmd := testsh.Command(t, script)
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),
 		"BUCKET=b", "S3_ENDPOINT=e", "KEY=p/a/k", connEnv,

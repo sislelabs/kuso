@@ -70,6 +70,33 @@ var ErrPublicTCPNotConfigured = fmt.Errorf("%w: public TCP proxy is not configur
 // is already allocated.
 var ErrPublicTCPPoolExhausted = fmt.Errorf("%w: every port in the public TCP pool is allocated; widen KUSO_TCP_PROXY_PORTS", ErrConflict)
 
+// publicTCPKinds are the kinds the kusoaddon chart's public-tcp.yaml can
+// route to (single-node topology). Keep in step with that template.
+var publicTCPKinds = map[string]bool{
+	"postgres": true, "redis": true, "valkey": true, "mongodb": true,
+	"mysql": true, "rabbitmq": true, "clickhouse": true, "nats": true,
+	"redpanda": true, "meilisearch": true, "s3": true,
+}
+
+// checkPublicTCPSupported refuses addons the chart can't expose, so the
+// user gets a 400 instead of a port that never routes. With HA only
+// postgres (via CNPG's -rw Service) and nats are routable: redis-ha has
+// no master-tracking Service. External and instance-shared addons have
+// no in-cluster pod of their own.
+func checkPublicTCPSupported(spec *kube.KusoAddonSpec) error {
+	switch {
+	case spec.External != nil && spec.External.SecretName != "":
+		return fmt.Errorf("%w: public TCP isn't available for an external addon; connect to the provider directly", ErrInvalid)
+	case spec.UseInstanceAddon != "":
+		return fmt.Errorf("%w: public TCP isn't available for an addon on the shared instance database", ErrInvalid)
+	case !publicTCPKinds[spec.Kind]:
+		return fmt.Errorf("%w: public TCP isn't supported for kind=%s", ErrInvalid, spec.Kind)
+	case spec.HA && spec.Kind != "postgres" && spec.Kind != "nats":
+		return fmt.Errorf("%w: public TCP isn't supported for HA %s (no primary-tracking Service to route to)", ErrInvalid, spec.Kind)
+	}
+	return nil
+}
+
 // EnablePublicTCP flips spec.publicTCP.{enabled:true,port:<allocated>}
 // on the addon, allocating the next free port from the configured
 // pool. Idempotent: if the addon already has an allocated port, that
@@ -99,6 +126,9 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 	// method so the guarantee doesn't depend on the handler precheck.
 	if !addonOwnedByProject(cur, project) {
 		return 0, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+	}
+	if err := checkPublicTCPSupported(&cur.Spec); err != nil {
+		return 0, err
 	}
 	if cur.Spec.PublicTCP != nil && cur.Spec.PublicTCP.Enabled && cur.Spec.PublicTCP.Port > 0 {
 		return cur.Spec.PublicTCP.Port, nil

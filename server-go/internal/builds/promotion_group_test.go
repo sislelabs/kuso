@@ -95,6 +95,15 @@ func TestPromotionHoldVerdict(t *testing.T) {
 			want: "",
 		},
 		{
+			// The CI gate cancels a red commit's builds; that's a wave
+			// failure, not an operator skip.
+			name: "sibling cancelled by a failed CI gate — holds",
+			all: []kube.KusoBuild{cms,
+				gb("int-1", "scuba-internal", shaA, repo, "cancelled", t0,
+					map[string]string{annCIGate: ciGateFailed})},
+			want: "sibling build failed",
+		},
+		{
 			name: "different repo sibling failing — unrelated, proceeds",
 			all: []kube.KusoBuild{cms,
 				gb("oth-1", "scuba-other", shaA, "https://github.com/acme/other", "failed", t0, nil)},

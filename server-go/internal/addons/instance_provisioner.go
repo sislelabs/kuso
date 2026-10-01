@@ -81,14 +81,17 @@ func (s *Service) instanceHasPooler(ctx context.Context, perProjectDSN string) b
 // userName are the shared form "<project>_<addon>" — both bounded
 // by 63 chars (Postgres limit). createdDB reports whether this call
 // created the database; a rollback may only drop it when true, because
-// a pre-existing one is a kept DB with data.
-func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort string) (perProjectDSN, password string, createdDB bool, err error) {
+// a pre-existing one is a kept DB with data. keepPassword, when set, is
+// re-asserted on the role instead of minting a new one.
+func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort, keepPassword string) (perProjectDSN, password string, createdDB bool, err error) {
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
-	pw, err := randPassword()
-	if err != nil {
-		return "", "", false, fmt.Errorf("gen password: %w", err)
+	pw := keepPassword
+	if pw == "" {
+		if pw, err = randPassword(); err != nil {
+			return "", "", false, fmt.Errorf("gen password: %w", err)
+		}
 	}
 
 	db, err := sql.Open("postgres", adminDSN)
@@ -475,8 +478,10 @@ func randPassword() (string, error) {
 }
 
 // ResyncInstanceAddon re-runs the provisioner for an instance-shared
-// addon. Useful if the per-project DSN secret was deleted, or to
-// rotate the password.
+// addon. Useful if the per-project DSN secret was deleted. The role keeps
+// the password from the existing conn Secret: rotating it here broke every
+// running pod's next connect, since envFrom only resolves at container
+// start. When the Secret's content does change, consuming envs restart.
 func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string) error {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
@@ -501,9 +506,16 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 		return err
 	}
 	short := ShortName(project, fqn)
-	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short)
+	before := s.connSecretData(ctx, ns, connSecretName(fqn))
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short, string(before["POSTGRES_PASSWORD"]))
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
-	return s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn))
+	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
+		return err
+	}
+	if !connDataEqual(before, s.connSecretData(ctx, ns, connSecretName(fqn))) {
+		s.restartConnConsumers(ctx, ns, connSecretName(fqn))
+	}
+	return nil
 }

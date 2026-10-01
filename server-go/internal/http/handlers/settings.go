@@ -118,6 +118,42 @@ func (h *SettingsHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// buildSettingsPatch is the PutBuild body. Every field is optional: an
+// omitted one keeps its current value. A full-struct decode made any save
+// pin maxConcurrent to the default 1 (overriding the adaptive cap) and
+// blank the registry override when the form didn't send it.
+type buildSettingsPatch struct {
+	MaxConcurrent      *int    `json:"maxConcurrent"`
+	MemoryLimit        *string `json:"memoryLimit"`
+	MemoryRequest      *string `json:"memoryRequest"`
+	CPULimit           *string `json:"cpuLimit"`
+	CPURequest         *string `json:"cpuRequest"`
+	RegistryAuthSecret *string `json:"registryAuthSecret"`
+	RegistryHost       *string `json:"registryHost"`
+}
+
+func (p buildSettingsPatch) apply(in *db.BuildSettings) {
+	if p.MaxConcurrent != nil {
+		in.MaxConcurrent = *p.MaxConcurrent
+		in.MaxConcurrentSet = true
+	}
+	for _, f := range []struct {
+		src *string
+		dst *string
+	}{
+		{p.MemoryLimit, &in.MemoryLimit},
+		{p.MemoryRequest, &in.MemoryRequest},
+		{p.CPULimit, &in.CPULimit},
+		{p.CPURequest, &in.CPURequest},
+		{p.RegistryAuthSecret, &in.RegistryAuthSecret},
+		{p.RegistryHost, &in.RegistryHost},
+	} {
+		if f.src != nil {
+			*f.dst = *f.src
+		}
+	}
+}
+
 // PutBuild validates + writes the new values. Quantity strings must
 // parse via resource.ParseQuantity so a typo here doesn't break
 // every future build with a kube-apiserver validation error.
@@ -125,11 +161,19 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	var in db.BuildSettings
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	var patch buildSettingsPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
+	cur, err := h.DB.GetBuildSettings(r.Context())
+	if err != nil {
+		h.Logger.Error("settings: put build: read current", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	in := cur
+	patch.apply(&in)
 	// Validate concurrency cap. 0 disables the cap which is risky
 	// on a small box but legitimate on a beefy one — accept and
 	// document in the UI.

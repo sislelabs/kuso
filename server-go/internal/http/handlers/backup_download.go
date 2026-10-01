@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -63,14 +65,8 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	// A dump/mirror of a large dataset can run for minutes — override the
 	// short backupCtx (15s) used by the metadata-only List/Restore paths.
-	// 5-minute default with a ?timeout= override capped at 1h, mirroring
-	// the control-plane /api/admin/backup handler.
-	timeout := 5 * time.Minute
-	if v := r.URL.Query().Get("timeout"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 && d < time.Hour {
-			timeout = d
-		}
-	}
+	// Same ?timeout= handling as the control-plane /api/admin/backup.
+	timeout := dumpTimeout(r.URL.Query().Get("timeout"))
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
@@ -351,8 +347,30 @@ func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (
 	}
 	// URL form so pg_dump takes it as a single connection-string arg.
 	// sslmode=disable + connect_timeout match pgConn's in-cluster dial.
-	return fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable&connect_timeout=5",
-		user, pass, host, port, dbName), nil
+	// Built with net/url: a password containing @ / ? # : broke the
+	// hand-formatted DSN.
+	u := url.URL{
+		Scheme:   "postgresql",
+		User:     url.UserPassword(user, pass),
+		Host:     net.JoinHostPort(host, port),
+		Path:     "/" + dbName,
+		RawQuery: "sslmode=disable&connect_timeout=5",
+	}
+	return u.String(), nil
+}
+
+// maxDumpTimeout bounds ?timeout= on the dump endpoints.
+const maxDumpTimeout = 6 * time.Hour
+
+// dumpTimeout parses ?timeout=, defaulting to 5 minutes. A value above
+// the cap is clamped rather than ignored: ?timeout=2h used to fall back
+// to the 5-minute default and cut every large dump off.
+func dumpTimeout(v string) time.Duration {
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 5 * time.Minute
+	}
+	return min(d, maxDumpTimeout)
 }
 
 // addonS3Client builds an S3 client from the addon's own <release>-conn

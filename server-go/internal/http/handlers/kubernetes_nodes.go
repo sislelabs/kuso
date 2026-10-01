@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/singleflight"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	restclient "k8s.io/client-go/rest"
 
@@ -52,6 +53,11 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 		podsByNode = map[string]int{}
 		if allPods != nil {
 			for _, p := range allPods.Items {
+				// Completed Job pods don't use a pod slot; counting them
+				// showed 137/110 on a node running 40.
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
 				podsByNode[p.Spec.NodeName]++
 			}
 		}

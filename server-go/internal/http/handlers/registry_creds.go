@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -84,7 +85,13 @@ func (h *RegistryCredsHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	registry := chi.URLParam(r, "registry")
+	// chi hands back the raw segment, so a client that encoded the
+	// host:port colon sends "%3A" — unescape before normalizing.
+	registry, err := url.PathUnescape(chi.URLParam(r, "registry"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid registry")
+		return
+	}
 	if err := h.Svc.Logout(ctx, project, registry); err != nil {
 		h.fail(w, "logout", err)
 		return

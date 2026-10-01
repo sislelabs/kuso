@@ -87,6 +87,22 @@ func requireUserWrite(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermUserWrite)
 }
 
+// requireUserListRead gates the user and group lists: instance admins,
+// plus delegated user managers (user:write), who can't manage users they
+// can't list.
+func requireUserListRead(w http.ResponseWriter, r *http.Request) bool {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) || auth.Has(claims.Permissions, auth.PermUserWrite) {
+		return true
+	}
+	writeErr(w, http.StatusForbidden, "forbidden")
+	return false
+}
+
 // errGrantForbidden marks an access-management write that would let a
 // non-admin confer more than it holds, or change its own access.
 var errGrantForbidden = errors.New("forbidden")

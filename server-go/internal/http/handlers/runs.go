@@ -61,6 +61,9 @@ func (h *RunsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
+	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, project, service) {
+		return
+	}
 	out, err := h.Svc.List(ctx, project, service)
 	if err != nil {
 		h.fail(w, "list", err)

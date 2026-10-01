@@ -134,6 +134,7 @@ type Shipper struct {
 	// Seams for tests; New wires them to the clientset and the DB.
 	openLogs     func(ctx context.Context, ns, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
 	lastStoredTs func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error)
+	envGroup     func(ctx context.Context, ns, envCR string) string
 
 	// flushing is a single-flight guard for the out-of-band flush that
 	// append() kicks off when the buffer crosses flushBatchSize.
@@ -149,6 +150,11 @@ type Shipper struct {
 	// cadence, and a skipped burst-flush is picked up either by the
 	// next append or by that ticker.
 	flushing atomic.Bool
+	// flushMu serialises every flush (timed, out-of-band, final). Two
+	// concurrent inserts can commit out of id order, and the error
+	// scanner's `id > watermark` cursor then skips the lower-id batch
+	// that committed last.
+	flushMu sync.Mutex
 
 	// rate caps per-service log ingestion so one chatty service can't
 	// dominate the shared LogLine table (observed: a single worker
@@ -203,6 +209,16 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 	}
 	s.lastStoredTs = func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error) {
 		return s.DB.LatestPodLogTs(ctx, project, service, pod, since)
+	}
+	s.envGroup = func(ctx context.Context, ns, envCR string) string {
+		if s.Kube == nil || s.Kube.Dynamic == nil || envCR == "" {
+			return ""
+		}
+		e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCR)
+		if err != nil || e == nil {
+			return ""
+		}
+		return e.Labels[kube.LabelEnv]
 	}
 	return s
 }
@@ -274,7 +290,9 @@ func (s *Shipper) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			s.Logger.Info("logship stopping")
-			s.flush(ctx)
+			// ctx is already cancelled; flushing with it failed at once
+			// and dropped the buffered lines.
+			s.flush(context.WithoutCancel(ctx))
 			return
 		case <-t.C:
 			s.reconcilePods(ctx)
@@ -423,6 +441,13 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	envName := env
 	if envName == "" {
 		envName = pod.Labels["app.kubernetes.io/instance"]
+		// Env pods don't carry the env-group label (adding it to the
+		// pod template would roll every tenant pod), so read it off
+		// the env CR. Without this the stored env is empty and the
+		// logs/errors ?env= filters match nothing.
+		if s.envGroup != nil {
+			env = s.envGroup(ctx, ns, envName)
+		}
 	}
 	envKind := pod.Labels["kuso.sislelabs.com/env-kind"]
 
@@ -723,6 +748,8 @@ func (s *Shipper) runFlusher(ctx context.Context) {
 }
 
 func (s *Shipper) flush(ctx context.Context) {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	// Drain env hints first; the path is fast and lets the UI surface
 	// a crash hint before the bulk log batch lands.
 	s.flushEnvHints(ctx)

@@ -21,15 +21,20 @@
 FROM node:22-bookworm-slim AS web-build
 WORKDIR /web
 
-# Copy package metadata first so npm install caches across SPA edits
-# that don't touch deps. The cache mount on /root/.npm survives across
-# builds; --prefer-offline skips network for already-cached tarballs.
-COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --prefer-offline
+# Copy package metadata first so the install caches across SPA edits
+# that don't touch deps. pnpm + pnpm-lock.yaml, the same install CI and
+# local dev use: npm ci against the stale package-lock.json shipped a
+# bundle with different dependency versions than the one tested.
+# corepack installs the pnpm version pinned by package.json's
+# packageManager field.
+COPY web/package.json web/pnpm-lock.yaml ./
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 COPY web/ ./
-# next.config.ts has output: "export" — `npm run build` emits the
+# next.config.ts has output: "export" — `pnpm build` emits the
 # static site into web/out/. Stage the result at /tmp/dist so the
 # next stage can grab it.
 #
@@ -38,7 +43,7 @@ COPY web/ ./
 # changed — and even when source did change, Next reuses webpack
 # module compilations.
 RUN --mount=type=cache,target=/web/.next/cache \
-    npm run build && cp -R out /tmp/dist
+    pnpm build && cp -R out /tmp/dist
 
 # ---- 2. go build ---------------------------------------------------------
 

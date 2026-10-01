@@ -120,3 +120,20 @@ func TestAdd_ExternalCredentials_RequiresConnectionURL(t *testing.T) {
 		t.Errorf("got %v, want ErrInvalid when no connection URL key is supplied", err)
 	}
 }
+
+// A 400 after the source Secret was written left the plaintext
+// credentials behind in an orphan <fqn>-external Secret.
+func TestAdd_ExternalCredentials_ValidatesBeforeWritingSecret(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, seedProj("alpha"))
+	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
+		Name: "cache", Kind: "redis", TLS: "require",
+		ExternalCredentials: map[string]string{"REDIS_URL": "redis://:p@h:6379"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), "alpha-cache-external", metav1.GetOptions{}); err == nil {
+		t.Fatal("credential Secret written although the request was rejected")
+	}
+}

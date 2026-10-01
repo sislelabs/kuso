@@ -87,6 +87,10 @@ var (
 	ErrNotFound = errors.New("addons: not found")
 	ErrConflict = errors.New("addons: conflict")
 	ErrInvalid  = errors.New("addons: invalid")
+	// ErrEnvRefresh marks an Add/Delete whose CR write succeeded but whose
+	// follow-up envFrom refresh failed: the change happened, so callers
+	// must not report a plain failure (a retry gets 409/404).
+	ErrEnvRefresh = errors.New("addons: env refresh failed")
 )
 
 // noHAKinds lists addon kinds whose chart templates gate on `not
@@ -449,13 +453,20 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight addon: %w", err)
 	}
+	if err := s.checkReleaseName(ctx, ns, fqn, req.ExtraLabels[kube.LabelEnv] != ""); err != nil {
+		return nil, err
+	}
 	// A deleted native addon keeps its data PVC; re-adding the name would
 	// silently mount that old data (and crash-loop a new engine version
 	// against an old data directory).
 	// A PR preview clone is the exception: an earlier PR's leftovers are
 	// stale by definition, so purge them rather than leave the preview
 	// without a database.
-	if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
+	pvcs, err := s.retainedPVCsForAddon(ctx, ns, fqn)
+	if err != nil {
+		return nil, fmt.Errorf("check for retained data: %w", err)
+	}
+	if len(pvcs) > 0 {
 		if req.ExtraLabels["kuso.sislelabs.com/preview-pr"] == "" {
 			return nil, fmt.Errorf("%w: data from a previous %s still exists — pick another name or delete it with purge", ErrConflict, req.Name)
 		}
@@ -485,6 +496,30 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	var projUID string
 	if projectCR != nil {
 		projUID = string(projectCR.UID)
+	}
+	// Validate before any side effect: a 400 after createExternalSecret
+	// left an orphan <fqn>-external Secret holding plaintext credentials.
+	if req.TLS != "" && req.TLS != "disable" && req.TLS != "require" {
+		return nil, fmt.Errorf("%w: tls must be \"disable\" or \"require\"", ErrInvalid)
+	}
+	if req.TLS == "require" && req.Kind != "postgres" {
+		return nil, fmt.Errorf("%w: tls=require only supports kind=postgres", ErrInvalid)
+	}
+	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
+		return nil, fmt.Errorf("%w: external and useInstanceAddon are mutually exclusive", ErrInvalid)
+	}
+	// Mirror the kusoaddon chart's unsupported.yaml guard: these kinds
+	// have no -ha template, so ha=true would fail helm rendering after
+	// the CR is written (a wedged addon the user has to delete). Refuse
+	// at the API boundary instead. external / useInstanceAddon bypass
+	// provisioning entirely, so ha is moot on those paths — same
+	// conditions the chart guard applies.
+	isExternal := len(req.ExternalCredentials) > 0 || (req.External != nil && req.External.SecretName != "")
+	if req.HA && noHAKinds[req.Kind] && !isExternal && req.UseInstanceAddon == "" {
+		return nil, fmt.Errorf("%w: kind %q does not support ha=true — no HA template exists; set ha=false or use an HA-capable kind (postgres, redis, nats)", ErrInvalid, req.Kind)
+	}
+	if req.UseInstanceAddon != "" && req.Kind != "postgres" {
+		return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres", ErrInvalid)
 	}
 	// Resolve externalCredentials into a real Secret BEFORE the CR is built —
 	// spec.external is captured below, and resync-external later reads the
@@ -531,25 +566,6 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			TLS:              req.TLS,
 		},
 	}
-	if req.TLS != "" && req.TLS != "disable" && req.TLS != "require" {
-		return nil, fmt.Errorf("%w: tls must be \"disable\" or \"require\"", ErrInvalid)
-	}
-	if req.TLS == "require" && req.Kind != "postgres" {
-		return nil, fmt.Errorf("%w: tls=require only supports kind=postgres", ErrInvalid)
-	}
-	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
-		return nil, fmt.Errorf("%w: external and useInstanceAddon are mutually exclusive", ErrInvalid)
-	}
-	// Mirror the kusoaddon chart's unsupported.yaml guard: these kinds
-	// have no -ha template, so ha=true would fail helm rendering after
-	// the CR is written (a wedged addon the user has to delete). Refuse
-	// at the API boundary instead. external / useInstanceAddon bypass
-	// provisioning entirely, so ha is moot on those paths — same
-	// conditions the chart guard applies.
-	if req.HA && noHAKinds[req.Kind] &&
-		(req.External == nil || req.External.SecretName == "") && req.UseInstanceAddon == "" {
-		return nil, fmt.Errorf("%w: kind %q does not support ha=true — no HA template exists; set ha=false or use an HA-capable kind (postgres, redis, nats)", ErrInvalid, req.Kind)
-	}
 	if req.External != nil && req.External.SecretName != "" {
 		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External, req.Pooler); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -568,7 +584,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			return nil, err
 		}
 		var dsn, pw string
-		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name)
+		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, "")
 		if err != nil {
 			return nil, fmt.Errorf("provision instance addon db: %w", err)
 		}
@@ -614,7 +630,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if err := s.refreshEnvSecrets(ctx, project, connSecretName(created.Name)); err != nil {
 		// Best-effort — the addon CR is in place; logs/admin can retry
 		// the env refresh manually if this fails.
-		return created, fmt.Errorf("addon created but env refresh failed: %w", err)
+		return created, fmt.Errorf("%w: addon created but wiring it into envs failed: %w", ErrEnvRefresh, err)
 	}
 	return created, nil
 }
@@ -648,7 +664,7 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	if err != nil {
 		return err
 	}
-	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort)
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort, "")
 	if err != nil {
 		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 	}
@@ -1012,16 +1028,57 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		}
 		return nil, fmt.Errorf("update addon: %w", err)
 	}
+	// POOLER_* keys of an external addon's conn Secret are computed only
+	// at mirror time, so a pooler toggle must re-mirror or
+	// ${{ x.POOLER_URL }} stays empty (enable) or points at the deleted
+	// pooler Service (disable).
+	if req.Pooler != nil && updated.Spec.External != nil && updated.Spec.External.SecretName != "" {
+		if err := s.mirrorExternalSecret(ctx, ns, fqn, updated.Spec.External, updated.Spec.Pooler); err != nil {
+			return nil, fmt.Errorf("addon updated but re-mirroring its conn secret failed (run resync-external): %w", err)
+		}
+	}
 	// Record a revision so the History tab can render + revert addon
-	// config changes. Best-effort (the kube write already succeeded);
-	// snapshot the patch body wrapped as {"patch": req}, matching the
-	// service-revision shape so RevertAddon peels it the same way.
+	// config changes. Best-effort (the kube write already succeeded).
+	// The snapshot is the full mutable config AFTER this change, wrapped
+	// as {"patch": ...} so RevertAddon peels it like the service shape:
+	// replaying only the fields this edit touched would leave later
+	// changes in place on "revert to rev N".
 	if s.RecordRevision != nil {
-		if snap, merr := json.Marshal(map[string]any{"patch": req}); merr == nil {
+		if snap, merr := json.Marshal(map[string]any{"patch": revisionState(updated.Spec)}); merr == nil {
 			s.RecordRevision(ctx, project, "addon", ShortName(project, name), "patch", snap)
 		}
 	}
 	return updated, nil
+}
+
+// revisionState expresses an addon's mutable config as an Update patch
+// that, replayed, restores exactly that config.
+func revisionState(spec kube.KusoAddonSpec) UpdateAddonRequest {
+	size, tls := spec.Size, spec.TLS
+	backup := kube.KusoBackup{}
+	if spec.Backup != nil {
+		backup = *spec.Backup
+	}
+	pooler := kube.KusoAddonPooler{}
+	if spec.Pooler != nil {
+		pooler = *spec.Pooler
+	}
+	return UpdateAddonRequest{
+		Size: &size,
+		TLS:  &tls,
+		Backup: &UpdateBackupPatch{
+			Schedule:      &backup.Schedule,
+			RetentionDays: &backup.RetentionDays,
+			Bucket:        &backup.Bucket,
+		},
+		Pooler: &AddonPoolerPatch{
+			Enabled:         &pooler.Enabled,
+			ExternalBackend: &pooler.ExternalBackend,
+			Host:            &pooler.Host,
+			Port:            &pooler.Port,
+			PoolSize:        &pooler.PoolSize,
+		},
+	}
 }
 
 // RevertAddon replays a stored addon-patch snapshot through Update. The
@@ -1081,13 +1138,16 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	}
 	// Informer cache when warm; live LIST otherwise. Same pattern
 	// as projects.validatePlacement.
+	// MatchesSchedulable: a node nodewatch cordoned (NotReady) or that
+	// isn't Ready can't take the addon pod, so pinning to it only
+	// satisfies validation.
 	if cached, ok := s.Kube.Cache.ListNodes(); ok {
 		for _, n := range cached {
-			if placement.Matches(p, n.Name, n.Labels) {
+			if placement.MatchesSchedulable(p, n) {
 				return nil
 			}
 		}
-		return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
+		return fmt.Errorf("%w: no schedulable cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
 	}
 	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -1095,11 +1155,11 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	}
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		if placement.Matches(p, n.Name, n.Labels) {
+		if placement.MatchesSchedulable(p, n) {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
+	return fmt.Errorf("%w: no schedulable cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
 }
 
 // DeleteOptions tunes DeleteWith. PurgeData also removes the data PVCs
@@ -1202,7 +1262,7 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	if opts.PurgeData {
 		s.deleteCloneConnSecret(ctx, ns, fqn)
 		s.deleteCloneDataPVCs(ctx, ns, fqn)
-	} else if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
+	} else if pvcs, _ := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
 		slog.Default().Warn("addon deleted; data PVC(s) RETAINED (resource-policy=keep) — re-adding this name is refused until they are purged",
 			"project", project, "addon", name, "fqn", fqn, "pvcs", pvcs)
 	}
@@ -1227,24 +1287,28 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// "tickero-pg-conn", so the exclude silently never matched and this
 	// guard did nothing at all. Every caller reaches Delete with a short
 	// name, so it was defeated on every code path.
-	return s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true})
+	if err := s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true}); err != nil {
+		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, err)
+	}
+	return nil
 }
 
 // retainedPVCsForAddon returns the names of PVCs that will survive the
 // addon's deletion (StatefulSet data PVCs carry resource-policy=keep).
-// Best-effort: a list error returns nil — the warning it feeds is
-// advisory, not load-bearing.
-func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) []string {
+// A list error is returned, not swallowed: Add relies on this to refuse a
+// re-add that would mount stale data, so failing open on an apiserver
+// blip let exactly that through.
+func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) ([]string, error) {
 	// Clientset is nil in unit tests that only wire the dynamic client
-	// (and on kube-less installs). The PVC trail is advisory, so skip.
+	// (and on kube-less installs).
 	if s.Kube == nil || s.Kube.Clientset == nil {
-		return nil
+		return nil, nil
 	}
 	list, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + fqn,
+		LabelSelector: addonPVCSelector(fqn),
 	})
-	if err != nil || list == nil {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("list data PVCs of %s: %w", fqn, err)
 	}
 	out := make([]string, 0, len(list.Items))
 	for i := range list.Items {
@@ -1253,7 +1317,50 @@ func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) []st
 		}
 		out = append(out, list.Items[i].Name)
 	}
-	return out
+	return out, nil
+}
+
+// previewCloneSuffix is the longest suffix a PR preview adds to an
+// addon's CR name ("<addon>-pr-NNNNN").
+const previewCloneSuffix = "-pr-99999"
+
+// checkReleaseName refuses an addon CR name helm can't install (helm
+// release names are capped at 53 characters; a base addon also needs room
+// for its PR-preview clone's suffix) or that a service or cron already
+// uses as its helm release in this namespace. Either way the CR would be
+// accepted and never render.
+func (s *Service) checkReleaseName(ctx context.Context, ns, fqn string, isClone bool) error {
+	budget := fqn
+	if !isClone {
+		budget += previewCloneSuffix
+	}
+	if err := kube.ValidateReleaseName(budget); err != nil {
+		if isClone {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		return fmt.Errorf("%w: addon name %q is too long: plus a preview clone's %q suffix it must fit %d characters, project prefix included", ErrInvalid, fqn, "-pr-N", kube.MaxReleaseNameLen)
+	}
+	if _, err := s.Kube.GetKusoService(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by a service in this project", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight service name: %w", err)
+	}
+	if _, err := s.Kube.GetKusoCron(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by a cron in this project", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight cron name: %w", err)
+	}
+	return nil
+}
+
+// addonPVCSelector matches an addon's data PVCs. The name=kusoaddon term
+// matters: instance alone also matched an env's volume PVCs when an addon
+// was named <service>-<env>, so a purge delete could take those.
+func addonPVCSelector(fqn string) string {
+	return kube.LabelSelector(map[string]string{
+		"app.kubernetes.io/name":     "kusoaddon",
+		"app.kubernetes.io/instance": fqn,
+	})
 }
 
 // unsubscribeFromAddon walks every KusoService in the project and
@@ -1451,6 +1558,7 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	for _, conn := range extraConnSecrets {
 		addAddonConn(conn)
 	}
+	var errs []error
 	for i := range envs {
 		env := &envs[i]
 		// Use the retry-on-conflict RMW path so concurrent writes from
@@ -1583,10 +1691,12 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			return nil
 		})
 		if err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
+			// Keep going: stopping at the first failing env left every
+			// later env with a stale envFrom list.
+			errs = append(errs, fmt.Errorf("update env %s: %w", env.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // orderedConnSecrets maps addon CRs to their conn-secret names in
@@ -1936,7 +2046,17 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string, cred
 			return err
 		}
 	}
-	return s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External, addon.Spec.Pooler)
+	before := s.connSecretData(ctx, ns, connSecretName(fqn))
+	if err := s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External, addon.Spec.Pooler); err != nil {
+		return err
+	}
+	// envFrom resolves at container start: running pods keep the old
+	// credentials until restarted, which fails once the old ones are
+	// revoked.
+	if !connDataEqual(before, s.connSecretData(ctx, ns, connSecretName(fqn))) {
+		s.restartConnConsumers(ctx, ns, connSecretName(fqn))
+	}
+	return nil
 }
 
 // updateExternalSecret merges rotated credentials into the addon's source
@@ -2034,7 +2154,7 @@ func (s *Service) deleteCloneDataPVCs(ctx context.Context, ns, addonFQN string) 
 		return
 	}
 	pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+		LabelSelector: addonPVCSelector(addonFQN),
 	})
 	if err != nil {
 		slog.Default().Warn("clone addon delete: list data PVCs", "addon", addonFQN, "namespace", ns, "err", err)

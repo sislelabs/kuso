@@ -99,7 +99,7 @@ type ProjectGrant struct {
 	Kind         GranteeKind `json:"kind"`
 	UserID       string      `json:"userId,omitempty"`
 	GroupID      string      `json:"groupId,omitempty"`
-	RoleOverride ProjectRole `json:"roleOverride,omitempty"`
+	RoleOverride ProjectRole `json:"roleOverride"`
 	CreatedAt    time.Time   `json:"createdAt"`
 }
 

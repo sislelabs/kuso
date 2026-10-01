@@ -183,6 +183,9 @@ func (f *Forwarder) Apply(ctx context.Context, ds []Drain) {
 	if f.sinks == nil {
 		f.sinks = map[string]*sink{}
 	}
+	// An edited drain is replaced by a new sink; its queued lines move
+	// over instead of being silently abandoned with the old channel.
+	replaced := map[string]*sink{}
 	for id, s := range f.sinks {
 		d, ok := want[id]
 		if ok && s.sig == signature(d) {
@@ -191,16 +194,43 @@ func (f *Forwarder) Apply(ctx context.Context, ds []Drain) {
 		}
 		s.cancel()
 		delete(f.sinks, id)
+		if ok {
+			replaced[id] = s
+		}
 	}
 	for id, d := range want {
 		sctx, cancel := context.WithCancel(ctx)
 		s := &sink{drain: d, sig: signature(d), ch: make(chan Line, f.BufferSize), cancel: cancel}
+		if old := replaced[id]; old != nil {
+			s.dropped.Store(old.dropped.Load())
+			moveQueued(old, s)
+		}
 		f.sinks[id] = s
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
 			f.runSink(sctx, s)
 		}()
+	}
+}
+
+// moveQueued hands lines still queued on a replaced sink to its
+// successor. Whatever doesn't fit is counted as dropped, not lost
+// silently. The old sink's goroutine may still be taking from the
+// channel during its final flush; that's fine, each line goes one way.
+func moveQueued(old, next *sink) {
+	for {
+		select {
+		case l := <-old.ch:
+			select {
+			case next.ch <- l:
+			default:
+				next.dropped.Add(1)
+				linesDropped.WithLabelValues(next.drain.ID, "buffer_full").Inc()
+			}
+		default:
+			return
+		}
 	}
 }
 

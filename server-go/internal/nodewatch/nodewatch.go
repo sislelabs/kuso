@@ -196,10 +196,17 @@ func (w *Watcher) tick(ctx context.Context) {
 			// cache-stale marker is harmless.
 			carriesOurMarker := n.Annotations[CordonAnnotation] == "true"
 			if was || carriesOurMarker {
-				// Only emit the "recovered" card when we actually tracked the
-				// downtime (was) — a bare marker after a restart has no
-				// trustworthy downFor and would emit a misleading 0s recovery.
+				// After a handover the in-memory downtime is gone, but
+				// the persisted NotReady-since marker still dates it, so
+				// the recovery that answers the earlier unreachable page
+				// is still announced. A bare cordon marker with no date
+				// gets no card rather than a misleading 0s one.
 				var emit notify.Event
+				if !was {
+					if v, perr := time.Parse(time.RFC3339, n.Annotations[NotReadySinceAnnotation]); perr == nil {
+						downFor, was = now.Sub(v), true
+					}
+				}
 				if was {
 					emit = notify.NodeRecovered(n.Name, downFor)
 				}
@@ -234,6 +241,12 @@ func (w *Watcher) tick(ctx context.Context) {
 			}
 		}
 		if _, alreadyAlerted := w.alerted[n.Name]; alreadyAlerted {
+			continue
+		}
+		// Our cordon marker means a previous leader already cordoned and
+		// paged for this outage; paging again after a handover is noise.
+		if n.Annotations[CordonAnnotation] == "true" {
+			w.alerted[n.Name] = struct{}{}
 			continue
 		}
 		if now.Sub(first) < w.Config.threshold() {

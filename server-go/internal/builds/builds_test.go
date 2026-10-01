@@ -529,6 +529,9 @@ func TestPoller_DispatchQueuedPromotesWhenIdle(t *testing.T) {
 	if phase := raw.GetAnnotations()[annPhase]; phase != "pending" {
 		t.Errorf("phase after promote: got %q, want pending", phase)
 	}
+	if _, err := time.Parse(time.RFC3339, raw.GetAnnotations()[annDispatchedAt]); err != nil {
+		t.Errorf("dispatched-at after promote: %q (%v)", raw.GetAnnotations()[annDispatchedAt], err)
+	}
 	// spec.image should be patched in — that's the chart's render gate.
 	imgRepo, _, _ := unstructured.NestedString(raw.Object, "spec", "image", "repository")
 	imgTag, _, _ := unstructured.NestedString(raw.Object, "spec", "image", "tag")
@@ -1527,6 +1530,26 @@ func TestCheckBuild_StuckNoJob(t *testing.T) {
 		}
 		if ph := buildPhase(got); ph != "queued" {
 			t.Fatalf("queued build must stay queued, got phase=%q", ph)
+		}
+	})
+
+	// A build that waited in the queue (or behind the CI gate) past the
+	// stuck-timeout was force-failed right after dispatch, before its Job
+	// could render: the timeout counted from CR creation.
+	t.Run("long-queued build just dispatched is left pending", func(t *testing.T) {
+		b := mkBuild("alpha-api-waited", 90, "pending")
+		b.Annotations[annDispatchedAt] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		if err := p.checkBuild(context.Background(), "kuso", b); err != nil {
+			t.Fatalf("checkBuild: %v", err)
+		}
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-waited")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph == "failed" {
+			t.Fatalf("freshly dispatched build force-failed; phase=%q", ph)
 		}
 	})
 

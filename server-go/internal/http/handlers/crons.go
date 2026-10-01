@@ -158,6 +158,9 @@ func (h *CronsHandler) ListForProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
+	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, project, "") {
+		return
+	}
 	out, err := h.Svc.List(ctx, project)
 	if err != nil {
 		h.fail(w, "list crons", err)
@@ -173,6 +176,9 @@ func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
+	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, project, chi.URLParam(r, "service")) {
+		return
+	}
 	out, err := h.Svc.ListForService(ctx, project, chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "list crons", err)

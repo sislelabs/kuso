@@ -1,6 +1,7 @@
 package logship
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -58,5 +59,27 @@ func TestTapSkipsRateCappedLines(t *testing.T) {
 	s.append(db.LogLine{Project: "p", Service: "svc", Line: "b"}, time.Time{}, "", "")
 	if len(rt.lines) != 1 || rt.lines[0].Line != "a" {
 		t.Fatalf("tap must only see lines the DB buffer accepted, got %+v", rt.lines)
+	}
+}
+
+func TestStoredEnvFallsBackToEnvCRGroupLabel(t *testing.T) {
+	logs := &fakeLogs{lines: map[string][]fakeLine{}}
+	logs.add("web", "main", time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), "hello")
+	pod := testPod("web", corev1.PodSucceeded, true)
+	pod.Labels["app.kubernetes.io/instance"] = "p-svc-staging"
+	s, _ := newTestShipper(logs, pod)
+	s.envGroup = func(_ context.Context, _, envCR string) string {
+		if envCR == "p-svc-staging" {
+			return "staging"
+		}
+		return ""
+	}
+	rt := &recordingTap{}
+	s.Tap = rt
+
+	tick(t, s)
+
+	if len(rt.lines) != 1 || rt.lines[0].Env != "staging" {
+		t.Fatalf("stored env must come from the env CR's group label, got %+v", rt.lines)
 	}
 }

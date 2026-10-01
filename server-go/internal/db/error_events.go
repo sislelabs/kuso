@@ -66,7 +66,10 @@ func (d *DB) InsertErrorEvent(ctx context.Context, e ErrorEvent) error {
 // The limit clamp allows up to 201 (not 200): the HTTP handler
 // over-fetches one row past its own 200-cap to detect truncation
 // exactly instead of guessing from a full page.
-func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since time.Time, limit, offset int) ([]ErrorGroup, error) {
+// env, when non-empty, restricts to one environment (the pod's
+// kuso.sislelabs.com/env label, e.g. "production") before grouping, so a
+// group's count and sample come from that env only.
+func (d *DB) ListErrorGroups(ctx context.Context, project, service, env string, since time.Time, limit, offset int) ([]ErrorGroup, error) {
 	if limit <= 0 || limit > 201 {
 		limit = 50
 	}
@@ -83,23 +86,27 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since
 		         WHERE e2.project = e.project
 		           AND e2.service = e.service
 		           AND e2.fingerprint = e.fingerprint
+		           AND ($6 = '' OR e2.env = $6)
 		         ORDER BY ts DESC LIMIT 1) AS sample_line,
 		       (SELECT env FROM "ErrorEvent" e3
 		         WHERE e3.project = e.project
 		           AND e3.service = e.service
 		           AND e3.fingerprint = e.fingerprint
+		           AND ($6 = '' OR e3.env = $6)
 		         ORDER BY ts DESC LIMIT 1) AS sample_env,
 		       (SELECT pod FROM "ErrorEvent" e4
 		         WHERE e4.project = e.project
 		           AND e4.service = e.service
 		           AND e4.fingerprint = e.fingerprint
+		           AND ($6 = '' OR e4.env = $6)
 		         ORDER BY ts DESC LIMIT 1) AS sample_pod
 		FROM "ErrorEvent" e
 		WHERE project = $1 AND service = $2 AND ts >= $3
+		  AND ($6 = '' OR env = $6)
 		GROUP BY project, service, fingerprint
 		ORDER BY last_seen DESC
 		LIMIT $4 OFFSET $5`,
-		project, service, since.UTC(), limit, offset,
+		project, service, since.UTC(), limit, offset, env,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ListErrorGroups: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -92,5 +93,46 @@ func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
 		if got.Spec.Image == nil || got.Spec.Image.Tag != tc.want {
 			t.Errorf("%s: image tag = %v, want %q", tc.cron, got.Spec.Image, tc.want)
 		}
+	}
+}
+
+// An older build finishing after a newer one has promoted matches no env
+// (the promoted-at guard skips it) but still repointed every cron at its
+// older image.
+func TestPromoteImage_StaleBuildLeavesCronsAlone(t *testing.T) {
+	t.Parallel()
+	newer := time.Now().UTC().Format(time.RFC3339Nano)
+	env := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "alpha-web-production", Namespace: "kuso",
+			Labels:      map[string]string{kube.LabelProject: "alpha", kube.LabelService: "web", kube.LabelEnv: "production"},
+			Annotations: map[string]string{annPromotedAt: newer},
+		},
+		Spec: kube.KusoEnvironmentSpec{Project: "alpha", Service: "alpha-web", Branch: "main"},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env),
+		seedCron("alpha-web-sweeps", "alpha", "alpha-web", "service", "newtag11111"),
+	)
+	p := &Poller{Svc: s, Logger: slog.Default()}
+	old := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-oldtag", Namespace: "kuso",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha", Service: "alpha-web", Branch: "main",
+			Image: &kube.KusoImage{Repository: "kuso-registry.kuso.svc.cluster.local:5000/alpha/web", Tag: "oldtag00000"},
+		},
+	}
+	if err := p.promoteImage(context.Background(), "kuso", old); err != nil {
+		t.Fatalf("promoteImage: %v", err)
+	}
+	got, err := s.Kube.GetKusoCron(context.Background(), "kuso", "alpha-web-sweeps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Image == nil || got.Spec.Image.Tag != "newtag11111" {
+		t.Errorf("cron image = %+v, want it left on newtag11111", got.Spec.Image)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -101,6 +102,25 @@ func idleConnsFor(maxOpen int) int {
 	return idle
 }
 
+// withUTCSession pins the session TimeZone to UTC unless the DSN sets
+// one. Several queries bind naive timestamp strings into TIMESTAMPTZ
+// columns; on a server whose default zone isn't UTC (external Postgres)
+// those shifted by the offset, so the notify outbox lease and retry
+// backoff landed hours in the past and rows were double-claimed. lib/pq
+// sends unrecognised DSN keys as startup parameters.
+func withUTCSession(dsn string) string {
+	if strings.Contains(strings.ToLower(dsn), "timezone=") {
+		return dsn
+	}
+	if u, err := url.Parse(dsn); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") {
+		q := u.Query()
+		q.Set("timezone", "UTC")
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return dsn + " timezone=UTC"
+}
+
 // Open opens a Postgres connection. dsn is the libpq URI (e.g.
 // "postgres://kuso:secret@kuso-postgres:5432/kuso?sslmode=disable").
 // Idempotent — applies the embedded schema on every Open so a fresh
@@ -109,7 +129,7 @@ func Open(dsn string) (*DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("db: empty DSN (set KUSO_DB_DSN)")
 	}
-	sqldb, err := sql.Open("postgres", dsn)
+	sqldb, err := sql.Open("postgres", withUTCSession(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("db: open: %w", err)
 	}

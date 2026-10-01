@@ -1146,10 +1146,13 @@ type SQLQueryRequest struct {
 // driver type ambiguity. Trade-off: bigints lose precision in JSON,
 // but the user is browsing, not aggregating.
 type SQLQueryResponse struct {
-	Columns   []string   `json:"columns"`
-	Rows      [][]string `json:"rows"`
-	Truncated bool       `json:"truncated"`
-	Elapsed   string     `json:"elapsed"`
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	// Nulls parallels Rows: true where the cell is SQL NULL, which Rows
+	// renders as "" and so can't tell apart from an empty string.
+	Nulls     [][]bool `json:"nulls"`
+	Truncated bool     `json:"truncated"`
+	Elapsed   string   `json:"elapsed"`
 }
 
 func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
@@ -1247,7 +1250,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
 		return
 	}
-	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit)}
+	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit), Nulls: make([][]bool, 0, limit)}
 	for rows.Next() {
 		if len(out.Rows) >= limit {
 			out.Truncated = true
@@ -1262,10 +1265,13 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		row := make([]string, len(cols))
+		nulls := make([]bool, len(cols))
 		for i, v := range raw {
 			row[i] = stringifyCell(v)
+			nulls[i] = v == nil
 		}
 		out.Rows = append(out.Rows, row)
+		out.Nulls = append(out.Nulls, nulls)
 	}
 	out.Elapsed = time.Since(start).Round(time.Millisecond).String()
 	writeJSON(w, http.StatusOK, out)

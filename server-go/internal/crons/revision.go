@@ -54,6 +54,7 @@ func (r UpdateCronRequest) changedFields() []string {
 			f = append(f, name)
 		}
 	}
+	add(r.DisplayName != nil, "displayName")
 	add(r.Schedule != nil, "schedule")
 	add(r.Command != nil, "command")
 	add(r.Suspend != nil, "suspend")

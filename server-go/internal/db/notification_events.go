@@ -11,7 +11,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -294,4 +296,84 @@ func (d *DB) ClearAllNotificationEvents(ctx context.Context) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// Per-user read state for the bell feed. The NotificationEvent.readAt
+// column is one global flag, so one admin opening the bell cleared the
+// unread dot for every admin. Each user instead keeps a watermark in the
+// Setting table: events with id <= the mark are read for that user.
+const notificationReadMarkPrefix = "notifications.readUpTo."
+
+// notificationReadMark returns userID's watermark and when it was set.
+// No row = nothing read.
+func (d *DB) notificationReadMark(ctx context.Context, userID string) (int64, time.Time, error) {
+	var v string
+	var at time.Time
+	err := d.QueryRowContext(ctx, `SELECT value, "updatedAt" FROM "Setting" WHERE key = $1`,
+		notificationReadMarkPrefix+userID).Scan(&v, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, time.Time{}, nil
+	}
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("read notification mark: %w", err)
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, time.Time{}, nil
+	}
+	return id, at, nil
+}
+
+// ListNotificationEventsForUser is ListNotificationEvents with readAt
+// (and the unread filter) taken from userID's own watermark.
+func (d *DB) ListNotificationEventsForUser(ctx context.Context, userID string, limit int, unreadOnly bool) ([]NotificationEvent, error) {
+	mark, at, err := d.notificationReadMark(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := d.ListNotificationEvents(ctx, limit, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NotificationEvent, 0, len(all))
+	for _, e := range all {
+		e.ReadAt = nil
+		if e.ID <= mark {
+			if unreadOnly {
+				continue
+			}
+			t := at
+			e.ReadAt = &t
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// CountUnreadNotificationEventsForUser counts events above userID's mark.
+func (d *DB) CountUnreadNotificationEventsForUser(ctx context.Context, userID string) (int, error) {
+	mark, _, err := d.notificationReadMark(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "NotificationEvent" WHERE "id" > $1`, mark).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count unread: %w", err)
+	}
+	return n, nil
+}
+
+// MarkNotificationEventsReadForUser moves userID's mark to the newest
+// event.
+func (d *DB) MarkNotificationEventsReadForUser(ctx context.Context, userID string) error {
+	_, err := d.ExecContext(ctx, `
+		INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
+		SELECT $1, COALESCE(MAX("id"), 0)::text, $2, $3 FROM "NotificationEvent"
+		ON CONFLICT (key) DO UPDATE
+		   SET value = EXCLUDED.value, "updatedAt" = EXCLUDED."updatedAt", "updatedBy" = EXCLUDED."updatedBy"`,
+		notificationReadMarkPrefix+userID, time.Now().UTC(), userID)
+	if err != nil {
+		return fmt.Errorf("mark read: %w", err)
+	}
+	return nil
 }

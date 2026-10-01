@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -283,10 +284,15 @@ func buildsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // name) and pulls a few status fields out of the unstructured map so
 // the frontend doesn't need to know about kube internals.
 type buildSummary struct {
-	ID              string `json:"id"`
-	ServiceName     string `json:"serviceName"`
-	Branch          string `json:"branch,omitempty"`
+	ID          string `json:"id"`
+	ServiceName string `json:"serviceName"`
+	Branch      string `json:"branch,omitempty"`
+	// CommitSha is set only when the build's ref is a real commit. A
+	// manual build without GitHub branch resolution carries a synthetic
+	// "<branch>-<nonce>" ref, which read as a SHA in every UI; that ref
+	// is in Ref.
 	CommitSha       string `json:"commitSha,omitempty"`
+	Ref             string `json:"ref,omitempty"`
 	CommitMessage   string `json:"commitMessage,omitempty"`
 	ImageTag        string `json:"imageTag,omitempty"`
 	Status          string `json:"status"`
@@ -357,12 +363,22 @@ func stampQueuePositions(ctx context.Context, svc *builds.Service, out []buildSu
 	}
 }
 
+var commitSHARe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+func commitSHAOnly(ref string) string {
+	if commitSHARe.MatchString(ref) {
+		return ref
+	}
+	return ""
+}
+
 func toBuildSummary(b kube.KusoBuild) buildSummary {
 	out := buildSummary{
 		ID:          b.Name,
 		ServiceName: b.Spec.Service,
 		Branch:      b.Spec.Branch,
-		CommitSha:   b.Spec.Ref,
+		CommitSha:   commitSHAOnly(b.Spec.Ref),
+		Ref:         b.Spec.Ref,
 	}
 	if b.Spec.Image != nil {
 		out.ImageTag = b.Spec.Image.Tag
@@ -485,6 +501,9 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
+	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, project, service) {
+		return
+	}
 	raw, err := h.Svc.List(ctx, project, service)
 	if err != nil {
 		h.fail(w, "list builds", err)
@@ -567,7 +586,8 @@ func recordToSummary(r db.BuildRecord) buildSummary {
 		ID:              r.BuildName,
 		ServiceName:     r.Service,
 		Branch:          r.Branch,
-		CommitSha:       r.CommitSha,
+		CommitSha:       commitSHAOnly(r.CommitSha),
+		Ref:             r.CommitSha,
 		CommitMessage:   r.CommitMessage,
 		ImageTag:        r.ImageTag,
 		Status:          r.Status,

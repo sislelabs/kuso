@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -105,7 +106,7 @@ type State struct {
 	NeedsUpdate    bool      `json:"needsUpdate"`
 	CanAutoUpgrade bool      `json:"canAutoUpgrade"`
 	BlockedReason  string    `json:"blockedReason,omitempty"`
-	LastChecked    time.Time `json:"lastChecked"`
+	LastChecked    time.Time `json:"lastChecked,omitzero"`
 	LastCheckError string    `json:"lastCheckError,omitempty"`
 }
 
@@ -123,6 +124,10 @@ type Service struct {
 	Notify EventEmitter
 
 	settings settingStore // test seam; defaults to DB
+
+	// startMu makes StartUpdate single-flight within this replica; the
+	// active-Job check covers other replicas and earlier calls.
+	startMu sync.Mutex
 
 	mu     sync.RWMutex
 	state  State
@@ -698,6 +703,17 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	if killSwitchEngaged() {
 		return "", errors.New("auto-update disabled (KUSO_UPDATE_KILL_SWITCH=true)")
 	}
+	// Two clicks (or a click racing the auto-updater) started two
+	// updater Jobs rolling the same deployments at once.
+	if !s.startMu.TryLock() {
+		return "", errors.New("an update is already being started")
+	}
+	defer s.startMu.Unlock()
+	if active, err := s.activeUpdateJob(ctx); err != nil {
+		return "", fmt.Errorf("check for a running update: %w", err)
+	} else if active != "" {
+		return "", fmt.Errorf("an update is already running (job %s)", active)
+	}
 
 	var m *Manifest
 	if targetVersion != "" {
@@ -787,6 +803,32 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	// ConfigMap status the UI polls. R5 audit fix.
 	go s.watchOperatorHealth(jobName, priorOperatorImg, m.Components.Operator.Image)
 	return jobName, nil
+}
+
+// activeUpdateJob returns the name of an updater Job that hasn't
+// finished yet, or "".
+func (s *Service) activeUpdateJob(ctx context.Context) (string, error) {
+	jobs, err := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=kuso-server",
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, j := range jobs.Items {
+		if !strings.HasPrefix(j.Name, "kuso-update-") || j.Status.Succeeded > 0 || j.Status.Failed > 0 {
+			continue
+		}
+		done := false
+		for _, c := range j.Status.Conditions {
+			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+				done = true
+			}
+		}
+		if !done {
+			return j.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // healthGate is how long we give the new operator image before

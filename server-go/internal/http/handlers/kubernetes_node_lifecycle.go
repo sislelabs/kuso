@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
@@ -297,9 +299,19 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	if body.Labels == nil {
 		body.Labels = map[string]string{}
 	}
-	for k := range body.Labels {
+	for k, v := range body.Labels {
 		if k == "" {
 			writeErr(w, http.StatusBadRequest, "label key cannot be empty")
+			return
+		}
+		// Validate here so a bad key or value is a 400 naming the
+		// problem, not a 500 from the apiserver's rejection.
+		if errs := validation.IsQualifiedName(kusoLabelPrefix + k); len(errs) > 0 {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("label key %q: %s", k, strings.Join(errs, "; ")))
+			return
+		}
+		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("label %q value %q: %s", k, v, strings.Join(errs, "; ")))
 			return
 		}
 	}
@@ -310,6 +322,10 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	// went away) and translate that into a minimal label patch +
 	// matching taint diff.
 	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		writeErr(w, http.StatusNotFound, "node "+name+" not found")
+		return
+	}
 	if err != nil {
 		h.Logger.Error("get node for label put", "node", name, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
@@ -340,6 +356,10 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	if _, err := h.Kube.Clientset.CoreV1().Nodes().Patch(
 		ctx, name, "application/merge-patch+json", labelPatch, metav1.PatchOptions{},
 	); err != nil {
+		if status, ok := kubeErrStatus(err); ok {
+			writeErr(w, status, err.Error())
+			return
+		}
 		h.Logger.Error("patch node labels", "node", name, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
@@ -350,7 +370,14 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	// kuso.sislelabs.com/region=<value>:NoSchedule taint matching the
 	// current label (or none, if the label is gone).
 	if err := h.reconcileRegionTaint(ctx, name, body.Labels["region"]); err != nil {
+		// The labels landed but the matching taint didn't, so pods
+		// without the region toleration can still schedule there. Say
+		// so instead of a bare 204.
 		h.Logger.Warn("reconcile region taint", "node", name, "err", err)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"warning": "labels applied, but updating the region taint failed: " + err.Error(),
+		})
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

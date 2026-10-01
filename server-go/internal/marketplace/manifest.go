@@ -34,13 +34,14 @@ type Prompt struct {
 
 // Manifest is the metadata + prompt schema for one catalog app.
 type Manifest struct {
-	Name        string   `yaml:"name" json:"name"`
-	Title       string   `yaml:"title" json:"title"`
-	Description string   `yaml:"description" json:"description"`
-	Category    string   `yaml:"category" json:"category"`
-	Website     string   `yaml:"website,omitempty" json:"website,omitempty"`
-	AppVersion  string   `yaml:"appVersion,omitempty" json:"appVersion,omitempty"`
-	Prompts     []Prompt `yaml:"prompts,omitempty" json:"prompts,omitempty"`
+	Name        string `yaml:"name" json:"name"`
+	Title       string `yaml:"title" json:"title"`
+	Description string `yaml:"description" json:"description"`
+	Category    string `yaml:"category" json:"category"`
+	Website     string `yaml:"website,omitempty" json:"website,omitempty"`
+	AppVersion  string `yaml:"appVersion,omitempty" json:"appVersion,omitempty"`
+	// Prompts is always sent (possibly []): clients iterate it directly.
+	Prompts []Prompt `yaml:"prompts,omitempty" json:"prompts"`
 	// Size is the pod-size preset the app's services are created with
 	// (e.g. "large" for a JVM app). A size set on a service in the
 	// template wins. Omitted = the instance default pod size.
@@ -96,6 +97,9 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 		if !validKinds[p.Kind] {
 			return nil, fmt.Errorf("%w: prompt %q has invalid kind %q", ErrInvalidManifest, p.Key, p.Kind)
 		}
+	}
+	if m.Prompts == nil {
+		m.Prompts = []Prompt{}
 	}
 	return &m, nil
 }

@@ -356,6 +356,9 @@ func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
+	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, chi.URLParam(r, "project"), "") {
+		return
+	}
 	out, err := h.Svc.List(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list addons", err)
@@ -393,9 +396,15 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	req := apiv1CreateAddonToDomain(wire)
 	out, err := h.Svc.Add(ctx, project, req)
-	if err != nil {
+	if err != nil && !(errors.Is(err, addons.ErrEnvRefresh) && out != nil) {
 		h.fail(w, "add addon", err)
 		return
+	}
+	if err != nil {
+		// The addon exists; only the envFrom refresh failed. A 500 here
+		// made the client retry into a 409.
+		h.Logger.Warn("add addon: env refresh", "project", project, "addon", req.Name, "err", err)
+		w.Header().Set(headerKusoWarning, err.Error())
 	}
 	if h.Audit != nil {
 		// Addon provisioning is privileged: it allocates persistent
@@ -485,8 +494,14 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	purge := r.URL.Query().Get("purgeData") == "true"
 	if err := h.Svc.DeleteWith(ctx, project, addon, addons.DeleteOptions{PurgeData: purge}); err != nil {
-		h.fail(w, "delete addon", err)
-		return
+		if !errors.Is(err, addons.ErrEnvRefresh) {
+			h.fail(w, "delete addon", err)
+			return
+		}
+		// The CR (and with purge, the data) is already gone: report
+		// success and keep the audit record of the destructive step.
+		h.Logger.Warn("delete addon: env refresh", "project", project, "addon", addon, "err", err)
+		w.Header().Set(headerKusoWarning, err.Error())
 	}
 	if h.Audit != nil {
 		uid := ""
@@ -509,6 +524,10 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// headerKusoWarning carries a non-fatal problem on an otherwise
+// successful write (the change landed; a follow-up step didn't).
+const headerKusoWarning = "X-Kuso-Warning"
 
 func (h *AddonsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {

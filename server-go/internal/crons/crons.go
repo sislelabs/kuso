@@ -17,6 +17,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"kuso/server/internal/kube"
 )
@@ -183,8 +184,9 @@ type CreateProjectCronRequest struct {
 // UpdateCronRequest is the partial-update body. Pointer fields
 // distinguish "leave alone" from "set to zero".
 type UpdateCronRequest struct {
-	Schedule              *string  `json:"schedule,omitempty"`
-	Command               []string `json:"command,omitempty"`
+	DisplayName             *string  `json:"displayName,omitempty"`
+	Schedule                *string  `json:"schedule,omitempty"`
+	Command                 []string `json:"command,omitempty"`
 	Suspend                 *bool    `json:"suspend,omitempty"`
 	PinImage                *bool    `json:"pinImage,omitempty"`
 	ConcurrencyPolicy       *string  `json:"concurrencyPolicy,omitempty"`
@@ -197,12 +199,12 @@ type UpdateCronRequest struct {
 // stay on the per-service Update endpoint (which knows how to
 // re-resolve image + envFromSecrets from the parent service env).
 type UpdateProjectCronRequest struct {
-	DisplayName           *string         `json:"displayName,omitempty"`
-	Schedule              *string         `json:"schedule,omitempty"`
-	Suspend               *bool           `json:"suspend,omitempty"`
-	PinImage              *bool           `json:"pinImage,omitempty"`
-	URL                   *string         `json:"url,omitempty"`
-	Image                 *kube.KusoImage `json:"image,omitempty"`
+	DisplayName             *string         `json:"displayName,omitempty"`
+	Schedule                *string         `json:"schedule,omitempty"`
+	Suspend                 *bool           `json:"suspend,omitempty"`
+	PinImage                *bool           `json:"pinImage,omitempty"`
+	URL                     *string         `json:"url,omitempty"`
+	Image                   *kube.KusoImage `json:"image,omitempty"`
 	Command                 []string        `json:"command,omitempty"`
 	ConcurrencyPolicy       *string         `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds   *int            `json:"activeDeadlineSeconds,omitempty"`
@@ -234,10 +236,22 @@ type OnFailureUpdate struct {
 // to have helm-operator fail in production. Symptom: cron CR
 // appears to save successfully, never fires, no UI feedback.
 //
-// Standard 5-field grammar only; `@hourly`/`@daily` macros and the
-// 6-field-with-seconds form are also rejected (kube CronJob takes
-// the standard form, anything else is a surprise hop).
-var cronExpr = regexp.MustCompile(`^[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+$`)
+// Standard 5-field grammar plus the macros in cronMacros; the
+// 6-field-with-seconds form is rejected (kube CronJob takes the
+// standard form, anything else is a surprise hop).
+var cronExpr = regexp.MustCompile(`^[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\dA-Za-z\*\/\,\-]+\s+[\dA-Za-z\*\/\,\-]+$`)
+
+var cronMacros = map[string]bool{
+	"@yearly": true, "@annually": true, "@monthly": true, "@weekly": true,
+	"@daily": true, "@midnight": true, "@hourly": true,
+}
+
+// cronNames are the month and day-of-week names robfig/cron accepts in
+// fields 4 and 5 (case-insensitive).
+var cronNames = map[string]map[string]int{
+	"month":       {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12},
+	"day-of-week": {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6},
+}
 
 // validateSchedule returns ErrInvalid for anything that wouldn't
 // pass `kubectl create cronjob --schedule=…`. Cheap — we don't
@@ -248,11 +262,13 @@ func validateSchedule(s string) error {
 	if s == "" {
 		return fmt.Errorf("%w: schedule is required", ErrInvalid)
 	}
-	// @-macros (Quartz / Vixie-cron shorthand) — reject with a
-	// helpful suggestion since the user likely meant the equivalent
-	// 5-field form.
+	// kube CronJob parses with robfig/cron's standard parser, which
+	// takes these descriptors (but not @every or @reboot).
 	if strings.HasPrefix(s, "@") {
-		return fmt.Errorf("%w: schedule %q uses a macro (@hourly, @daily, etc.) which kube CronJob doesn't support — use the 5-field form (e.g. `0 * * * *` for hourly)", ErrInvalid, s)
+		if cronMacros[s] {
+			return nil
+		}
+		return fmt.Errorf("%w: schedule %q is not a supported macro (@yearly, @monthly, @weekly, @daily, @hourly) — or use the 5-field form (e.g. `0 * * * *`)", ErrInvalid, s)
 	}
 	if !cronExpr.MatchString(s) {
 		return fmt.Errorf("%w: schedule %q does not look like a 5-field cron expression (e.g. `*/15 * * * *`)", ErrInvalid, s)
@@ -308,16 +324,32 @@ func checkCronField(field, name string, min, max int) error {
 			}
 			value = part[:slash]
 		}
-		if value == "*" || value == "" {
+		if value == "*" {
 			// "*" or "*/step" — whole-range base, nothing to bound-check.
 			continue
 		}
-		// Range "a-b" or a single integer.
-		for _, endpoint := range strings.SplitN(value, "-", 2) {
-			n, err := strconv.Atoi(endpoint)
-			if err != nil || n < min || n > max {
+		if value == "" {
+			// A bare "/5" has no base; kube's parser rejects it.
+			return invalid()
+		}
+		// Range "a-b" or a single value; names only in month/day-of-week.
+		ends := strings.SplitN(value, "-", 2)
+		nums := make([]int, 0, 2)
+		for _, endpoint := range ends {
+			n, ok := cronNames[name][strings.ToLower(endpoint)]
+			if !ok {
+				var err error
+				if n, err = strconv.Atoi(endpoint); err != nil {
+					return invalid()
+				}
+			}
+			if n < min || n > max {
 				return invalid()
 			}
+			nums = append(nums, n)
+		}
+		if len(nums) == 2 && nums[0] > nums[1] {
+			return fmt.Errorf("%w: cron %s field %q has a reversed range", ErrInvalid, name, field)
 		}
 	}
 	return nil
@@ -384,12 +416,18 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	default:
 		return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
 	}
+	if err := validateCronName(req.Name); err != nil {
+		return nil, err
+	}
 	ns := s.nsFor(ctx, project)
 	fqn := CRName(project, service, req.Name)
 	if existing, err := s.Kube.GetKusoCron(ctx, ns, fqn); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: cron %s already exists", ErrConflict, fqn)
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight cron: %w", err)
+	}
+	if err := s.checkReleaseName(ctx, ns, fqn); err != nil {
+		return nil, err
 	}
 	// Resolve image + envFromSecrets from the parent service's
 	// production environment so the cron container runs the same
@@ -400,7 +438,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	if !strings.HasPrefix(service, project+"-") {
 		serviceFQN = project + "-" + service
 	}
-	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
+	prod, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
@@ -423,18 +461,19 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	cr := &kube.KusoCron{
 		ObjectMeta: objMeta,
 		Spec: kube.KusoCronSpec{
-			Project:               project,
-			Service:               serviceFQN,
-			Schedule:              req.Schedule,
-			Command:               req.Command,
+			Project:                 project,
+			Service:                 serviceFQN,
+			Schedule:                req.Schedule,
+			Command:                 req.Command,
 			Suspend:                 req.Suspend,
 			PinImage:                req.PinImage,
 			ConcurrencyPolicy:       policy,
 			ActiveDeadlineSeconds:   req.ActiveDeadlineSeconds,
 			StartingDeadlineSeconds: defaultStartingDeadline(req.StartingDeadlineSeconds),
-			Image:                   image,
-			EnvFromSecrets:          envFromSecrets,
-			Placement:               placement,
+			Image:                   prod.Spec.Image,
+			EnvFromSecrets:          prod.Spec.EnvFromSecrets,
+			Env:                     EnvForCron(prod.Spec.EnvVars),
+			Placement:               prod.Spec.Placement,
 			PrivateEgress:           privateEgress,
 			PlatformAPIEgress:       platformAPIEgress,
 		},
@@ -493,15 +532,22 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			return nil, err
 		}
 	}
+	if err := validateCronName(req.Name); err != nil {
+		return nil, err
+	}
 	ns := s.nsFor(ctx, project)
-	// Project-scoped CR name: <project>-<short>. Distinct from
-	// service-attached crons (which use <project>-<svc>-<short>) so
-	// the two namespaces never collide.
+	// Project-scoped CR name: <project>-<short>. It shares the helm
+	// release namespace with services (<project>-<svc>), addons and
+	// service crons (<project>-<svc>-<short>), so checkReleaseName
+	// refuses a name another kind already holds.
 	fqn := project + "-" + req.Name
 	if existing, err := s.Kube.GetKusoCron(ctx, ns, fqn); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: cron %s already exists", ErrConflict, fqn)
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight cron: %w", err)
+	}
+	if err := s.checkReleaseName(ctx, ns, fqn); err != nil {
+		return nil, err
 	}
 	cr := &kube.KusoCron{
 		ObjectMeta: metav1.ObjectMeta{
@@ -513,13 +559,13 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			},
 		},
 		Spec: kube.KusoCronSpec{
-			Project:               project,
-			Kind:                  req.Kind,
-			URL:                   req.URL,
-			Schedule:              req.Schedule,
-			Command:               req.Command,
-			Image:                 req.Image,
-			DisplayName:           req.DisplayName,
+			Project:                 project,
+			Kind:                    req.Kind,
+			URL:                     req.URL,
+			Schedule:                req.Schedule,
+			Command:                 req.Command,
+			Image:                   req.Image,
+			DisplayName:             req.DisplayName,
 			Suspend:                 req.Suspend,
 			PinImage:                req.PinImage,
 			ConcurrencyPolicy:       policy,
@@ -560,6 +606,9 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		if !cronOwnedByProject(cr, project) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}
+		if req.DisplayName != nil {
+			cr.Spec.DisplayName = strings.TrimSpace(*req.DisplayName)
+		}
 		if req.Schedule != nil {
 			cr.Spec.Schedule = *req.Schedule
 		}
@@ -594,6 +643,42 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 	return updated, nil
 }
 
+// maxCronJobNameLen is kube's CronJob name limit: the controller appends
+// an 11-character suffix to name each Job, and the result must fit 63.
+const maxCronJobNameLen = 52
+
+// validateCronName requires a DNS-1123 label. A name like "Nightly Job!"
+// reached the apiserver and came back as a bare 500.
+func validateCronName(name string) error {
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		return fmt.Errorf("%w: cron name %q must be lowercase letters, digits and '-' (%s)", ErrInvalid, name, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// checkReleaseName refuses a cron CR name helm or kube can't render, or
+// one a service or addon already uses as its helm release: the second
+// CR would never install while the API reported 201.
+func (s *Service) checkReleaseName(ctx context.Context, ns, fqn string) error {
+	if err := kube.ValidateReleaseName(fqn); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if len(fqn) > maxCronJobNameLen {
+		return fmt.Errorf("%w: cron %q is %d characters; a CronJob name must be at most %d — use a shorter name", ErrInvalid, fqn, len(fqn), maxCronJobNameLen)
+	}
+	if _, err := s.Kube.GetKusoService(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by a service", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight service name: %w", err)
+	}
+	if _, err := s.Kube.GetKusoAddon(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by an addon", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight addon name: %w", err)
+	}
+	return nil
+}
+
 // defaultStartingDeadline returns the requested missed-schedule lookback,
 // defaulting to 300s when the caller left it unset (0). A finite deadline
 // stops a fallen-behind CronJob (>100 missed schedules) from wedging
@@ -610,16 +695,36 @@ func defaultStartingDeadline(v int) int {
 // returns the image + envFromSecrets the cron should inherit. Errors
 // when the production env doesn't exist yet — the user has to deploy
 // the service before adding crons.
-func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN string) (*kube.KusoImage, []string, *kube.KusoPlacement, error) {
+func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN string) (*kube.KusoEnvironment, error) {
 	envName := serviceFQN + "-production"
 	env, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, nil, nil, fmt.Errorf("%w: production env %s not found — deploy the service before adding crons", ErrInvalid, envName)
+			return nil, fmt.Errorf("%w: production env %s not found — deploy the service before adding crons", ErrInvalid, envName)
 		}
-		return nil, nil, nil, fmt.Errorf("lookup production env: %w", err)
+		return nil, fmt.Errorf("lookup production env: %w", err)
 	}
-	return env.Spec.Image, env.Spec.EnvFromSecrets, env.Spec.Placement, nil
+	return env, nil
+}
+
+// EnvForCron converts an env's envVars into the cron's env list. Without
+// it a service cron got only envFromSecrets, so ${{ addon.KEY }} aliases
+// (valueFrom secretKeyRef) and env-CR literals never reached the cron pod
+// and it ran on app defaults. Placeholders for keys that live in the
+// managed secret are dropped: envFrom already supplies them. Same shape
+// as runs' mergeRunEnv.
+func EnvForCron(vars []kube.KusoEnvVar) []kube.KusoRunEnv {
+	out := make([]kube.KusoRunEnv, 0, len(vars))
+	for _, e := range vars {
+		if e.Name == "" {
+			continue
+		}
+		if e.Source == "managed-secret" && e.Value == "" && e.ValueFrom == nil {
+			continue
+		}
+		out = append(out, kube.KusoRunEnv{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
+	}
+	return out
 }
 
 // serviceEgress returns the owning service's privateEgress /
@@ -657,7 +762,7 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 	// Resolve once outside the retry loop — the production env is the
 	// source of truth and a 409 retry on the cron CR doesn't change
 	// what we'd resolve here.
-	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
+	prod, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
@@ -666,9 +771,10 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		if !cronOwnedByProject(cr, project) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}
-		cr.Spec.Image = image
-		cr.Spec.EnvFromSecrets = envFromSecrets
-		cr.Spec.Placement = placement
+		cr.Spec.Image = prod.Spec.Image
+		cr.Spec.EnvFromSecrets = prod.Spec.EnvFromSecrets
+		cr.Spec.Env = EnvForCron(prod.Spec.EnvVars)
+		cr.Spec.Placement = prod.Spec.Placement
 		cr.Spec.PrivateEgress = privateEgress
 		cr.Spec.PlatformAPIEgress = platformAPIEgress
 		return nil

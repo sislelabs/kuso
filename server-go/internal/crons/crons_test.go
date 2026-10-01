@@ -33,10 +33,21 @@ func TestValidateSchedule(t *testing.T) {
 		{"quartz-dom-q", "0 0 ? * *", false, "5-field"},
 		{"quartz-dow-q", "0 0 1 * ?", false, "5-field"},
 
-		// @-macro shorthand — different dialect, kube rejects.
-		{"at-hourly", "@hourly", false, "macro"},
-		{"at-daily", "@daily", false, "macro"},
-		{"at-yearly", "@yearly", false, "macro"},
+		// @-descriptors: kube's parser (robfig/cron standard) takes these.
+		{"at-hourly", "@hourly", true, ""},
+		{"at-daily", "@daily", true, ""},
+		{"at-yearly", "@yearly", true, ""},
+		{"at-every", "@every 5m", false, "macro"},
+		{"at-reboot", "@reboot", false, "macro"},
+
+		// Month / weekday names are valid in kube CronJob schedules.
+		{"weekday-names", "0 9 * * MON-FRI", true, ""},
+		{"month-name", "0 0 1 JAN *", true, ""},
+		{"name-in-hour", "0 MON * * *", false, "5-field"},
+
+		// Accepted by the old check, rejected by kube.
+		{"reversed-range", "0 0 * * 5-1", false, "reversed"},
+		{"bare-step", "/5 * * * *", false, "range"},
 
 		// 6-field (Quartz/Vixie with seconds).
 		{"6-field-seconds", "0 0 0 * * *", false, "5-field"},

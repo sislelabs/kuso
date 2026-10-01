@@ -10,11 +10,11 @@ import (
 // this var" tuple. Upserted by the log shipper's crash-line scanner;
 // queried by the UI to flag missing env vars on the EnvVarsEditor.
 type EnvHint struct {
-	Project  string
-	Service  string
-	Name     string
-	LastLine string
-	LastSeen time.Time
+	Project  string    `json:"project"`
+	Service  string    `json:"service"`
+	Name     string    `json:"name"`
+	LastLine string    `json:"lastLine"`
+	LastSeen time.Time `json:"lastSeen"`
 }
 
 // UpsertEnvHints batches a slice of hints into the EnvHint table.

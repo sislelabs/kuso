@@ -78,6 +78,10 @@ func TestParseClickHouseJSONCompact(t *testing.T) {
 	if out.Rows[1][2] != "" {
 		t.Errorf("null cell = %q, want empty string", out.Rows[1][2])
 	}
+	// "" and NULL render the same in Rows; Nulls tells them apart.
+	if len(out.Nulls) != 2 || !out.Nulls[1][2] || out.Nulls[0][2] {
+		t.Errorf("nulls = %v, want only [1][2] set", out.Nulls)
+	}
 
 	// limit large enough → no truncation.
 	out2, _ := parseClickHouseJSONCompact(body, 10)

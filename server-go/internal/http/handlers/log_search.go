@@ -109,7 +109,9 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// parseTs accepts RFC3339 or "1700000000" (unix). Returns zero on
+// parseTs accepts RFC3339, "1700000000" (unix), or a lookback relative
+// to now ("1h", "7d"). A relative value used to parse as zero, which
+// meant an unbounded scan of the whole archive. Returns zero on
 // empty/garbage.
 func parseTs(s string) time.Time {
 	if s == "" {
@@ -120,6 +122,9 @@ func parseTs(s string) time.Time {
 	}
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return time.Unix(n, 0)
+	}
+	if d, err := parseRangeDuration(s); err == nil {
+		return time.Now().Add(-d)
 	}
 	return time.Time{}
 }

@@ -140,26 +140,34 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		names = append(names, n.Name)
 	}
 	disks := s.diskStats(ctx, names)
+	missing := 0
+	defer func() {
+		if missing > 0 {
+			s.Logger.Warn("nodemetrics: no metrics-server usage; skipped sample", "nodes", missing)
+		}
+	}()
 	for _, n := range nodes {
 		cpuCap := n.Status.Capacity.Cpu().MilliValue()
 		memCap, _ := n.Status.Capacity.Memory().AsInt64()
-		// Static fallback only. Capacity/Allocatable ephemeral-storage
-		// differ by a FIXED kubelet reservation (~16GB on every node
-		// here), so using them as used-vs-free renders a constant ~5%
-		// regardless of the real disk, and leaves the disk-pressure
-		// alert unfireable. The kubelet Summary API has the truth;
-		// these values survive only so a node whose kubelet didn't
-		// answer still writes a row.
-		diskCap, _ := n.Status.Capacity.StorageEphemeral().AsInt64()
-		diskAvail, _ := n.Status.Allocatable.StorageEphemeral().AsInt64()
+		// No usage sample (metrics-server down or not yet scraped this
+		// node): write nothing rather than a 0% row, which read as an
+		// idle node in the history and kept the CPU/memory alerts from
+		// ever firing.
+		u, ok := usage[n.Name]
+		if !ok {
+			missing++
+			continue
+		}
+		cpuUse, memUse := u.cpuMilli, u.memBytes
+		// Disk comes from the kubelet Summary API. Capacity minus
+		// Allocatable ephemeral-storage is a FIXED kubelet reservation,
+		// so using them as used-vs-free showed a constant ~5%; without
+		// a Summary answer the disk fields stay 0, which the disk alert
+		// and the history treat as "no data".
+		var diskCap, diskAvail int64
 		if fs, ok := disks[n.Name]; ok {
 			diskCap = fs.capacityBytes
 			diskAvail = fs.availableBytes
-		}
-		var cpuUse, memUse int64
-		if u, ok := usage[n.Name]; ok {
-			cpuUse = u.cpuMilli
-			memUse = u.memBytes
 		}
 		row := db.NodeMetric{
 			Node: n.Name, Ts: now,

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // ErrorsHandler exposes /api/projects/{project}/services/{service}/errors.
@@ -20,6 +21,9 @@ import (
 type ErrorsHandler struct {
 	DB     *db.DB
 	Logger *slog.Logger
+	// Kube + Namespace let List 404 an unknown project/service. Optional.
+	Kube      *kube.Client
+	Namespace string
 }
 
 // Mount registers the route. JWT-protected — the caller's project
@@ -33,6 +37,7 @@ func (h *ErrorsHandler) Mount(r chi.Router) {
 //	?since=24h   — lookback window. Default 24h, max 30d.
 //	?limit=50    — max groups returned (1–200, default 50).
 //	?offset=0    — groups to skip (offset paging, newest-first order).
+//	?env=staging — only that environment's errors (default: all).
 //
 // Truncation signal (agent-use W4): the wire shape is a bare JSON
 // array and MUST stay that way, so a cut response is signalled via
@@ -46,6 +51,9 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !requireParent(ctx, w, h.Kube, h.Namespace, project, service) {
 		return
 	}
 	// ErrorEvent.service is copied from LogLine.service, which is the FQ
@@ -83,7 +91,7 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// +1 over-fetch: one extra group past the limit proves truncation.
-	groups, err := h.DB.ListErrorGroups(ctx, project, service, since, limit+1, offset)
+	groups, err := h.DB.ListErrorGroups(ctx, project, service, r.URL.Query().Get("env"), since, limit+1, offset)
 	if err != nil {
 		h.Logger.Error("errors: list", "err", err, "project", project, "service", service)
 		writeErr(w, http.StatusInternalServerError, "internal")

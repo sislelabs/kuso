@@ -73,7 +73,7 @@ func (h *ConfigHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// UpdateSettings replaces the Kuso CR spec from the body's "settings" key.
+// UpdateSettings merges the body's "settings" keys into the Kuso CR spec.
 func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.Cfg.Features().AdminDisabled {
 		writeErr(w, http.StatusForbidden, "admin disabled")

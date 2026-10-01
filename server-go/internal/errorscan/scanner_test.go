@@ -84,6 +84,9 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"NullPointerException: cannot read property",
 		"ValueError: invalid literal for int() with base 10",
 		"KeyError: 'user_id'",
+		"time=2026-10-01T09:00:00Z level=ERROR msg=\"db down\"",
+		`{"level":"error","msg":"db down"}`,
+		"[error] upstream timed out",
 	}
 	for _, line := range matches {
 		if !matchesAnyPattern(line) {
@@ -101,6 +104,10 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"migration applied: 0009_tenancy_rev",
 		"#17 0.510 go: downloading github.com/hashicorp/go-multierror v1.1.1",
 		"rendering <ErrorBoundary> fallback",
+		// Bot probes logged at INFO (tickero, live): the path matched.
+		"time=2026-10-01T09:00:00Z level=INFO msg=request method=GET path=/manager.php/error.php status=404",
+		"GET /error.php 404 2ms",
+		`{"level":"info","msg":"request","path":"/error"}`,
 	}
 	for _, line := range nonMatches {
 		if matchesAnyPattern(line) {

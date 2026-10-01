@@ -130,18 +130,10 @@ func (h *KubernetesHandler) requireEnvAccess(
 	envName string,
 	role db.ProjectRole,
 ) bool {
-	if h.Kube == nil || h.DB == nil {
-		// No kube + no DB = either a misconfigured server or a test
-		// stub. Both should fail closed.
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return false
-	}
-	envCR, err := h.Kube.GetKusoEnvironment(ctx, h.Namespace, envName)
-	if err != nil || envCR == nil || envCR.Spec.Project == "" {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return false
-	}
-	return requireProjectAccess(ctx, w, h.DB, envCR.Spec.Project, role)
+	// Projects with their own namespace keep their envs there; a
+	// home-namespace lookup 404'd them.
+	_, ok := h.requireEnvAccessAnyNS(ctx, w, envName, role)
+	return ok
 }
 
 // kubeCtx returns a 10-second deadline context for kube round-trips.

@@ -223,6 +223,24 @@ ORDER BY "createdAt" ASC`, IncidentInvestigating, cutoff)
 	return out, rows.Err()
 }
 
+// IncidentsInState returns every incident currently in state.
+func (d *DB) IncidentsInState(ctx context.Context, state string) ([]Incident, error) {
+	rows, err := d.QueryContext(ctx, `SELECT `+incidentCols+` FROM "Incident" WHERE "state" = $1`, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		in, err := scanIncident(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
 // SetIncidentState transitions an incident, stamping closedAt when moving
 // to a terminal state. Returns ErrIncidentNotFound if the id is gone.
 func (d *DB) SetIncidentState(ctx context.Context, id, state string) error {

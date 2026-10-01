@@ -152,8 +152,9 @@ func TestUncoveredDetail(t *testing.T) {
 		{"external postgres schedulable", mk("postgres", func(a *kube.KusoAddon) {
 			a.Spec.External = &kube.KusoAddonExternal{SecretName: "byo"}
 		}), "set spec.backup.schedule"},
-		// HA postgres: chart suppresses pg_dump; CNPG owns backups.
-		{"ha postgres", mk("postgres", func(a *kube.KusoAddon) { a.Spec.HA = true }), "CNPG"},
+		// HA postgres: the chart now pg_dumps it (from <name>-rw), so it's
+		// schedulable like any other postgres.
+		{"ha postgres", mk("postgres", func(a *kube.KusoAddon) { a.Spec.HA = true }), "set spec.backup.schedule"},
 		// Instance-shared: backups belong to the instance addon.
 		{"instance-shared", mk("postgres", func(a *kube.KusoAddon) { a.Spec.UseInstanceAddon = "pg-main" }), "instance addon"},
 		// External non-postgres: provider's responsibility.

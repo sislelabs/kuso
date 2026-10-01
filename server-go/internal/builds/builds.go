@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	cronspkg "kuso/server/internal/crons"
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/metrics"
@@ -119,9 +120,13 @@ const (
 	AnnBuildCompletedAt = "kuso.sislelabs.com/build-completed-at"
 	AnnBuildMessage     = "kuso.sislelabs.com/build-message"
 
-	annPhase        = AnnBuildPhase
-	annCompletedAt  = AnnBuildCompletedAt
-	annStartedAt    = "kuso.sislelabs.com/build-started-at"
+	annPhase       = AnnBuildPhase
+	annCompletedAt = AnnBuildCompletedAt
+	annStartedAt   = "kuso.sislelabs.com/build-started-at"
+	// annDispatchedAt is when a queued build was promoted to pending. The
+	// stuck-timeout counts from here, not from CR creation, so time spent
+	// waiting in the queue (or behind the CI gate) isn't charged to it.
+	annDispatchedAt = "kuso.sislelabs.com/build-dispatched-at"
 	annMessage      = AnnBuildMessage
 	annSupersededBy = "kuso.sislelabs.com/superseded-by"
 	// annPromoteHold carries the atomic same-repo promotion gate's
@@ -202,6 +207,9 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+	// Images lets Rollback check the target image still exists in the
+	// in-cluster registry. Optional; nil skips the check.
+	Images ImageDeleter
 	// Tokens mints fresh github installation tokens for the build's
 	// clone init container. Optional — nil means we still create the
 	// expected secret (empty value) so pods start, but private repos
@@ -990,7 +998,10 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// single-process double-active-CR TOCTOU. See findActiveForServiceLive
 		// — cross-replica double-creation still needs leader-gating /
 		// server-side enforcement and is out of scope for this pass.
-		if active, err := s.findActiveForServiceLive(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
+		// A failed check queues too: starting anyway could run two builds
+		// of one service at once, while a queued build is dispatched as
+		// soon as the poller can see the slot is free.
+		if active, err := s.findActiveForServiceLive(ctx, ns, project, fqn); err != nil || (active != "" && active != buildName) {
 			queued = true
 		}
 	}
@@ -2117,8 +2128,8 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 		cachePatch = fmt.Sprintf(`,"cache":{"pvcName":%q}`, cachePVC)
 	}
 	patch := fmt.Sprintf(
-		`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
-		annPhase, imageRepo, ImageTag(next.Spec.Ref), cachePatch,
+		`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending",%q:%q}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
+		annPhase, annDispatchedAt, time.Now().UTC().Format(time.RFC3339), imageRepo, ImageTag(next.Spec.Ref), cachePatch,
 	)
 	if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
@@ -2217,11 +2228,18 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	return nil
 }
 
-// buildAge returns how long ago the build CR was created. A zero
-// creationTimestamp (unusual — only in tests with hand-built objects)
-// yields 0 so the stuck-timeout never trips spuriously.
+// buildAge returns how long ago the build was dispatched: the
+// dispatched-at stamp for a build that sat in the queue, else CR creation.
+// A zero creationTimestamp (unusual — only in tests with hand-built
+// objects) yields 0 so the stuck-timeout never trips spuriously.
 func buildAge(b *kube.KusoBuild) time.Duration {
-	if b == nil || b.CreationTimestamp.IsZero() {
+	if b == nil {
+		return 0
+	}
+	if t, err := time.Parse(time.RFC3339, b.Annotations[annDispatchedAt]); err == nil {
+		return time.Since(t)
+	}
+	if b.CreationTimestamp.IsZero() {
 		return 0
 	}
 	return time.Since(b.CreationTimestamp.Time)
@@ -3279,6 +3297,14 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 					"env", e.Name, "build", b.Name, "keys", snapKeys)
 			}
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
+			if rerr != nil && ctx.Err() != nil {
+				// Our own budget ran out (a hook longer than
+				// promoteAsyncTimeout) or leadership moved: the Job is
+				// still running, not broken. Leave the build
+				// non-terminal; the next tick polls the same Job. Marking
+				// it release-failed here paged a false "infra error".
+				return fmt.Errorf("release hook for %s still running when the promote budget ended: %w", e.Name, ctx.Err())
+			}
 			if rerr != nil {
 				// Infra error talking to kube — do NOT promote: the image
 				// is unverified, so block fromService propagation too.
@@ -3362,8 +3388,14 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// the fromService fan-out below: a consumer that carries a snapshot
 	// of the image goes stale on every deploy and breaks outright once
 	// registry GC reaps the pinned tag.
-	if err := p.promoteToCrons(ctx, ns, b, shortService); err != nil {
-		p.logger().Warn("promote to crons failed", "service", b.Spec.Service, "err", err)
+	// Only when this build actually reached an env: an older build that
+	// finishes after a newer one has promoted matches nothing above (the
+	// promoted-at guard skips it) and must not drag the crons back to
+	// its image.
+	if matched > 0 {
+		if err := p.promoteToCrons(ctx, ns, b, shortService); err != nil {
+			p.logger().Warn("promote to crons failed", "service", b.Spec.Service, "err", err)
+		}
 	}
 	if err := p.promoteToFromServiceConsumers(ctx, ns, b, shortService, bTrigger); err != nil {
 		// Workers being stale is a real bug but not worth failing the
@@ -3541,9 +3573,19 @@ func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuil
 			continue
 		}
 		name := c.Name
+		// Refresh the env the cron inherits along with the image: vars
+		// set since the cron was created otherwise never reach it.
+		prod, perr := p.Svc.Kube.GetKusoEnvironment(ctx, ns, c.Spec.Service+"-production")
+		if perr != nil && !strings.HasPrefix(c.Spec.Service, b.Spec.Project+"-") {
+			prod, perr = p.Svc.Kube.GetKusoEnvironment(ctx, ns, b.Spec.Project+"-"+c.Spec.Service+"-production")
+		}
 		if _, uerr := p.Svc.Kube.UpdateKusoCronWithRetry(ctx, ns, name, func(live *kube.KusoCron) error {
 			img := *b.Spec.Image
 			live.Spec.Image = &img
+			if perr == nil && prod != nil {
+				live.Spec.EnvFromSecrets = prod.Spec.EnvFromSecrets
+				live.Spec.Env = cronspkg.EnvForCron(prod.Spec.EnvVars)
+			}
 			return nil
 		}); uerr != nil {
 			p.logger().Warn("promote cron image failed", "cron", name, "err", uerr)

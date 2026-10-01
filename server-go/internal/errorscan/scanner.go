@@ -34,8 +34,12 @@ import (
 // Order matters — the first match wins. Keeping the list small +
 // case-insensitive so we don't burn CPU on every line.
 var errorPatterns = []*regexp.Regexp{
-	// Generic ERROR / FATAL prefixes (logging frameworks).
-	regexp.MustCompile(`(?i)\b(?:ERROR|FATAL|SEVERE|PANIC)\b`),
+	// Generic ERROR / FATAL keywords (logging frameworks). Delimited by
+	// whitespace or punctuation rather than \b: a "." or "/" also counts
+	// as a word boundary, so the bot-probe path /manager.php/error.php
+	// matched. Must stay first — matchesAnyPattern skips it on lines
+	// with an explicit info/debug level.
+	regexp.MustCompile(`(?i)(?:^|[\s\[\("'=:|,{])(?:ERROR|FATAL|SEVERE|PANIC)(?:$|[\s\]\)"':,|}])`),
 	// Go panic.
 	regexp.MustCompile(`^panic:\s`),
 	// Python traceback / exception.
@@ -253,13 +257,22 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 // matchesAnyPattern returns true if any of the error regexes hits.
 // Cheap iteration — these patterns are deliberately small.
 func matchesAnyPattern(line string) bool {
-	for _, p := range errorPatterns {
+	quiet := quietLevelRe.MatchString(line)
+	for i, p := range errorPatterns {
+		if i == 0 && quiet {
+			continue
+		}
 		if p.MatchString(line) {
 			return true
 		}
 	}
 	return false
 }
+
+// quietLevelRe matches a structured log line that declares itself
+// info/debug/trace. On those, a bare "error" word is part of the message
+// or a field value (a request path, a counter name), not the severity.
+var quietLevelRe = regexp.MustCompile(`(?i)(?:\blevel=|"level"\s*:\s*")(?:info|debug|trace)\b`)
 
 // normalize: lowercase, strip numbers, hex blobs, UUIDs, IP-like
 // segments, and quoted strings. Used for fingerprinting so noisy

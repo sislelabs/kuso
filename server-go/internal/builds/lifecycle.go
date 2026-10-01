@@ -245,6 +245,16 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	default:
 		return nil, fmt.Errorf("get build: %w", err)
 	}
+	// Only a handful of images per service survive the registry sweep,
+	// and the window counts every branch, so an older production build
+	// can be gone. Rolling back to it left the old pod running behind an
+	// ImagePullBackOff: the rollback silently never happened.
+	if s.Images != nil && strings.HasPrefix(imageRepo, RegistryHost+"/") {
+		dg, rerr := s.Images.ResolveTagDigest(ctx, strings.TrimPrefix(imageRepo, RegistryHost+"/"), imageTag)
+		if rerr == nil && dg == "" {
+			return nil, fmt.Errorf("%w: build %s's image %s is no longer in the registry (pruned by retention) — rebuild that commit instead", ErrInvalid, buildName, imageTag)
+		}
+	}
 	cur, err := s.resolveEnv(ctx, ns, project, service, envName)
 	if err != nil {
 		return nil, err

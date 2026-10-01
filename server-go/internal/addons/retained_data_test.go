@@ -9,7 +9,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -168,5 +170,38 @@ func TestUpdate_VersionErrorPointsAtNewName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "recreate under a new name, then restore") {
 		t.Errorf("message = %q", err.Error())
+	}
+}
+
+// The retained-data check is the only thing between a re-add and a
+// silent mount of stale data, so an apiserver error must refuse the add
+// rather than read as "no PVCs".
+func TestAdd_RefusesWhenRetainedPVCListFails(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProj("alpha"))
+	cs := kubefake.NewSimpleClientset()
+	cs.PrependReactor("list", "persistentvolumeclaims", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("apiserver blip")
+	})
+	s.Kube.Clientset = cs
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "pg", Kind: "postgres"}); err == nil {
+		t.Fatal("Add succeeded although the retained-data check couldn't run")
+	}
+}
+
+// An env volume PVC carries app.kubernetes.io/instance=<env CR>, which
+// equals an addon FQN named <service>-<env>. The addon's purge must not
+// select it.
+func TestRetainedPVCs_IgnoresEnvVolumeWithSameInstance(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProj("alpha"))
+	envPVC := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name: "alpha-web-production-uploads", Namespace: "kuso",
+		Labels: map[string]string{"app.kubernetes.io/name": "kusoenvironment", "app.kubernetes.io/instance": "alpha-web-production"},
+	}}
+	s.Kube.Clientset = kubefake.NewSimpleClientset(envPVC)
+	got, err := s.retainedPVCsForAddon(context.Background(), "kuso", "alpha-web-production")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("retained = %v, err %v; want none", got, err)
 	}
 }

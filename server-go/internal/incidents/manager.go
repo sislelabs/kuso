@@ -278,6 +278,11 @@ func (m *Manager) SpawnImplementFor(ctx context.Context, id string) error {
 	in.State = db.IncidentImplementing
 	job, err := m.Spawner.SpawnImplement(ctx, in)
 	if err != nil {
+		// Back to awaiting_feedback so the operator can approve again;
+		// left in implementing with no Job it stayed there forever.
+		if rerr := m.DB.SetIncidentState(ctx, id, db.IncidentAwaitingFeedback); rerr != nil {
+			m.log().Warn("incident: revert after failed implement spawn", "id", id, "err", rerr)
+		}
 		return fmt.Errorf("spawn implement job: %w", err)
 	}
 	return m.DB.SetIncidentJob(ctx, id, "implement", job)

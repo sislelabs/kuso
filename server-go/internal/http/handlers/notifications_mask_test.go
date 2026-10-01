@@ -243,3 +243,34 @@ func TestNotifications_EmailPasswordMasked(t *testing.T) {
 		t.Errorf("from = %v, want plain", got)
 	}
 }
+
+// The edit form sends only the keys it renders, and Update replaced the
+// whole config, so editing a webhook channel dropped its HMAC secret and
+// deliveries went out unsigned. It also disabled the channel whenever
+// the body omitted "enabled".
+func TestNotifications_UpdateMergesConfigAndKeepsEnabled(t *testing.T) {
+	d := openHandlerTestDB(t)
+	h := notifHandler(d)
+	ctx := context.Background()
+
+	created := createNotif(t, h, `{"name":"wh","type":"webhook","enabled":true,
+		"config":{"url":"https://example.com/hook","secret":"hmac-key"}}`)
+	rr := httptest.NewRecorder()
+	h.Update(rr, notifReq(http.MethodPut, created.ID, `{"config":{"url":"https://example.com/hook2"}}`))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("update: %d %q", rr.Code, rr.Body.String())
+	}
+	stored, err := d.FindNotification(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Config["secret"] != "hmac-key" {
+		t.Errorf("secret = %v, want kept", stored.Config["secret"])
+	}
+	if stored.Config["url"] != "https://example.com/hook2" {
+		t.Errorf("url = %v, want updated", stored.Config["url"])
+	}
+	if !stored.Enabled {
+		t.Error("channel disabled by an update that didn't mention enabled")
+	}
+}

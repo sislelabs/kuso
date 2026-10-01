@@ -35,3 +35,21 @@ func TestToBuildSummary_StateFields(t *testing.T) {
 		t.Errorf("succeeded build carries state fields: %+v", ok)
 	}
 }
+
+// A manual build without GitHub branch resolution carries a synthetic
+// "<branch>-<nonce>" ref; it showed in every SHA column as if it were a
+// commit.
+func TestToBuildSummary_CommitShaOnlyForRealCommits(t *testing.T) {
+	t.Parallel()
+	mk := func(ref string) kube.KusoBuild {
+		return kube.KusoBuild{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Spec: kube.KusoBuildSpec{Ref: ref}}
+	}
+	synth := toBuildSummary(mk("main-ms1z0ez8"))
+	if synth.CommitSha != "" || synth.Ref != "main-ms1z0ez8" {
+		t.Errorf("synthetic ref: commitSha=%q ref=%q", synth.CommitSha, synth.Ref)
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	if got := toBuildSummary(mk(sha)); got.CommitSha != sha {
+		t.Errorf("real sha: commitSha=%q", got.CommitSha)
+	}
+}

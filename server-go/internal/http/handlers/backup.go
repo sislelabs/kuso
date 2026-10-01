@@ -124,12 +124,7 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: no DSN resolved (kuso-postgres-conn Secret missing?)")
 		return
 	}
-	timeout := 5 * time.Minute
-	if v := r.URL.Query().Get("timeout"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 && d < time.Hour {
-			timeout = d
-		}
-	}
+	timeout := dumpTimeout(r.URL.Query().Get("timeout"))
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 

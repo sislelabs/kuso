@@ -22,7 +22,7 @@ server-go/
 │   ├── http/           chi router, JWT middleware, handlers/
 │   ├── projects/       project + service + env domain logic
 │   ├── addons/         polymorphic addon provisioning (Postgres, Redis, …)
-│   ├── builds/         kaniko/buildpacks build orchestration
+│   ├── builds/         build orchestration (shared buildkitd + buildpacks)
 │   ├── secrets/        env-var rewriting + K8s Secret-backed values
 │   ├── notify/         async event dispatcher (webhook fan-out + DB mirror)
 │   ├── nodewatch/      auto-cordon on NotReady
@@ -57,7 +57,8 @@ curl -s localhost:3000/healthz
 ## Container image
 
 ```sh
-docker build -f server-go/Dockerfile -t ghcr.io/sislelabs/kuso-server-go:vX.Y.Z server-go
+# run from the repo root: the image also builds ../web
+docker build -f server-go/Dockerfile -t ghcr.io/sislelabs/kuso-server-go:vX.Y.Z .
 docker run --rm -p 3000:3000 \
   -e KUSO_DB_DSN=... -e JWT_SECRET=... \
   ghcr.io/sislelabs/kuso-server-go:vX.Y.Z
@@ -76,4 +77,4 @@ The image is a `FROM scratch` static binary; no shell, no package manager, no CG
 - The notify dispatcher is per-pod (256-event buffered channel). The bell-icon feed is read from Postgres, so events survive even if a single pod's buffer drops.
 - Connection pool: `MaxOpenConns=25` per replica. With 3+ replicas plus operator + logship + addon pollers, the bundled Postgres `max_connections=100` is the next ceiling — PgBouncer or managed Postgres for serious deployments.
 
-See `.claude/skills/platform-architecture.md` for the full runtime shape.
+See the repo-root `CLAUDE.md` for the full runtime shape.

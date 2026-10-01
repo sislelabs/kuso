@@ -66,6 +66,9 @@ const (
 	actNone episodeAction = iota
 	actFire
 	actResolve
+	// actUpdate persists a shrunken target set without notifying: a
+	// target that recovered while others keep the episode open.
+	actUpdate
 )
 
 type episodeDecision struct {
@@ -91,20 +94,26 @@ func decideEpisode(r *db.AlertRule, f finding, now time.Time) episodeDecision {
 	for _, t := range r.FiringTargets {
 		known[t] = struct{}{}
 	}
-	var fresh []string
+	// still: previously fired and still breaching. A recovered target is
+	// dropped, so if it breaks again while the episode stays open it is
+	// fresh and pages again.
+	var fresh, still []string
 	for _, t := range f.targets {
-		if _, ok := known[t]; !ok {
+		if _, ok := known[t]; ok {
+			still = append(still, t)
+		} else {
 			fresh = append(fresh, t)
 		}
 	}
-	if len(fresh) == 0 {
+	sort.Strings(still)
+	shrunk := len(still) != len(r.FiringTargets)
+	if len(fresh) == 0 || (r.LastFiredAt != nil && now.Sub(*r.LastFiredAt) < time.Duration(r.ThrottleSeconds)*time.Second) {
+		if shrunk && r.FiringSince != nil {
+			return episodeDecision{action: actUpdate, targets: still}
+		}
 		return episodeDecision{action: actNone}
 	}
-	if r.LastFiredAt != nil && now.Sub(*r.LastFiredAt) < time.Duration(r.ThrottleSeconds)*time.Second {
-		return episodeDecision{action: actNone}
-	}
-	targets := append([]string{}, r.FiringTargets...)
-	targets = append(targets, fresh...)
+	targets := append(still, fresh...)
 	sort.Strings(targets)
 	return episodeDecision{action: actFire, newTargets: fresh, targets: targets}
 }
@@ -133,6 +142,10 @@ func (e *Engine) evalEpisode(ctx context.Context, r *db.AlertRule, now time.Time
 		}
 		if err := e.DB.SetAlertEpisode(ctx, r.ID, &since, d.targets, &now); err != nil {
 			e.Logger.Warn("alert episode stamp failed — may re-fire next tick", "rule", r.Name, "err", err)
+		}
+	case actUpdate:
+		if err := e.DB.SetAlertEpisode(ctx, r.ID, r.FiringSince, d.targets, nil); err != nil {
+			e.Logger.Warn("alert episode update failed", "rule", r.Name, "err", err)
 		}
 	case actResolve:
 		e.Notify.Emit(resolvedEvent(r, now))

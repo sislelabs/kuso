@@ -39,8 +39,10 @@ type BuildSettings struct {
 	// install shipped serialized builds regardless of cluster size.
 	// Callers use this to apply the adaptive default when unset while
 	// still honouring an explicit admin choice (including an explicit
-	// 1, and an explicit 0 meaning "no cap").
-	MaxConcurrentSet bool `json:"-"`
+	// 1, and an explicit 0 meaning "no cap"). Sent to clients so a form
+	// can tell "unset" from an explicit 1; SetBuildSettings writes
+	// maxConcurrent only when this is true.
+	MaxConcurrentSet bool `json:"maxConcurrentSet"`
 	// MemoryLimit / MemoryRequest / CPULimit / CPURequest are the
 	// kube quantity strings the kusobuild chart consumes for each
 	// kaniko Job pod. The strings are validated at admin-write
@@ -118,18 +120,22 @@ func (d *DB) GetBuildSettings(ctx context.Context) (BuildSettings, error) {
 // that differ from the live row to keep updatedBy meaningful.
 // updatedBy is the username of the admin who saved.
 func (d *DB) SetBuildSettings(ctx context.Context, in BuildSettings, updatedBy string) error {
-	pairs := []struct {
+	type pair struct {
 		key   string
 		value string
-	}{
-		{"build.maxConcurrent", strconv.Itoa(in.MaxConcurrent)},
+	}
+	var pairs []pair
+	if in.MaxConcurrentSet {
+		pairs = append(pairs, pair{"build.maxConcurrent", strconv.Itoa(in.MaxConcurrent)})
+	}
+	pairs = append(pairs, []pair{
 		{"build.memoryLimit", quote(in.MemoryLimit)},
 		{"build.memoryRequest", quote(in.MemoryRequest)},
 		{"build.cpuLimit", quote(in.CPULimit)},
 		{"build.cpuRequest", quote(in.CPURequest)},
 		{"build.registryAuthSecret", quote(in.RegistryAuthSecret)},
 		{"build.registryHost", quote(in.RegistryHost)},
-	}
+	}...)
 	now := time.Now().UTC()
 	for _, p := range pairs {
 		_, err := d.ExecContext(ctx, `

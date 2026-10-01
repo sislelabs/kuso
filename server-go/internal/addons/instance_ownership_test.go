@@ -340,3 +340,25 @@ func TestInstanceCleanup_KeepsDBOwnedByAnotherProject(t *testing.T) {
 		t.Fatalf("cleanup of %s/db dropped %s, which belongs to %s/api-db", p2, ident, p1)
 	}
 }
+
+// resync-instance re-ran the provisioner, which rotated the role password.
+// Running pods keep the old DATABASE_URL until restarted, so every healthy
+// addon's next new connection failed auth.
+func TestResyncInstanceAddon_KeepsWorkingCredentials(t *testing.T) {
+	p := uniqueProject(t)
+	s, adminDSN := instancePGService(t, p)
+	dropTestIdent(t, adminDSN, pgIdentifier(p, "db"))
+	if err := instanceAdd(s, p, "db"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	before := connDSN(t, s, p, "db")
+	if err := s.ResyncInstanceAddon(context.Background(), p, "db"); err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	if err := pingDSN(before); err != nil {
+		t.Fatalf("credentials a running pod holds stopped working after resync: %v", err)
+	}
+	if after := connDSN(t, s, p, "db"); after != before {
+		t.Errorf("conn DSN changed on resync of a healthy addon:\n before %s\n after  %s", before, after)
+	}
+}

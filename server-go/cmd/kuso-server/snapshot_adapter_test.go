@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/testsh"
 )
 
 func TestSnapshotJobPhase(t *testing.T) {
@@ -176,7 +176,7 @@ func TestBuildSnapshotJob_WaitsForPostgresBeforeDump(t *testing.T) {
 	if !strings.Contains(script[:dump], "exit 1") {
 		t.Error("wait loop is not bounded (no exit 1 before pg_dump)")
 	}
-	if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+	if out, err := testsh.Command(t, script, "-n").CombinedOutput(); err != nil {
 		t.Errorf("snapshot script does not parse: %v\n%s", err, out)
 	}
 }
@@ -206,7 +206,7 @@ func TestBuildSnapshotJob_UsesVersionMatchedClient(t *testing.T) {
 	t.Parallel()
 	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "")
 	script := job.Spec.Template.Spec.Containers[0].Args[0]
-	if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+	if out, err := testsh.Command(t, script, "-n").CombinedOutput(); err != nil {
 		t.Fatalf("snapshot script does not parse: %v\n%s", err, out)
 	}
 	cases := []struct {
@@ -270,7 +270,7 @@ func runSnapshotScript(t *testing.T, script, psqlBody string) (string, string, e
 	write(filepath.Join(bin, "sleep"), "exit 0")
 
 	script = strings.ReplaceAll(script, "/usr/libexec/postgresql", filepath.Join(root, "postgresql"))
-	cmd := exec.Command("sh", "-c", script)
+	cmd := testsh.Command(t, script)
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),

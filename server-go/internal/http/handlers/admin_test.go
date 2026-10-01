@@ -82,7 +82,14 @@ func TestAdmin_ListUsers(t *testing.T) {
 	var out []map[string]any
 	_ = json.NewDecoder(rr.Body).Decode(&out)
 	if len(out) != 1 || out[0]["username"] != "admin" {
-		t.Errorf("body: %+v", out)
+		t.Fatalf("body: %+v", out)
+	}
+	// The users page renders provider / created / group badges from these.
+	if out[0]["provider"] != "local" || out[0]["createdAt"] == nil {
+		t.Errorf("provider/createdAt missing: %+v", out[0])
+	}
+	if g, ok := out[0]["groups"].([]any); !ok || g == nil {
+		t.Errorf("groups = %#v, want a (possibly empty) list", out[0]["groups"])
 	}
 }
 

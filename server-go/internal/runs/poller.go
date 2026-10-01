@@ -125,12 +125,40 @@ func (p *Poller) tick(ctx context.Context) error {
 			if isTerminal(r.Annotations[annRunPhase]) {
 				continue
 			}
-			if err := p.observe(ctx, ns, r); err != nil && !apierrors.IsNotFound(err) {
+			err := p.observe(ctx, ns, r)
+			if apierrors.IsNotFound(err) {
+				p.failIfJobLost(ctx, ns, r, time.Now())
+				continue
+			}
+			if err != nil {
 				p.logger().Warn("runs poller: observe", "run", r.Name, "ns", ns, "err", err)
 			}
 		}
 	}
 	return nil
+}
+
+// jobLostGrace is how long past its own timeout a run may have no Job
+// before the poller gives up on it.
+const jobLostGrace = 30 * time.Minute
+
+// failIfJobLost fails a run whose Job is still missing well past the run's
+// timeout: it never rendered, or was removed before the poller saw it
+// finish. Such a run stayed non-terminal forever and was never GC'd.
+func (p *Poller) failIfJobLost(ctx context.Context, ns string, r *kube.KusoRun, now time.Time) {
+	if r.CreationTimestamp.IsZero() {
+		return
+	}
+	limit := time.Duration(r.Spec.TimeoutSeconds)*time.Second + jobLostGrace
+	if now.Sub(r.CreationTimestamp.Time) < limit {
+		return
+	}
+	const msg = "run job not found: it never started, or was removed before kuso saw it finish"
+	if err := p.markFailed(ctx, ns, r.Name, msg); err != nil {
+		p.logger().Warn("runs poller: fail lost run", "run", r.Name, "ns", ns, "err", err)
+		return
+	}
+	p.emitTerminal(r, "failed", msg)
 }
 
 // observe reads the Job, decides what to patch, and writes the

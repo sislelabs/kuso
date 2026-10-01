@@ -17,6 +17,9 @@ import (
 	"log/slog"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/db"
 	"kuso/server/internal/serverstate"
 )
@@ -73,6 +76,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-t.C:
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			reapStuck(rctx, m.DB, investigateTimeout, m.clock(), m.log())
+			m.reapStuckImplementing(rctx)
 			cancel()
 			serverstate.LoopHeartbeat(serverstate.LoopIncidents)
 		}
@@ -106,4 +110,50 @@ func reapStuck(ctx context.Context, store reaperStore, timeout time.Duration, no
 			"id", in.ID, "title", in.Title, "openFor", now.Sub(in.CreatedAt).String())
 	}
 	return reaped
+}
+
+// implementGrace is how long an incident may stay "implementing" after its
+// implement Job has finished. A successful agent posts its PR (moving the
+// state to pr_open) before exiting, so a finished Job with the state
+// unchanged means it died without reporting.
+const implementGrace = 30 * time.Minute
+
+// reapStuckImplementing times out incidents whose implement Job finished,
+// or is gone, without moving the incident on. Like a stuck investigation,
+// they otherwise hold a MaxConcurrent slot forever.
+func (m *Manager) reapStuckImplementing(ctx context.Context) {
+	if m.Kube == nil || m.Kube.Clientset == nil {
+		return
+	}
+	stuck, err := m.DB.IncidentsInState(ctx, db.IncidentImplementing)
+	if err != nil {
+		m.log().Warn("incident reaper: list implementing", "err", err)
+		return
+	}
+	ns := jobNamespace
+	if ks, ok := m.Spawner.(*KubeSpawner); ok {
+		ns = ks.namespace()
+	}
+	now := m.clock()
+	for _, in := range stuck {
+		if in.ImplementJob == "" {
+			continue
+		}
+		job, err := m.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, in.ImplementJob, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			continue
+		case job.Status.CompletionTime != nil && now.Sub(job.Status.CompletionTime.Time) >= implementGrace:
+		case job.Status.Failed > 0 && job.Status.Active == 0:
+		default:
+			continue // still running
+		}
+		_ = m.DB.AppendIncidentFeedback(ctx, in.ID, db.IncidentFeedback{
+			Text: "timed out: the implement job ended without opening a PR; slot released",
+		})
+		if err := m.DB.SetIncidentState(ctx, in.ID, db.IncidentTimedOut); err != nil {
+			m.log().Warn("incident reaper: transition implementing", "id", in.ID, "err", err)
+		}
+	}
 }

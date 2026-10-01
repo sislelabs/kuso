@@ -149,7 +149,7 @@ func TestDelete_NativeCloneRemovesConnSecretAndPVC(t *testing.T) {
 	}
 	if _, err := cs.PersistentVolumeClaims("kuso").Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
 		Name: "data-shop-db-pr-1-0", Namespace: "kuso",
-		Labels: map[string]string{"app.kubernetes.io/instance": "shop-db-pr-1"},
+		Labels: map[string]string{"app.kubernetes.io/name": "kusoaddon", "app.kubernetes.io/instance": "shop-db-pr-1"},
 	}}, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed pvc: %v", err)
 	}

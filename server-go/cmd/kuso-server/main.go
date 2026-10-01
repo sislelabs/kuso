@@ -579,6 +579,7 @@ func main() {
 		}
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
+		buildSvc.Images = builds.NewInClusterImageDeleter(builds.RegistryHost)
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
 		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)
 		// already saturate the node. Operators with bigger machines
@@ -695,6 +696,9 @@ func main() {
 		envAddonCloner := previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "env-addons"))
 		projSvc.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, map[string]string, error) {
 			return envAddonCloner.EnsureEnvAddonsMapped(ctx, project, envScope, previewdb.EnvAddonOpts{Kinds: kinds, SeedAll: seedAll})
+		}
+		projSvc.EnvAddonsFrom = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool, seedFrom string) ([]string, map[string]string, error) {
+			return envAddonCloner.EnsureEnvAddonsMapped(ctx, project, envScope, previewdb.EnvAddonOpts{Kinds: kinds, SeedAll: seedAll, SeedFromScope: seedFrom})
 		}
 		// Env-group clones inherit production's image but get fresh addons:
 		// run the release hook (migrations) against them in the background.
@@ -1406,22 +1410,29 @@ func main() {
 			// watcher reconciles envs with a withheld spec.pendingImage — runs the
 			// migration Job and promotes pendingImage→image on success. Leader-gated
 			// so only one replica drives it.
-			//
-			// Notify is left nil: markReleaseFailed's event shape (builds.EventEnvelope
-			// + the unexported eventBuildFailed type) isn't reusable from here without
-			// exporting build-package internals, and the brief calls for nil-and-log
-			// over a fragile hand-rolled event. The withheld image + logger.Warn below
-			// are the load-bearing failure signal; wire Notify once a shared event
-			// helper exists.
+			irWatcher := &imagerelease.Watcher{
+				Kube:      kubeClient,
+				Namespace: *namespace,
+				Logger:    logger.With("component", "imagerelease"),
+				Release:   releaserun.New(kubeClient),
+				Notify: func(project, service, msg string) {
+					short := strings.TrimPrefix(service, project+"-")
+					notifyDisp.Emit(notify.Event{
+						Type:        notify.EventBuildFailed,
+						Project:     project,
+						Service:     short,
+						Title:       fmt.Sprintf("✗ Release failed · %s / %s", project, short),
+						Description: msg + "\nThe new image was not deployed; existing pods keep running the previous version.",
+						Body:        msg,
+						Severity:    "error",
+					})
+				},
+			}
+			if buildSvc != nil {
+				irWatcher.Namespaces = buildSvc.ScanNamespaces
+			}
 			serverstate.RegisterLoop(serverstate.LoopImageRelease, imagerelease.DefaultTickInterval)
-			goSafe(logger, "imagerelease", func() {
-				(&imagerelease.Watcher{
-					Kube:      kubeClient,
-					Namespace: *namespace,
-					Logger:    logger.With("component", "imagerelease"),
-					Release:   releaserun.New(kubeClient),
-				}).Run(workCtx)
-			})
+			goSafe(logger, "imagerelease", func() { irWatcher.Run(workCtx) })
 			// Host package-update advisory — reads the pkg-probe
 			// DaemonSet's node annotations and notifies (warn, edge-
 			// triggered, restart-safe via the Setting kv) when a node

@@ -209,3 +209,24 @@ func TestCancel_RefusesOtherProjectsBuild(t *testing.T) {
 		t.Error("beta's build was cancelled via alpha")
 	}
 }
+
+// Rolling back to an image the retention sweep already removed left the
+// old pod running behind an ImagePullBackOff, so the rollback silently
+// never happened.
+func TestRollback_RefusesPrunedImage(t *testing.T) {
+	t.Parallel()
+	repo := RegistryHost + "/alpha/web"
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+		seedSucceededBuild("alpha", "web", "alpha-web-gone", repo, "gone12345678"),
+		seedSucceededBuild("alpha", "web", "alpha-web-kept", repo, "kept12345678"),
+	)
+	s.Images = &fakeDeleter{digests: map[string]string{"alpha/web:kept12345678": "sha256:abc"}}
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-gone", RollbackOptions{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("pruned image: err = %v, want ErrInvalid", err)
+	}
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-kept", RollbackOptions{}); err != nil {
+		t.Fatalf("present image: %v", err)
+	}
+}

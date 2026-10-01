@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // ListUsers returns every user as a slim profile shape suitable for the
@@ -21,12 +23,21 @@ type UserSummary struct {
 	// NULL/"" when the user inherits from their groups. Distinct from
 	// RoleName (the legacy Role join) — the admin UI edits this.
 	InstanceRole sql.NullString
+	Provider     sql.NullString
+	LastLogin    sql.NullTime
+	CreatedAt    time.Time
+	// Groups is the names of the user's groups, sorted.
+	Groups []string
 }
 
 // ListUsers returns the slim admin-list shape.
 func (d *DB) ListUsers(ctx context.Context) ([]UserSummary, error) {
 	rows, err := d.QueryContext(ctx, `
-SELECT u.id, u.username, u.email, u."firstName", u."lastName", u."isActive", r.name, u."instanceRole"
+SELECT u.id, u.username, u.email, u."firstName", u."lastName", u."isActive", r.name, u."instanceRole",
+       u.provider, u."lastLogin", u."createdAt",
+       COALESCE((SELECT array_agg(g.name ORDER BY g.name)
+                   FROM "_UserToUserGroup" m JOIN "UserGroup" g ON g.id = m."B"
+                  WHERE m."A" = u.id), '{}')
 FROM "User" u LEFT JOIN "Role" r ON r.id = u."roleId"
 ORDER BY u.username`)
 	if err != nil {
@@ -36,9 +47,14 @@ ORDER BY u.username`)
 	var out []UserSummary
 	for rows.Next() {
 		var u UserSummary
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.IsActive, &u.RoleName, &u.InstanceRole); err != nil {
+		var lastLogin nullPrismaTime
+		var createdAt prismaTime
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.IsActive, &u.RoleName, &u.InstanceRole,
+			&u.Provider, &lastLogin, &createdAt, pq.Array(&u.Groups)); err != nil {
 			return nil, fmt.Errorf("db: scan user: %w", err)
 		}
+		u.LastLogin = sql.NullTime{Time: lastLogin.Time, Valid: lastLogin.Valid}
+		u.CreatedAt = createdAt.Time
 		out = append(out, u)
 	}
 	return out, rows.Err()

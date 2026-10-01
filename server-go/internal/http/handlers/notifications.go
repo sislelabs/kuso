@@ -78,10 +78,9 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		r.Put("/api/notifications/{id}", h.Update)
 		r.Delete("/api/notifications/{id}", h.Delete)
 		r.Post("/api/notifications/{id}/test", h.Test)
-		// Admin-only in-app feed with global readAt tracking. The
-		// per-user readAt model doesn't exist yet — the column is a
-		// single global flag — so non-admins use /my-feed (no read
-		// tracking) instead of seeing stale read state from admins.
+		// Admin-only in-app feed with per-user read tracking (a
+		// watermark per user). Non-admins use /my-feed, which has no
+		// read tracking.
 		r.Get("/api/notifications/feed", h.Feed)
 		r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
 		r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
@@ -125,6 +124,12 @@ func (h *NotificationsHandler) GetProjectMute(w http.ResponseWriter, r *http.Req
 	project := chi.URLParam(r, "project")
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
+	}
+	if h.ProjectExists != nil {
+		if exists, err := h.ProjectExists(ctx, project); err == nil && !exists {
+			writeErr(w, http.StatusNotFound, "project "+project+" not found")
+			return
+		}
 	}
 	mutes, err := h.DB.ListProjectNotificationMutes(ctx)
 	if err != nil {
@@ -262,7 +267,7 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	unread := r.URL.Query().Get("unread") == "true"
-	out, err := h.DB.ListNotificationEvents(ctx, limit, unread)
+	out, err := h.DB.ListNotificationEventsForUser(ctx, actingUserID(r), limit, unread)
 	if err != nil {
 		h.fail(w, "feed", err)
 		return
@@ -270,11 +275,12 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// FeedUnread is the cheap counter the bell badge polls.
+// FeedUnread is the cheap counter the bell badge polls. Read state is
+// per user: one admin opening the bell no longer clears it for the rest.
 func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := notifCtx(r)
 	defer cancel()
-	n, err := h.DB.CountUnreadNotificationEvents(ctx)
+	n, err := h.DB.CountUnreadNotificationEventsForUser(ctx, actingUserID(r))
 	if err != nil {
 		h.fail(w, "unread count", err)
 		return
@@ -282,12 +288,11 @@ func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]int{"unread": n})
 }
 
-// FeedReadAll stamps readAt on every unread event. Called when the
-// user opens the bell popover.
+// FeedReadAll marks every current event read for the caller.
 func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := notifCtx(r)
 	defer cancel()
-	if err := h.DB.MarkAllNotificationEventsRead(ctx); err != nil {
+	if err := h.DB.MarkNotificationEventsReadForUser(ctx, actingUserID(r)); err != nil {
 		h.fail(w, "mark read", err)
 		return
 	}
@@ -405,8 +410,10 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 type notifBody struct {
-	Name      string         `json:"name"`
-	Enabled   bool           `json:"enabled"`
+	Name string `json:"name"`
+	// Enabled is a pointer so an Update that omits it leaves the channel
+	// as it was instead of disabling it.
+	Enabled   *bool          `json:"enabled"`
 	Type      string         `json:"type"`
 	Pipelines []string       `json:"pipelines"`
 	Events    []string       `json:"events"`
@@ -443,7 +450,7 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := &db.Notification{
-		ID: id, Name: body.Name, Enabled: body.Enabled, Type: body.Type,
+		ID: id, Name: body.Name, Enabled: body.Enabled != nil && *body.Enabled, Type: body.Type,
 		Pipelines: body.Pipelines, Events: body.Events, Config: body.Config,
 	}
 	ctx, cancel := notifCtx(r)
@@ -476,6 +483,24 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "find", err)
 		return
 	}
+	if body.Config != nil && (body.Type == "" || body.Type == existing.Type) {
+		// Merge into the stored config rather than replacing it: an edit
+		// form that only renders some keys (the webhook HMAC "secret",
+		// a numeric SMTP port) used to drop the rest. A null value
+		// removes a key. A type change still replaces the config.
+		merged := make(map[string]any, len(existing.Config)+len(body.Config))
+		for k, v := range existing.Config {
+			merged[k] = v
+		}
+		for k, v := range body.Config {
+			if v == nil {
+				delete(merged, k)
+				continue
+			}
+			merged[k] = v
+		}
+		body.Config = merged
+	}
 	if body.Config != nil {
 		// GET returns credential fields masked, so a read-modify-write
 		// from the UI echoes the sentinel back. Resolve sentinels to
@@ -500,7 +525,9 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if body.Name != "" {
 		existing.Name = body.Name
 	}
-	existing.Enabled = body.Enabled
+	if body.Enabled != nil {
+		existing.Enabled = *body.Enabled
+	}
 	if body.Type != "" {
 		existing.Type = body.Type
 	}

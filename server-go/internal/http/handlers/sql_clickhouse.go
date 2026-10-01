@@ -256,12 +256,16 @@ func parseClickHouseJSONCompact(body []byte, limit int) (SQLQueryResponse, error
 		rows = rows[:limit]
 	}
 	out.Rows = make([][]string, 0, len(rows))
+	out.Nulls = make([][]bool, 0, len(rows))
 	for _, r := range rows {
 		sr := make([]string, len(r))
+		nr := make([]bool, len(r))
 		for i, cell := range r {
 			sr[i] = stringifyJSONCell(cell)
+			nr[i] = strings.TrimSpace(string(cell)) == "null"
 		}
 		out.Rows = append(out.Rows, sr)
+		out.Nulls = append(out.Nulls, nr)
 	}
 	return out, nil
 }
@@ -461,13 +465,8 @@ func (h *BackupsHandler) clickhouseRows(ctx context.Context, info chConnInfo, da
 			break
 		}
 		nulls := make([]bool, len(r))
-		for j := range r {
-			// JSONCompact renders SQL NULL as JSON null → we mapped it to "".
-			// We can't perfectly distinguish "" from NULL post-stringify, so
-			// mark empty cells on Nullable columns as null best-effort: leave
-			// false here (the pg path has real null info; CH over HTTP loses
-			// it). Empty string is the safe display.
-			nulls[j] = false
+		if i < len(res.Nulls) {
+			copy(nulls, res.Nulls[i])
 		}
 		out.Rows = append(out.Rows, r)
 		out.Nulls = append(out.Nulls, nulls)
