@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.8] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): expose the pods backing an addon ([3a02231](https://github.com/sislelabs/kuso/commit/3a02231120999fe7b0a1736aaad8485b9398ab41))
+
 ## [0.25.7] — 2026-09-02
 
 ### ✨ Features

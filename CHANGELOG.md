@@ -19,6 +19,26 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.27.8] — 2026-10-01
+
+### Other
+- Clone build maps before handing a build to the detached promoter ([c89c321](https://github.com/sislelabs/kuso/commit/c89c32161b414ac9b1229e16bca10070ac7fe5ae))
+- Guard charts against null blocks and tighten CLI and MCP output ([6bab624](https://github.com/sislelabs/kuso/commit/6bab6247f84c580cd4a380fa0eb785b8886c7b39))
+- Show query failures and fix small contract bugs in the web UI ([3d4ca65](https://github.com/sislelabs/kuso/commit/3d4ca652a212dc82e27524b42776273d6d0208b5))
+- Recover goroutine panics and fix retries, leaks and sweeps in background loops ([9c324e4](https://github.com/sislelabs/kuso/commit/9c324e42e85662746e2c3f55c736ffbac3708b94))
+- Run backup-script tests under bash before busybox ([d832987](https://github.com/sislelabs/kuso/commit/d8329876af64e2643c848784b923b491e010e3e0))
+
+### 🐛 Bug Fixes
+- Fix backup download status, secret overwrite and config exposure in data paths ([d32ecd1](https://github.com/sislelabs/kuso/commit/d32ecd10d2a766c38b29898e69487d012bc9890d))
+- Fix CLI dry-run, confirmations and docs drift; gate releases on CI ([a00e533](https://github.com/sislelabs/kuso/commit/a00e53324d18611a6a989c56efaf526f9bf31b70))
+- Fix confirm dialog, stale canvas and lossy settings forms in the web UI ([682ffaa](https://github.com/sislelabs/kuso/commit/682ffaa27f52a4ea69edbc460305ba24eb551254))
+- Fix builds, log streams, addons and settings writes in server background paths ([c5a750e](https://github.com/sislelabs/kuso/commit/c5a750edb85afa98c29f26dc311ee7144eb1cbc6))
+- Fix service rename, revision revert and name limits in the control plane ([c96da3b](https://github.com/sislelabs/kuso/commit/c96da3bb0809f343b0f0e67852b799428422cfa9))
+- Fix chart churn, shared-disk rollouts and cron env in operator charts ([01e1836](https://github.com/sislelabs/kuso/commit/01e18368d6f5ba43a82a4b28f5cc8c6b5be1739d))
+
+### 🧹 Chores
+- Remove July review docs superseded by the consolidated open-findings list ([c034ce7](https://github.com/sislelabs/kuso/commit/c034ce74090ff7ef1b3936575ce3d87cc10d3d9a))
+
 ## [0.27.7] — 2026-09-30
 
 ### Other
@@ -401,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): re-assert a preview env's own clone conn ([2f0f4f9](https://github.com/sislelabs/kuso/commit/2f0f4f90a02a32717eb242465353f266aa75346d))
-
-## [0.25.8] — 2026-09-02
-
-### ✨ Features
-- Feat(addon): expose the pods backing an addon ([3a02231](https://github.com/sislelabs/kuso/commit/3a02231120999fe7b0a1736aaad8485b9398ab41))
 
 
 ---
