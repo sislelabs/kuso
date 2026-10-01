@@ -3849,12 +3849,11 @@ func (p *Poller) promoteDetached(ctx context.Context, ns string, b *kube.KusoBui
 	p.promoting[key] = struct{}{}
 	p.promotingMu.Unlock()
 
-	// Copy the CR value: the caller's `b` points into a slice element
-	// that the next tick's List overwrites. markSucceeded re-reads the
-	// live CR before it stamps anything, so a shallow copy of the
-	// identifying fields is all this goroutine actually needs.
-	buildCopy := *b
-	build := &buildCopy
+	// Copy the CR: the caller's `b` points into a slice element that the
+	// next tick's List overwrites, and the tick keeps reading its maps
+	// (CI gate) while markSucceeded writes annotations on this copy, so
+	// the maps must be cloned, not shared.
+	build := copyBuild(b)
 	go func() {
 		defer func() {
 			p.promotingMu.Lock()
