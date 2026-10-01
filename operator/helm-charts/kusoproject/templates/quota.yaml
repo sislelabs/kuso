@@ -7,6 +7,9 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
+  {{- /* Project ns, like the netpols: in the release ns (kuso) one
+         project's quota would cap every project and kuso itself. */}}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-quota
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
@@ -28,6 +31,7 @@ spec:
 apiVersion: v1
 kind: LimitRange
 metadata:
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
   name: {{ .Release.Name }}-limits
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}

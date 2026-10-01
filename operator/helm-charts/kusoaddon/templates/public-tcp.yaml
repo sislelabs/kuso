@@ -16,18 +16,34 @@ port allocator ensures no two addons share an entrypoint.
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $port := int .Values.publicTCP.port -}}
 {{- $svcPort := 0 -}}
+{{- $svcName := $name -}}
 {{- if eq .Values.kind "postgres" -}}{{- $svcPort = 5432 -}}{{- end -}}
 {{- if eq .Values.kind "redis" -}}{{- $svcPort = 6379 -}}{{- end -}}
+{{- if eq .Values.kind "valkey" -}}{{- $svcPort = 6379 -}}{{- end -}}
 {{- if eq .Values.kind "mongodb" -}}{{- $svcPort = 27017 -}}{{- end -}}
 {{- if eq .Values.kind "mysql" -}}{{- $svcPort = 3306 -}}{{- end -}}
+{{- if eq .Values.kind "rabbitmq" -}}{{- $svcPort = 5672 -}}{{- end -}}
 {{- if eq .Values.kind "clickhouse" -}}{{- $svcPort = 9000 -}}{{- end -}}
 {{- if eq .Values.kind "nats" -}}{{- $svcPort = 4222 -}}{{- end -}}
 {{- if eq .Values.kind "redpanda" -}}{{- $svcPort = 9092 -}}{{- end -}}
 {{- if eq .Values.kind "meilisearch" -}}{{- $svcPort = 7700 -}}{{- end -}}
 {{- if eq .Values.kind "s3" -}}{{- $svcPort = 9000 -}}{{- end -}}
-{{- if eq $svcPort 0 -}}
-{{- fail (printf "kusoaddon: publicTCP not yet supported for kind=%s — open an issue with the addon's primary port" .Values.kind) -}}
+{{- /* HA variants. CNPG creates <name>-rw/-ro/-r, never <name>, so the
+       route targets -rw (follows the primary, same as the conn Secret).
+       redis-ha's <name> is a headless Service over all three pods with no
+       master-tracking Service, so ~2/3 of connections would land on a
+       read-only replica: not exposable until there is one. nats-ha's
+       <name> client Service is fine — any cluster node serves clients. */ -}}
+{{- if .Values.ha -}}
+{{- if eq .Values.kind "postgres" -}}{{- $svcName = printf "%s-rw" $name -}}
+{{- else if ne .Values.kind "nats" -}}{{- $svcPort = 0 -}}
 {{- end -}}
+{{- end -}}
+{{- /* Unsupported kind (mailpit's SMTP has no auth, unimplemented kinds
+       have no Service): render nothing rather than `fail`. A failed render
+       freezes every later spec change to the addon until someone turns
+       publicTCP off; the server rejects these kinds at enable time. */ -}}
+{{- if gt $svcPort 0 -}}
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
@@ -50,6 +66,7 @@ spec:
     # destructive-action confirm in the UI.
     - match: HostSNI(`*`)
       services:
-        - name: {{ $name }}
+        - name: {{ $svcName }}
           port: {{ $svcPort }}
+{{- end }}
 {{- end }}

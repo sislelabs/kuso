@@ -127,9 +127,21 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
+        {{- /* namespaceSelector AND podSelector in ONE peer: only the
+               platform apps that actually dial tenant pods (kuso-server for
+               the DB browser / addon proxies, kuso-activator for woken-env
+               traffic, kuso-prometheus for scrapes, traefik when it lives
+               there). A bare namespaceSelector admitted every pod in the
+               platform ns, including the privileged buildkitd whose RUN
+               steps could then reach any project's addons. */}}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: ["traefik", "kuso-server", "kuso-activator", "kuso-prometheus"]
         # k3s default installs traefik into its own `traefik`
         # namespace, not the kuso platform ns. Without this rule,
         # every ingress request 502s with traefik unable to reach
@@ -161,7 +173,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/name
                 operator: In
-                values: ["traefik", "kuso-server", "kuso-prometheus"]
+                values: ["traefik", "kuso-server", "kuso-activator", "kuso-prometheus"]
 ---
 # Egress to the in-cluster image registry. The build pods need this
 # to push. Runtime pods do NOT need this rule to pull: image pulls are

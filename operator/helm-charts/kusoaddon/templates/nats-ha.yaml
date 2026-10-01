@@ -102,7 +102,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
@@ -241,4 +240,18 @@ data:
   # nats.yaml.
   NATS_URL: {{ printf "nats://%s@%s-0.%s-cluster:4222,nats://%s@%s-1.%s-cluster:4222,nats://%s@%s-2.%s-cluster:4222" $token $name $name $token $name $name $token $name $name | b64enc | quote }}
   NATS_MONITOR_URL: {{ printf "http://%s:8222" $name | b64enc | quote }}
+{{- /* PDB: a node drain may take at most one NATS node at a time, keeping
+       the JetStream R3 quorum. */}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
 {{- end }}

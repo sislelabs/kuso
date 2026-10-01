@@ -16,6 +16,11 @@
 # resource and the entire manager exited non-zero, so NO CR got
 # reconciled — addons stayed as YAML, services never came up.
 # Caught during the migration to the 16GB box.
+#
+# NOTE: helm-operator v1.42's Watch struct has no maxConcurrentReconciles
+# field — the per-watch keys below are silently ignored. Concurrency comes
+# from the global --max-concurrent-reconciles flag, which defaults to the
+# operator pod's NumCPU (deploy/operator.yaml doesn't set it).
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoProject
@@ -56,6 +61,15 @@
   # belt-and-braces so a future drift source can't churn datastores every
   # 3 minutes and flake migration release Jobs / `kuso run`.
   reconcilePeriod: 30m
+  # dryRunOption: server — helm-operator decides whether to upgrade by
+  # comparing the deployed manifest with a dry-run upgrade. A client dry-run
+  # makes every `lookup` return empty, so the password/key reuse in the addon
+  # templates fell through to randAlphaNum, the candidate never matched, and
+  # every addon did a no-op `helm upgrade` each period (papelito-db reached
+  # revision 14021; the s3 post-upgrade init hook re-ran every 30m). A server
+  # dry-run lets lookups resolve, so an unchanged addon renders identically.
+  # Uses only the get RBAC the real upgrade already needs.
+  dryRunOption: server
   maxConcurrentReconciles: 4
 # KusoBuild was removed from the operator's watch list as of v0.10.
 # Builds are now rendered to Jobs in-process by the kuso-server
@@ -81,9 +95,15 @@
   kind: KusoRun
   chart: helm-charts/kusorun
   # Runs are terminal-by-design — once the chart renders the Job
-  # there's nothing for the operator to do until spec.done flips. A
-  # 5m reconcile period is plenty; the run-phase write path goes
-  # through the kuso-server runs poller, not helm-operator.
-  reconcilePeriod: 5m
+  # there's nothing for the operator to do until spec.done flips, and
+  # that flip arrives through the watch, not the periodic resync. The
+  # run-phase write path goes through the kuso-server runs poller. At 5m,
+  # ~220 finished runs (kept 7d by runs GC) were 72% of all operator
+  # reconciles; 1h keeps drift self-heal without that load.
+  #
+  # Not a label selector excluding finished runs: a CR filtered out of the
+  # operator's cache never gets its uninstall-release finalizer removed, so
+  # runs GC's deletes would hang in Terminating.
+  reconcilePeriod: 1h
   maxConcurrentReconciles: 4
 #+kubebuilder:scaffold:watch

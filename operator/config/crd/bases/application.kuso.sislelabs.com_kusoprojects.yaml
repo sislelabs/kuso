@@ -185,6 +185,43 @@ spec:
                         must match all labels AND be in this list
                         (when set), or match all labels (when empty).
                       items: { type: string }
+                networkPolicy:
+                  type: object
+                  description: |
+                    Per-project NetworkPolicy knobs read by the kusoproject
+                    chart (see its values.yaml). Without this schema the
+                    apiserver pruned the block, so e.g. extraBlockCIDRs (the
+                    control-plane public IP on cloud installs) could never
+                    be set. Unset fields keep the chart defaults.
+                  properties:
+                    enabled:
+                      type: boolean
+                    platformNamespace:
+                      type: string
+                    extraBlockCIDRs:
+                      type: array
+                      items: { type: string }
+                    extraIngressNamespaces:
+                      type: array
+                      items: { type: string }
+                quota:
+                  type: object
+                  description: |
+                    Per-project ResourceQuota + LimitRange (kusoproject
+                    chart). Off unless enabled; unset fields keep the chart
+                    defaults.
+                  properties:
+                    enabled:
+                      type: boolean
+                    cpu: { type: string }
+                    memory: { type: string }
+                    pods: { type: string }
+                    pvcs: { type: string }
+                    services: { type: string }
+                    defaultPodCPURequest: { type: string }
+                    defaultPodMemoryRequest: { type: string }
+                    defaultPodCPULimit: { type: string }
+                    defaultPodMemoryLimit: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

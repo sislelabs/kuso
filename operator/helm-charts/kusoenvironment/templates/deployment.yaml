@@ -1,3 +1,7 @@
+{{- /* `| default dict`: an explicit `image: null` in a hand-edited CR
+       otherwise nil-derefs and fails the whole env render. */}}
+{{- $image := .Values.image | default dict }}
+{{- $volumes := include "kusoenvironment.volumes" . | fromJsonArray }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,7 +34,7 @@ spec:
        up. Distinct from scale-to-zero sleep — the activator refuses to
        wake a stopped env, so this stays at 0 until the user starts it. */}}
   replicas: 0
-  {{- else if not .Values.image.repository }}
+  {{- else if not $image.repository }}
   replicas: 0
   {{- else if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
@@ -56,19 +60,39 @@ spec:
     its port before traffic shifts. Without these two, the default
     25%/25% strategy on a single-replica deployment briefly runs zero
     Ready pods and clients see connection-refused / 503.
+
+    Exception: a ReadWriteOnce volume. Surging would run the old and new
+    pod on the same disk at once (local-path lets both mount it on one
+    node): two SQLite/embedded-DB writers on one data dir, or a new pod
+    that never goes Ready because the old one holds a lock, and with
+    maxUnavailable 0 the old pod is never killed — the rollout hangs to
+    the progress deadline. Recreate stops the old pod first; the cost is
+    a short gap on deploy, which is the honest price of a single disk.
+    strategy.type is mutable, and helm's 3-way patch drops the old
+    rollingUpdate block when it disappears from the manifest.
   */}}
+  {{- $rwo := false }}
+  {{- range $volumes }}
+  {{- $mode := upper (toString (default "ReadWriteOnce" .accessMode)) }}
+  {{- if not (or (eq $mode "RWX") (eq $mode "READWRITEMANY")) }}{{ $rwo = true }}{{ end }}
+  {{- end }}
   strategy:
+    {{- if $rwo }}
+    type: Recreate
+    {{- else }}
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+    {{- end }}
   selector:
     matchLabels:
       {{- include "kusoenvironment.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "kusoenvironment.selectorLabels" . | nindent 8 }}
+        {{- /* labels already carries the selectorLabels keys; including
+               both emitted duplicate map keys, which strict YAML rejects. */}}
         {{- include "kusoenvironment.labels" . | nindent 8 }}
         {{- if not .Values.privateEgress }}
         kuso.sislelabs.com/network-egress-public: "true"
@@ -100,7 +124,7 @@ spec:
       automountServiceAccountToken: false
       {{- /* Private-registry credential (runtime=image), a project
         dockerconfigjson Secret named by KusoImage.pullSecret. */}}
-      {{- with .Values.image.pullSecret }}
+      {{- with $image.pullSecret }}
       imagePullSecrets:
         - name: {{ . | quote }}
       {{- end }}
@@ -239,8 +263,8 @@ spec:
           {{- end }}
       containers:
         - name: app
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: "{{ $image.repository }}:{{ $image.tag | default "latest" }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: {{ if and .Values.securityContext .Values.securityContext.allowPrivilegeEscalation }}true{{ else }}false{{ end }}
             capabilities:
@@ -402,7 +426,24 @@ spec:
             When autoscaling is off, resources pass through untouched
             (empty {} is fine — no HPA depends on a request).
           */}}
-          {{- $res := .Values.resources | default dict }}
+          {{- /* Drop requests/limits values that aren't valid quantities
+                 ("1 GB", "lots"): the apiserver would reject the whole
+                 Deployment, and since that is the env's helm upgrade, one
+                 typo froze every later change to the env. The server
+                 validates on write; this covers CRs written around it. */}}
+          {{- $res := deepCopy (.Values.resources | default dict) }}
+          {{- range $section := list "requests" "limits" }}
+          {{- $m := get $res $section }}
+          {{- if and (hasKey $res $section) (not (kindIs "map" $m)) }}
+          {{- $_ := unset $res $section }}
+          {{- else if $m }}
+          {{- range $k, $v := $m }}
+          {{- if not (regexMatch "^\\+?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" (toString $v)) }}
+          {{- $_ := unset $m $k }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
           {{- if and .Values.autoscaling .Values.autoscaling.enabled }}
           {{- $req := (get $res "requests") | default dict }}
           {{- if not (get $req "cpu") }}
@@ -412,14 +453,14 @@ spec:
           {{- end }}
           resources:
             {{- toYaml $res | nindent 12 }}
-          {{- with .Values.volumes }}
+          {{- with $volumes }}
           volumeMounts:
             {{- range . }}
             - name: {{ .name | quote }}
               mountPath: {{ .mountPath | quote }}
             {{- end }}
           {{- end }}
-      {{- with .Values.volumes }}
+      {{- with $volumes }}
       volumes:
         {{- range . }}
         - name: {{ .name | quote }}

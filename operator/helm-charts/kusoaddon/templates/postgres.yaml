@@ -82,7 +82,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
         # Discriminates the DB pod from the opt-in pooler Deployment's
         # pods (postgres-pooler.yaml), which also carry kusoaddon.labels.

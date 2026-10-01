@@ -84,3 +84,23 @@ if [ "$rc" -ne 0 ] && [ "${WAIT_FOR_ADDONS_SOFT:-}" = "1" ]; then
 fi
 exit $rc
 {{- end -}}
+
+{{/*
+kusocron.env — the owning env's envVars (plain values AND ${{ }} aliases
+carried as valueFrom secretKeyRef/configMapKeyRef), same shape and
+rendering as kusorun.envBlock. Without them a cron saw only envFromSecrets,
+so aliases like DATABASE_URI=${{ db.DATABASE_URL }} and service refs were
+missing and the job quietly ran on app defaults. Renders list items only
+(no `env:` key) so callers can prepend their own entries.
+*/}}
+{{- define "kusocron.env" -}}
+{{- range .Values.env }}
+- name: {{ .name | quote }}
+  {{- if .valueFrom }}
+  valueFrom:
+    {{- toYaml .valueFrom | nindent 4 }}
+  {{- else }}
+  value: {{ .value | quote }}
+  {{- end }}
+{{- end }}
+{{- end -}}

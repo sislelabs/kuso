@@ -23,6 +23,10 @@ image:
 # Envs from the same connection-secrets every service in the project
 # already picks up via envFrom.
 envFromSecrets: []
+# env: the owning env's resolved envVars (plain key/value AND ${{ }}
+# aliases carried as valueFrom), so the cron sees the same env as the
+# service's pods. Same shape as KusoRun.spec.env. Ignored for kind=http.
+env: []
 # Knobs documented on the CRD.
 suspend: false
 concurrencyPolicy: Forbid

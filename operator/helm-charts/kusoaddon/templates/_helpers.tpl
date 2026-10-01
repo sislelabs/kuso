@@ -220,13 +220,19 @@ and page cache). We target ~75% of the size's memory limit:
   small  → 1Gi limit  → 768M
   medium → 2Gi limit  → 1536M
   large  → 4Gi limit  → 3072M
-When a user overrides .Values.resources we can't reliably parse their
-limit string in templating, so fall back to the small default; a user
-sophisticated enough to override resources can also override version/args
-via raw helm if they need a bigger broker.
+When a user overrides .Values.resources with a plain Gi/Mi memory limit we
+take 75% of it; any other limit shape falls back to the small default.
 */}}
 {{- define "kusoaddon.redpandaMemMB" -}}
-{{- if .Values.resources -}}
+{{- $lim := "" -}}
+{{- if and .Values.resources (kindIs "map" .Values.resources.limits) -}}
+{{- $lim = toString (default "" .Values.resources.limits.memory) -}}
+{{- end -}}
+{{- if regexMatch "^[0-9]+Gi$" $lim -}}
+{{- div (mul (int (trimSuffix "Gi" $lim)) 1024 3) 4 -}}
+{{- else if regexMatch "^[0-9]+Mi$" $lim -}}
+{{- div (mul (int (trimSuffix "Mi" $lim)) 3) 4 -}}
+{{- else if .Values.resources -}}
 768
 {{- else if eq .Values.size "medium" -}}
 1536
@@ -314,4 +320,41 @@ admin_users = kuso
 ; that backend serves plaintext by default (see spec.tls on the addon).
 server_tls_sslmode = {{ default "require" .Values.pooler.serverTLSSslmode }}
 {{- end }}
+{{- end -}}
+
+{{- /*
+Backup CronJob guards, shared by every kind in backup-cronjob.yaml.
+
+startingDeadlineSeconds: a CronJob that misses >100 schedules (long
+suspend, control-plane outage) otherwise stops starting Jobs for good.
+activeDeadlineSeconds: a dump wedged on a dead connection otherwise holds
+the Forbid concurrency slot and silently skips every later night. 6h is
+far beyond any dump seen here; it caps the whole Job, retries included.
+resources: requests only. A memory limit could OOM-kill a dump that works
+today (mongodump / large aws multipart uploads), so none is set.
+scratch: the dump is staged under /tmp; an emptyDir keeps it out of the
+container's writable layer and is freed with the pod.
+*/ -}}
+{{- define "kusoaddon.backupStartingDeadline" -}}
+startingDeadlineSeconds: 3600
+{{- end -}}
+
+{{- define "kusoaddon.backupActiveDeadline" -}}
+activeDeadlineSeconds: 21600
+{{- end -}}
+
+{{- define "kusoaddon.backupScratchVolume" -}}
+volumes:
+  - name: scratch
+    emptyDir: {}
+{{- end -}}
+
+{{- define "kusoaddon.backupContainerExtras" -}}
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+volumeMounts:
+  - name: scratch
+    mountPath: /tmp
 {{- end -}}

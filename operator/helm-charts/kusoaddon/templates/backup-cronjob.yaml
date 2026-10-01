@@ -12,12 +12,12 @@ that secret doesn't exist the CronJob still installs but every run
 fails — operators see the failure in `kubectl get jobs` and in
 notify (the Job-failed alert from the health watcher).
 */ -}}
-{{- /* Suppressed in HA mode — CNPG ships its own barman-cloud backup
-       scheduling and our pg_dump cronjob would conflict with the
-       managed backups. Configure CNPG-native backups via
-       spec.backup.barmanObjectStore on the Cluster CR (out-of-band
-       for now; native plumbing in a future kuso version). */}}
-{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- /* HA (CNPG) addons get the same pg_dump job, pointed at the <name>-rw
+       Service that follows the primary. It used to be suppressed on the
+       claim that CNPG's barman backups own HA — but nothing configured
+       barman, so choosing HA silently meant no backups at all. A logical
+       pg_dump does not conflict with barman if one is added later. */}}
+{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
 {{- /*
   Note (v0.7.x bugfix): POSTGRES_HOST used to be "<release>-postgresql"
   but the actual Service is just <release> (see postgres.yaml service
@@ -41,8 +41,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -65,6 +67,7 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
@@ -232,6 +235,7 @@ spec:
                   # support lifecycle rules consistently.
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
@@ -240,7 +244,7 @@ spec:
                 # spec.serviceName); the historical "-postgresql" suffix
                 # was wrong and caused all backups to fail with DNS
                 # resolution errors.
-                - { name: POSTGRES_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
+                - { name: POSTGRES_HOST, value: {{ printf "%s%s" (include "kusoaddon.fullname" .) (ternary "-rw" "" (eq (toString .Values.ha) "true")) | quote }} }
                 - { name: POSTGRES_USER, value: {{ default "kuso" .Values.username | quote }} }
                 # Database name MUST match what postgres.yaml created
                 # (which falls back to .Values.project, not "kuso"),
@@ -312,8 +316,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -335,6 +341,7 @@ spec:
             kuso.sislelabs.com/network-egress-public: "true"
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           containers:
             - name: dump
@@ -422,6 +429,7 @@ spec:
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
@@ -477,8 +485,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -501,6 +511,7 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
@@ -553,6 +564,7 @@ spec:
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
@@ -604,8 +616,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -628,6 +642,7 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
@@ -677,6 +692,7 @@ spec:
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
@@ -723,8 +739,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -747,6 +765,7 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
@@ -793,6 +812,7 @@ spec:
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
@@ -843,8 +863,10 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   concurrencyPolicy: Forbid
+  {{- include "kusoaddon.backupStartingDeadline" . | nindent 2 }}
   jobTemplate:
     spec:
+      {{- include "kusoaddon.backupActiveDeadline" . | nindent 6 }}
       # Retry a failed run rather than losing the night's backup to one
       # transient blip -- a pod evicted mid-run, a DNS hiccup, an S3 5xx.
       # Each run writes its own timestamped key, so a retry is idempotent
@@ -867,6 +889,7 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.backupScratchVolume" . | nindent 10 }}
           {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           {{- include "kusoaddon.placement" . | nindent 10 }}
           containers:
@@ -932,6 +955,7 @@ spec:
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "prefixes") | nindent 18 }}
                   echo "==> done"
+              {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }

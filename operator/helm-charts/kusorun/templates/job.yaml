@@ -47,24 +47,39 @@ spec:
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       {{- with .Values.placement }}
-      {{- if .labels }}
+      {{- /* Empty-value labels are capability flags (e.g. `gpu`): a
+             nodeSelector value "" exact-matches the empty string instead of
+             checking presence, so they render as nodeAffinity Exists.
+             Mirrors kusoenvironment/templates/deployment.yaml. */}}
+      {{- $valueLabels := dict }}
+      {{- $flagLabels := list }}
+      {{- range $k, $v := .labels }}
+      {{- if $v }}{{ $_ := set $valueLabels $k $v }}{{ else }}{{ $flagLabels = append $flagLabels $k }}{{ end }}
+      {{- end }}
+      {{- if $valueLabels }}
       nodeSelector:
-        {{- range $k, $v := .labels }}
+        {{- range $k, $v := $valueLabels }}
         {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
         {{- end }}
       {{- end }}
-      {{- if .nodes }}
+      {{- if or .nodes $flagLabels }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
+                  {{- range $flagLabels }}
+                  - key: {{ printf "kuso.sislelabs.com/%s" . | quote }}
+                    operator: Exists
+                  {{- end }}
+                  {{- if .nodes }}
                   - key: kubernetes.io/hostname
                     operator: In
                     values:
                       {{- range .nodes }}
                       - {{ . | quote }}
                       {{- end }}
+                  {{- end }}
       {{- end }}
       {{- if and .labels .labels.region }}
       tolerations:

@@ -134,7 +134,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
         kuso.sislelabs.com/component: redis
     spec:
@@ -261,7 +260,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
         kuso.sislelabs.com/component: sentinel
     spec:
@@ -384,4 +382,33 @@ data:
   # reconnect transparently on failover. The `<master>` path segment
   # at the end tells the client which monitored master to ask for.
   REDIS_SENTINEL_URL: {{ printf "redis-sentinel://default:%s@%s-sentinel:26379/%s" $password $name $name | b64enc | quote }}
+{{- /* PDBs: a node drain may take at most one redis / one sentinel pod at
+       a time, so quorum and a replica survive voluntary disruption. CNPG
+       ships its own for postgres-ha. */}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+      kuso.sislelabs.com/component: redis
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}-sentinel
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+      kuso.sislelabs.com/component: sentinel
 {{- end }}

@@ -12,6 +12,13 @@
 {{- if and $existing $existing.data (index $existing.data "RABBITMQ_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "RABBITMQ_PASSWORD" | b64dec) -}}
 {{- end -}}
+{{/* Drift guard, as postgres/mysql/mongodb: RABBITMQ_DEFAULT_PASS only
+     applies on first boot (it lives in mnesia after), so a fresh random
+     password against an existing broker hands apps credentials it rejects. */}}
+{{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
+{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+  {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
+{{- end -}}
 {{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 
 apiVersion: apps/v1
@@ -29,7 +36,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}

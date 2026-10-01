@@ -119,3 +119,30 @@ otherwise replicaCount. The PDB and topology spread both key on it.
 {{- int .Values.replicaCount -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+kusoenvironment.volumes — .Values.volumes minus entries the apiserver
+would reject: a name that isn't a DNS-1123 label, an empty mountPath, or
+a duplicate name/mountPath. Any one of those used to fail the env's whole
+helm upgrade, freezing every later change to the env until someone found
+the bad entry. A rejected entry could never have been mounted, so dropping
+it leaves running pods exactly as they were. The server validates on
+write; this covers CRs written around it. Returns JSON (fromJsonArray).
+*/}}
+{{- define "kusoenvironment.volumes" -}}
+{{- $out := list }}
+{{- $names := dict }}
+{{- $paths := dict }}
+{{- range (.Values.volumes | default list) }}
+{{- if kindIs "map" . }}
+{{- $name := toString (default "" .name) }}
+{{- $path := toString (default "" .mountPath) }}
+{{- if and (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $name) $path (not (hasKey $names $name)) (not (hasKey $paths $path)) }}
+{{- $_ := set $names $name true }}
+{{- $_ := set $paths $path true }}
+{{- $out = append $out . }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- toJson $out }}
+{{- end -}}

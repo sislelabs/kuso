@@ -33,7 +33,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}

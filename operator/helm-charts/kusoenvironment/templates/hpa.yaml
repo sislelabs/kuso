@@ -8,7 +8,9 @@
        an autoscaler with minReplicas>=1 would immediately fight that pin
        and scale it back up, defeating the stop. Drop the HPA while
        stopped; it reappears on start. */ -}}
-{{- if and .Values.autoscaling.enabled .Values.image.repository (not .Values.stopped) }}
+{{- /* `| default dict` guards an explicit `autoscaling: null` / `image: null`
+       in a hand-edited CR, which otherwise nil-derefs and fails the render. */ -}}
+{{- if and (.Values.autoscaling | default dict).enabled (.Values.image | default dict).repository (not .Values.stopped) }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

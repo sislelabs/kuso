@@ -5,7 +5,7 @@ template so a user can resize / delete one disk without touching the
 others. ReadWriteOnce default + cluster-default StorageClass keeps
 this working out of the box on k3s + local-path.
 */ -}}
-{{- range .Values.volumes }}
+{{- range include "kusoenvironment.volumes" . | fromJsonArray }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -33,7 +33,7 @@ spec:
     - {{ get $aliases (upper $mode) | default $mode | quote }}
   resources:
     requests:
-      storage: {{ printf "%dGi" (default 1 (int .sizeGi)) | quote }}
+      storage: {{ printf "%dGi" (max 1 (int .sizeGi)) | quote }}
   {{- if .storageClass }}
   storageClassName: {{ .storageClass | quote }}
   {{- end }}
