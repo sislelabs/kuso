@@ -3,14 +3,12 @@
 # server-go/.dockerignore is NOT consulted for that build — it only
 # applies if someone builds with server-go/ as the context.
 #
-# node_modules must be excluded or the release build breaks outright:
-# the web-build stage runs `npm ci` and then `COPY web/ ./` on top of
-# it. A local pnpm install makes web/node_modules/@base-ui/react a
-# symlink, npm ci makes it a real directory, and BuildKit refuses the
-# overlay with "cannot replace to directory ... with file". That made
-# `make ship` fail on any machine that had run a local web build.
-# Excluding it is also what the Dockerfile already assumes: it copies
-# package.json + package-lock.json and installs deps itself.
+# node_modules must be excluded: the web-build stage runs
+# `pnpm install --frozen-lockfile` and then `COPY web/ ./` on top of it,
+# so a local web/node_modules would overlay (and, when it was laid out
+# differently, clash with — "cannot replace to directory ... with file",
+# which once broke `make ship`) the one installed in the image. The
+# Dockerfile copies package.json + pnpm-lock.yaml and installs deps itself.
 **/node_modules
 
 # Build outputs — regenerated inside the image, and .next in particular

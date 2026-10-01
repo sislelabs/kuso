@@ -102,6 +102,7 @@ Env knobs (see release.sh header for the full list):
   KUSO_RELEASE_CLI=1        cross-build CLI binaries
   KUSO_RELEASE_PUSH=0       skip git push of commit + tag
   KUSO_RELEASE_OPERATOR=1   force-rebuild the operator image
+  FORCE=1                   ship even if CI ('test' workflow) isn't green for HEAD
 EOF
       exit 0
       ;;
@@ -227,6 +228,47 @@ if [[ "${KUSO_RELEASE_ALLOW_DIRTY:-0}" != "1" ]]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
     fail "working tree is dirty. commit/stash or set KUSO_RELEASE_ALLOW_DIRTY=1"
   fi
+fi
+
+# CI gate: refuse to ship a HEAD whose GitHub Actions `test` run isn't
+# green. ~20 releases shipped on red before this existed. FORCE=1
+# overrides; a missing/unauthenticated gh only warns (offline releases
+# stay possible). local-roll (SKIP_BUILD) flips an already-released tag,
+# so it isn't gated.
+ci_gate() {
+  local sha runs
+  sha="$(git rev-parse HEAD)"
+  if ! command -v gh >/dev/null 2>&1; then
+    warn "gh not on PATH — can't check CI for ${sha:0:12}; shipping unchecked"
+    return 0
+  fi
+  if ! runs="$(gh run list --workflow test --commit "$sha" --json status,conclusion \
+      --jq '.[] | "\(.status) \(.conclusion)"' 2>/dev/null)"; then
+    warn "gh run list failed (not authenticated?) — can't check CI for ${sha:0:12}; shipping unchecked"
+    return 0
+  fi
+  if grep -q '^completed success$' <<<"$runs"; then
+    log "CI green for ${sha:0:12}"
+    return 0
+  fi
+  local why
+  if [[ -z "$runs" ]]; then
+    why="no 'test' workflow run for ${sha:0:12} — push it and wait for CI"
+  elif grep -qv '^completed ' <<<"$runs"; then
+    why="'test' workflow for ${sha:0:12} is still running — wait for it"
+  else
+    why="'test' workflow for ${sha:0:12} is red ($(tr '\n' ',' <<<"$runs" | sed 's/,$//'))"
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    warn "CI gate: ${why} (dry-run: not blocking; a real ship would stop here)"
+  elif [[ "${FORCE:-0}" == "1" ]]; then
+    warn "CI gate: ${why} — FORCE=1, shipping anyway"
+  else
+    fail "CI gate: ${why}. Re-run with FORCE=1 to ship anyway."
+  fi
+}
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  ci_gate
 fi
 
 CURRENT="$(cat server-go/internal/version/VERSION | tr -d '[:space:]')"
@@ -397,7 +439,7 @@ fi
 
 if [[ "$CURRENT" != "$VERSION" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
-    dry "rewrite server-go/internal/version/VERSION + deploy/server-go.yaml + hack/install.sh + cli/{cmd/kusoCli/version/CLI_VERSION,pkg/kusoApi/VERSION}: ${CURRENT} → ${VERSION}"
+    dry "rewrite server-go/internal/version/VERSION + deploy/server-go.yaml + hack/install.sh + cli/{cmd/kusoCli/version/CLI_VERSION,pkg/kusoApi/VERSION} + skills/kuso/SKILL.md: ${CURRENT} → ${VERSION}"
   else
     printf '%s\n' "$VERSION" > server-go/internal/version/VERSION
 
@@ -449,6 +491,11 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
     # report the right version).
     printf '%s\n' "$VERSION" > cli/cmd/kusoCli/version/CLI_VERSION
     printf '%s\n' "$VERSION" > cli/pkg/kusoApi/VERSION
+
+    # The consumer skill states the release it was checked against.
+    sed -i.bak -E "s|current to \*\*v[0-9][0-9.]*[a-zA-Z0-9.-]*\*\*|current to **${VERSION}**|" \
+      skills/kuso/SKILL.md
+    rm skills/kuso/SKILL.md.bak
 
     log "rewrote VERSION + deploy/server-go.yaml + hack/install.sh + CLI VERSIONs"
   fi
@@ -530,6 +577,84 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && [[ -d web ]]; then
     warn "neither pnpm nor npm on PATH — assuming web/dist is already current"
   fi
 fi
+
+# ---- 3a. operator image tag -------------------------------------
+#
+# Decide what operator image to bake into release.json. Two paths:
+#
+#   - operator/ changed since last tag → build + push at $VERSION
+#     (so the new server has a matching operator).
+#   - operator/ unchanged → reuse the last operator tag actually
+#     present on ghcr (queried at release time so we don't chase
+#     phantom tags). KUSO_RELEASE_OPERATOR_VERSION overrides both.
+
+operator_should_build() {
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "0" ]]; then
+    return 1
+  fi
+  local last
+  last="$(git describe --tags --abbrev=0 2>/dev/null || echo)"
+  if [[ -z "$last" ]]; then
+    # No previous tag → can't diff. Build to be safe.
+    return 0
+  fi
+  if ! git diff --quiet "$last"..HEAD -- operator/; then
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
+  OPERATOR_VERSION="$KUSO_RELEASE_OPERATOR_VERSION"
+elif operator_should_build; then
+  OPERATOR_VERSION="$VERSION"
+else
+  OPERATOR_VERSION="$(latest_ghcr_tag sislelabs/kuso-operator)"
+  if [[ -z "$OPERATOR_VERSION" ]]; then
+    warn "couldn't query ghcr for operator tags; falling back to ${VERSION}"
+    OPERATOR_VERSION="$VERSION"
+  else
+    log "operator/ unchanged — release.json will pin operator to last built tag ${OPERATOR_VERSION}"
+  fi
+fi
+
+# Correct the eager operator pin from step 2. The version-bump block
+# rewrote deploy/operator.yaml + install.sh's KUSO_VERSION default to
+# ${VERSION} unconditionally — BUT when operator/ is unchanged we do NOT
+# build+push an operator image at ${VERSION}, so that pin dangles. Fresh
+# installs (`kubectl apply -f deploy/operator.yaml`, or install.sh which
+# fetches the same file) then pull a 404 tag → ImagePullBackOff → the
+# install's `kubectl wait` times out. This bit v0.18.69: server shipped
+# at v0.18.69 but the operator image only existed up to v0.18.68, so the
+# deploy yaml pointed at a phantom kuso-operator:v0.18.69.
+#
+# release.json was always correct (it pins OPERATOR_VERSION via the
+# query above), so auto-updating clusters were fine — only the
+# kubectl-apply / fresh-install path broke. Re-stamp the two install
+# sources to the tag we actually pinned so all three paths agree.
+if [[ "$OPERATOR_VERSION" != "$VERSION" && "$CURRENT" != "$VERSION" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "re-stamp deploy/operator.yaml + install.sh KUSO_VERSION default: ${VERSION} → ${OPERATOR_VERSION} (operator not rebuilt this release)"
+  else
+    log "operator not rebuilt — re-stamping install sources to real operator tag ${OPERATOR_VERSION} (was ${VERSION})"
+    sed -i.bak \
+      -E "s|kuso-operator:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-operator:${OPERATOR_VERSION}|g" \
+      deploy/operator.yaml
+    rm deploy/operator.yaml.bak
+    sed -i.bak \
+      -e "s|KUSO_VERSION=\"\${KUSO_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_VERSION=\"\${KUSO_VERSION:-${OPERATOR_VERSION}}\"|g" \
+      hack/install.sh
+    rm hack/install.sh.bak
+  fi
+fi
+
+# The re-stamp above MUST run before 3b: the server image embeds a copy
+# of hack/install.sh, and syncing it earlier baked the eager
+# KUSO_VERSION=${VERSION} pin into every instance's /install.sh (an
+# operator tag that was never built → ImagePullBackOff on fresh installs).
 
 # ---- 3b. sync install scripts into the server-go embed -------------
 #
@@ -678,78 +803,10 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
-# ---- 4a3. operator image -------------------------------------------
+# ---- 4a3b. operator image build ----------------------------------
 #
-# Decide what operator image to bake into release.json. Two paths:
-#
-#   - operator/ changed since last tag → build + push at $VERSION
-#     (so the new server has a matching operator).
-#   - operator/ unchanged → reuse the last operator tag actually
-#     present on ghcr (queried at release time so we don't chase
-#     phantom tags). KUSO_RELEASE_OPERATOR_VERSION overrides both.
-
-operator_should_build() {
-  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "1" ]]; then
-    return 0
-  fi
-  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "0" ]]; then
-    return 1
-  fi
-  local last
-  last="$(git describe --tags --abbrev=0 2>/dev/null || echo)"
-  if [[ -z "$last" ]]; then
-    # No previous tag → can't diff. Build to be safe.
-    return 0
-  fi
-  if ! git diff --quiet "$last"..HEAD -- operator/; then
-    return 0
-  fi
-  return 1
-}
-
-if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
-  OPERATOR_VERSION="$KUSO_RELEASE_OPERATOR_VERSION"
-elif operator_should_build; then
-  OPERATOR_VERSION="$VERSION"
-else
-  OPERATOR_VERSION="$(latest_ghcr_tag sislelabs/kuso-operator)"
-  if [[ -z "$OPERATOR_VERSION" ]]; then
-    warn "couldn't query ghcr for operator tags; falling back to ${VERSION}"
-    OPERATOR_VERSION="$VERSION"
-  else
-    log "operator/ unchanged — release.json will pin operator to last built tag ${OPERATOR_VERSION}"
-  fi
-fi
-
-# Correct the eager operator pin from step 2. The version-bump block
-# rewrote deploy/operator.yaml + install.sh's KUSO_VERSION default to
-# ${VERSION} unconditionally — BUT when operator/ is unchanged we do NOT
-# build+push an operator image at ${VERSION}, so that pin dangles. Fresh
-# installs (`kubectl apply -f deploy/operator.yaml`, or install.sh which
-# fetches the same file) then pull a 404 tag → ImagePullBackOff → the
-# install's `kubectl wait` times out. This bit v0.18.69: server shipped
-# at v0.18.69 but the operator image only existed up to v0.18.68, so the
-# deploy yaml pointed at a phantom kuso-operator:v0.18.69.
-#
-# release.json was always correct (it pins OPERATOR_VERSION via the
-# query above), so auto-updating clusters were fine — only the
-# kubectl-apply / fresh-install path broke. Re-stamp the two install
-# sources to the tag we actually pinned so all three paths agree.
-if [[ "$OPERATOR_VERSION" != "$VERSION" && "$CURRENT" != "$VERSION" ]]; then
-  if [[ "$DRY_RUN" == "1" ]]; then
-    dry "re-stamp deploy/operator.yaml + install.sh KUSO_VERSION default: ${VERSION} → ${OPERATOR_VERSION} (operator not rebuilt this release)"
-  else
-    log "operator not rebuilt — re-stamping install sources to real operator tag ${OPERATOR_VERSION} (was ${VERSION})"
-    sed -i.bak \
-      -E "s|kuso-operator:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-operator:${OPERATOR_VERSION}|g" \
-      deploy/operator.yaml
-    rm deploy/operator.yaml.bak
-    sed -i.bak \
-      -e "s|KUSO_VERSION=\"\${KUSO_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_VERSION=\"\${KUSO_VERSION:-${OPERATOR_VERSION}}\"|g" \
-      hack/install.sh
-    rm hack/install.sh.bak
-  fi
-fi
+# OPERATOR_VERSION and the install-source re-stamp were resolved in
+# step 3a (before the embed sync); only the build+push happens here.
 
 if operator_should_build && [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   log "building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
@@ -1433,6 +1490,7 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     server-go/internal/installscripts/scripts/install.sh
     cli/cmd/kusoCli/version/CLI_VERSION
     cli/pkg/kusoApi/VERSION
+    skills/kuso/SKILL.md
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)

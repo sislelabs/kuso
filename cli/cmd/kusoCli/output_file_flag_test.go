@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // On ~59 commands `-o/--output` selects the output FORMAT (json/table).
@@ -105,5 +107,30 @@ func TestBackupCommandsExposeLongOnlyFileFlag(t *testing.T) {
 		if got := tc.sh(); got != "" {
 			t.Errorf("%s: --file should be long-only, has shorthand %q", tc.name, got)
 		}
+	}
+}
+
+// `kuso project export distill -o json` wrote the project's kuso.yaml
+// to ./json (found live in the 2026-10-01 review).
+func TestExportDashOFormatValueRefused(t *testing.T) {
+	if _, err := resolveLegacyOutFile("", "json", "--out"); err == nil || !strings.Contains(err.Error(), "--out") {
+		t.Fatalf("-o json must be refused pointing at --out, got %v", err)
+	}
+	got, err := resolveLegacyOutFile("", "kuso.yaml", "--out")
+	if err != nil || got != "kuso.yaml" {
+		t.Fatalf("-o <path> should still work as a deprecated alias: %q %v", got, err)
+	}
+	for _, c := range []*cobra.Command{projectExportCmd, projectExportArchiveCmd} {
+		if f := c.Flags().Lookup("out"); f == nil || f.Shorthand != "" {
+			t.Errorf("%s: --out must be long-only", c.Name())
+		}
+		if f := c.Flags().ShorthandLookup("o"); f == nil || !f.Hidden {
+			t.Errorf("%s: -o should remain only as a hidden legacy alias", c.Name())
+		}
+	}
+	importOut, importFile = "json", ""
+	t.Cleanup(func() { importOut = "" })
+	if _, err := importDestFile(); err == nil {
+		t.Error("import compose -o json must be refused")
 	}
 }

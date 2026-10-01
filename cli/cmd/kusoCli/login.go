@@ -34,19 +34,30 @@ var (
 )
 
 var loginCmd = &cobra.Command{
-	Use:   "login",
-	Args:  cobra.NoArgs,
+	Use:   "login [instance-url]",
+	Args:  cobra.MaximumNArgs(1),
 	Short: "Login to a kuso instance",
 	Long: `Authenticate against a kuso server. The resulting token is stored
 in ~/.kuso/credentials.yaml and reused by subsequent commands.
 
-Use --api to login non-interactively (creates the instance entry on
+The instance URL can be given as the positional argument or with --api.
+Use --api (or the positional URL) to login non-interactively (creates the instance entry on
 the fly). Use --token to install a pre-issued API token without
 trading credentials.`,
 	Example: `  kuso login
+  kuso login https://kuso.example.com
   kuso login --api https://kuso.example.com -u admin -p '<password>'
   kuso login --api https://kuso.example.com --token <jwt>`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			if loginAPIURL != "" && loginAPIURL != args[0] {
+				return fmt.Errorf("pass the instance URL once: either as the argument or with --api")
+			}
+			if !strings.HasPrefix(args[0], "https://") && !strings.HasPrefix(args[0], "http://") {
+				return fmt.Errorf("%q is not an instance URL; use e.g. kuso login https://kuso.example.com", args[0])
+			}
+			loginAPIURL = args[0]
+		}
 		if loginAPIURL != "" {
 			if err := upsertInstanceFromFlags(); err != nil {
 				return err

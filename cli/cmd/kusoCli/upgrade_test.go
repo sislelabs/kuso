@@ -1,6 +1,14 @@
 package kusoCli
 
-import "testing"
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"kuso/pkg/kusoApi"
+)
 
 // TestClassifyUpgradePhase guards the regression where `kuso upgrade` reported
 // a false "timed out after 15m" on a fully successful upgrade: the in-cluster
@@ -39,5 +47,38 @@ func TestClassifyUpgradePhase(t *testing.T) {
 		if (gotErr != nil) != c.wantErr {
 			t.Errorf("phase %q: err = %v, wantErr = %v", c.phase, gotErr, c.wantErr)
 		}
+	}
+}
+
+// `kuso upgrade` with no flags used to POST /api/system/update straight
+// away, so someone expecting a CLI self-update rolled the server.
+func TestUpgrade_RefusesWithoutConfirmOffTTY(t *testing.T) {
+	var posted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/system/update" {
+			posted = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/system/update/status" {
+			_, _ = io.WriteString(w, `{"phase":"done"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"current":"v0.27.6","latest":"v0.27.7","needsUpdate":true}`)
+	}))
+	t.Cleanup(srv.Close)
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	orig := stdinIsTTYFn
+	stdinIsTTYFn = func() bool { return false }
+	t.Cleanup(func() { api = nil; stdinIsTTYFn = orig; upgradeYes = false })
+
+	captureStdout(t, func() {
+		_, err := runRoot(t, "upgrade")
+		if err == nil || !strings.Contains(err.Error(), "--yes") {
+			t.Errorf("want refusal naming --yes, got %v", err)
+		}
+	})
+	if posted {
+		t.Fatal("upgrade started the update job without confirmation")
 	}
 }

@@ -100,9 +100,10 @@ type ServiceSpec struct {
 	Volumes           []Volume   `json:"volumes,omitempty"`
 	Placement         *Placement `json:"placement,omitempty"`
 	Scale             struct {
-		Min       int `json:"min,omitempty"`
-		Max       int `json:"max,omitempty"`
-		TargetCPU int `json:"targetCPU,omitempty"`
+		// Pointer so scale-to-zero (min: 0) is distinguishable from unset.
+		Min       *int `json:"min,omitempty"`
+		Max       int  `json:"max,omitempty"`
+		TargetCPU int  `json:"targetCPU,omitempty"`
 	} `json:"scale,omitempty"`
 	Sleep struct {
 		Enabled      bool `json:"enabled,omitempty"`

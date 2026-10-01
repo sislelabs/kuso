@@ -80,11 +80,9 @@ output names the next concrete step for every finding.`,
 			report("token", "present", "pass")
 		}
 
-		// Server URL — env var beats saved instance.
-		serverURL := strings.TrimRight(os.Getenv("KUSO_SERVER"), "/")
-		if serverURL == "" {
-			serverURL = strings.TrimRight(currentInstance.ApiUrl, "/")
-		}
+		// Server URL — same resolution every other command uses
+		// (it read KUSO_SERVER, so doctor checked a different server).
+		serverURL := strings.TrimRight(resolveAPIURL(), "/")
 		if serverURL == "" {
 			report("server URL", "no instance configured — run: kuso login --api https://<your-instance>", "fail")
 			if fail {

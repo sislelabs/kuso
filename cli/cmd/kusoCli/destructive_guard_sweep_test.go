@@ -67,6 +67,26 @@ var sweepGuardedCommands = []struct {
 	{"instance-addon unregister", instanceAddonUnregisterCmd, []string{"recoverable"}},
 	{"instance-pg disable", instancePGDisableCmd, []string{"data lost"}},
 	{"addon public-tcp disable", addonPublicTCPDisableCmd, []string{"cut off"}},
+
+	// 2026-10-01 review: these acted on prod with no prompt at all.
+	{"upgrade", upgradeCmd, []string{"outage", "does not update"}},
+	{"apply", applyCmd, []string{"not recoverable"}},
+	{"node apply-updates", nodeApplyUpdatesCmd, []string{"evicts"}},
+	{"node cleanup", nodeCleanupCmd, []string{"recoverable"}},
+	{"revision revert", revisionRevertCmd, []string{"overwritten"}},
+	{"addon-backup unschedule", addonBackupUnscheduleCmd, []string{"no new backups"}},
+}
+
+func TestConfirmTypedName_FailsClosedOffTTY(t *testing.T) {
+	orig := stdinIsTTYFn
+	t.Cleanup(func() { stdinIsTTYFn = orig })
+	stdinIsTTYFn = func() bool { return false }
+	if err := confirmTypedName(false, "shop", "purge?"); err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("want refusal naming --yes, got %v", err)
+	}
+	if err := confirmTypedName(true, "shop", "purge?"); err != nil {
+		t.Fatalf("--yes must skip: %v", err)
+	}
 }
 
 func TestSweepGuardedCommands_ExposeYesFlag(t *testing.T) {

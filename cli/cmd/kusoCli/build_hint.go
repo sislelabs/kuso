@@ -3,6 +3,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -102,7 +103,9 @@ buildId to explain a specific one.`,
 				}
 			}
 			if target == nil {
-				return fmt.Errorf("no failed builds for %s/%s — nothing to explain", project, service)
+				// Nothing failed is a successful answer, not an error.
+				fmt.Fprintf(os.Stderr, "no failed builds for %s/%s — nothing to explain\n", project, service)
+				return nil
 			}
 		}
 

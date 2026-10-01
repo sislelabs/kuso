@@ -17,6 +17,12 @@
 
 set -euo pipefail
 
+# `declare -A` below needs bash 4+; macOS ships 3.2 at /bin/bash.
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "verify-parity: needs bash >= 4 (got $BASH_VERSION); try 'brew install bash'" >&2
+  exit 2
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -79,7 +85,8 @@ declare -A alias_map=(
 missing=()
 matched=()
 for noun in $api_nouns; do
-  candidates="${alias_map[$noun]:-$noun}"
+  # API nouns are plural, CLI commands mostly singular (drains→drain).
+  candidates="${alias_map[$noun]:-$noun ${noun%s}}"
   hit=""
   for cand in $candidates; do
     if echo "$cli_nouns" | grep -qx "$cand"; then

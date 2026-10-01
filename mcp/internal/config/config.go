@@ -34,6 +34,11 @@ type Config struct {
 // ReadOnly defaults to false; callers set it from CLI flags.
 func FromEnv() (*Config, error) {
 	envURL := strings.TrimRight(strings.TrimSpace(os.Getenv("KUSO_URL")), "/")
+	if envURL == "" {
+		// KUSO_API_URL is the name the kuso CLI reads; accept it so one
+		// exported variable configures both.
+		envURL = strings.TrimRight(strings.TrimSpace(os.Getenv("KUSO_API_URL")), "/")
+	}
 	envToken := strings.TrimSpace(os.Getenv("KUSO_TOKEN"))
 	if envURL != "" && envToken != "" {
 		return &Config{URL: envURL, Token: envToken}, nil

@@ -19,7 +19,7 @@ Three things matter for capacity decisions:
 | `kuso_db_pool_idle` | gauge | idle slots — drops to 0 under burst |
 | `kuso_db_pool_open` | gauge | total open conns (in_use + idle) |
 | `kuso_build_queue_depth` | gauge | KusoBuild CRs in `queued` state cluster-wide |
-| `kuso_build_running` | gauge | running kaniko build pods cluster-wide |
+| `kuso_build_running` | gauge | running build pods cluster-wide |
 
 Plus the standard `go_*` and `process_*` metrics from the Prometheus
 client library (heap size, goroutines, file descriptors, GC pauses).

@@ -178,20 +178,22 @@ Addon PVCs are KEPT by default. The helm-operator stamps
 "helm.sh/resource-policy: keep" on every addon PVC so an accidental
 project delete doesn't turn into accidental data loss. Pass
 --purge-data to also wipe the PVCs — required when you actually
-want a clean slate. Without it, a delete+recreate cycle inherits
-the OLD postgres data dir AND the OLD password from disk, while
-the new addon spec generates a new password, and pods crashloop
-with SASL auth failures.`,
+want a clean slate. Without it, a delete+recreate cycle with the
+same names picks the OLD data back up (the addon conn Secret is
+kept alongside the PVC, so the old password still matches).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		msg := fmt.Sprintf("Delete project %q (cascades to services, envs, addons)?", args[0])
 		if projectDeletePurgeData {
-			msg = fmt.Sprintf("Delete project %q AND PURGE ALL DATA (PVCs)? This is irreversible.", args[0])
-		}
-		if err := confirmDestructive(projectDeleteYes, msg); err != nil {
+			// The biggest delete kuso has: type-the-name, like gh repo delete.
+			if err := confirmTypedName(projectDeleteYes, args[0], fmt.Sprintf(
+				"Delete project %q AND PURGE ALL DATA (PVCs)? This is irreversible.", args[0])); err != nil {
+				return err
+			}
+		} else if err := confirmDestructive(projectDeleteYes,
+			fmt.Sprintf("Delete project %q (cascades to services, envs, addons)?", args[0])); err != nil {
 			return err
 		}
 		resp, err := api.DeleteProjectOpts(args[0], kusoApi.DeleteProjectOptions{PurgeData: projectDeletePurgeData})
@@ -1001,16 +1003,18 @@ var (
 	addonAddTLS     string
 )
 
+// supportedAddonKinds mirrors addons.SupportedKinds in server-go (the
+// kinds the kusoaddon chart actually deploys).
 var supportedAddonKinds = []string{
-	// Implemented kinds — chart renders real workloads + conn secret.
-	// Must track $supported in operator/helm-charts/kusoaddon/templates/unsupported.yaml.
-	"postgres", "redis", "valkey", "mongodb", "rabbitmq", "s3",
+	"postgres", "redis", "valkey", "mongodb", "mysql", "rabbitmq", "s3",
 	"mailpit", "nats", "meilisearch", "clickhouse", "redpanda",
-	// Reserved (chart emits an "unsupported" marker); listed so the
-	// CLI accepts the kind for projects that pre-declare the field.
-	"mysql", "memcached",
-	"elasticsearch", "kafka", "cockroachdb", "couchdb",
 }
+
+// reservedAddonKinds are in the CRD enum but the chart only renders a
+// "not implemented" marker for them, so `addon add` refuses them (the
+// addon would deploy nothing). connect-external still accepts them:
+// nothing is deployed for an external addon anyway.
+var reservedAddonKinds = []string{"memcached", "elasticsearch", "kafka", "cockroachdb", "couchdb"}
 
 var projectAddonCmd = &cobra.Command{
 	Use:   "addon",
@@ -1036,6 +1040,9 @@ After the add, the command prints which services mount it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if contains(reservedAddonKinds, addonAddKind) {
+			return fmt.Errorf("--kind %s is reserved: kuso can't deploy it yet (connect an external one with `kuso project addon connect-external`); deployable kinds: %s", addonAddKind, strings.Join(supportedAddonKinds, ", "))
 		}
 		if !contains(supportedAddonKinds, addonAddKind) {
 			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
@@ -1110,6 +1117,9 @@ Examples:
 		sub, err := readSubscribedAddons(args[0], args[1])
 		if err != nil {
 			return err
+		}
+		if outputFormat == "json" {
+			return jsonOut(sub)
 		}
 		subSet := map[string]bool{}
 		for _, a := range sub.Subscribed {
@@ -1291,8 +1301,8 @@ build its userlist.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		if !contains(supportedAddonKinds, addonExtKind) {
-			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
+		if !contains(supportedAddonKinds, addonExtKind) && !contains(reservedAddonKinds, addonExtKind) {
+			return fmt.Errorf("--kind must be one of: %s, %s", strings.Join(supportedAddonKinds, ", "), strings.Join(reservedAddonKinds, ", "))
 		}
 		if addonExtSecret == "" && len(addonExtCreds) == 0 {
 			return fmt.Errorf("pass --secret to adopt an existing Secret, or --set K=V to have kuso create one")
@@ -1607,6 +1617,23 @@ func confirmDestructive(skip bool, prompt string) error {
 	}
 }
 
+// confirmTypedName is confirmDestructive for irreversible data loss:
+// the user must type name back instead of answering y.
+func confirmTypedName(skip bool, name, prompt string) error {
+	if skip {
+		return nil
+	}
+	if !stdinIsTTYFn() {
+		return fmt.Errorf("refusing to run a destructive action non-interactively without confirmation — re-run with --yes to proceed")
+	}
+	fmt.Fprintf(os.Stderr, "%s\nType %q to confirm: ", prompt, name)
+	var ans string
+	if _, err := fmt.Fscanln(os.Stdin, &ans); err != nil || strings.TrimSpace(ans) != name {
+		return fmt.Errorf("aborted")
+	}
+	return nil
+}
+
 // stdinIsTTY reports whether stdin is connected to a real terminal so
 // destructive commands don't force a prompt a piped caller can't
 // answer.
@@ -1709,6 +1736,9 @@ func init() {
 
 	projectAddonCmd.AddCommand(addonConnectExternalCmd)
 	projectAddonCmd.AddCommand(addonPodsCmd)
+	// Both already branch on outputFormat but never registered -o.
+	addonPodsCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	addonListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	addonResyncExternalCmd.Flags().StringArrayVar(&addonResyncCreds, "set", nil, "KEY=VALUE credential to rotate before re-mirroring; repeat per key (kuso-created Secrets only)")
 	addonConnectExternalCmd.Flags().StringVar(&addonExtKind, "kind", "", "addon kind (required: postgres, redis, ...)")
 	addonConnectExternalCmd.Flags().StringVar(&addonExtSecret, "secret", "", "name of an existing kube Secret to mirror as the addon's conn secret (or use --set)")

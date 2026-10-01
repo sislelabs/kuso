@@ -71,6 +71,12 @@ var projectMutesCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &mutes); err != nil {
 			return fmt.Errorf("decode mutes: %w", err)
 		}
+		if outputFormat == "json" {
+			if mutes == nil {
+				return jsonOut([]any{})
+			}
+			return jsonOut(mutes)
+		}
 		if len(mutes) == 0 {
 			fmt.Println("no muted projects")
 			return nil
@@ -103,11 +109,14 @@ var projectMuteStatusCmd = &cobra.Command{
 		}
 		var st struct {
 			Muted bool   `json:"muted"`
-			Since string `json:"since"`
-			By    string `json:"by"`
+			Since string `json:"since,omitempty"`
+			By    string `json:"by,omitempty"`
 		}
 		if err := json.Unmarshal(resp.Body(), &st); err != nil {
 			return fmt.Errorf("decode mute status: %w", err)
+		}
+		if outputFormat == "json" {
+			return jsonOut(st)
 		}
 		if !st.Muted {
 			fmt.Printf("project %s notifications are not muted\n", args[0])
@@ -127,4 +136,7 @@ var projectMuteStatusCmd = &cobra.Command{
 
 func init() {
 	projectCmd.AddCommand(projectMuteCmd, projectUnmuteCmd, projectMutesCmd, projectMuteStatusCmd)
+	for _, c := range []*cobra.Command{projectMutesCmd, projectMuteStatusCmd} {
+		c.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	}
 }

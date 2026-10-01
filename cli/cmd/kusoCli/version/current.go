@@ -113,7 +113,7 @@ func GetVersionInfoWithLatestAndCheck() string {
 	if GetVersion() == GetLatestVersionFromGit() {
 		return GetVersionInfo() + "\n" + GetLatestVersionInfo() + "\n" + "You are using the latest version."
 	} else {
-		return GetVersionInfo() + "\n" + GetLatestVersionInfo() + "\n" + "You are using an outdated version.\n" + "Please upgrade your kusoCli to prevent any issues."
+		return GetVersionInfo() + "\n" + GetLatestVersionInfo() + "\n" + "You are using an outdated version.\n" + "Update the CLI with: curl -fsSL https://<your-instance>/install-cli.sh | sh\n(`kuso upgrade` upgrades the server, not the CLI.)"
 	}
 }
 

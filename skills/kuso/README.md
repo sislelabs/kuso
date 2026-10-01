@@ -26,11 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/SKI
 
 ## Update
 
-Re-run the same `curl` — `install.sh` overwrites `SKILL.md` with the latest from `main`. Pin to a specific kuso release with:
+Re-run the same `curl` — `install.sh` overwrites `SKILL.md` with the latest from `main`. Pin to a specific kuso release with the commands below. `export` matters: the variable has to be set before the shell expands the URL, and `install.sh` (run by `bash`) reads it too.
 
 ```bash
-KUSO_SKILL_REF=v0.18.128 curl -fsSL \
-  "https://raw.githubusercontent.com/sislelabs/kuso/${KUSO_SKILL_REF}/skills/kuso/install.sh" | bash
+export KUSO_SKILL_REF=v0.27.7
+curl -fsSL "https://raw.githubusercontent.com/sislelabs/kuso/${KUSO_SKILL_REF}/skills/kuso/install.sh" | bash
 ```
 
 ## Uninstall
@@ -44,8 +44,8 @@ rm -rf .claude/skills/kuso
 - **Mental model** — projects, services, environments (incl. branch-tracking staging envs), addons, builds
 - **The CLI commands you'll actually use**, with concrete shapes and the flag-convention gotchas
 - **Env vars & secrets** — the `env set` vs `secret set` rule, shared secrets, addon subscriptions (least privilege), `${{ ... }}` reference syntax
-- **How a deploy actually flows** — push → build CR → kaniko → release hook → image promote → kube roll
-- **Failure modes** ranked by frequency: GH App not installed, OOMKilled snapshot, wrong port, release-failed, exit-127 capability drops
+- **How a deploy actually flows** — push → build CR → buildkit → release hook → image promote → kube roll
+- **Failure modes** ranked by frequency: GH App not installed, build OOM (fixed with NODE_OPTIONS in the Dockerfile), wrong port, release-failed, exit-127 capability drops
 - **Debugging playbook** — the standard order, starting with `kuso build why`
 - **Edit safety** — what's hot-swappable vs. what triggers a rollout
 - **Addons** — kinds, conn-secret keys, TLS, public TCP, backups, the SQL browser

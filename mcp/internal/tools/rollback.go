@@ -42,6 +42,36 @@ type listBuildsResult struct {
 	Builds []buildSummary `json:"builds"`
 }
 
+// rollbackResult is the slice of the KusoEnvironment CR the rollback
+// endpoint returns (it is the re-pointed env, not a build summary).
+type rollbackResult struct {
+	Environment string `json:"environment"`
+	ImageRepo   string `json:"imageRepository,omitempty"`
+	ImageTag    string `json:"imageTag,omitempty"`
+}
+
+// rollbackEnvWire decodes the server's KusoEnvironment response.
+type rollbackEnvWire struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		Image *struct {
+			Repository string `json:"repository"`
+			Tag        string `json:"tag"`
+		} `json:"image"`
+	} `json:"spec"`
+}
+
+func (w rollbackEnvWire) result() rollbackResult {
+	r := rollbackResult{Environment: w.Metadata.Name}
+	if w.Spec.Image != nil {
+		r.ImageRepo = w.Spec.Image.Repository
+		r.ImageTag = w.Spec.Image.Tag
+	}
+	return r
+}
+
 type rollbackArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
@@ -88,6 +118,9 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 				if s.FinishedAt != "" {
 					fmt.Fprintf(&b, "  (%s)", s.FinishedAt)
 				}
+				if notes := promotionNotes(s); notes != "" {
+					b.WriteString(strings.ReplaceAll(notes, "\n  ", "\n      "))
+				}
 				b.WriteString("\n")
 			}
 			b.WriteString("Only a build with status=succeeded can be a rollback target.")
@@ -105,31 +138,35 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 			"env to target staging/qa/preview-pr-N. Promotion-only: it does NOT rebuild, and it fails if " +
 			"the target build never succeeded or its image has aged out of the retention window. Call " +
 			"list_builds first to choose a target.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args rollbackArgs) (*mcp.CallToolResult, buildSummary, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args rollbackArgs) (*mcp.CallToolResult, rollbackResult, error) {
 		if args.Project == "" || args.Service == "" || args.Build == "" {
-			return nil, buildSummary{}, errors.New("project, service and build are required")
+			return nil, rollbackResult{}, errors.New("project, service and build are required")
 		}
 		if !args.Confirm {
-			return nil, buildSummary{}, errors.New(
+			return nil, rollbackResult{}, errors.New(
 				"confirm=true is required — rollback re-points a live environment at an older image " +
 					"(a production deploy). Run list_builds first to confirm the target build succeeded")
 		}
 		if client.ReadOnly() {
-			return nil, buildSummary{}, errors.New("kuso-mcp is running in --read-only mode; rollback is refused")
+			return nil, rollbackResult{}, errors.New("kuso-mcp is running in --read-only mode; rollback is refused")
 		}
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds", args.Build, "rollback")
 		if env := strings.TrimSpace(args.Env); env != "" {
 			path += "?env=" + url.QueryEscape(env)
 		}
-		var out buildSummary
-		if err := client.PostJSON(ctx, path, struct{}{}, &out); err != nil {
-			return nil, buildSummary{}, fmt.Errorf("rollback: %w", err)
+		var wire rollbackEnvWire
+		if err := client.PostJSON(ctx, path, struct{}{}, &wire); err != nil {
+			return nil, rollbackResult{}, fmt.Errorf("rollback: %w", err)
 		}
+		out := wire.result()
 		target := args.Env
 		if target == "" {
 			target = "production"
 		}
 		text := fmt.Sprintf("Rolled %s/%s (%s) back to build %s", args.Project, args.Service, target, args.Build)
+		if out.Environment != "" {
+			text += fmt.Sprintf(" (env CR %s)", out.Environment)
+		}
 		if out.ImageTag != "" {
 			text += fmt.Sprintf(" — now serving image tag %s", out.ImageTag)
 		}

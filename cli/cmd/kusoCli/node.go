@@ -120,7 +120,7 @@ on first use; replays return 410.`,
 		fmt.Println()
 		fmt.Println("  " + out.OneLiner)
 		fmt.Println()
-		fmt.Println("The node should appear in `kuso get nodes` within ~30 seconds.")
+		fmt.Println("The node should appear in `kuso node list` within ~30 seconds.")
 		// Use the hash prefix as the revoke handle — the cleartext is
 		// only safe to surface once, here at mint time.
 		fmt.Printf("To cancel before it's used:  kuso node revoke %s\n", out.JTIPrefix)
@@ -377,6 +377,8 @@ var (
 	nodeRemoveForce bool
 	nodeRemoveYes   bool
 	nodeApplyReboot bool
+	nodeApplyYes    bool
+	nodeCleanupYes  bool
 )
 
 // nodeCredsFromFlags assembles the shared SSH credential block from the
@@ -622,7 +624,11 @@ var nodeApplyUpdatesCmd = &cobra.Command{
 	Short: "Apply pending host package updates on a node (privileged Job).",
 	Long: `Launch a privileged Job that patches the node's host OS packages. By
 default it's patch-only; --allow-reboot lets kuso run the cordon/drain/
-reboot orchestration when a kernel or other update requires a restart.`,
+reboot orchestration when a kernel or other update requires a restart.
+A reboot evicts every pod on the node, and a singleton (an addon pooler,
+a one-replica service) can be stranded while it restarts, so
+--allow-reboot asks for confirmation; pass --yes to skip it. Roll one
+node at a time, control-plane last.`,
 	Example: `  kuso node apply-updates worker-2
   kuso node apply-updates worker-2 --allow-reboot`,
 	Args: cobra.ExactArgs(1),
@@ -631,6 +637,12 @@ reboot orchestration when a kernel or other update requires a restart.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		name := args[0]
+		if nodeApplyReboot {
+			if err := confirmDestructive(nodeApplyYes, fmt.Sprintf(
+				"Apply updates on %s and allow a cordon/drain/reboot? Every pod on the node is evicted.", name)); err != nil {
+				return err
+			}
+		}
 		resp, err := api.ApplyNodeUpdates(name, kusoApi.ApplyNodeUpdatesRequest{AllowReboot: nodeApplyReboot})
 		if err != nil {
 			return err
@@ -709,10 +721,16 @@ var nodeCleanupCmd = &cobra.Command{
 	Long: `Sweep Succeeded/Failed pods and finished Jobs across all namespaces.
 Running pods, active Jobs, KusoBuild-owned Jobs/pods, and the
 kube-system family are left untouched. Use this when the host is
-drowning in stale completion artifacts.`,
+drowning in stale completion artifacts. Deleted pods take their logs
+with them and that is not recoverable, so it asks for confirmation;
+pass --yes to skip it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(nodeCleanupYes,
+			"Delete every completed pod and finished Job cluster-wide? Their logs are not recoverable."); err != nil {
+			return err
 		}
 		resp, err := api.CleanupCompleted()
 		if err := checkRespErr(resp, err); err != nil {
@@ -871,12 +889,14 @@ func init() {
 	nodeCmd.AddCommand(nodeUpdatesCmd)
 
 	nodeApplyUpdatesCmd.Flags().BoolVar(&nodeApplyReboot, "allow-reboot", false, "permit cordon/drain/reboot when an update needs a restart")
+	nodeApplyUpdatesCmd.Flags().BoolVarP(&nodeApplyYes, "yes", "y", false, "skip the --allow-reboot confirmation")
 	nodeCmd.AddCommand(nodeApplyUpdatesCmd)
 
 	nodeHistoryCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	nodeCmd.AddCommand(nodeHistoryCmd)
 
 	nodeCleanupCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCleanupCmd.Flags().BoolVarP(&nodeCleanupYes, "yes", "y", false, "skip the confirmation prompt")
 	nodeCmd.AddCommand(nodeCleanupCmd)
 
 	rootCmd.AddCommand(nodeCmd)

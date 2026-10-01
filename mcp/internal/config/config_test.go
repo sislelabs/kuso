@@ -13,6 +13,7 @@ func isolateHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("KUSO_API_URL", "")
 	return home
 }
 
@@ -44,6 +45,17 @@ func TestFromEnv(t *testing.T) {
 		}
 		if cfg.Token != "envtok" {
 			t.Errorf("Token = %q, want env token", cfg.Token)
+		}
+	})
+
+	t.Run("KUSO_API_URL (the CLI's name) is accepted", func(t *testing.T) {
+		isolateHome(t)
+		t.Setenv("KUSO_URL", "")
+		t.Setenv("KUSO_API_URL", "https://kuso.example.com/")
+		t.Setenv("KUSO_TOKEN", "tok")
+		cfg, err := FromEnv()
+		if err != nil || cfg.URL != "https://kuso.example.com" {
+			t.Fatalf("got %+v, %v", cfg, err)
 		}
 	})
 

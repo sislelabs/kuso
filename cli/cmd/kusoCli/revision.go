@@ -109,6 +109,8 @@ var revisionShowCmd = &cobra.Command{
 	},
 }
 
+var revisionRevertYes bool
+
 var revisionRevertCmd = &cobra.Command{
 	Use:   "revert <project> <id>",
 	Short: "Replay a revision's snapshot back through the matching update path",
@@ -116,11 +118,17 @@ var revisionRevertCmd = &cobra.Command{
 		"revision is recorded with reason=\"revert: <original id>\" so the " +
 		"history stays linear (you can revert the revert to roll forward).\n\n" +
 		"This reverts configuration (service/env/addon/cron spec), not code. To put a " +
-		"previous build's image back live, use kuso build rollback.",
+		"previous build's image back live, use kuso build rollback.\n\n" +
+		"The live spec is overwritten and pods may roll, so it asks for " +
+		"confirmation; pass --yes to skip it.",
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(revisionRevertYes, fmt.Sprintf(
+			"Revert %s to revision %s? The live spec is overwritten and pods may roll.", args[0], args[1])); err != nil {
+			return err
 		}
 		resp, err := api.RevertRevision(args[0], args[1])
 		if err != nil {
@@ -141,4 +149,5 @@ func init() {
 	revisionCmd.AddCommand(revisionShowCmd)
 	revisionShowCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format [json]")
 	revisionCmd.AddCommand(revisionRevertCmd)
+	revisionRevertCmd.Flags().BoolVarP(&revisionRevertYes, "yes", "y", false, "skip the confirmation prompt")
 }

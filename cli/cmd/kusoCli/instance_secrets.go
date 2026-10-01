@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -56,20 +55,23 @@ var instanceSecretListCmd = &cobra.Command{
 }
 
 var instanceSecretSetCmd = &cobra.Command{
-	Use:   "set <KEY=VALUE>",
+	Use:   "set <KEY=VALUE|KEY=-|KEY>",
 	Short: "Upsert an instance secret",
-	Args:  cobra.ExactArgs(1),
+	Long: `Upsert an instance secret. KEY=- reads the value from stdin and
+KEY --from-file <path> reads it from a file, which keeps it out of shell
+history and the process list.`,
+	Args: cobra.ExactArgs(1),
 	Example: `  kuso instance-secret set SENTRY_DSN=https://abc@sentry.io/123
-  kuso instance-secret set DATADOG_API_KEY=abc123`,
+  pbpaste | kuso instance-secret set DATADOG_API_KEY=-`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		eq := strings.IndexByte(args[0], '=')
-		if eq <= 0 {
-			return fmt.Errorf("argument must be KEY=VALUE")
+		key, value, err := splitSecretKV(args[0], instanceSecretSetFromFile)
+		if err != nil {
+			return err
 		}
-		req := kusoApi.SetSharedSecretRequest{Key: args[0][:eq], Value: args[0][eq+1:]}
+		req := kusoApi.SetSharedSecretRequest{Key: key, Value: value}
 		resp, err := api.SetInstanceSecret(req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -113,6 +115,7 @@ func init() {
 	instanceSecretCmd.AddCommand(instanceSecretListCmd)
 	instanceSecretListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	instanceSecretCmd.AddCommand(instanceSecretSetCmd)
+	instanceSecretSetCmd.Flags().StringVar(&instanceSecretSetFromFile, "from-file", "", "read the value from this `path`")
 	instanceSecretUnsetCmd.Flags().BoolVarP(&instanceSecretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 	instanceSecretCmd.AddCommand(instanceSecretUnsetCmd)
 }

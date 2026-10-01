@@ -96,29 +96,26 @@ var sharedSecretListCmd = &cobra.Command{
 }
 
 var sharedSecretSetCmd = &cobra.Command{
-	Use:   "set <project> <KEY=VALUE>",
+	Use:   "set <project> <KEY=VALUE|KEY=-|KEY>",
 	Short: "Upsert a shared secret",
-	Args:  cobra.ExactArgs(2),
+	Long: `Upsert a project-shared secret. KEY=- reads the value from stdin and
+KEY --from-file <path> reads it from a file, which keeps it out of shell
+history and the process list.`,
+	Args: cobra.ExactArgs(2),
 	Example: `  kuso shared-secret set myproj RESEND_API_KEY=re_abc123
-  kuso shared-secret set myproj STRIPE_SECRET_KEY=sk_live_xxx`,
+  pbpaste | kuso shared-secret set myproj STRIPE_SECRET_KEY=-
+  kuso shared-secret set myproj GCP_SA_JSON --from-file ./sa.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		// Split on the FIRST = so values containing = work (e.g.
+		// Splits on the FIRST = so values containing = work (e.g.
 		// base64-encoded keys like "AKIA…====").
-		kv := args[1]
-		eq := -1
-		for i, c := range kv {
-			if c == '=' {
-				eq = i
-				break
-			}
+		key, value, err := splitSecretKV(args[1], sharedSecretSetFromFile)
+		if err != nil {
+			return err
 		}
-		if eq <= 0 {
-			return fmt.Errorf("argument must be KEY=VALUE")
-		}
-		req := kusoApi.SetSharedSecretRequest{Key: kv[:eq], Value: kv[eq+1:], Force: sharedSecretForceFlag}
+		req := kusoApi.SetSharedSecretRequest{Key: key, Value: value, Force: sharedSecretForceFlag}
 		resp, err := api.SetSharedSecret(args[0], req)
 		if err != nil {
 			return err
@@ -271,6 +268,7 @@ func init() {
 	sharedSecretCmd.AddCommand(sharedSecretListCmd)
 	sharedSecretListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	sharedSecretCmd.AddCommand(sharedSecretSetCmd)
+	sharedSecretSetCmd.Flags().StringVar(&sharedSecretSetFromFile, "from-file", "", "read the value from this `path`")
 	sharedSecretSetCmd.Flags().BoolVar(&sharedSecretForceFlag, "force", false, "override the shadow check (set even if a service-scoped secret with the same key exists)")
 	sharedSecretUnsetCmd.Flags().BoolVarP(&sharedSecretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 	sharedSecretCmd.AddCommand(sharedSecretUnsetCmd)

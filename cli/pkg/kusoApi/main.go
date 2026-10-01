@@ -36,7 +36,7 @@ type KusoClient struct {
 
 // Sentinel errors callers check via errors.Is.
 var (
-	ErrNotConfigured   = errors.New("kuso is not configured — run `kuso login <instance-url>` first")
+	ErrNotConfigured   = errors.New("kuso is not configured — run `kuso login --api <instance-url>` first")
 	ErrUnauthenticated = errors.New("not authenticated: run `kuso login`")
 )
 

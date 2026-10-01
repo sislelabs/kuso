@@ -195,7 +195,7 @@ Run from the workstation with `KUSO=https://kuso-go.example.com`.
 ### 2.4 Trigger build (manual)
 - [ ] In the UI, click **Trigger build** on the production env. Body: `{branch:"main"}`.
 - [ ] `kubectl get kusobuilds -n kuso -l kuso.sislelabs.com/service=smoke-web` shows a new CR.
-- [ ] Within 1 min, a kaniko Job appears (`kubectl get jobs -n kuso`).
+- [ ] Within 1 min, a build Job appears (`kubectl get jobs -n kuso`).
 - [ ] Within 5 min, `kubectl get kusobuild -n kuso <name> -o jsonpath='{.status.phase}'` reports `succeeded`.
 - [ ] After success, `kubectl get kusoenvironment -n kuso smoke-web-production -o jsonpath='{.spec.image.tag}'` matches the build's tag (image promotion verified).
 - [ ] The pod rolls and serves traffic at `https://web-smoke.<baseDomain>`.

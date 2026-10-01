@@ -19,9 +19,10 @@ import (
 // dump and hold the archive in memory.
 
 var (
-	exportOutFile string
-	importInFile  string
-	importPolicy  string
+	exportOutFile   string
+	exportLegacyOut string
+	importInFile    string
+	importPolicy    string
 )
 
 var projectExportArchiveCmd = &cobra.Command{
@@ -43,6 +44,11 @@ use ` + "`kuso project export`" + ` (emits kuso.yaml).`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		out, err := resolveLegacyOutFile(exportOutFile, exportLegacyOut, "--out")
+		if err != nil {
+			return err
+		}
+		exportOutFile = out
 		resp, err := api.ExportProject(args[0])
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("export: %w", err)
@@ -137,7 +143,8 @@ you, the operator is expected to plan DNS cutover separately.`,
 }
 
 func init() {
-	projectExportArchiveCmd.Flags().StringVarP(&exportOutFile, "out", "o", "", "output file (default: stdout)")
+	projectExportArchiveCmd.Flags().StringVar(&exportOutFile, "out", "", "output file (default: stdout)")
+	bindLegacyOutFileShorthand(projectExportArchiveCmd, &exportLegacyOut)
 	projectImportCmd.Flags().StringVarP(&importInFile, "in", "i", "", "input tarball (default: stdin)")
 	projectImportCmd.Flags().StringVar(&importPolicy, "policy", "error",
 		"conflict handling: error | rename | overwrite")

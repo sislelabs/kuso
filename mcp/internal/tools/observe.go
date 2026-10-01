@@ -26,7 +26,7 @@ type logsArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
 	Env     string `json:"env,omitempty" jsonschema:"environment to tail; empty = production"`
-	Lines   int    `json:"lines,omitempty" jsonschema:"number of lines to tail; default 200, server caps at 2000"`
+	Lines   int    `json:"lines,omitempty" jsonschema:"number of lines to return: the newest N across all pods (each pod's last N merged by timestamp); default 200, server caps at 2000"`
 }
 
 // logLine mirrors the server's per-line wire shape: the logs endpoint

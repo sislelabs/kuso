@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# kuso pre-push validation — runs the same checks that used to live in
-# .github/workflows/ci.yml, locally, before a push leaves your machine.
-# CI was removed from GitHub (no push/PR runners); this hook is now the
-# gate. Install it with `make hooks-install` (sets core.hooksPath to
-# hack/hooks so this file is the repo's pre-push hook).
+# kuso pre-push validation — a fast local pre-check before a push leaves
+# your machine. The merge gate is GitHub Actions (.github/workflows/test.yml),
+# which also runs the Postgres-backed tests with -race; this hook catches
+# the cheap failures earlier. Install it with `make hooks-install` (sets
+# core.hooksPath to hack/hooks so this file is the repo's pre-push hook).
 #
 # Path-aware, exactly like the old CI `changes` job: it only validates a
 # module when files under it are part of what you're pushing, so a
@@ -64,8 +64,7 @@ step() { # step <name> <cmd...>
   fi
 }
 
-# A module's CI also re-ran when ci.yml itself changed; there's no ci.yml
-# anymore, so path membership is the sole trigger.
+# Path membership is the sole trigger (test.yml re-runs everything anyway).
 
 # ---- Go modules: vet + build + test ----------------------------------
 go_module() { # go_module <dir>
@@ -81,13 +80,22 @@ fi
 if touched 'mcp/'; then
   step "mcp (go vet/build/test)" go_module mcp
 fi
+if touched 'compose/'; then
+  step "compose (go vet/build/test)" go_module compose
+fi
+if touched 'coolify/'; then
+  step "coolify (go vet/build/test)" go_module coolify
+fi
+if touched 'api/'; then
+  step "api/apiv1 (go vet/build/test)" go_module api/apiv1
+fi
 
 # ---- web: typecheck + lint (+ build only in FULL mode) ---------------
 if touched 'web/' || touched 'scripts/build-frontend.sh'; then
-  step "web (tsc --noEmit)" bash -c 'cd web && npx tsc --noEmit'
-  step "web (eslint)"       bash -c 'cd web && npm run lint'
+  step "web (tsc --noEmit)" bash -c 'cd web && pnpm exec tsc --noEmit'
+  step "web (eslint)"       bash -c 'cd web && pnpm lint'
   if [[ "${KUSO_HOOK_FULL:-}" == "1" ]]; then
-    step "web (next build)" bash -c 'cd web && npm run build'
+    step "web (next build)" bash -c 'cd web && pnpm build'
   else
     echo "    (skipping 'next build' — set KUSO_HOOK_FULL=1 to include it)"
   fi

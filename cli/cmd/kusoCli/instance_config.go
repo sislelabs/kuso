@@ -183,7 +183,7 @@ var buildSettingsCmd = &cobra.Command{
 
 var buildSettingsGetCmd = &cobra.Command{
 	Use:   "get",
-	Short: "Show build settings (concurrency + kaniko resources + registry override)",
+	Short: "Show build settings (concurrency + build resources + registry override)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSettingsGet("/api/admin/settings/build")

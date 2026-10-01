@@ -33,7 +33,7 @@ The service is served at `web.shop.example.com`: each service gets `<service>.<p
 - **Managed addons with batteries.** Postgres (optionally HA via CloudNativePG — 3 replicas, ~30s failover), Redis/Valkey, MongoDB, RabbitMQ, ClickHouse, Redpanda (Kafka API), NATS, S3-compatible storage, Meilisearch, Mailpit. Connection secrets auto-inject; per-service subscriptions keep DB creds out of your public frontend; scheduled and on-demand backups included.
 - **A marketplace for the usual suspects.** `kuso marketplace deploy n8n` — Gitea, Metabase, n8n, Plausible, Umami, Uptime Kuma, Vaultwarden, rendered into ordinary kuso services you manage like everything else.
 - **Self-healing, not just self-hosting.** `kuso doctor` diagnoses first-run setup (DNS, TLS, webhook delivery). `kuso health` flags stuck helm releases and drift cluster-wide, with one-command remediation. Failed builds come back with a classified cause and a suggested fix (`kuso build why`), not a raw log dump.
-- **Zero-downtime self-update.** Each instance checks GitHub for new releases. When one is out, Settings → Updates shows an Update button, and `kuso upgrade` does the same from the CLI: an in-cluster Job swaps the images, rolls the operator and applies CRDs. Nothing updates until you click or run it. No ssh from your laptop.
+- **Zero-downtime self-update.** Each instance checks GitHub for new releases. When one is out, Settings → Updates shows an Update button, and `kuso upgrade` does the same from the CLI (it upgrades the server, not the CLI, and asks before starting): an in-cluster Job swaps the images, rolls the operator and applies CRDs. Nothing updates until you click or run it. No ssh from your laptop.
 - **Built to scale up.** Postgres-backed, stateless, multi-replica control plane. Multi-node clusters with token-based bootstrap (NAT-friendly), label-driven placement, auto-cordon on node failure. Point the control plane at managed Postgres when you outgrow the bundled one.
 - **Honest about what's missing.** Multi-region active/active, edge functions, a WAF, a Grafana clone — not on the roadmap. Cloudflare and managed Postgres already do those well. kuso does the control plane and the cluster, and does them properly.
 
@@ -105,7 +105,7 @@ Everything supports `--help` with examples and `-o json` for scripting.
 ## How a deploy flows
 
 ```
-git push → GitHub webhook → KusoBuild CR → kaniko build → image pushed
+git push → GitHub webhook → KusoBuild CR → buildkit build → image pushed
    → release hook Job (your migrations — failure blocks promotion)
    → env image tag patched → operator reconciles
    → rolling update (maxSurge 1, maxUnavailable 0) → zero downtime

@@ -134,6 +134,14 @@ func (c *Client) DeleteJSON(ctx context.Context, path string) error {
 	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
 }
 
+// PutJSON issues a PUT with a JSON body. Refused in read-only mode.
+func (c *Client) PutJSON(ctx context.Context, path string, body, out any) error {
+	if c.cfg.ReadOnly {
+		return fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodPut, path)
+	}
+	return c.doJSON(ctx, http.MethodPut, path, body, out)
+}
+
 // PatchJSON issues a PATCH with a JSON body. Refused in read-only mode.
 func (c *Client) PatchJSON(ctx context.Context, path string, body, out any) error {
 	if c.cfg.ReadOnly {

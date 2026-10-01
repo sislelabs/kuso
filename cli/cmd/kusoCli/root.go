@@ -91,6 +91,18 @@ Use 'kuso build trigger' only for an out-of-band rebuild.
 // Execute is the entry point called by cmd/main.go. Wires up shared
 // state, registers commands (which is done via init() in their own
 // files), and hands off to cobra.
+// resolveAPIURL is the one place the target instance is picked, so
+// doctor and every other command agree. KUSO_API_URL wins, then KUSO_URL
+// (the name the MCP server reads), then the saved instance.
+func resolveAPIURL() string {
+	for _, k := range []string{"KUSO_API_URL", "KUSO_URL"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return currentInstance.ApiUrl
+}
+
 func Execute() {
 	rootCmd.CompletionOptions.HiddenDefaultCmd = false
 	rootCmd.AddCommand(version.CliCommand())
@@ -122,10 +134,7 @@ func Execute() {
 	// KUSO_API_URL likewise lets a headless caller point at an instance
 	// without a prior `kuso remote add`; the saved instance still wins
 	// when the env var is unset.
-	apiURL := currentInstance.ApiUrl
-	if v := strings.TrimSpace(os.Getenv("KUSO_API_URL")); v != "" {
-		apiURL = v
-	}
+	apiURL := resolveAPIURL()
 	api.Init(apiURL, tok)
 	version.ServerVersion = func() (string, error) {
 		if tok == "" {

@@ -19,6 +19,14 @@ func (k *KusoClient) Raw(method, path string, body []byte, headers map[string]st
 	req := k.client
 	for key, val := range headers {
 		req.SetHeader(key, val)
+		// resty writes the stored token over any Authorization header,
+		// so `-H 'Authorization: …'` was silently ignored. Drop the
+		// stored token for this call when the caller supplies one.
+		if strings.EqualFold(key, "Authorization") {
+			saved := req.Token
+			req.Token = ""
+			defer func() { req.Token = saved; req.Header.Del("Authorization") }()
+		}
 	}
 	if body != nil {
 		// Default content type for a JSON passthrough; a caller-supplied

@@ -21,6 +21,7 @@ var (
 	upgradeRefresh bool
 	upgradeForce   bool
 	upgradeVersion string
+	upgradeYes     bool
 )
 
 // versionRe matches vX.Y.Z, optionally with a dash-suffix. Used to
@@ -30,8 +31,13 @@ var versionRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([-A-Za-z0-9.]+)?$`)
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "Self-update the kuso server to the latest release",
-	Long: `Self-update the kuso server.
+	Short: "Upgrade the kuso SERVER (control plane) to the latest release",
+	Long: `Upgrade the kuso server this CLI is logged in to. This does NOT update
+the kuso CLI binary itself; re-run the install-cli.sh one-liner for that.
+
+The server rolls to the new image (a short API outage) and the release's
+CRDs and platform manifests are applied. It asks for confirmation first;
+pass --yes to skip the prompt (required when stdin is not a terminal).
 
 Reads /api/system/version to find the latest GitHub release, then
 launches a kube Job that swaps the server image. Without --force,
@@ -42,7 +48,8 @@ re-running the same release, rolling back, or pulling a hotfix
 that hasn't propagated to "latest" yet. Pinned upgrades skip the
 "needsUpdate" gate (the user explicitly asked for that tag).`,
 	Example: `  kuso upgrade --check               # just print version state
-  kuso upgrade                       # update to latest
+  kuso upgrade                       # update the server to latest (asks first)
+  kuso upgrade --yes                 # same, without the prompt
   kuso upgrade --version v0.7.13     # pin to a specific tag
   kuso upgrade --force               # re-run even if already current`,
 	Args: cobra.NoArgs,
@@ -98,6 +105,16 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		if upgradeVersion != "" && upgradeVersion == v.Current && !upgradeForce {
 			fmt.Printf("Already on %s.\n", upgradeVersion)
 			return nil
+		}
+
+		target := upgradeVersion
+		if target == "" {
+			target = v.Latest
+		}
+		if err := confirmDestructive(upgradeYes, fmt.Sprintf(
+			"Upgrade the kuso SERVER at %s from %s to %s? The control plane restarts.",
+			api.BaseURL(), v.Current, target)); err != nil {
+			return err
 		}
 
 		// Step 2: kick the Job. Empty version = "latest" path on the
@@ -204,4 +221,5 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeRefresh, "refresh", false, "force a synchronous GitHub poll instead of using the 6h-cached value")
 	upgradeCmd.Flags().BoolVar(&upgradeForce, "force", false, "trigger update even if already current")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
+	upgradeCmd.Flags().BoolVarP(&upgradeYes, "yes", "y", false, "skip the confirmation prompt")
 }

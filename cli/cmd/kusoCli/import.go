@@ -66,6 +66,10 @@ data, users and init scripts are NOT migrated — override with
   kuso import compose docker-compose.yml --project shop --apply`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		dest, err := importDestFile()
+		if err != nil {
+			return err
+		}
 		path := args[0]
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -97,7 +101,7 @@ data, users and init scripts are NOT migrated — override with
 			fmt.Fprintln(os.Stderr)
 		}
 
-		if dest := importDestFile(); dest != "" {
+		if dest != "" {
 			if err := os.WriteFile(dest, yamlOut, 0o644); err != nil {
 				return fmt.Errorf("write %s: %w", dest, err)
 			}
@@ -196,10 +200,14 @@ func init() {
 }
 
 // importDestFile returns the --file path, falling back to the
-// deprecated --out/-o.
-func importDestFile() string {
+// deprecated --out/-o. A format-looking -o value (`-o json`) is refused
+// rather than written to a file of that name.
+func importDestFile() (string, error) {
 	if importFile != "" {
-		return importFile
+		return importFile, nil
 	}
-	return importOut
+	if err := rejectFormatAsPath(importOut, "--file"); err != nil {
+		return "", err
+	}
+	return importOut, nil
 }

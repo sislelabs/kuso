@@ -17,6 +17,7 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | Connect to addon DB              | `kuso get addons <project> -o json` then read DATABASE_URL               |
 | Trigger a build                  | `kuso build trigger <project> <service>`                                 |
 | Open a shell in a pod            | `kuso shell <project> <service>`                                         |
+| Kube events / project usage     | `kuso get events [--namespace <ns>]` · `kuso project metrics <project>`  |
 | Pods for a service               | `kuso service pods <project> <service>` (or `kuso get pods …`)           |
 | Recent service errors            | `kuso service errors <project> <service>`                                |
 | Query an addon DB                | `kuso db sql <project> <addon> "SELECT …"` · `kuso db tables …`          |
@@ -45,7 +46,7 @@ even before it has a dedicated command (gh-api style: `kuso api GET
 projects`, `kuso api POST .../builds -f branch=main`, `--jq` to filter).
 
 **Fall back to `kubectl` only when**:
-- The CLI genuinely has no equivalent: `kubectl logs` of a non-kuso pod, helm-operator state, raw CRD yaml for operator reconcile debugging, or **kube events** (no kuso endpoint exists — verified).
+- The CLI genuinely has no equivalent: `kubectl logs` of a non-kuso pod, helm-operator state, raw CRD yaml for operator reconcile debugging, (kube events are NOT a reason: use `kuso get events [--namespace <ns>]`).
 - You're debugging the CLI itself.
 - You're inspecting cluster-level state (nodes beyond `kuso node list`, ClusterRoles, namespaces, storageclasses) that has no kuso-CLI equivalent.
 
@@ -55,6 +56,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 
 - **Per-machine test target lives in `agent-target.local.json` (gitignored).** Read this on session start when the user asks you to smoke-test, redeploy, or otherwise interact with a live kuso instance. It carries deploy host + SSH key path + CLI binary path + a disposable project/service to poke at. Don't prompt the user for these values when the file exists. Schema lives in `agent-target.example.json` (committed).
 - Confirm `dist/kuso-darwin-arm64` is up to date before driving it. After server-go changes that affect the API surface, also rebuild the CLI: `cd cli && go build -o /tmp/kuso ./cmd`.
+- **Test gate:** GitHub Actions `test` (`.github/workflows/test.yml`) is the merge/release gate; it runs every go.work module with `-race -p 1` and `KUSO_TEST_PG_DSN`. `make test` runs all Go modules without the DB; `make test-db` is the local CI equivalent (starts a throwaway postgres; ~20 test files skip without the DSN, and `-p 1` is required because packages share one DB). The `hack/hooks/pre-push` hook is only a fast local pre-check.
 - Don't mix CLI invocations with raw kubectl in the same diagnostic — pick one and stay there. Mixing buries the actual signal in tooling noise.
 - For e2e validation, the CLI is the contract. If it lies (wrong status, missing fields, decode error), that's a real bug to fix — not something to work around with a kubectl one-liner.
 - **Before editing a running CR's spec, consult `docs/EDIT_SAFETY.md`.** It's the per-field contract for which fields are live-editable, which trigger rolling restarts, which hit Let's Encrypt rate limits, and which orphan data on removal. Use it to reason about blast radius before suggesting destructive edits to the user.
@@ -65,17 +67,17 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - `server-go/` — Go HTTP API (`internal/http/handlers/*`), kube client (`internal/kube/`), 50+ domain packages under `internal/` (`projects`, `addons`, `builds`+`buildcontroller`, `secrets`, `notify`, `nodewatch`, `nodemetrics`, `nodejoin`, `spec`, `status`, `marketplace`, `crons`+`runs`, `previewdb`, `pkgupdates`, `scaledown`, `alerts`, `incidents`, `remediate`, `audit`, `updater`, `imagerelease`, `leader`, …). `ls server-go/internal` for the full set — don't assume this list is exhaustive.
 - `web/` — Next.js 16 App Router with `output: "export"`. Static bundle gets embedded into the server-go binary (`server-go/internal/web/dist/`).
 - `operator/` — operator-sdk helm-operator. CRDs in `operator/config/crd/bases/`, helm charts in `operator/helm-charts/{kuso,kusoproject,kusoservice,kusoenvironment,kusoaddon,kusobuild,kusocron,kusorun}/`.
-- `cli/` — single binary (`./cmd`) entry point + `cmd/kusoCli/` cobra commands + `pkg/kusoApi/` resty client + `pkg/coolify/` migration importer.
+- `cli/` — single binary (`./cmd`) entry point + `cmd/kusoCli/` cobra commands + `pkg/kusoApi/` resty client.
 - `deploy/` — kube manifests applied during install (`server-go.yaml`, `prometheus.yaml`, `cluster-issuer.yaml`).
-- `api/` typed API surface · `mcp/` MCP server · `compose/` docker-compose importer · `scripts/` dev-ops helpers · `skills/` the published Claude Code skill (`skills/kuso/SKILL.md`, installed into consumer repos via `install.sh`).
-- `hack/release.sh` — `make ship VERSION=vX.Y.Z` does version bump + web build + cross-platform docker push to ghcr + cuts a GH release + writes `release.json`. Live instances poll the GH releases endpoint and self-update via the in-built updater (no ssh from the laptop). `make local-roll VERSION=vX.Y.Z` is the dev-only escape hatch that ssh-rolls a single test cluster — almost no one should use it. The `make release-roll` target is deprecated and exits non-zero with a helpful message; replace any reference to it with `make ship`.
+- `api/` typed API surface · `mcp/` MCP server · `compose/` docker-compose importer · `coolify/` Coolify migration importer (own module) · `scripts/` dev-ops helpers · `skills/` the published Claude Code skill (`skills/kuso/SKILL.md`, installed into consumer repos via `install.sh`).
+- `hack/release.sh` — `make ship VERSION=vX.Y.Z` does version bump + web build + cross-platform docker push to ghcr + cuts a GH release + writes `release.json`. Live instances poll the GH releases endpoint and offer the update; it rolls when someone runs `kuso upgrade` or clicks Update (no ssh from the laptop). `make local-roll VERSION=vX.Y.Z` is the dev-only escape hatch that ssh-rolls a single test cluster — almost no one should use it. The `make release-roll` target is deprecated and exits non-zero with a helpful message; replace any reference to it with `make ship`.
 
 **CRD model:**
 - `KusoProject` — top-level grouping. `spec.{defaultRepo, baseDomain, github, previews, placement}`.
 - `KusoService` — one application within a project. `spec.{repo, runtime, port, domains, envVars, scale, sleep, placement, volumes, previews, runtime-specific blocks (static/buildpacks)}`. `runtime ∈ {dockerfile, nixpacks, buildpacks, static}`.
 - `KusoEnvironment` — one deployed instance of a service (production / preview-pr-N). Carries the resolved placement + envFromSecrets + image tag.
 - `KusoAddon` — managed datastore. `spec.{kind, version, size, ha, storageSize, password, database, backup, placement}`. Helm chart renders to a StatefulSet + a `<name>-conn` Secret consumed by every env in the project via `envFromSecrets`.
-- `KusoBuild` — kaniko/buildpacks build pod that produces an image and patches the matching env CR. Reconciled by the server-go `buildcontroller`, NOT the helm-operator.
+- `KusoBuild` — build Job (a `buildctl` client against the shared `kuso-buildkitd` daemon; buildpacks builds compile in-pod) that produces an image and patches the matching env CR. Reconciled by the server-go `buildcontroller`, NOT the helm-operator.
 - `KusoCron` — scheduled job in a project (cron expr + container spec) → renders a k8s CronJob. `KusoRun` — a one-off/triggered job execution (imperative counterpart to KusoCron).
 
 **Patterns to keep:**
@@ -87,13 +89,14 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - Node failure detection (`nodewatch.Watcher`) auto-cordons nodes that have been NotReady > 5 min, fires `node.unreachable` notify event, auto-uncordons + fires `node.recovered` on recovery (only uncordons if WE cordoned, marker = `kuso.sislelabs.com/cordoned-by-nodewatch` annotation).
 
 **Shared primitives:**
-- `web/src/components/ui/popover.tsx` — base-ui Popover, used everywhere. The `dropdown-menu.tsx` primitive exists but DON'T USE IT — base-ui Menu has a portal/hydration edge case in our static export that throws "This page couldn't load" on first mount. UserMenu and the bell-icon feed both use Popover instead. ServersPopover is the canonical example.
-- `internal/projects.PlacementMatchesNode` (in `kube/types.go`) — canonical AND-of-labels matcher; used by service + addon placement validation.
+- `web/src/components/ui/popover.tsx` — base-ui Popover, used everywhere. Don't (re)introduce a base-ui Menu / `dropdown-menu.tsx` primitive — base-ui Menu has a portal/hydration edge case in our static export that throws "This page couldn't load" on first mount. UserMenu and the bell-icon feed both use Popover instead. ServersPopover is the canonical example.
+- `placement.Matches` (in `server-go/internal/placement/placement.go`) — canonical AND-of-labels matcher; used by service + addon placement validation.
 - The `kuso.sislelabs.com/<key>` label prefix is the user-visible label namespace. Helm charts emit `nodeSelector: kuso.sislelabs.com/<key>: <value>`, the labels editor reconciles it. Bare keys without prefix are kuso-internal (e.g. `kuso.sislelabs.com/project`, `…/service`, `…/addon-kind`).
 
 **Release flow:**
-- Bump `server-go/internal/version/VERSION`, `deploy/server-go.yaml` image tag, `hack/install.sh` `KUSO_SERVER_VERSION` AND `KUSO_VERSION` defaults. Then `make ship VERSION=vX.Y.Z` (release.sh handles all four version-string rewrites + the web bundle build + docker push + GH release). Live instances pick up the new release.json on the next updater tick and roll themselves; you do NOT ssh from the laptop. CRD changes still need an explicit `kubectl apply -f operator/config/crd/bases/...yaml` via ssh — the auto-updater only flips image tags, not schemas.
-- Operator helm-operator picks up CR spec changes via watch + 3m reconcile (watches Project/Service/Environment/Addon/Cron/Run — NOT Build). Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
+- Don't hand-bump versions. `make ship VERSION=vX.Y.Z` (run `make dry-run VERSION=…` first) rewrites `server-go/internal/version/VERSION`, `deploy/server-go.yaml`, `hack/install.sh`, the CLI version files and the SKILL.md version line, then builds the web bundle, pushes images and cuts the GH release. `hack/install.sh`'s `KUSO_VERSION` is the **operator** image pin: release.sh resets it to the last version that actually has an operator image, so it legitimately lags the server version.
+- Instances see the new release.json on the next updater tick and roll when someone runs `kuso upgrade` / clicks Update (`kuso api POST system/version/refresh` + `POST system/update`). The updater Job (`build/updater/entrypoint.sh`) server-side-dry-runs then applies the release's `crds.yaml`, then applies `upgrade-manifests.yaml` (RBAC, ServiceAccounts, NetworkPolicies, PDBs) **best-effort**: the kuso-server ServiceAccount can't mutate ClusterRoles/RoleBindings, so new RBAC still has to be applied by hand over ssh. CRD changes must stay additive — release.sh's CRD guard fails the ship otherwise; `--allow-breaking-crds` only after the manual migration was applied over ssh.
+- Operator helm-operator picks up CR spec changes via watch + periodic reconcile (`operator/watches.yaml`: Project/Cron 3m, Service/Environment 10m, Addon 30m, Run 1h — NOT Build). KusoAddon uses `dryRunOption: server` (client dry-run can't `lookup`, which made every addon release no-op-upgrade each period). The per-watch `maxConcurrentReconciles` keys are ignored by helm-operator v1.42; concurrency comes from the operator's `--max-concurrent-reconciles` flag (default NumCPU). Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
 
 ## Scope guardrails (resist scope creep)
 
@@ -120,6 +123,6 @@ Pattern, in order:
 8. Add the Go types + resty methods to `cli/pkg/kusoApi/<name>.go`. Add a cobra subcommand at `cli/cmd/kusoCli/<name>.go`.
 9. Add the API client + hooks to `web/src/features/<name>/{api,hooks}.ts`. Re-export from `web/src/features/<name>/index.ts`.
 10. Build the UI section/tab/dialog under `web/src/components/<name>/` or as a tab on the existing service overlay.
-11. Apply the new CRD to the live cluster: `scp` it then `ssh … "kubectl apply -f /tmp/<name>.yaml"`. The release auto-updater (`make ship`, then instances pull) only flips image tags — it does NOT apply CRD schema changes.
+11. A NEW CRD (or an additive schema change) ships in the release's `crds.yaml` and the updater applies it on upgrade. To try it on the test cluster before a release: `scp` it then `ssh … "kubectl apply -f /tmp/<name>.yaml"`. Any new ClusterRole rules it needs must be applied over ssh (the updater can't grant RBAC).
 
 When in doubt, mirror how addons or environments do it. They're the most complete examples of this pattern in the codebase.

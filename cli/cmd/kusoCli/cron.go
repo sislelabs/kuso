@@ -138,7 +138,16 @@ var cronListCmd = &cobra.Command{
 var cronAddCommand = &cobra.Command{
 	Use:   "add <project> <service>",
 	Short: "Schedule a new cron",
-	Args:  cobra.ExactArgs(2),
+	Long: `Schedule a new cron that runs on the service's image.
+
+--schedule is a standard 5-field cron expression (minute hour
+day-of-month month day-of-week) with *, a-b ranges, a,b lists and */n
+steps; month and day-of-week also take names (JAN-DEC, SUN-SAT, any
+case, e.g. '0 9 * * MON-FRI'). The macros @yearly, @annually, @monthly,
+@weekly, @daily, @midnight and @hourly are accepted. Not accepted:
+@every/@reboot, the Quartz '?', a seconds field, reversed ranges (5-1)
+and a step without a base ('/5').`,
+	Args: cobra.ExactArgs(2),
 	Example: `  kuso cron add myproj api --name daily-cleanup --schedule '0 3 * * *' --cmd 'rails runner Cleanup.run'
   kuso cron add myproj api --name every-15min --schedule '*/15 * * * *' --cmd 'sh -c "echo tick"'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -456,7 +465,7 @@ func init() {
 	cronListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	cronCmd.AddCommand(cronAddCommand)
 	cronAddCommand.Flags().StringVar(&cronAddName, "name", "", "cron name (required)")
-	cronAddCommand.Flags().StringVar(&cronAddSchedule, "schedule", "", "cron expression — '*/15 * * * *' (required)")
+	cronAddCommand.Flags().StringVar(&cronAddSchedule, "schedule", "", "5-field cron or @daily-style macro, e.g. '*/15 * * * *', '0 9 * * MON-FRI' (required; see 'kuso cron add --help')")
 	cronAddCommand.Flags().StringVar(&cronAddCmdString, "cmd", "", "command argv (shell-quoted; e.g. 'sh -c \"echo tick\"') (required)")
 	cronAddCommand.Flags().BoolVar(&cronAddSuspend, "suspend", false, "create suspended")
 	cronAddCommand.Flags().BoolVar(&cronAddPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
@@ -464,7 +473,7 @@ func init() {
 	cronDeleteCmd.Flags().BoolVarP(&cronDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	cronCmd.AddCommand(cronDeleteCmd)
 	cronCmd.AddCommand(cronSyncCmd)
-	cronEditServiceCmd.Flags().StringVar(&cronSetSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
+	cronEditServiceCmd.Flags().StringVar(&cronSetSchedule, "schedule", "", "5-field cron or @daily-style macro, e.g. '*/15 * * * *', '0 9 * * MON-FRI' (see 'kuso cron add --help')")
 	cronEditServiceCmd.Flags().BoolVar(&cronSetSuspend, "suspend", false, "pause the cron (schedule stays saved)")
 	cronEditServiceCmd.Flags().BoolVar(&cronSetPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
 	cronCmd.AddCommand(cronEditServiceCmd)
@@ -485,7 +494,7 @@ func init() {
 		// shipped that day; a pinned tag stays safe because the image
 		// sweep treats cron-referenced images as in-use.
 		c.Flags().BoolVar(&pCronPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
-		c.Flags().StringVar(&pCronSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
+		c.Flags().StringVar(&pCronSchedule, "schedule", "", "5-field cron or @daily-style macro, e.g. '*/15 * * * *', '0 9 * * MON-FRI' (see 'kuso cron add --help')")
 		c.Flags().StringVar(&pCronURL, "url", "", "target URL (kind=http only)")
 		c.Flags().StringVar(&pCronImage, "image", "", "container image repo (kind=command only)")
 		c.Flags().StringVar(&pCronImageTag, "image-tag", "latest", "container image tag")

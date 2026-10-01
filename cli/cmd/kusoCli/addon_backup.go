@@ -323,18 +323,25 @@ This requires admin S3 credentials configured at /settings/backups
 	},
 }
 
+var addonBackupUnscheduleYes bool
+
 var addonBackupUnscheduleCmd = &cobra.Command{
 	Use:     "unschedule <project> <addon>",
 	Aliases: []string{"disable"},
 	Short:   "Disable scheduled backups for an addon (keeps existing S3 objects)",
 	Long: `Disable scheduled backups for an addon. Same as
 kuso addon-backup schedule <project> <addon> --schedule "". Existing S3
-objects are kept.`,
+objects are kept, but no new backups are taken, so it asks for
+confirmation; pass --yes to skip it.`,
 	Example: "  kuso addon-backup unschedule myproj db",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(addonBackupUnscheduleYes, fmt.Sprintf(
+			"Stop scheduled backups of %s/%s? No new backups are taken until you re-schedule.", args[0], args[1])); err != nil {
+			return err
 		}
 		empty := ""
 		req := kusoApi.UpdateAddonRequest{
@@ -368,4 +375,5 @@ func init() {
 	addonBackupScheduleCmd.Flags().IntVar(&addonBackupRetentionDays, "retention", 14, "delete S3 objects older than N days; 0 = keep forever")
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupBucket, "bucket", "", "override the instance-wide backup bucket for this addon; empty clears")
 	addonBackupCmd.AddCommand(addonBackupUnscheduleCmd)
+	addonBackupUnscheduleCmd.Flags().BoolVarP(&addonBackupUnscheduleYes, "yes", "y", false, "skip the confirmation prompt")
 }

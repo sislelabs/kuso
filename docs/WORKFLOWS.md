@@ -318,7 +318,7 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 
 ### Background poller
 - Every 30s by default (disable with `KUSO_BUILD_POLLER_DISABLED=true`).
-- Reads the kaniko Job for each build whose status.phase isn't
+- Reads the build Job for each build whose status.phase isn't
   succeeded/failed. JobComplete=True → mark succeeded + patch the
   production env's spec.image with the new tag. JobFailed=True →
   mark failed.

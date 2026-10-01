@@ -1,4 +1,4 @@
-.PHONY: help ship roll dry-run web typecheck test
+.PHONY: help ship roll dry-run web typecheck test test-db
 
 # Repository helpers. The release flow lives in hack/release.sh — the
 # Makefile is just an ergonomic shim so common invocations are one
@@ -32,7 +32,9 @@ help:
 	@echo "  DEV:"
 	@echo "  make typecheck    # tsc on web/"
 	@echo "  make web          # pnpm --dir web build"
-	@echo "  make test         # go test ./... in server-go"
+	@echo "  make test         # go test ./... in every go.work module"
+	@echo "  make test-db      # same, plus the Postgres-backed tests (-race -p 1,"
+	@echo "                    # throwaway postgres:16-alpine via docker) — what CI runs"
 	@echo ""
 	@echo "  Local-only escape hatch (you almost never want this):"
 	@echo "  make local-roll VERSION=vX.Y.Z"
@@ -69,7 +71,7 @@ local-roll:
 	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_SKIP_BUILD=1 ./hack/release.sh $(VERSION)
 
 # Deprecated targets — they used to ssh into a cluster as part of
-# release. That's now `make local-roll` only. Removing in v0.8.
+# release. That's now `make local-roll` only.
 .PHONY: release release-roll release-roll-commit roll
 release release-roll release-roll-commit roll:
 	@echo "==> 'make $@' is deprecated." >&2
@@ -83,8 +85,36 @@ web:
 typecheck:
 	@cd web && pnpm typecheck
 
+# Every go.work module (server-go, cli, mcp, compose, coolify, api/apiv1),
+# read from go.work the same way .github/workflows/test.yml does.
 test:
-	@cd server-go && go test ./...
+	@set -e; for m in $$(go list -m -f '{{.Dir}}'); do \
+		echo "==> go test $$m"; (cd "$$m" && go test ./...); \
+	done
+
+# test-db: the CI-equivalent run. ~20 test files t.Skip() without
+# KUSO_TEST_PG_DSN (repository layer, migrations, rate limiter), so
+# `make test` alone never exercises them. -p 1 is required: the packages
+# share one database and truncate tables in t.Cleanup. The container is
+# removed on exit, pass or fail.
+TEST_PG_PORT ?= 54329
+TEST_PG_CONTAINER ?= kuso-test-pg
+test-db:
+	@set -e; \
+	docker rm -f $(TEST_PG_CONTAINER) >/dev/null 2>&1 || true; \
+	trap 'docker rm -f $(TEST_PG_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
+	docker run -d --name $(TEST_PG_CONTAINER) -p $(TEST_PG_PORT):5432 \
+		-e POSTGRES_USER=kuso -e POSTGRES_PASSWORD=kuso -e POSTGRES_DB=kuso_test \
+		postgres:16-alpine >/dev/null; \
+	for i in $$(seq 1 30); do \
+		docker exec $(TEST_PG_CONTAINER) pg_isready -h 127.0.0.1 -U kuso -d kuso_test >/dev/null 2>&1 && break; \
+		[ $$i -eq 30 ] && { echo "postgres never became ready" >&2; exit 1; }; \
+		sleep 1; \
+	done; \
+	export KUSO_TEST_PG_DSN="postgres://kuso:kuso@localhost:$(TEST_PG_PORT)/kuso_test?sslmode=disable"; \
+	for m in $$(go list -m -f '{{.Dir}}'); do \
+		echo "==> go test -race -p 1 $$m"; (cd "$$m" && go test -race -p 1 ./...); \
+	done
 
 # verify: lightweight CI gate. Runs typechecks + tests + a CLI/API
 # parity grep that catches new HTTP routes added without a matching
@@ -97,8 +127,8 @@ verify-parity:
 	@bash hack/verify-parity.sh
 
 # hooks-install points git at hack/hooks/ for its hooks (currently just
-# pre-push). CI was removed from GitHub Actions — validation now runs
-# locally on push via hack/hooks/pre-push. Run this once per clone.
+# pre-push). The merge gate is GitHub Actions (.github/workflows/test.yml);
+# the pre-push hook is a fast local pre-check. Run this once per clone.
 .PHONY: hooks-install verify-ci
 hooks-install:
 	@git config core.hooksPath hack/hooks

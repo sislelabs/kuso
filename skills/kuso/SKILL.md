@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.23.1**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.27.7**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
@@ -28,7 +28,7 @@ This skill is current to **v0.23.1**. Run `kuso version` to confirm what's on th
 - **Service** = one deployable app inside a project. Has a runtime, a port, and env vars.
 - **Environment** = one running instance of a service. Each service auto-gets a `production` env. PR previews AND long-lived named envs (`staging`, `qa`) are extra envs. A named env **tracks a git branch** — pushes to that branch auto-build+deploy it (v0.18.120+). See "Persistent environments".
 - **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. Which addons a service gets is its `subscribedAddons` list. A service with no list (unset) mounts every addon, including ones added later. A service with an explicit list mounts only those addons, so a newly added addon does NOT reach it until you run `kuso project addon subscribe <p> <svc> <addon>`. A new service starts unset, but the next kuso-server restart (every upgrade is one) writes the list out as the addons that existed then. If `DATABASE_URL` is missing after `kuso project addon add`, check `subscribedAddons` in `kuso get services <p> -o json` and subscribe. See "Subscriptions".
-- **Build** = a kaniko Job that produces an image and patches the env's `image.tag`. One build per `(service, ref)`. Helm-operator rolls the new pod.
+- **Build** = a Job (rendered by kuso-server's build controller) that sends the build to the shared `kuso-buildkitd` daemon, produces an image and patches the env's `image.tag`. One build per `(service, ref)`. Helm-operator rolls the new pod.
 - **Deploy = push.** kuso auto-deploys on `git push` to a branch some env tracks (production tracks the service default, usually `main`): the GitHub webhook fires a build, which promotes and rolls the new pod with zero manual steps. **A merge to `main` is already a production deploy — you do NOT run anything to ship it.** `kuso build trigger` / `kuso redeploy` are only for *out-of-band* rebuilds (rebuild without a new commit, deploy a non-tracked ref, re-run after a transient failure) — not part of the normal ship flow.
 - **Release hook** (v0.16+) = an optional Job that runs **before** the new image is promoted. Heroku-style migration phase. Set via `spec.release.command`.
 - **kuso.yml** = optional config-as-code at repo root. **See "Config-as-code caveats" below before using `kuso apply`.**
@@ -56,7 +56,7 @@ This inconsistency is real. When you get `Error: accepts N arg(s), received M`, 
 # Verify session — token, DNS, server reachability, auth, GitHub webhook health.
 kuso doctor
 
-# If doctor fails on token: log in.
+# If doctor fails on token: log in. (`kuso login https://kuso.<your-domain>` works too.)
 kuso login --api https://kuso.<your-domain> --token <pat>
 ```
 
@@ -146,7 +146,7 @@ kuso project service add papelito web \
 kuso project service add papelito web \
   --runtime dockerfile --path . --dockerfile apps/web/Dockerfile.dev --port 3000
 
-# 3b. OR: service from a pre-built registry image (no kaniko build)
+# 3b. OR: service from a pre-built registry image (no build)
 #     --image-repo + --image-tag are SEPARATE; don't put X:Y in --image-repo
 kuso project service add papelito web \
   --runtime image \
@@ -211,7 +211,7 @@ kuso environment add papelito web staging --branch develop
 #   --addons <kinds>    which stateful kinds get their OWN per-env instance
 #   --share-addons      legacy: share production's addons instead (no isolation)
 kuso environment list papelito
-kuso environment delete papelito web-staging      # production can't be deleted
+kuso environment delete papelito papelito-web-staging   # full env name from `environment list`; production can't be deleted
 
 # Per-env extra hostnames:
 kuso environment domain add papelito web staging staging.papelito.bg
@@ -272,7 +272,7 @@ Three distinct states — don't conflate them:
 
 ### wakeOn excludePaths — keep callback paths warm
 
-ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag — kuso.yml or PATCH:
+ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag and not a kuso.yml field (the strict parser rejects it; `kuso apply` leaves it untouched) — PATCH the service:
 
 ```bash
 curl -X PATCH ... \
@@ -290,10 +290,13 @@ kuso cron add <p> <svc> --name nightly --schedule '0 3 * * *' --cmd './bin/sweep
 kuso cron add-command <p> --name sweep --schedule '0 * * * *' --image ghcr.io/org/api --image-tag v1.2.3 --cmd '/app/bin/sweep-refunds'
 kuso cron add-http <p> --name ping --schedule '*/5 * * * *' --url 'https://...'
 kuso cron sync <p> <svc> <name>       # re-resolve image/env from production after a deploy
-kuso cron edit <p> <name> --schedule '...' --suspend=false
+kuso cron edit <p> <name> --schedule '...' --suspend=false              # project crons (http / command)
+kuso cron edit-service <p> <svc> <name> --schedule '...' --suspend=false  # service crons
+# --schedule: 5-field cron (`*/15 * * * *`, names OK: `0 9 * * MON-FRI`, `0 0 1 JAN *`)
+# or @yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly. Rejected: @every, @reboot, `?`, seconds field.
 ```
 
-Crons can POST an HMAC-signed payload to a webhook when they fail — anything where silent cron failure is a revenue leak. No CLI flag yet; PATCH the cron:
+Crons can POST an HMAC-signed payload to a webhook when they fail — anything where silent cron failure is a revenue leak. No CLI flag and not a kuso.yml field; PATCH the cron:
 
 ```bash
 curl -X PATCH ... \
@@ -360,6 +363,7 @@ The user must create the source Secret with `DATABASE_URL=postgres://...` and co
 `kuso apply` reads `kuso.yml` and reconciles it against the live project. Discipline:
 
 - `--dry-run` prints the plan but doesn't write. **Always run with `--dry-run` first; eyeball every `delete` line before running without it.**
+- Deletes only happen when the file sets `prune: true`. With prune on, `kuso apply` lists what it will delete and asks first; `--yes` skips the prompt (required when not on a TTY, e.g. CI). With `prune: false` (the default) would-be deletions are only reported.
 - A misspelled addon name in `addons:` looks identical to "user wants the live addon deleted." Plan diffs are merciless.
 - (Historical: kuso servers older than the addon-scoping fix could list OTHER projects' addons in `addonsToDelete`. Current servers scope the plan to the file's project — but the dry-run discipline stays.)
 - `--rotate-secrets` re-mints `{generate:}` secrets — only when you mean it.
@@ -378,7 +382,7 @@ kuso apply                  # only after the dry-run is clean
 
 ```bash
 kuso import compose docker-compose.yml                  # dry-run: prints the report + generated kuso.yaml
-kuso import compose docker-compose.yml -o kuso.yaml      # write the kuso.yaml for review
+kuso import compose docker-compose.yml --file kuso.yaml  # write the kuso.yaml for review
 kuso import compose docker-compose.yml --apply           # create resources (auto-creates the project first)
 kuso import compose docker-compose.yml --project shop --apply
 ```
@@ -633,8 +637,9 @@ Rules that save you:
   env takes a pre-deploy Postgres snapshot automatically; for a manual one use
   the backup surface before you start.
 - **`kuso run` carries REAL production secrets** — the same `envFromSecrets` the
-  service runs with. A "quick test" here writes to live data. Point it at a
-  staging env when you're unsure.
+  service runs with. A "quick test" here writes to live data. `kuso run` has no
+  env selector — it always uses production. To test against staging, use a
+  separate staging service/project, or a read-only `kuso db sql` first.
 - **Read before you write.** `kuso db sql "SELECT count(*) …"` to confirm the row
   count you expect, then make the change, then re-check.
 - **Never paste credentials into a command.** They're already in the pod's env —
@@ -645,7 +650,7 @@ Rules that save you:
 The `${{ ... }}` must be the ENTIRE value (no `prefix-${{ ... }}-suffix`).
 
 1. **Addon key (rename/alias)** — `${{ <addon-name>.<KEY> }}` → a `secretKeyRef` into `<project>-<addon>-conn`.
-2. **Service-to-service URL** — `${{ api.URL }}` → `http://<project>-api-<env>.<ns>.svc.cluster.local:<port>` (in-cluster, resolves per-env). `${{ api.HOST }}`, `${{ api.PORT }}` for the parts. Use this for SERVER-SIDE calls (a Next.js app's `API_URL`); the browser-facing `NEXT_PUBLIC_API_URL` must stay the public https URL.
+2. **Service-to-service URL** — `${{ api.URL }}` → `http://<project>-api-<env>.<ns>.svc.cluster.local` (in-cluster, resolves per-env, **no port**: the in-cluster Service listens on 80 and forwards to the app's port). Keys: `URL` (same as `INTERNAL_URL`), `HOST`, `PORT` (always `80`, not the app's port), `PUBLIC_HOST`, `PUBLIC_URL` (`https://<public host>`, empty when the service has no ingress). Use `URL` for SERVER-SIDE calls (a Next.js app's `API_URL`); the browser-facing `NEXT_PUBLIC_API_URL` should be `PUBLIC_URL` or the literal public https URL.
 
 `kuso run` jobs resolve `${{ }}` aliases too (v0.18.116+ — on older servers a
 `DATABASE_URI: ${{ db.DATABASE_URL }}` alias was dropped in runs; if you hit
@@ -781,7 +786,7 @@ kuso health [fix <resource>]                    # cluster-wide reconcile health 
 kuso usage                                      # node/project resource + cost rollup
 
 # Logs
-kuso logs <project> <service>                   # last 200 lines
+kuso logs <project> <service>                   # newest 200 lines (--lines N: each pod's last N merged by time, newest N kept)
 kuso logs <project> <service> -f                # tail (^C to stop)
 kuso logs <project> <service> --env <env>       # non-prod env (staging, web-pr-N, ...)
 kuso logs <project> <service> --build <id>      # a build pod's logs
@@ -794,8 +799,11 @@ kuso logs search <project> [service] --q "<query>" [--since 1h] [--limit 100]
 kuso build list <project> <service>             # newest first; status = pending|running|succeeded|failed|release-failed|cancelled
 kuso build why <project> <service> [id]         # classified failure cause + suggested fix
 kuso build trigger <project> <service>          # manual rebuild of the default branch
+#   --dry-run prints what would build and creates NOTHING; --compile-only runs a
+#   real build on the shared builder but skips push + promotion.
 kuso redeploy <project> <service>               # alias; --branch <name> or --ref <sha> for a non-tracked ref
-kuso build rollback <project> <service> <id>    # re-point production at an older successful build
+kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes)
+kuso build retry-release <project> <service> <id>  # re-run a RELEASE FAILED build's hook; promotes on success
 kuso build cancel <project> <service> <id>      # kill an in-flight build
 #   (branch deletes / force-pushes auto-cancel their in-flight builds)
 
@@ -819,7 +827,7 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--domains h1,h2] [--replicas N] [--max-replicas N] [--branch b] [--path dir] \
     [--internal on|off] [--private-egress on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off]
-#   NOT settable here (kuso.yml / PATCH only): release hook, sleep.wakeOn
+#   NOT settable here: release hook (kuso.yml or PATCH), sleep.wakeOn (PATCH only)
 #   (sleep itself: `kuso project service sleep`),
 #   container command override, dockerfile path (create-time --dockerfile only).
 
@@ -829,7 +837,8 @@ kuso cron add <project> <service> --name N --schedule '*/5 * * * *' --cmd '...'
 kuso cron add-command <project> --name N --schedule '...' --image IMG --image-tag TAG --cmd '...'
 kuso cron add-http <project> --name N --schedule '...' --url 'https://...'
 kuso cron sync <project> <service> <name>       # re-resolve image/env from production
-kuso cron edit <project> <name> [--schedule ...] [--suspend ...]
+kuso cron edit <project> <name> [--schedule ...] [--suspend ...]   # project crons (http/command)
+kuso cron edit-service <project> <service> <name> [--schedule ...] # service crons
 kuso cron delete <project> <service> <name>     # kind=service
 kuso cron delete-project <project> <name>       # kind=http|command
 
@@ -840,7 +849,7 @@ kuso run <project> <service> --set-env DEBUG=1 --timeout-seconds 600 -- <cmd>  #
 kuso run cancel <project> <run>                           # kill a running one-shot
 
 # Shells + domains
-kuso shell <project> <service>                  # exec into a pod (uses local kubectl context)
+kuso shell <project> <service>                  # sh -l in a pod via the server (admin role; no kubeconfig needed)
 kuso domains add <project> <service> <host>     # add a custom domain (--no-tls for HTTP-only)
 kuso domains remove <project> <service> <host>  # alias: rm
 kuso domains list <project> <service>
@@ -865,14 +874,14 @@ kuso environment add <project> <service> <name> --branch <b> [--seed-from <env>]
 kuso project delete <name> [--purge-data] [-y]  # cascades services/envs/addons/secrets;
        # PVCs KEPT unless --purge-data (required for a clean delete+recreate — else the
        # recreated postgres inherits the old data dir + password and crashloops on SASL)
-kuso project export <name>                      # dump live state as kuso.yaml
+kuso project export <name> [--out kuso.yaml]    # dump live state as kuso.yaml (-o is NOT the output file)
 kuso github installations                       # find a GitHub App installation id
 
 # Maintenance
 kuso doctor                                     # pre-flight checks (incl. webhook health)
 kuso version
 kuso upgrade --check                            # see if a newer kuso-server is available
-kuso upgrade --version vX.Y.Z                   # pin to a specific release
+kuso upgrade --version vX.Y.Z                   # upgrades the SERVER, not the CLI; asks first (--yes)
 kuso revision list <project> <kind> <name>      # kind ∈ {service, environment, addon, cron}
 kuso revision revert <project> <id>             # replay an old snapshot
 kuso token create --name ci --expires 90d       # long-lived API token (printed ONCE)
@@ -898,10 +907,10 @@ kuso instance-config podsize list               # pod-size presets
 git push → GitHub webhook → kuso receives push event
   → matches services whose default branch OR a persistent env's tracked branch == pushed branch
   → creates a KusoBuild CR with the commit SHA
-  → operator renders a kaniko Job
+  → kuso-server's build controller renders a build Job
     → init: clone (with App-installation token if private)
     → init: env-detect (scans repo for ${process.env.X} usages)
-    → kaniko: build image, push to in-cluster registry
+    → buildctl client: the shared kuso-buildkitd daemon builds the image, pushes to the in-cluster registry
   → on success: build poller checks for spec.release.command
     → IF release.command set:
         → create <env>-release-<short-tag> Job with the new image + env's envVars/envFromSecrets
@@ -918,11 +927,11 @@ What can go wrong, in rough order of frequency (start with `kuso build why`):
 
 1. **GitHub App not installed on the repo's owner** → clone 404s. Build clones auto-resolve the installation from the repo URL; PR PREVIEWS additionally need the install bound on the project: `kuso project update <p> --github-installation <id>`.
 2. **Transient clone failure** → `Could not resolve host: github.com` is usually a momentary DNS blip in the build pod. Just re-trigger.
-3. **OOMKilled during kaniko snapshot** → "exit code 137" in the build's failure message. Fix: trim build deps OR raise the build memory limit (Settings → Build resources).
+3. **Build OOM** → "exit code 137" / `cannot allocate memory` in the build's failure message. Dockerfile/nixpacks/static builds compile inside the shared `kuso-buildkitd` daemon, not the build pod, so raising the build memory limit (Settings → Build) does nothing for them (it only affects buildpacks builds). Node sizes its heap from the host's RAM, so cap it in the Dockerfile: `ENV NODE_OPTIONS=--max-old-space-size=3072` before the build step. `NODE_OPTIONS` set via `kuso env` is stripped from build env, so the Dockerfile is the only place it works.
 4. **App reads wrong port** → kuso always sets `$PORT` to the service spec's port. Apps that hardcode `3000` while spec says `8080` fail readiness. Fix: bind to `process.env.PORT || 3000`.
 5. **App redirects to wrong host on a custom domain** → kuso routes correctly; the app's `NEXTAUTH_URL` / `AUTH_URL` / `APP_URL` is hardcoded to the auto-domain. Fix: `kuso env set` then `kuso redeploy`.
 6. **CrashLoopBackOff with no logs** → readiness/liveness probe failing before the app prints. Tail with `kuso logs -f`; the previous pod's last 200 lines persist in the archive even after pod GC. Also check `kuso service errors`.
-7. **`release-failed` → new pods never come up** → the release hook (migration) blocked promote BY DESIGN; the env keeps its last GREEN image. `kuso build why` + fix the migration + re-trigger.
+7. **`release-failed` → new pods never come up** → the release hook (migration) blocked promote BY DESIGN; the env keeps its last GREEN image. `kuso build why`, then fix the migration and re-trigger — or, if the failure was transient (DB briefly unreachable), `kuso build retry-release <p> <s> <id>` re-runs just the hook and promotes on success.
 8. **`InvalidImageName` / pod image `:latest`** → the env's `spec.image` is empty (never promoted). Causes: a release-failed build (see #7), or a recreated preview env whose terminal build didn't re-promote (self-heals on v0.17.25+). Fix: re-trigger the build.
 9. **Exit 127 right at container start (marketplace-style images)** → image drops root itself (setpriv/gosu) but kuso strips capabilities. Fix: `--cap-add SETUID --cap-add SETGID --allow-privilege-escalation on` (see "Marketplace").
 10. **Build fails/mis-builds reading a secret at BUILD time (v0.23.0+)** → secret-sourced env vars are withheld from the build (anti-leak); build log shows `secret-sourced build env vars are no longer passed as build-args`. Typical culprit: `prisma migrate deploy` in the build script (→ move to a release hook), or a Dockerfile `ARG <secret>` (→ `RUN --mount=type=secret,id=<KEY>`). See "Build-time vs runtime" under Env vars & secrets.
@@ -949,7 +958,7 @@ kuso logs search <project> <service> --q "ECONNREFUSED" --since 24h
 kuso env list <project> <service>
 kuso service drift <project> <service>
 
-# 6. Pop a shell to poke around. Needs local kubectl context.
+# 6. Pop a shell to poke around (goes through the kuso server; needs the admin role).
 kuso shell <project> <service>
 
 # 7. Force a fresh build + roll.
@@ -1031,33 +1040,41 @@ nothing else in this skill, read this.
 
 - You need to inspect a non-kuso pod or raw cluster state → `kubectl` is fine, but you'll need a kubeconfig pointing at the cluster (which the user typically does NOT have on their dev machine).
 - You're debugging the operator itself → `ssh` to the cluster + `kubectl logs -n kuso-operator-system deploy/kuso-operator-controller-manager`.
-- A feature has no CLI verb yet (release hooks, cron `onFailure`, `sleep.wakeOn`, non-worker `command` override) → set it in `kuso.yml` + `kuso apply`, or `curl` the REST API with the bearer token (`$(awk '{print $2}' ~/.kuso/credentials.yaml)`), as shown in those sections. That's the sanctioned path, not a workaround.
+- A feature has no CLI verb yet (release hooks, cron `onFailure`, `sleep.wakeOn`, non-worker `command` override) → set it in `kuso.yml` + `kuso apply` where the field exists there (release hooks, `command`), otherwise `kuso api PATCH …` or `curl` the REST API with the bearer token (`$(awk '{print $2}' ~/.kuso/credentials.yaml)`), as shown in those sections. That's the sanctioned path, not a workaround.
 
 For everything else — **reach for `kuso`**. If a CLI command fails or returns confusing output, that's a real bug; don't paper over it with raw `kubectl`.
 
 ## kuso.yml shape (reference only — prefer the imperative path)
 
+The parser is strict: an unknown key is a hard error from `kuso apply`. Full field list: `docs/KUSO_YML.md` in the kuso repo.
+
 ```yaml
+apiVersion: kuso/v1
 project: my-product
 baseDomain: my-product.example.com
-defaultRepo:
-  url: https://github.com/me/my-product
-  defaultBranch: main
+prune: false          # true = delete services/addons/crons missing from this file
 
 services:
   - name: web
+    repo: https://github.com/me/my-product   # repo is per service; no project-level default
+    branch: main
     runtime: dockerfile
     port: 3000
     domains: [{ host: my-product.com, tls: true }]
     # NO need to set DATABASE_URL etc. here — addons auto-inject.
-    envVars:
+    env:
       NODE_ENV: production
+      API_URL: ${{ api.URL }}                # in-cluster URL of the api service
+      SESSION_SECRET: { generate: hex32 }    # minted once, stored in the service Secret
+      STRIPE_SECRET_KEY: { secret: true }    # set out-of-band; apply leaves it alone
     scale: { min: 1, max: 5, targetCPU: 70 }
     # NOTE: per-service subscriptions (subscribedAddons / sharedEnvKeys) are
     # NOT expressible in kuso.yml — use `kuso env share/unshare` and
     # `kuso project addon subscribe/unsubscribe` after apply.
 
   - name: api
+    repo: https://github.com/me/my-product
+    path: api
     runtime: dockerfile
     port: 8080
     # v0.16+ release hook — runs as a Job before image promote
@@ -1066,8 +1083,9 @@ services:
       timeoutSeconds: 600
     sleep:
       enabled: true
-      wakeOn:
-        excludePaths: [/api/v1/payments/notify]
+      afterMinutes: 30
+    # sleep.wakeOn.excludePaths is NOT a kuso.yml field — set it via PATCH
+    # (see "wakeOn excludePaths"); apply leaves it untouched.
     scale: { min: 0, max: 5, targetCPU: 70 }
 
 addons:
@@ -1093,6 +1111,11 @@ addons:
     backup:
       schedule: "0 3 * * *"
       retentionDays: 14
+
+# Project crons only (kind: http | command). Service crons (run on a service's
+# image) are created with `kuso cron add`, not kuso.yml.
+crons:
+  - { name: warm-cache, kind: http, schedule: "*/10 * * * *", url: https://my-product.com/api/warm }
 ```
 
 ## Quick reference card
@@ -1106,12 +1129,13 @@ service errors|pods|drift     aggregated errors / pod list / spec-vs-live drift
 # NB: push/merge to a tracked branch AUTO-deploys — the build cmds below are out-of-band.
 build list <p> <s>            build history; status incl release-failed, cancelled
 build why <p> <s>             classified failure cause + suggested fix
-build trigger <p> <s>         MANUAL rebuild w/o a new commit (runs release hook)
+build trigger <p> <s>         MANUAL rebuild w/o a new commit (runs release hook); --dry-run = plan only
 build rollback <p> <s> <id>   re-point production at older successful build
+build retry-release <p> <s> <id>  re-run a RELEASE FAILED hook, promote on success
 build cancel <p> <s> <id>     kill an in-flight build
 redeploy <p> <s>              same as build trigger; --branch / --ref for other refs
 run <p> <s> -- cmd…           one-shot Job (NOTE: -- separator); run cancel to kill
-shell <p> <s>                 kubectl exec into a pod
+shell <p> <s>                 exec into a pod
 env list/set/unset            plain vars (K=V; --env <n> per-env). DEFAULT for most vars.
 env share/unshare <p> <s> K   subscribe/unsubscribe service to shared-secret keys
 secret list/set/unset         K8s-Secret-backed (KEY VALUE positional) — provider secrets only
@@ -1121,7 +1145,7 @@ domains add/remove/list       custom hostnames (--env <n> to scope; else mirrors
 get addons <p>                addons + their conn-secret names
 environment add <p> <s> <n> --branch <b>   long-lived env tracking a branch
 addon-backup download|list|restore|schedule    addon data backups
-cron list/add/add-http/add-command/sync/edit/delete[-project]
+cron list/add/add-http/add-command/sync/edit/edit-service/delete[-project]
 marketplace list/info/deploy  one-click apps (gitea, n8n, uptime-kuma, ...)
 import compose <file>         convert docker-compose (dry-run by default)
 project create --repo --domain
@@ -1133,7 +1157,7 @@ project delete <p>            cascades to services/envs/addons
 health [fix <r>]              reconcile health + one-click remediation
 doctor                        pre-flight checks
 backup --file <file>          control-plane pg_dump; backup settings/health for addon S3
-upgrade --check / --version vX.Y.Z
+upgrade --check / --version vX.Y.Z   upgrades the SERVER (asks; --yes)
 version
 ```
 

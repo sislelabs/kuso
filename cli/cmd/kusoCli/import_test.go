@@ -81,13 +81,13 @@ func TestImportFileFlagWithDeprecatedOut(t *testing.T) {
 	if err := importComposeCmd.Flags().Parse([]string{"-o", "old.yaml"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := importDestFile(); got != "old.yaml" {
+	if got, _ := importDestFile(); got != "old.yaml" {
 		t.Errorf("-o alone: got %q, want old.yaml", got)
 	}
 	if err := importComposeCmd.Flags().Parse([]string{"--file", "new.yaml"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := importDestFile(); got != "new.yaml" {
+	if got, _ := importDestFile(); got != "new.yaml" {
 		t.Errorf("--file should win: got %q", got)
 	}
 	if importComposeCmd.Flags().Lookup("out").Deprecated == "" {

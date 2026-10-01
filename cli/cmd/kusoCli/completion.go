@@ -13,45 +13,10 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
-
-// completeProjects suggests project names for the first positional arg.
-func completeProjects(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-	if len(args) != 0 || api == nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	resp, err := api.GetProjects()
-	if err != nil || resp.StatusCode() >= 300 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	return namesFromList(resp.Body()), cobra.ShellCompDirectiveNoFileComp
-}
-
-// completeProjectThenService suggests projects for arg 0 and that
-// project's services for arg 1 — the `<project> <service>` shape used by
-// logs, env, build, run, shell, db, and most of the rest.
-func completeProjectThenService(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-	if api == nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	switch len(args) {
-	case 0:
-		resp, err := api.GetProjects()
-		if err != nil || resp.StatusCode() >= 300 {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		return namesFromList(resp.Body()), cobra.ShellCompDirectiveNoFileComp
-	case 1:
-		resp, err := api.GetServices(args[0])
-		if err != nil || resp.StatusCode() >= 300 {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		return shortServiceNames(resp.Body(), args[0]), cobra.ShellCompDirectiveNoFileComp
-	}
-	return nil, cobra.ShellCompDirectiveNoFileComp
-}
 
 // namesFromList pulls metadata.name out of a CR list payload. Tolerates
 // both a bare array and a {"items": [...]} envelope since the API uses
@@ -107,40 +72,78 @@ func shortName(name, project string) string {
 	return name
 }
 
-// registerCompletions attaches the arg completers to the commands whose
-// first two positionals are <project> [service]. Done centrally (rather
-// than in each command's own file) so the list is auditable in one place
-// and adding a command doesn't silently miss out.
+// registerCompletions attaches a completer to every runnable command
+// that doesn't have its own, driven by the placeholders in its Use line
+// (<project>, <service>, <addon>, [file] …). It used to be a hand-written
+// map by top-level name, which suggested services for `db sql`'s addon
+// argument, project names for `apply [file]`, and nothing at all for
+// most of the tree.
 func registerCompletions(root *cobra.Command) {
-	// <project> only.
-	projectOnly := map[string]bool{
-		"status": true, "apply": true,
-	}
-	// <project> <service>.
-	projectService := map[string]bool{
-		"logs": true, "redeploy": true, "run": true, "shell": true,
-		"env": true, "secret": true, "domains": true, "build": true,
-		"db": true, "cron": true, "environment": true, "service": true,
-		"revision": true,
-	}
-
-	for _, c := range root.Commands() {
-		switch {
-		case projectOnly[c.Name()]:
-			if c.ValidArgsFunction == nil {
-				c.ValidArgsFunction = completeProjects
-			}
-		case projectService[c.Name()]:
-			// Parent groups (build, env, db …) dispatch to subcommands,
-			// so attach to the leaves; a runnable parent gets it too.
-			if c.Runnable() && c.ValidArgsFunction == nil {
-				c.ValidArgsFunction = completeProjectThenService
-			}
-			for _, sub := range c.Commands() {
-				if sub.ValidArgsFunction == nil {
-					sub.ValidArgsFunction = completeProjectThenService
-				}
-			}
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c != root && c.Runnable() && c.ValidArgsFunction == nil && len(positionalSlots(c.Use)) > 0 {
+			c.ValidArgsFunction = completeFromUse
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
 		}
 	}
+	walk(root)
+}
+
+// positionalSlots returns the lower-cased positional placeholder names
+// from a Use line, stopping at the first flag-looking token.
+func positionalSlots(use string) []string {
+	fields := strings.Fields(use)
+	if len(fields) < 2 {
+		return nil
+	}
+	var out []string
+	for _, tok := range fields[1:] {
+		if strings.HasPrefix(tok, "--") || strings.HasPrefix(tok, "[--") {
+			break
+		}
+		out = append(out, strings.ToLower(strings.Trim(tok, "<>[].…")))
+	}
+	return out
+}
+
+func isFileSlot(slot string) bool {
+	return slot == "file" || slot == "path" || strings.HasSuffix(slot, ".yml") || strings.HasSuffix(slot, ".yaml")
+}
+
+func completeFromUse(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	slots := positionalSlots(cmd.Use)
+	if len(args) >= len(slots) {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	slot := slots[len(args)]
+	if isFileSlot(slot) {
+		return nil, cobra.ShellCompDirectiveDefault
+	}
+	if api == nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	underProject := len(args) > 0 && slots[0] == "project"
+	switch {
+	case slot == "project", slot == "name" && len(args) == 0 && cmd.Parent() != nil && cmd.Parent().Name() == "project":
+		resp, err := api.GetProjects()
+		if err != nil || resp.StatusCode() >= 300 {
+			break
+		}
+		return namesFromList(resp.Body()), cobra.ShellCompDirectiveNoFileComp
+	case slot == "service" && underProject:
+		resp, err := api.GetServices(args[0])
+		if err != nil || resp.StatusCode() >= 300 {
+			break
+		}
+		return shortServiceNames(resp.Body(), args[0]), cobra.ShellCompDirectiveNoFileComp
+	case slot == "addon" && underProject:
+		resp, err := api.GetAddonsForProject(args[0])
+		if err != nil || resp.StatusCode() >= 300 {
+			break
+		}
+		return shortServiceNames(resp.Body(), args[0]), cobra.ShellCompDirectiveNoFileComp
+	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }

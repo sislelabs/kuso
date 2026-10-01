@@ -50,7 +50,8 @@ var addonPlacementShowCmd = &cobra.Command{
 			return fmt.Errorf("decode response: %w", err)
 		}
 		for _, a := range addons {
-			if resourceName(a) != args[1] {
+			// `get addons` prints the short name; accept it and the CR name.
+			if n := resourceName(a); n != args[1] && n != args[0]+"-"+args[1] {
 				continue
 			}
 			placement := mapAt(mapAt(a, "spec"), "placement")

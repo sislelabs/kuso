@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,7 +26,8 @@ type buildArgs struct {
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
 	Branch  string `json:"branch,omitempty" jsonschema:"branch to build; defaults to the service's default branch"`
 	Ref     string `json:"ref,omitempty" jsonschema:"explicit git ref/SHA to build; overrides branch"`
-	DryRun  bool   `json:"dryRun,omitempty" jsonschema:"compile + assemble layers but skip registry push and env promotion"`
+	Env     string `json:"env,omitempty" jsonschema:"build for one environment (staging, preview-pr-N): uses its branch and build-time env vars; default production"`
+	DryRun  bool   `json:"dryRun,omitempty" jsonschema:"compile + assemble layers but skip registry push and env promotion (still runs a real build on the shared builder)"`
 	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true for the build tool — a non-dryRun build PROMOTES a new image to the live environment (a production deploy); ignored by build_status"`
 }
 
@@ -34,6 +36,7 @@ type buildRequest struct {
 	Branch string `json:"branch,omitempty"`
 	Ref    string `json:"ref,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
+	Env    string `json:"env,omitempty"`
 }
 
 // buildSummary mirrors the handler's wire shape (newest-first in the list).
@@ -48,6 +51,44 @@ type buildSummary struct {
 	StartedAt     string `json:"startedAt,omitempty"`
 	FinishedAt    string `json:"finishedAt,omitempty"`
 	ErrorMessage  string `json:"errorMessage,omitempty"`
+	// The promotion fields below explain "built but not live": without
+	// them a held or unpromoted build reads as deployed.
+	FailureClass      *failureClass `json:"failureClass,omitempty"`
+	PromoteHold       string        `json:"promoteHold,omitempty"`
+	WaitingFor        string        `json:"waitingFor,omitempty"`
+	NotPromotedReason string        `json:"notPromotedReason,omitempty"`
+	QueuePosition     int           `json:"queuePosition,omitempty"`
+	LiveEnvs          []string      `json:"liveEnvs,omitempty"`
+}
+
+// failureClass mirrors the server's failures.Classification (subset).
+type failureClass struct {
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+}
+
+// promotionNotes renders the "why isn't this live" fields, one per line.
+func promotionNotes(s buildSummary) string {
+	var b strings.Builder
+	if s.QueuePosition > 0 {
+		fmt.Fprintf(&b, "\n  queue position: %d", s.QueuePosition)
+	}
+	if s.WaitingFor != "" {
+		b.WriteString("\n  waiting for: " + s.WaitingFor)
+	}
+	if s.PromoteHold != "" {
+		b.WriteString("\n  promotion held: " + s.PromoteHold)
+	}
+	if s.NotPromotedReason != "" {
+		b.WriteString("\n  not promoted: " + s.NotPromotedReason)
+	}
+	if len(s.LiveEnvs) > 0 {
+		b.WriteString("\n  live on: " + strings.Join(s.LiveEnvs, ", "))
+	}
+	if s.FailureClass != nil && s.FailureClass.Kind != "" {
+		b.WriteString("\n  failure class: " + s.FailureClass.Kind)
+	}
+	return b.String()
 }
 
 func registerBuild(server *mcp.Server, client *kusoclient.Client) {
@@ -61,7 +102,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		if !args.Confirm {
 			return nil, buildSummary{}, errors.New("confirm=true is required — a build promotes a new image to the live environment (production deploy)")
 		}
-		body := buildRequest{Branch: args.Branch, Ref: args.Ref, DryRun: args.DryRun}
+		body := buildRequest{Branch: args.Branch, Ref: args.Ref, DryRun: args.DryRun, Env: args.Env}
 		var out buildSummary
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
 		if err := client.PostJSON(ctx, path, body, &out); err != nil {
@@ -98,6 +139,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		if out.ImageTag != "" {
 			text += "\n  image: " + out.ImageTag
 		}
+		text += promotionNotes(out)
 		if out.ErrorMessage != "" {
 			// errorMessage is regex-scraped from raw build logs — it is
 			// attacker-controllable (a build can print anything). Fence it

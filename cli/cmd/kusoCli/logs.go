@@ -58,8 +58,9 @@ var logsCmd = &cobra.Command{
 	Short: "Print recent log lines from a service's pods",
 	Long: `Print recent log lines from a service's pods.
 
-Without --follow, prints the last N lines and exits (the legacy
-behaviour). With --follow / -f, opens a WebSocket and streams new
+Without --follow, prints the newest --lines N lines and exits. With
+several replicas the server tails N lines from each pod, merges them by
+timestamp, and keeps the newest N, so the output is one ordered stream. With --follow / -f, opens a WebSocket and streams new
 log lines until ^C — same surface as the web UI's Logs tab.`,
 	Example: `  kuso logs hello web
   kuso logs hello web -f --env staging
@@ -82,7 +83,19 @@ log lines until ^C — same surface as the web UI's Logs tab.`,
 			}
 			envSelector = "build:" + logsBuild
 		}
+		if logsLines < 1 || logsLines > 2000 {
+			return fmt.Errorf("--lines must be between 1 and 2000 (got %d)", logsLines)
+		}
+		// A stopped or scaled-to-zero env has no pods: the non-follow
+		// path printed nothing and -f hung silently. Say so instead.
+		var podCount = -1
+		if logsBuild == "" {
+			podCount = countServicePods(args[0], args[1], envSelector)
+		}
 		if logsFollow {
+			if podCount == 0 {
+				return fmt.Errorf("no pods running for %s/%s in env %s (stopped, sleeping or scaled to zero) — nothing to follow", args[0], args[1], envSelector)
+			}
 			return streamLogs(args[0], args[1], envSelector, logsLines)
 		}
 		// Non-follow path: hit the REST endpoint, dump, exit.
@@ -104,8 +117,28 @@ log lines until ^C — same surface as the web UI's Logs tab.`,
 		for _, l := range data.Lines {
 			fmt.Printf("[%s] %s\n", l.Pod, l.Line)
 		}
+		if len(data.Lines) == 0 && podCount == 0 {
+			fmt.Fprintf(os.Stderr, "no pods running for %s/%s in env %s (stopped, sleeping or scaled to zero); `kuso logs search` reads the persisted archive\n", args[0], args[1], envSelector)
+		}
 		return nil
 	},
+}
+
+// countServicePods returns the number of pods backing the env, or -1
+// when the lookup fails (the caller then behaves as before).
+func countServicePods(project, service, env string) int {
+	resp, err := api.RawGet(fmt.Sprintf("/api/projects/%s/services/%s/pods?env=%s",
+		url.PathEscape(project), url.PathEscape(service), url.QueryEscape(env)))
+	if err != nil || resp.StatusCode() >= 300 {
+		return -1
+	}
+	var info struct {
+		Pods []json.RawMessage `json:"pods"`
+	}
+	if json.Unmarshal(resp.Body(), &info) != nil {
+		return -1
+	}
+	return len(info.Pods)
 }
 
 // streamLogs opens the same WebSocket the web UI uses and prints
@@ -209,7 +242,7 @@ func streamLogs(project, service, env string, tail int) error {
 func init() {
 	rootCmd.AddCommand(logsCmd)
 	logsCmd.Flags().StringVar(&logsEnv, "env", "production", "environment (production|preview-pr-N|<custom>)")
-	logsCmd.Flags().IntVar(&logsLines, "lines", 200, "number of lines to fetch (max 2000)")
+	logsCmd.Flags().IntVar(&logsLines, "lines", 200, "number of lines to show, 1-2000: the newest N across all the env's pods (each pod's last N, merged by timestamp)")
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "stream live logs over WebSocket until ^C")
 	logsCmd.Flags().StringVar(&logsBuild, "build", "", "tail this `build-id`'s pod logs (ids from kuso build list)")
 }

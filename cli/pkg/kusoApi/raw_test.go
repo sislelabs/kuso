@@ -58,3 +58,25 @@ func TestRaw_POSTSendsBodyAndHeaders(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode())
 	}
 }
+
+// `kuso api -H 'Authorization: Bearer x'` was silently overridden by the
+// stored token; it must win for that call and not leak into the next.
+func TestRaw_ExplicitAuthorizationWins(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	k := &KusoClient{}
+	k.Init(srv.URL, "stored")
+	if _, err := k.Raw("GET", "/api/x", nil, map[string]string{"Authorization": "Bearer other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Raw("GET", "/api/x", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "Bearer other" || got[1] != "Bearer stored" {
+		t.Fatalf("Authorization headers = %v, want [Bearer other, Bearer stored]", got)
+	}
+}

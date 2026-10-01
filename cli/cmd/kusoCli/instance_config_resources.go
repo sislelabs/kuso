@@ -299,9 +299,10 @@ Prompts for confirmation unless --yes.`,
 // that dumps a config sub-resource as JSON.
 func simpleConfigReadCmd(use, short string, fetch func() (*resty.Response, error)) *cobra.Command {
 	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.NoArgs,
+		Use:         use,
+		Short:       short,
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{outputAnnotation: outputJSONOnly},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if api == nil {
 				return fmt.Errorf("not logged in; run 'kuso login' first")

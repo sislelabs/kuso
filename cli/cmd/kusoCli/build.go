@@ -39,11 +39,12 @@ var buildCmd = &cobra.Command{
 }
 
 var (
-	buildTriggerBranch string
-	buildTriggerRef    string
-	buildTriggerDryRun bool
-	buildTriggerFollow bool
-	buildTriggerEnv    string
+	buildTriggerBranch      string
+	buildTriggerRef         string
+	buildTriggerDryRun      bool
+	buildTriggerCompileOnly bool
+	buildTriggerFollow      bool
+	buildTriggerEnv         string
 )
 
 // pollBuildToTerminal polls ListBuilds until the build with id buildID
@@ -110,10 +111,23 @@ var buildTriggerCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		if buildTriggerDryRun {
+			if buildTriggerCompileOnly {
+				return fmt.Errorf("--dry-run and --compile-only are mutually exclusive")
+			}
+			// The service lookup makes a typo fail here instead of
+			// printing a plan for something that doesn't exist.
+			resp, err := api.GetService(args[0], args[1])
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("dry run: %w", err)
+			}
+			fmt.Println(buildPlanLine(args[0], args[1], buildTriggerBranch, buildTriggerRef, buildTriggerEnv))
+			return nil
+		}
 		req := kusoApi.CreateBuildRequest{
 			Branch: buildTriggerBranch,
 			Ref:    buildTriggerRef,
-			DryRun: buildTriggerDryRun,
+			DryRun: buildTriggerCompileOnly,
 			Env:    buildTriggerEnv,
 		}
 		resp, err := api.CreateBuild(args[0], args[1], req)
@@ -125,7 +139,7 @@ var buildTriggerCmd = &cobra.Command{
 			return err
 		}
 		fmt.Println(line)
-		if buildTriggerFollow && !buildTriggerDryRun && id != "" {
+		if buildTriggerFollow && !buildTriggerCompileOnly && id != "" {
 			status, ferr := pollBuildToTerminal(args[0], args[1], id)
 			if ferr != nil {
 				return ferr // non-zero exit on failed/timeout so CI/scripts catch it
@@ -134,6 +148,23 @@ var buildTriggerCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// buildPlanLine is the --dry-run output. The server has no plan-only
+// build mode (its dryRun still compiles on the shared buildkitd), so the
+// plan is assembled client-side and nothing is created.
+func buildPlanLine(project, service, branch, ref, env string) string {
+	if branch == "" {
+		branch = "(the env's / project's default branch)"
+	}
+	if ref == "" {
+		ref = "(branch HEAD)"
+	}
+	if env == "" {
+		env = "production"
+	}
+	return fmt.Sprintf("dry run: would build %s/%s branch=%s ref=%s env=%s — no build created (--compile-only runs a compile check on the builder)",
+		project, service, branch, ref, env)
 }
 
 // triggerResultLine renders the trigger response. The server returns the
@@ -300,10 +331,7 @@ var buildListCmd = &cobra.Command{
 			}
 			t.SetHeader(header)
 			for _, b := range items {
-				sha := b.CommitSha
-				if len(sha) > 12 {
-					sha = sha[:12]
-				}
+				sha := displaySha(b.CommitSha)
 				status := b.Status
 				if b.Status == "queued" && b.QueuePosition > 0 {
 					status = fmt.Sprintf("queued (#%d)", b.QueuePosition)
@@ -380,6 +408,24 @@ func buildLatestRows(body []byte) ([][]string, bool) {
 	return rows, true
 }
 
+// displaySha shortens a commit SHA for the table. For manual/branch
+// builds the server reports the synthesized ref (e.g. "main-ms1z0ez8")
+// as commitSha; show "-" rather than pass that off as a commit.
+func displaySha(s string) string {
+	if len(s) < 7 {
+		return "-"
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return "-"
+		}
+	}
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
 // relativeAge converts an ISO8601 timestamp to "<n>m" / "<n>h" / "<n>d".
 func relativeAge(iso string) string {
 	if iso == "" {
@@ -412,7 +458,8 @@ func init() {
 	buildCmd.AddCommand(buildTriggerCmd)
 	buildTriggerCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to build (default: project default branch)")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA to build")
-	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "compile + assemble image but skip push and env promotion")
+	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
+	buildTriggerCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	buildTriggerCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 
@@ -492,6 +539,7 @@ per service regardless of branch.`,
 		buildRollbackEnv      string
 		buildRollbackPrevious bool
 		buildRollbackForce    bool
+		buildRollbackYes      bool
 	)
 	rollbackCmd := &cobra.Command{
 		Use:   "rollback <project> <service> [build]",
@@ -504,7 +552,10 @@ staging would silently roll PRODUCTION back.
 
 --previous picks the build for you: the newest succeeded build of the
 same branch older than the one live on the env. The server refuses a
-build from a different branch than the env deploys unless --force.`,
+build from a different branch than the env deploys unless --force.
+
+The env's pods roll to the older image right away, so it asks for
+confirmation; pass --yes to skip it.`,
 		Example: `  kuso build rollback tickero api tickero-api-3abf9b99
   kuso build rollback tickero api tickero-api-3abf9b99 --env staging
   kuso build rollback tickero api --previous`,
@@ -538,6 +589,10 @@ build from a different branch than the env deploys unless --force.`,
 			default:
 				return fmt.Errorf("name the build to roll back to, or pass --previous")
 			}
+			if err := confirmDestructive(buildRollbackYes, fmt.Sprintf(
+				"Roll %s/%s (%s) back to build %s? Its pods restart on the older image.", args[0], args[1], target, build)); err != nil {
+				return err
+			}
 			resp, err := api.RollbackBuild(args[0], args[1], build, buildRollbackEnv, buildRollbackForce)
 			if err := checkRespErr(resp, err); err != nil {
 				return err
@@ -549,6 +604,7 @@ build from a different branch than the env deploys unless --force.`,
 	rollbackCmd.Flags().StringVar(&buildRollbackEnv, "env", "", "environment to roll back (default production)")
 	rollbackCmd.Flags().BoolVar(&buildRollbackPrevious, "previous", false, "roll back to the build before the one live on the env")
 	rollbackCmd.Flags().BoolVar(&buildRollbackForce, "force", false, "allow a build from a different branch than the env deploys")
+	rollbackCmd.Flags().BoolVarP(&buildRollbackYes, "yes", "y", false, "skip the confirmation prompt")
 	buildCmd.AddCommand(rollbackCmd)
 
 	retryReleaseCmd := &cobra.Command{
@@ -616,7 +672,8 @@ as a fresh green build would be. Follow the outcome with
 	// state) — keep shorthand + help text identical to trigger's.
 	redeployCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to deploy")
 	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")
-	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "resolve the ref and print what would build, without creating a build")
+	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
+	redeployCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	redeployCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
 	redeployCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 	rootCmd.AddCommand(redeployCmd)

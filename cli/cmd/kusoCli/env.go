@@ -403,16 +403,30 @@ var secretListCmd = &cobra.Command{
 }
 
 var secretSetCmd = &cobra.Command{
-	Use:   "set <project> <service> KEY VALUE",
+	Use:   "set <project> <service> KEY [VALUE|-]",
 	Short: "Set or replace a secret value (default scope: shared; --env to scope to one env)",
-	Args:  cobra.ExactArgs(4),
+	Long: `Set or replace a secret value. VALUE "-" reads it from stdin and
+--from-file reads it from a file, which keeps it out of shell history
+and the process list.`,
+	Example: `  kuso secret set shop api STRIPE_KEY sk_live_xxx
+  pbpaste | kuso secret set shop api STRIPE_KEY -
+  kuso secret set shop api TLS_KEY --from-file ./tls.key`,
+	Args: cobra.RangeArgs(3, 4),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		literal := ""
+		if len(args) == 4 {
+			literal = args[3]
+		}
+		value, err := resolveSecretValue(literal, len(args) == 4, secretSetFromFile)
+		if err != nil {
+			return err
+		}
 		resp, err := api.SetSecret(args[0], args[1], kusoApi.SetSecretRequest{
 			Key:   args[2],
-			Value: args[3],
+			Value: value,
 			Env:   secretEnvFlag,
 			Force: secretForceFlag,
 		})
@@ -623,6 +637,7 @@ func init() {
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)
 	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one `environment` by name (e.g. production, staging, preview-pr-12); empty = shared across all envs")
+	secretSetCmd.Flags().StringVar(&secretSetFromFile, "from-file", "", "read the value from this `path`")
 	secretSetCmd.Flags().BoolVar(&secretForceFlag, "force", false, "override the shadow check (set even if a project-shared secret with the same key exists)")
 	secretUnsetCmd.Flags().BoolVarP(&secretUnsetYes, "yes", "y", false, "skip the confirmation prompt")
 }

@@ -29,6 +29,7 @@ func enforceArgContracts(root *cobra.Command) {
 		}
 	}
 	walk(root)
+	enforceOutputContracts(root)
 }
 
 func unknownSubcommand(cmd *cobra.Command, args []string) error {

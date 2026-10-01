@@ -57,6 +57,12 @@ var initCmd = &cobra.Command{
 			project = sanitizeName(filepath.Base(cwd))
 		}
 		repo := guessGitRemote()
+		switch initRuntime {
+		case "", "nixpacks", "dockerfile", "static", "buildpacks":
+		default:
+			fmt.Fprintf(os.Stderr, "unknown --runtime %q (known: nixpacks, dockerfile, static, buildpacks)\n", initRuntime)
+			os.Exit(1)
+		}
 		if initRuntime == "" {
 			initRuntime = "nixpacks"
 			if _, err := os.Stat("Dockerfile"); err == nil {
@@ -82,12 +88,14 @@ var initCmd = &cobra.Command{
 			fmt.Printf("wrote kuso.yml (project=%s, template=payload)\n", project)
 			fmt.Println("next:")
 			fmt.Println("  set baseDomain to your real domain (and the NEXT_PUBLIC_* URLs)")
-			fmt.Println("  kuso apply           # plan + push (generates secrets, runs migrations)")
+			fmt.Println("  kuso apply --dry-run # review the plan")
+			fmt.Println("  kuso apply           # push (generates secrets, runs migrations)")
 		} else {
 			fmt.Printf("wrote kuso.yml (project=%s, runtime=%s, port=%d)\n", project, initRuntime, initPort)
 			fmt.Println("next:")
 			fmt.Println("  edit kuso.yml to taste")
-			fmt.Println("  kuso apply           # plan + push")
+			fmt.Println("  kuso apply --dry-run # review the plan")
+			fmt.Println("  kuso apply           # push")
 		}
 	},
 }
@@ -107,6 +115,7 @@ func renderPayloadTemplate(project, repo string) string {
 # deploy. The ONLY thing you must change is the domain (set baseDomain + the
 # two NEXT_PUBLIC_* URLs to your real host).
 
+apiVersion: kuso/v1
 project: %s
 # ← set to your real domain
 baseDomain: %s.example.com
@@ -168,6 +177,7 @@ func renderInitYAML(project, service, repo, runtime string, port int) string {
 # This file is the source of truth on every push: the UI is read-only
 # for fields managed here.
 
+apiVersion: kuso/v1
 project: %s
 # baseDomain: %s.example.com   # optional — auto-generated from project name otherwise
 

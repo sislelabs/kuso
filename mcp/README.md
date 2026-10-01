@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** v0.1.0 — pre-release, but functional: 20 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, and config-as-code plan/apply.
+**Status:** v0.1.0 — pre-release, but functional: 21 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, and config-as-code plan/apply.
 
 ## Run
 
@@ -71,10 +71,11 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `update_project`    | patch project fields (mutating) |
 | `add_service`       | add a service (mutating; `confirm: true`) |
 | `manage_addon`      | add / delete addons (mutating; `confirm: true`) |
-| `set_env`           | set plain env vars (mutating) |
+| `get_env`           | a service's env vars, including addon `valueFrom` refs (read-only) |
+| `set_env`           | upsert / remove individual plain env vars; unnamed keys are untouched (mutating; `confirm: true`) |
 | `set_secret`        | set secret-backed vars (mutating) |
-| `build`             | trigger a build (mutating) |
-| `build_status`      | build state for a service |
+| `build`             | trigger a build, optionally for one `env` (mutating; `confirm: true`) |
+| `build_status`      | build state for a service, incl. promotion hold / not-promoted reason |
 | `run`               | one-shot Job in a service's context (mutating) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
 | `apply`             | reconcile kuso.yaml (mutating; `confirm: true`) |

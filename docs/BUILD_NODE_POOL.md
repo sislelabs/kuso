@@ -1,16 +1,28 @@
 # Build node pool
 
-Default kuso runs every kaniko/nixpacks build pod on whichever node
-the kube scheduler picks. On a single-node install that's the control
+Default kuso runs every build Job on whichever node the kube
+scheduler picks. On a single-node install that's the control
 plane, which means a build storm can starve kuso-server / traefik /
 the operator off CPU and crash the dashboard. We've patched the
 control-plane resilience three different ways (priority class,
 tolerant probes, memory limits) — but the structural fix is to give
 build Jobs a node of their own.
 
+> **Where the compile actually runs.** For `dockerfile`, `nixpacks` and
+> `static` builds the build Job is a thin `buildctl` client; the compile
+> runs inside the shared `kuso-buildkitd` daemon (`deploy/buildkitd.yaml`).
+> A build node pool moves the Jobs, which matters for `buildpacks` builds
+> (they compile in-pod) and for clone/cache steps. It does not move the
+> buildkitd load. buildkitd has its own placement: a required
+> anti-affinity keeps it off the control-plane node, and its
+> `kuso-buildkitd-state` PVC is RWO on local-path, so it stays on
+> whichever node first bound that volume. Moving it means recreating the
+> PVC.
+
 ## How it works
 
-The kusobuild chart's Job template carries:
+The build Job that kuso-server's build controller renders
+(`server-go/internal/buildcontroller/render.go`) carries:
 
 ```
 tolerations:

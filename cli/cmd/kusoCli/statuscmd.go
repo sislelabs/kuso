@@ -98,10 +98,34 @@ var statusCmd = &cobra.Command{
 
 		if statusOutput == "json" {
 			// Re-emit the parsed shape so scripts get a stable schema
-			// even if the server adds fields later. The full rollup
-			// response is also available via `kuso get projects -o
-			// json` if a caller needs more detail.
-			out, err := json.MarshalIndent(rollup, "", "  ")
+			// even if the server adds fields later, plus the per-service
+			// last build and the addons the table shows (they were
+			// missing, so scripts couldn't get the advertised rollup).
+			type svcOut struct {
+				Metadata  any          `json:"metadata"`
+				Spec      any          `json:"spec"`
+				LastBuild *statusBuild `json:"lastBuild"`
+			}
+			doc := struct {
+				Project      any              `json:"project"`
+				Services     []svcOut         `json:"services"`
+				Environments any              `json:"environments"`
+				Addons       []map[string]any `json:"addons"`
+			}{Project: rollup.Project, Environments: rollup.Environments, Services: []svcOut{}, Addons: []map[string]any{}}
+			for _, s := range rollup.Services {
+				so := svcOut{Metadata: s.Metadata, Spec: s.Spec}
+				if br, err := api.ListBuilds(project, short(s.Metadata.Name, rollup.Project.Metadata.Name)); err == nil && br.StatusCode() < 300 {
+					var builds []statusBuild
+					if json.Unmarshal(br.Body(), &builds) == nil {
+						so.LastBuild = latestBuild(builds)
+					}
+				}
+				doc.Services = append(doc.Services, so)
+			}
+			if ar, err := api.GetAddonsForProject(project); err == nil && ar.StatusCode() < 300 {
+				_ = json.Unmarshal(ar.Body(), &doc.Addons)
+			}
+			out, err := json.MarshalIndent(doc, "", "  ")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "encode:", err)
 				os.Exit(1)
@@ -187,20 +211,13 @@ type statusBuild struct {
 	Status       string `json:"status"`
 	Branch       string `json:"branch"`
 	StartedAt    string `json:"startedAt"`
-	ErrorMessage string `json:"errorMessage"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // lastBuildLine summarises the newest build by startedAt. The list is
 // live CRs followed by archived records, so its order isn't trusted.
 func lastBuildLine(builds []statusBuild) string {
-	var latest *statusBuild
-	var latestAt time.Time
-	for i := range builds {
-		t, _ := time.Parse(time.RFC3339, builds[i].StartedAt)
-		if latest == nil || t.After(latestAt) {
-			latest, latestAt = &builds[i], t
-		}
-	}
+	latest := latestBuild(builds)
 	if latest == nil {
 		return "last build: none"
 	}
@@ -212,6 +229,18 @@ func lastBuildLine(builds []statusBuild) string {
 		line += "\n    " + latest.ErrorMessage
 	}
 	return line
+}
+
+func latestBuild(builds []statusBuild) *statusBuild {
+	var latest *statusBuild
+	var latestAt time.Time
+	for i := range builds {
+		t, _ := time.Parse(time.RFC3339, builds[i].StartedAt)
+		if latest == nil || t.After(latestAt) {
+			latest, latestAt = &builds[i], t
+		}
+	}
+	return latest
 }
 
 // addonsStatusLines renders the project's addons as "name (kind version)".

@@ -14,12 +14,14 @@ var (
 	applyFile          string
 	applyDryRun        bool
 	applyRotateSecrets bool
+	applyYes           bool
 )
 
 func init() {
 	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "", "path to the manifest (default: kuso.yml, or kuso.yaml if only that exists)")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "show the plan without writing")
 	applyCmd.Flags().BoolVar(&applyRotateSecrets, "rotate-secrets", false, "re-mint generated ({generate: …}) secrets even if they already exist (default: generate-once)")
+	applyCmd.Flags().BoolVarP(&applyYes, "yes", "y", false, "skip the confirmation when the plan deletes services, addons or crons (prune: true)")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -36,7 +38,12 @@ against the live project and reconciles. With --dry-run the server
 returns the plan but doesn't write anything.
 
 The file's "project:" field selects the target project — no flag
-needed.`,
+needed.
+
+With "prune: true" in the file, services, addons and crons missing from
+it are deleted (addon data is not recoverable). When the plan contains
+deletions, apply prints the plan and asks for confirmation first; pass
+--yes to skip the prompt (required when stdin is not a terminal).`,
 	Example: `  kuso apply
   kuso apply kuso.yaml --dry-run
   kuso apply -f config/kuso.yml --dry-run`,
@@ -78,6 +85,13 @@ needed.`,
 			os.Exit(1)
 		}
 
+		if !applyDryRun && !applyYes {
+			if err := confirmApplyDeletes(project, body); err != nil {
+				fmt.Fprintln(os.Stderr, "apply:", err)
+				os.Exit(1)
+			}
+		}
+
 		resp, err := api.ApplyConfig(project, body, applyDryRun, applyRotateSecrets)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "apply:", err)
@@ -89,6 +103,45 @@ needed.`,
 		}
 		printApplyResult(resp.Body(), applyDryRun)
 	},
+}
+
+// confirmApplyDeletes fetches the server's plan for body and, when it
+// deletes anything (prune: true), prints the plan and asks before the
+// real apply. Plans without deletions proceed without a prompt.
+func confirmApplyDeletes(project string, body []byte) error {
+	resp, err := api.ApplyConfig(project, body, true, false)
+	if err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+	if resp.StatusCode() >= 400 {
+		return fmt.Errorf("plan failed (%d): %s", resp.StatusCode(), resp.String())
+	}
+	var plan applyPlan
+	if err := json.Unmarshal(resp.Body(), &plan); err != nil {
+		return fmt.Errorf("decode plan: %w", err)
+	}
+	deletes := applyPlanDeletes(plan)
+	if len(deletes) == 0 {
+		return nil
+	}
+	renderApplyResult(os.Stderr, os.Stderr, resp.Body(), true)
+	return confirmDestructive(false, fmt.Sprintf(
+		"\nprune: true will DELETE %d resource(s) from project %s: %s. Addon data is not recoverable. Continue?",
+		len(deletes), project, strings.Join(deletes, ", ")))
+}
+
+func applyPlanDeletes(p applyPlan) []string {
+	var out []string
+	for _, n := range p.ServicesToDelete {
+		out = append(out, "service:"+n)
+	}
+	for _, n := range p.AddonsToDelete {
+		out = append(out, "addon:"+n)
+	}
+	for _, n := range p.CronsToDelete {
+		out = append(out, "cron:"+n)
+	}
+	return out
 }
 
 // readProjectFromYAML pulls the `project:` field without parsing the

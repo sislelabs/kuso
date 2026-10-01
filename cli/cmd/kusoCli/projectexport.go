@@ -18,7 +18,7 @@ import (
 // project between kuso instances. This command emits a human-readable
 // kuso.yaml you can commit to the repo and re-apply with `kuso apply`.
 
-var exportSpecOutFile string
+var exportSpecOutFile, exportSpecLegacyOut string
 
 var projectExportCmd = &cobra.Command{
 	Use:   "export <project>",
@@ -31,12 +31,17 @@ The result round-trips: re-applying it with ` + "`kuso apply`" + ` against
 the same cluster is a no-op. Commit it to your repo root to enable
 config-as-code on push.`,
 	Example: `  kuso project export shop
-  kuso project export shop -o kuso.yaml`,
+  kuso project export shop --out kuso.yaml`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		out, err := resolveLegacyOutFile(exportSpecOutFile, exportSpecLegacyOut, "--out")
+		if err != nil {
+			return err
+		}
+		exportSpecOutFile = out
 		resp, err := api.GetProjectSpec(args[0])
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("export: %w", err)
@@ -59,7 +64,8 @@ config-as-code on push.`,
 }
 
 func init() {
-	projectExportCmd.Flags().StringVarP(&exportSpecOutFile, "out", "o", "", "write to file instead of stdout")
+	projectExportCmd.Flags().StringVar(&exportSpecOutFile, "out", "", "write to this file instead of stdout")
+	bindLegacyOutFileShorthand(projectExportCmd, &exportSpecLegacyOut)
 	projectCmd.AddCommand(projectExportCmd)
 }
 
@@ -97,6 +103,6 @@ func secretEnvNote(body []byte) string {
 		return ""
 	}
 	return "note: these env vars are held in kuso secrets and exported as {secret: true} without values.\n" +
-		"apply leaves them untouched; a project recreated from this file needs them set separately (kuso env set):\n" +
+		"apply leaves them untouched; a project recreated from this file needs them set separately (kuso secret set <project> <service> KEY -):\n" +
 		strings.Join(lines, "\n") + "\n"
 }
