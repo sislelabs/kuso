@@ -229,7 +229,7 @@ function ProjectTable({
             <button
               type="button"
               onClick={() => setExpanded(isOpen ? null : r.project)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-tertiary)]/40"
+              className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-tertiary)]/40 sm:flex-nowrap"
             >
               {isOpen ? (
                 <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -241,7 +241,7 @@ function ProjectTable({
                 {r.project}
               </span>
               <ShareBar pct={r.sharePct} />
-              <div className="flex w-[280px] shrink-0 items-center justify-end gap-4 font-mono text-[11px] text-[var(--text-secondary)]">
+              <div className="flex w-full shrink-0 items-center sm:w-[280px] justify-end gap-4 font-mono text-[11px] text-[var(--text-secondary)]">
                 <span title="CPU consumed (projected)">
                   {(r.cpuMilliHours / 1000).toFixed(1)} cpu·hr
                 </span>

@@ -27,11 +27,20 @@ describe("registry credentials api", () => {
     });
   });
 
-  it("encodes the registry host in the logout path", async () => {
+  it("keeps a host:port registry's colon literal in the logout path", async () => {
+    apiMock.mockResolvedValue(undefined);
+    await logoutRegistry("shop", "localhost:5000");
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/projects/shop/registry-credentials/localhost:5000",
+      { method: "DELETE" },
+    );
+  });
+
+  it("still encodes other reserved characters", async () => {
     apiMock.mockResolvedValue(undefined);
     await logoutRegistry("shop", "localhost:5000/x");
     expect(apiMock).toHaveBeenCalledWith(
-      "/api/projects/shop/registry-credentials/localhost%3A5000%2Fx",
+      "/api/projects/shop/registry-credentials/localhost:5000%2Fx",
       { method: "DELETE" },
     );
   });

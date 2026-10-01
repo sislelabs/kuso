@@ -21,6 +21,7 @@ import { CronPicker } from "@/components/shared/CronPicker";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
+import { ApiError } from "@/lib/api-client";
 
 // addonCRName + addonShort mirror the server's CRName/ShortName
 // helpers so we can map between "<project>-<addon>" CR names and the
@@ -88,6 +89,10 @@ function DownloadBackupButton({
   );
 }
 
+// The list endpoint caps at 200 objects (handlers/backups.go); hitting
+// the cap means older ones were cut off.
+const BACKUP_LIST_CAP = 200;
+
 export function BackupsTab({ project, addon }: { project: string; addon: string }) {
   const qc = useQueryClient();
   // One useAddons call drives both the schedule editor (this addon's
@@ -105,6 +110,9 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   // Restore + schedule edits are addons:write mutations; viewers get
   // the buttons disabled with a hint instead of a post-click 403.
   const canWrite = useCanOnProject(project, Perms.AddonsWrite);
+  // There's no restore-progress endpoint yet, so at least keep a visible
+  // record of what was started instead of a toast that vanishes.
+  const [lastRestore, setLastRestore] = useState<{ job: string; key: string; into?: string; at: Date } | null>(null);
   const restore = useMutation({
     mutationFn: ({ key, into, confirm }: { key: string; into?: string; confirm?: string }) =>
       // In-place restore (no `into`) is destructive; the server requires
@@ -112,8 +120,10 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
       // user typed in the dialog — auto-supplying it here would defeat
       // the server's type-the-name safeguard.
       restoreBackup(project, addon, key, into, confirm),
-    onSuccess: () => {
-      toast.success("Restore started");
+    onSuccess: (res, vars) => {
+      toast.success(`Restore job ${res.job} started`);
+      setLastRestore({ job: res.job, key: vars.key, into: vars.into, at: new Date() });
+      setConfirmKey(null);
       qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
@@ -131,10 +141,11 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   }
   if (list.isError) {
     const msg = list.error instanceof Error ? list.error.message : "load failed";
-    // 503 is the server's "S3 not configured" signal. Anything else
-    // means the bucket is reachable but something is wrong (auth,
-    // permissions, network) — those need a different message.
-    const noS3 = msg.includes("503") || /s3|bucket|credentials/i.test(msg);
+    // 503 + "not configured" is the server's "S3 not set up" signal. A
+    // 503 for anything else (bad credentials, unreachable endpoint) is a
+    // real outage and must show its message, not the setup hint.
+    const noS3 =
+      list.error instanceof ApiError && list.error.status === 503 && /not configured/i.test(msg);
     return (
       <div className="space-y-4 p-5">
         <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
@@ -195,6 +206,19 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
           <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
         </div>
       </header>
+      {lastRestore && (
+        <div role="status" className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
+          Restore job <span className="text-[var(--text-primary)]">{lastRestore.job}</span> started{" "}
+          {relativeTime(lastRestore.at.toISOString())} from {lastRestore.key}
+          {lastRestore.into ? ` into ${lastRestore.into}` : ""}. Progress isn&apos;t tracked here yet; check the
+          job&apos;s logs before relying on the data.
+        </div>
+      )}
+      {items.length >= BACKUP_LIST_CAP && (
+        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          Showing the newest {BACKUP_LIST_CAP} objects; older backups are in the bucket but not listed.
+        </p>
+      )}
       <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         {sorted.map((b) => (
           <li
@@ -231,8 +255,9 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
         siblings={siblingAddons.map((a) => addonShort(project, a.metadata.name))}
         onCancel={() => setConfirmKey(null)}
         onConfirm={(key, into, confirm) => {
+          // The dialog stays open (pending) until the server accepts the
+          // job, so a rejected restore shows its error in context.
           restore.mutate({ key, into, confirm });
-          setConfirmKey(null);
         }}
       />
     </div>

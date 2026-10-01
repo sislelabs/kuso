@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { X, Plus, Globe, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -123,36 +123,34 @@ export function AddCronDialog({ project, open, onClose }: Props) {
     create.mutate();
   };
 
+  // A half-filled form shouldn't vanish on a stray backdrop click.
+  const dirty = !!(name.trim() || displayName.trim() || url.trim() || imageRepo.trim() || cmd.trim());
+
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(8,8,11,0.6)] p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.96, y: 4 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.96, y: 4 }}
-            transition={{ duration: 0.12 }}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)]"
-          >
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !create.isPending) onClose();
+      }}
+      disablePointerDismissal={dirty || create.isPending}
+    >
+      <DialogContent
+        showCloseButton={false}
+        className="block max-h-[90vh] gap-0 overflow-y-auto rounded-md p-0 sm:max-w-lg"
+      >
             <header className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
               <div>
-                <h2 className="font-heading text-base font-semibold tracking-tight">
+                <DialogTitle className="font-heading text-base font-semibold tracking-tight">
                   Add cron
-                </h2>
-                <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
+                </DialogTitle>
+                <DialogDescription className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
                   A recurring job in <span className="font-mono">{project}</span>.
-                </p>
+                </DialogDescription>
               </div>
               <button
                 type="button"
                 onClick={onClose}
+                disabled={create.isPending}
                 aria-label="Close"
                 className="rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
@@ -291,10 +289,8 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                 {create.isPending ? "Adding…" : "Add cron"}
               </Button>
             </footer>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -27,8 +27,9 @@ export interface RenderResult {
 }
 
 export async function listMarketplace(): Promise<MarketplaceApp[]> {
-  const res = await api<{ apps: MarketplaceApp[] }>("/api/marketplace");
-  return res.apps ?? [];
+  const res = await api<{ apps: MarketplaceApp[] | null }>("/api/marketplace");
+  // prompts is omitempty server-side: an app with no prompts arrives without the key.
+  return (res.apps ?? []).map((a) => ({ ...a, prompts: a.prompts ?? [] }));
 }
 
 export async function renderApp(

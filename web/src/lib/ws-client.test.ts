@@ -243,3 +243,66 @@ describe("frame + send plumbing", () => {
     expect(lastSocket().sent).toEqual(["plain", JSON.stringify({ cmd: "resize", cols: 80 })]);
   });
 });
+
+describe("refused upgrades (401/403/429 all surface as 1006 before open)", () => {
+  function makeProbed(probe: () => Promise<"retry" | "stop">, maxHandshakeFailures?: number) {
+    return new ReconnectingWS({
+      path: "/ws/x",
+      onFrame: () => {},
+      onStatus: (status, info) => statuses.push({ status, code: info?.code, ...(info?.gaveUp ? { gaveUp: true } : {}) } as { status: WSStatus; code?: number }),
+      onHandshakeFailure: probe,
+      maxHandshakeFailures,
+    });
+  }
+
+  it("stops for good when the auth probe says the session is gone", async () => {
+    const probe = vi.fn(async () => "stop" as const);
+    const ws = makeProbed(probe);
+    ws.open();
+    lastSocket().serverClose(1006);
+    await vi.runAllTimersAsync();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(socketCount()).toBe(1);
+    expect(statuses.at(-1)).toEqual({ status: "closed", code: 1006, gaveUp: true });
+  });
+
+  it("keeps backing off while the probe says retry, then gives up after the cap", async () => {
+    const probe = vi.fn(async () => "retry" as const);
+    const ws = makeProbed(probe, 3);
+    ws.open();
+    for (let i = 0; i < 3; i++) {
+      lastSocket().serverClose(1006);
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(socketCount()).toBe(3);
+    expect(statuses.at(-1)).toEqual({ status: "closed", code: 1006, gaveUp: true });
+  });
+
+  it("a socket that opened and then dropped is a normal reconnect, not a probe", async () => {
+    const probe = vi.fn(async () => "stop" as const);
+    const ws = makeProbed(probe);
+    ws.open();
+    lastSocket().simulateOpen();
+    lastSocket().serverClose(1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(probe).not.toHaveBeenCalled();
+    expect(socketCount()).toBe(2);
+  });
+});
+
+describe("caller close()", () => {
+  it("detaches handlers so the dead socket can't report into the next session", () => {
+    const frames: unknown[] = [];
+    const ws = makeWS({ onFrame: (f) => frames.push(f) });
+    ws.open();
+    const sock = lastSocket();
+    sock.simulateOpen();
+    const before = statuses.length;
+    ws.close();
+    sock.onmessage?.({ data: JSON.stringify({ late: true }) });
+    expect(statuses.length).toBe(before);
+    expect(frames).toEqual([]);
+  });
+});

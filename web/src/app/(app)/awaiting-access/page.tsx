@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
 import { useSession, useSignOut } from "@/features/auth";
 import { Button } from "@/components/ui/button";
-import { ShieldAlert, LogOut } from "lucide-react";
+import { ShieldAlert, LogOut, RefreshCw } from "lucide-react";
 
 // Awaiting-access page. Authenticated users with no perms land here
 // instead of bouncing off every guarded route. We deliberately keep
@@ -11,8 +12,17 @@ import { ShieldAlert, LogOut } from "lucide-react";
 // customize this in a later release once we have an instance-config
 // surface that can carry HTML / contact links.
 export default function AwaitingAccessPage() {
-  const { data } = useSession();
+  const { data, refetch, isFetching } = useSession();
   const signOut = useSignOut();
+
+  // Re-check every 30s while visible; AuthGate moves the user on once
+  // an admin grants a group.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refetch();
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [refetch]);
 
   return (
     <div className="mx-auto max-w-lg p-8 lg:p-12">
@@ -38,7 +48,11 @@ export default function AwaitingAccessPage() {
             </div>
           </div>
         </div>
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            <RefreshCw className="h-3 w-3" />
+            {isFetching ? "Checking…" : "Check again"}
+          </Button>
           <Button variant="outline" size="sm" onClick={signOut}>
             <LogOut className="h-3 w-3" />
             Sign out

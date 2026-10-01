@@ -20,7 +20,9 @@ export async function listSharedSecrets(project: string): Promise<SharedSecretsL
 
 export async function setSharedSecret(
   project: string,
-  body: { key: string; value: string }
+  // force overrides the 409 `shadowed` guard (a service-level env var
+  // with the same key would otherwise win over the shared value).
+  body: { key: string; value: string; force?: boolean }
 ): Promise<void> {
   await api(`/api/projects/${encodeURIComponent(project)}/shared-secrets`, {
     method: "PUT",

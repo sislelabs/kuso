@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, Filter } from "lucide-react";
@@ -110,7 +110,7 @@ export default function ActivityPage() {
         </div>
       ) : query.isError ? (
         <div className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
-          {(query.error as Error).message.includes("403")
+          {query.error instanceof ApiError && query.error.status === 403
             ? "Set a project filter to see audit entries — instance-wide audit requires admin."
             : `Failed to load audit log: ${(query.error as Error).message}`}
         </div>
@@ -119,7 +119,7 @@ export default function ActivityPage() {
           No audit entries match your filters.
         </div>
       ) : (
-        <div className="rounded-md border border-[var(--border-subtle)] overflow-hidden">
+        <div className="rounded-md border border-[var(--border-subtle)] overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead className="bg-[var(--bg-secondary)] text-[var(--text-tertiary)]">
               <tr>

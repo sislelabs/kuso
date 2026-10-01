@@ -241,7 +241,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
               />
               <div className="mt-2 flex items-center justify-between">
                 <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                  read-only · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
+                  this runner is read-only (Browse edits live data) · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
                 </span>
                 <Button size="sm" onClick={() => run.mutate(query)} disabled={run.isPending}>
                   <Play className="h-3 w-3" />
@@ -269,10 +269,47 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
   );
 }
 
+export type SQLCellDisplay =
+  | { kind: "null" }
+  | { kind: "empty" }
+  | { kind: "ambiguous" }
+  | { kind: "text"; text: string };
+
+// sqlCellDisplay decides how a result cell renders. '' is a real value
+// and must never be shown as NULL; when the server doesn't say which
+// cells are NULL, an empty cell is labelled as ambiguous instead.
+export function sqlCellDisplay(cell: string, isNull: boolean | undefined): SQLCellDisplay {
+  if (isNull) return { kind: "null" };
+  if (cell !== "") return { kind: "text", text: cell.length > 200 ? cell.slice(0, 200) + "…" : cell };
+  return isNull === false ? { kind: "empty" } : { kind: "ambiguous" };
+}
+
+function SQLCell({ cell }: { cell: SQLCellDisplay }) {
+  switch (cell.kind) {
+    case "null":
+      return <span className="text-[var(--text-tertiary)]/60 italic">null</span>;
+    case "empty":
+      return <span className="text-[var(--text-tertiary)]/60">&apos;&apos;</span>;
+    case "ambiguous":
+      return (
+        <span
+          className="text-[var(--text-tertiary)]/60"
+          title="Empty string or NULL: this runner can't tell them apart yet. Use Browse, or IS NULL in the query."
+        >
+          ∅
+        </span>
+      );
+    default:
+      return <>{cell.text}</>;
+  }
+}
+
 function SQLResults({
   resp,
 }: {
-  resp: { columns: string[]; rows: string[][]; truncated: boolean; elapsed: string };
+  // nulls arrives once the server reports it (like the Browse grid's
+  // data.nulls); until then NULL and '' are indistinguishable here.
+  resp: { columns: string[]; rows: string[][]; nulls?: boolean[][]; truncated: boolean; elapsed: string };
 }) {
   if (resp.columns.length === 0) {
     return (
@@ -307,13 +344,7 @@ function SQLResults({
                   key={j}
                   className="px-2 py-1 align-top text-[var(--text-secondary)]"
                 >
-                  {cell === "" ? (
-                    <span className="text-[var(--text-tertiary)]/60 italic">null</span>
-                  ) : cell.length > 200 ? (
-                    cell.slice(0, 200) + "…"
-                  ) : (
-                    cell
-                  )}
+                  <SQLCell cell={sqlCellDisplay(cell, resp.nulls?.[i]?.[j])} />
                 </td>
               ))}
             </tr>

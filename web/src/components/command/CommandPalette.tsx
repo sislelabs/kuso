@@ -38,6 +38,7 @@ import {
 import { buildTriggerMessage, triggerBuild } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // Pull the current project name out of the pathname when we're on a
 // /projects/<name>/... route. That lets the palette load the
@@ -85,9 +86,14 @@ export function CommandPalette() {
 
   const perms = session?.session.permissions ?? [];
   const isAdmin = perms.includes("user:write");
+  // Both pages sit behind settings:admin (settings index cards); listing
+  // them for everyone just leads to a load error.
+  const isSettingsAdmin = perms.includes("settings:admin");
 
-  const serviceList = services.data ?? [];
+  const serviceList = useMemo(() => services.data ?? [], [services.data]);
   const addonList = addons.data ?? [];
+  // A redeploy is a production build: confirm instead of firing on Enter.
+  const [pendingRedeploy, setPendingRedeploy] = useState<string | null>(null);
 
   // Per-service env-var index. cmdk's value-string matching means a
   // user typing "DATABASE_URL" lands on the right service row even
@@ -109,7 +115,7 @@ export function CommandPalette() {
   }, [serviceList, currentProject]);
 
   const runBuild = async (svc: string) => {
-    setOpen(false);
+    setPendingRedeploy(null);
     try {
       const res = await triggerBuild(currentProject, svc, {});
       toast.success(buildTriggerMessage(res, `Redeploy started for ${svc}`, svc));
@@ -119,6 +125,18 @@ export function CommandPalette() {
   };
 
   return (
+    <>
+    <ConfirmDialog
+      open={pendingRedeploy != null}
+      title={`Redeploy ${pendingRedeploy ?? ""}?`}
+      body="Starts a new production build from the tracked branch and rolls the service when it's green."
+      confirmLabel="Redeploy"
+      destructive={false}
+      onCancel={() => setPendingRedeploy(null)}
+      onConfirm={() => {
+        if (pendingRedeploy) void runBuild(pendingRedeploy);
+      }}
+    />
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput placeholder="Jump or do: project, service, env var, redeploy…" />
       <CommandList>
@@ -196,7 +214,10 @@ export function CommandPalette() {
                   return (
                     <CommandItem
                       key={`redeploy-${name}`}
-                      onSelect={() => runBuild(name)}
+                      onSelect={() => {
+                        setOpen(false);
+                        setPendingRedeploy(name);
+                      }}
                       value={`redeploy build trigger ${name}`}
                     >
                       <Play className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -290,7 +311,6 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/projects")} value="all projects list dashboard home">
             <LayoutGrid className="h-4 w-4 text-[var(--text-tertiary)]" />
             All projects
-            <CommandShortcut>g p</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => go("/settings")} value="settings index">
             <Settings className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -304,14 +324,18 @@ export function CommandPalette() {
             <KeyRound className="h-4 w-4 text-[var(--text-tertiary)]" />
             API tokens
           </CommandItem>
-          <CommandItem onSelect={() => go("/settings/nodes")} value="nodes cluster servers">
-            <Box className="h-4 w-4 text-[var(--text-tertiary)]" />
-            Cluster nodes
-          </CommandItem>
-          <CommandItem onSelect={() => go("/settings/alerts")} value="alerts alerting rules thresholds">
-            <Bell className="h-4 w-4 text-[var(--text-tertiary)]" />
-            Alerts
-          </CommandItem>
+          {isSettingsAdmin && (
+            <CommandItem onSelect={() => go("/settings/nodes")} value="nodes cluster servers">
+              <Box className="h-4 w-4 text-[var(--text-tertiary)]" />
+              Cluster nodes
+            </CommandItem>
+          )}
+          {isSettingsAdmin && (
+            <CommandItem onSelect={() => go("/settings/alerts")} value="alerts alerting rules thresholds">
+              <Bell className="h-4 w-4 text-[var(--text-tertiary)]" />
+              Alerts
+            </CommandItem>
+          )}
           {isAdmin && (
             <CommandItem onSelect={() => go("/settings/users")} value="users admin">
               <Settings className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -356,6 +380,7 @@ export function CommandPalette() {
         </CommandGroup>
       </CommandList>
     </CommandDialog>
+    </>
   );
 }
 
@@ -367,12 +392,12 @@ export function CommandTrigger() {
         const evt = new KeyboardEvent("keydown", { key: "k", metaKey: true });
         window.dispatchEvent(evt);
       }}
-      className="hidden sm:inline-flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+      className="inline-flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
       aria-label="Open command palette"
     >
       <Search className="h-3.5 w-3.5" />
-      <span>Search</span>
-      <kbd className="ml-2 rounded border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <span className="hidden sm:inline">Search</span>
+      <kbd className="ml-2 hidden sm:inline rounded border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
         ⌘K
       </kbd>
     </button>

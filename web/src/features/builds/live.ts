@@ -88,3 +88,11 @@ export function isBranchMismatch(err: unknown): boolean {
   const status = (err as { status?: unknown }).status;
   return status === 400 && /branch/i.test(err.message);
 }
+
+// buildRefLabel names what a build built: the commit SHA cut to `shaLen`,
+// else the synthetic ref in full (cutting "main-x7k2p" would leave a
+// meaningless prefix), else "".
+export function buildRefLabel(b: { commitSha?: string; ref?: string }, shaLen: number): string {
+  if (b.commitSha) return b.commitSha.slice(0, shaLen);
+  return b.ref ?? "";
+}

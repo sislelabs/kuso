@@ -189,10 +189,10 @@ function ResultView({ result }: { result: ConfigApplyResult }) {
                 key={`${e.resource}-${e.op}-${i}`}
                 className={
                   "px-3 py-2 text-[12px]" +
-                  (i < errs.length - 1 ? " border-b border-red-500/20" : "")
+                  (i < errs.length - 1 ? " border-b border-[var(--error)]/20" : "")
                 }
               >
-                <span className="font-mono text-[11px] text-red-300">
+                <span className="font-mono text-[11px] text-[var(--error)]">
                   {e.op} {e.resource}
                 </span>
                 <span className="ml-2 text-[var(--text-secondary)]">{e.message}</span>

@@ -11,7 +11,7 @@ import type { LogLine, LogSearchResponse } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isProductionGroup } from "@/lib/env-group";
+import { serviceEnvOptions } from "@/lib/env-group";
 import { LogStream } from "@/components/logs/LogStream";
 
 interface Props {
@@ -52,35 +52,7 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv 
   // to a preview at all.
   const envs = useEnvironments(project);
   const fqn = service ? project + "-" + service : "";
-  const envOptions = useMemo(() => {
-    const list = (envs.data ?? []).filter((e) => e.spec.service === fqn);
-    return list
-      .map((e) => {
-        // The log store filters by the pod's `kuso.sislelabs.com/env`
-        // label (logship shipper.go:317), so the dropdown VALUE must equal
-        // that label. Prefer the label off the env CR; fall back to
-        // stripping the real `<project>-<service>-` prefix from the CR
-        // name. The old `slice(-2)` was wrong for single-segment env ids
-        // (env `staging` on service `frontend` → CR `frontend-staging` →
-        // yielded `frontend-staging`, so the filter matched zero rows).
-        const short =
-          e.metadata.labels?.["kuso.sislelabs.com/env"] ||
-          (fqn && e.metadata.name.startsWith(fqn + "-")
-            ? e.metadata.name.slice(fqn.length + 1)
-            : e.metadata.name);
-        // Only the production-GROUP env renders as "production". A staging
-        // clone carries spec.kind="production" too, so keying on spec.kind
-        // mislabeled it "production" — drive the option off the group label
-        // (with the legacy spec.kind fallback for label-less CRs).
-        if (isProductionGroup(e)) return { value: "production", label: "production" };
-        return { value: short, label: short };
-      })
-      .sort((a, b) => {
-        if (a.value === "production") return -1;
-        if (b.value === "production") return 1;
-        return a.label.localeCompare(b.label);
-      });
-  }, [envs.data, fqn]);
+  const envOptions = useMemo(() => serviceEnvOptions(envs.data ?? [], fqn), [envs.data, fqn]);
 
   // Convert "1h" → RFC3339 absolute. The server accepts RFC3339 or
   // unix; we send RFC3339 for consistency with the time pickers.
@@ -108,10 +80,13 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv 
       }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.nextBeforeId,
-    // Only the newest page live-tails, and only while untouched: a
-    // background refetch of every loaded page would re-request the
-    // whole scrollback every 10s.
-    refetchInterval: committed.q === "" ? 10_000 : false,
+    // Poll only while the reader is on the newest page with no query.
+    // An infinite query refetches EVERY loaded page, serially, so once
+    // older pages are loaded polling would re-download the scrollback
+    // every 10s and shift page boundaries under the reader.
+    refetchInterval: (query) =>
+      committed.q === "" && (query.state.data?.pages.length ?? 0) <= 1 ? 10_000 : false,
+    refetchOnWindowFocus: (query) => (query.state.data?.pages.length ?? 0) <= 1,
     staleTime: 5_000,
   });
 
@@ -130,7 +105,7 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv 
           <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
             {live
               ? "Live tail of the running pods in this environment."
-              : "Searchable archive, 7d retention. Substring match, case-insensitive. Polls every 10s when no query is set."}
+              : "Searchable archive, 7d retention. Substring match, case-insensitive. Polls every 10s when no query is set and you haven't scrolled back."}
           </p>
         </div>
         {streamEnv && (
@@ -184,7 +159,11 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv 
         </div>
         <select
           value={env}
-          onChange={(e) => setEnv(e.target.value)}
+          onChange={(e) => {
+            // Applies immediately, like the time chips.
+            setEnv(e.target.value);
+            setCommitted((c) => ({ ...c, env: e.target.value }));
+          }}
           aria-label="Environment"
           className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
         >
@@ -381,11 +360,14 @@ function Highlight({ text, query }: { text: string; query: string }) {
   if (needle.length === 0) return <>{stripAnsi(text)}</>;
   const re = new RegExp(`(${needle.map(escapeRe).join("|")})`, "ig");
   const stripped = stripAnsi(text);
+  // split() with one capture group puts the matches at odd indices.
+  // (Testing each part with the /g regex was wrong: .test() carries
+  // lastIndex between calls and skipped some matches.)
   const parts = stripped.split(re);
   return (
     <>
       {parts.map((p, i) =>
-        re.test(p) ? (
+        i % 2 === 1 ? (
           <mark key={i} className="rounded bg-[var(--accent-subtle)] px-0.5 text-[var(--text-primary)]">
             {p}
           </mark>

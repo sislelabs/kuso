@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { claimEscape } from "@/lib/escape-layer";
 import { serviceBlast } from "@/lib/blast-radius";
 import { Input } from "@/components/ui/input";
 import { Check, ChevronRight, Eye, EyeOff, Link2, Lock, Search, Trash2 } from "lucide-react";
@@ -19,6 +21,7 @@ import {
   addonShortByConnSecret,
   buildTimePrefix,
   dotenvToRows,
+  envApplyFailureMessage,
   prefixGroups,
   reservedEnvWarning,
   rid,
@@ -128,6 +131,7 @@ export function EnvVarsEditor({
   const [subscriptionSaving, setSubscriptionSaving] = useState(false);
   // Replaces the service's shared-secret subscription. Applied immediately,
   // not through the SaveBar: it's its own spec field with its own rollout.
+  const [pendingUnsub, setPendingUnsub] = useState<string | null>(null);
   const setSubscription = async (keys: string[]) => {
     setSubscriptionSaving(true);
     try {
@@ -245,9 +249,12 @@ export function EnvVarsEditor({
       .map((v) => toRow(v, project, addonByConn, knownScopes))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     if (!dirty) {
+      // Only collapse open rows when the values actually changed; a poll
+      // that merely re-derives addonByConn shouldn't close a row the user
+      // just opened.
+      if (!rowsShallowEqual(incoming, baselineFromRows.current)) setEditing(new Set());
       setRows(incoming);
       baselineFromRows.current = incoming;
-      setEditing(new Set());
       setConflictNotified(false);
       return;
     }
@@ -459,11 +466,22 @@ export function EnvVarsEditor({
   saveRef.current = save;
   discardRef.current = discard;
 
+  const refreshAfterApply = () =>
+    Promise.all([
+      // env (incl. the reveal variant) + drift for the rollout banner, and
+      // the describe payload the canvas derives edges from.
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] }),
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] }),
+      qc.invalidateQueries({ queryKey: ["projects", project], exact: true }),
+    ]);
+
   const applyPending = async () => {
     if (!pendingPayload) return;
     const { valueWrites, deletes } = pendingPayload;
     setSaving(true);
     setSaveError(undefined);
+    const applied: string[] = [];
+    let current = "";
     try {
       // The whole save is expressed as idempotent per-key operations — no
       // wholesale bulk overwrite, so there is no window where the CR is
@@ -475,28 +493,38 @@ export function EnvVarsEditor({
       //    storage (CR literal / managed secret / secretKeyRef) and clears
       //    any stale prior form of the same name.
       for (const w of valueWrites) {
+        current = w.name;
         await setServiceEnvValue(project, service, w.name, w.value);
+        applied.push(w.name);
       }
       // 2. Every removed row → DELETE. UnsetEnvVar removes any form. A
       //    404 (already gone) is fine — treat it as success.
       for (const name of deletes) {
+        current = name;
         try {
           await unsetServiceEnvVar(project, service, name);
         } catch (e) {
           if (!(e instanceof ApiError && e.status === 404)) throw e;
         }
+        applied.push(name);
       }
-      // Invalidate the env (incl. the reveal variant) + drift queries to
-      // refetch current values and surface the rollout banner.
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] });
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
+      // Await the refetch before dropping dirty, or the sync effect
+      // re-seeds the rows from the pre-save cache and they flash back.
+      await refreshAfterApply();
       toast.success("Env vars saved");
       setDirty(false);
       setPendingPayload(null);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to save env vars";
+      const reason = e instanceof Error ? e.message : "request failed";
+      const msg = envApplyFailureMessage(applied, current, reason);
       setSaveError(msg);
       toast.error(msg);
+      // Some keys may already be live: refresh so the editor and the
+      // rollout banner reflect them. The local edits stay dirty so Save
+      // retries (every write is idempotent); the refetch is ours, so
+      // don't warn about "another edit".
+      setConflictNotified(true);
+      void refreshAfterApply();
     } finally {
       setSaving(false);
     }
@@ -845,7 +873,7 @@ export function EnvVarsEditor({
               { label: `Edit in ${it.source} settings`, href: settingsHref(it.source) },
               {
                 label: "Remove from this service",
-                onSelect: () => void setSubscription(subscribed.filter((k) => k !== it.name)).catch(() => undefined),
+                onSelect: () => setPendingUnsub(it.name),
                 destructive: true,
                 disabled: !canWrite,
               },
@@ -1048,6 +1076,26 @@ export function EnvVarsEditor({
         onCancel={() => setPendingPayload(null)}
         onConfirm={applyPending}
       />
+      <ConfirmDialog
+        open={pendingUnsub != null}
+        title={`Remove ${pendingUnsub ?? ""} from this service?`}
+        body="The service stops receiving this shared secret. The running pod keeps it until its next restart or deploy."
+        confirmLabel="Remove"
+        pending={subscriptionSaving}
+        onCancel={() => setPendingUnsub(null)}
+        onConfirm={() => {
+          const name = pendingUnsub;
+          if (!name) return;
+          // setSubscription already toasts its own error.
+          setSubscription(subscribed.filter((k) => k !== name)).then(
+            () => {
+              toast.success(`Removed ${name} from ${service}`);
+              setPendingUnsub(null);
+            },
+            () => setPendingUnsub(null),
+          );
+        }}
+      />
     </div>
   );
 }
@@ -1152,10 +1200,13 @@ function ReferenceMenu({
   // Auto-close on outside click + Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Capture + claim: close just this menu, not the service overlay.
+      claimEscape(e);
+      onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
   return (

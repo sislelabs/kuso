@@ -1,20 +1,25 @@
 // Small formatting helpers used throughout the dashboard.
 
-export function relativeTime(input?: string): string {
+export function relativeTime(input?: string, now: number = Date.now()): string {
   if (!input) return "";
   const t = new Date(input).getTime();
   if (Number.isNaN(t)) return "";
-  const diffMs = Date.now() - t;
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  const diffMs = now - t;
+  // Future timestamps (invite/token expiry) read "in 3d"; a few seconds
+  // of client/server clock skew on a fresh event reads "just now"
+  // rather than "-3s ago".
+  const future = diffMs < 0;
+  const sec = Math.floor(Math.abs(diffMs) / 1000);
+  if (sec < 60) return future || sec < 5 ? "just now" : `${sec}s ago`;
+  const fmt = (n: number, unit: string) => (future ? `in ${n}${unit}` : `${n}${unit} ago`);
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return fmt(min, "m");
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return fmt(hr, "h");
   const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
+  if (day < 30) return fmt(day, "d");
   const mo = Math.floor(day / 30);
-  if (mo < 12) return `${mo}mo ago`;
+  if (mo < 12) return fmt(mo, "mo");
   return new Date(input).toLocaleDateString();
 }
 

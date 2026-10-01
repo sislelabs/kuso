@@ -12,6 +12,8 @@ export function useDrains(enabled: boolean) {
 export function useCreateDrain() {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (input: DrainInput) => createDrain(input),
     onSuccess: () => qc.invalidateQueries({ queryKey: drainsQueryKey }),
   });
@@ -20,11 +22,13 @@ export function useCreateDrain() {
 export function useDeleteDrain() {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (id: string) => deleteDrain(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: drainsQueryKey }),
   });
 }
 
 export function useTestDrain() {
-  return useMutation({ mutationFn: (id: string) => testDrain(id) });
+  return useMutation({ meta: { skipGlobalErrorToast: true }, mutationFn: (id: string) => testDrain(id) });
 }

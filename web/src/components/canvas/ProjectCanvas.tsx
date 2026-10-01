@@ -39,6 +39,8 @@ import {
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
 import { servicesQueryKey } from "@/features/projects";
+import { invalidateProjectDescribe } from "@/features/projects/hooks";
+import { anySurfaceOpen } from "@/lib/escape-layer";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { AddCronDialog } from "@/components/cron/AddCronDialog";
 import { EditCronDialog } from "@/components/cron/EditCronDialog";
@@ -128,7 +130,13 @@ export function ProjectCanvas({
     // run anyway. Pause polling while the tab is hidden — the user
     // isn't watching, kube isn't telling us anything new, and a
     // 30-tab browser shouldn't burn N×Q pollers in the background.
-    refetchInterval: 5_000,
+    // 5s only while some build is in flight; settled projects poll at 15s.
+    refetchInterval: (q) =>
+      Object.values(q.state.data ?? {}).some((b) =>
+        ["queued", "pending", "running", "deploying"].includes((b.status ?? "").toLowerCase()),
+      )
+        ? 5_000
+        : 15_000,
     refetchIntervalInBackground: false,
     staleTime: 5_000,
   });
@@ -608,7 +616,13 @@ export function ProjectCanvas({
         const tag = target.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         if (target.isContentEditable) return;
+        // Enter on a focused button/link activates that control.
+        if (e.key === "Enter" && (tag === "BUTTON" || tag === "A")) return;
       }
+      // An overlay, dialog or menu is open on top of the canvas: its
+      // keys belong to it (r/l/v/s would otherwise switch services
+      // under an overlay with unsaved edits).
+      if (e.defaultPrevented || anySurfaceOpen()) return;
       // Ignore when modifiers are held — those are reserved for
       // browser shortcuts (cmd-K opens the palette, cmd-R reloads).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -770,9 +784,10 @@ export function ProjectCanvas({
       ];
       await setServiceEnv(project, plan.targetService, next);
       toast.success(`Connected ${plan.summary} (${plan.varName})`);
-      // Refetch services so the new env var lands in props +
-      // edge-derivation re-runs.
+      // Edges derive from the describe payload, not the services list.
       qc.invalidateQueries({ queryKey: servicesQueryKey(project) });
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      invalidateProjectDescribe(qc, project);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Connect failed");
     }

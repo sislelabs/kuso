@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,7 @@ import {
   useProject,
   useUpdateProject,
   useDeleteProject,
+  projectQueryKey,
   getProjectNotificationMute,
   muteProjectNotifications,
   unmuteProjectNotifications,
@@ -18,6 +20,8 @@ import {
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { RegistryCredentialsCard } from "@/components/project/RegistryCredentialsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { friendlyApiError } from "@/features/projects/names";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
 import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
@@ -38,6 +42,7 @@ export function ProjectSettingsView() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const router = useRouter();
   const projectName = params.project ?? "";
+  const qc = useQueryClient();
   const project = useProject(projectName);
   const update = useUpdateProject(projectName);
   const del = useDeleteProject();
@@ -56,6 +61,11 @@ export function ProjectSettingsView() {
   // typing; clamped on blur and on save.
   const [previewsTtl, setPreviewsTtl] = useState("7");
   const [alwaysOn, setAlwaysOn] = useState(false);
+  // dirty pins the form once the user edits it: the describe payload
+  // carries live env status, so it refetches (and would re-seed every
+  // field) on focus and after unrelated mutations.
+  const [dirty, setDirty] = useState(false);
+  const [confirmDomain, setConfirmDomain] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   const [purgeData, setPurgeData] = useState(false);
   // Notification mute is NOT part of the project spec (it lives in the
@@ -71,9 +81,11 @@ export function ProjectSettingsView() {
       .catch(() => setMuted(false));
   }, [projectName]);
 
+  const spec = project.data?.project?.spec;
+  const specKey = JSON.stringify(spec ?? null);
   useEffect(() => {
-    if (project.data?.project?.spec) {
-      const s = project.data.project.spec;
+    if (spec && !dirty) {
+      const s = spec;
       setDescription(s.description ?? "");
       setBaseDomain(s.baseDomain ?? "");
       setRepoURL(s.defaultRepo?.url ?? "");
@@ -82,7 +94,10 @@ export function ProjectSettingsView() {
       setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
       setAlwaysOn(!!s.alwaysOn);
     }
-  }, [project.data]);
+    // specKey stands in for spec: re-seed on content change, not on
+    // every refetch's new object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specKey, dirty]);
 
   if (project.isPending) {
     return (
@@ -103,25 +118,41 @@ export function ProjectSettingsView() {
     );
   }
 
-  const onSave = async () => {
+  const storedBaseDomain = spec?.baseDomain ?? "";
+  const storedRepoURL = spec?.defaultRepo?.url ?? "";
+
+  const save = async () => {
     try {
       await update.mutateAsync({
-        description: description || null,
-        baseDomain: baseDomain || null,
-        // Default repo: services with no spec.repo inherit this. Only
-        // sent when a URL is present — the server's PATCH sets-when-
-        // -non-empty (it doesn't clear), so an empty field is a no-op,
-        // not a removal. Setting/changing the repo is the supported op.
+        // "" clears; the server treats an omitted/null key as "leave alone".
+        description: description.trim(),
+        baseDomain: baseDomain.trim(),
+        // Default repo: services with no spec.repo inherit this. An
+        // emptied field clears it; the server ignores an empty defaultRepo.
         ...(repoURL.trim()
           ? { defaultRepo: { url: repoURL.trim(), defaultBranch: repoBranch.trim() || undefined } }
-          : {}),
+          : storedRepoURL
+            ? { clearDefaultRepo: true }
+            : {}),
         previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl) },
         alwaysOn,
       });
+      await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
+      setDirty(false);
       toast.success("Saved");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
+      toast.error(friendlyApiError(e, "Failed to save"));
     }
+  };
+
+  const onSave = () => {
+    // A base-domain change re-hosts every service that uses the default
+    // host and mints new certificates, so it gets its own confirm.
+    if (baseDomain.trim() !== storedBaseDomain) {
+      setConfirmDomain(true);
+      return;
+    }
+    void save();
   };
 
   const onDelete = async () => {
@@ -139,7 +170,7 @@ export function ProjectSettingsView() {
       }
       router.replace("/projects");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete");
+      toast.error(friendlyApiError(e, "Failed to delete"));
     }
   };
 
@@ -166,7 +197,7 @@ export function ProjectSettingsView() {
             <Input
               id="description"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
               placeholder="Short human-readable summary"
             />
           </div>
@@ -175,7 +206,7 @@ export function ProjectSettingsView() {
             <Input
               id="baseDomain"
               value={baseDomain}
-              onChange={(e) => setBaseDomain(e.target.value)}
+              onChange={(e) => { setBaseDomain(e.target.value); setDirty(true); }}
               placeholder="myproject.example.com"
               className="font-mono"
             />
@@ -199,14 +230,14 @@ export function ProjectSettingsView() {
               <Input
                 id="repoURL"
                 value={repoURL}
-                onChange={(e) => setRepoURL(e.target.value)}
+                onChange={(e) => { setRepoURL(e.target.value); setDirty(true); }}
                 placeholder="https://github.com/org/repo"
                 className="font-mono flex-1"
               />
               <Input
                 id="repoBranch"
                 value={repoBranch}
-                onChange={(e) => setRepoBranch(e.target.value)}
+                onChange={(e) => { setRepoBranch(e.target.value); setDirty(true); }}
                 placeholder="main"
                 className="font-mono w-32"
                 aria-label="Default branch"
@@ -250,7 +281,7 @@ export function ProjectSettingsView() {
             <input
               type="checkbox"
               checked={previewsEnabled}
-              onChange={(e) => setPreviewsEnabled(e.target.checked)}
+              onChange={(e) => { setPreviewsEnabled(e.target.checked); setDirty(true); }}
               className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
             />
             <span className="flex-1">
@@ -275,7 +306,7 @@ export function ProjectSettingsView() {
                 value={previewsTtl}
                 min={1}
                 max={30}
-                onChange={(e) => setPreviewsTtl(e.target.value)}
+                onChange={(e) => { setPreviewsTtl(e.target.value); setDirty(true); }}
                 onBlur={(e) => setPreviewsTtl(String(clampPreviewTtl(e.target.value)))}
                 className="w-32 font-mono"
               />
@@ -314,6 +345,7 @@ export function ProjectSettingsView() {
                     await unmuteProjectNotifications(projectName);
                   }
                   setMuted(next);
+                  void qc.invalidateQueries({ queryKey: ["admin", "notifications", "muted-projects"] });
                   toast.success(next ? "Notifications muted" : "Notifications unmuted");
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "Failed to update mute");
@@ -349,16 +381,15 @@ export function ProjectSettingsView() {
             <input
               type="checkbox"
               checked={alwaysOn}
-              onChange={(e) => setAlwaysOn(e.target.checked)}
+              onChange={(e) => { setAlwaysOn(e.target.checked); setDirty(true); }}
               className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
             />
             <span className="flex-1">
               <span className="text-[13px] font-medium">Always-on services (disable scale-to-zero)</span>
               <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
-                Overrides every service&apos;s individual{" "}
-                <code className="font-mono">spec.sleep</code> setting. With this on, services in
-                this project never scale below their <code className="font-mono">scale.min</code>{" "}
-                replica count regardless of idle time. Useful for low-traffic but cold-start-
+                Overrides every service&apos;s own sleep setting. With this on, services in
+                this project never scale below their minimum replica count, however long
+                they sit idle. Useful for low-traffic but cold-start-
                 sensitive workloads.
               </span>
             </span>
@@ -367,6 +398,26 @@ export function ProjectSettingsView() {
       </section>
 
       {/* Save */}
+      <ConfirmDialog
+        open={confirmDomain}
+        title="Change the base domain?"
+        body={
+          <>
+            Every service on a default host moves from{" "}
+            <span className="font-mono">*.{storedBaseDomain || "the instance domain"}</span> to{" "}
+            <span className="font-mono">*.{baseDomain.trim() || "the instance domain"}</span>, and new
+            TLS certificates are requested. The old URLs stop working once this applies. Make sure
+            DNS for the new domain already points at the cluster.
+          </>
+        }
+        confirmLabel="Change domain"
+        pending={update.isPending}
+        onConfirm={() => {
+          setConfirmDomain(false);
+          void save();
+        }}
+        onCancel={() => setConfirmDomain(false)}
+      />
       <div className="flex justify-end">
         <Button onClick={onSave} disabled={update.isPending}>
           <Save className="h-4 w-4" />
@@ -443,7 +494,7 @@ export function ProjectSettingsView() {
             disabled={del.isPending || confirmDelete !== projectName}
           >
             <Trash2 className="h-4 w-4" />
-            Delete project
+            {del.isPending ? "Deleting…" : "Delete project"}
           </Button>
         </div>
       </section>

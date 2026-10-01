@@ -2,9 +2,15 @@
 
 import { useState, useRef } from "react";
 import Link from "next/link";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api-client";
-import { applyConfig, type ConfigStepError } from "@/features/projects";
+import {
+  applyConfig,
+  projectQueryKey,
+  projectsQueryKey,
+  projectsSummaryQueryKey,
+  type ConfigStepError,
+} from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileUp, CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
@@ -47,6 +53,7 @@ const ACTION_META: Record<NoteAction, { label: string; cls: string; icon: React.
 };
 
 export default function ImportComposePage() {
+  const qc = useQueryClient();
   const isAdmin = useCan(Perms.SettingsAdmin);
   const [project, setProject] = useState("");
   const [composeText, setComposeText] = useState("");
@@ -98,6 +105,10 @@ export default function ImportComposePage() {
     onSuccess: (outcome) => {
       if (outcome === "conflict") return;
       setApplied(true);
+      const proj = preview.data?.project ?? project;
+      void qc.invalidateQueries({ queryKey: projectsQueryKey, exact: true });
+      void qc.invalidateQueries({ queryKey: projectsSummaryQueryKey, exact: true });
+      void qc.invalidateQueries({ queryKey: projectQueryKey(proj) });
     },
     onError: (err) => toast.error(err.message),
   });

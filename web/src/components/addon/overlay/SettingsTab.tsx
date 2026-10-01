@@ -82,6 +82,8 @@ export function SettingsTab({
       toast.success(`Addon ${addon} deleted`);
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      // Connection details (DSN, TLS, pooler) render from this cache.
+      qc.invalidateQueries({ queryKey: ["addons", project] });
       onClose();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
@@ -244,6 +246,8 @@ function ConfigurationSection({
     onSuccess: () => {
       toast.success("Configuration saved");
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      // Connection details (DSN, TLS, pooler) render from this cache.
+      qc.invalidateQueries({ queryKey: ["addons", project] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });
@@ -281,7 +285,7 @@ function ConfigurationSection({
           // the badge can't claim "in sync" while the release is broken.
           if (dirty) {
             return (
-              <span className="font-mono text-[10px] text-amber-300/80">unsaved</span>
+              <span className="font-mono text-[10px] text-[var(--warning)]">unsaved</span>
             );
           }
           const rs = addonReconcileState(cr);
@@ -292,7 +296,7 @@ function ConfigurationSection({
             return (
               <span
                 title={msg}
-                className="inline-flex items-center gap-1 font-mono text-[10px] text-red-300"
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--error)]"
               >
                 <AlertTriangle className="h-3 w-3" /> upgrade failed
               </span>
@@ -300,7 +304,7 @@ function ConfigurationSection({
           }
           if (rs === "synced") {
             return (
-              <span className="font-mono text-[10px] text-emerald-300/80">in sync</span>
+              <span className="font-mono text-[10px] text-[var(--success)]">in sync</span>
             );
           }
           // Unknown reconcile state (no conditions yet) — don't assert green.
@@ -319,7 +323,7 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-amber-300/80">
+            <p className="font-mono text-[10px] text-[var(--warning)]">
               {addonBlast("version")?.message}
             </p>
           </div>
@@ -336,7 +340,7 @@ function ConfigurationSection({
               <option value="medium">medium</option>
               <option value="large">large</option>
             </select>
-            <p className="font-mono text-[10px] text-amber-300/80">
+            <p className="font-mono text-[10px] text-[var(--warning)]">
               {addonBlast("size")?.message}
             </p>
           </div>
@@ -352,7 +356,7 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-amber-300/80">
+            <p className="font-mono text-[10px] text-[var(--warning)]">
               Cannot be changed after addon create. To resize, take a backup,
               delete the addon, recreate at the new size, restore.
             </p>
@@ -367,7 +371,7 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-amber-300/80">
+            <p className="font-mono text-[10px] text-[var(--warning)]">
               {addonBlast("database")?.message}
             </p>
           </div>
@@ -385,7 +389,7 @@ function ConfigurationSection({
               · immutable
             </span>
           </label>
-          <p className="mt-1 font-mono text-[10px] text-amber-300/80">
+          <p className="mt-1 font-mono text-[10px] text-[var(--warning)]">
             {addonBlast("ha")?.message}
           </p>
         </div>
@@ -422,7 +426,7 @@ function ConfigurationSection({
               </span>
             </label>
             {requireTLS !== initial.requireTLS && (
-              <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-amber-300/80">
+              <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-[var(--warning)]">
                 The DB pod restarts {requireTLS ? "serving" : "without"} TLS and the
                 conn secret re-renders with the new sslmode — but services keep the
                 OLD value until their pods restart. Redeploy or restart every
@@ -584,6 +588,8 @@ function PlacementSection({
     onSuccess: () => {
       toast.success("Placement saved");
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      // Connection details (DSN, TLS, pooler) render from this cache.
+      qc.invalidateQueries({ queryKey: ["addons", project] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });
@@ -894,6 +900,8 @@ function PublicTCPSection({
     onSuccess: (res) => {
       toast.success(`Public TCP port ${res.port} allocated`);
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      // Connection details (DSN, TLS, pooler) render from this cache.
+      qc.invalidateQueries({ queryKey: ["addons", project] });
       setConfirmingEnable(false);
     },
     onError: (e) =>
@@ -905,6 +913,8 @@ function PublicTCPSection({
     onSuccess: () => {
       toast.success("Public TCP endpoint removed");
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      // Connection details (DSN, TLS, pooler) render from this cache.
+      qc.invalidateQueries({ queryKey: ["addons", project] });
       setConfirming(false);
     },
     onError: (e) =>
@@ -928,7 +938,7 @@ function PublicTCPSection({
           className={cn(
             "font-mono text-[10px]",
             enabled
-              ? "text-amber-300"
+              ? "text-[var(--warning)]"
               : "text-[var(--text-tertiary)]",
           )}
         >
@@ -946,8 +956,8 @@ function PublicTCPSection({
           <div className="space-y-2">
             <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-300" />
-                <span className="text-[11px] font-medium text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />
+                <span className="text-[11px] font-medium text-[var(--warning)]">
                   Reachable from the public internet
                 </span>
               </div>

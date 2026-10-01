@@ -6,28 +6,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
+import { friendlyApiError, projectNameError } from "@/features/projects/names";
 import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Globe, Store, FileUp } from "lucide-react";
-
-// Route segments the app owns. A project with one of these names would
-// collide with a static page (/projects/new) or be stripped by the
-// pathname-based param extraction in lib/dynamic-params.ts, leaving it
-// unreachable. Mirrors reservedRouteNames in
-// server-go/internal/projects/projects_ops.go — the server rejects
-// these too; checking here just gives an instant, friendlier error.
-const RESERVED_NAMES = new Set([
-  "new",
-  "projects",
-  "services",
-  "addons",
-  "envs",
-  "logs",
-  "settings",
-  "invite",
-]);
 
 // NewProjectPage creates an empty project — just a name and optional
 // base domain. Repos attach later as services (each service owns its
@@ -78,17 +62,9 @@ export default function NewProjectPage() {
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(trimmed)) {
-      setNameError(
-        trimmed
-          ? "Lowercase letters, digits, and dashes only; must start/end with a letter or digit; ≤ 63 chars."
-          : "Project name is required."
-      );
-      nameInputRef.current?.focus();
-      return;
-    }
-    if (RESERVED_NAMES.has(trimmed)) {
-      setNameError(`"${trimmed}" is reserved — it collides with an app route. Pick another name.`);
+    const invalid = projectNameError(trimmed);
+    if (invalid) {
+      setNameError(invalid);
       nameInputRef.current?.focus();
       return;
     }
@@ -104,7 +80,7 @@ export default function NewProjectPage() {
       toast.success("Project created");
       router.replace(`/projects/${encodeURIComponent(trimmed)}/services/new`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create project");
+      toast.error(friendlyApiError(err, "Failed to create project"));
     } finally {
       setSubmitting(false);
     }

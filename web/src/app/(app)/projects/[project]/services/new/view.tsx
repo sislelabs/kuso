@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,8 @@ import {
   type AddonSuggestion,
 } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
-import { addAddon, useAddons, useProject, useServices } from "@/features/projects";
+import { addAddon, projectQueryKey, useAddons, useProject, useServices } from "@/features/projects";
+import { SERVICE_DISPLAY_NAME_RE, friendlyApiError, serviceSlugError } from "@/features/projects/names";
 import { Perms, useCan, useSession } from "@/features/auth";
 import { useRegistryCredentials } from "@/features/registry-credentials";
 import { addonLabel } from "@/components/addon/AddonIcon";
@@ -70,6 +72,7 @@ export function imageRegistryHost(image: string): string {
 // the legacy multi-row UI which conflated project + services.
 export function AddServiceView() {
   const router = useRouter();
+  const qc = useQueryClient();
   const params = useRouteParams<{ project: string }>(["project"]);
   const project = params.project ?? "";
 
@@ -222,7 +225,9 @@ export function AddServiceView() {
     // Repo name is already kebab-case in 99% of cases, so it doubles
     // as a sensible display-name default — slug derives back to itself.
     const repoName = picked.repo.fullName.split("/")[1] ?? "service";
-    if (!name) setName(repoName);
+    // Repo names may carry "_" or "." which the server's display-name
+    // rule rejects; swap them so an untouched prefill always submits.
+    if (!name) setName(repoName.replace(/[^A-Za-z0-9 -]+/g, "-").slice(0, 60));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked]);
 
@@ -299,6 +304,11 @@ export function AddServiceView() {
       errs.name = "Service name is required.";
     } else if (!slug) {
       errs.name = "Name needs at least one letter or digit.";
+    } else if (!SERVICE_DISPLAY_NAME_RE.test(name.trim())) {
+      errs.name = "Use letters, digits, spaces and dashes only (max 60).";
+    } else {
+      const tooLong = serviceSlugError(project, slug);
+      if (tooLong) errs.name = tooLong;
     }
     if (source === "repo" && !picked) {
       errs.repo = "Pick a repository to continue.";
@@ -368,19 +378,6 @@ export function AddServiceView() {
           github: { installationId: picked!.installationId },
         };
       }
-      // Create picked addons before the service: a service with no
-      // explicit subscription list mounts every project addon, so the
-      // new service boots with DATABASE_URL etc. already set.
-      if (source === "repo") {
-        for (const addonKind of addonPicks) {
-          if (!addonSuggestions.some((s) => s.kind === addonKind)) continue;
-          try {
-            await addAddon(project, { name: addonKind, kind: addonKind });
-          } catch (ae) {
-            if (!(ae instanceof ApiError && ae.status === 409)) throw ae;
-          }
-        }
-      }
       // Land on the new service's Deployments tab so the first build is
       // the first thing the user sees, not the bare canvas.
       const serviceHref = `/projects/${encodeURIComponent(project)}?service=${encodeURIComponent(slug)}&tab=deployments`;
@@ -388,6 +385,34 @@ export function AddServiceView() {
         method: "POST",
         body,
       });
+      // Addons come AFTER the service so a rejected service POST can't
+      // leave a running database behind. A service with no explicit
+      // subscription list mounts every project addon, and adding one
+      // re-renders existing envs, so the new service still gets
+      // DATABASE_URL etc. A failure here is reported, not thrown: the
+      // service exists and the addon can be added from the canvas.
+      if (source === "repo") {
+        const failed: string[] = [];
+        for (const addonKind of addonPicks) {
+          if (!addonSuggestions.some((s) => s.kind === addonKind)) continue;
+          try {
+            await addAddon(project, { name: addonKind, kind: addonKind });
+          } catch (ae) {
+            if (!(ae instanceof ApiError && ae.status === 409)) {
+              failed.push(`${addonKind} (${friendlyApiError(ae, "failed")})`);
+            }
+          }
+        }
+        if (failed.length > 0) {
+          toast.warning(`Service created, but these addons weren't: ${failed.join(", ")}. Add them from the canvas.`, {
+            duration: Infinity,
+            closeButton: true,
+          });
+        }
+      }
+      // The canvas reads the cached project describe; without this a
+      // first service can land on the "Empty project" state.
+      await qc.invalidateQueries({ queryKey: projectQueryKey(project) });
 
       // The server may report the outcome of the first build it
       // triggered on our behalf via an optional `firstBuild` field on
@@ -455,11 +480,7 @@ export function AddServiceView() {
       }
       router.replace(serviceHref);
     } catch (e) {
-      if (e instanceof ApiError) {
-        toast.error(e.message);
-      } else {
-        toast.error(e instanceof Error ? e.message : "Failed to add service");
-      }
+      toast.error(friendlyApiError(e, "Failed to add service"));
     } finally {
       setSubmitting(false);
     }
@@ -658,13 +679,13 @@ export function AddServiceView() {
                 <p className="text-sm text-[var(--text-secondary)]">
                   GitHub App not configured on this kuso instance.
                 </p>
-                <a
+                <Link
                   href="/settings/github"
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
                 >
                   <Github className="h-3.5 w-3.5" />
                   Configure GitHub App
-                </a>
+                </Link>
               </div>
             ) : (
               <p className="text-sm text-[var(--text-secondary)]">

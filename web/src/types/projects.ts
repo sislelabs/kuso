@@ -113,6 +113,31 @@ export interface KusoServiceSpec {
   release?: { command?: string[]; timeoutSeconds?: number };
   // waitForCI holds push/PR builds until the commit's GitHub checks pass.
   waitForCI?: boolean;
+  // Remaining kube.KusoServiceSpec fields, so callers stop casting.
+  internal?: boolean;
+  privateEgress?: boolean;
+  platformApiEgress?: boolean;
+  // No omitempty server-side: [] (opt into nothing) differs from absent.
+  sharedEnvKeys?: string[] | null;
+  subscribedAddons?: string[] | null;
+  healthcheck?: {
+    path?: string;
+    port?: number;
+    initialDelaySeconds?: number;
+    periodSeconds?: number;
+    timeoutSeconds?: number;
+    failureThreshold?: number;
+  };
+  buildArgs?: Record<string, string>;
+  publicEnv?: string[];
+  github?: { installationId?: number };
+  previews?: {
+    disabled?: boolean;
+    reviewUrl?: boolean;
+    seed?: string;
+    previewEnvVars?: KusoEnvVar[];
+  };
+  snapshotBeforeDeploy?: boolean;
 }
 
 export interface KusoVolume {

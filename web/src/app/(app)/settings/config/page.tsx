@@ -16,11 +16,16 @@ interface SettingsResp {
   settings: Record<string, unknown>;
 }
 
+// Only keys the server actually reads belong here. baseDomain, ingressClass
+// and letsEncryptEmail used to be listed but nothing consumed them, so the
+// form said "saved" for settings with no effect.
 const FIELDS: { key: string; label: string; hint: string; placeholder?: string }[] = [
-  { key: "baseDomain",       label: "Base domain",         hint: "default suffix for service URLs (e.g. apps.example.com)", placeholder: "apps.example.com" },
-  { key: "clusterIssuer",    label: "ClusterIssuer",       hint: "cert-manager issuer used for auto-TLS",                  placeholder: "letsencrypt-prod" },
-  { key: "ingressClass",     label: "Ingress class",       hint: "ingressClassName the chart stamps on each Ingress",      placeholder: "traefik" },
-  { key: "letsEncryptEmail", label: "Let's Encrypt email", hint: "operator contact for cert renewal warnings",             placeholder: "you@example.com" },
+  {
+    key: "clusterissuer",
+    label: "ClusterIssuer",
+    hint: "reported by /api/config/clusterissuer; environment certs still use letsencrypt-prod",
+    placeholder: "letsencrypt-prod",
+  },
 ];
 
 export default function ClusterConfigPage() {
@@ -117,7 +122,7 @@ export default function ClusterConfigPage() {
         </header>
         <div className="space-y-3 p-4">
           {FIELDS.map((f) => (
-            <div key={f.key} className="grid grid-cols-[140px_1fr] items-start gap-3">
+            <div key={f.key} className="grid items-start gap-1 sm:grid-cols-[140px_1fr] sm:gap-3">
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   {f.label}

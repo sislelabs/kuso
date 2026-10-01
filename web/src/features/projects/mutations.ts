@@ -8,6 +8,7 @@ import {
   envsQueryKey,
   projectQueryKey,
   projectsQueryKey,
+  projectsSummaryQueryKey,
   servicesQueryKey,
 } from "./hooks";
 
@@ -16,6 +17,8 @@ export interface UpdateProjectBody {
   baseDomain?: string | null;
   previews?: { enabled?: boolean; ttlDays?: number };
   defaultRepo?: { url?: string; defaultBranch?: string };
+  // clearDefaultRepo=true removes spec.defaultRepo; wins over defaultRepo.
+  clearDefaultRepo?: boolean;
   // alwaysOn=true overrides every per-service sleep config so all
   // services in this project run with scale-to-zero disabled.
   alwaysOn?: boolean;
@@ -98,8 +101,8 @@ export function useDeleteProject() {
 }
 
 // invalidateProjectViews refreshes every surface that renders a
-// project's live/stopped state: the projects list, the per-project
-// describe-summary the cards read from, and the services/envs the
+// project's live/stopped state: the projects list, the summary
+// rollup the cards read from, and the services/envs the
 // canvas + overlay read from. Called by stop/start so the card badge
 // and canvas flip without a hard refresh.
 //
@@ -108,7 +111,7 @@ export function useDeleteProject() {
 // every ["projects", <other>, …] per-project detail query and trigger a
 // broad refetch across projects we didn't touch. We instead invalidate
 // the list key with { exact: true } (so only the list card badge, which
-// reads services off the describe-summary, refetches for the touched
+// reads services off the summary rollup, refetches for the touched
 // project) plus this project's own detail keys.
 function invalidateProjectViews(
   qc: ReturnType<typeof useQueryClient>,
@@ -116,10 +119,9 @@ function invalidateProjectViews(
 ) {
   // Only the exact list query, not every descendant per-project key.
   qc.invalidateQueries({ queryKey: projectsQueryKey, exact: true });
-  // This project's describe-summary — the projects grid cards read
-  // services + envs off this composite key, NOT the individual
-  // services/envs queries — plus the canvas/overlay's services + envs.
-  qc.invalidateQueries({ queryKey: ["projects", name, "describe-summary"] });
+  // The projects grid cards read the batched summary rollup, NOT the
+  // individual services/envs queries.
+  qc.invalidateQueries({ queryKey: projectsSummaryQueryKey, exact: true });
   qc.invalidateQueries({ queryKey: projectQueryKey(name), exact: true });
   qc.invalidateQueries({ queryKey: servicesQueryKey(name) });
   qc.invalidateQueries({ queryKey: envsQueryKey(name) });

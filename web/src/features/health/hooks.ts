@@ -22,6 +22,8 @@ export function useReconcileHealth() {
 export function useRemediate() {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (body: RemediateRequest) => remediate(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: reconcileHealthQueryKey });

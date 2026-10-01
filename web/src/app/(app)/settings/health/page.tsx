@@ -181,6 +181,15 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
         </div>
       </section>
 
+      {(report.skippedNamespaces ?? []).length > 0 && (
+        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[12px] text-[var(--warning)]">
+          Couldn&apos;t scan {report.skippedNamespaces!.length} namespace
+          {report.skippedNamespaces!.length === 1 ? "" : "s"}:{" "}
+          <span className="font-mono">{report.skippedNamespaces!.join(", ")}</span>. Resources there
+          aren&apos;t counted above, so this report may be missing problems.
+        </p>
+      )}
+
       {!hasIssues ? (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-8 text-center">
           <ShieldCheck className="mx-auto h-8 w-8 text-[var(--success)]" />

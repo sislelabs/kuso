@@ -101,6 +101,12 @@ export interface EnvGroupSummary {
   addons: string[];
   addonPolicy?: Record<string, "fresh" | "shared">;
   createdAt?: string;
+  // Create-only: "<clone-svc>: KEY" literals the server retargeted from
+  // a sibling's production URL to its clone in the new env.
+  rewrittenEnvVars?: string[];
+  // Create-only: literals that still name a host under the project's
+  // domain and couldn't be mapped — they may still reach production.
+  warnings?: string[];
 }
 
 export async function listEnvGroups(project: string): Promise<EnvGroupSummary[]> {
@@ -415,6 +421,9 @@ function dbQS(database?: string, sep: "?" | "&" = "?"): string {
 export interface SQLQueryResponse {
   columns: string[];
   rows: string[][];
+  // nulls[r][c] is true when the cell is SQL NULL (rows carry "" for
+  // both NULL and the empty string). Absent on older servers.
+  nulls?: boolean[][];
   truncated: boolean;
   elapsed: string;
 }

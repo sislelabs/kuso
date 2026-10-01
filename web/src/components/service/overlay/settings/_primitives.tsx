@@ -15,6 +15,11 @@ export interface VolumeRow {
   name: string;
   mountPath: string;
   sizeGi: number;
+  // Not editable in the form, but the server replaces the volume list
+  // wholesale on PATCH and both are immutable on a bound PVC: dropping
+  // them turns RWX into RWO and wedges the helm upgrade.
+  storageClass?: string;
+  accessMode?: string;
 }
 
 export interface FormState {
@@ -170,6 +175,8 @@ export function fromSvc(svc?: KusoService): FormState {
       name: v.name,
       mountPath: v.mountPath,
       sizeGi: v.sizeGi ?? 1,
+      ...(v.storageClass ? { storageClass: v.storageClass } : {}),
+      ...(v.accessMode ? { accessMode: v.accessMode } : {}),
     })),
     placement: Object.entries(svc?.spec.placement?.labels ?? {}).map(([k, v]) => ({
       key: k,

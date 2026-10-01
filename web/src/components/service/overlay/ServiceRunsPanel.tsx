@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
 import { Play, X, Terminal, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -379,22 +380,39 @@ function CancelRunButton({
   runName: string;
 }) {
   const m = useCancelRun(project, service);
+  const [confirming, setConfirming] = useState(false);
   return (
-    <button
-      type="button"
-      onClick={() => {
-        m.mutate(runName, {
-          onSuccess: () => toast.success("Run cancelled"),
-          onError: (e) =>
-            toast.error(e instanceof Error ? e.message : "Cancel failed"),
-        });
-      }}
-      disabled={m.isPending}
-      title="Cancel this run"
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-red-500/40 hover:bg-red-500/5 hover:text-red-400 disabled:opacity-50"
-    >
-      <X className="h-3 w-3" />
-      {m.isPending ? "…" : "cancel"}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        disabled={m.isPending}
+        title="Cancel this run"
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--error)]/40 hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-50"
+      >
+        <X className="h-3 w-3" />
+        {m.isPending ? "…" : "cancel"}
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={`Cancel run ${runName}?`}
+        body="The run's pod is killed mid-way. A migration or script that was part-way through won't roll back."
+        confirmLabel="Cancel run"
+        pending={m.isPending}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() =>
+          m.mutate(runName, {
+            onSuccess: () => {
+              toast.success("Run cancelled");
+              setConfirming(false);
+            },
+            onError: (e) => {
+              toast.error(e instanceof Error ? e.message : "Cancel failed");
+              setConfirming(false);
+            },
+          })
+        }
+      />
+    </>
   );
 }

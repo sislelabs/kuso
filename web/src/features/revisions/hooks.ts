@@ -16,6 +16,8 @@ export function useRevisions(project: string, kind: RevisionKind, name: string |
 export function useRevertRevision(project: string) {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (id: string) => revertRevision(project, id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project] });

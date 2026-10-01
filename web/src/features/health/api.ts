@@ -41,6 +41,9 @@ export interface ReconcileReport {
   critical: number;
   warning: number;
   info: number;
+  // Project namespaces whose CRs couldn't be listed; their resources are
+  // missing from every count above, so "all green" isn't authoritative.
+  skippedNamespaces?: string[];
 }
 
 export interface RemediateRequest {

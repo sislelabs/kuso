@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { nextRuns } from "@/lib/cron-next";
+import { projectCronPatch, serviceCronPatch, type CronForm } from "./cronPatch";
 
 // EditCronDialog opens when a CronNode is clicked. Lets the user edit
 // schedule / target / suspend state, and delete the cron entirely.
@@ -40,7 +41,7 @@ interface CronShape {
     pinImage?: boolean;
     displayName?: string;
     // Resolved runtime detail — what the pod actually runs with.
-    image?: { repository?: string; tag?: string; pullPolicy?: string };
+    image?: { repository?: string; tag?: string; pullPolicy?: string; pullSecret?: string };
     envFromSecrets?: string[];
     concurrencyPolicy?: string;
     activeDeadlineSeconds?: number;
@@ -139,28 +140,21 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
       //     {svc}/crons/{name} — the existing endpoint that knows
       //     how to re-resolve image + envFromSecrets from the
       //     parent service.
+      const form: CronForm = {
+        kind: (cron.spec.kind ?? "service").toLowerCase(),
+        displayName,
+        schedule,
+        suspend,
+        pinImage,
+        url,
+        imageRepo,
+        imageTag,
+        cmd,
+      };
       if (isProjectScoped) {
-        const kind = (cron.spec.kind ?? "service").toLowerCase();
-        const body: Record<string, unknown> = {
-          displayName: displayName.trim(),
-          schedule: schedule.trim(),
-          suspend,
-          pinImage,
-        };
-        if (kind === "http") {
-          body.url = url.trim();
-        } else if (kind === "command") {
-          if (imageRepo.trim()) {
-            body.image = {
-              repository: imageRepo.trim(),
-              ...(imageTag.trim() ? { tag: imageTag.trim() } : {}),
-            };
-          }
-          body.command = cmd.trim().split(/\s+/).filter(Boolean);
-        }
         return api(
           `/api/projects/${encodeURIComponent(project)}/crons/${encodeURIComponent(tail)}`,
-          { method: "PATCH", body },
+          { method: "PATCH", body: projectCronPatch(form, cron.spec.image) },
         );
       }
       // Service-attached cron: PATCH the existing endpoint.
@@ -168,14 +162,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
       const cronShort = shortName(project + "-" + svc.replace(project + "-", ""), cron.metadata.name);
       return api(
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(svc)}/crons/${encodeURIComponent(cronShort)}`,
-        {
-          method: "PATCH",
-          body: {
-            schedule: schedule.trim(),
-            suspend,
-            command: cmd.trim().split(/\s+/).filter(Boolean),
-          },
-        },
+        { method: "PATCH", body: serviceCronPatch(form) },
       );
     },
     onSuccess: () => {

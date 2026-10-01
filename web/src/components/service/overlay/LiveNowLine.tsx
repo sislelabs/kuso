@@ -1,6 +1,6 @@
 "use client";
 
-import type { DeployBuild } from "@/features/builds";
+import { buildRefLabel, type DeployBuild } from "@/features/builds";
 import { relativeTime } from "@/lib/format";
 import { triggerLabel } from "./BuildRow";
 
@@ -14,7 +14,7 @@ export function LiveNowLine({
   rolledBack: boolean;
   branch: string;
 }) {
-  const sha = (build.commitSha ?? "").slice(0, 12);
+  const sha = buildRefLabel(build, 12);
   const when = relativeTime(build.finishedAt ?? build.startedAt);
   const who = triggerLabel(build);
   return (

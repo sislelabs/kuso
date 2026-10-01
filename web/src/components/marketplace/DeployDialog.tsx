@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api-client";
 import { useRenderApp, type MarketplaceApp, type RenderResult } from "@/features/marketplace";
@@ -11,6 +13,7 @@ import { applyConfig, type ConfigStepError } from "@/features/projects";
 
 export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: () => void }) {
   const router = useRouter();
+  const qc = useQueryClient();
   const [project, setProject] = useState(app.name);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<RenderResult | null>(null);
@@ -65,6 +68,13 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
         return;
       }
       toast.success(`Deployed ${app.title}`);
+      // The project list and this project's describe may be cached from
+      // an earlier visit; without this the canvas lands empty.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["projects"], exact: true }),
+        qc.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        qc.invalidateQueries({ queryKey: ["projects", project] }),
+      ]);
       router.push(`/projects/${encodeURIComponent(project)}`);
     } catch (e) {
       toast.error((e as Error).message);
@@ -72,17 +82,28 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
     }
   }
 
+  // Typed answers or a renamed project are worth protecting from a stray
+  // backdrop click; Escape and the explicit Cancel still close.
+  const dirty = project !== app.name || Object.keys(answers).length > 0;
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !deploying) onClose();
+      }}
+      disablePointerDismissal={dirty || deploying}
     >
-      <div
-        className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-5 shadow-[var(--shadow-lg,0_20px_60px_rgba(0,0,0,0.5))]"
-        onClick={(e) => e.stopPropagation()}
+      <DialogContent
+        className="block max-h-[90vh] overflow-y-auto p-5 sm:max-w-lg"
+        showCloseButton={!deploying}
       >
-        <h2 className="text-lg font-semibold text-[var(--text-primary)]">Deploy {app.title}</h2>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">{app.description}</p>
+        <DialogTitle className="text-lg font-semibold text-[var(--text-primary)]">
+          Deploy {app.title}
+        </DialogTitle>
+        <DialogDescription className="mt-1 text-sm text-[var(--text-secondary)]">
+          {app.description}
+        </DialogDescription>
 
         <label className="mt-4 block text-sm text-[var(--text-secondary)]">Project</label>
         <Input
@@ -158,7 +179,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose} disabled={deploying}>Cancel</Button>
           {!preview ? (
             <Button onClick={onPreview} disabled={missing || render.isPending}>
               {render.isPending ? "Rendering…" : "Preview"}
@@ -169,7 +190,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
             </Button>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

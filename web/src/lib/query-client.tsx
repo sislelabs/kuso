@@ -7,9 +7,10 @@ import {
   QueryClientProvider,
   type Mutation,
 } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { clearJwt } from "./api-client";
+import { clearJwt, onApiWarning } from "./api-client";
+import { kt } from "./toast";
 
 // onAuthError centralises the "session expired" handling. Triggered
 // from BOTH the QueryCache and MutationCache so a 401 from any path
@@ -68,7 +69,9 @@ function onAuthError(err: unknown) {
   // queries with the dead token.
   clearJwt();
   if (typeof window !== "undefined") {
-    const next = encodeURIComponent(window.location.pathname);
+    // Keep the query string: ?service=web&tab=variables&env=staging is
+    // where the user was, not just the page.
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
     if (!window.location.pathname.startsWith("/login")) {
       window.location.replace(`/login?next=${next}`);
     }
@@ -155,5 +158,6 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         },
       })
   );
+  useEffect(() => onApiWarning((w) => kt.warning(w.message)), []);
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }

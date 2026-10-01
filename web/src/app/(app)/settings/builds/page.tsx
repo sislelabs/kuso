@@ -6,14 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Cpu, MemoryStick } from "lucide-react";
+import { buildSettingsPayload, type BuildSettingsResponse } from "./payload";
 
-interface BuildSettings {
-  maxConcurrent: number;
-  memoryLimit: string;
-  memoryRequest: string;
-  cpuLimit: string;
-  cpuRequest: string;
-}
+type BuildSettings = Pick<
+  BuildSettingsResponse,
+  "maxConcurrent" | "memoryLimit" | "memoryRequest" | "cpuLimit" | "cpuRequest"
+>;
 
 // Sizing presets. Two invariants every preset must satisfy on the
 // stated VM:
@@ -105,7 +103,7 @@ function cpuM(v: string): number {
 
 export default function BuildSettingsPage() {
   const [loaded, setLoaded] = useState(false);
-  const [s, setS] = useState<BuildSettings>({
+  const [s, setS] = useState<BuildSettingsResponse>({
     maxConcurrent: 1,
     memoryLimit: "2Gi",
     memoryRequest: "512Mi",
@@ -113,9 +111,10 @@ export default function BuildSettingsPage() {
     cpuRequest: "200m",
   });
   const [saving, setSaving] = useState(false);
+  const [capEdited, setCapEdited] = useState(false);
 
   useEffect(() => {
-    api<BuildSettings>("/api/admin/settings/build")
+    api<BuildSettingsResponse>("/api/admin/settings/build")
       .then((d) => {
         setS(d);
         setLoaded(true);
@@ -129,7 +128,10 @@ export default function BuildSettingsPage() {
   const save = async () => {
     setSaving(true);
     try {
-      await api("/api/admin/settings/build", { method: "PUT", body: s });
+      await api("/api/admin/settings/build", {
+        method: "PUT",
+        body: buildSettingsPayload(s, capEdited),
+      });
       toast.success("Saved. New limits apply to the next build.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -185,7 +187,10 @@ export default function BuildSettingsPage() {
               <button
                 key={p.label}
                 type="button"
-                onClick={() => setS(p.values)}
+                onClick={() => {
+                  setS({ ...s, ...p.values });
+                  setCapEdited(true);
+                }}
                 className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-left hover:border-[var(--accent)]/40 hover:bg-[var(--accent)]/5"
               >
                 <div className="text-sm font-medium">{p.label}</div>
@@ -210,7 +215,11 @@ export default function BuildSettingsPage() {
       <section className="space-y-6">
         <FieldRow
           icon={Cpu}
-          label="Concurrent builds"
+          label={
+            s.maxConcurrentSet === false && !capEdited
+              ? "Concurrent builds (not set: server sizes it automatically)"
+              : "Concurrent builds"
+          }
           hint={`Cluster-wide cap on simultaneous build pods. Total budget consumed = cap × per-build limits below — currently ${(memGi(s.memoryLimit) * s.maxConcurrent).toFixed(1)} Gi RAM + ${cpuM(s.cpuLimit) * s.maxConcurrent}m CPU. 0 disables the cap (not recommended on a single-VM install).`}
         >
           <input
@@ -218,7 +227,10 @@ export default function BuildSettingsPage() {
             min={0}
             max={32}
             value={s.maxConcurrent}
-            onChange={(e) => setS({ ...s, maxConcurrent: parseInt(e.target.value || "0", 10) })}
+            onChange={(e) => {
+              setS({ ...s, maxConcurrent: parseInt(e.target.value || "0", 10) });
+              setCapEdited(true);
+            }}
             className="w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono"
           />
         </FieldRow>

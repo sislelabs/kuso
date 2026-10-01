@@ -20,11 +20,14 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
   // which flips True the moment the helm release reaches Deployed.
   // Earlier code looked at .status.ready / .status.connectionSecret;
   // both are nil on the live CR so addons always pulsed amber.
-  const conditions = (data.addon.status?.conditions ?? []) as Array<{ type?: string; status?: string }>;
-  const ready =
-    !!data.addon.status?.ready ||
-    !!data.addon.status?.connectionSecret ||
-    conditions.some((c) => c.type === "Deployed" && c.status === "True");
+  const conditions = (data.addon.status?.conditions ?? []) as Array<{ type?: string; status?: string; message?: string }>;
+  // Deployed stays True from the last good release, so a wedged upgrade
+  // (ReleaseFailed / Irreconcilable) has to win over it.
+  const failure = conditions.find(
+    (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
+  );
+  const ready = !failure && conditions.some((c) => c.type === "Deployed" && c.status === "True");
+  const stateLabel = failure ? "release failed" : ready ? "ready" : "provisioning";
   return (
     <div
       data-node-context
@@ -44,11 +47,15 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the
         // hover only nudges the alpha.
-        ready
-          ? "border-emerald-500/60 hover:border-[var(--border-strong)]"
-          : "border-amber-500/60 animate-pulse hover:border-[var(--border-strong)]"
+        failure
+          ? "border-[var(--error)]/60 hover:border-[var(--border-strong)]"
+          : ready
+            ? "border-[var(--success)]/60 hover:border-[var(--border-strong)]"
+            : "border-[var(--warning)]/60 animate-pulse hover:border-[var(--border-strong)]"
       )}
+      title={failure?.message ? `${stateLabel}: ${failure.message}` : stateLabel}
     >
+      <span className="sr-only">{stateLabel}</span>
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
       <button

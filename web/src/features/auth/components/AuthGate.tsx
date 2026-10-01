@@ -20,7 +20,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     // session, so errors get a retry screen below instead of a redirect.
     if (isError) return;
     if (data === null) {
-      const next = encodeURIComponent(pathname);
+      // Keep the query string: ?service=web&tab=variables is where the
+      // user actually was.
+      const next = encodeURIComponent(pathname + window.location.search);
       router.replace(`/login?next=${next}`);
       return;
     }
@@ -30,6 +32,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     // already on the page.
     if (pending && pathname !== "/awaiting-access") {
       router.replace("/awaiting-access");
+    } else if (!pending && pathname === "/awaiting-access") {
+      // Access was granted while they waited.
+      router.replace("/projects");
     }
   }, [data, isPending, isError, pathname, router, pending]);
 

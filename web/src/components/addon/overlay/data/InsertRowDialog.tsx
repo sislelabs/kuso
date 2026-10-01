@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { X } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { insertSQLRow, type SQLColumn, type SQLCellValue } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { useMutation } from "@tanstack/react-query";
@@ -76,27 +76,27 @@ export function InsertRowDialog({
     onError: (e) => toast.error(e instanceof Error ? e.message : "insert failed"),
   });
 
+  // A half-filled row survives a stray click outside; Escape and the
+  // buttons still close it.
+  const dirty = Object.values(fields).some((f) => f.raw !== "" || f.isNull);
+
   return (
-    <AnimatePresence>
-      <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
+    <Dialog
+      open
+      disablePointerDismissal={dirty}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        showCloseButton={false}
+        className="flex max-h-[80vh] max-w-lg flex-col gap-0 overflow-hidden rounded-lg bg-[var(--bg-primary)] p-0 sm:max-w-lg"
       >
-        <motion.div
-          className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-2xl"
-          initial={{ scale: 0.96, y: 8 }}
-          animate={{ scale: 1, y: 0 }}
-          exit={{ scale: 0.96, y: 8 }}
-          onClick={(e) => e.stopPropagation()}
-        >
           <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-            <h3 className="font-mono text-sm text-[var(--text-primary)]">
+            <DialogTitle className="font-mono text-sm font-normal text-[var(--text-primary)]">
               insert into {schema === "public" ? table : `${schema}.${table}`}
-            </h3>
-            <button type="button" onClick={onClose}>
+            </DialogTitle>
+            <button type="button" onClick={onClose} aria-label="Close">
               <X className="h-4 w-4 text-[var(--text-tertiary)]" />
             </button>
           </header>
@@ -130,7 +130,7 @@ export function InsertRowDialog({
                           onClick={() => set(c.name, { isNull: !fs.isNull })}
                           className={`rounded px-1 text-[9px] ${
                             fs.isNull
-                              ? "bg-amber-500/20 text-amber-300"
+                              ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
                               : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]"
                           }`}
                         >
@@ -170,7 +170,7 @@ export function InsertRowDialog({
                         />
                       ))}
                     {errs[c.name] && (
-                      <span className="text-[9px] text-red-400">{errs[c.name]}</span>
+                      <span className="text-[9px] text-[var(--error)]">{errs[c.name]}</span>
                     )}
                   </div>
                 </div>
@@ -186,8 +186,7 @@ export function InsertRowDialog({
               {insert.isPending ? "Inserting…" : "Insert"}
             </Button>
           </footer>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+      </DialogContent>
+    </Dialog>
   );
 }

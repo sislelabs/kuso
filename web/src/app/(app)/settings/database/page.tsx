@@ -9,6 +9,7 @@ import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Database, Cloud, Server, Trash2, RotateCw, CheckCircle2, AlertCircle, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // /settings/database — first-class home for the cluster-shared
@@ -255,7 +256,7 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
           Helm-installing the Postgres chart. Usually ready in 30–90 seconds — this page polls every 5s.
         </p>
       )}
-      {status.phase === "failed" && status.lastError && (
+      {(status.phase === "failed" || status.phase === "unhealthy") && status.lastError && (
         <p className="mt-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] leading-snug text-[var(--error)]">
           {status.lastError}
         </p>
@@ -331,17 +332,18 @@ function ProvisionDialog({
   const [ha, setHa] = useState(false);
   const [storageSize, setStorageSize] = useState("20Gi");
   const [version, setVersion] = useState("16");
-  if (!open) return null;
+  const dirty = size !== "small" || ha || storageSize !== "20Gi" || version !== "16";
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (next || submitting) return;
+        if (dirty && details.reason === "outside-press") return;
+        onClose();
+      }}
     >
-      <div
-        className="w-full max-w-md rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-sm font-semibold tracking-tight">Provision on-cluster Postgres</h2>
+      <DialogContent className="max-w-md gap-0 bg-[var(--bg-secondary)] p-5 sm:max-w-md">
+        <DialogTitle className="text-sm font-semibold tracking-tight">Provision on-cluster Postgres</DialogTitle>
         <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
           Kuso installs a Postgres StatefulSet in the cluster namespace. Projects opt in later via the Add Addon dialog.
         </p>
@@ -366,8 +368,8 @@ function ProvisionDialog({
             {submitting ? "Provisioning…" : "Provision"}
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -383,18 +385,22 @@ function ExternalDialog({
   submitting: boolean;
 }) {
   const [dsn, setDsn] = useState("");
-  if (!open) return null;
   const valid = /^postgres(ql)?:\/\//.test(dsn.trim());
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (next || submitting) return;
+        if (dsn.trim() !== "" && details.reason === "outside-press") return;
+        onClose();
+      }}
+      // Don't keep a pasted superuser DSN around after the dialog closes.
+      onOpenChangeComplete={(o) => {
+        if (!o) setDsn("");
+      }}
     >
-      <div
-        className="w-full max-w-md rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-sm font-semibold tracking-tight">Connect external Postgres</h2>
+      <DialogContent className="max-w-md gap-0 bg-[var(--bg-secondary)] p-5 sm:max-w-md">
+        <DialogTitle className="text-sm font-semibold tracking-tight">Connect external Postgres</DialogTitle>
         <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
           Paste a superuser DSN. Kuso will test the connection (SELECT 1) before saving. The password never leaves this server.
         </p>
@@ -425,8 +431,8 @@ function ExternalDialog({
             )}
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

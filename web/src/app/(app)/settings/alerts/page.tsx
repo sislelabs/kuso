@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 // /settings/alerts — manage alert rules. Engine evaluates them on a
 // 1-min ticker server-side and fires through the existing notify
@@ -184,6 +185,7 @@ function RuleRow({
         <button
           type="button"
           onClick={() => setConfirming(true)}
+          aria-label={`Delete ${rule.name}`}
           className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -196,7 +198,9 @@ function RuleRow({
 const KIND_GROUPS = ["Service", "Edge", "Logs", "Nodes"] as const;
 
 function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [form, setForm] = useState<RuleFormState>(() => emptyRuleForm("http_5xx_rate"));
+  const [initialForm] = useState<RuleFormState>(() => emptyRuleForm("http_5xx_rate"));
+  const [form, setForm] = useState<RuleFormState>(initialForm);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
   const meta = ALERT_KINDS[form.kind];
   const set = <K extends keyof RuleFormState>(k: K, v: RuleFormState[K]) => setForm((f) => ({ ...f, [k]: v }));
   const built = buildCreateBody(form);
@@ -217,19 +221,22 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
     setForm((f) => ({ ...emptyRuleForm(kind), name: f.name, project: f.project, service: f.service, severity: f.severity }));
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+    <Dialog
+      open
+      onOpenChange={(next, details) => {
+        if (next || create.isPending) return;
+        // A stray backdrop click shouldn't throw away a half-built rule.
+        if (dirty && details.reason === "outside-press") return;
+        onClose();
+      }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]"
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] max-w-lg gap-0 overflow-y-auto rounded-md bg-[var(--bg-secondary)] p-0 sm:max-w-lg"
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <h2 className="font-mono text-sm font-medium">New alert rule</h2>
+            <DialogTitle className="font-mono text-sm font-medium">New alert rule</DialogTitle>
             <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
               evaluated every 1 min · fires through configured channels
             </p>
@@ -237,6 +244,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
           >
             <X className="h-4 w-4" />
@@ -386,8 +394,8 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
             {create.isPending ? "Creating…" : "Create rule"}
           </Button>
         </footer>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

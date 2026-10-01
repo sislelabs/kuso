@@ -38,3 +38,41 @@ export function envGroupName(e: KusoEnvironment | undefined): string {
   if (!e) return "production";
   return envGroupLabel(e) ?? e.spec?.kind ?? "production";
 }
+
+export interface EnvOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Env filter options for one service (`fqn` = "<project>-<service>"),
+ * production first. The value is what the log store and error feed
+ * filter on: the env-group label, else the CR name minus the
+ * "<fqn>-" prefix.
+ */
+export function serviceEnvOptions(envs: KusoEnvironment[], fqn: string): EnvOption[] {
+  return envs
+    .filter((e) => e.spec.service === fqn)
+    .map((e) => {
+      if (isProductionGroup(e)) return { value: "production", label: "production" };
+      const short =
+        envGroupLabel(e) ||
+        (fqn && e.metadata.name.startsWith(fqn + "-") ? e.metadata.name.slice(fqn.length + 1) : e.metadata.name);
+      return { value: short, label: short };
+    })
+    .sort((a, b) => {
+      if (a.value === "production") return -1;
+      if (b.value === "production") return 1;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+/**
+ * The wake endpoint's `?env=` for this env: undefined for production
+ * (the server default), else the CR name. A preview's CR is
+ * "<fqn>-pr-N", which the server can't derive from "preview-pr-N".
+ */
+export function wakeEnvParam(e: KusoEnvironment | undefined, group: string): string | undefined {
+  if (e) return isProductionGroup(e) ? undefined : e.metadata.name;
+  return group === "production" ? undefined : group;
+}

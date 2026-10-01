@@ -20,7 +20,8 @@ import {
   type HealthProblem,
 } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
-import { envGroupName, isProductionGroup } from "@/lib/env-group";
+import { buildRefLabel } from "@/features/builds";
+import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, Square, Play, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
@@ -60,6 +61,8 @@ import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
 import { Check, Copy, ExternalLink, X, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { escapeHandledAbove } from "@/lib/escape-layer";
+import { invalidateProjectDescribe } from "@/features/projects/hooks";
 
 // OverlayDirtyContext lets every panel inside ServiceOverlay register
 // whether its form has unsaved edits AND (optionally) the save +
@@ -385,11 +388,23 @@ export function ServiceOverlay({
     window.sessionStorage.setItem("kuso-service-overlay-tab", tab);
   }, [tab]);
 
+  // Escape is easy to hit by accident (and used to leak through from
+  // nested dialogs), so with unsaved edits it asks first. Clicking the
+  // backdrop / X still discards without asking, per the comment above.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
   // Close on ESC + lock body scroll while open.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") guardedClose();
+      if (e.key !== "Escape") return;
+      if (escapeHandledAbove(e, rootRef.current)) return;
+      if (Object.keys(dirtyMap.current).length > 0) {
+        setConfirmDiscard(true);
+        return;
+      }
+      guardedClose();
     };
     window.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -576,7 +591,6 @@ export function ServiceOverlay({
               : "unknown";
 
   const envGroup = env ? envGroupName(env) : envParam;
-  const onProdEnv = env ? isProductionGroup(env) : envParam === "production";
   const stopped = !!(svc.data?.spec as { stopped?: boolean } | undefined)?.stopped;
   const problem = healthProblem(env?.status?.state, status);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
@@ -601,7 +615,7 @@ export function ServiceOverlay({
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+        <div ref={rootRef} className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
           {/* Backdrop — clickable to close. */}
           <motion.button
             type="button"
@@ -740,8 +754,8 @@ export function ServiceOverlay({
                     }
                     return null;
                   })()}
-                  {service && status === "sleeping" && !stopped && onProdEnv ? (
-                    <WakeControl project={project} service={service} />
+                  {service && status === "sleeping" && !stopped ? (
+                    <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
                   ) : null}
                   {service && env && !stopped && !restartNeeded && status !== "sleeping" && problem !== "runtime" ? (
                     <RestartControl project={project} service={service} envGroup={envGroup} variant="button" />
@@ -951,7 +965,7 @@ export function ServiceOverlay({
                           service={service ?? ""}
                           env={envParam}
                           blocked={stopped ? "stopped" : status === "sleeping" ? "asleep" : undefined}
-                          canWake={onProdEnv}
+                          wakeEnv={wakeEnvParam(env, envGroup)}
                         />
                       </div>
                     )}
@@ -1053,6 +1067,17 @@ export function ServiceOverlay({
               )}
             </div>
           </motion.div>
+          <ConfirmDialog
+            open={confirmDiscard}
+            title="Discard unsaved changes?"
+            body="This panel has edits that haven't been saved. Closing drops them."
+            confirmLabel="Discard"
+            onCancel={() => setConfirmDiscard(false)}
+            onConfirm={() => {
+              setConfirmDiscard(false);
+              guardedClose();
+            }}
+          />
         </div>
       )}
     </AnimatePresence>
@@ -1308,14 +1333,14 @@ function RestartControl({
   );
 }
 
-// WakeControl scales a sleeping production env back up now instead of
-// waiting for the next request to cold-start it.
-function WakeControl({ project, service }: { project: string; service: string }) {
+// WakeControl scales a sleeping env back up now instead of waiting for
+// the next request to cold-start it. env undefined = production.
+function WakeControl({ project, service, env }: { project: string; service: string; env?: string }) {
   const wake = useWakeService(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const onWake = async () => {
     try {
-      await wake.mutateAsync();
+      await wake.mutateAsync(env);
       toast.success(`Waking ${service}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Wake failed");
@@ -1366,9 +1391,10 @@ function RollbackControl({
     meta: { skipGlobalErrorToast: true },
     mutationFn: (buildId: string) => rollbackBuild(project, service, buildId, envGroup),
     onSuccess: () => {
-      toast.success(`Rolled ${envGroup} back to ${target?.commitSha?.slice(0, 7) ?? target?.id ?? "previous build"}`);
+      toast.success(`Rolled ${envGroup} back to ${(target && buildRefLabel(target, 7)) || target?.id || "previous build"}`);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      invalidateProjectDescribe(qc, project);
       setConfirming(false);
     },
     onError: (e) => {
@@ -1377,7 +1403,7 @@ function RollbackControl({
     },
   });
   if (!target) return null;
-  const sha = target.commitSha?.slice(0, 7) ?? target.id.slice(0, 8);
+  const sha = buildRefLabel(target, 7) || target.id.slice(0, 8);
   const ageStamp = target.finishedAt ? relativeAge(target.finishedAt) : "";
   return (
     <>

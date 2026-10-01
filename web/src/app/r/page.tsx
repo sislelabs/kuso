@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
+import { toast } from "sonner";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
 // token is the only credential, so kuso login isn't required. Layout
@@ -108,7 +109,7 @@ export default function ReviewerPage() {
       const data: ReviewerView = await res.json();
       setView(data);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "submit failed");
+      toast.error(e instanceof Error ? `Couldn't submit: ${e.message}` : "Couldn't submit");
     } finally {
       setSubmitting(false);
     }

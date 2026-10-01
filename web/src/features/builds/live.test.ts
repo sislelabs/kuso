@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNote,
+  buildRefLabel,
   classifyBuild,
   isBranchMismatch,
   isRolledBack,
@@ -110,5 +111,19 @@ describe("isBranchMismatch", () => {
     expect(isBranchMismatch(apiErr(400, "build has not succeeded"))).toBe(false);
     expect(isBranchMismatch(apiErr(500, "branch lookup failed"))).toBe(false);
     expect(isBranchMismatch("branch")).toBe(false);
+  });
+});
+
+describe("buildRefLabel", () => {
+  it("cuts a real commit SHA", () => {
+    expect(buildRefLabel({ commitSha: "a4b2f1c9e8d7", ref: "a4b2f1c9e8d7" }, 7)).toBe("a4b2f1c");
+  });
+
+  it("shows a synthetic ref whole when there is no SHA", () => {
+    expect(buildRefLabel({ ref: "main-x7k2p9q" }, 7)).toBe("main-x7k2p9q");
+  });
+
+  it("is empty when the server sent neither", () => {
+    expect(buildRefLabel({}, 7)).toBe("");
   });
 });

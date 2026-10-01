@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import type { BlastInfo, BlastLevel } from "@/lib/blast-radius";
+import { claimEscape } from "@/lib/escape-layer";
 import { worstLevel, summaryFor } from "@/lib/blast-radius";
 
 // DiffEntry is a single row in the "you're about to change" list.
@@ -52,10 +53,13 @@ export function DiffConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key !== "Escape") return;
+      // Capture phase + claim so the enclosing overlay doesn't also close.
+      claimEscape(e);
+      onCancel();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, onCancel]);
   if (!open) return null;
   return (
@@ -111,7 +115,7 @@ export function DiffConfirmDialog({
                     <span
                       className={
                         d.before
-                          ? "truncate text-red-300/80 line-through decoration-red-500/40"
+                          ? "truncate text-[var(--error)] line-through decoration-[var(--error)]/40"
                           : "italic text-[var(--text-tertiary)]"
                       }
                     >
@@ -121,7 +125,7 @@ export function DiffConfirmDialog({
                     <span
                       className={
                         d.after
-                          ? "truncate text-emerald-300"
+                          ? "truncate text-[var(--success)]"
                           : "italic text-[var(--text-tertiary)]"
                       }
                     >
@@ -162,9 +166,9 @@ export function DiffConfirmDialog({
 function blastChipClass(level: BlastLevel): string {
   switch (level) {
     case "danger":
-      return "bg-red-500/10 text-red-300";
+      return "bg-[var(--error-subtle)] text-[var(--error)]";
     case "warn":
-      return "bg-amber-500/10 text-amber-300";
+      return "bg-[var(--warning-subtle)] text-[var(--warning)]";
     default:
       return "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]";
   }

@@ -10,9 +10,10 @@ import {
   useStopService,
   useStartService,
   useServiceEnv,
-  useBuilds,
+  type BuildSummary,
 } from "@/features/services";
 import { api } from "@/lib/api-client";
+import { envGroupName } from "@/lib/env-group";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -175,7 +176,22 @@ function MobileServiceCard({
   const trigger = useTriggerBuild(project, shortName);
   const stop = useStopService(project, shortName);
   const start = useStartService(project, shortName);
-  const builds = useBuilds(project, shortName);
+  // One project-level request shared by every card (same key as the
+  // canvas), instead of a per-service builds poller each.
+  const group = env ? envGroupName(env) : "production";
+  const latestBuilds = useQuery<Record<string, BuildSummary>>({
+    queryKey: ["projects", project, "builds", "latest", group],
+    queryFn: () =>
+      api(`/api/projects/${encodeURIComponent(project)}/builds/latest?env=${encodeURIComponent(group)}`),
+    refetchInterval: (q) =>
+      Object.values(q.state.data ?? {}).some((b) =>
+        ["queued", "pending", "running", "deploying"].includes((b.status ?? "").toLowerCase()),
+      )
+        ? 5_000
+        : 15_000,
+    refetchIntervalInBackground: false,
+    staleTime: 5_000,
+  });
   const [envOpen, setEnvOpen] = useState(false);
   // Redeploy + stop/start are editor-level mutations; disable with a
   // hint for viewers instead of a post-tap 403 toast.
@@ -202,7 +218,7 @@ function MobileServiceCard({
           : env?.status?.url;
   const phase = env?.status?.phase || "unknown";
   const stopped = service.spec.stopped === true;
-  const latest = builds.data?.[0];
+  const latest = latestBuilds.data?.[shortName];
 
   const redeploy = () => {
     trigger.mutate(

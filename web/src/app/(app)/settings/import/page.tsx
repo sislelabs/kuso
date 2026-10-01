@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { projectsQueryKey } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +82,7 @@ interface PreviewResponse {
 }
 
 export default function ImportPage() {
+  const qc = useQueryClient();
   const isAdmin = useCan(Perms.SettingsAdmin);
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
@@ -91,11 +93,14 @@ export default function ImportPage() {
   const [commitResult, setCommitResult] = useState<CommitResponse | null>(null);
 
   const preview = useMutation<PreviewResponse, Error>({
-    mutationFn: () =>
-      api<PreviewResponse>("/api/import/coolify/preview", {
+    // Go encodes empty slices as null; normalise so the render can .map.
+    mutationFn: async () => {
+      const res = await api<PreviewResponse>("/api/import/coolify/preview", {
         method: "POST",
         body: { baseUrl, token },
-      }),
+      });
+      return { ...res, items: res.items ?? [] };
+    },
     onSuccess: (data) => {
       // Default-select every migrate-classified row so the user
       // only has to uncheck things they want to skip.
@@ -111,13 +116,17 @@ export default function ImportPage() {
   });
 
   const commit = useMutation<CommitResponse, Error, string[]>({
-    mutationFn: (uuids) =>
-      api<CommitResponse>("/api/import/coolify/commit", {
+    mutationFn: async (uuids) => {
+      const res = await api<CommitResponse>("/api/import/coolify/commit", {
         method: "POST",
         body: { baseUrl, token, uuids },
-      }),
+      });
+      return { ...res, skipped: res.skipped ?? [], errors: res.errors ?? [] };
+    },
     onSuccess: (data) => {
       setCommitResult(data);
+      // Imported projects/services should show up without a reload.
+      void qc.invalidateQueries({ queryKey: projectsQueryKey });
       const total = data.projectsCreated + data.servicesCreated + data.addonsCreated;
       if (data.errors.length === 0) {
         toast.success(`Imported ${total} resources from Coolify`);
@@ -258,7 +267,7 @@ function PreviewTable({
         </span>
       </header>
 
-      <div className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
+      <div className="overflow-x-auto rounded-md border border-[var(--border-subtle)]">
         <table className="w-full text-[12px]">
           <thead className="bg-[var(--bg-secondary)] text-[var(--text-tertiary)]">
             <tr>

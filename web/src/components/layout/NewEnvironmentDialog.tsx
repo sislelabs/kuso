@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useProject, useAddons, createEnvGroup } from "@/features/projects";
+import { useProject, useAddons, createEnvGroup, type EnvGroupSummary } from "@/features/projects";
+import { friendlyApiError } from "@/features/projects/names";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Plus, Database, Share2, Sparkles } from "lucide-react";
+import { Plus, Database, Share2, Sparkles, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,10 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
 
   const [name, setName] = useState("");
   const [policy, setPolicy] = useState<Record<string, AddonPolicy>>({});
+  // Set when the server created the env but flagged literals that may
+  // still reach production. Shown in-dialog until dismissed — a toast
+  // would vanish before anyone reads it.
+  const [warned, setWarned] = useState<EnvGroupSummary | null>(null);
 
   // Default the addon-policy map whenever the addon list loads.
   const addonShorts = useMemo(() => {
@@ -71,6 +76,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   useEffect(() => {
     if (!open) return;
     setName("");
+    setWarned(null);
     // Seed defaults on each open. Stateful kinds default to fresh,
     // others to shared. Users can flip any of them inline.
     const def: Record<string, AddonPolicy> = {};
@@ -82,18 +88,22 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
 
   const create = useMutation({
     mutationFn: () => createEnvGroup(project, { name, addonPolicy: policy }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["projects", project] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
+      if (res?.warnings && res.warnings.length > 0) {
+        setWarned(res);
+        return;
+      }
       toast.success(
         `Environment "${name}" created. Review variables in each service — addon refs were rewritten where you picked "fresh".`,
         { duration: 8000 },
       );
-      qc.invalidateQueries({ queryKey: ["projects", project] });
-      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
-      qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
       onCreated?.(name);
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to create environment"),
+    onError: (e) => toast.error(friendlyApiError(e, "Failed to create environment")),
   });
 
   const submit = () => {
@@ -115,6 +125,55 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     }
     create.mutate();
   };
+
+  if (warned) {
+    const finish = () => {
+      onCreated?.(warned.name);
+      onClose();
+    };
+    return (
+      <Dialog open={open} onOpenChange={(next) => !next && finish()}>
+        <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-lg">
+          <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
+            <DialogTitle className="flex items-center gap-1.5 font-heading">
+              <AlertTriangle className="h-4 w-4 text-[var(--warning)]" aria-hidden />
+              &ldquo;{warned.name}&rdquo; created — check these variables
+            </DialogTitle>
+            <DialogDescription className="text-[11px] text-[var(--text-secondary)]">
+              These values still name a host under this project&apos;s domain that kuso couldn&apos;t map
+              to a clone. Until you change them, this environment may read from or write to production.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            <ul className="space-y-1 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-3 font-mono text-[11px] text-[var(--text-primary)]">
+              {(warned.warnings ?? []).map((w) => (
+                <li key={w} className="break-all">
+                  {w}
+                </li>
+              ))}
+            </ul>
+            {warned.rewrittenEnvVars && warned.rewrittenEnvVars.length > 0 && (
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                <p className="font-medium text-[var(--text-primary)]">Rewritten to point at the clones</p>
+                <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                  {warned.rewrittenEnvVars.map((r) => (
+                    <li key={r} className="break-all">
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="m-0 rounded-b-2xl px-4 py-3">
+            <Button size="sm" onClick={finish}>
+              I&apos;ll review them
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog

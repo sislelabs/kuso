@@ -21,6 +21,8 @@ export function useRegistryCredentials(project: string) {
 export function useRegistryLogin(project: string) {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (body: RegistryLoginBody) => loginRegistry(project, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: registryCredentialsQueryKey(project) }),
   });
@@ -29,6 +31,8 @@ export function useRegistryLogin(project: string) {
 export function useRegistryLogout(project: string) {
   const qc = useQueryClient();
   return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (registry: string) => logoutRegistry(project, registry),
     onSuccess: () => qc.invalidateQueries({ queryKey: registryCredentialsQueryKey(project) }),
   });

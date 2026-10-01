@@ -10,6 +10,7 @@ import { cancelBuild } from "@/features/services";
 import type { BuildSummary, BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
+  buildRefLabel,
   isBranchMismatch,
   useRetryRelease,
   useRollbackToBuild,
@@ -20,9 +21,40 @@ import { relativeTime } from "@/lib/format";
 import { ChevronDown, ChevronRight, Undo2, X, Copy, Check, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 export type { BuildRowStatus };
+
+// formatDuration turns a millisecond span into the kind of label the
+// build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
+// "1h 02m". Sub-second spans floor to "0s" rather than disappear so
+// a freshly-clicked redeploy shows a live counter immediately.
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) {
+    return remSec === 0 ? `${min}m` : `${min}m ${String(remSec).padStart(2, "0")}s`;
+  }
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin === 0 ? `${hr}h` : `${hr}h ${String(remMin).padStart(2, "0")}m`;
+}
+
+// LiveDuration owns the 1s tick for a running build, so only this
+// span re-renders each second — not the panel and its open log view.
+function LiveDuration({ since }: { since: string }) {
+  const startMs = Date.parse(since);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (!Number.isFinite(startMs)) return null;
+  return <span className="text-[var(--building)]">{formatDuration(now - startMs)}</span>;
+}
 
 const CHIP =
   "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] disabled:opacity-50";
@@ -90,6 +122,8 @@ export interface BuildRowProps {
   build: DeployBuild;
   status: BuildRowStatus;
   duration: string;
+  // startedAt of a running build; renders a self-ticking duration.
+  runningSince?: string;
   isOpen: boolean;
   canDeploy: boolean;
   onToggle: () => void;
@@ -102,11 +136,12 @@ export function BuildRow({
   build: b,
   status: s,
   duration,
+  runningSince,
   isOpen,
   canDeploy,
   onToggle,
 }: BuildRowProps) {
-  const sha = (b.commitSha ?? "").slice(0, 12);
+  const sha = buildRefLabel(b, 12);
   const branch = b.branch ?? "—";
   const ts = b.startedAt ?? b.finishedAt;
   const created = ts ? relativeTime(ts) : "—";
@@ -163,12 +198,17 @@ export function BuildRow({
             )}
             <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
               {created}
-              {duration && (
+              {runningSince ? (
                 <>
                   {" · "}
-                  <span className={cn(s === "running" && "text-[var(--building)]")}>{duration}</span>
+                  <LiveDuration since={runningSince} />
                 </>
-              )}
+              ) : duration ? (
+                <>
+                  {" · "}
+                  <span>{duration}</span>
+                </>
+              ) : null}
               {triggerLabel(b) && (
                 <>
                   {" · "}
@@ -354,13 +394,15 @@ function FixBlock({ fix, lang }: { fix: string; lang?: string }) {
 // route to the kaniko pod by name. If the server doesn't recognise
 // it we fall through to "no logs available" (the server side handles
 // that case gracefully).
-function BuildLogs({ project, service, buildId }: { project: string; service: string; buildId: string }) {
+// Memoized: the row re-renders on every builds poll; the log view
+// (up to 10k lines) only needs to when its build changes.
+const BuildLogs = memo(function BuildLogs({ project, service, buildId }: { project: string; service: string; buildId: string }) {
   return (
     <div className="h-72 p-2">
       <LogStream project={project} service={service} env={`build:${buildId}`} height="100%" />
     </div>
   );
-}
+});
 
 // CancelButton — POSTs the build's cancel endpoint. No confirm step:
 // cancelling a build is reversible (the user can just trigger a new

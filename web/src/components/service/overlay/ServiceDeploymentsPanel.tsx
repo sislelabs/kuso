@@ -1,7 +1,7 @@
 "use client";
 
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -20,7 +20,7 @@ import type { KusoEnvironment } from "@/types/projects";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
-import { BuildRow, type BuildRowStatus } from "./BuildRow";
+import { BuildRow, formatDuration, type BuildRowStatus } from "./BuildRow";
 import { LiveNowLine } from "./LiveNowLine";
 import { RevisionRow } from "./RevisionRow";
 
@@ -30,48 +30,17 @@ interface Props {
   env?: KusoEnvironment;
 }
 
-// formatDuration turns a millisecond span into the kind of label the
-// build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
-// "1h 02m". Sub-second spans floor to "0s" rather than disappear so
-// a freshly-clicked redeploy shows a live counter immediately.
-function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 60) {
-    return remSec === 0 ? `${min}m` : `${min}m ${String(remSec).padStart(2, "0")}s`;
-  }
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return remMin === 0 ? `${hr}h` : `${hr}h ${String(remMin).padStart(2, "0")}m`;
-}
-
 // buildDuration returns the time-on-task for a build:
-//   - running:   now - startedAt (live counter)
+//   - running:   "" — BuildRow renders a self-ticking LiveDuration
 //   - finished:  finishedAt - startedAt
 //   - missing:   "" so the renderer skips the whole pill
 function buildDuration(b: BuildSummary, status: BuildRowStatus): string {
   const startMs = b.startedAt ? Date.parse(b.startedAt) : NaN;
   if (!Number.isFinite(startMs)) return "";
-  if (status === "running") return formatDuration(Date.now() - startMs);
+  if (status === "running") return "";
   const endMs = b.finishedAt ? Date.parse(b.finishedAt) : NaN;
   if (!Number.isFinite(endMs)) return "";
   return formatDuration(endMs - startMs);
-}
-
-// useNowTick re-renders every second while `running` is true so the
-// live duration display ticks. Returns nothing — the side effect is
-// the bumped state. Stops the interval when nothing is running so a
-// quiet panel doesn't burn cycles forcing renders.
-function useNowTick(running: boolean) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [running]);
 }
 
 export function ServiceDeploymentsPanel({ project, service, env }: Props) {
@@ -84,13 +53,6 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const isImage = svc.data?.spec.runtime === "image";
   const [expanded, setExpanded] = useState<string | null>(null);
   const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
-  // Re-render every second while at least one build is running so
-  // the in-flight duration display ticks visibly.
-  const anyRunning = (builds.data ?? []).some(
-    (b) => (b.status ?? "").toLowerCase() === "running",
-  );
-  useNowTick(anyRunning);
-
   const [confirmRedeploy, setConfirmRedeploy] = useState(false);
 
   const onRedeploy = async (body: { branch?: string; ref?: string } = {}) => {
@@ -317,6 +279,7 @@ function BuildsList({
               build={b}
               status={s}
               duration={buildDuration(b, s)}
+              runningSince={s === "running" ? b.startedAt : undefined}
               isOpen={expanded === b.id}
               canDeploy={canDeploy}
               onToggle={() => setExpanded(expanded === b.id ? null : b.id)}

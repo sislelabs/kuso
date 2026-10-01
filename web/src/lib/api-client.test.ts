@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api-client";
+import { api, ApiError, onApiWarning, type ApiWarning } from "./api-client";
 
 // ---------------------------------------------------------------------------
 // ApiError — tiered friendly-message extraction.
@@ -201,5 +201,31 @@ describe("api()", () => {
     const err = (await api("/api/x").catch((e: unknown) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.message).toBe("500 Internal Server Error");
+  });
+});
+
+describe("X-Kuso-Warning", () => {
+  function stubWarning(status: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status, headers: { "X-Kuso-Warning": "env refresh failed" } })),
+    );
+    const seen: ApiWarning[] = [];
+    const off = onApiWarning((w) => seen.push(w));
+    return { seen, off };
+  }
+
+  it("reports the warning on a successful write, 204 included", async () => {
+    const { seen, off } = stubWarning(204);
+    await api("/api/projects/p/addons/db", { method: "DELETE" });
+    off();
+    expect(seen).toEqual([{ method: "DELETE", path: "/api/projects/p/addons/db", message: "env refresh failed" }]);
+  });
+
+  it("ignores it on reads", async () => {
+    const { seen, off } = stubWarning(204);
+    await api("/api/projects/p/addons");
+    off();
+    expect(seen).toEqual([]);
   });
 });

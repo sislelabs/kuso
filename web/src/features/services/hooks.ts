@@ -29,6 +29,7 @@ import {
   type PatchServiceBody,
 } from "./api";
 import type { KusoEnvVar } from "@/types/projects";
+import { invalidateProjectDescribe } from "@/features/projects/hooks";
 
 // selfHandledErrors marks a mutation whose call sites handle their own
 // errors (mutateAsync + try/catch, or a per-call onError). The global
@@ -151,32 +152,35 @@ export function useBuilds(project: string, service: string) {
   // drift right away so ACTIVE/SUPERSEDED chips flip without waiting
   // for the next 10s envs poll. We dedupe by (project, service,
   // newest-id+status) — only fire when *that pair* changes.
-  const lastSeenRef = useRef<string>("");
+  const lastSeenRef = useRef<{ scope: string; key: string }>({ scope: "", key: "" });
   useEffect(() => {
     const list = buildsQ.data ?? [];
     if (list.length === 0) return;
     const newest = list[0];
+    const scope = `${project}/${service}`;
     const key = `${newest.id}:${(newest.status ?? "").toLowerCase()}`;
-    if (key === lastSeenRef.current) return;
-    const prevKey = lastSeenRef.current;
-    lastSeenRef.current = key;
-    // Only invalidate on a transition INTO succeeded — first mount
-    // shouldn't trigger an unnecessary refetch storm.
-    if (prevKey && (newest.status ?? "").toLowerCase() === "succeeded") {
+    const prev = lastSeenRef.current;
+    if (prev.scope === scope && prev.key === key) return;
+    lastSeenRef.current = { scope, key };
+    // Only invalidate on a transition INTO succeeded within the same
+    // service — first mount and switching services aren't transitions.
+    if (prev.scope === scope && prev.key && (newest.status ?? "").toLowerCase() === "succeeded") {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      invalidateProjectDescribe(qc, project);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
     }
   }, [buildsQ.data, project, service, qc]);
   return buildsQ;
 }
 
-export const errorsQueryKey = (project: string, service: string, since: string) =>
-  ["projects", project, "services", service, "errors", since] as const;
+// env "" means every environment.
+export const errorsQueryKey = (project: string, service: string, since: string, env = "") =>
+  ["projects", project, "services", service, "errors", since, env] as const;
 
-export function useErrors(project: string, service: string, since = "24h") {
+export function useErrors(project: string, service: string, since = "24h", env = "") {
   return useQuery({
-    queryKey: errorsQueryKey(project, service, since),
-    queryFn: () => listErrors(project, service, since),
+    queryKey: errorsQueryKey(project, service, since, env),
+    queryFn: () => listErrors(project, service, since, env || undefined),
     enabled: !!project && !!service,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
@@ -207,9 +211,11 @@ export function useWakeService(project: string, service: string) {
   const qc = useQueryClient();
   return useMutation({
     meta: selfHandledErrors,
-    mutationFn: () => wakeService(project, service),
+    // env: the env CR name or group to wake; undefined = production.
+    mutationFn: (env?: string) => wakeService(project, service, env),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      invalidateProjectDescribe(qc, project);
     },
   });
 }
@@ -224,6 +230,7 @@ export function useRestartService(project: string, service: string) {
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
       qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      invalidateProjectDescribe(qc, project);
     },
   });
 }

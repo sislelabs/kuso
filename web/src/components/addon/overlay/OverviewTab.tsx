@@ -10,6 +10,7 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { cn, serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
 // helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
@@ -46,7 +47,8 @@ export function OverviewTab({
     queryKey: ["addons", project, addon, "secret"],
     queryFn: () => addonSecret(project, addon),
     enabled: canReadSecrets,
-    refetchInterval: (q) => (q.state.data ? false : 5_000),
+    // An empty {values:{}} is "not generated yet" too: keep polling.
+    refetchInterval: (q) => (Object.keys(q.state.data?.values ?? {}).length > 0 ? false : 5_000),
   });
   const storageSize = storageSizeFromSpec(cr?.spec);
   const tier = cr?.spec.size ?? "small";
@@ -107,6 +109,25 @@ function UsedBy({ project, addon }: { project: string; addon: string }) {
   const toggle = useToggleAddonSubscription(project);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const [pending, setPending] = useState<string | null>(null);
+  // Connecting/disconnecting rewrites the service's env and restarts its
+  // pods (disconnect drops DATABASE_URL & co.), so it gets a confirm.
+  const [confirm, setConfirm] = useState<{ svc: string; on: boolean } | null>(null);
+  const apply = (svc: string, on: boolean) => {
+    const q = subs[names.indexOf(svc)];
+    if (!q?.data) return;
+    setPending(svc);
+    toggle.mutate(
+      { service: svc, addon, on, current: q.data },
+      {
+        onSuccess: () => toast.success(on ? `Connected ${svc} to ${addon}` : `Disconnected ${svc} from ${addon}`),
+        onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+        onSettled: () => {
+          setPending(null);
+          setConfirm(null);
+        },
+      },
+    );
+  };
 
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
@@ -133,15 +154,7 @@ function UsedBy({ project, addon }: { project: string; addon: string }) {
                   title={canWrite ? (on ? "Disconnect" : "Connect") : undefined}
                   onClick={() => {
                     if (!q?.data) return;
-                    setPending(svc);
-                    toggle.mutate(
-                      { service: svc, addon, on: !on, current: q.data },
-                      {
-                        onError: (e) =>
-                          toast.error(e instanceof Error ? e.message : "Update failed"),
-                        onSettled: () => setPending(null),
-                      },
-                    );
+                    setConfirm({ svc, on: !on });
                   }}
                   className={cn(
                     "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors",
@@ -160,6 +173,20 @@ function UsedBy({ project, addon }: { project: string; addon: string }) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.on ? `Connect ${confirm.svc} to ${addon}?` : `Disconnect ${confirm?.svc ?? ""} from ${addon}?`}
+        body={
+          confirm?.on
+            ? `${confirm.svc} gets ${addon}'s connection variables and its pods restart to pick them up.`
+            : `${confirm?.svc ?? ""} loses ${addon}'s connection variables (e.g. DATABASE_URL) and its pods restart without them.`
+        }
+        confirmLabel={confirm?.on ? "Connect & restart" : "Disconnect & restart"}
+        destructive={!confirm?.on}
+        pending={pending !== null}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirm && apply(confirm.svc, confirm.on)}
+      />
     </section>
   );
 }

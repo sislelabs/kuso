@@ -87,6 +87,8 @@ export function useLogin() {
   const qc = useQueryClient();
   const router = useRouter();
   return useMutation({
+    // LoginForm shows the error inline (mutateAsync + catch).
+    meta: { skipGlobalErrorToast: true },
     mutationFn: (input: LoginInput) => loginApi(input),
     onSuccess: async (data) => {
       setJwt(data.access_token);

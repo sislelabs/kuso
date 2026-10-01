@@ -32,7 +32,7 @@ export function ServiceTerminalPanel({
   service,
   env = "production",
   blocked,
-  canWake = false,
+  wakeEnv,
 }: {
   project: string;
   service: string;
@@ -40,8 +40,8 @@ export function ServiceTerminalPanel({
   // No pod to exec into. The WS would 503 before the upgrade, which
   // the browser only reports as "connection closed", so don't connect.
   blocked?: "asleep" | "stopped";
-  // Wake only exists for the production env server-side.
-  canWake?: boolean;
+  // The wake endpoint's ?env= for this env; undefined = production.
+  wakeEnv?: string;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
@@ -136,6 +136,13 @@ export function ServiceTerminalPanel({
       ro.disconnect();
       dataDisp.dispose();
       resizeDisp.dispose();
+      // Detach before closing: the old socket's onclose fires after a
+      // "New session" remount and would mark the new session "closed"
+      // and write into this disposed terminal.
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
       ws.close();
       term.dispose();
     };
@@ -144,7 +151,7 @@ export function ServiceTerminalPanel({
   if (blocked) {
     const onWake = async () => {
       try {
-        await wake.mutateAsync();
+        await wake.mutateAsync(wakeEnv);
         toast.success(`Waking ${service}`);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Wake failed");
@@ -156,7 +163,7 @@ export function ServiceTerminalPanel({
         <p className="text-sm text-[var(--text-secondary)]">
           {blocked === "stopped" ? "Service is stopped" : "Service is asleep"}
         </p>
-        {blocked === "asleep" && canWake ? (
+        {blocked === "asleep" ? (
           <Button
             size="sm"
             variant="outline"

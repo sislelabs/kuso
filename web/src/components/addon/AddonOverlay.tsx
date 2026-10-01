@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +8,8 @@ import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { X, Database, HardDrive, Settings, Info, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { escapeHandledAbove } from "@/lib/escape-layer";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 import { OverviewTab } from "./overlay/OverviewTab";
 import { BackupsTab } from "./overlay/BackupsTab";
@@ -127,13 +129,16 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
     }
     setTab(next);
   };
-  const guardedClose = () => {
+  const guardedClose = useCallback(() => {
     for (const e of Object.values(panels)) {
       e.onDiscard?.();
     }
     setPanels({});
     onClose();
-  };
+  }, [panels, onClose]);
+  // Escape with unsaved edits asks first; backdrop / X still discard.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!addon) return;
@@ -146,9 +151,13 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      // A dialog opened from inside the overlay (restore confirm, etc.)
-      // handles its own Escape; don't also close the overlay under it.
-      if (document.querySelector('[data-slot="dialog-content"]')) return;
+      // A dialog/menu opened from inside the overlay (restore confirm,
+      // etc.) handles its own Escape; don't also close the overlay under it.
+      if (escapeHandledAbove(e, rootRef.current)) return;
+      if (Object.values(panels).some((p) => p.dirty)) {
+        setConfirmDiscard(true);
+        return;
+      }
       guardedClose();
     };
     window.addEventListener("keydown", onKey);
@@ -158,7 +167,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, panels, guardedClose]);
 
   const addons = useAddons(project);
   const data = (addons.data ?? []).find((a) => a.metadata.name === addon);
@@ -174,7 +183,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+        <div ref={rootRef} className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
           <motion.button
             type="button"
             aria-label="Close"
@@ -347,6 +356,17 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
               </AddonOverlayDirtyContext.Provider>
             </div>
           </motion.div>
+          <ConfirmDialog
+            open={confirmDiscard}
+            title="Discard unsaved changes?"
+            body="This addon has edits that haven't been saved. Closing drops them."
+            confirmLabel="Discard"
+            onCancel={() => setConfirmDiscard(false)}
+            onConfirm={() => {
+              setConfirmDiscard(false);
+              guardedClose();
+            }}
+          />
         </div>
       )}
     </AnimatePresence>

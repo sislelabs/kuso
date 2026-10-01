@@ -163,6 +163,10 @@ function fieldDiffValues(
 // ServiceSettingsPanel orchestrates the per-service settings overlay.
 // Each section lives in ./settings/<Name>Section.tsx; this file owns
 // the form state, the dirty/save bar, and the section-anchor nav.
+
+// RFC 1123 hostname, optionally with a leading "*." wildcard label.
+const HOSTNAME_RE = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/i;
+
 export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const onProduction = !env || env === "production";
   // Hoisted up from below so the env-domains save path inside onSave
@@ -297,6 +301,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       const a = norm(state.domains);
       const b = norm(baseline.domains);
       if (a !== b) {
+        const bad = a.split("\n").filter(Boolean).find((h) => !HOSTNAME_RE.test(h));
+        if (bad) {
+          toast.error(`"${bad}" isn't a hostname (e.g. app.example.com; no scheme, path or port)`);
+          return;
+        }
         // Per-env scope (v0.16.19): the form binds to the env CR's
         // AdditionalHosts, and saves go to the env endpoint so the
         // change doesn't leak to sibling envs. Staged here; applyPatch
@@ -516,16 +525,14 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         .split(",")
         .map((c) => c.trim())
         .filter(Boolean);
-      // Server semantics: nil = leave alone, non-nil = set verbatim (no
-      // "empty clears" sentinel yet). Only send when there's actually
-      // something to set, so an untouched service that never had
-      // securityContext isn't force-set to an all-empty block.
-      if (caps.length > 0 || state.allowPrivilegeEscalation) {
-        body.securityContext = {
-          ...(caps.length > 0 ? { capabilities: { add: caps } } : {}),
-          allowPrivilegeEscalation: state.allowPrivilegeEscalation,
-        };
-      }
+      // Server semantics: nil = leave alone, non-nil = set verbatim. We
+      // only get here when the user changed a field, so always send: an
+      // emptied block (no caps, escalation off) renders exactly kuso's
+      // hardened default, which is how the user clears an override.
+      body.securityContext = {
+        ...(caps.length > 0 ? { capabilities: { add: caps } } : {}),
+        allowPrivilegeEscalation: state.allowPrivilegeEscalation,
+      };
     }
 
     if (Object.keys(body).length === 0 && envHosts === null) {
@@ -567,6 +574,8 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         // Refetch so the baseline picks up the new AdditionalHosts and
         // the dirty flag clears.
         await qcForPanel.invalidateQueries({ queryKey: envsQueryKey(project) });
+        // Canvas tiles / project card read the URL from the describe payload.
+        qcForPanel.invalidateQueries({ queryKey: ["projects", project], exact: true });
       }
       if (Object.keys(body).length > 0) {
         await patch.mutateAsync(body);
@@ -799,6 +808,7 @@ function EnvBranchSection({
       );
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
+      qc.invalidateQueries({ queryKey: ["projects", project], exact: true });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
     } finally {

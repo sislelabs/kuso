@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
@@ -122,8 +123,16 @@ export function ProjectDetailView() {
     return (
       <div className="p-6 lg:p-8">
         <Card>
-          <CardContent className="p-6 text-sm text-[var(--error)]">
-            Failed to load project: {project.error?.message}
+          <CardContent className="space-y-3 p-6 text-sm">
+            <p className="text-[var(--error)]">Failed to load project: {project.error?.message}</p>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void project.refetch()}>
+                Retry
+              </Button>
+              <Link href="/projects" className="text-xs text-[var(--text-secondary)] underline-offset-2 hover:underline">
+                Back to projects
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -278,12 +287,12 @@ export function ProjectDetailView() {
           title={`Environment "${selectedEnv}" not found`}
           description="This environment doesn't exist (anymore) — a preview environment may have been torn down after its PR closed or expired."
           action={
-            <a
+            <Link
               href={`/projects/${encodeURIComponent(projectName)}`}
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
             >
               Back to production
-            </a>
+            </Link>
           }
         />
       </div>
@@ -299,12 +308,12 @@ export function ProjectDetailView() {
           description="A project is a container for services and addons. Wire your first GitHub repo or provision a managed database to get this canvas lit up."
           action={
             <div className="flex items-center gap-2">
-              <a
+              <Link
                 href={`/projects/${encodeURIComponent(projectName)}/services/new`}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
               >
                 + Add service
-              </a>
+              </Link>
               <Button
                 type="button"
                 variant="outline"
@@ -347,6 +356,17 @@ export function ProjectDetailView() {
           // get amber; preview-pr envs get blue so the user can tell
           // them apart at a glance.
           <NonProdBanner project={projectName} env={selectedEnv} />
+        )}
+        {addons.isError && (
+          <div
+            role="alert"
+            className="shrink-0 border-b border-[var(--error)]/30 bg-[var(--error-subtle)] px-6 py-2 text-[12px] text-[var(--error)]"
+          >
+            Couldn&apos;t load addons, so databases are missing from this canvas: {addons.error?.message}{" "}
+            <button type="button" className="underline underline-offset-2" onClick={() => void addons.refetch()}>
+              Retry
+            </button>
+          </div>
         )}
         <ProjectCanvas
           project={projectName}

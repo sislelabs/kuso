@@ -166,7 +166,8 @@ function CronRow({
             type="button"
             onClick={() => sync.mutate()}
             disabled={sync.isPending}
-            title="Re-resolve image + env from production"
+            title="Re-sync image + env from production (doesn't refresh this list)"
+            aria-label="Re-sync image and env from production"
             className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", sync.isPending && "animate-spin")} />
@@ -177,6 +178,7 @@ function CronRow({
             disabled={del.isPending}
             className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
             title="Delete cron"
+            aria-label="Delete cron"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -242,6 +244,7 @@ function CronCreateForm({
         <button
           type="button"
           onClick={onClose}
+          aria-label="Close new cron form"
           className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
         >
           <X className="h-3 w-3" />

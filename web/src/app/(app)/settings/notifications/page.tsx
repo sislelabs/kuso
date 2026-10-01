@@ -37,6 +37,7 @@ import {
   type NotificationEventGroup,
   type NotificationEventType,
 } from "@/features/notifications";
+import { cleanMentionRules } from "./mentions";
 import { useProjects } from "@/features/projects";
 
 type NotifKind =
@@ -102,6 +103,12 @@ const NOTIF_KINDS: {
         label: "webhook url",
         placeholder: "https://example.com/hooks/kuso",
         hint: "any URL that accepts a JSON POST",
+      },
+      {
+        key: "secret",
+        label: "signing secret",
+        placeholder: "(optional)",
+        hint: "HMAC-SHA256 signs each delivery when set",
       },
     ],
   },
@@ -170,7 +177,7 @@ interface Notification {
   enabled: boolean;
   pipelines: string[];
   events: string[];
-  config: Record<string, string | undefined>;
+  config: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -549,6 +556,7 @@ function NotificationEditor({
     const c: Record<string, string> = {};
     for (const [k, v] of Object.entries(notification?.config ?? {})) {
       if (typeof v === "string") c[k] = v;
+      else if (typeof v === "number") c[k] = String(v);
     }
     return c;
   });
@@ -583,6 +591,7 @@ function NotificationEditor({
     const c: Record<string, string> = {};
     for (const [k, v] of Object.entries(notification.config ?? {})) {
       if (typeof v === "string") c[k] = v;
+      else if (typeof v === "number") c[k] = String(v);
     }
     setCfg(c);
     setEvents(notification.events);
@@ -594,7 +603,7 @@ function NotificationEditor({
 
   // optionalConfigKeys are config fields the save button doesn't
   // require — email's auth + port have sane defaults / can be empty.
-  const optionalConfigKeys = new Set(["port", "username", "password"]);
+  const optionalConfigKeys = new Set(["port", "username", "password", "secret"]);
   const configComplete = kindFields(type).every(
     (f) => optionalConfigKeys.has(f.key) || (cfg[f.key] ?? "").trim() !== "",
   );
@@ -603,35 +612,24 @@ function NotificationEditor({
 
   const save = useMutation({
     mutationFn: () => {
-      // Persist only mention rules that DIFFER from the event's
-      // server-side default. "" means "use the default" → never
-      // stored. "none" is an EXPLICIT opt-out and MUST be stored
-      // when the default is a ping (error-severity events default to
-      // @here) — previously we stripped "none" unconditionally, so
-      // disabling @here on backup.failed silently reverted to the
-      // @here default on reload. A redundant rule (e.g. "none" on an
-      // event whose default is already none) is still dropped to keep
-      // the stored config clean.
-      //
-      // Without the catalogue we don't know the defaults, so every
-      // explicit rule is kept rather than risk dropping an opt-out.
-      const catalogue = eventTypes.data;
-      const cleanMentions: Record<string, string> = {};
-      for (const [k, v] of Object.entries(mentions)) {
-        if (!v) continue; // "" = use default
-        const known = catalogue?.find((t) => t.type === k);
-        if (known) {
-          const effective = v === "none" ? "" : v;
-          if (effective === known.defaultMention) continue; // matches default → redundant
-        }
-        cleanMentions[k] = v;
-      }
+      // "none" is an explicit opt-out and must survive when the
+      // fallback would ping; see cleanMentionRules.
+      const cleanMentions = cleanMentionRules(mentions, eventTypes.data);
       // Only persist the config keys this channel type actually uses,
       // so switching type doesn't leave stale keys (a leftover `url`
       // on a telegram channel, etc.) in the stored config.
-      const typeConfig: Record<string, string> = {};
+      // When the type is unchanged, keys the form doesn't render (set via
+      // CLI/API) are carried over as stored, since the server replaces the
+      // whole config map on update.
+      const typeConfig: Record<string, unknown> = {};
+      if (notification && notification.type === type) {
+        for (const [k, v] of Object.entries(notification.config ?? {})) {
+          if (k !== "mentions") typeConfig[k] = v;
+        }
+      }
       for (const f of kindFields(type)) {
         if (cfg[f.key]) typeConfig[f.key] = cfg[f.key];
+        else delete typeConfig[f.key];
       }
       const body = {
         name,

@@ -223,8 +223,9 @@ export function TableGrid({
                         const k = safePkOf(ri);
                         if (k) setPendingDelete(k);
                       }}
-                      className="opacity-0 transition-opacity group-hover:opacity-100"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
                       title="delete row"
+                      aria-label="Delete row"
                     >
                       <Trash2 className="h-3 w-3 text-red-400/70 hover:text-red-400" />
                     </button>

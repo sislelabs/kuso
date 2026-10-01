@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { X, AlertTriangle } from "lucide-react";
+import { claimEscape } from "@/lib/escape-layer";
 
 interface Props {
   open: boolean;
@@ -19,6 +20,14 @@ interface Props {
   pending?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+// confirmDialogKeyAction maps a window keydown to what the dialog does
+// with it. Enter is deliberately absent: confirming goes through the
+// form's submit (Enter in the typed-name input, or activating the
+// confirm button), so Enter while Cancel/X has focus can't confirm.
+export function confirmDialogKeyAction(key: string): "cancel" | null {
+  return key === "Escape" ? "cancel" : null;
 }
 
 // ConfirmDialog is the typed-name confirmation modal we use across
@@ -90,8 +99,11 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-      if (e.key === "Enter" && allow()) onConfirm();
+      if (confirmDialogKeyAction(e.key) === "cancel") {
+        claimEscape(e);
+        onCancel();
+        return;
+      }
       // Focus trap: keep Tab / Shift+Tab cycling inside the panel so
       // keyboard focus can't escape to page content behind the modal.
       if (e.key === "Tab") {
@@ -117,10 +129,11 @@ export function ConfirmDialog({
         }
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, text, pending]);
+    // Capture phase so this runs before an enclosing overlay's window
+    // listener, which then sees the Escape as claimed.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onCancel]);
 
   const allow = () => !pending && (typeToConfirm ? text === typeToConfirm : true);
 
@@ -146,12 +159,18 @@ export function ConfirmDialog({
             transition={{ type: "spring", stiffness: 360, damping: 32 }}
             onClick={(e) => e.stopPropagation()}
             className={`w-full max-w-md rounded-md border bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)] ${
-              destructive ? "border-red-500/40" : "border-[var(--border-subtle)]"
+              destructive ? "border-[var(--error)]/40" : "border-[var(--border-subtle)]"
             }`}
           >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (allow()) onConfirm();
+              }}
+            >
             <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
               <div className="flex items-center gap-2">
-                {destructive && <AlertTriangle className="h-4 w-4 text-red-400" />}
+                {destructive && <AlertTriangle aria-hidden className="h-4 w-4 text-[var(--error)]" />}
                 <h2 id={titleId} className="text-sm font-semibold tracking-tight">{title}</h2>
               </div>
               <button
@@ -185,18 +204,19 @@ export function ConfirmDialog({
             </div>
 
             <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
-              <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
+              <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
                 Cancel
               </Button>
               <Button
+                type="submit"
                 variant={destructive ? "destructive" : "default"}
                 size="sm"
-                onClick={onConfirm}
                 disabled={!allow()}
               >
                 {pending ? "Working…" : confirmLabel}
               </Button>
             </footer>
+            </form>
           </motion.div>
         </motion.div>
       )}

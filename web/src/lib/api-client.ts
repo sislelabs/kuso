@@ -121,6 +121,36 @@ export function onServerVersionMismatch(cb: () => void): () => void {
   return () => versionListeners.delete(cb);
 }
 
+// X-Kuso-Warning: a write succeeded but a follow-up step didn't (e.g.
+// an addon landed but the env refresh failed). Reported for non-GET
+// calls only; the QueryProvider turns each one into a warning toast.
+export interface ApiWarning {
+  method: string;
+  path: string;
+  message: string;
+}
+
+const warningListeners = new Set<(w: ApiWarning) => void>();
+
+export function onApiWarning(cb: (w: ApiWarning) => void): () => void {
+  warningListeners.add(cb);
+  return () => {
+    warningListeners.delete(cb);
+  };
+}
+
+function observeWarning(method: string, path: string, res: Response) {
+  const message = res.headers.get("X-Kuso-Warning");
+  if (!message || method === "GET" || !res.ok) return;
+  warningListeners.forEach((cb) => {
+    try {
+      cb({ method, path, message });
+    } catch {
+      /* listener errors must not break the api call */
+    }
+  });
+}
+
 type Options = Omit<RequestInit, "body"> & { body?: unknown };
 
 export async function api<T>(path: string, opts: Options = {}): Promise<T> {
@@ -142,6 +172,7 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
     credentials: "include",
   });
   observeServerVersion(res.headers.get("X-Kuso-Server-Version"));
+  observeWarning((opts.method ?? "GET").toUpperCase(), path, res);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let parsed: unknown = undefined;

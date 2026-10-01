@@ -86,7 +86,7 @@ export default function GroupsSettingsPage() {
         </div>
       </header>
 
-      <div className="grid grid-cols-[280px_1fr] gap-4">
+      <div className="grid gap-4 md:grid-cols-[280px_1fr]">
         {/* Left: group list */}
         <aside className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
           <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
@@ -398,6 +398,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "add failed"),
   });
+  const [removing, setRemoving] = useState<{ id: string; username: string } | null>(null);
   const remove = useMutation({
     mutationFn: (userId: string) =>
       api(
@@ -406,6 +407,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       ),
     onSuccess: () => {
       toast.success("Member removed");
+      setRemoving(null);
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "remove failed"),
@@ -445,7 +447,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
               )}
               <button
                 type="button"
-                onClick={() => remove.mutate(m.id)}
+                onClick={() => setRemoving({ id: m.id, username: m.username })}
                 disabled={remove.isPending}
                 aria-label={`Remove ${m.username}`}
                 title={`Remove ${m.username} from group`}
@@ -493,6 +495,17 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
           </PopoverContent>
         </Popover>
       </div>
+
+      <ConfirmDialog
+        open={removing !== null}
+        title={`Remove ${removing?.username ?? "member"} from this group?`}
+        body={<p>They lose the group&apos;s instance role and project grants on their next request.</p>}
+        confirmLabel="Remove member"
+        destructive
+        pending={remove.isPending}
+        onConfirm={() => removing && remove.mutate(removing.id)}
+        onCancel={() => setRemoving(null)}
+      />
     </section>
   );
 }

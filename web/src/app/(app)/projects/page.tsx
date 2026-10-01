@@ -386,18 +386,16 @@ function ProjectsGrid({
   // the project list still render), matching how a failed per-card
   // describe rendered before.
   const summaryQuery = useProjectsSummary();
-  // Index by project name once per resolved response. Memoised on
-  // dataUpdatedAt (not the data ref) so a poll that returns identical
-  // data — react-query still hands back a new array — doesn't produce a
-  // new Map and rebuild all N cards below.
+  // Index by project name once per resolved response. Keyed on the
+  // data ref: structural sharing hands back the SAME array when a poll
+  // returns identical data, whereas dataUpdatedAt moves on every poll.
   const summaryByName = useMemo(() => {
     const m = new Map<string, ProjectSummaryItem>();
     for (const item of summaryQuery.data ?? []) {
       m.set(item.project.metadata.name, item);
     }
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summaryQuery.dataUpdatedAt]);
+  }, [summaryQuery.data]);
   // Build one rendered <li> per project, tagged with its star/folder
   // state so we can group them into sections below without recomputing
   // the per-card data (which is indexed off the queries arrays by
@@ -899,9 +897,9 @@ function ProjectsGrid({
         );
         return { name, starred, folder, node };
       }),
-    // summaryByName is memoised on the summary query's dataUpdatedAt
-    // (changes only when the poll actually resolves new data) + prefs,
-    // so a 30s tick that returns identical data is a no-op rebuild.
+    // summaryByName is memoised on the summary data ref (stable across
+    // polls that return identical data) + prefs, so a 30s tick that
+    // returns identical data is a no-op rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       projects,

@@ -57,6 +57,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { ServersPopover } from "./ServersPopover";
+import { CommandTrigger } from "@/components/command/CommandPalette";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
 // TopNav is the persistent shell across every authenticated page. Left
@@ -139,6 +140,9 @@ export function TopNav() {
 
       <div className="flex-1" />
 
+      {/* The only way to open the palette on touch devices (no ⌘K). */}
+      <CommandTrigger />
+
       {/* Mobile: icon-only Settings to save horizontal pixels. The
           full-text version returns at sm. ServersPopover renders an
           icon either way; ThemeToggle is icon-only. Marketplace lives
@@ -178,6 +182,22 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
     config: "Cluster config",
     users: "Users",
     groups: "Groups",
+    activity: "Activity",
+    alerts: "Alerts",
+    backups: "Backups",
+    builds: "Builds",
+    database: "Database",
+    drains: "Log drains",
+    github: "GitHub",
+    health: "Health",
+    import: "Import",
+    "import-compose": "Import compose",
+    "incident-agent": "Incident agent",
+    "instance-secrets": "Instance secrets",
+    roles: "Roles",
+    sessions: "Sessions",
+    updates: "Updates",
+    usage: "Usage",
   };
   const out: { label: string; href?: string }[] = [
     { label: "Settings", href: "/settings" },
@@ -369,6 +389,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
           )}
         >
           <span
+            aria-hidden
             className={cn(
               "inline-block h-1.5 w-1.5 rounded-full",
               currentEnv === "production"
@@ -378,6 +399,13 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                   : "bg-blue-400",
             )}
           />
+          <span className="sr-only">
+            {currentEnv === "production"
+              ? "Production environment:"
+              : currentEnv.startsWith("pr-") || currentEnv.startsWith("preview-")
+                ? "Preview environment:"
+                : "Environment:"}
+          </span>
           <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
           <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
         </PopoverTrigger>
@@ -636,7 +664,10 @@ function NotificationsButton() {
   // invalidate so the previous events come back.
   const clearAll = useMutation({
     mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
-    onMutate: () => {
+    onMutate: async () => {
+      // An in-flight feed refetch would otherwise land after this and
+      // repopulate the list.
+      await qc.cancelQueries({ queryKey: feedKey });
       qc.setQueryData(feedKey, [] as FeedEvent[]);
     },
     onSuccess: () => {
@@ -648,17 +679,20 @@ function NotificationsButton() {
     },
   });
 
+  const unreadCount = unread.data?.unread ?? 0;
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
       void feed.refetch();
+    } else if (isAdmin && unreadCount > 0) {
+      // Mark read on CLOSE, not open: marking on open cleared readAt
+      // before the feed rendered, so nothing could show as new.
       // Mark-read only exists for admins — non-admin feed has no
       // read tracking (per-user readAt isn't modelled yet).
-      if (isAdmin) markRead.mutate();
+      markRead.mutate();
     }
   };
 
-  const unreadCount = unread.data?.unread ?? 0;
   const badge = unreadCount > 0;
   const [confirmClear, setConfirmClear] = useState(false);
   return (
@@ -749,7 +783,12 @@ function NotificationsButton() {
           ) : (
             <ul className="divide-y divide-[var(--border-subtle)]">
               {(feed.data ?? []).map((e) => (
-                <NotificationRow key={e.id} event={e} onClose={() => setOpen(false)} />
+                <NotificationRow
+                  key={e.id}
+                  event={e}
+                  unread={isAdmin && !e.readAt}
+                  onClose={() => setOpen(false)}
+                />
               ))}
             </ul>
           )}
@@ -766,7 +805,15 @@ function NotificationsButton() {
 // plain non-interactive li so events without a meaningful target
 // (e.g. low-importance generic events) don't pretend to be
 // clickable.
-function NotificationRow({ event, onClose }: { event: FeedEvent; onClose: () => void }) {
+function NotificationRow({
+  event,
+  unread = false,
+  onClose,
+}: {
+  event: FeedEvent;
+  unread?: boolean;
+  onClose: () => void;
+}) {
   const body = (
     <div className="flex items-start gap-2">
       <span
@@ -786,7 +833,10 @@ function NotificationRow({ event, onClose }: { event: FeedEvent; onClose: () => 
         )}
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[12px] font-medium">{event.title}</p>
+        <p className={cn("truncate text-[12px]", unread ? "font-semibold" : "font-medium")}>
+          {unread && <span className="sr-only">New: </span>}
+          {event.title}
+        </p>
         {/* Prefer the classifier's human summary over the raw body
             when both are present. The summary reads "Missing env var:
             DATABASE_URL"; the raw body would say "build pod exited

@@ -497,3 +497,12 @@ export function prefixGroups(names: readonly string[], min = 4): Map<string, str
   }
   return out;
 }
+
+// envApplyFailureMessage explains a per-key save that stopped part-way:
+// which keys already went live and which one failed, so the user isn't
+// left guessing what the pod will see.
+export function envApplyFailureMessage(applied: string[], failed: string, reason: string): string {
+  const head = failed ? `Failed to save ${failed}: ${reason}` : `Failed to save env vars: ${reason}`;
+  if (applied.length === 0) return `${head}. Nothing was changed.`;
+  return `${head}. Already applied: ${applied.join(", ")}. Save again to retry the rest.`;
+}

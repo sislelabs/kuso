@@ -34,6 +34,10 @@ export async function loginRegistry(
   return api<RegistryCredential>(base(project), { method: "POST", body });
 }
 
+// chi matches on the raw (still-escaped) path, so an encoded ":" reaches the
+// handler as "%3A" and fails registry normalisation. ":" is legal in a path
+// segment, so keep it literal; everything else stays encoded.
 export async function logoutRegistry(project: string, registry: string): Promise<void> {
-  await api(`${base(project)}/${encodeURIComponent(registry)}`, { method: "DELETE" });
+  const segment = encodeURIComponent(registry).replace(/%3A/gi, ":");
+  await api(`${base(project)}/${segment}`, { method: "DELETE" });
 }

@@ -70,6 +70,14 @@ export function VolumesSection({ state, setState }: SectionProps) {
             >
               <X className="h-3 w-3" />
             </button>
+            {(v.accessMode || v.storageClass) && (
+              <p
+                className="col-span-4 font-mono text-[10px] text-[var(--text-tertiary)]"
+                title="Fixed when the volume was created; immutable on a bound PVC"
+              >
+                {[v.accessMode, v.storageClass && `class ${v.storageClass}`].filter(Boolean).join(" · ")} (read-only)
+              </p>
+            )}
           </div>
         ))
       )}

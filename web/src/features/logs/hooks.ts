@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ReconnectingWS, type WSStatus } from "@/lib/ws-client";
+import { ApiError } from "@/lib/api-client";
+import { getProfile } from "@/features/auth/api";
+import { sessionQueryKey } from "@/features/auth";
 
 export interface LogFrame {
   type: "log" | "ping" | "phase" | "error" | "notice";
@@ -14,6 +18,9 @@ export interface LogFrame {
 }
 
 export interface LogLine {
+  // Monotonic per-stream id: a stable React key that survives the
+  // MAX_LINES slice (index keys shift every row once the cap kicks in).
+  id: number;
   pod: string;
   line: string;
   ts: string;
@@ -30,6 +37,33 @@ export interface UseLogStreamResult {
 }
 
 const MAX_LINES = 10_000;
+
+// createReplayFilter drops lines a reconnect replays. Every new socket
+// asks for the same ?tail=N, so after a drop the server re-sends up to
+// N lines per pod we already have. Kube log timestamps are per-pod
+// monotonic, so a line older than the newest one seen for its pod is a
+// replay; a line at exactly that instant is a replay only if its text
+// was already seen at that instant. Lines without a timestamp pass.
+export function createReplayFilter(): (l: { pod: string; ts?: string; line: string }) => boolean {
+  const last = new Map<string, { ms: number; seen: Set<string> }>();
+  return (l) => {
+    if (!l.ts) return true;
+    const ms = Date.parse(l.ts);
+    if (Number.isNaN(ms)) return true;
+    // Sub-millisecond part of RFC3339Nano so same-ms lines still order.
+    const frac = /\.(\d+)/.exec(l.ts)?.[1] ?? "";
+    const key = frac.padEnd(9, "0") + "\u0000" + l.line;
+    const cur = last.get(l.pod);
+    if (!cur || ms > cur.ms) {
+      last.set(l.pod, { ms, seen: new Set([key]) });
+      return true;
+    }
+    if (ms < cur.ms) return false;
+    if (cur.seen.has(key)) return false;
+    cur.seen.add(key);
+    return true;
+  };
+}
 
 export function useLogStream(
   project: string,
@@ -54,6 +88,7 @@ export function useLogStream(
   // build. We use a ref instead of state because the WS callbacks
   // close over the initial render and wouldn't see state updates.
   const completedRef = useRef(false);
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!project || !service) return;
@@ -63,31 +98,73 @@ export function useLogStream(
     setStatus("connecting");
     completedRef.current = false;
 
+    const accept = createReplayFilter();
+    let nextId = 0;
+    // Frames arrive in bursts (a 200-line backfill, a chatty build).
+    // Buffer them and commit every ~50ms instead of one state update +
+    // full-array copy per line.
+    let pending: LogLine[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      if (pending.length === 0) return;
+      const batch = pending;
+      pending = [];
+      setLines((prev) => {
+        const next = prev.length + batch.length > MAX_LINES
+          ? prev.concat(batch).slice(-MAX_LINES)
+          : prev.concat(batch);
+        return next;
+      });
+    };
+
     const path = `/ws/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs?env=${encodeURIComponent(env)}&tail=${tail}`;
     const ws = new ReconnectingWS<LogFrame>({
       path,
       onStatus: (s, info) => {
         setStatus(s);
+        if (s === "open") {
+          setError(null);
+          return;
+        }
         // Suppress error chrome once the server has signalled
         // end-of-stream — a 1000 close after phase=completed is the
         // expected exit, and even a 1006 (no Close frame) is fine if
         // we already saw the completed phase.
         if (completedRef.current) return;
+        if (info?.gaveUp) {
+          setError("can't connect to the log stream — reload to retry");
+          return;
+        }
         if (s === "error") setError("connection error");
         if (s === "closed" && info?.code === 1006) setError("connection lost");
       },
+      // A refused upgrade looks like any other drop. Ask the API whether
+      // the session is still good: if not, stop retrying and let the
+      // session query bounce the user to /login.
+      onHandshakeFailure: async () => {
+        try {
+          await getProfile();
+          return "retry";
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            void qc.invalidateQueries({ queryKey: sessionQueryKey });
+            return "stop";
+          }
+          return "retry";
+        }
+      },
       onFrame: (f) => {
         if (f.type === "log") {
-          setLines((prev) => {
-            const next = [...prev, {
-              pod: f.pod ?? "",
-              line: f.line ?? "",
-              ts: f.ts ?? new Date().toISOString(),
-              stream: f.stream,
-            }];
-            if (next.length > MAX_LINES) return next.slice(-MAX_LINES);
-            return next;
-          });
+          const l = {
+            pod: f.pod ?? "",
+            line: f.line ?? "",
+            ts: f.ts,
+            stream: f.stream,
+          };
+          if (!accept(l)) return;
+          pending.push({ ...l, id: nextId++, ts: l.ts ?? new Date().toISOString() });
+          if (timer === null) timer = setTimeout(flush, 50);
         } else if (f.type === "phase" && f.value) {
           setPhase(f.value);
           // Terminal phases the build poller emits at end-of-stream.
@@ -110,9 +187,10 @@ export function useLogStream(
 
     return () => {
       ws.close();
+      if (timer !== null) clearTimeout(timer);
       wsRef.current = null;
     };
-  }, [project, service, env, tail]);
+  }, [project, service, env, tail, qc]);
 
   return {
     lines,

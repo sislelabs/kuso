@@ -16,16 +16,16 @@ import { toast } from "sonner";
 import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon, KeyRound } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
-// Preset expiry choices. "Never" sends an empty expiresAt; the
-// server treats that as "infinite" (omits the JWT exp claim, stores a
-// 100y sentinel in the row). Custom keeps the numeric input around
-// for the rare "1.5 year" case without cluttering the common path.
-const PRESETS: { label: string; days: number | null }[] = [
+// Preset expiry choices. There is no "Never": the server clamps every
+// personal token to 365 days (baked-in perms must not outlive a demotion),
+// so offering it would mint a 1-year token labelled as non-expiring.
+const MAX_TOKEN_DAYS = 365;
+const PRESETS: { label: string; days: number }[] = [
   { label: "30 days",  days: 30 },
   { label: "90 days",  days: 90 },
-  { label: "1 year",   days: 365 },
-  { label: "Never",    days: null },
+  { label: "1 year",   days: MAX_TOKEN_DAYS },
   { label: "Custom",   days: 0 },
 ];
 
@@ -40,9 +40,13 @@ export default function TokensPage() {
       issueMyToken(name, expiresAt),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens", "my"] }),
   });
+  const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null);
   const revoke = useMutation({
     mutationFn: (id: string) => revokeMyToken(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens", "my"] }),
+    onSuccess: () => {
+      setRevoking(null);
+      qc.invalidateQueries({ queryKey: ["tokens", "my"] });
+    },
   });
 
   const [name, setName] = useState("");
@@ -55,8 +59,7 @@ export default function TokensPage() {
   const expiresAtFor = (): string => {
     const p = PRESETS.find((x) => x.label === preset);
     if (!p) return "";
-    if (p.days === null) return ""; // never → empty → server omits exp
-    const days = p.days === 0 ? customDays : p.days;
+    const days = Math.min(p.days === 0 ? customDays : p.days, MAX_TOKEN_DAYS);
     return new Date(Date.now() + days * 86400_000).toISOString();
   };
 
@@ -75,8 +78,13 @@ export default function TokensPage() {
     }
   };
 
-  const copy = (s: string) => {
-    navigator.clipboard.writeText(s);
+  const copy = async (s: string) => {
+    try {
+      await navigator.clipboard.writeText(s);
+    } catch {
+      toast.error("Clipboard unavailable — select the token and copy it manually");
+      return;
+    }
     setCopied(true);
     toast.success("Copied to clipboard");
     setTimeout(() => setCopied(false), 1200);
@@ -137,7 +145,6 @@ export default function TokensPage() {
                         : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                     )}
                   >
-                    {p.days === null && <InfinityIcon className="h-3 w-3" />}
                     {p.label}
                   </button>
                 );
@@ -148,19 +155,15 @@ export default function TokensPage() {
                 <Input
                   type="number"
                   min={1}
-                  max={365 * 50}
+                  max={MAX_TOKEN_DAYS}
                   value={customDays}
                   onChange={(e) => setCustomDays(parseInt(e.target.value, 10) || 30)}
                   className="h-7 w-24 font-mono text-[11px]"
                 />
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">days</span>
+                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  days (max {MAX_TOKEN_DAYS})
+                </span>
               </div>
-            )}
-            {preset === "Never" && (
-              <p className="mt-2 text-[10px] text-[var(--warning)]">
-                ⚠ Non-expiring tokens stay valid until you manually revoke. Use sparingly —
-                rotate when a laptop is lost.
-              </p>
             )}
           </Field>
         </div>
@@ -179,10 +182,10 @@ export default function TokensPage() {
             Save this now — kuso never shows it again.
           </p>
           <div className="mt-3 flex items-stretch gap-2">
-            <code className="flex-1 truncate rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[11px]">
+            <code className="flex-1 break-all rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[11px]">
               {issued.token}
             </code>
-            <Button variant="outline" size="sm" type="button" onClick={() => copy(issued.token)}>
+            <Button variant="outline" size="sm" type="button" onClick={() => void copy(issued.token)}>
               {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
               {copied ? "Copied" : "Copy"}
             </Button>
@@ -249,8 +252,8 @@ export default function TokensPage() {
                   variant="ghost"
                   size="icon-sm"
                   type="button"
-                  aria-label="Revoke"
-                  onClick={() => revoke.mutate(t.id)}
+                  aria-label={`Revoke ${t.name}`}
+                  onClick={() => setRevoking({ id: t.id, name: t.name })}
                   disabled={revoke.isPending}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -260,6 +263,17 @@ export default function TokensPage() {
           </ul>
         )}
       </section>
+
+      <ConfirmDialog
+        open={revoking !== null}
+        title={`Revoke ${revoking?.name ?? "token"}?`}
+        body={<p>Anything using this token (CLI logins, scripts, CI) stops working immediately.</p>}
+        confirmLabel="Revoke token"
+        destructive
+        pending={revoke.isPending}
+        onConfirm={() => revoking && revoke.mutate(revoking.id)}
+        onCancel={() => setRevoking(null)}
+      />
     </div>
   );
 }

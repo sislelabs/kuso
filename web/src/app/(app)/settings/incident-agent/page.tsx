@@ -25,7 +25,6 @@ import {
 } from "@/features/incident-agent";
 import { useProjects, useSetIncidentMonitoring } from "@/features/projects";
 import { toast } from "sonner";
-import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default function IncidentAgentPage() {
@@ -273,6 +272,7 @@ function ConfigSection({
       <CardContent className="space-y-4 text-[13px]">
         <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
           <span
+            aria-hidden
             className={cn(
               "h-1.5 w-1.5 rounded-full",
               status.openIncidents > 0 ? "bg-amber-400" : "bg-emerald-400/60",
@@ -371,7 +371,7 @@ function CredentialsSection({
         <StatusLine
           ok={status.ccConfigured}
           okText={`configured${status.ccSubscriptionType ? ` · ${status.ccSubscriptionType} sub` : ""}${
-            status.ccExpiresAt ? ` · expires ${relativeTime(status.ccExpiresAt)}` : ""
+            status.ccExpiresAt ? ` · expires ${new Date(status.ccExpiresAt).toLocaleString()}` : ""
           }`}
           badText="not configured — the agent can't authenticate"
         />

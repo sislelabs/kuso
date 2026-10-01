@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import {
   getProject,
   getProjectsSummary,
@@ -65,12 +65,35 @@ export function useProjectsSummary() {
   });
 }
 
+// The describe payload is what the canvas paints service tiles from
+// (replicas, URL, unified env state). Poll it fast while any env is
+// mid-transition so a restart/wake/deploy/crashloop shows up without a
+// window refocus, slow otherwise.
+const TRANSITIONAL_ENV_STATES = new Set(["building", "deploying", "crashlooping", "degraded"]);
+
+export function projectRefetchInterval(
+  data: { environments?: { status?: { state?: string } }[] } | undefined,
+): number {
+  const busy = (data?.environments ?? []).some((e) => TRANSITIONAL_ENV_STATES.has(e.status?.state ?? ""));
+  return busy ? 5_000 : 30_000;
+}
+
 export function useProject(name: string) {
   return useQuery({
     queryKey: projectQueryKey(name),
     queryFn: () => getProject(name),
     enabled: !!name,
+    refetchInterval: (q) => projectRefetchInterval(q.state.data),
+    refetchIntervalInBackground: false,
   });
+}
+
+// invalidateProjectDescribe refreshes the canvas source of truth
+// (["projects", p] exactly). Mutations that only invalidated
+// ["projects", p, "envs"] left the canvas frozen, because that key is a
+// sibling of the describe query, not a parent.
+export function invalidateProjectDescribe(qc: QueryClient, project: string) {
+  return qc.invalidateQueries({ queryKey: projectQueryKey(project), exact: true });
 }
 
 export function useServices(project: string) {

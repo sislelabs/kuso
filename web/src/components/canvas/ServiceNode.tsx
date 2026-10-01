@@ -5,6 +5,7 @@ import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink, MoreHorizontal, Square } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
+import { buildRefLabel } from "@/features/builds";
 import {
   deployStatusFromServerState,
   type DeployStatus,
@@ -314,7 +315,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
 // lives; this is just glance info.
 function BuildLine({ build }: { build?: BuildSummary }) {
   if (!build) return null;
-  const sha = (build.commitSha ?? "").slice(0, 7);
+  const sha = buildRefLabel(build, 7);
   const branch = build.branch || "main";
   const status = (build.status ?? "").toLowerCase();
   // Status glyph + color via the shared token vocabulary so it
@@ -323,17 +324,22 @@ function BuildLine({ build }: { build?: BuildSummary }) {
   let cls = "text-[var(--text-tertiary)]";
   if (status === "succeeded") {
     glyph = "✓";
-    cls = "text-emerald-400";
+    cls = "text-[var(--success)]";
   } else if (status === "failed" || status === "error") {
     glyph = "✗";
-    cls = "text-red-400";
+    cls = "text-[var(--error)]";
+  } else if (status === "release-failed") {
+    // Image built but the release hook failed; the previous green build
+    // keeps serving, so this is a warning, not a dead service.
+    glyph = "!";
+    cls = "text-[var(--warning)]";
   } else if (status === "cancelled" || status === "superseded") {
     // Distinct from failed (red) — the build didn't break, it was
     // replaced by a newer one. Muted gray so a feed of redeploys
     // doesn't read as a wall of red.
     glyph = "⊘";
     cls = "text-[var(--text-tertiary)]";
-  } else if (status === "running" || status === "pending" || status === "building") {
+  } else if (status === "running" || status === "pending" || status === "queued" || status === "building") {
     glyph = "…";
     cls = "text-[var(--building)]";
   }
@@ -347,7 +353,7 @@ function BuildLine({ build }: { build?: BuildSummary }) {
         </>
       )}
       {" "}
-      <span className={cn("ml-0.5", cls)}>{glyph}</span>
+      <span className={cn("ml-0.5", cls)} title={status} aria-label={`build ${status || "unknown"}`}>{glyph}</span>
     </span>
   );
 }

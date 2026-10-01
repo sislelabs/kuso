@@ -178,7 +178,11 @@ export interface BuildSummary {
   id: string;
   serviceName: string;
   branch?: string;
+  // commitSha is set only when the build's ref is a real commit. A
+  // synthetic "<branch>-<nonce>" ref (manual build, no GitHub branch
+  // resolution) arrives in `ref` with commitSha omitted.
   commitSha?: string;
+  ref?: string;
   commitMessage?: string;
   imageTag?: string;
   // status ∈ queued | pending | running | succeeded | failed | cancelled
@@ -256,14 +260,17 @@ export interface ErrorGroup {
 
 // listErrors fetches the current error groups for a service. `since`
 // accepts Go duration units plus `d`/`w` ("24h", "7d"); the server
-// caps it at 30d and 400s on anything it cannot parse.
+// caps it at 30d and 400s on anything it cannot parse. `env` scopes the
+// groups to one env group (e.g. "staging").
 export async function listErrors(
   project: string,
   service: string,
   since = "24h",
+  env?: string,
 ): Promise<ErrorGroup[]> {
+  const envQS = env ? `&env=${encodeURIComponent(env)}` : "";
   return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/errors?since=${encodeURIComponent(since)}`,
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/errors?since=${encodeURIComponent(since)}${envQS}`,
   );
 }
 
@@ -296,9 +303,12 @@ export async function triggerBuild(
   );
 }
 
-export async function wakeService(project: string, service: string): Promise<void> {
+// wakeService scales a sleeping env up now. `env` (an env-group name or
+// the env CR name) picks a non-production env; omitted means production.
+export async function wakeService(project: string, service: string, env?: string): Promise<void> {
+  const envQS = env ? `?env=${encodeURIComponent(env)}` : "";
   return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/wake`,
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/wake${envQS}`,
     { method: "POST" }
   );
 }

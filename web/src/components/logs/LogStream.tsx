@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useLogStream } from "@/features/logs";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useLogStream, type LogLine } from "@/features/logs";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, Copy, RotateCcw, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,7 +52,9 @@ export function LogStream({ project, service, env = "production", height = "40vh
     const el = scrollerRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
-    if (!atBottom && follow) setFollow(false);
+    // Scrolling back down to the tail resumes following, same as the
+    // "jump to live" pill.
+    if (atBottom !== follow) setFollow(atBottom);
   };
 
   const statusColor =
@@ -72,7 +74,8 @@ export function LogStream({ project, service, env = "production", height = "40vh
     <div className="flex h-full min-h-0 flex-col rounded-md border border-[var(--border-subtle)] overflow-hidden">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-xs">
         <div className="flex items-center gap-2">
-          <span className={cn("h-2 w-2 rounded-full", statusColor)} />
+          <span aria-hidden className={cn("h-2 w-2 rounded-full", statusColor)} />
+          <span className="sr-only">Stream status:</span>
           <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
             {status}
           </span>
@@ -215,38 +218,44 @@ export function LogStream({ project, service, env = "production", height = "40vh
             <span className="font-mono text-[var(--text-secondary)]">{filter}</span>
           </p>
         )}
-        {visibleLines.map((l, i) => {
-          const podShort = l.pod.length > 12 ? l.pod.slice(-12) : l.pod;
-          return (
-            <div
-              key={i}
-              className={cn(
-                "py-px",
-                wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre",
-                l.stream === "stderr" && "text-red-400"
-              )}
-            >
-              {/* Pod prefix as a CSS ::before-style decoration: the
-                  user sees it, but the value isn't a child text node
-                  of the line wrapper, so a drag-select copy + paste
-                  carries only `l.line`. select-none is a belt for
-                  browsers that still drag the inline span on copy. */}
-              <span
-                aria-hidden="true"
-                className="select-none text-zinc-500 mr-2 inline-block"
-                style={{ userSelect: "none", WebkitUserSelect: "none" }}
-              >
-                {podShort}
-              </span>
-              <span className="select-text">{l.line}</span>
-            </div>
-          );
-        })}
+        {visibleLines.map((l) => (
+          <LogRow key={l.id} line={l} wrap={wrap} />
+        ))}
       </div>
       </div>
     </div>
   );
 }
+
+// Memoized per row: a new batch of lines re-renders only the rows it
+// added, not all 10k. content-visibility lets the browser skip layout
+// and paint for rows scrolled out of view.
+const LogRow = memo(function LogRow({ line: l, wrap }: { line: LogLine; wrap: boolean }) {
+  const podShort = l.pod.length > 12 ? l.pod.slice(-12) : l.pod;
+  return (
+    <div
+      className={cn(
+        "py-px [content-visibility:auto] [contain-intrinsic-size:auto_1.4em]",
+        wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre",
+        l.stream === "stderr" && "text-red-400"
+      )}
+    >
+      {/* Pod prefix as a CSS ::before-style decoration: the
+          user sees it, but the value isn't a child text node
+          of the line wrapper, so a drag-select copy + paste
+          carries only `l.line`. select-none is a belt for
+          browsers that still drag the inline span on copy. */}
+      <span
+        aria-hidden="true"
+        className="select-none text-zinc-500 mr-2 inline-block"
+        style={{ userSelect: "none", WebkitUserSelect: "none" }}
+      >
+        {podShort}
+      </span>
+      <span className="select-text">{l.line}</span>
+    </div>
+  );
+});
 
 export function PhaseStepper({ phase }: { phase?: string | null }) {
   const steps = ["CLONING", "INSTALLING", "BUILDING", "PUSHING", "DEPLOYING", "ACTIVE"];

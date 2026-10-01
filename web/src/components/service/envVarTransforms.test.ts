@@ -5,6 +5,7 @@ import {
   addonShortByConnSecret,
   buildTimePrefix,
   dotenvToRows,
+  envApplyFailureMessage,
   literalToRef,
   prefixGroups,
   reservedEnvWarning,
@@ -565,5 +566,17 @@ describe("toRow addon ref reveal", () => {
     );
     expect(r.value).toBe("${{ db.DATABASE_URL }}");
     expect(r.resolved).toBe("postgres://real");
+  });
+});
+
+describe("envApplyFailureMessage", () => {
+  it("names the failed key and the keys that already went live", () => {
+    const msg = envApplyFailureMessage(["A", "B"], "C", "boom");
+    expect(msg).toContain("Failed to save C: boom");
+    expect(msg).toContain("Already applied: A, B");
+  });
+
+  it("says nothing changed when the first write failed", () => {
+    expect(envApplyFailureMessage([], "A", "boom")).toContain("Nothing was changed");
   });
 });

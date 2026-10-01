@@ -53,7 +53,12 @@ export default function UpdatesPage() {
   const status = useQuery({
     queryKey: ["system", "update-status"],
     queryFn: () => api<UpdateStatus>("/api/system/update/status"),
-    refetchInterval: 5_000,
+    // Fast only while a rollout runs; idle, the status only changes
+    // when someone presses Update (which invalidates this query).
+    refetchInterval: (q) => {
+      const phase = q.state.data?.phase ?? "";
+      return phase !== "" && phase !== "done" && phase !== "failed" ? 5_000 : 60_000;
+    },
   });
 
   const start = useMutation({
@@ -167,7 +172,7 @@ export default function UpdatesPage() {
             <div className="mt-1 flex flex-wrap items-center gap-3 font-mono text-[10px] text-[var(--text-tertiary)]">
               <span>current {v.current || "—"}</span>
               {v.latest && <span>latest {v.latest}</span>}
-              {v.lastChecked && (
+              {v.lastChecked && !isZeroTime(v.lastChecked) && (
                 <span title={v.lastChecked}>
                   <Clock className="mr-1 inline h-2.5 w-2.5" />
                   checked {relTime(v.lastChecked)}
@@ -304,4 +309,11 @@ function relTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// The server serialises an unset Go time.Time as 0001-01-01; treat it as
+// "never checked" rather than rendering a ~2000-year-old timestamp.
+function isZeroTime(iso: string): boolean {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) || new Date(t).getUTCFullYear() < 2000;
 }

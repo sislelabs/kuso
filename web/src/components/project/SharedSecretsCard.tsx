@@ -12,6 +12,7 @@ import { Check, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { ApiError } from "@/lib/api-client";
 
 // Project-level shared secrets card. Each row is one env var in the
 // "<project>-shared" Secret; services opt in per key from their
@@ -36,21 +37,39 @@ export function SharedSecretsCard({ project }: { project: string }) {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<string | null>(null);
 
-  const doSave = (k: string) => {
+  // A 409 "shadowed" means some service sets the same key itself, so
+  // the shared value wouldn't reach it. Offer an explicit force instead
+  // of a dead-end error toast.
+  const [pendingShadowed, setPendingShadowed] = useState<{ key: string; value: string; message: string } | null>(null);
+  const submit = (k: string, v: string, force: boolean, after?: () => void) => {
     set.mutate(
-      { key: k, value: editingValue },
+      { key: k, value: v, ...(force ? { force: true } : {}) },
       {
         onSuccess: () => {
-          toast.success(`${k} saved to ${project}-shared`);
-          setEditingKey("");
-          setEditingValue("");
-          setPendingOverwrite(null);
+          toast.success(`${k} saved to ${project}-shared`, {
+            description: "Subscribed services pick it up on their next restart or deploy.",
+          });
+          setPendingShadowed(null);
+          after?.();
         },
-        onError: (e) =>
-          toast.error(e instanceof Error ? e.message : `Failed to save ${k}`),
+        onError: (e) => {
+          if (!force && e instanceof ApiError && e.status === 409 && e.code === "shadowed") {
+            setPendingShadowed({ key: k, value: v, message: e.message });
+            return;
+          }
+          setPendingShadowed(null);
+          toast.error(e instanceof Error ? e.message : `Failed to save ${k}`);
+        },
       }
     );
   };
+
+  const doSave = (k: string) =>
+    submit(k, editingValue, false, () => {
+      setEditingKey("");
+      setEditingValue("");
+      setPendingOverwrite(null);
+    });
 
   const onSave = () => {
     const k = editingKey.trim();
@@ -191,19 +210,35 @@ export function SharedSecretsCard({ project }: { project: string }) {
           </h4>
         </header>
         <ManualAddRow
-          onAdd={(k, v) =>
-            set.mutate(
-              { key: k, value: v },
-              {
-                onSuccess: () => {
-                  toast.success(`${k} saved to ${project}-shared`);
-                },
-              }
-            )
-          }
+          onAdd={(k, v) => submit(k, v, false)}
           pending={set.isPending}
         />
       </section>
+
+      <ConfirmDialog
+        open={pendingShadowed !== null}
+        title={`Save ${pendingShadowed?.key ?? ""} anyway?`}
+        body={
+          <p>
+            {pendingShadowed?.message} Services that set this key themselves keep
+            their own value; the rest get the shared one.
+          </p>
+        }
+        confirmLabel="Save anyway"
+        destructive={false}
+        pending={set.isPending}
+        onConfirm={() => {
+          if (!pendingShadowed) return;
+          const { key, value } = pendingShadowed;
+          submit(key, value, true, () => {
+            if (editingKey.trim() === key) {
+              setEditingKey("");
+              setEditingValue("");
+            }
+          });
+        }}
+        onCancel={() => setPendingShadowed(null)}
+      />
 
       <ConfirmDialog
         open={pendingDelete !== null}
@@ -344,7 +379,7 @@ function ManualAddRow({
         spellCheck={false}
         autoComplete="new-password"
       />
-      <Button size="sm" type="submit" disabled={!k.trim() || !v || pending}>
+      <Button size="sm" type="submit" aria-label="Add secret" disabled={!k.trim() || !v || pending}>
         <Plus className="h-3.5 w-3.5" />
       </Button>
     </form>

@@ -16,14 +16,17 @@ import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { toGoDuration } from "./duration";
 
 interface UserRow {
   id: string;
   username: string;
   email?: string;
   isActive: boolean;
+  // The list endpoint sends the legacy role as `role`. provider/lastLogin/
+  // groups aren't sent by summariseUsers yet; the badges render once they are.
   provider?: string;
-  roleName?: string;
+  role?: string;
   // v2 direct instance role: "admin" | "editor" | "viewer" | "" (inherit
   // from groups). Admin-editable; "admin" lets the user see every project.
   instanceRole?: string;
@@ -264,7 +267,8 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
             {role && <span>· role {role}</span>}
             {nullTime(inv.expiresAt) && (
               <span title={nullTime(inv.expiresAt)}>
-                · expires {relativeTime(nullTime(inv.expiresAt))}
+                · {expired ? "expired" : "expires"}{" "}
+                {new Date(nullTime(inv.expiresAt)).toLocaleString()}
               </span>
             )}
             <span title={inv.createdAt}>· created {relativeTime(inv.createdAt)}</span>
@@ -302,7 +306,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
         body: {
           groupId: groupId || undefined,
           instanceRole: instanceRole || undefined,
-          expiresIn: expiresIn || undefined,
+          expiresIn: toGoDuration(expiresIn) || undefined,
           maxUses,
           note: note || undefined,
         },
@@ -349,7 +353,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
             <option value="viewer">viewer</option>
           </select>
         </Field>
-        <Field label="expires in" hint="duration like 24h, 168h (7d), 720h (30d). empty = never">
+        <Field label="expires in" hint="duration like 24h, 7d, 30d. empty = never">
           <Input
             value={expiresIn}
             onChange={(e) => setExpiresIn(e.target.value)}
@@ -473,9 +477,9 @@ function UserRowItem({
               pending
             </span>
           )}
-          {u.roleName && u.roleName !== "none" && (
+          {u.role && u.role !== "none" && (
             <span className="rounded bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--accent)]">
-              {u.roleName}
+              {u.role}
             </span>
           )}
         </div>

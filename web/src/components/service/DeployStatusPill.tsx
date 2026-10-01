@@ -31,8 +31,12 @@ export function deployStatusFromServerState(
     case "building":
       return "building";
     case "build_failed":
-    case "release_failed":
       return "failed";
+    // Release hook (migration) failed: the new image wasn't promoted and
+    // the last green build keeps serving by design, so the service is
+    // up. Warning, not the red "failed" a dead service gets.
+    case "release_failed":
+      return "degraded";
     case "sleeping":
       return "sleeping";
     case "stopped":
@@ -56,22 +60,22 @@ const styles: Record<DeployStatus, string> = {
   deploying:
     "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
   active:
-    "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+    "bg-[var(--success-subtle)] text-[var(--success)] border-[var(--success)]/30",
   // Awaiting the first build — neutral/informational, NOT red. A
   // brand-new build-based service has no image yet (held at replicas=0),
   // so it's intentionally not running rather than broken.
   awaiting:
-    "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30",
+    "bg-[var(--info-subtle)] text-[var(--info)] border-[var(--info)]/30",
   sleeping:
     "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]",
   // Stopped — explicit hard stop. Slate/grey so it reads as "off" and
   // is visually distinct from sleeping (muted tertiary) and failed (red).
   stopped:
-    "bg-slate-500/10 text-slate-500 dark:text-slate-300 border-slate-500/30",
+    "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--text-secondary)]/30",
   failed:
-    "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
+    "bg-[var(--error-subtle)] text-[var(--error)] border-[var(--error)]/30",
   crashed:
-    "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
+    "bg-[var(--error-subtle)] text-[var(--error)] border-[var(--error)]/30",
   // Degraded — partially up (some replicas ready). Warning hue, not
   // error red: traffic is still being served.
   degraded:

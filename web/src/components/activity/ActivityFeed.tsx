@@ -22,11 +22,19 @@ function severityColor(s?: string) {
   return "text-[var(--text-tertiary)]";
 }
 
+// Day buckets follow the viewer's calendar, not UTC: toISOString() would
+// file a 01:00 local event (UTC+3) under the previous day.
+export function localDayKey(t: Date): string {
+  const m = String(t.getMonth() + 1).padStart(2, "0");
+  const d = String(t.getDate()).padStart(2, "0");
+  return `${t.getFullYear()}-${m}-${d}`;
+}
+
 function groupByDay(entries: AuditEntry[]): Record<string, AuditEntry[]> {
   const out: Record<string, AuditEntry[]> = {};
   for (const e of entries) {
     const t = e.timestamp ? new Date(e.timestamp) : new Date();
-    const key = t.toISOString().slice(0, 10);
+    const key = localDayKey(t);
     out[key] ??= [];
     out[key].push(e);
   }

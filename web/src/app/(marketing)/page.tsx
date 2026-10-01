@@ -1,20 +1,37 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/features/auth";
 import { Logo } from "@/components/shared/Logo";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
+import NotFound from "@/app/not-found";
 import { ArrowRight, Github, Zap, Database, Rocket, GitBranch } from "lucide-react";
+
+function isLandingPath(pathname: string): boolean {
+  const path = pathname.replace(/\/+$/, "");
+  return path === "" || path === "/index.html";
+}
 
 export default function LandingPage() {
   const router = useRouter();
   const { data, isPending } = useSession();
+  // Older servers answer unknown URLs with this page (200). Render the
+  // 404 there instead of the landing — or, logged in, a silent bounce
+  // to /projects that hides the bad link.
+  const [unknownPath, setUnknownPath] = useState(false);
 
   useEffect(() => {
+    if (!isLandingPath(window.location.pathname)) setUnknownPath(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isLandingPath(window.location.pathname)) return;
     if (!isPending && data) router.replace("/projects");
   }, [data, isPending, router]);
+
+  if (unknownPath) return <NotFound />;
 
   return (
     <div className="min-h-screen bg-[var(--bg-primary)]">
@@ -44,7 +61,7 @@ export default function LandingPage() {
             kuso runs on your own Kubernetes cluster. Push to <span className="font-mono">main</span> and
             it builds + rolls a new image. Open a PR and you get a preview URL. Add a Postgres with one
             click and <span className="font-mono">DATABASE_URL</span> shows up as an env var in every
-            service.
+            service you subscribe (all, by default).
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link
@@ -81,7 +98,7 @@ export default function LandingPage() {
             <Feature
               Icon={Database}
               title="Shared addons"
-              copy="One Postgres for the whole project. Connection env vars wired into every service automatically."
+              copy="One Postgres for the whole project. Connection env vars wired into every subscribed service (all, by default)."
             />
             <Feature
               Icon={Zap}

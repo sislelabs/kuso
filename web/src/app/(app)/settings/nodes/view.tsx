@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -329,7 +329,7 @@ function FloatingSaveBar({
           className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
         >
           <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
             unsaved on {count} {count === 1 ? "node" : "nodes"}
           </span>
           <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
@@ -374,6 +374,8 @@ function NodeCard({
             node.ready ? "bg-emerald-400" : "bg-red-400"
           )}
           title={node.ready ? "Ready" : "NotReady"}
+          role="img"
+          aria-label={node.ready ? "Ready" : "NotReady"}
         />
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-mono text-sm font-medium">{node.name}</h3>
@@ -427,7 +429,9 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const phase = advisory?.apply?.phase ?? "";
-  const inFlight = phase === "running" || phase === "draining" || phase === "rebooting";
+  // "settling" is the post-reboot sweep; the server 409s a new apply until it ends.
+  const inFlight =
+    phase === "running" || phase === "draining" || phase === "rebooting" || phase === "settling";
 
   const apply = useMutation({
     mutationFn: (allowReboot: boolean) =>
@@ -447,10 +451,10 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   // (running → draining → rebooting → done) surface without a manual refresh.
   useEffect(() => {
     if (!inFlight) return;
-    const t = setInterval(
-      () => qc.invalidateQueries({ queryKey: ["kubernetes", "node-updates"] }),
-      8000
-    );
+    const t = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void qc.invalidateQueries({ queryKey: ["kubernetes", "node-updates"] });
+    }, 8000);
     return () => clearInterval(t);
   }, [inFlight, qc]);
 
@@ -485,7 +489,9 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
     return (
       <div className="mt-3 flex items-center gap-1.5 rounded-md border border-[var(--info)]/20 bg-[var(--info-subtle)] px-3 py-2 text-[11px] text-[var(--info)]">
         <RotateCcw className="h-3.5 w-3.5 shrink-0 animate-spin" />
-        {phase === "rebooting"
+        {phase === "settling"
+          ? "Rebooted — waiting for workloads to settle…"
+          : phase === "rebooting"
           ? "Patched — rebooting node to finish…"
           : phase === "draining"
             ? "Patched — draining node before reboot…"
@@ -1159,7 +1165,14 @@ function AddNodeModal({
       onJoined();
     },
     onError: (err) => {
-      setOutput(err instanceof Error ? err.message : String(err));
+      // A remote-side failure (502) carries the install log in `output`.
+      const body = err instanceof ApiError ? err.body : null;
+      const remoteOut =
+        body && typeof body === "object" && "output" in body && typeof body.output === "string"
+          ? body.output
+          : "";
+      const msg = err instanceof Error ? err.message : String(err);
+      setOutput(remoteOut ? `${remoteOut}\n\n${msg}` : msg);
       toast.error("Join failed — see install output");
     },
   });
@@ -1374,6 +1387,8 @@ function AddNodeModal({
                         "mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
                         c.ok ? "bg-emerald-400" : "bg-red-400"
                       )}
+                      role="img"
+                      aria-label={c.ok ? "passed" : "failed"}
                     />
                     <span className="w-24 shrink-0 text-[var(--text-secondary)]">{c.label}</span>
                     <span
@@ -1468,8 +1483,14 @@ function BootstrapBody({
   );
   useEffect(() => {
     if (minted && pending.isSuccess && !stillPending) {
-      // Token consumed — the agent on the new VM redeemed it.
-      toast.success("Node phoned home — appearing in the list now");
+      // Dropping out of the pending list also happens on expiry or a
+      // revoke from the pending-tokens card, not only on redemption.
+      if (new Date(minted.expiresAt).getTime() <= Date.now()) {
+        toast.warning("Bootstrap token expired before a node used it — generate a new command");
+        setMinted(null);
+        return;
+      }
+      toast.success("Token redeemed — the node should appear in the list shortly");
       onJoined();
       // Don't auto-close; the operator may want to verify the install
       // log scrolled successfully on the VM. They click Done.
@@ -1498,12 +1519,14 @@ function BootstrapBody({
     },
   });
 
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
   const revoke = useMutation({
     mutationFn: (jti: string) =>
       api<void>(`/api/kubernetes/nodes/bootstrap-tokens/${encodeURIComponent(jti)}`, {
         method: "DELETE",
       }),
     onSuccess: () => {
+      setConfirmRevoke(false);
       setMinted(null);
       void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
       toast.success("Token revoked");
@@ -1637,7 +1660,7 @@ function BootstrapBody({
               size="sm"
               variant="ghost"
               disabled={revoke.isPending}
-              onClick={() => revoke.mutate(minted.jtiPrefix)}
+              onClick={() => setConfirmRevoke(true)}
             >
               {revoke.isPending ? "Revoking…" : "Revoke token"}
             </Button>
@@ -1647,6 +1670,21 @@ function BootstrapBody({
           </>
         )}
       </footer>
+      <ConfirmDialog
+        open={confirmRevoke}
+        title="Revoke this bootstrap token?"
+        body={
+          <p>
+            The join command stops working. The token can&apos;t be recovered; you&apos;d
+            have to generate a new command.
+          </p>
+        }
+        confirmLabel="Revoke token"
+        destructive
+        pending={revoke.isPending}
+        onConfirm={() => minted && revoke.mutate(minted.jtiPrefix)}
+        onCancel={() => setConfirmRevoke(false)}
+      />
     </>
   );
 }
@@ -2078,11 +2116,13 @@ function PendingBootstrapTokensCard() {
         method: "DELETE",
       }),
     onSuccess: () => {
+      setRevoking(null);
       void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
       toast.success("Token revoked");
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
   });
+  const [revoking, setRevoking] = useState<PendingTokenRow | null>(null);
   const tokens = pending.data?.tokens ?? [];
   if (tokens.length === 0) return null;
   return (
@@ -2127,7 +2167,7 @@ function PendingBootstrapTokensCard() {
                 size="sm"
                 variant="ghost"
                 disabled={revoke.isPending}
-                onClick={() => revoke.mutate(t.jtiHash)}
+                onClick={() => setRevoking(t)}
               >
                 Revoke
               </Button>
@@ -2135,6 +2175,21 @@ function PendingBootstrapTokensCard() {
           </li>
         ))}
       </ul>
+      <ConfirmDialog
+        open={revoking !== null}
+        title={`Revoke bootstrap token ${revoking?.jtiPrefix ?? ""}…?`}
+        body={
+          <p>
+            The join command using this token stops working. The token can&apos;t be
+            recovered; you&apos;d have to generate a new command.
+          </p>
+        }
+        confirmLabel="Revoke token"
+        destructive
+        pending={revoke.isPending}
+        onConfirm={() => revoking && revoke.mutate(revoking.jtiHash)}
+        onCancel={() => setRevoking(null)}
+      />
     </section>
   );
 }

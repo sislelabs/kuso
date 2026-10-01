@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useErrors } from "@/features/services";
+import { useEnvironments } from "@/features/projects";
+import { serviceEnvOptions } from "@/lib/env-group";
 import type { ErrorGroup } from "@/features/services";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -36,8 +38,14 @@ const SINCE_OPTIONS: { id: string; label: string }[] = [
 //          (expanded) raw line
 export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
   const [since, setSince] = useState("24h");
+  // "" = every environment. Not pre-set from the overlay's env: error
+  // events only carry an env for pods labelled kuso.sislelabs.com/env.
+  const [env, setEnv] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
-  const errors = useErrors(project, service, since);
+  const errors = useErrors(project, service, since, env);
+  const envs = useEnvironments(project);
+  const fqn = service ? project + "-" + service : "";
+  const envOptions = useMemo(() => serviceEnvOptions(envs.data ?? [], fqn), [envs.data, fqn]);
 
   return (
     <div className="space-y-4">
@@ -53,6 +61,19 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <select
+            value={env}
+            onChange={(e) => setEnv(e.target.value)}
+            aria-label="Environment"
+            className="mr-1 h-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
+          >
+            <option value="">all envs</option>
+            {envOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
           {SINCE_OPTIONS.map((opt) => (
             <button
               key={opt.id}
