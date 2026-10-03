@@ -66,6 +66,19 @@ func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.Patc
 		}
 	}
 
+	if req.Uptime != nil {
+		var liveUp kube.KusoServiceUptime
+		if ls.Uptime != nil {
+			liveUp = *ls.Uptime
+		}
+		want := kube.KusoServiceUptime{Disabled: *req.Uptime.Disabled, Path: strings.TrimSpace(*req.Uptime.Path)}
+		if want == liveUp {
+			req.Uptime = nil
+		} else {
+			add("uptime", renderUptime(liveUp), renderUptime(want), false)
+		}
+	}
+
 	// Domains: order matters (the first is the service's public host).
 	from, to := renderDomains(ls.Domains), renderServiceDomains(*req.Domains)
 	if from == to {
@@ -741,4 +754,15 @@ func sortedMapKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func renderUptime(u kube.KusoServiceUptime) string {
+	state := "on"
+	if u.Disabled {
+		state = "off"
+	}
+	if u.Path != "" {
+		state += " path=" + u.Path
+	}
+	return state
 }

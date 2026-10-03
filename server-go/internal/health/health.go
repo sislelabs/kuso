@@ -625,3 +625,7 @@ func ownedByJob(p *corev1.Pod) bool {
 	}
 	return false
 }
+
+// PodBadReason exposes the crash-alert classification: non-empty when
+// the pod is in a state pod.crashed alerts on.
+func PodBadReason(p *corev1.Pod) string { return podBadReason(p) }

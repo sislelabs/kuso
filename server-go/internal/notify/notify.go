@@ -58,6 +58,10 @@ const (
 	// EventPodRecovered closes a pod.crashed episode: the service's env
 	// has been healthy for a stability window after crashing.
 	EventPodRecovered EventType = "pod.recovered"
+	// Uptime checks (internal/uptime): a production service stopped
+	// answering HTTP on its in-cluster Service, and later answered again.
+	EventUptimeDown      EventType = "uptime.down"
+	EventUptimeRecovered EventType = "uptime.recovered"
 	EventAlertFired      EventType = "alert.fired"
 	EventBackupOK        EventType = "backup.succeeded"
 	EventBackupFailed    EventType = "backup.failed"
@@ -132,6 +136,8 @@ var EventCatalogue = []EventTypeInfo{
 	{EventDeployRolledBack, "Deploy rolled back", "build", ""},
 	{EventPodCrashed, "Pod crashed", "runtime", "@here"}, // production only; other envs are warn
 	{EventPodRecovered, "Pod recovered", "runtime", ""},
+	{EventUptimeDown, "Service down", "runtime", "@here"},
+	{EventUptimeRecovered, "Service back up", "runtime", ""},
 	{EventAddonCrashed, "Addon crashed", "runtime", "@here"},
 	{EventAlertFired, "Alert fired", "runtime", ""},
 	{EventRunStarted, "Run started", "jobs", ""},
@@ -735,7 +741,7 @@ func eventTone(e Event) tone {
 	}
 	switch e.Type {
 	case EventBuildSucceeded, EventBackupOK, EventRunSucceeded,
-		EventNodeRecovered, EventNodeUpdatesApplied, EventPodRecovered:
+		EventNodeRecovered, EventNodeUpdatesApplied, EventPodRecovered, EventUptimeRecovered:
 		return toneSuccess
 	case EventBuildCancelled, EventBuildSuperseded:
 		return toneNeutral

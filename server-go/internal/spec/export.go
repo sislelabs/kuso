@@ -160,6 +160,9 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 			TargetCPU: cr.Spec.Scale.TargetCPU,
 		}
 	}
+	if cr.Spec.Uptime != nil {
+		s.Uptime = &UptimeSpec{Disabled: cr.Spec.Uptime.Disabled, Path: cr.Spec.Uptime.Path}
+	}
 	if cr.Spec.Sleep != nil {
 		s.Sleep = &SleepSpec{
 			Enabled:       cr.Spec.Sleep.Enabled,

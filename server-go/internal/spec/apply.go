@@ -332,6 +332,11 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	privateEgress := s.PrivateEgress
 	platformAPIEgress := s.PlatformAPIEgress
 	waitForCI := s.WaitForCI
+	var uptime *projects.UpdateUptimeSpec
+	if s.Uptime != nil {
+		disabled, path := s.Uptime.Disabled, s.Uptime.Path
+		uptime = &projects.UpdateUptimeSpec{Disabled: &disabled, Path: &path}
+	}
 
 	domains := make([]projects.ServiceDomain, 0, len(s.Domains))
 	for _, d := range s.Domains {
@@ -432,6 +437,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		PrivateEgress:     &privateEgress,
 		PlatformAPIEgress: &platformAPIEgress,
 		WaitForCI:         &waitForCI,
+		Uptime:            uptime,
 		Domains:           &domains,
 		Scale:             scale,
 		Sleep:             sleep,

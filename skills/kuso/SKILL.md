@@ -746,6 +746,30 @@ kuso alert create --kind http_5xx_rate --project shop --service web --threshold 
 kuso alert create --kind dns_mismatch --project shop
 ```
 
+## Uptime checks
+
+kuso pings every production web service once a minute over its in-cluster address and
+sends `uptime.down` / `uptime.recovered` notifications. Every project is checked unless
+it opts out. Workers, internal services, previews and staging are never pinged.
+
+```bash
+kuso uptime status <project>                    # up / failing / down / paused / disabled per service
+kuso uptime disable <project> [service]         # opt a project or one service out
+kuso uptime enable <project> [service]
+kuso uptime set-path <project> <service> /health   # kuso.yml: services[].uptime.path
+```
+
+- A service counts as down on a timeout (10s), a refused connection or a 5xx. A 3xx, 401
+  or 404 counts as up.
+- The path is `uptime.path`, else `healthcheck.path`, else `/`. Setting `uptime.path` does
+  not change the pod's kube probes; setting `healthcheck.path` does.
+- A "down" message needs 3 failed checks in a row, and a "recovered" message needs 3 good
+  ones. Each service sends at most one "down" per 30 minutes.
+- Stopped, sleeping and image-less services are paused, and the pings never wake a
+  sleeping service.
+- A crash-looping service is reported by `pod.crashed`, not by `uptime.down`.
+- `KUSO_UPTIME_DISABLED=true` on kuso-server switches the checks off for the instance.
+
 ## Preview (PR) environments
 
 - Enable: `kuso project update <p> --previews=on --github-installation <id>`

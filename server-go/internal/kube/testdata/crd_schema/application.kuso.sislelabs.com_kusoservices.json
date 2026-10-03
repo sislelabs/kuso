@@ -438,6 +438,21 @@
             },
             "type": "array"
           },
+          "uptime": {
+            "description": "Uptime check settings for this service's production\nenvironment. Read off the service CR; not mirrored\nonto environments.\n",
+            "properties": {
+              "disabled": {
+                "description": "When true, this service is not pinged.\n",
+                "type": "boolean"
+              },
+              "path": {
+                "description": "Path the uptime check requests. Empty falls back\nto healthcheck.path, then \"/\". Unlike\nhealthcheck.path this does not change the pod's\nkube probes.\n",
+                "maxLength": 512,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "volumes": {
             "description": "Persistent volumes to mount into every env's pod. Each entry maps to a PVC + a volumeMount. Declared explicitly so the apiserver doesn't prune them on write.",
             "items": {

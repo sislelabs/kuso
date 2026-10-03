@@ -25,6 +25,8 @@ export interface UpdateProjectBody {
   // incidentMonitoring=true opts the project into the incident-response
   // agent (it only investigates opted-in projects).
   incidentMonitoring?: boolean;
+  // uptime.disabled=true opts the project out of uptime checks.
+  uptime?: { disabled?: boolean };
 }
 
 async function updateProject(name: string, body: UpdateProjectBody): Promise<unknown> {

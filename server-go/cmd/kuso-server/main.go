@@ -68,6 +68,7 @@ import (
 	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
 	"kuso/server/internal/updater"
+	"kuso/server/internal/uptime"
 	"kuso/server/internal/version"
 )
 
@@ -1367,6 +1368,7 @@ func main() {
 					serverstate.LoopBackupHealth,
 					serverstate.LoopIncidents,
 					serverstate.LoopAutoRemediate,
+					serverstate.LoopUptime,
 				)
 			}()
 
@@ -1383,6 +1385,20 @@ func main() {
 				Logger: logger.With("component", "nodewatch"),
 			}
 			goSafe(logger, "nodewatch", func() { watcher.Run(workCtx) })
+			// Uptime checks: ping every production web service and notify
+			// on down/recovered. Registered only when it will run and
+			// beat, like scaledown.
+			if !uptime.Disabled() {
+				serverstate.RegisterLoop(serverstate.LoopUptime, uptime.Interval)
+				uptimeWatcher := &uptime.Watcher{
+					Cluster:   uptime.KubeCluster{Kube: kubeClient},
+					DB:        database,
+					Notify:    notifyDisp,
+					Namespace: *namespace,
+					Logger:    logger.With("component", "uptime"),
+				}
+				goSafe(logger, "uptime", func() { uptimeWatcher.Run(workCtx) })
+			}
 			// Scale-to-zero scale-down half: sleeps idle sleep-enabled
 			// services (Deployment → 0 replicas) after sleep.afterMinutes
 			// of no traffic; the activator (--activator mode) wakes them

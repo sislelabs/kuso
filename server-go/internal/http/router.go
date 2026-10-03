@@ -53,6 +53,7 @@ import (
 	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
 	"kuso/server/internal/updater"
+	"kuso/server/internal/uptime"
 	"kuso/server/internal/version"
 	"kuso/server/internal/web"
 
@@ -535,6 +536,9 @@ func mountAuthenticatedRoutes(
 			grantsH.Mount(r)
 			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			invitesH.Mount(r)
+			if d.Kube != nil {
+				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
+			}
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
 			if d.Projects != nil {
 				notifH.ProjectExists = func(ctx context.Context, name string) (bool, error) {

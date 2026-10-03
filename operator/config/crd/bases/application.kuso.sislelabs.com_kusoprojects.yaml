@@ -160,6 +160,17 @@ spec:
                     runs. Gated additionally by the global incident-agent
                     enable. Default false (not monitored).
                   default: false
+                uptime:
+                  type: object
+                  description: |
+                    Uptime checks. kuso pings every production web
+                    service once a minute and notifies when one stops
+                    answering. On by default.
+                  properties:
+                    disabled:
+                      type: boolean
+                      description: |
+                        When true, no service in this project is pinged.
                 placement:
                   type: object
                   description: |

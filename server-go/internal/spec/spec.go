@@ -87,6 +87,9 @@ type ServiceSpec struct {
 	// over in-cluster DNS (for apps that orchestrate kuso).
 	PlatformAPIEgress bool                `yaml:"platformApiEgress,omitempty"`
 	WaitForCI         bool                `yaml:"waitForCI,omitempty"`
+	// Uptime sets the uptime-check opt-out and path. A missing block
+	// leaves the live settings alone.
+	Uptime *UptimeSpec `yaml:"uptime,omitempty"`
 	Command           []string            `yaml:"command,omitempty"`
 	Domains           []DomainSpec        `yaml:"domains,omitempty"`
 	Env               map[string]EnvValue `yaml:"env,omitempty"`
@@ -270,6 +273,12 @@ type ScaleSpec struct {
 	Min       int `yaml:"min,omitempty"`
 	Max       int `yaml:"max,omitempty"`
 	TargetCPU int `yaml:"targetCPU,omitempty"`
+}
+
+// UptimeSpec is the kuso.yaml form of a service's uptime-check settings.
+type UptimeSpec struct {
+	Disabled bool   `yaml:"disabled,omitempty"`
+	Path     string `yaml:"path,omitempty"`
 }
 
 type SleepSpec struct {

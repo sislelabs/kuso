@@ -58,6 +58,8 @@ type UpdateProjectRequest struct {
 	// IncidentMonitoring opts the project into the incident-response
 	// agent. Pointer-typed so an omitted key leaves the value alone.
 	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
+	// Uptime sets the project's uptime-check opt-out.
+	Uptime *UpdateUptimeSpec `json:"uptime,omitempty"`
 	// ClearDefaultRepo removes spec.defaultRepo. Wins over DefaultRepo.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
 }
@@ -232,4 +234,11 @@ type ServiceSleep struct {
 type SetEnvRequest struct {
 	EnvVars      []EnvVar `json:"envVars"`
 	AllowPending bool     `json:"allowPending,omitempty"`
+}
+
+// UpdateUptimeSpec patches uptime-check settings on a project or a
+// service. Omitted fields are left alone. Path applies to services only.
+type UpdateUptimeSpec struct {
+	Disabled *bool   `json:"disabled,omitempty"`
+	Path     *string `json:"path,omitempty"`
 }

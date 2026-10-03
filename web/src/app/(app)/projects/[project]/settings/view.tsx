@@ -61,6 +61,7 @@ export function ProjectSettingsView() {
   // typing; clamped on blur and on save.
   const [previewsTtl, setPreviewsTtl] = useState("7");
   const [alwaysOn, setAlwaysOn] = useState(false);
+  const [uptimeEnabled, setUptimeEnabled] = useState(true);
   // dirty pins the form once the user edits it: the describe payload
   // carries live env status, so it refetches (and would re-seed every
   // field) on focus and after unrelated mutations.
@@ -95,6 +96,7 @@ export function ProjectSettingsView() {
       setPreviewsEnabled(!!s.previews?.enabled);
       setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
       setAlwaysOn(!!s.alwaysOn);
+      setUptimeEnabled(s.uptime?.disabled !== true);
     }
     // specKey stands in for spec: re-seed on content change, not on
     // every refetch's new object identity.
@@ -138,6 +140,7 @@ export function ProjectSettingsView() {
             : {}),
         previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl) },
         alwaysOn,
+        uptime: { disabled: !uptimeEnabled },
       });
       await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
       setDirty(false);
@@ -373,6 +376,31 @@ export function ProjectSettingsView() {
               Couldn&apos;t load the current mute state: {muteLoadError}
             </p>
           )}
+        </div>
+      </section>
+
+      {/* Monitoring */}
+      <section className="space-y-4">
+        <header>
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            monitoring
+          </h2>
+        </header>
+        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={uptimeEnabled}
+              onChange={(e) => { setUptimeEnabled(e.target.checked); setDirty(true); }}
+              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            <span className="flex-1">
+              <span className="text-[13px] font-medium">Uptime checks</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+                Ping every production service once a minute and notify when one stops answering.
+              </span>
+            </span>
+          </label>
         </div>
       </section>
 

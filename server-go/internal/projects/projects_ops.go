@@ -371,6 +371,13 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 		if req.IncidentMonitoring != nil {
 			cur.Spec.IncidentMonitoring = *req.IncidentMonitoring
 		}
+		if req.Uptime != nil && req.Uptime.Disabled != nil {
+			if *req.Uptime.Disabled {
+				cur.Spec.Uptime = &kube.KusoProjectUptime{Disabled: true}
+			} else {
+				cur.Spec.Uptime = nil
+			}
+		}
 		return nil
 	})
 	if err != nil {

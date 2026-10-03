@@ -198,6 +198,16 @@
               }
             },
             "type": "object"
+          },
+          "uptime": {
+            "description": "Uptime checks. kuso pings every production web\nservice once a minute and notifies when one stops\nanswering. On by default.\n",
+            "properties": {
+              "disabled": {
+                "description": "When true, no service in this project is pinged.\n",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
           }
         },
         "type": "object"

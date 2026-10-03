@@ -78,6 +78,23 @@ type KusoProjectSpec struct {
 	// unset field) keeps the chart defaults.
 	NetworkPolicy *KusoProjectNetworkPolicy `json:"networkPolicy,omitempty"`
 	Quota         *KusoProjectQuota         `json:"quota,omitempty"`
+	// Uptime opts the whole project out of uptime checks. nil = checked.
+	Uptime *KusoProjectUptime `json:"uptime,omitempty"`
+}
+
+// KusoProjectUptime is the project-level uptime-check opt-out.
+type KusoProjectUptime struct {
+	Disabled bool `json:"disabled,omitempty"`
+}
+
+// KusoServiceUptime is a service's uptime-check settings. Read off the
+// service CR by the uptime loop; not mirrored onto envs.
+type KusoServiceUptime struct {
+	Disabled bool `json:"disabled,omitempty"`
+	// Path overrides the checked path. Empty falls back to
+	// healthcheck.path, then "/". Setting healthcheck.path would also
+	// switch the pod's kube probes to HTTP; this doesn't.
+	Path string `json:"path,omitempty"`
 }
 
 // KusoProjectNetworkPolicy is spec.networkPolicy on KusoProject.
@@ -392,6 +409,9 @@ type KusoServiceSpec struct {
 	// kuso/* contexts, are green. Read by builds.create + the poller's
 	// CI gate; service-level only (not mirrored onto envs).
 	WaitForCI bool `json:"waitForCI,omitempty"`
+	// Uptime holds the uptime-check opt-out and path. nil = checked at
+	// the default path.
+	Uptime *KusoServiceUptime `json:"uptime,omitempty"`
 }
 
 // KusoReleaseSpec configures a release hook. The Job uses the new

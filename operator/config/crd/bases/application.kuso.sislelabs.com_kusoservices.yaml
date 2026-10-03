@@ -505,6 +505,25 @@ spec:
                     GitHub check runs and commit statuses (excluding kuso's
                     own kuso/* contexts) are all green. A failing check or the
                     gate timeout cancels the build. Manual builds are not held.
+                uptime:
+                  type: object
+                  description: |
+                    Uptime check settings for this service's production
+                    environment. Read off the service CR; not mirrored
+                    onto environments.
+                  properties:
+                    disabled:
+                      type: boolean
+                      description: |
+                        When true, this service is not pinged.
+                    path:
+                      type: string
+                      maxLength: 512
+                      description: |
+                        Path the uptime check requests. Empty falls back
+                        to healthcheck.path, then "/". Unlike
+                        healthcheck.path this does not change the pod's
+                        kube probes.
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

@@ -2349,6 +2349,9 @@ type PatchServiceRequest struct {
 	// WaitForCI toggles the wait-for-GitHub-CI build gate. Service-level
 	// only (builds read it off the service CR), so no env propagation.
 	WaitForCI *bool `json:"waitForCI,omitempty"`
+	// Uptime patches the uptime-check opt-out and path. Service-level
+	// only (the uptime loop reads the service CR), so no env propagation.
+	Uptime *UpdateUptimeSpec `json:"uptime,omitempty"`
 	// BuildArgs / PublicEnv replace the build-time env config wholesale.
 	// Pointer so omitting leaves it alone; a non-nil pointer (even to an
 	// empty map/slice) resets it — declarative reset, matching Static.
@@ -2942,6 +2945,27 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.WaitForCI != nil {
 			svc.Spec.WaitForCI = *req.WaitForCI
 		}
+		if req.Uptime != nil {
+			up := kube.KusoServiceUptime{}
+			if svc.Spec.Uptime != nil {
+				up = *svc.Spec.Uptime
+			}
+			if req.Uptime.Disabled != nil {
+				up.Disabled = *req.Uptime.Disabled
+			}
+			if req.Uptime.Path != nil {
+				path, err := normalizeUptimePath(*req.Uptime.Path)
+				if err != nil {
+					return err
+				}
+				up.Path = path
+			}
+			if up == (kube.KusoServiceUptime{}) {
+				svc.Spec.Uptime = nil
+			} else {
+				svc.Spec.Uptime = &up
+			}
+		}
 		// Build-time env config. Wholesale replace on a non-nil pointer
 		// (declarative reset); leave alone when omitted.
 		//
@@ -3363,4 +3387,21 @@ func (s *Service) storeRepoToken(ctx context.Context, project, service, token st
 		return "", fmt.Errorf("create repo token secret %s/%s: %w", ns, name, err)
 	}
 	return name, nil
+}
+
+// normalizeUptimePath validates a service's uptime-check path. "" clears
+// it. The check always targets the env's own in-cluster host, so the
+// path must be a plain absolute path.
+func normalizeUptimePath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	if len(p) > 512 {
+		return "", fmt.Errorf("%w: uptime.path is longer than 512 characters", ErrInvalid)
+	}
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, " \t\r\n\\") {
+		return "", fmt.Errorf("%w: uptime.path must be an absolute path like /health", ErrInvalid)
+	}
+	return p, nil
 }

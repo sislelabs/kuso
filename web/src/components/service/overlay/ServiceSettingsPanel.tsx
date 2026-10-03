@@ -10,7 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { stripRepoCredentials } from "@/lib/format";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket, Moon } from "lucide-react";
+import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket, Moon, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -27,6 +27,7 @@ import { VolumesSection } from "./settings/VolumesSection";
 import { BuildSection } from "./settings/BuildSection";
 import { DeploySection } from "./settings/DeploySection";
 import { ReleaseSection } from "./settings/ReleaseSection";
+import { UptimeSection } from "./settings/UptimeSection";
 import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
 
@@ -52,6 +53,7 @@ const SECTIONS = [
   { id: "build",      label: "Build",      icon: Hammer },
   { id: "deploy",     label: "Deploy",     icon: Cloud },
   { id: "release",    label: "Release",    icon: Rocket },
+  { id: "uptime",     label: "Uptime",     icon: Activity },
   { id: "security",   label: "Security",   icon: ShieldAlert },
   { id: "danger",     label: "Danger",     icon: Trash2 },
 ] as const;
@@ -152,6 +154,7 @@ function fieldDiffValues(
     volumes: volumes,
     previews: (s) => (s.previewsDisabled ? "disabled" : "enabled"),
     waitForCI: (s) => (s.waitForCI ? "wait for CI" : "build immediately"),
+    uptime: (s) => (s.uptimeEnabled ? `checked at ${s.uptimePath.trim() || "default path"}` : "not checked"),
     release: release,
     securityContext: security,
   };
@@ -504,6 +507,23 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     if (state.waitForCI !== baseline.waitForCI) {
       body.waitForCI = state.waitForCI;
     }
+    {
+      const path = state.uptimePath.trim();
+      const pathChanged = path !== baseline.uptimePath;
+      if (pathChanged && path) {
+        // Mirrors the server's rule so a bad path fails here, not as a 400.
+        if (!path.startsWith("/") || path.startsWith("//") || /\s/.test(path) || path.length > 512) {
+          toast.error("Check path must start with a single / and contain no spaces (≤512 chars)");
+          return;
+        }
+      }
+      if (pathChanged || state.uptimeEnabled !== baseline.uptimeEnabled) {
+        body.uptime = {
+          ...(state.uptimeEnabled !== baseline.uptimeEnabled ? { disabled: !state.uptimeEnabled } : {}),
+          ...(pathChanged ? { path } : {}),
+        };
+      }
+    }
     if (
       state.releaseCommand !== baseline.releaseCommand ||
       state.releaseTimeout !== baseline.releaseTimeout
@@ -639,6 +659,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     saveError: saveError ?? undefined,
   });
 
+  // Uptime checks ping the HTTP port, so workers and internal-only
+  // services have nothing to check.
+  const uptimeApplies = state.runtime !== "worker" && !state.internal;
+  const sections = SECTIONS.filter((s) => s.id !== "uptime" || uptimeApplies);
+
   return (
     <div className="relative">
       {/* On md+ the layout is a 2-col grid with a sticky sidebar
@@ -648,7 +673,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           That keeps the section anchors discoverable on phones
           without crowding the inputs. */}
       <nav className="sticky top-0 z-10 -mx-px flex gap-1 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/95 px-3 py-2 text-xs backdrop-blur md:hidden">
-        {SECTIONS.map((s) => (
+        {sections.map((s) => (
           <a
             key={s.id}
             href={`#${s.id}`}
@@ -676,13 +701,14 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           <BuildSection state={state} setState={setState} project={project} />
           <DeploySection project={project} state={state} setState={setState} />
           <ReleaseSection state={state} setState={setState} />
+          {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
           <SecuritySection state={state} setState={setState} />
           <DangerSection project={project} service={service} />
         </div>
 
         <nav className="sticky top-0 hidden self-start px-4 py-6 text-sm md:block">
           <ul className="space-y-2">
-            {SECTIONS.map((s) => (
+            {sections.map((s) => (
               <li key={s.id}>
                 <a
                   href={`#${s.id}`}

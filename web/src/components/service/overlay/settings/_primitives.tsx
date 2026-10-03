@@ -89,6 +89,10 @@ export interface FormState {
   // Deploy
   previewsDisabled: boolean;
   waitForCI: boolean;
+  // Uptime check: uptimeEnabled is the inverse of spec.uptime.disabled;
+  // uptimePath "" = health check path, or "/".
+  uptimeEnabled: boolean;
+  uptimePath: string;
   // Security (advanced) — opt-in escape hatch for images that self-drop
   // root at runtime (setpriv/gosu/su-exec). capAdd is comma-separated
   // capability names without the CAP_ prefix, e.g. "SETUID, SETGID".
@@ -185,6 +189,8 @@ export function fromSvc(svc?: KusoService): FormState {
     previewsDisabled:
       !!svc?.spec?.previews?.disabled,
     waitForCI: !!svc?.spec.waitForCI,
+    uptimeEnabled: svc?.spec.uptime?.disabled !== true,
+    uptimePath: svc?.spec.uptime?.path ?? "",
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
     releaseCommand: (svc?.spec.release?.command ?? []).join(" "),

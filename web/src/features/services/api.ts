@@ -426,6 +426,9 @@ export interface PatchServiceBody {
   // waitForCI holds push/PR builds until the commit's GitHub checks
   // (excluding kuso/* statuses) are green. Absent leaves it unchanged.
   waitForCI?: boolean;
+  // uptime: both fields optional; an absent field is left unchanged and
+  // path "" clears the override.
+  uptime?: { disabled?: boolean; path?: string };
 }
 
 export interface PatchRepoBody {

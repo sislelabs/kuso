@@ -94,3 +94,9 @@ func isProductionEnv(svc *kube.KusoService, env *kube.KusoEnvironment) bool {
 func activatorBackend(name string) bool {
 	return name == activatorDeployment || strings.HasSuffix(name, "-activator")
 }
+
+// IsProductionEnv exposes the production classification to other loops
+// (uptime checks only ping production).
+func IsProductionEnv(svc *kube.KusoService, env *kube.KusoEnvironment) bool {
+	return isProductionEnv(svc, env)
+}

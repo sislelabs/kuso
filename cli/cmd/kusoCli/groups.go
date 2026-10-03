@@ -58,6 +58,7 @@ func registerCommandGroups(root *cobra.Command) {
 		"doctor":        groupInspect,
 		"health":        groupInspect,
 		"incident":      groupInspect,
+		"uptime":        groupInspect,
 		"alert":         groupInspect,
 		"audit":         groupInspect,
 		"notifications": groupInspect,

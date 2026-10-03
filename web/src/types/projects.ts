@@ -29,6 +29,9 @@ export interface KusoProjectSpec {
   // incidentMonitoring=true opts the project into the incident-response
   // agent (it only investigates opted-in projects).
   incidentMonitoring?: boolean;
+  // uptime.disabled=true opts the whole project out of the once-a-minute
+  // uptime checks. Absent = checked (the default).
+  uptime?: { disabled?: boolean };
 }
 
 export interface KusoProject {
@@ -113,6 +116,9 @@ export interface KusoServiceSpec {
   release?: { command?: string[]; timeoutSeconds?: number };
   // waitForCI holds push/PR builds until the commit's GitHub checks pass.
   waitForCI?: boolean;
+  // uptime: per-service opt-out and request path for the uptime check.
+  // No path = the health check path, or "/".
+  uptime?: { disabled?: boolean; path?: string };
   // Remaining kube.KusoServiceSpec fields, so callers stop casting.
   internal?: boolean;
   privateEgress?: boolean;

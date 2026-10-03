@@ -52,6 +52,10 @@ const SERVICE_BLAST: Record<string, BlastInfo> = {
     level: "info",
     message: "Affects idle behaviour only; pods wake on the next request.",
   },
+  uptime: {
+    level: "info",
+    message: "Only changes what kuso pings — no redeploy, no pod restart.",
+  },
   resources: {
     level: "warn",
     message:

@@ -25,6 +25,7 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | Pin an addon to nodes            | `kuso project addon placement set <project> <addon> --label k=v`         |
 | RBAC roles                       | `kuso get roles` · `kuso role create/edit/delete`                        |
 | Backup policy / health           | `kuso backup settings get` · `kuso backup health`                        |
+| Uptime checks                    | `kuso uptime status <project>` · `kuso uptime enable/disable <project> [service]` |
 | Pod-size presets                 | `kuso instance-config podsize list`                                      |
 | Hit any API endpoint directly    | `kuso api <METHOD> <path> [-f k=v] [--data @f.json] [--jq expr]`         |
 

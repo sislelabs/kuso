@@ -38,6 +38,7 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `privateEgress` | bool | Allow egress to private ranges. |
 | `platformApiEgress` | bool | Let pods call the kuso API over in-cluster DNS. |
 | `waitForCI` | bool | Hold push/preview builds until the commit's GitHub checks are green. |
+| `uptime` | object | Uptime check settings: `disabled` (bool) opts the service out, `path` (string) is the path the check requests. Leave the block out to keep whatever is set in the UI or CLI. |
 | `command` | list of strings | Overrides the image's CMD. |
 | `domains` | list | `{host, tls, tlsSecret}`. `tlsSecret` is only for wildcard hosts (`*.example.com`) and is required there. |
 | `env` | map | See [Env values](#env-values). |
