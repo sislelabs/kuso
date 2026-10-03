@@ -599,7 +599,7 @@ var logDetectors = []logDetector{
 		kind:      KindBuildCommandFailed,
 		tab:       TabLogs,
 		buildTime: true,
-		re:        regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed`),
+		re:        regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed|failed to solve: process|did not complete successfully: exit code`),
 		summarize: func(line string) string {
 			return "Build command exited non-zero. " + briefLine(line)
 		},

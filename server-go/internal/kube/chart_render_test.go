@@ -235,3 +235,19 @@ func TestCharts_NullBlocksRender(t *testing.T) {
 		}
 	}
 }
+
+// TestKusoEnvironmentChart_PreStopSleep verifies web pods wait before
+// SIGTERM so the ingress stops routing to them first: without it every
+// rollout dropped a request or two per replaced pod. Workers take no
+// traffic and skip the wait.
+func TestKusoEnvironmentChart_PreStopSleep(t *testing.T) {
+	t.Parallel()
+	web := helmTemplate(t, "test-env")
+	if !strings.Contains(web, "preStop:") || !strings.Contains(web, "seconds: 5") {
+		t.Errorf("web pod has no 5s preStop sleep:\n%s", web)
+	}
+	worker := helmTemplate(t, "test-env", "runtime=worker")
+	if strings.Contains(worker, "preStop:") {
+		t.Errorf("worker pod should not render a preStop hook:\n%s", worker)
+	}
+}

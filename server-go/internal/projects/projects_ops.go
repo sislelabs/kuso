@@ -263,6 +263,13 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 			return nil, fmt.Errorf("%w: prepare namespace %q (create the namespace + kuso-server RBAC): %s", ErrInvalid, req.Namespace, err.Error())
 		}
 	}
+	// The preflight above proved no project holds this name, so any build
+	// history still filed under it belongs to a deleted one.
+	if s.BuildHistoryCleanupForProject != nil {
+		if herr := s.BuildHistoryCleanupForProject(ctx, req.Name); herr != nil {
+			slog.Warn("project create: dropping leftover build history failed", "project", req.Name, "err", herr)
+		}
+	}
 	out, err := s.Kube.CreateKusoProject(ctx, s.Namespace, p)
 	if err != nil {
 		return nil, err

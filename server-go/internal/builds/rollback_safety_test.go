@@ -159,11 +159,37 @@ func TestRollback_EmitsRolledBackEvent(t *testing.T) {
 	}
 }
 
-type stubRecord struct{ repo, tag, phase string }
+type stubRecord struct{ repo, tag, phase, branch string }
 
 type stubRecordLookup map[string]stubRecord
 
-func (m stubRecordLookup) GetBuildImage(_ context.Context, _ string, name string) (string, string, string, bool, error) {
+func (m stubRecordLookup) GetBuildImage(_ context.Context, _ string, name string) (string, string, string, string, bool, error) {
 	r, ok := m[name]
-	return r.repo, r.tag, r.phase, ok, nil
+	return r.repo, r.tag, r.phase, r.branch, ok, nil
+}
+
+// An archived build (CR already GC'd) from another branch must hit the
+// same guard as a live one: a 4-day-old feature-branch image landed on
+// production without --force because the archive path skipped the check.
+func TestRollback_ArchivedBuildFromOtherBranchNeedsForce(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+	)
+	s.RecordLookup = stubRecordLookup{
+		"alpha-web-feat": {repo: RegistryHost + "/alpha/web", tag: "feat123", phase: "succeeded", branch: "feat/preview-test"},
+		"alpha-web-main": {repo: RegistryHost + "/alpha/web", tag: "main123", phase: "succeeded", branch: "main"},
+	}
+	ctx := context.Background()
+	if _, err := s.Rollback(ctx, "alpha", "web", "production", "alpha-web-feat", RollbackOptions{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("archived cross-branch rollback without force: want ErrInvalid, got %v", err)
+	}
+	env, err := s.Rollback(ctx, "alpha", "web", "production", "alpha-web-feat", RollbackOptions{Force: true})
+	if err != nil || env.Spec.Image == nil || env.Spec.Image.Tag != "feat123" {
+		t.Fatalf("forced archived rollback: err=%v image=%+v", err, env)
+	}
+	if _, err := s.Rollback(ctx, "alpha", "web", "production", "alpha-web-main", RollbackOptions{}); err != nil {
+		t.Fatalf("archived same-branch rollback: %v", err)
+	}
 }

@@ -141,3 +141,12 @@ func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time, keep []string
 	}
 	return int(n), nil
 }
+
+// DeleteBuildLogsForProject removes every archived build log under a
+// project name. Mirrors DeleteBuildRecordsForProject.
+func (d *DB) DeleteBuildLogsForProject(ctx context.Context, project string) error {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "BuildLog" WHERE "project"=$1`, project); err != nil {
+		return fmt.Errorf("DeleteBuildLogsForProject: %w", err)
+	}
+	return nil
+}

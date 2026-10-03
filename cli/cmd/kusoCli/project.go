@@ -1671,7 +1671,7 @@ func init() {
 	projectCreateCmd.Flags().StringVar(&projectCreateBranch, "branch", "main", "default branch")
 	projectCreateCmd.Flags().StringVar(&projectCreateDomain, "domain", "", "base domain (services get <name>.<this>)")
 	projectCreateCmd.Flags().BoolVar(&projectCreatePreviews, "previews", false, "enable PR-based preview environments")
-	projectCreateCmd.Flags().StringVar(&projectCreateNamespace, "namespace", "", "execution namespace for this project's child resources (default: server's home namespace)")
+	projectCreateCmd.Flags().StringVar(&projectCreateNamespace, "namespace", "", "execution namespace for this project's child resources (default: kuso-<name>)")
 
 	projectCmd.AddCommand(projectDeleteCmd)
 	projectDeleteCmd.Flags().BoolVarP(&projectDeleteYes, "yes", "y", false, "skip the confirmation prompt")

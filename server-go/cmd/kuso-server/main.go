@@ -550,6 +550,12 @@ func main() {
 					database.DeleteBuildLogsForService(ctx, project, service),
 				)
 			}
+			projSvc.BuildHistoryCleanupForProject = func(ctx context.Context, project string) error {
+				return errors.Join(
+					database.DeleteBuildRecordsForProject(ctx, project),
+					database.DeleteBuildLogsForProject(ctx, project),
+				)
+			}
 		}
 		// Revision history: log every successful spec mutation so the
 		// History tab + revert path have something to show. Best-
@@ -2143,12 +2149,16 @@ func (a imageRecordsAdapter) ClearImageTag(ctx context.Context, project, buildNa
 // "<RegistryHost>/<project>/<service>" convention.
 type buildRecordLookupAdapter struct{ d *db.DB }
 
-func (a buildRecordLookupAdapter) GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase string, ok bool, err error) {
+func (a buildRecordLookupAdapter) GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase, branch string, ok bool, err error) {
 	svc, tag, phase, ok, err := a.d.GetBuildImage(ctx, project, buildName)
 	if err != nil || !ok {
-		return "", "", "", ok, err
+		return "", "", "", "", ok, err
 	}
-	return fmt.Sprintf("%s/%s/%s", builds.RegistryHost, project, svc), tag, phase, true, nil
+	branch, err = a.d.GetBuildBranch(ctx, project, buildName)
+	if err != nil {
+		return "", "", "", "", false, err
+	}
+	return fmt.Sprintf("%s/%s/%s", builds.RegistryHost, project, svc), tag, phase, branch, true, nil
 }
 
 // runsNotifyAdapter satisfies runs.EventEmitter by mapping the

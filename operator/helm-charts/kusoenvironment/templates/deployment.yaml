@@ -55,10 +55,11 @@ spec:
     Zero-downtime rolling update. maxSurge=1 + maxUnavailable=0 means
     kube ALWAYS brings up a new pod and waits for it to be Ready
     before killing any old pod, even at replicas=1. Combined with the
-    HTTP readinessProbe below this is what makes env-var edits roll
-    without dropping requests — the new pod has to actually answer on
-    its port before traffic shifts. Without these two, the default
-    25%/25% strategy on a single-replica deployment briefly runs zero
+    readiness probe and the preStop sleep below this is what makes
+    env-var edits roll without dropping requests — the new pod has to
+    accept connections before traffic shifts, and the old one keeps
+    serving until the ingress has stopped routing to it. Without the
+    strategy, the default 25%/25% on a single-replica deployment briefly runs zero
     Ready pods and clients see connection-refused / 503.
 
     Exception: a ReadWriteOnce volume. Surging would run the old and new
@@ -363,6 +364,18 @@ spec:
             the readinessProbe doesn't false-fail during cold starts.
           */}}
           {{- if not (eq (default "" .Values.runtime) "worker") }}
+          {{- /*
+            Hold SIGTERM back for 5s on shutdown. Removing the pod from
+            the Service endpoints and stopping the container start at the
+            same moment, and the ingress takes a second or two to notice;
+            without the wait each replaced pod drops the requests still
+            routed to it (a 502 and a hung request per rollout, measured).
+            The native sleep action needs no binary in the image.
+          */}}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           {{- if and .Values.healthcheck .Values.healthcheck.path }}
           {{- /*
             HTTP health check (user opted in via spec.healthcheck.path).

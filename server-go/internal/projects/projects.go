@@ -51,6 +51,11 @@ type Service struct {
 	// deployment history. nil = no-op (no DB wired).
 	BuildHistoryCleanupForService func(ctx context.Context, project, service string) error
 
+	// BuildHistoryCleanupForProject drops every archived build record +
+	// log under a project name. Run on create: a reused name must not
+	// inherit a deleted project's builds as rollback targets. nil = no-op.
+	BuildHistoryCleanupForProject func(ctx context.Context, project string) error
+
 	// AddonConnSecrets returns the project's addon connection-secret
 	// names so a freshly-created env starts with envFromSecrets
 	// already pointing at every existing addon (DATABASE_URL etc.

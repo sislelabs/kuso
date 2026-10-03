@@ -1,6 +1,7 @@
 package failures
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -485,5 +486,24 @@ func TestClassify_MissingCapability_NotOverbroad(t *testing.T) {
 	// A hard signal still beats a capability log line.
 	if got := Classify([]string{"setgroups: Operation not permitted"}, Signal{Reason: "OOMKilled"}); got.Kind != KindOOM {
 		t.Errorf("OOMKilled + cap line = %q, want oom", got.Kind)
+	}
+}
+
+// A plain compile error under buildkit ends in "failed to solve … did not
+// complete successfully"; it used to fall through to the generic
+// "See logs" banner.
+func TestClassify_BuildkitStepFailure(t *testing.T) {
+	lines := []string{
+		`#13 ERROR: process "/bin/sh -c CGO_ENABLED=0 go build -o /out/api ." did not complete successfully: exit code: 1`,
+		`7.345 ./main.go:330:14: syntax error: unexpected {, expected )`,
+		`Dockerfile:6`,
+		`error: failed to solve: process "/bin/sh -c CGO_ENABLED=0 go build -o /out/api ." did not complete successfully: exit code: 1`,
+	}
+	c := Classify(lines, Signal{})
+	if c.Kind != KindBuildCommandFailed {
+		t.Fatalf("kind = %q, want %q", c.Kind, KindBuildCommandFailed)
+	}
+	if !strings.Contains(c.Summary, "go build") {
+		t.Errorf("summary should name the failing command, got %q", c.Summary)
 	}
 }

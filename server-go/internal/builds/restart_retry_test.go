@@ -129,6 +129,9 @@ func TestRetryRelease_PromotesOnSuccess(t *testing.T) {
 	if b.Annotations[annRetryRelease] != "" {
 		t.Error("retry request not cleared after a terminal outcome")
 	}
+	if msg := b.Annotations[annMessage]; msg != "" {
+		t.Errorf("succeeded build still carries message %q", msg)
+	}
 }
 
 func TestRetryRelease_FailsAgainWithoutPromoting(t *testing.T) {

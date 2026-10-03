@@ -126,3 +126,37 @@ func TestListProjectBuildRecords(t *testing.T) {
 		t.Errorf("missing a service: %v", seen)
 	}
 }
+
+func TestBuildRecord_BranchAndProjectDelete(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	for _, r := range []BuildRecord{
+		{BuildName: "p-web-1", Project: "p", Service: "web", Branch: "feat/x", Status: "succeeded"},
+		{BuildName: "p-gone-1", Project: "p", Service: "gone", Branch: "main", Status: "succeeded"},
+		{BuildName: "q-web-1", Project: "q", Service: "web", Branch: "main", Status: "succeeded"},
+	} {
+		if err := d.SaveBuildRecord(ctx, r); err != nil {
+			t.Fatalf("save %s: %v", r.BuildName, err)
+		}
+	}
+	if b, err := d.GetBuildBranch(ctx, "p", "p-web-1"); err != nil || b != "feat/x" {
+		t.Errorf("branch = %q, %v; want feat/x", b, err)
+	}
+	if b, err := d.GetBuildBranch(ctx, "p", "missing"); err != nil || b != "" {
+		t.Errorf("missing record: branch = %q, %v; want empty, nil", b, err)
+	}
+
+	if err := d.DeleteBuildRecordsForProject(ctx, "p"); err != nil {
+		t.Fatalf("delete project records: %v", err)
+	}
+	if err := d.DeleteBuildLogsForProject(ctx, "p"); err != nil {
+		t.Fatalf("delete project logs: %v", err)
+	}
+	if left, _ := d.ListProjectBuildRecords(ctx, "p", 0); len(left) != 0 {
+		t.Errorf("project p still has %d records", len(left))
+	}
+	if other, _ := d.ListProjectBuildRecords(ctx, "q", 0); len(other) != 1 {
+		t.Errorf("project q has %d records, want 1", len(other))
+	}
+}

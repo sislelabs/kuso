@@ -222,9 +222,8 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		}
 		imageRepo, imageTag, buildBranch = b.Spec.Image.Repository, b.Spec.Image.Tag, b.Spec.Branch
 	case apierrors.IsNotFound(err) && s.RecordLookup != nil:
-		// CR gone — try the archive. The archive carries no branch, so
-		// the branch check below cannot run for these.
-		repo, tag, phase, ok, lerr := s.RecordLookup.GetBuildImage(ctx, project, buildName)
+		// CR gone — try the archive.
+		repo, tag, phase, branch, ok, lerr := s.RecordLookup.GetBuildImage(ctx, project, buildName)
 		if lerr != nil {
 			return nil, fmt.Errorf("get build record: %w", lerr)
 		}
@@ -239,7 +238,7 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		if tag == "" {
 			return nil, fmt.Errorf("%w: build %s has no archived image to roll back to (image was pruned past the retention window)", ErrInvalid, buildName)
 		}
-		imageRepo, imageTag = repo, tag
+		imageRepo, imageTag, buildBranch = repo, tag, branch
 	case apierrors.IsNotFound(err):
 		return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
 	default:

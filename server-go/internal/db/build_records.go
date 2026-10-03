@@ -168,6 +168,29 @@ func (d *DB) GetBuildImage(ctx context.Context, project, buildName string) (serv
 	return service, tag, phase, true, nil
 }
 
+// GetBuildBranch returns the branch an archived build was built from, so
+// a rollback to it can enforce the same cross-branch guard as a live
+// build. "" when the record is missing or predates the column.
+func (d *DB) GetBuildBranch(ctx context.Context, project, buildName string) (string, error) {
+	var branch sql.NullString
+	err := d.QueryRowContext(ctx,
+		`SELECT "branch" FROM "BuildRecord" WHERE "buildName"=$1 AND "project"=$2`,
+		buildName, project).Scan(&branch)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("GetBuildBranch: %w", err)
+	}
+	return branch.String, nil
+}
+
+// DeleteBuildRecordsForProject removes every archived summary under a
+// project name, including those of services that no longer exist.
+func (d *DB) DeleteBuildRecordsForProject(ctx context.Context, project string) error {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "BuildRecord" WHERE "project"=$1`, project); err != nil {
+		return fmt.Errorf("DeleteBuildRecordsForProject: %w", err)
+	}
+	return nil
+}
+
 // ListArchivedImages returns one row per archived build in a project (or
 // all projects when project==""), carrying the fields the image-
 // retention sweep needs. Used to extend the rollback-window sweep over

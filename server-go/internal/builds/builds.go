@@ -310,7 +310,7 @@ type Service struct {
 // fields by CR name. Implemented by an adapter over db.DB. Returns
 // ok=false when no record exists.
 type BuildRecordLookup interface {
-	GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase string, ok bool, err error)
+	GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase, branch string, ok bool, err error)
 }
 
 // inFlightEntry is the value side of inFlight: a channel that closes
@@ -2684,9 +2684,16 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// up. We OOMKilled a 4 GB host once on this — two nixpacks
 	// builds resurrected on top of each other.
 	completedAt := time.Now().UTC().Format(time.RFC3339)
+	// A release retry parks "retrying release hook" in the message; left
+	// in place it reads as the reason on a build that then succeeded.
+	msgPatch := ""
+	if b.Annotations[annRetryRelease] != "" {
+		msgPatch = fmt.Sprintf(`,%q:null`, annMessage)
+		delete(b.Annotations, annMessage)
+	}
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
-		annPhase, annCompletedAt, completedAt,
+		`{"metadata":{"annotations":{%q:"succeeded",%q:%q%s},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
+		annPhase, annCompletedAt, completedAt, msgPatch,
 	)
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
