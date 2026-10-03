@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.28.2] — 2026-10-03
+
+### Other
+- Reject malformed refs and allow rebuilding an already-built commit ([0487b74](https://github.com/sislelabs/kuso/commit/0487b743576c776b7d54c6f1829b86051e154348))
+
 ## [0.28.1] — 2026-10-03
 
 ### 🐛 Bug Fixes
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): publish DIRECT_URL for external addons ([f8664bb](https://github.com/sislelabs/kuso/commit/f8664bbde07edf23e0e7c54a73c5475284bdd3a6))
-
-## [0.25.11] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): publish POOLER_* keys for external addons ([c0429ee](https://github.com/sislelabs/kuso/commit/c0429ee894721b6104d6f9ad3921d1b39f298c86))
 
 
 ---

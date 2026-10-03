@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.11] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): publish POOLER_* keys for external addons ([c0429ee](https://github.com/sislelabs/kuso/commit/c0429ee894721b6104d6f9ad3921d1b39f298c86))
+
 ## [0.25.10] — 2026-09-02
 
 ### 🐛 Bug Fixes
