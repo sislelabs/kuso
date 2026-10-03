@@ -879,6 +879,12 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// manual = no explicit ref (CLI/UI trigger, system redeploy). The
 	// webhook path always carries the pushed SHA.
 	manual := req.Ref == ""
+	// userRef = a person or API client named the commit. Webhooks carry
+	// GitHub's own SHA and keep the SHA-keyed CR name for redelivery dedup.
+	userRef := !manual && (req.TriggeredBy == "user" || req.TriggeredBy == "api")
+	if userRef && !shaRE.MatchString(req.Ref) {
+		return nil, false, fmt.Errorf("%w: ref %q is not a full 40-character commit SHA (use branch to build a branch head)", ErrInvalid, req.Ref)
+	}
 	if manual {
 		sha = s.resolveBranchHead(ctx, installationID, repoURL, branch, project, service)
 	}
@@ -939,9 +945,10 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	defer release()
 
 	buildName := buildCRName(project, service, sha)
-	if manual && !syntheticRef {
+	if (manual || userRef) && !syntheticRef {
 		// A resolved HEAD is usually already built (redeploying an
-		// unchanged branch), and that build owns the SHA-keyed name.
+		// unchanged branch), and that build owns the SHA-keyed name; the
+		// same goes for a commit someone asks to rebuild by SHA.
 		// Suffix like a synthetic ref so the manual build gets its own CR.
 		buildName = buildCRName(project, service, sha[:12]+"-"+strconv.FormatInt(time.Now().UnixMilli(), 36))
 	}
