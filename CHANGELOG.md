@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.28.1] — 2026-10-03
+
+### 🐛 Bug Fixes
+- Fix deploy lifecycle defects found by the e2e run ([81e340a](https://github.com/sislelabs/kuso/commit/81e340a07fff9306764af4f996b5ade5a3ba759d))
+
 ## [0.28.0] — 2026-10-03
 
 ### ✨ Features
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): publish POOLER_* keys for external addons ([c0429ee](https://github.com/sislelabs/kuso/commit/c0429ee894721b6104d6f9ad3921d1b39f298c86))
-
-## [0.25.10] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(env): resolve refs to env-scoped clones, and 400 unknown refs ([d138325](https://github.com/sislelabs/kuso/commit/d138325cd3e728ee16e9ee55b93dc2385cc24947))
 
 
 ---

@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.10] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): resolve refs to env-scoped clones, and 400 unknown refs ([d138325](https://github.com/sislelabs/kuso/commit/d138325cd3e728ee16e9ee55b93dc2385cc24947))
+
 ## [0.25.9] — 2026-09-02
 
 ### 🐛 Bug Fixes
