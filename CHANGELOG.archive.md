@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.9] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): re-assert a preview env's own clone conn ([2f0f4f9](https://github.com/sislelabs/kuso/commit/2f0f4f90a02a32717eb242465353f266aa75346d))
+
 ## [0.25.8] — 2026-09-02
 
 ### ✨ Features

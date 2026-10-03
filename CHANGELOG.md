@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.28.0] — 2026-10-03
+
+### ✨ Features
+- Add uptime checks with Discord down and recovered alerts ([c6fc977](https://github.com/sislelabs/kuso/commit/c6fc9770dd00653c5d6fb1b807b9158eabd0603e))
+
 ## [0.27.8] — 2026-10-01
 
 ### Other
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): resolve refs to env-scoped clones, and 400 unknown refs ([d138325](https://github.com/sislelabs/kuso/commit/d138325cd3e728ee16e9ee55b93dc2385cc24947))
-
-## [0.25.9] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): re-assert a preview env's own clone conn ([2f0f4f9](https://github.com/sislelabs/kuso/commit/2f0f4f90a02a32717eb242465353f266aa75346d))
 
 
 ---
