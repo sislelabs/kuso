@@ -33,6 +33,8 @@ dist/
 !/build/backup/
 !/build/incident-agent/
 !/build/incident-bot/
+!/build/nixpacks/
+!/build/env-detect/
 # but never the bot's compiled binary
 /build/incident-bot/incident-bot
 *.log
@@ -80,3 +82,4 @@ server-go/internal/web/dist/*
 # Local development worktrees (superpowers)
 .worktrees/
 migration/
+/hack/sandbox/.state/

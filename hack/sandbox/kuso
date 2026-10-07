@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# The kuso CLI, pointed at the sandbox. Runs with its own HOME so it never
+# reads or writes ~/.kuso (your real instances and tokens).
+set -euo pipefail
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin="${dir}/.state/bin/kuso"
+[[ -x "$bin" ]] || { echo "error: sandbox CLI not built; run 'make sandbox-up'" >&2; exit 1; }
+mkdir -p "${dir}/.state/home"
+HOME="${dir}/.state/home" exec "$bin" "$@"

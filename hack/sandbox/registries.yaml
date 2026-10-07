@@ -1,0 +1,11 @@
+# Mirrors the entry hack/install.sh writes: lets the node's containerd pull
+# from the in-cluster registry over plain HTTP. The hostname resolves through
+# the /etc/hosts line up.sh stamps into the node.
+mirrors:
+  "kuso-registry.kuso.svc.cluster.local:5000":
+    endpoint:
+      - "http://kuso-registry.kuso.svc.cluster.local:5000"
+configs:
+  "kuso-registry.kuso.svc.cluster.local:5000":
+    tls:
+      insecure_skip_verify: true

@@ -1,0 +1,72 @@
+# kuso's own metadata database for the sandbox. Production installs run the
+# CloudNativePG cluster in deploy/postgres.yaml; the control-plane database
+# is not what the sandbox tests, so this is a single plain postgres.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kuso-postgres-conn
+  namespace: kuso
+stringData:
+  username: kuso
+  user: kuso
+  password: kuso
+  database: kuso
+  host: kuso-postgres
+  port: "5432"
+  dsn: postgres://kuso:kuso@kuso-postgres:5432/kuso?sslmode=disable
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kuso-postgres-data
+  namespace: kuso
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-postgres
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-postgres }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-postgres }
+    spec:
+      priorityClassName: kuso-platform
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: kuso }
+            - { name: POSTGRES_PASSWORD, value: kuso }
+            - { name: POSTGRES_DB, value: kuso }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, kuso, -d, kuso] }
+            periodSeconds: 3
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: kuso-postgres-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-postgres
+  namespace: kuso
+spec:
+  selector: { app.kubernetes.io/name: kuso-postgres }
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }

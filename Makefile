@@ -36,6 +36,12 @@ help:
 	@echo "  make test-db      # same, plus the Postgres-backed tests (-race -p 1,"
 	@echo "                    # throwaway postgres:16-alpine via docker) — what CI runs"
 	@echo ""
+	@echo "  SANDBOX (disposable kuso in Docker, built from this tree):"
+	@echo "  make sandbox-up       # build images, start k3s in docker, install kuso"
+	@echo "  make sandbox-reload   # rebuild + restart server and operator"
+	@echo "  make sandbox-smoke    # scripted end-to-end check against the sandbox"
+	@echo "  make sandbox-down     # delete containers, volumes and local state"
+	@echo ""
 	@echo "  Local-only escape hatch (you almost never want this):"
 	@echo "  make local-roll VERSION=vX.Y.Z"
 	@echo "      ssh into the configured KUSO_RELEASE_HOST and"
@@ -121,10 +127,30 @@ test-db:
 # CLI command. Not airtight — it's a heuristic — but it surfaces the
 # common "added an endpoint, forgot the CLI" mistake before review.
 .PHONY: verify verify-parity update-goldens
-verify: typecheck test verify-parity
+verify: typecheck test verify-parity verify-sandbox
 
 verify-parity:
 	@bash hack/verify-parity.sh
+
+# The sandbox applies deploy/*.yaml from its own list; this fails when a
+# manifest was added to deploy/ without deciding whether the sandbox gets it.
+.PHONY: verify-sandbox sandbox-up sandbox-reload sandbox-smoke sandbox-down
+verify-sandbox:
+	@bash hack/sandbox/check-drift.sh
+
+# Disposable single-node kuso in Docker, built from the working tree.
+# See hack/sandbox/README.md.
+sandbox-up:
+	@bash hack/sandbox/up.sh
+
+sandbox-reload:
+	@bash hack/sandbox/reload.sh $(TARGET)
+
+sandbox-smoke:
+	@bash hack/sandbox/smoke.sh
+
+sandbox-down:
+	@bash hack/sandbox/down.sh
 
 # hooks-install points git at hack/hooks/ for its hooks (currently just
 # pre-push). The merge gate is GitHub Actions (.github/workflows/test.yml);
