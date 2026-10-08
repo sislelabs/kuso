@@ -27,9 +27,32 @@ for _ in $(seq 1 90); do
 done
 [[ "${ready:-0}" == "1" ]] || { docker logs --tail 40 "$NODE" >&2; die "the k3s node did not become Ready"; }
 
-for img in "${IMAGES[@]}"; do import_image "$img"; done
+# A re-run after a code change loads a new image under the same tag;
+# pods only pick it up when restarted. Remember which ones were replaced.
+replaced=()
+for img in "${IMAGES[@]}"; do
+  marker="${STATE_DIR}/imported/${img}"
+  before="$(cat "$marker" 2>/dev/null || true)"
+  import_image "$img"
+  [[ -n "$before" && "$before" != "$(cat "$marker")" ]] && replaced+=("$img")
+done
 
 compose --profile tools run --rm -T tools /repo/hack/sandbox/bootstrap.sh
+
+for img in ${replaced[@]+"${replaced[@]}"}; do
+  case "$img" in
+    server)
+      log "restarting the server on its new image"
+      node_kubectl -n kuso rollout restart deployment/kuso-server deployment/kuso-activator >/dev/null
+      node_kubectl -n kuso rollout status deployment/kuso-server --timeout=300s >/dev/null
+      ;;
+    operator)
+      log "restarting the operator on its new image"
+      node_kubectl -n kuso-operator-system rollout restart deployment/kuso-operator-controller-manager >/dev/null
+      node_kubectl -n kuso-operator-system rollout status deployment/kuso-operator-controller-manager --timeout=300s >/dev/null
+      ;;
+  esac
+done
 
 stamp_registry_host
 
@@ -69,7 +92,7 @@ kuso sandbox is up.
   Login      admin / ${SANDBOX_ADMIN_PASSWORD}
   CLI        hack/sandbox/kuso <command>      (already logged in; never touches ~/.kuso)
   kubectl    KUBECONFIG=hack/sandbox/.state/kubeconfig kubectl ...
-  Services   http://<service>.<project>.${SANDBOX_DOMAIN}:${KUSO_SANDBOX_PORT}
+  Services   http://<service>.<project>.${SANDBOX_DOMAIN}${SANDBOX_PORT_SUFFIX}
 
   make sandbox-reload   rebuild + restart server and operator
   make sandbox-smoke    scripted end-to-end check

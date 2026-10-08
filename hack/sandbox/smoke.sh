@@ -43,10 +43,10 @@ wait_http() {
   die "${svc}${path} did not return 200 within $3s (last status: ${code:-none})"
 }
 
-# live_image <service>: the image the production environment runs.
-live_image() {
-  node_kubectl get kusoenvironments -A -o json \
-    | jq -r --arg n "${PROJECT}-$1-production" '.items[] | select(.metadata.name==$n) | "\(.spec.image.repository):\(.spec.image.tag)"'
+# live_build <service>: the build production currently runs.
+live_build() {
+  "$K" build list "$PROJECT" "$1" -o json \
+    | jq -r '[.[] | select((.liveEnvs // []) | index("production"))][0].id // empty'
 }
 
 command -v jq >/dev/null || die "jq is required"
@@ -102,16 +102,18 @@ echo "  GET via nix:     ${listed}"
 grep -q 'smoke-test' <<<"$listed" || die "the row written through one service is not visible through the other"
 
 step "rebuild, then roll back"
-first_image="$(live_image docker)"
-[[ -n "$first_image" ]] || die "could not read the live image of ${PROJECT}/docker"
+# Both builds are of the same commit, so they share an image tag; what
+# moves is which build the production environment counts as live.
+first_build="$(live_build docker)"
+[[ -n "$first_build" ]] || die "could not tell which build of ${PROJECT}/docker is live"
 "$K" build trigger "$PROJECT" docker --follow || die "second build of docker failed"
-second_image="$(live_image docker)"
-[[ "$second_image" != "$first_image" ]] || die "the second build did not change the live image (${first_image})"
+second_build="$(live_build docker)"
+[[ "$second_build" != "$first_build" ]] || die "the second build did not become live (still ${first_build})"
 "$K" build rollback "$PROJECT" docker --previous --yes
-rolled_image="$(live_image docker)"
-[[ "$rolled_image" == "$first_image" ]] || die "rollback left ${rolled_image}, expected ${first_image}"
+rolled_build="$(live_build docker)"
+[[ "$rolled_build" == "$first_build" ]] || die "rollback left ${rolled_build} live, expected ${first_build}"
 wait_http docker /healthz 180
-echo "  ${first_image} -> ${second_image} -> ${rolled_image}"
+echo "  live build: ${first_build} -> ${second_build} -> ${rolled_build}"
 
 if [[ "${KEEP:-0}" == "1" ]]; then
   printf '\n\033[1;32mSMOKE PASSED\033[0m (KEEP=1: project %s left in place)\n' "$PROJECT"

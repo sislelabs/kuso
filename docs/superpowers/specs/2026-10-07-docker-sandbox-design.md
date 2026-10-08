@@ -146,7 +146,8 @@ the sandbox tests, and skipping the CNPG operator shortens cold start.
 
 - `KUSO_DOMAIN=kuso.localhost`. The API is `http://kuso.localhost:<port>` and services land
   at `http://<service>.<project>.kuso.localhost:<port>`.
-- The host port defaults to 18080 and is set by `KUSO_SANDBOX_PORT`. It is published on
+- The host port defaults to 80, because kuso prints service links without a port, and is
+  set by `KUSO_SANDBOX_PORT`. It is published on
   both `127.0.0.1` and `[::1]`: `*.localhost` resolves to `::1` first on macOS, and with an
   IPv4-only bind another process on `[::1]:<port>` answered the CLI with a 404.
 - Everything is plain HTTP. There is no cert-manager, and the chart emits no TLS block for

@@ -36,8 +36,9 @@ services:
     ports:
       # Both loopbacks: *.localhost resolves to ::1 first on macOS, so an
       # IPv4-only bind lets any other process on [::1]:<port> answer instead.
-      - "127.0.0.1:${KUSO_SANDBOX_PORT:-18080}:80"
-      - "[::1]:${KUSO_SANDBOX_PORT:-18080}:80"
+      # Port 80 by default: kuso prints service links without a port.
+      - "127.0.0.1:${KUSO_SANDBOX_PORT:-80}:80"
+      - "[::1]:${KUSO_SANDBOX_PORT:-80}:80"
       - "127.0.0.1:${KUSO_SANDBOX_API_PORT:-16443}:6443"
 
   # kubectl + helm. Shares the node's network namespace so the kubeconfig's
@@ -48,6 +49,7 @@ services:
     network_mode: service:node
     environment:
       KUBECONFIG: /kube/kubeconfig.yaml
+      KUSO_SANDBOX_PORT: ${KUSO_SANDBOX_PORT:-80}
     volumes:
       - kubeconfig:/kube:ro
       - ../..:/repo:ro

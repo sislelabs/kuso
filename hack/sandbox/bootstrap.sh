@@ -12,6 +12,8 @@ set -euo pipefail
 REPO="${REPO:-/repo}"
 DOMAIN="${KUSO_SANDBOX_DOMAIN:-kuso.localhost}"
 IMAGE_TAG="${KUSO_SANDBOX_IMAGE_TAG:-sandbox}"
+PORT_SUFFIX=":${KUSO_SANDBOX_PORT:-80}"
+[[ "$PORT_SUFFIX" == ":80" ]] && PORT_SUFFIX=""
 
 # shellcheck source=hack/sandbox/manifests.sh
 source "${REPO}/hack/sandbox/manifests.sh"
@@ -92,8 +94,10 @@ kubectl apply -f "${REPO}/hack/sandbox/postgres.yaml" >/dev/null
 wait_rollout kuso kuso-postgres 180s
 
 log "secrets (well-known dev values, same as KUSO_INSECURE_SECRETS=1)"
-# KUSO_UPDATER_DISABLED rides along here because the Deployment loads this
-# Secret with envFrom; that avoids a second rollout from `kubectl set env`.
+# KUSO_UPDATER_DISABLED and KUSO_PUBLIC_URL ride along here because the
+# Deployment loads this Secret with envFrom; that avoids a second rollout
+# from `kubectl set env`. KUSO_PUBLIC_URL carries the host port: without
+# it the URLs kuso prints (deploy hooks, GitHub App callbacks) drop it.
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="dev-session-key-do-not-use-in-prod-3232" \
   --from-literal=JWT_SECRET="dev-jwt-secret-do-not-use-in-prod-32-chars" \
@@ -101,6 +105,7 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_REQUIRE_SIGNATURES="true" \
   --from-literal=KUSO_METRICS_SCRAPE_TOKEN="dev-metrics-scrape-token-do-not-use" \
   --from-literal=KUSO_UPDATER_DISABLED="true" \
+  --from-literal=KUSO_PUBLIC_URL="http://${DOMAIN}${PORT_SUFFIX}" \
   | kubectl apply -f - >/dev/null
 kubectl create secret generic kuso-admin-credentials -n kuso --dry-run=client -o yaml \
   --from-literal=password="${KUSO_SANDBOX_ADMIN_PASSWORD:-kuso-admin}" \

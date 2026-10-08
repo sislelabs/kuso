@@ -27,11 +27,11 @@ make sandbox-up
 hack/sandbox/kuso get projects
 hack/sandbox/kuso project create demo --repo https://github.com/ivo9999/kuso-demo-todo-api
 hack/sandbox/kuso service add demo api --runtime dockerfile --port 8080
-curl http://api.demo.kuso.localhost:18080/healthz
+curl http://api.demo.kuso.localhost/healthz
 ```
 
-- UI and API: `http://kuso.localhost:18080`, login `admin` / `kuso-admin`.
-- Services: `http://<service>.<project>.kuso.localhost:18080`. Don't pass `--domain` to
+- UI and API: `http://kuso.localhost`, login `admin` / `kuso-admin`.
+- Services: `http://<service>.<project>.kuso.localhost`. Don't pass `--domain` to
   `project create`; a project base domain must be a public one.
 - `hack/sandbox/kuso` is the CLI built from this tree. It runs with
   `HOME=hack/sandbox/.state/home`, so it never reads or writes `~/.kuso`. Use it for
@@ -39,8 +39,10 @@ curl http://api.demo.kuso.localhost:18080/healthz
 - kubectl: `KUBECONFIG=hack/sandbox/.state/kubeconfig kubectl get pods -A`, or
   `docker exec kuso-sandbox-node kubectl get pods -A` with no kubectl on the host.
 
-`KUSO_SANDBOX_PORT` (default 18080) and `KUSO_SANDBOX_API_PORT` (default 16443) change the
-host ports. Set them the same way for every command.
+The sandbox listens on host port 80 because kuso prints service links without a port.
+`KUSO_SANDBOX_PORT` moves it (and `KUSO_SANDBOX_API_PORT`, default 16443, moves kubectl's);
+set them the same way for every command. On another port the UI and CLI still work, but the
+service links kuso shows have no port, so add it by hand.
 
 ## What is inside
 
@@ -83,5 +85,5 @@ It needs internet access to clone the repo and pull base images.
   Builds need several GB free. `docker system df` shows what is using it;
   `docker builder prune` frees build cache.
 - **`ImagePullBackOff` on a freshly built service after a restart.** Run `make sandbox-up`.
-- **Login returns 404.** Something else is listening on the sandbox port. Pick another with
-  `KUSO_SANDBOX_PORT`.
+- **`make sandbox-up` fails to bind port 80, or login returns 404.** Something else is
+  listening on that port. Stop it, or pick another port with `KUSO_SANDBOX_PORT`.
