@@ -50,6 +50,7 @@ type JoinSpec struct {
 	K3sToken    string            // contents of /var/lib/rancher/k3s/server/node-token
 	NodeLabels  map[string]string // optional kuso.sislelabs.com/<key>=<val>
 	NodeName    string            // optional --node-name override
+	K3sVersion  string            // control plane's gitVersion; pins the agent install (see BuildInstallCommand)
 }
 
 // JoinResult bundles the captured stdout/stderr so the UI can show a
@@ -115,7 +116,7 @@ func Join(ctx context.Context, spec JoinSpec) (*JoinResult, error) {
 	// carries the agent flags; node labels are baked at boot so a
 	// freshly-joined node lands in the right region/tier without a
 	// separate label-update round-trip.
-	install := BuildInstallCommand(spec.K3sURL, spec.K3sToken, spec.NodeLabels, spec.NodeName)
+	install := BuildInstallCommand(spec.K3sURL, spec.K3sToken, spec.NodeLabels, spec.NodeName, spec.K3sVersion)
 	out, err := runCmd(ctx, cli, install)
 	if err != nil {
 		return &JoinResult{Output: out}, fmt.Errorf("k3s agent install: %w", err)

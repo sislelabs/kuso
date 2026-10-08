@@ -2,11 +2,14 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -97,31 +100,16 @@ func TestCreateEnvGroup_RollbackCleansUpProvisionedInstanceAddon(t *testing.T) {
 		Spec: kube.KusoAddonSpec{Project: "acme", Kind: "postgres", UseInstanceAddon: "pg"},
 	})
 
-	// Decoy service that COLLIDES by name with the clone target
-	// ("acme-web-staging") so CreateKusoService fails AFTER the addon has been
-	// provisioned. It carries env=other so it's excluded from the source-service
-	// list (only production services are mirrored) and never buckets under the
-	// "staging" group in the pre-existing-group conflict check.
-	decoy := typedSeed(kube.GVRServices, "KusoService", "acme-web-staging", &kube.KusoService{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "acme-web-staging",
-			Namespace: "kuso",
-			Labels: map[string]string{
-				labelProject: "acme",
-				labelService: "web-staging",
-				labelEnv:     "other",
-			},
-		},
-		Spec: kube.KusoServiceSpec{Project: "acme", Port: 8080},
-	})
-
 	s := fakeService(t,
 		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
 		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
 		seedEnv("acme", "web", "production", "main", "acme-web-production"),
 		srcAddon,
-		decoy,
 	)
+	// The service clone fails AFTER the addon has been provisioned.
+	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("create", "kusoservices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("injected service create failure")
+	})
 
 	var provisioned int
 	s.ProvisionInstanceAddon = func(ctx context.Context, project, addonShort, instanceName string) error {
@@ -140,8 +128,7 @@ func TestCreateEnvGroup_RollbackCleansUpProvisionedInstanceAddon(t *testing.T) {
 		return nil
 	}
 
-	// The service clone collides with the decoy → CreateEnvGroup fails AFTER
-	// the instance addon was provisioned.
+	// CreateEnvGroup fails AFTER the instance addon was provisioned.
 	_, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"})
 	if err == nil {
 		t.Fatal("CreateEnvGroup succeeded, want failure from service-clone conflict")

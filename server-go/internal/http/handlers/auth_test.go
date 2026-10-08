@@ -44,15 +44,13 @@ INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES ('r1
 		t.Fatalf("seed role: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', $2, $3)`, hash, now, now); err != nil {
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "instanceRole", "createdAt", "updatedAt")
+VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', 'admin', $2, $3)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	// Since per-request permission resolution (v0.22.15) the resolver
-	// derives claims.Permissions from the role's _PermissionToRole rows
-	// on every request — a role NAMED admin means nothing without the
-	// settings:admin permission actually attached (a real install seeds
-	// it at first boot).
+	// Instance admin comes from the direct instanceRole above. The
+	// role's settings:admin row is the legacy shape and is stripped as
+	// reserved, so the role contributes only app:read.
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt")
 VALUES ('p1', 'app', 'read', $1, $2), ('p2', 'settings', 'admin', $1, $2)`, now, now); err != nil {
@@ -94,9 +92,7 @@ func TestLogin_Success(t *testing.T) {
 	if claims.UserID != "u1" || claims.Role != "admin" || claims.Strategy != "local" {
 		t.Errorf("claims: %+v", claims)
 	}
-	// seedAdmin wires app:read + settings:admin onto the role (the
-	// resolver derives perms from _PermissionToRole since v0.22.15).
-	if len(claims.Permissions) != 2 {
+	if !auth.Has(claims.Permissions, "app:read") || !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
 		t.Errorf("permissions: %+v", claims.Permissions)
 	}
 }

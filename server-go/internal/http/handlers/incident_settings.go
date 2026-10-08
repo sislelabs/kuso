@@ -215,7 +215,8 @@ func (h *IncidentAgentSettingsHandler) PutDiscord(w http.ResponseWriter, r *http
 	var body struct {
 		BotToken     string `json:"botToken,omitempty"`
 		KusoBotToken string `json:"kusoBotToken,omitempty"`
-		ChannelID    string `json:"channelId,omitempty"`
+		// nil = keep the stored channel; "" clears it.
+		ChannelID *string `json:"channelId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -242,8 +243,8 @@ func (h *IncidentAgentSettingsHandler) PutDiscord(w http.ResponseWriter, r *http
 			return
 		}
 	}
-	if body.ChannelID != "" {
-		if err := h.upsertConfigMap(ctx, botConfigName, map[string]string{channelConfigKey: body.ChannelID}); err != nil {
+	if body.ChannelID != nil {
+		if err := h.upsertConfigMap(ctx, botConfigName, map[string]string{channelConfigKey: *body.ChannelID}); err != nil {
 			h.log().Error("incident-settings: write bot configmap", "err", err)
 			writeErr(w, http.StatusInternalServerError, "internal")
 			return

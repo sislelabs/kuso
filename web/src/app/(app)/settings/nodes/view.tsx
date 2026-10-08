@@ -144,22 +144,29 @@ export function NodesView() {
   const saveAll = async () => {
     setSaving(true);
     try {
+      const warnings: string[] = [];
       for (const [nodeName, labels] of Object.entries(edits)) {
         const body = {
           labels: Object.fromEntries(
             labels.filter((l) => l.key.trim()).map((l) => [l.key.trim(), l.value])
           ),
         };
-        await api(`/api/kubernetes/nodes/${encodeURIComponent(nodeName)}/labels`, {
-          method: "PUT",
-          body,
-        });
+        // 200 + {warning} = labels landed but the region taint didn't.
+        const res = await api<{ warning?: string } | undefined>(
+          `/api/kubernetes/nodes/${encodeURIComponent(nodeName)}/labels`,
+          { method: "PUT", body },
+        );
+        if (res?.warning) warnings.push(`${nodeName}: ${res.warning}`);
       }
-      toast.success(
-        Object.keys(edits).length === 1
-          ? "Node updated"
-          : `${Object.keys(edits).length} nodes updated`
-      );
+      if (warnings.length > 0) {
+        for (const w of warnings) toast.warning(w);
+      } else {
+        toast.success(
+          Object.keys(edits).length === 1
+            ? "Node updated"
+            : `${Object.keys(edits).length} nodes updated`
+        );
+      }
       setEdits({});
       await qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     } catch (e) {

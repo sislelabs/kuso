@@ -43,6 +43,9 @@ interface ComposeResponse {
   yaml: string;
   notes: Note[];
   flagged: boolean;
+  // env_file paths whose values were never read. Services would deploy
+  // without them, so Apply is blocked until the user opts in.
+  unresolvedEnvFiles?: string[];
 }
 
 const ACTION_META: Record<NoteAction, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -207,6 +210,7 @@ export default function ImportComposePage() {
 
       {preview.data && (
         <ResultView
+          key={preview.data.yaml}
           data={preview.data}
           applied={applied}
           applyPending={apply.isPending}
@@ -237,6 +241,9 @@ function ResultView({
   const serviceCount = data.notes.filter((n) => n.action === "service" && n.detail.includes("→ runtime")).length;
   const addonCount = data.notes.filter((n) => n.action === "addon" && n.detail.includes("→ addon")).length;
   const grouped = groupByService(data.notes);
+  const missingEnvFiles = data.unresolvedEnvFiles ?? [];
+  const [allowMissing, setAllowMissing] = useState(false);
+  const applyBlocked = missingEnvFiles.length > 0 && !allowMissing;
 
   return (
     <section className="mt-6 space-y-4">
@@ -257,6 +264,35 @@ function ResultView({
             You can still apply now and fill those in afterward.
           </span>
         </p>
+      )}
+
+      {missingEnvFiles.length > 0 && (
+        <div
+          role="alert"
+          className="space-y-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]"
+        >
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              These <code className="font-mono">env_file</code>s weren&apos;t read, so the services
+              that use them would deploy without those variables. Set them as env vars after
+              importing.
+            </span>
+          </p>
+          <ul className="ml-5 list-disc font-mono text-[11px]">
+            {missingEnvFiles.map((f) => (
+              <li key={f}>{f}</li>
+            ))}
+          </ul>
+          <label className="ml-5 flex items-center gap-2 text-[var(--text-secondary)]">
+            <input
+              type="checkbox"
+              checked={allowMissing}
+              onChange={(e) => setAllowMissing(e.target.checked)}
+            />
+            Apply without these env files
+          </label>
+        </div>
       )}
 
       <div className="space-y-3">
@@ -302,7 +338,12 @@ function ResultView({
             Project <span className="font-mono">{nameTaken}</span> already exists. Pick another
             name and preview again, or import into it.
           </span>
-          <Button size="sm" variant="outline" onClick={() => onApply(true)} disabled={applyPending}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onApply(true)}
+            disabled={applyPending || applyBlocked}
+          >
             Import into {nameTaken}
           </Button>
         </div>
@@ -350,7 +391,7 @@ function ResultView({
             Open project
           </Link>
         )}
-        <Button size="sm" onClick={() => onApply(false)} disabled={applyPending || applied}>
+        <Button size="sm" onClick={() => onApply(false)} disabled={applyPending || applied || applyBlocked}>
           {applyPending ? "Applying…" : applied ? "Applied" : "Apply to kuso"}
         </Button>
       </div>

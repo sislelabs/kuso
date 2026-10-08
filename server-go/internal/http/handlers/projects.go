@@ -189,6 +189,9 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 			BaseDomain: in.Previews.BaseDomain,
 		}
 	}
+	if in.Uptime != nil {
+		out.Uptime = &projects.UpdateUptimeSpec{Disabled: in.Uptime.Disabled, Path: in.Uptime.Path}
+	}
 	return out
 }
 
@@ -681,8 +684,10 @@ func (h *ProjectsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 			// doesn't hide.
 			h.Logger.Warn("projects summary: describe failed; card degraded",
 				"project", name, "err", derr)
+			p := visible[i]
+			redactProjectRepoIfNeeded(ctx, h.DB, &p)
 			items = append(items, projectSummaryItem{
-				Project: &visible[i],
+				Project: &p,
 				Metrics: projectMetricsResponse{Project: name},
 			})
 			continue
@@ -830,6 +835,17 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if merr := h.DB.ClearProjectNotificationMute(ctx, project); merr != nil {
 			h.Logger.Error("delete project: clearing notification mute failed — a reborn project name starts muted",
 				"project", project, "err", merr)
+		}
+		// Alert rules, logs, error events, uptime state and build history
+		// are keyed by project name too; left behind, a reborn project
+		// inherits them.
+		if perr := errors.Join(
+			h.DB.PurgeProjectState(ctx, project),
+			h.DB.DeleteBuildRecordsForProject(ctx, project),
+			h.DB.DeleteBuildLogsForProject(ctx, project),
+		); perr != nil {
+			h.Logger.Error("delete project: purging project-scoped rows failed — a reborn project name inherits them",
+				"project", project, "err", perr)
 		}
 	}
 	if h.Audit != nil {

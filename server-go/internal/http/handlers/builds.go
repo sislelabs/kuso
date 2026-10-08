@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -94,29 +95,37 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 	// fetch per service in the loop, not N×M.
 	type predFn func(branch string) bool
 	allowAny := func(_ string) bool { return true }
-	branchAllowed := allowAny
-	var defaultBranch string
-	if envFilter == "production" {
-		proj, perr := h.Svc.Kube.GetKusoProject(ctx, h.Svc.Namespace, project)
-		defaultBranch = "main"
-		if perr == nil && proj != nil && proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
-			defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
-		}
-		expect := defaultBranch
-		branchAllowed = func(b string) bool { return b == expect || b == "" }
+	// Archived build rows outlive their service. Only report services
+	// that exist, so a deleted service's old failed build doesn't show
+	// on a healthy project. A listing error keeps the old behaviour.
+	liveBranches, lerr := h.Svc.LiveServiceBranches(ctx, project)
+	if lerr != nil {
+		h.Logger.Warn("latest builds: list services", "project", project, "err", lerr)
+		liveBranches = nil
 	}
-	// For non-production filters we resolve per service inside the
-	// loop. Cache: serviceFQN → predicate.
+	ns := h.Svc.NamespaceFor(ctx, project)
+	// Production follows each service's own deploy branch (the service
+	// repo's default branch, else the project's). Cache: serviceFQN →
+	// predicate.
 	serviceBranchAllowed := map[string]predFn{}
 	resolveForService := func(serviceFQN string) predFn {
-		if envFilter == "" || envFilter == "production" {
-			return branchAllowed
+		if envFilter == "" {
+			return allowAny
 		}
 		if cached, ok := serviceBranchAllowed[serviceFQN]; ok {
 			return cached
 		}
+		if envFilter == "production" {
+			expect, ok := liveBranches[strings.TrimPrefix(serviceFQN, project+"-")]
+			if !ok {
+				expect = h.Svc.DefaultBranchFor(ctx, project, strings.TrimPrefix(serviceFQN, project+"-"))
+			}
+			pred := func(b string) bool { return b == expect || b == "" }
+			serviceBranchAllowed[serviceFQN] = pred
+			return pred
+		}
 		envName := serviceFQN + "-" + envFilter
-		env, _ := h.Svc.Kube.GetKusoEnvironment(ctx, h.Svc.Namespace, envName)
+		env, _ := h.Svc.Kube.GetKusoEnvironment(ctx, ns, envName)
 		var pred predFn
 		if env != nil && env.Spec.Branch != "" {
 			expect := env.Spec.Branch
@@ -165,6 +174,13 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 			backfillLatestFromArchive(out, records, project, func(serviceFQN, branch string) bool {
 				return resolveForService(serviceFQN)(branch)
 			})
+		}
+	}
+	if liveBranches != nil {
+		for short := range out {
+			if _, ok := liveBranches[short]; !ok {
+				delete(out, short)
+			}
 		}
 	}
 	// Stamp queue positions on any queued latest-builds so the canvas

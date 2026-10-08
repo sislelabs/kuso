@@ -19,7 +19,11 @@ spec:
   # ttlSecondsAfterFinished so the Job (+ pod) is garbage-collected
   # without operator intervention. The KusoRun CR itself stays for
   # audit trail.
-  ttlSecondsAfterFinished: 600
+  # Only the poller flips .Values.done. If the Job is reaped before it
+  # does (kuso-server down), helm-operator's reconcile recreates the Job
+  # and re-runs the command, so the TTL must outlast any plausible
+  # control-plane outage.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 0
   template:
     metadata:

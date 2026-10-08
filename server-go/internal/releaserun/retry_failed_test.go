@@ -36,7 +36,7 @@ func TestRun_RetriesAFailedJobButReusesACompletedOne(t *testing.T) {
 		Spec:       kube.KusoEnvironmentSpec{Release: &kube.KusoReleaseSpec{Command: []string{"migrate"}, TimeoutSeconds: 5}},
 	}
 	img := &kube.KusoImage{Repository: "registry/p/api", Tag: "3cb2674e541c"}
-	name := JobName(env.Name, img.Tag)
+	name := JobName(env.Name, img.Repository, img.Tag)
 	job := func(cond batchv1.JobConditionType) *batchv1.Job {
 		return &batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso", UID: "old"},
@@ -69,4 +69,32 @@ func TestRun_RetriesAFailedJobButReusesACompletedOne(t *testing.T) {
 		t.Fatalf("completed Job must be reused: outcome=%q created=%v err=%v", res.Outcome, created, err)
 	}
 
+}
+
+// BLD-21: app:1.4.0 → app-v2:1.4.0 is a different image. A completed Job for
+// the old repository must not satisfy the new one's release, or the new
+// image is promoted without its migration.
+func TestRun_SameTagDifferentRepositoryRunsAgain(t *testing.T) {
+	env := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "p-api-production", Namespace: "kuso"},
+		Spec:       kube.KusoEnvironmentSpec{Release: &kube.KusoReleaseSpec{Command: []string{"migrate"}, TimeoutSeconds: 5}},
+	}
+	old := &kube.KusoImage{Repository: "ghcr.io/acme/app", Tag: "1.4.0"}
+	cs := fake.NewSimpleClientset(&batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: JobName(env.Name, old.Repository, old.Tag), Namespace: "kuso"},
+		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
+	})
+	finishJobsOnCreate(cs, batchv1.JobComplete, "")
+	created := false
+	cs.PrependReactor("create", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		created = true
+		return false, nil, nil
+	})
+	img := &kube.KusoImage{Repository: "ghcr.io/acme/app-v2", Tag: "1.4.0"}
+	if _, err := New(&kube.Client{Clientset: cs}).Run(context.Background(), "kuso", env, img); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !created {
+		t.Fatal("the old repository's completed Job was reused; the new image's release never ran")
+	}
 }

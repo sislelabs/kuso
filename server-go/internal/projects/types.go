@@ -138,6 +138,18 @@ type CreateServiceRequest struct {
 	Size string `json:"size,omitempty"`
 	// GitHub stamps spec.github.installationId on the new service.
 	GitHub *CreateProjectGithubSpec `json:"github,omitempty"`
+	// Born-with network posture: set at create so the production env never
+	// exists (and never asks Let's Encrypt for a cert) without them.
+	Internal          bool `json:"internal,omitempty"`
+	PrivateEgress     bool `json:"privateEgress,omitempty"`
+	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
+	WaitForCI         bool `json:"waitForCI,omitempty"`
+	// Placement nil = the project default.
+	Placement *kube.KusoPlacement `json:"placement,omitempty"`
+	// Volumes are created with the production env so the first run
+	// already writes to persistent disk.
+	Volumes []VolumePatch     `json:"volumes,omitempty"`
+	Uptime  *UpdateUptimeSpec `json:"uptime,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

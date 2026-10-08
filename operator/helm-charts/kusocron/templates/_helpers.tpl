@@ -4,11 +4,11 @@
 
 {{- define "kusocron.labels" -}}
 app.kubernetes.io/name: kusocron
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-kuso.sislelabs.com/project: {{ .Values.project | default "unknown" }}
-kuso.sislelabs.com/service: {{ .Values.service | default "unknown" }}
-kuso.sislelabs.com/cron: {{ .Release.Name }}
+kuso.sislelabs.com/project: {{ .Values.project | default "unknown" | quote }}
+kuso.sislelabs.com/service: {{ .Values.service | default "unknown" | quote }}
+kuso.sislelabs.com/cron: {{ .Release.Name | quote }}
 {{- end }}
 
 {{/*

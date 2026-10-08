@@ -334,6 +334,10 @@ const portforwardProtocolV1Name = "portforward.k8s.io"
 // bridge proxies bytes between the WebSocket and the kube data
 // stream until either side closes.
 func bridge(ctx context.Context, ws *websocket.Conn, ds io.ReadWriteCloser, logger *slog.Logger) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ws.SetReadLimit(wsPortForwardMaxInbound)
+	ka := startWSKeepalive(ctx, ws)
 	done := make(chan struct{}, 2)
 
 	// pod → ws
@@ -343,6 +347,9 @@ func bridge(ctx context.Context, ws *websocket.Conn, ds io.ReadWriteCloser, logg
 		for {
 			n, err := ds.Read(buf)
 			if n > 0 {
+				if werr := ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); werr != nil {
+					return
+				}
 				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					return
 				}
@@ -360,7 +367,7 @@ func bridge(ctx context.Context, ws *websocket.Conn, ds io.ReadWriteCloser, logg
 	go func() {
 		defer func() { done <- struct{}{} }()
 		for {
-			_, msg, err := ws.ReadMessage()
+			_, msg, err := ka.read()
 			if err != nil {
 				return
 			}

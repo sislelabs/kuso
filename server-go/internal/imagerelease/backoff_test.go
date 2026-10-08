@@ -123,11 +123,12 @@ func TestReconcile_ScansProjectNamespaces(t *testing.T) {
 }
 
 // An image set while a release was running hasn't been migrated for; the
-// promote of the earlier image must not clear it.
+// promote of the earlier image must neither clear it nor change Image.
 func TestPromote_KeepsNewerPendingImage(t *testing.T) {
 	t.Parallel()
 	kc := fakeKube(t, seedEnv("alpha-web-production", kube.KusoEnvironmentSpec{
 		Project: "alpha", Service: "alpha-web", Kind: "production",
+		Image:        &kube.KusoImage{Repository: "r", Tag: "v1"},
 		PendingImage: &kube.KusoImage{Repository: "r", Tag: "v3"},
 	}))
 	w := &Watcher{Kube: kc, Namespace: "kuso", Logger: slog.Default()}
@@ -135,10 +136,28 @@ func TestPromote_KeepsNewerPendingImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	env, _ := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
-	if env.Spec.Image == nil || env.Spec.Image.Tag != "v2" {
-		t.Fatalf("image = %+v, want v2", env.Spec.Image)
+	if env.Spec.Image == nil || env.Spec.Image.Tag != "v1" {
+		t.Fatalf("image = %+v, want v1 untouched", env.Spec.Image)
 	}
 	if env.Spec.PendingImage == nil || env.Spec.PendingImage.Tag != "v3" {
 		t.Fatalf("pending = %+v, want v3 kept", env.Spec.PendingImage)
+	}
+}
+
+// BLD-10: the hook was removed and image C set directly (Image=C, no pending)
+// while A's release ran; A's success must not roll production back to A.
+func TestPromote_DoesNotClobberDirectlySetImage(t *testing.T) {
+	t.Parallel()
+	kc := fakeKube(t, seedEnv("alpha-web-production", kube.KusoEnvironmentSpec{
+		Project: "alpha", Service: "alpha-web", Kind: "production",
+		Image: &kube.KusoImage{Repository: "r", Tag: "c"},
+	}))
+	w := &Watcher{Kube: kc, Namespace: "kuso", Logger: slog.Default()}
+	if err := w.promote(context.Background(), "kuso", "alpha-web-production", &kube.KusoImage{Repository: "r", Tag: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if env.Spec.Image == nil || env.Spec.Image.Tag != "c" || env.Spec.PendingImage != nil {
+		t.Fatalf("image=%+v pending=%+v, want image c kept", env.Spec.Image, env.Spec.PendingImage)
 	}
 }

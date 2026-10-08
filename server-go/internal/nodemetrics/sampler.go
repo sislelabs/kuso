@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,6 +51,11 @@ type Sampler struct {
 	DB     *db.DB
 	Kube   *kube.Client
 	Logger *slog.Logger
+
+	// diskForbidden latches after the kubelet proxy answers 403: the
+	// grant is withheld on purpose, so retrying every tick only costs
+	// API calls and log lines.
+	diskForbidden atomic.Bool
 }
 
 // Run blocks until ctx is cancelled. Fires one sample immediately so

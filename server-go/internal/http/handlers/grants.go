@@ -142,7 +142,7 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	userID := chi.URLParam(r, "userId")
-	if !requireGrant(w, r, userID, instanceRolePerms(body.Role)) {
+	if !requireGrant(w, r, userID, instanceRolePerms(body.Role)) || !requireGrantOverUser(w, r, h.DB, userID) {
 		return
 	}
 	ctx, cancel := grantsCtx(r)
@@ -181,12 +181,12 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusBadRequest, "invalid role (want admin|editor|viewer or empty)")
 		return
 	}
-	if !requireGrant(w, r, "", instanceRolePerms(body.Role)) {
+	groupID := chi.URLParam(r, "id")
+	if !requireGrant(w, r, "", instanceRolePerms(body.Role)) || !requireGrantOverGroup(w, r, h.DB, groupID) {
 		return
 	}
 	ctx, cancel := grantsCtx(r)
 	defer cancel()
-	groupID := chi.URLParam(r, "id")
 	// Preserve existing memberships; only swap the instance role.
 	cur, err := h.DB.GetGroupTenancy(ctx, groupID)
 	if err != nil {
@@ -320,6 +320,12 @@ func (h *GrantsHandler) RemoveGrant(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+	}
+	if userID != "" && !requireGrantOverUser(w, r, h.DB, userID) {
+		return
+	}
+	if groupID != "" && !requireGrantOverGroup(w, r, h.DB, groupID) {
+		return
 	}
 	if err := h.DB.RemoveProjectGrant(ctx, grantID); err != nil {
 		if errors.Is(err, db.ErrNotFound) {

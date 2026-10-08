@@ -112,6 +112,9 @@ spec:
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
   jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuso-registry-gc
     spec:
       backoffLimit: 1
       # Reap the finished Job (+ its pods) 24h after completion so a failed
@@ -256,7 +259,7 @@ metadata:
   namespace: kuso
 ---
 # Tightly-scoped — only what the GC job needs to scale the registry
-# Deployment and run an ephemeral pod against the data PVC.
+# Deployment down and back up around the GC.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -270,9 +273,11 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [list, watch]
+  # The single-pod GC only waits on / reads pods (`kubectl wait`, `get
+  # pod`); it never creates, deletes or reads logs of one.
   - apiGroups: [""]
-    resources: [pods, pods/log]
-    verbs: [get, list, watch, create, delete]
+    resources: [pods]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     resourceNames: [kuso-registry-data]

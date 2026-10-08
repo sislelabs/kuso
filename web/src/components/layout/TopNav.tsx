@@ -661,23 +661,25 @@ function NotificationsButton() {
   // Clear-all wipes the entire feed server-side. Called from the
   // trash button in the popover header. We optimistically blank the
   // local feed cache so the empty-state appears immediately, then
-  // refetch on success to confirm — and on error roll back via
-  // invalidate so the previous events come back.
+  // refetch on success to confirm — and on error restore the snapshot
+  // (the feed query is enabled:false, so an invalidate wouldn't refetch).
   const clearAll = useMutation({
     mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
     onMutate: async () => {
       // An in-flight feed refetch would otherwise land after this and
       // repopulate the list.
       await qc.cancelQueries({ queryKey: feedKey });
+      const previous = qc.getQueryData<FeedEvent[]>(feedKey);
       qc.setQueryData(feedKey, [] as FeedEvent[]);
+      return { previous };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
       qc.invalidateQueries({ queryKey: feedKey });
     },
-    onError: (e) => {
+    onError: (e, _vars, ctx) => {
       toast.error(e instanceof Error ? `Couldn't clear notifications: ${e.message}` : "Couldn't clear notifications");
-      qc.invalidateQueries({ queryKey: feedKey });
+      if (ctx?.previous) qc.setQueryData(feedKey, ctx.previous);
     },
   });
 

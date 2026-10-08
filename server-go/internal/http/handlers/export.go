@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -240,20 +241,57 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	// fetch each one's Secret by name.
 	ns := h.nsFor(ctx, project)
 	for _, env := range desc.Environments {
-		secName := env.Name + "-secrets"
-		sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secName, metav1.GetOptions{})
+		data, err := h.ownedSecretData(ctx, ns, project, env.Name+"-secrets")
 		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				h.Logger.Warn("export: env secret read", "env", env.Name, "err", err)
-			}
+			h.Logger.Warn("export: env secret read", "env", env.Name, "err", err)
 			continue
 		}
-		data := map[string]string{}
-		for k, v := range sec.Data {
-			data[k] = string(v)
+		if data == nil {
+			continue
 		}
 		if err := writeJSON(fmt.Sprintf("secrets/envs/%s.json", env.Name), data); err != nil {
 			h.Logger.Error("export: write env secret", "env", env.Name, "err", err)
+			return
+		}
+	}
+
+	// Service-scoped Secrets (<project>-<service>-secrets): where `kuso env
+	// set` literals and `kuso secret set` without --env live. Keyed by the
+	// service CR name; the importer rebuilds the Secret name from it.
+	for _, svc := range desc.Services {
+		short := strings.TrimPrefix(svc.Name, project+"-")
+		data, err := h.ownedSecretData(ctx, ns, project, kube.ServiceSecretName(project, short))
+		if err != nil {
+			h.Logger.Warn("export: service secret read", "service", svc.Name, "err", err)
+			continue
+		}
+		if data == nil {
+			continue
+		}
+		if err := writeJSON(fmt.Sprintf("secrets/services/%s.json", svc.Name), data); err != nil {
+			h.Logger.Error("export: write service secret", "service", svc.Name, "err", err)
+			return
+		}
+	}
+
+	// External addons' credentials. Only a source Secret kuso minted for the
+	// addon (external-source=true) is exported; a Secret the user adopted
+	// with --secret is theirs and the importer reports it as missing.
+	for i := range addonList {
+		a := &addonList[i]
+		if a.Spec.External == nil || a.Spec.External.SecretName == "" {
+			continue
+		}
+		data, err := h.externalSourceData(ctx, ns, project, a)
+		if err != nil {
+			h.Logger.Warn("export: external addon secret read", "addon", a.Name, "err", err)
+			continue
+		}
+		if data == nil {
+			continue
+		}
+		if err := writeJSON(fmt.Sprintf("secrets/external/%s.json", a.Name), data); err != nil {
+			h.Logger.Error("export: write external addon secret", "addon", a.Name, "err", err)
 			return
 		}
 	}
@@ -280,6 +318,120 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		"envs", manifest.Environments,
 		"addons", manifest.Addons,
 	)
+}
+
+// ownedSecretData returns the decoded data of the Secret name, or nil when
+// it is missing or belongs to another project. The name is built by
+// concatenation ("<env>-secrets" for env "a-b-c" is also project "a-b"'s
+// service "c" Secret), so a plain Get put other projects' values in the
+// archive.
+func (h *ExportHandler) ownedSecretData(ctx context.Context, ns, project, name string) (map[string]string, error) {
+	sec, err := h.Kube.GetOwnedSecret(ctx, ns, project, name)
+	if err != nil {
+		if kube.IsNotFoundOrNotOwned(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return secretStringData(sec), nil
+}
+
+// externalSourceData returns the external addon's source Secret data when
+// kuso created that Secret for this addon, else nil.
+func (h *ExportHandler) externalSourceData(ctx context.Context, ns, project string, a *kube.KusoAddon) (map[string]string, error) {
+	sec, err := h.Kube.GetOwnedSecret(ctx, ns, project, a.Spec.External.SecretName)
+	if err != nil {
+		if kube.IsNotFoundOrNotOwned(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if sec.Labels[externalSourceLabel] != "true" || sec.Labels[addonLabel] != a.Name {
+		return nil, nil
+	}
+	return secretStringData(sec), nil
+}
+
+const (
+	externalSourceLabel = "kuso.sislelabs.com/external-source"
+	addonLabel          = "kuso.sislelabs.com/addon"
+)
+
+func secretStringData(sec *corev1.Secret) map[string]string {
+	data := make(map[string]string, len(sec.Data))
+	for k, v := range sec.Data {
+		data[k] = string(v)
+	}
+	return data
+}
+
+// restoreSecret creates or refreshes an imported Secret in the project's
+// namespace. Only "<project>-…" names are written, and an existing Secret
+// another project owns is never overwritten: the archive is caller input
+// and the namespace may be shared.
+func (h *ExportHandler) restoreSecret(ctx context.Context, ns, project, name string, labels, data map[string]string) error {
+	if !strings.HasPrefix(name, project+"-") {
+		return fmt.Errorf("refusing to write %s: not a %s-… name", name, project)
+	}
+	byteData := make(map[string][]byte, len(data))
+	for k, v := range data {
+		byteData[k] = []byte(v)
+	}
+	all := map[string]string{kube.LabelProject: project}
+	for k, v := range labels {
+		all[k] = v
+	}
+	secrets := h.Kube.Clientset.CoreV1().Secrets(ns)
+	_, err := secrets.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: all},
+		Data:       byteData,
+	}, metav1.CreateOptions{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create: %w", err)
+	}
+	// Update in place: an idempotent re-import refreshes the values.
+	existing, err := h.Kube.GetOwnedSecret(ctx, ns, project, name)
+	if err != nil {
+		if errors.Is(err, kube.ErrNotOwned) {
+			return fmt.Errorf("a Secret of that name belongs to another project; not overwritten")
+		}
+		return fmt.Errorf("get existing: %w", err)
+	}
+	existing.Data = byteData
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	for k, v := range all {
+		existing.Labels[k] = v
+	}
+	if _, err := secrets.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
+	return nil
+}
+
+// restoreExternalSource recreates an external addon's kuso-created source
+// Secret from the archive, before the addon CR, so the conn mirror has
+// something to read. Returns the number of keys restored.
+func (h *ExportHandler) restoreExternalSource(ctx context.Context, ns, project string, a *kube.KusoAddon, raw []byte) (int, error) {
+	if raw == nil {
+		if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, a.Spec.External.SecretName, metav1.GetOptions{}); err == nil {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("source secret %s is not in the archive (it was not created by kuso); create it, then run `kuso project addon resync-external`", a.Spec.External.SecretName)
+	}
+	var data map[string]string
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return 0, fmt.Errorf("decode source secret: %w", err)
+	}
+	labels := map[string]string{externalSourceLabel: "true", addonLabel: a.Name}
+	if err := h.restoreSecret(ctx, ns, project, a.Spec.External.SecretName, labels, data); err != nil {
+		return 0, fmt.Errorf("source secret %s: %w", a.Spec.External.SecretName, err)
+	}
+	return len(data), nil
 }
 
 // Import ingest limits. MaxImportRequestBytes is exported because the
@@ -539,6 +691,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Phase 3: envs.
+	var importedEnvs []kube.KusoEnvironment
 	for path, raw := range files {
 		if !pathHasPrefix(path, "envs/") || !pathHasSuffix(path, ".json") {
 			continue
@@ -569,9 +722,11 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out.Environments++
+		importedEnvs = append(importedEnvs, e)
 	}
 
 	// Phase 4: addons.
+	providedConns := map[string]bool{}
 	for path, raw := range files {
 		if !pathHasPrefix(path, "addons/") || !pathHasSuffix(path, ".json") {
 			continue
@@ -581,8 +736,18 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("decode %s: %v", path, err))
 			continue
 		}
+		sourceAddon := pathTrimSuffix(pathTrimPrefix(path, "addons/"), ".json")
 		applyProjectRename(&a.ObjectMeta, &a.Spec.Project, renameMap)
 		stripServerMeta(&a.ObjectMeta)
+		external := a.Spec.External != nil && a.Spec.External.SecretName != ""
+		if external {
+			a.Spec.External.SecretName = rewriteSecretName(a.Spec.External.SecretName, renameMap)
+			n, err := h.restoreExternalSource(ctx, ns, desiredName, &a, files["secrets/external/"+sourceAddon+".json"])
+			if err != nil {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("external addon %s: %v", a.Name, err))
+			}
+			out.Secrets += n
+		}
 		if _, err := h.Kube.CreateKusoAddon(ctx, ns, &a); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				out.Warnings = append(out.Warnings, fmt.Sprintf("addon %s already exists, skipping", a.Name))
@@ -592,6 +757,28 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out.Addons++
+		// The CR alone gives an external or instance-shared addon no
+		// credentials: addons.Add mirrors / provisions them, and this path
+		// bypasses it. Run the same steps, and say so when they fail.
+		if !external && a.Spec.UseInstanceAddon == "" {
+			providedConns[a.Name+"-conn"] = true
+			continue
+		}
+		short := addons.ShortName(desiredName, a.Name)
+		var setupErr error
+		switch {
+		case h.Addons == nil:
+			setupErr = errors.New("addon service not wired")
+		case external:
+			setupErr = h.Addons.ResyncExternal(ctx, desiredName, short, nil)
+		default:
+			setupErr = h.Addons.ProvisionInstanceAddon(ctx, desiredName, short, a.Spec.UseInstanceAddon)
+		}
+		if setupErr != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("addon %s was created without credentials (%v); services using it will not connect until it is fixed", a.Name, setupErr))
+			continue
+		}
+		providedConns[a.Name+"-conn"] = true
 	}
 
 	// Phase 5: shared project secret.
@@ -620,6 +807,7 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	// the renamed env CRs. We write the Secret directly because the
 	// kuso secrets.Service expects (project, service, env) tuples and
 	// not raw key=value blobs.
+	restored := map[string]bool{}
 	for path, raw := range files {
 		if !pathHasPrefix(path, "secrets/envs/") || !pathHasSuffix(path, ".json") {
 			continue
@@ -640,38 +828,50 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		secName := envName + "-secrets"
-		byteData := map[string][]byte{}
-		for k, v := range data {
-			byteData[k] = []byte(v)
+		if err := h.restoreSecret(ctx, ns, desiredName, secName, nil, data); err != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("env secret %s: %v", secName, err))
+			continue
 		}
-		sec := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secName,
-				Namespace: ns,
-				Labels: map[string]string{
-					"kuso.sislelabs.com/project": desiredName,
-				},
-			},
-			Data: byteData,
+		restored[secName] = true
+		out.Secrets += len(data)
+	}
+
+	// Phase 7: service-scoped Secrets (<project>-<service>-secrets), keyed
+	// in the archive by the source service CR name.
+	for path, raw := range files {
+		if !pathHasPrefix(path, "secrets/services/") || !pathHasSuffix(path, ".json") {
+			continue
 		}
-		if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				// Update in place. Idempotent re-imports just refresh
-				// the values, matching what `kubectl apply` would do.
-				existing, gerr := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, secName, metav1.GetOptions{})
-				if gerr == nil {
-					existing.Data = byteData
-					if _, uerr := h.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); uerr != nil {
-						out.Warnings = append(out.Warnings, fmt.Sprintf("update env secret %s: %v", secName, uerr))
-						continue
-					}
-				}
-			} else {
-				out.Warnings = append(out.Warnings, fmt.Sprintf("create env secret %s: %v", secName, err))
+		svcName := rewriteSecretName(pathTrimPrefix(pathTrimSuffix(path, ".json"), "secrets/services/"), renameMap)
+		var data map[string]string
+		if err := json.Unmarshal(raw, &data); err != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("decode %s: %v", path, err))
+			continue
+		}
+		secName := kube.ServiceSecretName(desiredName, strings.TrimPrefix(svcName, desiredName+"-"))
+		if err := h.restoreSecret(ctx, ns, desiredName, secName, nil, data); err != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("service secret %s: %v", secName, err))
+			continue
+		}
+		restored[secName] = true
+		out.Secrets += len(data)
+	}
+
+	// Anything an imported env mounts that neither the archive nor this
+	// cluster provides means pods boot on app defaults. Say which, instead
+	// of reporting a clean import. Managed "<project>-…-secrets" names not
+	// in the archive had no values at the source, and native addon conns
+	// are written by the operator shortly.
+	for i := range importedEnvs {
+		for _, name := range importedEnvs[i].Spec.EnvFromSecrets {
+			if restored[name] || providedConns[name] || name == desiredName+"-shared" || name == "kuso-instance-shared" ||
+				(pathHasPrefix(name, desiredName+"-") && pathHasSuffix(name, "-secrets")) {
 				continue
 			}
+			if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("env %s mounts secret %s, which the archive does not contain and this cluster does not have", importedEnvs[i].Name, name))
+			}
 		}
-		out.Secrets += len(byteData)
 	}
 
 	h.Logger.Info("project imported",

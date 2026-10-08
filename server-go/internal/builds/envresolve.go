@@ -87,14 +87,75 @@ func (s *Service) resolveEnv(ctx context.Context, ns, project, service, env stri
 	return nil, fmt.Errorf("%w: environment %q of %s/%s", ErrNotFound, env, project, service)
 }
 
-// defaultBranchOf returns the project's default branch ("main" when unset
-// or unreadable), the same fallback promotion uses.
-func (s *Service) defaultBranchOf(ctx context.Context, project string) string {
-	if p, err := s.Kube.GetKusoProject(ctx, s.Namespace, project); err == nil && p != nil &&
-		p.Spec.DefaultRepo != nil && p.Spec.DefaultRepo.DefaultBranch != "" {
-		return p.Spec.DefaultRepo.DefaultBranch
+// effectiveDefaultBranch is the branch a service's production env deploys:
+// the service repo's own default branch, then the project's, then "main".
+// projects.AddService stamps the production env's branch the same way, and
+// github.serviceEffectiveRepo routes webhooks by it. Using the project's
+// branch alone built `main` for a service whose repo deploys `master`.
+func effectiveDefaultBranch(proj *kube.KusoProject, svc *kube.KusoService) string {
+	if svc != nil && svc.Spec.Repo != nil && svc.Spec.Repo.DefaultBranch != "" {
+		return svc.Spec.Repo.DefaultBranch
+	}
+	if proj != nil && proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+		return proj.Spec.DefaultRepo.DefaultBranch
 	}
 	return "main"
+}
+
+// defaultBranchOf returns effectiveDefaultBranch for project/service
+// ("main" when nothing is readable), the same fallback promotion uses.
+func (s *Service) defaultBranchOf(ctx context.Context, project, service string) string {
+	return s.defaultBranchIn(ctx, s.nsFor(ctx, project), project, project+"-"+service)
+}
+
+// NamespaceFor returns the namespace project's services, envs and builds
+// live in.
+func (s *Service) NamespaceFor(ctx context.Context, project string) string {
+	return s.nsFor(ctx, project)
+}
+
+// DefaultBranchFor is the branch project/service's production env deploys.
+func (s *Service) DefaultBranchFor(ctx context.Context, project, service string) string {
+	return s.defaultBranchOf(ctx, project, service)
+}
+
+// LiveServiceBranches maps the short name of each service that currently
+// exists in project to the branch its production env deploys.
+func (s *Service) LiveServiceBranches(ctx context.Context, project string) (map[string]string, error) {
+	svcs, err := s.Kube.ListKusoServices(ctx, s.nsFor(ctx, project))
+	if err != nil {
+		return nil, fmt.Errorf("list services: %w", err)
+	}
+	proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if perr != nil {
+		proj = nil
+	}
+	out := map[string]string{}
+	for i := range svcs {
+		owner := svcs[i].Spec.Project
+		if owner == "" && strings.HasPrefix(svcs[i].Name, project+"-") {
+			owner = project
+		}
+		if owner != project {
+			continue
+		}
+		out[strings.TrimPrefix(svcs[i].Name, project+"-")] = effectiveDefaultBranch(proj, &svcs[i])
+	}
+	return out, nil
+}
+
+// defaultBranchIn is defaultBranchOf for a caller that already knows the
+// service's namespace and FQN.
+func (s *Service) defaultBranchIn(ctx context.Context, ns, project, fqn string) string {
+	proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if perr != nil {
+		proj = nil
+	}
+	svc, serr := s.Kube.GetKusoService(ctx, ns, fqn)
+	if serr != nil {
+		svc = nil
+	}
+	return effectiveDefaultBranch(proj, svc)
 }
 
 // envBranch is the branch an env deploys: spec.branch, or the project's

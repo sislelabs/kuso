@@ -54,14 +54,18 @@ api_get() {
 # Used to decide whether a drain is worthwhile: on a single Ready node
 # there's nowhere to evict to, so we skip the drain entirely. Prefer jq
 # (exact: count nodes with a Ready=True condition); fall back to a grep
-# heuristic if jq somehow isn't present so the check still returns
-# something sane rather than 0 (which would wrongly skip the drain).
+# heuristic if jq somehow isn't present.
+#
+# Returns non-zero when the count is unknown (API error such as a 403 on
+# the nodes list, or an unparseable body). It used to print 0 instead,
+# which took the single-node branch and rebooted a multi-node worker
+# without draining it.
 ready_node_count() {
-  body=$(api_get "/api/v1/nodes" 2>/dev/null) || { echo 0; return; }
+  body=$(api_get "/api/v1/nodes") || return 1
   if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$body" | jq '[.items[] | select(.status.conditions[]? | .type=="Ready" and .status=="True")] | length' 2>/dev/null || echo 0
+    printf '%s' "$body" | jq -e '[.items[] | select(.status.conditions[]? | .type=="Ready" and .status=="True")] | length'
   else
-    printf '%s' "$body" | tr '{' '\n' | grep -c '"type":"Ready","status":"True"' 2>/dev/null || echo 0
+    printf '%s' "$body" | tr '{' '\n' | grep -c '"type":"Ready","status":"True"' || true
   fi
 }
 
@@ -161,7 +165,7 @@ api_patch_node "{\"spec\":{\"unschedulable\":true},\"metadata\":{\"annotations\"
 # reboot — preserving availability. On a single Ready node there's
 # nowhere to go, so skip the drain and rely on the kubelet restarting
 # pods after the reboot (current single-node behavior, unchanged).
-READY=$(ready_node_count)
+READY=$(ready_node_count) || fail "could not count Ready nodes (GET /api/v1/nodes failed); refusing to reboot without a drain decision"
 echo "pkg-apply: ready node count = $READY"
 if [ "${READY:-0}" -gt 1 ]; then
   set_state draining "draining $NODE before reboot ($READY ready nodes)"

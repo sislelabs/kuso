@@ -64,13 +64,16 @@ import (
 // "kuso/v1". prune gates destructive apply: deletions only run when
 // prune is true.
 type File struct {
-	APIVersion string        `yaml:"apiVersion,omitempty"`
-	Project    string        `yaml:"project"`
-	BaseDomain string        `yaml:"baseDomain,omitempty"`
-	Prune      bool          `yaml:"prune,omitempty"`
-	Services   []ServiceSpec `yaml:"services,omitempty"`
-	Addons     []AddonSpec   `yaml:"addons,omitempty"`
-	Crons      []CronSpec    `yaml:"crons,omitempty"`
+	APIVersion string `yaml:"apiVersion,omitempty"`
+	Project    string `yaml:"project"`
+	BaseDomain string `yaml:"baseDomain,omitempty"`
+	// Uptime is the project-wide uptime-check opt-out. A missing block
+	// leaves the live setting alone.
+	Uptime   *ProjectUptimeSpec `yaml:"uptime,omitempty"`
+	Prune    bool               `yaml:"prune,omitempty"`
+	Services []ServiceSpec      `yaml:"services,omitempty"`
+	Addons   []AddonSpec        `yaml:"addons,omitempty"`
+	Crons    []CronSpec         `yaml:"crons,omitempty"`
 }
 
 // ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
@@ -276,6 +279,11 @@ type ScaleSpec struct {
 }
 
 // UptimeSpec is the kuso.yaml form of a service's uptime-check settings.
+// ProjectUptimeSpec mirrors kube.KusoProjectUptime.
+type ProjectUptimeSpec struct {
+	Disabled bool `yaml:"disabled,omitempty"`
+}
+
 type UptimeSpec struct {
 	Disabled bool   `yaml:"disabled,omitempty"`
 	Path     string `yaml:"path,omitempty"`
@@ -399,6 +407,9 @@ func Parse(raw []byte) (*File, error) {
 	for _, s := range f.Services {
 		if s.Name == "" {
 			return nil, fmt.Errorf("%w: every service needs a name", ErrInvalid)
+		}
+		if s.Runtime == "buildpacks" {
+			return nil, fmt.Errorf("%w: service %s: runtime \"buildpacks\" is not supported (its builds cannot produce an image); use nixpacks or dockerfile", ErrInvalid, s.Name)
 		}
 		if s.Runtime != "" && !validRuntime(s.Runtime) {
 			return nil, fmt.Errorf("%w: service %s has invalid runtime %q", ErrInvalid, s.Name, s.Runtime)
@@ -708,6 +719,17 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		plan.ServicesToDelete = nil
 		plan.AddonsToDelete = nil
 		plan.CronsToDelete = nil
+	}
+	// Empty buckets encode as [] rather than null; the web plan view and
+	// CLI JSON consumers iterate them unguarded.
+	for _, b := range []*[]string{
+		&plan.ServicesToCreate, &plan.ServicesToUpdate, &plan.ServicesToDelete,
+		&plan.AddonsToCreate, &plan.AddonsToUpdate, &plan.AddonsToDelete,
+		&plan.CronsToCreate, &plan.CronsToUpdate, &plan.CronsToDelete,
+	} {
+		if *b == nil {
+			*b = []string{}
+		}
 	}
 	return plan, nil
 }

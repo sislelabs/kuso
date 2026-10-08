@@ -1,10 +1,12 @@
 package nodemetrics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -74,26 +76,61 @@ func parseNodeFS(body []byte) (nodeFS, error) {
 // answer leaves that node out of the map, and the caller falls back to
 // the static figures rather than writing a row that claims the disk is
 // empty. Per-node timeout so one wedged kubelet can't stall the tick.
+//
+// Failures are summarised in one WARN per tick. The proxy path needs
+// nodes/proxy, which kuso-server is deliberately not granted (kubelet
+// exec escalation), and a silent `continue` hid a week of blank disk
+// metrics.
 func (s *Sampler) diskStats(ctx context.Context, nodeNames []string) map[string]nodeFS {
 	out := map[string]nodeFS{}
+	if s.diskForbidden.Load() {
+		return out
+	}
 	rest := s.Kube.Clientset.Discovery().RESTClient()
 	if rest == nil {
 		return out
 	}
+	var firstErr error
+	failed, forbidden := 0, false
 	for _, name := range nodeNames {
 		nctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		body, err := rest.Get().
 			AbsPath(fmt.Sprintf("/api/v1/nodes/%s/proxy/stats/summary", name)).
 			DoRaw(nctx)
 		cancel()
-		if err != nil {
-			continue
+		var fs nodeFS
+		if err != nil && len(body) > 0 {
+			// The discovery REST client can't decode a Status body, so
+			// err alone reads "unknown"; the body names the forbidden
+			// resource.
+			err = fmt.Errorf("%w: %.200s", err, body)
+			forbidden = forbidden || bytes.Contains(body, []byte(`"reason":"Forbidden"`))
 		}
-		fs, err := parseNodeFS(body)
+		if err == nil {
+			fs, err = parseNodeFS(body)
+		}
 		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("node %s: %w", name, err)
+			}
 			continue
 		}
 		out[name] = fs
+	}
+	if failed > 0 {
+		logger := s.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		if forbidden {
+			s.diskForbidden.Store(true)
+			logger.Warn("nodemetrics: kubelet disk summary forbidden (nodes/proxy is not granted); disk figures disabled until restart",
+				"failedNodes", failed, "nodes", len(nodeNames), "firstErr", firstErr)
+			return out
+		}
+		logger.Warn("nodemetrics: kubelet disk summary unavailable; disk figures left blank",
+			"failedNodes", failed, "nodes", len(nodeNames), "firstErr", firstErr)
 	}
 	return out
 }

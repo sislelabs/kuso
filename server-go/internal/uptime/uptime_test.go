@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
@@ -21,7 +23,7 @@ type fakeCluster struct {
 	err     error
 }
 
-func (f *fakeCluster) Targets(context.Context) ([]Target, error) { return f.targets, f.err }
+func (f *fakeCluster) Targets(context.Context, string) ([]Target, error) { return f.targets, f.err }
 
 type fakeStore struct {
 	rows    map[string]db.UptimeState
@@ -70,12 +72,18 @@ func (f *fakeStore) ListProjectNotificationMutes(context.Context) ([]db.ProjectN
 type fakeNotify struct {
 	mu     sync.Mutex
 	events []notify.Event
+	// fail makes the next sends report that nothing was enqueued.
+	fail bool
 }
 
-func (f *fakeNotify) Emit(e notify.Event) {
+func (f *fakeNotify) EmitDurable(e notify.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail {
+		return errors.New("outbox down")
+	}
 	f.events = append(f.events, e)
+	return nil
 }
 
 func (f *fakeNotify) titles() []string {
@@ -239,7 +247,7 @@ func TestLoopDisabledAndPausedTargets(t *testing.T) {
 	}
 }
 
-func TestLoopOptOutWhileDownClosesQuietly(t *testing.T) {
+func TestLoopOptOutWhileDownClosesTheAlertedOutage(t *testing.T) {
 	a := tgt("shop", "web")
 	h := newHarness(a)
 	h.failing[a.URL] = true
@@ -247,11 +255,91 @@ func TestLoopOptOutWhileDownClosesQuietly(t *testing.T) {
 	a.Disabled = true
 	h.cluster.targets = []Target{a}
 	h.ticks(3)
-	if len(h.notify.events) != 1 {
-		t.Fatalf("opt-out sent something: %v", h.notify.titles())
+	got := h.notify.titles()
+	if len(got) != 2 || got[1] != "uptime.recovered ◼ No longer checked · shop / web" {
+		t.Fatalf("opt-out of an alerted outage: %v", got)
+	}
+	if d := h.notify.events[1].Description; !strings.Contains(d, "uptime checks were turned off") {
+		t.Fatalf("closing description = %q", d)
 	}
 	if len(h.store.rows) != 0 {
 		t.Fatal("opted-out target kept its row")
+	}
+}
+
+func TestLoopOptOutWhileConfirmingClosesQuietly(t *testing.T) {
+	a := tgt("shop", "web")
+	h := newHarness(a)
+	h.failing[a.URL] = true
+	h.ticks(2)
+	a.Disabled = true
+	h.cluster.targets = []Target{a}
+	h.ticks(3)
+	if len(h.notify.events) != 0 {
+		t.Fatalf("opt-out of an unalerted outage sent: %v", h.notify.titles())
+	}
+}
+
+func TestLoopStopWhileDownSendsClosing(t *testing.T) {
+	a := tgt("shop", "web")
+	h := newHarness(a)
+	h.failing[a.URL] = true
+	h.ticks(5)
+	a.Paused = PausedStopped
+	h.cluster.targets = []Target{a}
+	h.ticks(3)
+	got := h.notify.titles()
+	if len(got) != 2 || !strings.Contains(h.notify.events[1].Description, "the service was stopped") {
+		t.Fatalf("stopping an alerted service: %v", got)
+	}
+}
+
+func TestLoopFailedNotifyRetriesNextTick(t *testing.T) {
+	a := tgt("shop", "web")
+	h := newHarness(a)
+	h.failing[a.URL] = true
+	h.ticks(2)
+	h.notify.fail = true
+	h.ticks(1) // the alerting tick: the send fails
+	if r := h.store.rows[a.Key()]; r.Alerted {
+		t.Fatalf("row left alerted after a lost page: %+v", r)
+	}
+	h.notify.fail = false
+	h.ticks(5)
+	if got := h.notify.titles(); len(got) != 1 || got[0] != "uptime.down ✗ Down · shop / web" {
+		t.Fatalf("want the lost page sent once on retry, got %v", got)
+	}
+}
+
+func TestLoopUnknownWorkloadNeitherProbedNorPruned(t *testing.T) {
+	a, b := tgt("shop", "web"), tgt("shop", "api")
+	h := newHarness(a, b)
+	h.ticks(2)
+	before := h.store.rows[a.Key()]
+	a.Unknown = true
+	h.cluster.targets = []Target{a, b}
+	h.failing[a.URL] = true
+	probe := h.w.Probe
+	var probedA atomic.Int32
+	h.w.Probe = func(ctx context.Context, url string) Result {
+		if url == a.URL {
+			probedA.Add(1)
+		}
+		return probe(ctx, url)
+	}
+	h.ticks(4)
+	if n := probedA.Load(); n != 0 {
+		t.Fatalf("unknown target probed %d times", n)
+	}
+	after, ok := h.store.rows[a.Key()]
+	if !ok {
+		t.Fatal("a target with an unreadable workload was pruned")
+	}
+	if after.FailStreak != 0 || !after.LastCheckedAt.Equal(before.LastCheckedAt) {
+		t.Fatalf("unknown target was probed: %+v", after)
+	}
+	if r := h.store.rows[b.Key()]; !r.LastCheckedAt.After(before.LastCheckedAt) {
+		t.Fatal("one unknown target stopped the others being checked")
 	}
 }
 
@@ -285,17 +373,33 @@ func TestLoopStormGroupsAcrossProjects(t *testing.T) {
 	}
 	h.ticks(4)
 	got := h.notify.titles()
-	// d is muted: its own per-project event. a, b, c: one cluster event.
-	if len(got) != 2 {
-		t.Fatalf("want 2 events, got %v", got)
+	// d is muted: its own per-project event. a, b, c: one cluster event
+	// for unscoped channels plus a per-project twin each for scoped ones.
+	if len(got) != 5 {
+		t.Fatalf("want 5 events, got %v", got)
 	}
 	var cluster notify.Event
+	scoped := map[string]bool{}
 	for _, e := range h.notify.events {
-		if e.Project == "" {
+		switch {
+		case e.Project == "":
 			cluster = e
-		} else if e.Project != "d" {
-			t.Fatalf("unexpected per-project event for %q", e.Project)
+		case e.Project == "d":
+			if e.Audience != notify.AudienceAll {
+				t.Fatalf("muted project's event audience = %v", e.Audience)
+			}
+		default:
+			if e.Audience != notify.AudienceScoped {
+				t.Fatalf("storm twin for %q has audience %v, want scoped", e.Project, e.Audience)
+			}
+			scoped[e.Project] = true
 		}
+	}
+	if len(scoped) != 3 {
+		t.Fatalf("want scoped twins for a, b, c; got %v", scoped)
+	}
+	if cluster.Audience != notify.AudienceUnscoped {
+		t.Fatalf("cluster event audience = %v, want unscoped", cluster.Audience)
 	}
 	if cluster.Title != "✗ 4 services down across 3 projects" {
 		t.Fatalf("cluster title = %q", cluster.Title)
@@ -440,6 +544,56 @@ func TestBuildTargets(t *testing.T) {
 	}
 }
 
+func TestWorkloadOfRollout(t *testing.T) {
+	now := t0
+	one := int32(1)
+	dep := func(mut func(*appsv1.Deployment)) *appsv1.Deployment {
+		d := &appsv1.Deployment{}
+		d.Generation, d.Status.ObservedGeneration = 2, 2
+		d.Spec.Replicas = &one
+		d.Status.UpdatedReplicas, d.Status.ReadyReplicas = 1, 1
+		if mut != nil {
+			mut(d)
+		}
+		return d
+	}
+	cases := []struct {
+		name   string
+		d      *appsv1.Deployment
+		newest time.Time
+		want   bool
+	}{
+		{"steady", dep(nil), now.Add(-time.Hour), false},
+		{"new spec not observed", dep(func(d *appsv1.Deployment) { d.Generation = 3 }), now.Add(-time.Hour), true},
+		{"recreate: no updated pods yet", dep(func(d *appsv1.Deployment) { d.Status.UpdatedReplicas = 0 }), time.Time{}, true},
+		{"deadline exceeded", dep(func(d *appsv1.Deployment) {
+			d.Status.UpdatedReplicas = 0
+			d.Status.Conditions = []appsv1.DeploymentCondition{{Type: appsv1.DeploymentProgressing, Reason: "ProgressDeadlineExceeded"}}
+		}), now.Add(-time.Hour), false},
+		{"woken: young unready pod", dep(func(d *appsv1.Deployment) { d.Status.ReadyReplicas = 0 }), now.Add(-time.Minute), true},
+		{"old unready pod", dep(func(d *appsv1.Deployment) { d.Status.ReadyReplicas = 0 }), now.Add(-RolloutGrace - time.Minute), false},
+	}
+	for _, c := range cases {
+		if got := WorkloadOf(c.d, c.newest, now).RollingOut; got != c.want {
+			t.Errorf("%s: RollingOut = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if w := WorkloadOf(nil, time.Time{}, now); w.Exists {
+		t.Error("nil deployment reads as existing")
+	}
+}
+
+func TestStatusFlagsStaleRows(t *testing.T) {
+	a := tgt("shop", "web")
+	rows := []db.UptimeState{{Namespace: "kuso", Env: a.Env, LastCheckedAt: t0}}
+	if s := Status("shop", []Target{a}, rows, t0.Add(StaleAfter+time.Second)); !s[0].Stale {
+		t.Fatal("old check not flagged stale")
+	}
+	if s := Status("shop", []Target{a}, rows, t0.Add(time.Minute)); s[0].Stale {
+		t.Fatal("fresh check flagged stale")
+	}
+}
+
 func TestStatusStates(t *testing.T) {
 	up, down, failing, pending := tgt("shop", "up"), tgt("shop", "down"), tgt("shop", "failing"), tgt("shop", "pending")
 	paused := tgt("shop", "paused")
@@ -453,7 +607,7 @@ func TestStatusStates(t *testing.T) {
 		{Namespace: "kuso", Env: failing.Env, LastCheckedAt: t0, DownSince: t0, Hold: HoldConfirming},
 	}
 	got := map[string]ServiceStatus{}
-	for _, s := range Status("shop", []Target{up, down, failing, pending, paused, dis, other}, rows) {
+	for _, s := range Status("shop", []Target{up, down, failing, pending, paused, dis, other}, rows, t0) {
 		got[s.Service] = s
 	}
 	want := map[string]string{"up": "up", "down": "down", "failing": "failing", "pending": "pending", "paused": "paused", "dis": "disabled"}

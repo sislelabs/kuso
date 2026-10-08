@@ -165,7 +165,8 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	// stdinPipe carries bytes from the WS read loop to the kube exec
 	// stream. resizeCh carries TTY size changes. Both close when the
 	// client disconnects so the exec stream unwinds.
-	stdin := &wsStdin{conn: conn, resize: make(chan remotecommand.TerminalSize, 4)}
+	conn.SetReadLimit(wsTerminalMaxInbound)
+	stdin := &wsStdin{conn: conn, ka: startWSKeepalive(ctx, conn), resize: make(chan remotecommand.TerminalSize, 4), onClose: cancel}
 	conn.SetCloseHandler(func(code int, text string) error {
 		cancel()
 		stdin.closeOnce()
@@ -274,7 +275,11 @@ func (h *TerminalWSHandler) releaseSlot(userID string) {
 // is raw stdin bytes.
 type wsStdin struct {
 	conn   *websocket.Conn
+	ka     *wsKeepalive
 	resize chan remotecommand.TerminalSize
+	// onClose ends the session when the client's read side dies (missed
+	// pongs, oversized frame, reset); stdin EOF alone doesn't stop exec.
+	onClose func()
 
 	mu     sync.Mutex
 	buf    []byte
@@ -305,9 +310,12 @@ func (s *wsStdin) Read(p []byte) (int, error) {
 			return 0, websocket.ErrCloseSent
 		}
 
-		_, data, err := s.conn.ReadMessage()
+		_, data, err := s.ka.read()
 		if err != nil {
 			s.closeOnce()
+			if s.onClose != nil {
+				s.onClose()
+			}
 			return 0, err
 		}
 		// A {"resize":...} JSON frame is a control message, not stdin.
@@ -358,6 +366,9 @@ type wsStdout struct {
 func (w *wsStdout) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return 0, err
+	}
 	if err := w.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
 		return 0, err
 	}

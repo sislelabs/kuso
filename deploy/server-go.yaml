@@ -57,6 +57,11 @@ rules:
   - apiGroups: [cert-manager.io]
     resources: [certificates]
     verbs: [get, list, watch]
+  # Read: the addon re-add guard spots an HA Postgres addon's kept CNPG
+  # Cluster. Delete (purgeData) lives on kuso-server-managed-ns below.
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters]
+    verbs: [get]
   # Kube-native resources we read/write to manage tenants.
   # delete: project delete --purge-data removes a namespace kuso created
   # for the project. The server only deletes namespaces carrying the
@@ -314,6 +319,10 @@ rules:
   - apiGroups: [""]
     resources: [services]
     verbs: [get, list, watch]
+  # GET /api/kubernetes/storageclasses (cluster overview).
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -404,6 +413,10 @@ rules:
     verbs: [patch, update]
   - apiGroups: [apps]
     resources: [statefulsets]
+    verbs: [delete]
+  # Addon purgeData on an HA Postgres addon removes its kept CNPG Cluster.
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters]
     verbs: [delete]
   # batch mutation: build Jobs (buildcontroller), backup/restore Jobs,
   # updater Jobs, preview-DB clone Jobs, run executions, incident-agent

@@ -14,37 +14,45 @@ function b(id: string, status: string, at: string, extra: Partial<BuildSummary> 
 }
 
 describe("pickRollbackTarget", () => {
-  const builds = [
+  const live = (id: string, group = "production") => (x: BuildSummary) =>
+    x.id === id ? { ...x, liveEnvs: [group] } : x;
+  const base = [
     b("b5", "succeeded", "2026-09-05T00:00:00Z", { branch: "main" }),
     b("b4", "failed", "2026-09-04T00:00:00Z", { branch: "main" }),
     b("b3", "succeeded", "2026-09-03T00:00:00Z", { branch: "staging" }),
     b("b2", "succeeded", "2026-09-02T00:00:00Z", { branch: "main" }),
     b("b1", "succeeded", "2026-09-01T00:00:00Z", { branch: "main" }),
   ];
+  const prod = { envGroup: "production", branch: "main" };
 
   it("picks the newest succeeded build on the branch older than live", () => {
-    expect(pickRollbackTarget(builds, { imageTag: "b5", branch: "main" })?.id).toBe("b2");
+    expect(pickRollbackTarget(base.map(live("b5")), prod)?.id).toBe("b2");
   });
 
   it("skips builds from another branch", () => {
-    expect(pickRollbackTarget(builds, { imageTag: "b3", branch: "staging" })).toBeUndefined();
+    expect(
+      pickRollbackTarget(base.map(live("b3", "staging")), { envGroup: "staging", branch: "staging" }),
+    ).toBeUndefined();
   });
 
-  it("never targets a build newer than live", () => {
-    expect(pickRollbackTarget(builds, { imageTag: "b2", branch: "main" })?.id).toBe("b1");
+  it("steps back from the live build after a rollback, not from the newest", () => {
+    expect(pickRollbackTarget(base.map(live("b2")), prod)?.id).toBe("b1");
   });
 
-  it("steps one back from the newest when live is unknown", () => {
-    expect(pickRollbackTarget(builds, { branch: "main" })?.id).toBe("b2");
+  it("never re-targets the live build when the newest success was not promoted", () => {
+    expect(pickRollbackTarget(base.map(live("b2")), prod)?.id).not.toBe("b2");
+  });
+
+  it("ignores liveEnvs of other env groups", () => {
+    expect(pickRollbackTarget(base.map(live("b1", "staging")), prod)?.id).toBe("b2");
+  });
+
+  it("steps one back from the newest when nothing is live", () => {
+    expect(pickRollbackTarget(base, prod)?.id).toBe("b2");
   });
 
   it("returns undefined when only the live build succeeded", () => {
-    expect(pickRollbackTarget([builds[0]], { imageTag: "b5", branch: "main" })).toBeUndefined();
-  });
-
-  it("matches live by commit when the image tag is missing", () => {
-    const withSha = builds.map((x) => ({ ...x, commitSha: x.id + "0000000" }));
-    expect(pickRollbackTarget(withSha, { commit: "b20000", branch: "main" })?.id).toBe("b1");
+    expect(pickRollbackTarget([base[0]].map(live("b5")), prod)).toBeUndefined();
   });
 });
 

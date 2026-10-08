@@ -472,6 +472,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		}
 		s.deleteCloneDataPVCs(ctx, ns, fqn)
 		s.deleteCloneConnSecret(ctx, ns, fqn)
+		s.purgeHAPostgres(ctx, ns, fqn)
 	}
 
 	size := req.Size
@@ -1203,15 +1204,20 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// cluster before anyone noticed. A project's OWN addon still retains
 	// its data, matching native-addon PVC retain semantics: an accidental
 	// delete must not nuke a production database.
+	// keepConn: the instance database survived, so its conn Secret stays as
+	// the trail the orphan_conn_secret health check keys on.
+	keepConn := false
 	if cr.Spec.UseInstanceAddon != "" && (shouldDropInstanceDB(cr.Labels) || opts.PurgeData) {
-		if adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon); derr == nil {
-			if err := s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn)); err != nil {
-				// Non-fatal: log via the orphan-trail mechanism below; the
-				// CR delete still proceeds so the preview teardown isn't
-				// wedged. An operator can reclaim the DB manually.
-				slog.Default().Warn("preview clone: drop instance-pg DB failed (orphaned on shared server)",
-					"project", project, "addon", name, "err", err)
-			}
+		adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon)
+		if derr == nil {
+			derr = s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn))
+		}
+		if derr != nil {
+			// Non-fatal: the CR delete still proceeds so the preview
+			// teardown isn't wedged. An operator can reclaim the DB manually.
+			keepConn = true
+			slog.Default().Warn("addon delete: instance-pg DB NOT dropped (orphaned on shared server; conn secret kept)",
+				"project", project, "addon", name, "instance", cr.Spec.UseInstanceAddon, "err", derr)
 		}
 	}
 	if err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
@@ -1244,9 +1250,12 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// closed PR left <addon>-pr-N-conn credentials behind. A project's
 	// own addon (no clone labels) still keeps both.
 	if shouldDropInstanceDB(cr.Labels) {
-		s.deleteCloneConnSecret(ctx, ns, fqn)
+		if !keepConn {
+			s.deleteCloneConnSecret(ctx, ns, fqn)
+		}
 		if cr.Spec.UseInstanceAddon == "" {
 			s.deleteCloneDataPVCs(ctx, ns, fqn)
+			s.purgeHAPostgres(ctx, ns, fqn)
 		}
 	}
 	// Data-safety trail: deleting the addon does NOT delete its data —
@@ -1259,9 +1268,13 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// re-adding an addon with the same name will REUSE the old PVC's
 	// stale data. Log it loudly so an operator has a trail to either
 	// reclaim the space or know the data will come back on re-add.
+	var haPurgeErr error
 	if opts.PurgeData {
-		s.deleteCloneConnSecret(ctx, ns, fqn)
+		if !keepConn {
+			s.deleteCloneConnSecret(ctx, ns, fqn)
+		}
 		s.deleteCloneDataPVCs(ctx, ns, fqn)
+		haPurgeErr = PurgeHAPostgres(ctx, s.Kube, ns, fqn)
 	} else if pvcs, _ := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
 		slog.Default().Warn("addon deleted; data PVC(s) RETAINED (resource-policy=keep) — re-adding this name is refused until they are purged",
 			"project", project, "addon", name, "fqn", fqn, "pvcs", pvcs)
@@ -1271,7 +1284,9 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// survives addon deletion and auto-re-attaches if the same name
 	// is re-added later. Best-effort: a partial failure here doesn't
 	// roll back the delete.
-	s.unsubscribeFromAddon(ctx, ns, project, name)
+	// By the CR's short name: name may be the pre-qualified FQN, which
+	// matches neither shape a service records its subscription in.
+	s.unsubscribeFromAddon(ctx, ns, project, ShortName(project, fqn))
 	// Exclude the just-deleted addon's conn secret: the addon List() in
 	// refreshEnvSecrets is served from the eventually-consistent watch
 	// cache, which frequently still returns the addon we just deleted.
@@ -1289,6 +1304,9 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// name, so it was defeated on every code path.
 	if err := s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true}); err != nil {
 		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, err)
+	}
+	if haPurgeErr != nil {
+		return fmt.Errorf("addon deleted but its data was not purged: %w", haPurgeErr)
 	}
 	return nil
 }
@@ -1316,6 +1334,21 @@ func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) ([]s
 			continue
 		}
 		out = append(out, list.Items[i].Name)
+	}
+	// An HA addon's replica PVCs belong to its kept CNPG Cluster and carry
+	// none of the kusoaddon labels, so report the Cluster itself.
+	cluster, err := haClusterName(ctx, s.Kube, ns, fqn)
+	if apierrors.IsForbidden(err) {
+		// Instance whose kuso-server ClusterRole predates the CNPG read
+		// rule: don't wedge every addon create on it.
+		slog.Default().Warn("retained-data check: cannot read CNPG clusters (RBAC not applied)", "addon", fqn, "err", err)
+		err = nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cluster != "" {
+		out = append(out, "cluster/"+cluster)
 	}
 	return out, nil
 }

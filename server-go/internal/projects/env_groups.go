@@ -121,7 +121,14 @@ const envGroupKindAnnotation = "kuso.sislelabs.com/env-group-kind"
 // — UI shows it as the default landing) so the env switcher never
 // renders empty.
 func (s *Service) ListEnvGroups(ctx context.Context, project string) ([]EnvGroupSummary, error) {
-	envs, err := s.listEnvsForProject(ctx, project)
+	// Labels + annotations only: skip the live-status enrichment (a
+	// Deployment read, metrics and a service lookup per env) that
+	// listEnvsForProject pays. Polled every 10s on every project page.
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
 	if err != nil {
 		return nil, err
 	}
@@ -397,10 +404,16 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		if err := kube.ValidateReleaseName(fmt.Sprintf("%s-%s-%s-production", project, short, req.Name)); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
+		// A custom env "<group>" on this service is CR <p>-<svc>-<group>,
+		// the clone service's own name.
+		cloneSvc := fmt.Sprintf("%s-%s-%s", project, short, req.Name)
+		if err := s.checkReleaseNameFree(ctx, ns, cloneSvc, cloneSvc+"-production"); err != nil {
+			return nil, err
+		}
 	}
 
 	// Track what we created so we can roll back on partial failure.
-	var createdAddons, createdServices, createdEnvs []string
+	var createdAddons, createdServices, createdEnvs, createdSecrets []string
 	// provisionedInstanceAddons records the SHORT name of every fresh
 	// instance-shared clone whose ProvisionInstanceAddon returned nil.
 	// Those provisioned a per-project DB + login role + <addon>-conn secret
@@ -432,6 +445,13 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		for _, n := range createdServices {
 			if err := s.Kube.DeleteKusoService(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
 				rbFail("KusoService", n, err)
+			}
+		}
+		// Copies of production's managed secret values: never leave them
+		// behind ownerless.
+		for _, n := range createdSecrets {
+			if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, n, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				rbFail("Secret", n, err)
 			}
 		}
 		// Drop the instance DB/role + conn secret BEFORE deleting the addon
@@ -705,6 +725,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		if created {
 			rewrittenKeys = append(rewrittenKeys, secretRewrites...)
 			hostWarnings = append(hostWarnings, secretWarnings...)
+			createdSecrets = append(createdSecrets, kube.ServiceSecretName(project, newSvcShort))
 		}
 		if err != nil {
 			return nil, failCreate(fmt.Errorf("copy managed secret for %s: %w", item.short, err))
@@ -1447,7 +1468,20 @@ func (s *Service) copyManagedServiceSecret(ctx context.Context, ns, srcShort, ds
 	}
 	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, dst, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
-		return false, nil // idempotent re-run
+		// A leftover from an earlier failed or deleted group: refresh it so
+		// a production rotation since then reaches the clone.
+		existing, gerr := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, dstName, metav1.GetOptions{})
+		if gerr != nil {
+			return false, fmt.Errorf("read clone secret %s: %w", dstName, gerr)
+		}
+		if existing.Labels[labelProject] != project {
+			return false, fmt.Errorf("%w: secret %s already exists and doesn't belong to project %s", ErrConflict, dstName, project)
+		}
+		existing.Data = data
+		if _, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); uerr != nil {
+			return false, fmt.Errorf("refresh clone secret %s: %w", dstName, uerr)
+		}
+		return true, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("create clone secret %s: %w", dstName, err)

@@ -324,6 +324,7 @@ func maskCronsIfNeeded(ctx context.Context, dbConn *db.DB, project string, in []
 	for i := range in {
 		out[i] = in[i]
 		out[i].Spec.OnFailure = maskedOnFailure(in[i].Spec.OnFailure)
+		out[i].Spec.Env = maskedCronEnv(in[i].Spec.Env)
 	}
 	return out
 }
@@ -334,7 +335,20 @@ func maskCronIfNeeded(ctx context.Context, dbConn *db.DB, project string, in *ku
 	}
 	out := *in
 	out.Spec.OnFailure = maskedOnFailure(in.Spec.OnFailure)
+	out.Spec.Env = maskedCronEnv(in.Spec.Env)
 	return &out
+}
+
+// maskedCronEnv masks the env literals a service cron copies from its
+// production env (crons.EnvForCron) — the same values /envs withholds from
+// viewers. Copies first: the input slice is shared with the informer cache.
+func maskedCronEnv(in []kube.KusoRunEnv) []kube.KusoRunEnv {
+	if in == nil {
+		return nil
+	}
+	out := append([]kube.KusoRunEnv(nil), in...)
+	maskKusoRunEnv(out)
+	return out
 }
 
 func maskedOnFailure(of *kube.KusoCronOnFailure) *kube.KusoCronOnFailure {

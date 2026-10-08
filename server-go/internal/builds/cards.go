@@ -479,13 +479,17 @@ func lookupBuildTargets(ctx context.Context, kc *kube.Client, ns, homeNS string,
 	if err != nil || len(envs) == 0 {
 		return nil
 	}
-	defaultBranch := "main"
-	if pp, perr := kc.GetKusoProject(lctx, homeNS, project); perr == nil &&
-		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
-		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
+	pp, perr := kc.GetKusoProject(lctx, homeNS, project)
+	if perr != nil {
+		pp = nil
 	}
+	svc, serr := kc.GetKusoService(lctx, ns, fqn)
+	if serr != nil {
+		svc = nil
+	}
+	defaultBranch := effectiveDefaultBranch(pp, svc)
 	var domainURL string
-	if svc, err := kc.GetKusoService(lctx, ns, fqn); err == nil && svc != nil && len(svc.Spec.Domains) > 0 {
+	if svc != nil && len(svc.Spec.Domains) > 0 {
 		if host := strings.TrimSpace(svc.Spec.Domains[0].Host); host != "" {
 			scheme := "https"
 			if !svc.Spec.Domains[0].TLS {

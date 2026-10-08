@@ -129,6 +129,9 @@ type ServiceSpec struct {
 	} `json:"image,omitempty"`
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 	PublicEnv []string          `json:"publicEnv,omitempty"`
+	// SubscribedAddons lists the addons whose conn Secret is mounted into
+	// this service. null = legacy (every project addon); [] = none.
+	SubscribedAddons []string `json:"subscribedAddons"`
 	// Release is the pre-promotion hook (migrations): on non-zero
 	// exit the new image is NOT promoted.
 	Release *struct {

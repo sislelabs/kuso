@@ -1131,6 +1131,19 @@ func blockedSQLBuiltin(q string) string {
 	return ""
 }
 
+// sqlTxControlRe matches a statement that starts with transaction or
+// session-characteristics control. Even as a lone statement these could end
+// the read-only transaction or flip the session to read-write; the single-
+// statement rule in runReadOnlyPGQuery is the real barrier, this is the belt.
+var sqlTxControlRe = regexp.MustCompile(`(?i)^\s*(begin|start\s+transaction|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|set\s+transaction|set\s+session|reset|discard)\b`)
+
+func blockedSQLTxControl(q string) string {
+	if sqlTxControlRe.MatchString(sqlCommentRe.ReplaceAllString(q, " ")) {
+		return "transaction or session control is not allowed in the read-only runner"
+	}
+	return ""
+}
+
 // SQLQueryRequest is the body of POST /sql/query. We accept a raw
 // SQL string but enforce read-only at runtime, not on the parsed
 // statement — that's defence in depth against drivers that quietly
@@ -1215,6 +1228,10 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "query rejected: "+reason)
 		return
 	}
+	if reason := blockedSQLTxControl(req.Query); reason != "" {
+		writeErr(w, http.StatusForbidden, "query rejected: "+reason)
+		return
+	}
 	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
 	if err != nil {
 		writeAddonErr(w, err)
@@ -1222,33 +1239,46 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Open a read-only transaction with a statement timeout. If
-	// anything in the user's query tries to write, postgres rejects
-	// it inside this transaction — no need to parse the SQL ourselves.
+	start := time.Now()
+	h.auditSQLQuery(ctx, r, project, addon, req.Query)
+	out, status, err := runReadOnlyPGQuery(ctx, conn, req.Query, limit)
+	if err != nil {
+		writeErr(w, status, err.Error())
+		return
+	}
+	out.Elapsed = time.Since(start).Round(time.Millisecond).String()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// runReadOnlyPGQuery runs one user statement inside a read-only transaction
+// with a statement timeout. The statement is prepared, so it travels over
+// the extended query protocol: Postgres refuses a Parse holding more than one
+// command. Over the simple protocol (what lib/pq uses for an argument-less
+// query) `COMMIT; DROP TABLE t` would end the read-only transaction and run
+// the DROP in autocommit.
+func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit int) (SQLQueryResponse, int, error) {
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "begin: "+err.Error())
-		return
+		return SQLQueryResponse{}, http.StatusBadGateway, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
-		writeErr(w, http.StatusBadGateway, "set timeout: "+err.Error())
-		return
+		return SQLQueryResponse{}, http.StatusBadGateway, fmt.Errorf("set timeout: %w", err)
 	}
-
-	start := time.Now()
-	h.auditSQLQuery(ctx, r, project, addon, req.Query)
-	rows, err := tx.QueryContext(ctx, req.Query)
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
+		return SQLQueryResponse{}, http.StatusUnprocessableEntity, err
+	}
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx)
+	if err != nil {
+		return SQLQueryResponse{}, http.StatusUnprocessableEntity, err
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "columns: "+err.Error())
-		return
+		return SQLQueryResponse{}, http.StatusBadGateway, fmt.Errorf("columns: %w", err)
 	}
 	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit), Nulls: make([][]bool, 0, limit)}
 	for rows.Next() {
@@ -1273,8 +1303,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		out.Rows = append(out.Rows, row)
 		out.Nulls = append(out.Nulls, nulls)
 	}
-	out.Elapsed = time.Since(start).Round(time.Millisecond).String()
-	writeJSON(w, http.StatusOK, out)
+	return out, http.StatusOK, nil
 }
 
 // auditSQLQuery records a raw SQL-runner invocation. The SQL browser is the
@@ -1322,7 +1351,9 @@ func stringifyCell(v any) string {
 	case string:
 		return x
 	case time.Time:
-		return x.UTC().Format(time.RFC3339)
+		// Full precision: the row editor sends this string back as the
+		// primary key, and Postgres timestamps carry microseconds.
+		return x.UTC().Format(time.RFC3339Nano)
 	default:
 		return fmt.Sprintf("%v", x)
 	}

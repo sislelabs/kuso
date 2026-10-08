@@ -267,8 +267,15 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		serviceFQN string
 		envKind    string
 	)
-	e, gerr := s.GetEnvironment(ctx, project, env)
+	// GetOwnedEnv, not GetEnvironment: GetEnvironment folds "owned by
+	// another project" into ErrNotFound, and the not-found branch below
+	// deletes by raw name. In the shared namespace that tore down another
+	// project's env, PVCs and TLS Secrets, skipping the production guard.
+	// It also sent a legacy env without spec.project down that branch.
+	e, gerr := s.Kube.GetOwnedEnv(ctx, ns, project, "", env)
 	switch {
+	case errors.Is(gerr, kube.ErrNotOwned):
+		return fmt.Errorf("%w: environment %s", ErrNotFound, env)
 	case gerr == nil:
 		// Protect the TRUE production env-GROUP only. spec.kind is chart
 		// semantics and is "production" on staging clones too; guarding
@@ -286,7 +293,7 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		}
 		serviceFQN = e.Spec.Service
 		envKind = e.Spec.Kind
-	case apierrors.IsNotFound(gerr) || errors.Is(gerr, ErrNotFound):
+	case apierrors.IsNotFound(gerr):
 		// CR is gone. Two very different situations reach here:
 		//
 		//  1. A RESUMED delete — a prior run got past phase 2 but failed
@@ -334,6 +341,11 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 			}
 			return fmt.Errorf("%w: %q is an env GROUP spanning %d environments (%s) — delete it as a group, not as a single environment",
 				ErrInvalid, env, len(names), strings.Join(names, ", "))
+		}
+		// Every env CR this project can own is named "<project>-…"; any
+		// other name can only be another project's leftovers.
+		if !strings.HasPrefix(env, project+"-") {
+			return fmt.Errorf("%w: environment %s", ErrNotFound, env)
 		}
 		serviceFQN = inferServiceFQNFromEnv(env)
 	default:
@@ -466,7 +478,7 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 			envFQN = e.Name
 		}
 		volPVCs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/instance=" + envFQN + ",kuso.sislelabs.com/volume",
+			LabelSelector: "app.kubernetes.io/instance=" + envFQN + ",kuso.sislelabs.com/volume," + kube.LabelProject + "=" + project,
 		})
 		if lerr != nil {
 			cleanupFail("PersistentVolumeClaimList", "app.kubernetes.io/instance="+envFQN, lerr)

@@ -24,6 +24,8 @@ import (
 	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/kube"
 )
@@ -229,15 +231,22 @@ func (s *Service) DisablePublicTCP(ctx context.Context, project, name string) er
 // addons cluster-wide. A multi-tenant deployment would scope this to
 // the caller's namespace; kuso is single-tenant so a global scan is
 // correct AND the allocator must avoid the *whole* cluster's range.
+//
+// The list goes to the apiserver, never the informer cache: the cache
+// lags the port the previous allocation just wrote, so two enables in
+// quick succession both picked the same lowest free port.
 func (s *Service) usedPublicTCPPorts(ctx context.Context) (map[int32]bool, error) {
-	addons, err := s.Kube.ListKusoAddonsByLabels(ctx, "", nil)
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list addons: %w", err)
 	}
 	used := map[int32]bool{}
-	for i := range addons {
-		pt := addons[i].Spec.PublicTCP
-		if pt != nil && pt.Port > 0 {
+	for i := range raw.Items {
+		var a kube.KusoAddon
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &a); err != nil {
+			return nil, fmt.Errorf("decode addon %s: %w", raw.Items[i].GetName(), err)
+		}
+		if pt := a.Spec.PublicTCP; pt != nil && pt.Port > 0 {
 			used[pt.Port] = true
 		}
 	}

@@ -25,14 +25,23 @@ import { kt } from "./toast";
 // editor mid-add) loses everything and the user has to retype.
 //
 // Best-effort: storage failures (quota, private mode) silently skip.
+//
+// Only routes that call restoreFormDraft are snapshotted: anywhere else
+// the draft would sit in sessionStorage unread, and some fields there
+// hold secrets that aren't type=password (the GitHub App PEM textarea).
+const DRAFT_ROUTES = new Set(["/projects/new"]);
+
 function snapshotFormDrafts() {
   if (typeof window === "undefined") return;
   try {
     const route = window.location.pathname;
+    if (!DRAFT_ROUTES.has(route)) return;
     const draft: Record<string, string> = {};
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("input,textarea,[contenteditable=true]"))) {
-      // Skip password fields — never persist secrets through a redirect.
+      // Skip password fields and anything marked data-no-draft — never
+      // persist secrets through a redirect.
       if (el instanceof HTMLInputElement && el.type === "password") continue;
+      if (el.hasAttribute("data-no-draft")) continue;
       const key = el.getAttribute("name") || el.id;
       if (!key) continue;
       let value: string;

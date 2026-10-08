@@ -21,6 +21,7 @@ import (
 // round-trips the masked export needs the live CR to recover the real
 // stored values.
 type projectsReconciler interface {
+	Update(ctx context.Context, name string, req projects.UpdateProjectRequest) (*kube.KusoProject, error)
 	GetService(ctx context.Context, project, service string) (*kube.KusoService, error)
 	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
 	PatchService(ctx context.Context, project, service string, req projects.PatchServiceRequest) (*kube.KusoService, error)
@@ -111,6 +112,17 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 	}
 
 	out := &ApplyResult{Plan: plan}
+
+	// Project-level settings. Idempotent: an unchanged value is a no-op
+	// write on the project CR.
+	if f.Uptime != nil {
+		disabled := f.Uptime.Disabled
+		if _, err := r.Projects.Update(ctx, f.Project, projects.UpdateProjectRequest{
+			Uptime: &projects.UpdateUptimeSpec{Disabled: &disabled},
+		}); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "project:" + f.Project, Op: "update", Message: err.Error()})
+		}
+	}
 
 	desiredAddons := map[string]AddonSpec{}
 	for _, a := range f.Addons {
@@ -266,7 +278,21 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 		Command: s.Command,
 	}
 	if repoURL != "" {
-		req.Repo = &projects.CreateServiceRepo{URL: repoURL, Path: repoPath}
+		req.Repo = &projects.CreateServiceRepo{URL: repoURL, Path: repoPath, DefaultBranch: s.Branch}
+	}
+	req.Internal = s.Internal
+	req.PrivateEgress = s.PrivateEgress
+	req.PlatformAPIEgress = s.PlatformAPIEgress
+	req.WaitForCI = s.WaitForCI
+	if s.Uptime != nil {
+		disabled, path := s.Uptime.Disabled, s.Uptime.Path
+		req.Uptime = &projects.UpdateUptimeSpec{Disabled: &disabled, Path: &path}
+	}
+	if s.Placement != nil {
+		req.Placement = &kube.KusoPlacement{Labels: s.Placement.Labels, Nodes: s.Placement.Nodes}
+	}
+	for _, v := range s.Volumes {
+		req.Volumes = append(req.Volumes, projects.VolumePatch{Name: v.Name, MountPath: v.MountPath, SizeGi: v.SizeGi})
 	}
 	if s.Scale != nil {
 		req.Scale = &projects.ServiceScale{Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU}
@@ -289,7 +315,7 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	}
 	req.WatchPaths = s.WatchPaths
 	for _, d := range s.Domains {
-		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
+		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret})
 	}
 	if ev := mapToEnvVars(s.Env); len(ev) > 0 {
 		req.EnvVars = ev
@@ -430,7 +456,18 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	}
 	publicEnv := append([]string{}, s.PublicEnv...)
 
+	// An omitted repo: leaves the live repo alone (the service tracks the
+	// project default). Path defaults to "." like AddService.
+	var repo *projects.PatchRepoRequest
+	if repoURL, repoPath := splitRepo(s.Repo, s.Path); repoURL != "" {
+		if repoPath == "" {
+			repoPath = "."
+		}
+		repo = &projects.PatchRepoRequest{URL: repoURL, Branch: s.Branch, Path: repoPath}
+	}
+
 	return projects.PatchServiceRequest{
+		Repo:              repo,
 		Port:              &port,
 		Runtime:           &runtime,
 		Internal:          &internal,

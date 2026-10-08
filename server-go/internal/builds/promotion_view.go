@@ -33,7 +33,7 @@ func (s *Service) PromotionIndex(ctx context.Context, project, service string) (
 		return nil, err
 	}
 	fqn := project + "-" + service
-	x := &PromotionIndex{envs: envs, fqn: fqn, defaultBranch: s.defaultBranchOf(ctx, project), live: map[string][]string{}}
+	x := &PromotionIndex{envs: envs, fqn: fqn, defaultBranch: s.defaultBranchOf(ctx, project, service), live: map[string][]string{}}
 	for i := range envs {
 		if b := envs[i].Annotations[annPromotedBuild]; b != "" {
 			x.live[b] = append(x.live[b], envGroupName(&envs[i], fqn))

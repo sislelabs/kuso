@@ -2,10 +2,13 @@ package previewdb
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
@@ -81,11 +84,25 @@ func TestResumePendingSeeds_RekicksInterruptedSeed(t *testing.T) {
 	}
 }
 
+// waitForAddon polls until cond holds for the named addon, for the async
+// migrate-then-clear the resume sweep runs.
+func waitForAddon(t *testing.T, dyn *dynamicfake.FakeDynamicClient, name string, cond func(*kube.KusoAddon) bool) *kube.KusoAddon {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a := getAddon(t, dyn, name)
+		if (a != nil && cond(a)) || time.Now().After(deadline) {
+			return a
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestResumePendingSeeds_CompletedSeedIsNoOp: the crash happened AFTER the
 // seed Job succeeded but before the marker was cleared. Re-seeding here
-// would pg_dump --clean over a live preview DB (wiping any release-hook
-// migrations applied since), so the sweep must observe the succeeded Job,
-// clear the stale marker, and NOT re-kick.
+// would pg_dump --clean over a live preview DB, so the sweep must observe
+// the succeeded Job, record the seed as done, run the post-seed migration
+// (which the crash may have skipped), clear the marker, and NOT re-seed.
 func TestResumePendingSeeds_CompletedSeedIsNoOp(t *testing.T) {
 	pending := addonCR("alpha", "pg-pr-9", "postgres")
 	pending.Labels[kube.LabelEnv] = "preview-pr-9"
@@ -104,18 +121,74 @@ func TestResumePendingSeeds_CompletedSeedIsNoOp(t *testing.T) {
 		},
 		Status: batchv1.JobStatus{Succeeded: 1},
 	})
-	c.BaseCtx = cancelledCtx()
 
-	resumed := c.ResumePendingSeeds(context.Background())
-
-	if len(resumed) != 0 {
-		t.Fatalf("resumed = %v, want none (seed Job already succeeded; re-seeding would wipe post-seed migrations)", resumed)
+	if resumed := c.ResumePendingSeeds(context.Background()); len(resumed) != 0 {
+		t.Fatalf("resumed = %v, want none (seed Job already succeeded; re-seeding would wipe the preview DB)", resumed)
 	}
-	a := getAddon(t, dyn, "alpha-pg-pr-9")
+	a := waitForAddon(t, dyn, "alpha-pg-pr-9", func(a *kube.KusoAddon) bool {
+		_, still := a.Annotations[seedPendingAnnotation]
+		return !still
+	})
 	if a == nil {
 		t.Fatal("clone alpha-pg-pr-9 missing")
 	}
 	if _, still := a.Annotations[seedPendingAnnotation]; still {
-		t.Fatal("stale seed-pending marker must be cleared once the completed Job is observed (else every boot re-checks it forever)")
+		t.Fatal("stale seed-pending marker must be cleared once the completed seed is migrated (else every boot re-checks it forever)")
+	}
+	if a.Annotations[seededAtAnnotation] == "" {
+		t.Fatal("seed completion must be recorded on the clone so a later restart doesn't depend on the TTL'd Job")
 	}
 }
+
+// DATA-6: the seed Job was TTL-reaped (1h) before the restart, but the
+// clone records that the seed completed. The sweep must migrate, not
+// re-seed: a re-seed `pg_dump --clean`s over the reviewers' data.
+func TestResumePendingSeeds_SeededAtSurvivesJobTTL(t *testing.T) {
+	pending := addonCR("alpha", "pg-pr-9", "postgres")
+	pending.Labels[kube.LabelEnv] = "preview-pr-9"
+	pending.Annotations = map[string]string{
+		seedPendingAnnotation: "alpha-pg",
+		seededAtAnnotation:    "2026-10-01T00:00:00Z",
+	}
+	c, dyn := newTestCloner(t, "alpha", pending)
+	mustSeed(t, dyn, kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "alpha-web-pr-9", Namespace: "kuso",
+			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelEnv: "preview-pr-9"},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Kind:           "preview",
+			EnvFromSecrets: []string{"alpha-pg-pr-9-conn"},
+			Image:          &kube.KusoImage{Repository: "r", Tag: "abc"},
+			Release:        &kube.KusoReleaseSpec{Command: []string{"migrate"}},
+		},
+	})
+	cs := kubefake.NewSimpleClientset() // no seed Job: reaped by its TTL
+	c.Kube.Clientset = cs
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // stops the migrate goroutine's wait on the fake Job
+	c.BaseCtx = ctx
+
+	if resumed := c.ResumePendingSeeds(context.Background()); len(resumed) != 0 {
+		t.Fatalf("resumed = %v, want none: a recorded seed must not be re-run", resumed)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		jobs, _ := cs.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{})
+		var roles []string
+		for _, j := range jobs.Items {
+			roles = append(roles, j.Labels["kuso.sislelabs.com/role"])
+		}
+		if slices.Contains(roles, "preview-seed") {
+			t.Fatalf("resume re-seeded a clone whose seed had completed: %v", roles)
+		}
+		if slices.Contains(roles, "preview-migrate") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no post-seed migrate Job created; jobs = %v", roles)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+

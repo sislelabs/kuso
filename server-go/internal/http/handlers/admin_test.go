@@ -33,13 +33,12 @@ INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1', 'admin', $
 		t.Fatalf("seed role: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', $2, $3)`, hash, now, now); err != nil {
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "instanceRole", "createdAt", "updatedAt")
+VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', 'admin', $2, $3)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	// The per-request resolver (v0.22.15) derives perms from
-	// _PermissionToRole — a role merely NAMED admin resolves to zero
-	// permissions and every admin-gated endpoint 403s.
+	// Admin comes from the direct instanceRole above. The role's
+	// settings:admin row is the legacy shape and is stripped as reserved.
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ('padm', 'settings', 'admin', $1, $2)`, now, now); err != nil {
 		t.Fatalf("seed admin perm: %v", err)

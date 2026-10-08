@@ -507,3 +507,26 @@ func TestClassify_BuildkitStepFailure(t *testing.T) {
 		t.Errorf("summary should name the failing command, got %q", c.Summary)
 	}
 }
+
+// The buildkit footer ends every failed buildkit build, so it must not
+// shadow a specific cause printed earlier (here a runtime-kind detector).
+func TestClassify_BuildkitFooterDoesNotShadowSpecificCause(t *testing.T) {
+	footer := `error: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1`
+	withEnv := []string{
+		`#14 9.12 Error: Missing required env var DATABASE_URL`,
+		footer,
+	}
+	if c := Classify(withEnv, Signal{}); c.Kind != KindMissingEnv {
+		t.Errorf("missing env + footer = %q (%s), want %q", c.Kind, c.Summary, KindMissingEnv)
+	}
+	if c := Classify([]string{footer}, Signal{}); c.Kind != KindBuildCommandFailed {
+		t.Errorf("footer alone = %q, want %q", c.Kind, KindBuildCommandFailed)
+	}
+	oom := []string{`error: failed to solve: process "/bin/sh -c next build" did not complete successfully: exit code: 137`}
+	if c := Classify(oom, Signal{}); c.Kind != KindBuildOOM {
+		t.Errorf("exit code 137 = %q, want %q", c.Kind, KindBuildOOM)
+	}
+	if c := Classify(oom, Signal{Runtime: true}); c.Kind == KindBuildOOM || c.Kind == KindBuildCommandFailed {
+		t.Errorf("runtime logs reached build detectors: %q", c.Kind)
+	}
+}

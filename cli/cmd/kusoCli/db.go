@@ -286,7 +286,7 @@ func runConnect(project, addon string, doExec bool) error {
 
 	// Build the localhost-rewritten connection string from the
 	// addon's secret. We rewrite the canonical DSN (DATABASE_URL /
-	// REDIS_URL / MONGODB_URL / …) by replacing the host:port with
+	// REDIS_URL / MONGO_URL / …) by replacing the host:port with
 	// our chosen localhost:port.
 	kindHint, dsn := localDSNFromSecret(secret, localPort)
 	if dsn == "" {
@@ -300,6 +300,9 @@ func runConnect(project, addon string, doExec bool) error {
 		client := clientForKind(kindHint)
 		if kindHint == "clickhouse" {
 			client = "clickhouse HTTP shell"
+		}
+		if client == "" {
+			return fmt.Errorf("no built-in client for kind %q; run without --exec and use the printed DSN with your own tool", kindHint)
 		}
 		fmt.Fprintf(os.Stderr, "[kuso] tunnel + %s → %s\n", client, dsn)
 	} else {
@@ -384,17 +387,19 @@ func coerceSecretValue(v any) (string, bool) {
 // string that points at localhost:port instead of the in-cluster
 // service. kindHint is a best-effort label used to pick a client tool.
 func localDSNFromSecret(s map[string]string, localPort int) (string, string) {
-	// DATABASE_URL is the postgres/mysql canonical key; REDIS_URL is
-	// redis; MONGODB_URL is mongo. The conn secrets the kuso addon
-	// charts emit always carry one of these.
+	// DATABASE_URL is emitted by postgres, and as an alias by the mongodb
+	// and mysql charts too, so its scheme (not the key) picks the kind.
+	// REDIS_URL is redis; MONGO_URL / MONGODB_URI are mongo.
 	if v := s["DATABASE_URL"]; v != "" {
-		return "postgres", rewriteDSNHost(v, "127.0.0.1", localPort)
+		return kindFromScheme(v), rewriteDSNHost(v, "127.0.0.1", localPort)
 	}
 	if v := s["REDIS_URL"]; v != "" {
 		return "redis", rewriteDSNHost(v, "127.0.0.1", localPort)
 	}
-	if v := s["MONGODB_URL"]; v != "" {
-		return "mongo", rewriteDSNHost(v, "127.0.0.1", localPort)
+	for _, key := range []string{"MONGO_URL", "MONGODB_URI"} {
+		if v := s[key]; v != "" {
+			return "mongo", rewriteDSNHost(v, "127.0.0.1", localPort)
+		}
 	}
 	// ClickHouse. The addon's Service lists the HTTP port (8123) first, and
 	// the server port-forwards Service.Ports[0] — so the tunnel carries the
@@ -406,6 +411,18 @@ func localDSNFromSecret(s map[string]string, localPort int) (string, string) {
 		return "clickhouse", rewriteDSNHost(v, "127.0.0.1", localPort)
 	}
 	return "", ""
+}
+
+func kindFromScheme(dsn string) string {
+	scheme, _, _ := strings.Cut(dsn, "://")
+	switch strings.ToLower(scheme) {
+	case "mongodb", "mongodb+srv":
+		return "mongo"
+	case "mysql", "mariadb":
+		return "mysql"
+	default:
+		return "postgres"
+	}
 }
 
 // rewriteDSNHost replaces the host:port in a URL-style DSN with the

@@ -3,8 +3,11 @@ package uptime
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,14 +41,56 @@ type Target struct {
 	Paused string
 	// PodsBad: pods are crash-looping or can't pull their image.
 	PodsBad bool
+	// RollingOut: pods are still coming up (deploy, wake, first start).
+	RollingOut bool
+	// Unknown: the workload couldn't be read this time. The target is
+	// neither probed nor pruned; its row is left as it was.
+	Unknown bool
 }
 
 func (t Target) Key() string { return t.Namespace + "/" + t.Env }
 
 // Workload is what BuildTargets needs to know about an env's Deployment.
 type Workload struct {
-	Exists   bool
-	Replicas int32
+	Exists     bool
+	Replicas   int32
+	RollingOut bool
+	// Unknown: the Deployment lookup failed.
+	Unknown bool
+}
+
+// RolloutGrace is how long after a pod is created a not-yet-ready
+// Deployment counts as starting up rather than down.
+const RolloutGrace = 5 * time.Minute
+
+func servicesByKey(services []kube.KusoService) map[string]*kube.KusoService {
+	out := make(map[string]*kube.KusoService, len(services))
+	for i := range services {
+		out[services[i].Namespace+"/"+services[i].Name] = &services[i]
+	}
+	return out
+}
+
+// isTargetEnv: production, web (not worker, not internal).
+func isTargetEnv(svcByKey map[string]*kube.KusoService, env *kube.KusoEnvironment) (*kube.KusoService, bool) {
+	svc, ok := svcByKey[env.Namespace+"/"+env.Spec.Service]
+	if !ok {
+		return nil, false // orphan env
+	}
+	if !scaledown.IsProductionEnv(svc, env) {
+		return nil, false
+	}
+	if env.Spec.Runtime == "worker" || svc.Spec.Runtime == "worker" || env.Spec.Internal || svc.Spec.Internal {
+		return nil, false
+	}
+	return svc, true
+}
+
+func envProject(env *kube.KusoEnvironment) string {
+	if env.Spec.Project != "" {
+		return env.Spec.Project
+	}
+	return env.Labels[kube.LabelProject]
 }
 
 // BuildTargets picks the envs uptime checks cover: production, web
@@ -59,27 +104,15 @@ func BuildTargets(
 	for i := range projects {
 		projByName[projects[i].Name] = &projects[i]
 	}
-	svcByKey := make(map[string]*kube.KusoService, len(services))
-	for i := range services {
-		svcByKey[services[i].Namespace+"/"+services[i].Name] = &services[i]
-	}
+	svcByKey := servicesByKey(services)
 	var out []Target
 	for i := range envs {
 		env := &envs[i]
-		svc, ok := svcByKey[env.Namespace+"/"+env.Spec.Service]
+		svc, ok := isTargetEnv(svcByKey, env)
 		if !ok {
-			continue // orphan env
-		}
-		if !scaledown.IsProductionEnv(svc, env) {
 			continue
 		}
-		if env.Spec.Runtime == "worker" || svc.Spec.Runtime == "worker" || env.Spec.Internal || svc.Spec.Internal {
-			continue
-		}
-		project := env.Spec.Project
-		if project == "" {
-			project = env.Labels[kube.LabelProject]
-		}
+		project := envProject(env)
 		t := Target{
 			Namespace: env.Namespace,
 			Env:       env.Name,
@@ -101,6 +134,8 @@ func BuildTargets(
 
 		w := workload[t.Key()]
 		switch {
+		case w.Unknown:
+			t.Unknown = true
 		case env.Spec.Stopped || svc.Spec.Stopped:
 			t.Paused = PausedStopped
 		case !w.Exists:
@@ -113,22 +148,24 @@ func BuildTargets(
 			t.Paused = PausedScaledToZero
 		}
 		t.PodsBad = podsBad[t.Key()]
+		t.RollingOut = w.RollingOut
 		out = append(out, t)
 	}
 	return out
 }
 
-// Cluster reads the current targets.
+// Cluster reads the current targets. project "" means every project.
 type Cluster interface {
-	Targets(ctx context.Context) ([]Target, error)
+	Targets(ctx context.Context, project string) ([]Target, error)
 }
 
 // KubeCluster is the live Cluster.
 type KubeCluster struct {
-	Kube *kube.Client
+	Kube   *kube.Client
+	Logger *slog.Logger
 }
 
-func (k KubeCluster) Targets(ctx context.Context) ([]Target, error) {
+func (k KubeCluster) Targets(ctx context.Context, project string) ([]Target, error) {
 	// Empty ns → cluster-wide. A failed list must read as "unknown", not
 	// "nothing to check": the caller prunes rows for missing targets.
 	projects, err := k.Kube.ListKusoProjects(ctx, "")
@@ -139,40 +176,72 @@ func (k KubeCluster) Targets(ctx context.Context) ([]Target, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
 	}
-	envs, err := k.Kube.ListKusoEnvironments(ctx, "")
+	allEnvs, err := k.Kube.ListKusoEnvironments(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
 	}
-	pods, err := k.pods(ctx)
+	// Only production web envs (of the asked-for project) need a
+	// Deployment lookup; previews and workers would cost a live GET
+	// each when they have no Deployment yet.
+	svcByKey := servicesByKey(services)
+	var envs []kube.KusoEnvironment
+	for i := range allEnvs {
+		if project != "" && envProject(&allEnvs[i]) != project {
+			continue
+		}
+		if _, ok := isTargetEnv(svcByKey, &allEnvs[i]); ok {
+			envs = append(envs, allEnvs[i])
+		}
+	}
+	pods, err := k.pods(ctx, project)
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
 	podsBad := map[string]bool{}
+	newestPod := map[string]time.Time{}
 	for _, p := range pods {
+		key := p.Namespace + "/" + p.Labels["app.kubernetes.io/instance"]
 		if health.PodBadReason(p) != "" {
-			podsBad[p.Namespace+"/"+p.Labels["app.kubernetes.io/instance"]] = true
+			podsBad[key] = true
+		}
+		if c := p.CreationTimestamp.Time; c.After(newestPod[key]) {
+			newestPod[key] = c
 		}
 	}
+	now := time.Now()
 	workload := make(map[string]Workload, len(envs))
 	for i := range envs {
-		w, err := k.workload(ctx, envs[i].Namespace, envs[i].Name)
+		key := envs[i].Namespace + "/" + envs[i].Name
+		dep, err := k.deployment(ctx, envs[i].Namespace, envs[i].Name)
 		if err != nil {
-			return nil, fmt.Errorf("get deployment %s/%s: %w", envs[i].Namespace, envs[i].Name, err)
+			// One bad lookup must not blind the whole tick: this target
+			// is skipped (not pruned) and the rest are checked.
+			if k.Logger != nil {
+				k.Logger.Warn("uptime: get deployment", "env", key, "err", err)
+			}
+			workload[key] = Workload{Unknown: true}
+			continue
 		}
-		workload[envs[i].Namespace+"/"+envs[i].Name] = w
+		workload[key] = WorkloadOf(dep, newestPod[key], now)
 	}
 	return BuildTargets(projects, services, envs, workload, podsBad), nil
 }
 
-func (k KubeCluster) pods(ctx context.Context) ([]*corev1.Pod, error) {
-	sel, err := labels.Parse(kube.LabelProject)
-	if err != nil {
-		return nil, err
+func (k KubeCluster) pods(ctx context.Context, project string) ([]*corev1.Pod, error) {
+	var sel labels.Selector
+	if project != "" {
+		sel = labels.SelectorFromSet(labels.Set{kube.LabelProject: project})
+	} else {
+		s, err := labels.Parse(kube.LabelProject)
+		if err != nil {
+			return nil, err
+		}
+		sel = s
 	}
 	if pods, ok := k.Kube.Cache.ListPodsByLabel(sel); ok {
 		return pods, nil
 	}
-	list, err := k.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: kube.LabelProject})
+	list, err := k.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
 	if err != nil {
 		return nil, err
 	}
@@ -183,20 +252,48 @@ func (k KubeCluster) pods(ctx context.Context) ([]*corev1.Pod, error) {
 	return out, nil
 }
 
-func (k KubeCluster) workload(ctx context.Context, ns, name string) (Workload, error) {
-	dep, ok := k.Kube.Cache.GetDeployment(ns, name)
-	if !ok {
-		d, err := k.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return Workload{}, nil
-		}
-		if err != nil {
-			return Workload{}, err
-		}
-		dep = d
+// deployment returns nil when the env has no Deployment.
+func (k KubeCluster) deployment(ctx context.Context, ns, name string) (*appsv1.Deployment, error) {
+	if dep, ok := k.Kube.Cache.GetDeployment(ns, name); ok {
+		return dep, nil
 	}
-	if dep.Spec.Replicas == nil {
-		return Workload{Exists: true, Replicas: 1}, nil
+	d, err := k.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
 	}
-	return Workload{Exists: true, Replicas: *dep.Spec.Replicas}, nil
+	if err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// WorkloadOf summarises a Deployment (nil = none) for BuildTargets.
+// newestPod is the creation time of the env's youngest pod.
+func WorkloadOf(dep *appsv1.Deployment, newestPod, now time.Time) Workload {
+	if dep == nil {
+		return Workload{}
+	}
+	w := Workload{Exists: true, Replicas: 1}
+	if dep.Spec.Replicas != nil {
+		w.Replicas = *dep.Spec.Replicas
+	}
+	if w.Replicas == 0 {
+		return w
+	}
+	deadlineExceeded := false
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && c.Reason == "ProgressDeadlineExceeded" {
+			deadlineExceeded = true
+		}
+	}
+	// A rollout the controller still reports as in progress. Bounded by
+	// progressDeadlineSeconds: past it the condition flips and failures
+	// count again.
+	rolling := !deadlineExceeded &&
+		(dep.Generation > dep.Status.ObservedGeneration || dep.Status.UpdatedReplicas < w.Replicas)
+	// A scale-up from zero (wake, first deploy) doesn't touch the
+	// Progressing condition, so a young, not-yet-ready pod counts too.
+	starting := dep.Status.ReadyReplicas < w.Replicas && !newestPod.IsZero() && now.Sub(newestPod) < RolloutGrace
+	w.RollingOut = rolling || starting
+	return w
 }

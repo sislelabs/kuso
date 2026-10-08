@@ -9,6 +9,7 @@ package imagerelease
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -249,20 +250,29 @@ func (w *Watcher) recordFailure(ctx context.Context, ns, envName string, img *ku
 // wait blocks until every in-flight release has finished. Tests only.
 func (w *Watcher) wait() { w.wg.Wait() }
 
-// promote sets Image=img via read-modify-write with retry (mirrors the build
-// poller's promoteEnvImageCAS conflict handling). PendingImage is cleared
-// only when it still holds img: an image set while this release ran hasn't
-// been migrated for, so it stays pending for the next tick.
+// errPendingMoved aborts promote's update when PendingImage no longer holds
+// the image whose release just ran.
+var errPendingMoved = errors.New("pending image changed during release")
+
+// promote moves img from PendingImage to Image via read-modify-write with
+// retry (mirrors the build poller's promoteEnvImageCAS conflict handling).
+// It is a no-op unless PendingImage still holds img: if the image changed
+// while this release ran (a newer pending image, or one set directly after
+// the hook was removed), writing img would roll production back to it.
 func (w *Watcher) promote(ctx context.Context, ns, envName string, img *kube.KusoImage) error {
 	_, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
-		env.Spec.Image = img
-		if env.Spec.PendingImage != nil && imageKey(env.Spec.PendingImage) == imageKey(img) {
-			env.Spec.PendingImage = nil
+		if env.Spec.PendingImage == nil || imageKey(env.Spec.PendingImage) != imageKey(img) {
+			return errPendingMoved
 		}
+		env.Spec.Image = img
+		env.Spec.PendingImage = nil
 		delete(env.Annotations, AnnFailedImage)
 		delete(env.Annotations, AnnFailedAttempts)
 		delete(env.Annotations, AnnFailedAt)
 		return nil
 	})
+	if errors.Is(err, errPendingMoved) {
+		return nil
+	}
 	return err
 }

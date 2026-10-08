@@ -309,7 +309,7 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		// on leader acquisition and re-kicks the seed; seedAsync clears it
 		// once the seed lands.
 		c.markSeedPending(ctx, ns, cloneFQN, seedSrcFQN)
-		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
+		seedCtx, cancel := context.WithTimeout(c.BaseCtx, seedBudget)
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
 			defer c.releaseSeed(clone)
@@ -364,6 +364,22 @@ const previewPRLabel = "kuso.sislelabs.com/preview-pr"
 // clone still carrying it.
 const seedPendingAnnotation = "kuso.sislelabs.com/seed-pending"
 
+// seededAtAnnotation records (RFC3339) that the owed seed's Job completed.
+// The resume sweep reads it instead of the seed Job, which is TTL-reaped
+// an hour after it finishes: once the Job was gone, a restart re-seeded
+// with `pg_dump --clean` and wiped whatever reviewers had done in the
+// preview DB. Cleared by markSeedPending when a new seed is owed.
+const seededAtAnnotation = "kuso.sislelabs.com/seeded-at"
+
+// Seed timing. A seed's wall time scales with the source DB, and a fresh
+// clone can wait minutes on PVC provisioning or an image pull, so the old
+// 5-minute waits abandoned real seeds (preview booted empty or unmigrated).
+const (
+	seedBudget        = 2 * time.Hour    // whole seed+migrate goroutine
+	cloneReadyBudget  = 30 * time.Minute // clone StatefulSet + conn Secret
+	seedJobWaitBudget = 90 * time.Minute // pg_dump | psql Job
+)
+
 // markSeedPending stamps the durable in-flight seed marker. Best-effort:
 // a failed stamp only costs the restart-resume guarantee for this one
 // seed attempt, so it must not block the seed itself.
@@ -373,6 +389,7 @@ func (c *Cloner) markSeedPending(ctx context.Context, ns, cloneFQN, sourceFQN st
 			a.Annotations = map[string]string{}
 		}
 		a.Annotations[seedPendingAnnotation] = sourceFQN
+		delete(a.Annotations, seededAtAnnotation)
 		return nil
 	}); err != nil {
 		c.Logger.Warn("seed-pending mark failed; a restart during this seed will not auto-resume",
@@ -389,6 +406,20 @@ func (c *Cloner) clearSeedPending(ctx context.Context, ns, cloneFQN string) {
 	}); err != nil && !apierrors.IsNotFound(err) {
 		c.Logger.Warn("seed-pending clear failed; boot resume will re-check this clone",
 			"clone", cloneFQN, "ns", ns, "err", err)
+	}
+}
+
+// markSeeded stamps seededAtAnnotation. Best-effort: without it a restart
+// falls back to the seed Job's status, as before.
+func (c *Cloner) markSeeded(ctx context.Context, ns, cloneFQN string) {
+	if _, err := c.Kube.UpdateKusoAddonWithRetry(ctx, ns, cloneFQN, func(a *kube.KusoAddon) error {
+		if a.Annotations == nil {
+			a.Annotations = map[string]string{}
+		}
+		a.Annotations[seededAtAnnotation] = time.Now().UTC().Format(time.RFC3339)
+		return nil
+	}); err != nil && !apierrors.IsNotFound(err) {
+		c.Logger.Warn("seeded-at mark failed", "clone", cloneFQN, "ns", ns, "err", err)
 	}
 }
 
@@ -435,18 +466,34 @@ func (c *Cloner) ResumePendingSeeds(ctx context.Context) []string {
 			continue
 		}
 		cloneFQN := a.Name
-		// Completion check: if the latest seed Job for this clone already
-		// succeeded, the seed landed and only the marker clear was lost.
-		if c.latestSeedJobSucceeded(ctx, ns, project, cloneFQN) {
-			c.clearSeedPending(ctx, ns, cloneFQN)
-			c.Logger.Info("seed resume: seed already completed; cleared stale marker", "clone", cloneFQN)
+		// Completion check: the seed landed (recorded on the clone, or its
+		// Job is still around and succeeded), but the post-seed migration
+		// may not have run — the marker is cleared only after it. Run the
+		// migration, never the seed: re-seeding would wipe the preview DB.
+		if a.Annotations[seededAtAnnotation] != "" || c.latestSeedJobSucceeded(ctx, ns, project, cloneFQN) {
+			if a.Annotations[seededAtAnnotation] == "" {
+				c.markSeeded(ctx, ns, cloneFQN)
+			}
+			if !c.tryAcquireSeed(cloneFQN) {
+				continue
+			}
+			migCtx, cancel := context.WithTimeout(c.BaseCtx, seedBudget)
+			go func(ns, project, clone, scope string) {
+				defer cancel()
+				defer c.releaseSeed(clone)
+				c.migrateAfterSeed(migCtx, ns, project, scope, clone, time.Now().Unix())
+				if migCtx.Err() == nil {
+					c.clearSeedPending(migCtx, ns, clone)
+				}
+			}(ns, project, cloneFQN, envScope)
+			c.Logger.Info("seed resume: seed already completed; running the post-seed migration", "clone", cloneFQN)
 			continue
 		}
 		if !c.tryAcquireSeed(cloneFQN) {
 			continue
 		}
 		instancePG := a.Spec.UseInstanceAddon != ""
-		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
+		seedCtx, cancel := context.WithTimeout(c.BaseCtx, seedBudget)
 		go func(ns, project, src, clone, scope string, ipg bool) {
 			defer cancel()
 			defer c.releaseSeed(clone)
@@ -584,7 +631,7 @@ func (c *Cloner) reclaimClonePVCs(ctx context.Context, project, cloneFQN string)
 // effort: failures are logged; the preview env still boots, just
 // with an empty DB.
 func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool, envScope string) {
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(cloneReadyBudget)
 	for time.Now().Before(deadline) {
 		if c.cloneReady(ctx, ns, cloneFQN, instancePG) {
 			break
@@ -707,12 +754,13 @@ func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, clo
 		waitName = c.latestSeedJobName(ctx, ns, project, cloneFQN)
 	}
 	if waitName != "" {
-		if werr := c.waitForJobComplete(ctx, ns, waitName, 5*time.Minute); werr != nil {
+		if werr := c.waitForJobComplete(ctx, ns, waitName, seedJobWaitBudget); werr != nil {
 			// Surface the failure (skipping the migrate) so seedAsync does
 			// NOT clear the seed-pending marker — the boot-time resume sweep
 			// then re-checks this clone instead of treating it as seeded.
 			return fmt.Errorf("seed job %s did not complete (migrate skipped): %w", waitName, werr)
 		}
+		c.markSeeded(ctx, ns, cloneFQN)
 	}
 	c.migrateAfterSeed(ctx, ns, project, envScope, cloneFQN, nonce)
 	return nil
@@ -746,10 +794,7 @@ func (c *Cloner) latestSeedJobName(ctx context.Context, ns, project, cloneFQN st
 // owner ref (cascade lost, TTL still reaps). nowUnix makes the Job
 // name deterministic in tests.
 func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, nowUnix int64) *batchv1.Job {
-	jobName := fmt.Sprintf("%s-seed-from-%s-%d", cloneFQN, addons.ShortName(project, sourceFQN), nowUnix)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
-	}
+	jobName := uniqueJobName(fmt.Sprintf("%s-seed-from-%s", cloneFQN, addons.ShortName(project, sourceFQN)), nowUnix)
 	one := int32(1)
 	// A couple of retries: the script now waits (pg_isready) for both
 	// DBs before dumping, so it shouldn't fail transiently — but if it

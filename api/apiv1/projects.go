@@ -32,9 +32,19 @@ type UpdateProjectRequest struct {
 	// IncidentMonitoring=true opts the project into the incident-
 	// response agent. Omitted = leave unchanged.
 	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
+	// Uptime sets the project-wide uptime-check opt-out. Omitted = leave
+	// unchanged.
+	Uptime *UptimePatch `json:"uptime,omitempty"`
 	// ClearDefaultRepo=true removes the project's default repository.
 	// An omitted or empty defaultRepo leaves it unchanged.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
+}
+
+// UptimePatch is the `uptime` block of a PATCH. Nil fields are left
+// alone. Path applies to services only; projects ignore it.
+type UptimePatch struct {
+	Disabled *bool   `json:"disabled,omitempty"`
+	Path     *string `json:"path,omitempty"`
 }
 
 // RepoRef pairs a repo URL with optional branch + path. Used by

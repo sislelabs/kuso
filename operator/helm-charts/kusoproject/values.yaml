@@ -82,6 +82,13 @@ networkPolicy:
   #     - longhorn-system    # CSI probes
   #     - grafana            # external monitoring
   extraIngressNamespaces: []
+  # Where the cluster's Traefik runs, for the allow-ingress-hairpin rule
+  # (public-egress pods calling a domain this cluster serves). ports are
+  # the Traefik POD ports (the web/websecure entrypoints), not 80/443:
+  # the policy sees the connection after kube-proxy's DNAT.
+  ingressController:
+    namespace: traefik
+    ports: [8000, 8443]
 
 # Per-project resource ceiling. ResourceQuota caps CPU/memory/object
 # counts so one tenant can't starve the cluster. LimitRange supplies

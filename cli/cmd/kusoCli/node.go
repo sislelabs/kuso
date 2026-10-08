@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -524,10 +525,16 @@ var nodeRemoveCmd = &cobra.Command{
 connection flags are supplied, kuso also runs k3s-agent-uninstall on the
 host so the VM is left clean; without them the node is only untracked
 (use this when the VM is already gone). Refuses to remove the last
-control-plane node.`,
+control-plane node.
+
+If volumes store their data only on this node (local-path PVCs for
+addons or service volumes), the server refuses and lists them. Move or
+back them up first, or pass --accept-data-loss to remove the node anyway.
+--force only skips graceful pod eviction during the drain.`,
 	Example: `  kuso node remove worker-2
   kuso node remove worker-2 --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
   kuso node remove worker-2 --force
+  kuso node remove dead-worker --force --accept-data-loss --yes
   kuso node remove worker-2 --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -535,8 +542,11 @@ control-plane node.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		name := args[0]
-		if err := confirmDestructive(nodeRemoveYes,
-			fmt.Sprintf("Cordon, drain, and remove node %q from the cluster? Its workloads reschedule elsewhere.", name)); err != nil {
+		prompt := fmt.Sprintf("Cordon, drain, and remove node %q from the cluster? Its workloads reschedule elsewhere.", name)
+		if nodeRemoveAcceptDataLoss {
+			prompt += " Data on volumes stored only on this node is LOST."
+		}
+		if err := confirmDestructive(nodeRemoveYes, prompt); err != nil {
 			return err
 		}
 		req := kusoApi.RemoveNodeRequest{Force: nodeRemoveForce}
@@ -549,7 +559,12 @@ control-plane node.`,
 			}
 			req.Credentials = &creds
 		}
-		resp, err := api.RemoveNode(name, req)
+		resp, err := api.RemoveNode(name, req, nodeRemoveAcceptDataLoss)
+		if err == nil && resp.StatusCode() == http.StatusConflict {
+			if msg := pinnedVolumesConflict(resp.Body()); msg != "" {
+				return errors.New(msg)
+			}
+		}
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
@@ -566,6 +581,39 @@ control-plane node.`,
 		fmt.Printf("Node %s removed.\n", out.Removed)
 		return nil
 	},
+}
+
+var nodeRemoveAcceptDataLoss bool
+
+// pinnedVolumesConflict renders the server's 409 for node-local volumes, or
+// "" when the body isn't that shape.
+func pinnedVolumesConflict(body []byte) string {
+	var conflict struct {
+		Error  string `json:"error"`
+		Pinned []struct {
+			Namespace string `json:"namespace"`
+			PVC       string `json:"pvc"`
+			Kind      string `json:"kind"`
+			Owner     string `json:"owner"`
+			Size      string `json:"size"`
+		} `json:"pinned"`
+	}
+	if json.Unmarshal(body, &conflict) != nil || len(conflict.Pinned) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimSuffix(conflict.Error, ", or retry with force=true"))
+	for _, p := range conflict.Pinned {
+		fmt.Fprintf(&b, "\n  %s/%s  %s", p.Namespace, p.PVC, p.Kind)
+		if p.Owner != "" {
+			b.WriteString("  " + p.Owner)
+		}
+		if p.Size != "" {
+			b.WriteString("  " + p.Size)
+		}
+	}
+	b.WriteString("\nRe-run with --accept-data-loss to remove the node anyway.")
+	return b.String()
 }
 
 var nodeUpdatesCmd = &cobra.Command{
@@ -706,12 +754,21 @@ var nodeHistoryCmd = &cobra.Command{
 				s.Ts.Local().Format(time.RFC3339),
 				fmt.Sprintf("%s / %s", formatMilliCPU(s.CPUUsedMilli), formatMilliCPU(s.CPUCapacityMilli)),
 				fmt.Sprintf("%s / %s", humanBytes(s.MemUsedBytes), humanBytes(s.MemCapacityBytes)),
-				fmt.Sprintf("%s / %s", humanBytes(s.DiskCapacityBytes-s.DiskAvailBytes), humanBytes(s.DiskCapacityBytes)),
+				diskUsedCell(s.DiskAvailBytes, s.DiskCapacityBytes),
 			})
 		}
 		tw.Render()
 		return nil
 	},
+}
+
+// diskUsedCell renders "-" when the sampler got no disk data (capacity 0,
+// e.g. the kubelet stats call was forbidden); "0 / 0" read as a real value.
+func diskUsedCell(avail, capacity int64) string {
+	if capacity <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%s / %s", humanBytes(capacity-avail), humanBytes(capacity))
 }
 
 var nodeCleanupCmd = &cobra.Command{
@@ -882,6 +939,7 @@ func init() {
 	nodeCmd.AddCommand(nodeJoinCmd)
 
 	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveForce, "force", false, "skip graceful pod eviction during drain")
+	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveAcceptDataLoss, "accept-data-loss", false, "remove even when volumes store data only on this node (that data is lost)")
 	nodeRemoveCmd.Flags().BoolVarP(&nodeRemoveYes, "yes", "y", false, "skip the confirmation prompt")
 	nodeCmd.AddCommand(nodeRemoveCmd)
 

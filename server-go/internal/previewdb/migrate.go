@@ -2,7 +2,11 @@ package previewdb
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -72,10 +76,7 @@ func containsString(ss []string, want string) bool {
 // A fresh nonce per seed guarantees the migration re-runs every time the DB is
 // reset. One-shot (backoffLimit 0) — never retry a half-applied migration.
 func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ownerUID types.UID, nowUnix int64) *batchv1.Job {
-	jobName := fmt.Sprintf("%s-migrate-%s-%d", cloneFQN, env.Name, nowUnix)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
-	}
+	jobName := uniqueJobName(fmt.Sprintf("%s-migrate-%s", cloneFQN, env.Name), nowUnix)
 
 	backoff := int32(0)
 	one := int32(1)
@@ -120,6 +121,10 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 				"kuso.sislelabs.com/project":     project,
 				"kuso.sislelabs.com/env":         env.Name,
 				"kuso.sislelabs.com/clone-addon": addons.ShortName(project, cloneFQN),
+			},
+			Annotations: map[string]string{
+				migrateNonceAnnotation: strconv.FormatInt(nowUnix, 10),
+				migrateImageAnnotation: env.Spec.Image.Tag,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -179,6 +184,56 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// Annotations that identify which run a migrate Job belongs to, so an
+// AlreadyExists is only adopted when the existing Job is this same run.
+const (
+	migrateNonceAnnotation = "kuso.sislelabs.com/migrate-nonce"
+	migrateImageAnnotation = "kuso.sislelabs.com/migrate-image-tag"
+)
+
+// createMigrateJob creates job, or adopts an existing Job of the same name
+// when it is the same run (same nonce and image tag) — a dedupe, whose
+// outcome the caller can wait on. Any other existing Job is an error: its
+// result says nothing about whether THIS migration ran.
+func (c *Cloner) createMigrateJob(ctx context.Context, ns string, job *batchv1.Job) error {
+	_, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	existing, gerr := c.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, job.Name, metav1.GetOptions{})
+	if gerr != nil {
+		return fmt.Errorf("migrate job %s exists but can't be read: %w", job.Name, gerr)
+	}
+	for _, k := range []string{migrateNonceAnnotation, migrateImageAnnotation} {
+		if existing.Annotations[k] != job.Annotations[k] {
+			return fmt.Errorf("migrate job %s already exists for a different run (%s %q, want %q)",
+				job.Name, k, existing.Annotations[k], job.Annotations[k])
+		}
+	}
+	return nil
+}
+
+// uniqueJobName returns "<prefix>-<nonce>" within kube's 63-char name limit.
+// When that is too long the PREFIX is cut, never the nonce: cutting the
+// tail dropped the nonce, so a later run reused the previous Job's name,
+// hit AlreadyExists, and "observed" the old, finished Job as its own. The
+// cut name gets a short hash of the full prefix so two prefixes that only
+// differ past the cut stay distinct.
+func uniqueJobName(prefix string, nonce int64) string {
+	const maxLen = 63
+	plain := fmt.Sprintf("%s-%d", prefix, nonce)
+	if len(plain) <= maxLen {
+		return plain
+	}
+	sum := sha256.Sum256([]byte(prefix))
+	suffix := hex.EncodeToString(sum[:3]) + "-" + strconv.FormatInt(nonce, 36)
+	cut := strings.TrimRight(prefix[:maxLen-len(suffix)-1], "-.")
+	return cut + "-" + suffix
+}
 
 // tryAcquireSeed returns true if no seed+migrate is already in flight for this
 // clone, marking it in-flight. ensurePreviewEnv calls EnsurePRAddons once per
@@ -257,13 +312,9 @@ func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, envSc
 			continue
 		}
 		job := buildMigrateJob(ns, project, cloneFQN, env, ownerUID, nonce)
-		if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				// Same seed nonce already migrating this env — observe it.
-			} else {
-				c.Logger.Warn("preview migrate: create job", "env", env.Name, "clone", cloneFQN, "err", err)
-				continue
-			}
+		if err := c.createMigrateJob(ctx, ns, job); err != nil {
+			c.Logger.Warn("preview migrate: create job", "env", env.Name, "clone", cloneFQN, "err", err)
+			continue
 		}
 		if err := c.waitForJobComplete(ctx, ns, job.Name, 10*time.Minute); err != nil {
 			c.Logger.Warn("preview migrate failed", "env", env.Name, "clone", cloneFQN, "job", job.Name, "err", err)
@@ -404,7 +455,7 @@ func (c *Cloner) watchAndMigrate(ctx context.Context, ns, project, envScope, clo
 			}
 			baseline[env.Name] = env.Spec.Image.Tag
 			job := buildMigrateJob(ns, project, cloneFQN, env, ownerUID, time.Now().Unix())
-			if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			if err := c.createMigrateJob(ctx, ns, job); err != nil {
 				c.Logger.Warn("preview migrate: create job", "env", env.Name, "clone", cloneFQN, "err", err)
 				continue
 			}

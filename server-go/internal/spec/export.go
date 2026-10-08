@@ -35,6 +35,9 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 	for _, p := range projects {
 		if p.Name == project {
 			f.BaseDomain = p.Spec.BaseDomain
+			if p.Spec.Uptime != nil && p.Spec.Uptime.Disabled {
+				f.Uptime = &ProjectUptimeSpec{Disabled: true}
+			}
 			namespace = projectExecNamespace(&p, namespace)
 			break
 		}

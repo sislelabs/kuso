@@ -707,7 +707,7 @@ func TestSetEnv_ReplacesAndRedacts(t *testing.T) {
 	// same: a plain var round-trips with its value visible.
 	err := s.SetEnv(context.Background(), "alpha", "web", []EnvVar{
 		{Name: "API_BASE", Value: "https://api.example.com"},
-		{Name: "DB_URL", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-web-secrets", "key": "DB_URL"}}},
+		{Name: "DB_URL", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-shared", "key": "DB_URL"}}},
 	})
 	if err != nil {
 		t.Fatalf("SetEnv: %v", err)

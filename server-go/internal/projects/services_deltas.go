@@ -106,7 +106,10 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		dupConflict = false
 		for i := range svc.Spec.Domains {
 			if strings.EqualFold(svc.Spec.Domains[i].Host, host) {
-				if svc.Spec.Domains[i].TLS == req.TLS && svc.Spec.Domains[i].TLSSecret == req.TLSSecret {
+				// The stored tls bit can't be false (the CRD defaults it
+				// to true and omitempty drops false), so it can't tell a
+				// re-add apart; only the secret can.
+				if svc.Spec.Domains[i].TLSSecret == req.TLSSecret {
 					dupConflict = true
 					return kube.ErrAbortRetry
 				}
@@ -133,8 +136,9 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	// different hostnames and must not auto-inherit (that mirror-to-every-
 	// env behavior is exactly what v0.16.19 removed to stop staging from
 	// claiming production's domain). AddEnvDomain is idempotent + reuses
-	// the cross-env conflict check + computeTLSHosts. For TLS=false hosts
-	// it still routes (additionalHosts) but won't be added to tlsHosts.
+	// the cross-env conflict check + computeTLSHosts. computeTLSHosts
+	// certifies every public FQDN regardless of the tls bit; a host that
+	// can't get a Let's Encrypt cert routes over plain HTTP only.
 	if _, perr := s.AddEnvDomain(ctx, project, service, "production", host, req.TLSSecret); perr != nil {
 		// A missing production env (rare: service mid-create) shouldn't
 		// fail the service-level write — the domain is recorded on the
@@ -245,6 +249,9 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	}
 	if !validEnvVarName(name) {
 		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+	}
+	if reason := envNameReserved(name); reason != "" {
+		return nil, fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
 	}
 	hasValue := req.Value != ""
 	hasRef := req.SecretRef != nil && req.SecretRef.Name != "" && req.SecretRef.Key != ""
@@ -364,6 +371,9 @@ func (s *Service) SetEnvValue(ctx context.Context, project, service, name, value
 	}
 	if !validEnvVarName(name) {
 		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+	}
+	if reason := envNameReserved(name); reason != "" {
+		return nil, fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
 	}
 	ctx, rev := s.beginRevision(ctx)
 	svc, err := s.GetService(ctx, project, service)

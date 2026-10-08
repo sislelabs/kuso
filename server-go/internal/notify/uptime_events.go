@@ -16,6 +16,9 @@ type UptimeTarget struct {
 	Since time.Time
 	// DownFor is the outage length (recovered events).
 	DownFor time.Duration
+	// Closed, on a recovered event, says why the outage ended without
+	// the service answering again ("stopped", "service deleted", …).
+	Closed string
 }
 
 // UptimeDown: one project's services stopped answering this tick.
@@ -64,6 +67,10 @@ func UptimeRecovered(project string, targets []UptimeTarget) Event {
 		e.Service = t.Service
 		e.Title = "✓ Back up · " + Scope(project, t.Service, "")
 		e.Description = "Was down for " + formatShortDuration(t.DownFor)
+		if t.Closed != "" {
+			e.Title = "◼ No longer checked · " + Scope(project, t.Service, "")
+			e.Description = "Was down for " + formatShortDuration(t.DownFor) + ", then " + t.Closed + "."
+		}
 		e.Body = e.Description
 		e.URL = ServiceLink(project, t.Service, "", "")
 		return e
@@ -76,11 +83,13 @@ func UptimeRecovered(project string, targets []UptimeTarget) Event {
 }
 
 // UptimeDownCluster: services in several projects went down in the same
-// minute. Project-less, so it reaches every channel.
+// minute. It names every project, so it goes only to channels that see
+// all projects; send the per-project events with AudienceScoped too.
 func UptimeDownCluster(targets []UptimeTarget) Event {
 	desc := uptimeLines(targets, true, false) +
 		"\n\nSeveral projects failing in the same minute usually means a node or platform problem."
 	return Event{
+		Audience:    AudienceUnscoped,
 		Type:        EventUptimeDown,
 		Title:       fmt.Sprintf("✗ %d services down across %d projects", len(targets), uptimeProjects(targets)),
 		Description: desc,
@@ -95,6 +104,7 @@ func UptimeDownCluster(targets []UptimeTarget) Event {
 func UptimeRecoveredCluster(targets []UptimeTarget) Event {
 	desc := uptimeLines(targets, true, true)
 	return Event{
+		Audience:    AudienceUnscoped,
 		Type:        EventUptimeRecovered,
 		Title:       fmt.Sprintf("✓ %d services back up across %d projects", len(targets), uptimeProjects(targets)),
 		Description: desc,
@@ -132,7 +142,9 @@ func uptimeLines(targets []UptimeTarget, withProject, recovered bool) string {
 		if withProject {
 			name = Scope(t.Project, t.Service, "")
 		}
-		if recovered {
+		if recovered && t.Closed != "" {
+			fmt.Fprintf(&b, "• %s (down for %s, then %s)\n", name, formatShortDuration(t.DownFor), t.Closed)
+		} else if recovered {
 			fmt.Fprintf(&b, "• %s (down for %s)\n", name, formatShortDuration(t.DownFor))
 		} else {
 			fmt.Fprintf(&b, "• %s: %s\n", name, t.Reason)

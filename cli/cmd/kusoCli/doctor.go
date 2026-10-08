@@ -217,11 +217,27 @@ output names the next concrete step for every finding.`,
 				report("github", "webhook-health failed: "+apiErrorMessage(resp.StatusCode(), string(resp.Body())), "warn")
 			default:
 				var wh struct {
-					Configured        bool   `json:"configured"`
-					LastDeliveryAt    string `json:"lastDeliveryAt"`
-					LastDeliveryEvent string `json:"lastDeliveryEvent"`
+					Configured           bool   `json:"configured"`
+					LastDeliveryAt       string `json:"lastDeliveryAt"`
+					LastDeliveryEvent    string `json:"lastDeliveryEvent"`
+					PermissionCheckError string `json:"permissionCheckError"`
+					PermissionGaps       []struct {
+						InstallationID int64    `json:"installationId"`
+						Account        string   `json:"account"`
+						Missing        []string `json:"missing"`
+					} `json:"permissionGaps"`
 				}
-				if jerr := json.Unmarshal(resp.Body(), &wh); jerr != nil {
+				jerr := json.Unmarshal(resp.Body(), &wh)
+				if jerr == nil {
+					for _, g := range wh.PermissionGaps {
+						report("github", fmt.Sprintf("installation %d (%s) lacks %s — commit statuses/CI gate will 403; add them in the App settings on GitHub, then accept the new permissions on that account",
+							g.InstallationID, g.Account, strings.Join(g.Missing, ", ")), "warn")
+					}
+					if wh.PermissionCheckError != "" {
+						report("github", "could not check App installation permissions: "+wh.PermissionCheckError, "warn")
+					}
+				}
+				if jerr != nil {
 					report("github", "decode webhook-health: "+jerr.Error(), "warn")
 				} else if !wh.Configured {
 					report("github", "GitHub App not configured — connect it in the dashboard (Settings → GitHub, click 'Create GitHub App') or via the install wizard", "fail")

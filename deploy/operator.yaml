@@ -64,6 +64,11 @@ rules:
       [services, endpoints, configmaps, secrets, serviceaccounts,
        persistentvolumeclaims, pods, events]
     verbs: [get, list, watch, create, update, patch, delete]
+  # kusoproject/templates/quota.yaml (spec.quota.enabled). Without these
+  # the whole project release fails, freezing its NetworkPolicies too.
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -85,6 +90,12 @@ rules:
   # Cert-manager glue (per-service custom-domain Certificates).
   - apiGroups: [cert-manager.io]
     resources: [certificates, certificaterequests, issuers, clusterissuers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # kusoaddon/templates/public-tcp.yaml renders an IngressRouteTCP. A
+  # missing grant fails the addon's helm release with a Forbidden, and
+  # every later change to that addon stops reconciling.
+  - apiGroups: [traefik.io]
+    resources: [ingressroutetcps]
     verbs: [get, list, watch, create, update, patch, delete]
   # CloudNativePG glue for HA Postgres addons (kept here so a fresh
   # install isn't surprised when ha:true fails). If CNPG isn't
@@ -162,7 +173,10 @@ spec:
           # for `kubectl apply -f deploy/` direct users — who pulled
           # the long-stale v0.1.0-dev tag pre-v0.9.4.
           image: ghcr.io/sislelabs/kuso-operator:v0.28.1
-          imagePullPolicy: Always
+          # Tags are immutable per release and the updater changes the tag
+          # on every upgrade, so Always only adds a ghcr dependency to every
+          # operator restart.
+          imagePullPolicy: IfNotPresent
           args:
             - "--leader-election-id=kuso-operator"
           securityContext:

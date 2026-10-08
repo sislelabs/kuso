@@ -3,7 +3,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api-client", () => ({ api: apiMock }));
 
-import { getDefaultPodSize, listPodSizes, setDefaultPodSize, updateClusterSettings } from "./api";
+import {
+  getDefaultPodSize,
+  listPodSizes,
+  setDefaultPodSize,
+  settingsPatch,
+  updateClusterSettings,
+} from "./api";
+
+describe("settingsPatch", () => {
+  it("nulls top-level keys removed in the editor", () => {
+    expect(settingsPatch({ a: 1, banner: { text: "x" } }, { a: 2 })).toEqual({ a: 2, banner: null });
+  });
+
+  it("passes edits and additions through", () => {
+    expect(settingsPatch({ a: 1 }, { a: 1, b: "new" })).toEqual({ a: 1, b: "new" });
+  });
+});
 
 describe("updateClusterSettings", () => {
   beforeEach(() => apiMock.mockReset());

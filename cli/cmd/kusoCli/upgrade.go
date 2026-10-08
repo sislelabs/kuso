@@ -153,19 +153,24 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		// Bound the poll loop generously — image pulls + rollouts
 		// regularly take a couple minutes on slow links.
 		deadline := time.Now().Add(15 * time.Minute)
+		failures := 0
 		for time.Now().Before(deadline) {
 			time.Sleep(3 * time.Second)
 			sResp, err := api.RawGet("/api/system/update/status")
-			if err != nil {
-				return err
+			retry, perr := upgradePollVerdict(sResp, err)
+			if perr != nil {
+				if !retry {
+					return perr
+				}
+				// The API pod is replaced during rolling-server, so a reset
+				// or a 5xx from the ingress is expected for a few polls.
+				failures++
+				if failures >= maxUpgradePollFailures {
+					return fmt.Errorf("update status: %d polls in a row failed; the upgrade may still be running, check 'kuso status' or the Update page: %w", failures, perr)
+				}
+				continue
 			}
-			// Same HTML-page-on-poll guard as the start step. Without
-			// this, an ingress hiccup mid-upgrade silently keeps the
-			// loop running for the full 15 min and the operator has
-			// to ^C with no useful output.
-			if ct := sResp.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
-				return fmt.Errorf("update status: server returned HTML (Content-Type=%s) — bailing", ct)
-			}
+			failures = 0
 			var s struct {
 				Phase   string `json:"phase"`
 				Message string `json:"message"`
@@ -189,6 +194,30 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		}
 		return fmt.Errorf("upgrade timed out after 15m; check 'kuso status' or the Update page")
 	},
+}
+
+// maxUpgradePollFailures is how many consecutive transient status-poll
+// failures (3s apart) are tolerated: about a minute, enough for the API
+// pod to be replaced.
+const maxUpgradePollFailures = 20
+
+// upgradePollVerdict classifies one status poll. A nil error means the
+// response is usable. Transport errors and 5xx are transient (retry=true);
+// 4xx and a 2xx HTML page (wrong URL, ingress error page) are fatal.
+func upgradePollVerdict(resp *resty.Response, err error) (retry bool, verdict error) {
+	if err != nil {
+		return true, err
+	}
+	if code := resp.StatusCode(); code >= 500 {
+		return true, fmt.Errorf("update status: HTTP %d", code)
+	}
+	if resp.StatusCode() >= 300 {
+		return false, fmt.Errorf("update status: %w", checkRespErr(resp, nil))
+	}
+	if ct := resp.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+		return false, fmt.Errorf("update status: server returned HTML (Content-Type=%s) — bailing", ct)
+	}
+	return false, nil
 }
 
 // classifyUpgradePhase decides whether an update-status phase is terminal.

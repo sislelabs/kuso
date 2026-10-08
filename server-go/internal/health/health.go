@@ -10,15 +10,18 @@
 // request/error/latency timeseries; this watcher handles operational
 // alerts.
 //
-// State is kept in-memory: we remember which alerts we've already
-// fired so a CrashLoopBackOff that lasts an hour doesn't spam
-// Discord every 30s. On restart we re-emit the current state once,
-// which is fine — operators want the boot-time summary anyway.
+// We remember which alerts we've already fired so a CrashLoopBackOff
+// that lasts an hour doesn't spam Discord every 30s. With a Store the
+// open episodes survive a kuso-server roll or lease handover, so an
+// upgrade neither re-pages every ongoing crash nor loses the recovery
+// for an episode opened by the previous leader.
 package health
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -94,9 +97,42 @@ type Watcher struct {
 	// crashSeen maps a pod-crash key (see crashKey) to its open episode.
 	crashSeen map[string]*crashEpisode
 
+	// Store persists open episodes across restarts. nil keeps them
+	// in memory only.
+	Store StateStore
+
+	restored  bool
+	lastSaved string
+
 	// Test seams; nil means time.Now / w.Notify.Emit.
 	now  func() time.Time
 	emit func(notify.Event)
+}
+
+// StateStore is the Setting key/value surface the watcher persists its
+// alert state through (*db.DB satisfies it).
+type StateStore interface {
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key, value, updatedBy string) error
+}
+
+// stateKey is the Setting row holding the persisted alert state.
+const stateKey = "health.alertState"
+
+type persistedEpisode struct {
+	Since        time.Time `json:"since"`
+	LastBad      time.Time `json:"lastBad"`
+	Addon        bool      `json:"addon,omitempty"`
+	Project      string    `json:"project,omitempty"`
+	Service      string    `json:"service,omitempty"`
+	Env          string    `json:"env,omitempty"`
+	HealthySince time.Time `json:"healthySince"`
+	Restarts     int       `json:"restarts,omitempty"`
+}
+
+type persistedState struct {
+	Crash map[string]persistedEpisode `json:"crash"`
+	Fired []string                    `json:"fired"`
 }
 
 // New returns a Watcher with sensible defaults.
@@ -148,8 +184,88 @@ func (w *Watcher) Run(ctx context.Context) {
 }
 
 func (w *Watcher) tick(ctx context.Context) {
+	w.restoreState(ctx)
 	w.checkPods(ctx)
 	w.checkNodes(ctx)
+	w.persistState(ctx)
+}
+
+// restoreState loads the previous process's open episodes once, before
+// the first check. Entries whose condition cleared while no watcher ran
+// close through the normal recovery/cooldown paths on the next ticks.
+func (w *Watcher) restoreState(ctx context.Context) {
+	if w.Store == nil || w.restored {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	raw, err := w.Store.GetSetting(rctx, stateKey)
+	cancel()
+	if err != nil {
+		// Retry next tick rather than starting empty and re-paging.
+		w.Logger.Warn("health: load alert state", "err", err)
+		return
+	}
+	w.restored = true
+	w.lastSaved = raw
+	if raw == "" {
+		return
+	}
+	var st persistedState
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		w.Logger.Warn("health: decode alert state; starting empty", "err", err)
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for k, e := range st.Crash {
+		if _, ok := w.crashSeen[k]; ok {
+			continue
+		}
+		w.crashSeen[k] = &crashEpisode{
+			since: e.Since, lastBad: e.LastBad, addon: e.Addon,
+			project: e.Project, service: e.Service, env: e.Env,
+			healthySince: e.HealthySince, restarts: e.Restarts,
+		}
+	}
+	for _, k := range st.Fired {
+		w.fired[k] = true
+	}
+}
+
+// persistState writes the alert state when it changed since the last
+// write. Failures are logged and retried on the next tick.
+func (w *Watcher) persistState(ctx context.Context) {
+	if w.Store == nil || !w.restored {
+		return
+	}
+	st := persistedState{Crash: map[string]persistedEpisode{}, Fired: []string{}}
+	w.mu.Lock()
+	for k, e := range w.crashSeen {
+		st.Crash[k] = persistedEpisode{
+			Since: e.since, LastBad: e.lastBad, Addon: e.addon,
+			Project: e.project, Service: e.service, Env: e.env,
+			HealthySince: e.healthySince, Restarts: e.restarts,
+		}
+	}
+	for k := range w.fired {
+		st.Fired = append(st.Fired, k)
+	}
+	w.mu.Unlock()
+	sort.Strings(st.Fired)
+	b, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	if string(b) == w.lastSaved {
+		return
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := w.Store.SetSetting(sctx, stateKey, string(b), "health-watcher"); err != nil {
+		w.Logger.Warn("health: save alert state", "err", err)
+		return
+	}
+	w.lastSaved = string(b)
 }
 
 // checkPods finds pods in CrashLoopBackOff / ImagePullBackOff /

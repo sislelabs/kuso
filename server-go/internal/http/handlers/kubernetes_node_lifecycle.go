@@ -28,6 +28,21 @@ import (
 // route here is admin-gated; the read-only views in
 // kubernetes_nodes.go are open to any authenticated user.
 
+// kusoNodeLabels moves join labels into the kuso.sislelabs.com/
+// namespace, as the bootstrap path does, so placement and region chips
+// see them. Keys that already carry a prefix (kuso's or another) pass
+// through unchanged.
+func kusoNodeLabels(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if !strings.Contains(k, "/") {
+			k = kusoLabelPrefix + k
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // JoinNode runs the SSH-driven k3s agent install on a remote VM.
 // Body: {host, user, password|privateKey, port?, labels?, name?}.
 // Returns the install output verbatim so the user can debug install
@@ -78,8 +93,9 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 		Credentials: body.Credentials,
 		K3sURL:      k3sURL,
 		K3sToken:    token,
-		NodeLabels:  body.Labels,
+		NodeLabels:  kusoNodeLabels(body.Labels),
 		NodeName:    body.Name,
+		K3sVersion:  nodejoin.ServerK3sVersion(h.Kube.Clientset),
 	})
 	if err != nil {
 		// Return 502 so the UI distinguishes "the join failed on the

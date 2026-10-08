@@ -4,12 +4,12 @@
 
 {{- define "kusorun.labels" -}}
 app.kubernetes.io/name: kusorun
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/component: kusorun
-kuso.sislelabs.com/project: {{ .Values.project | default "unknown" }}
-kuso.sislelabs.com/service: {{ .Values.service | default "unknown" }}
-kuso.sislelabs.com/run: {{ .Release.Name }}
+kuso.sislelabs.com/project: {{ .Values.project | default "unknown" | quote }}
+kuso.sislelabs.com/service: {{ .Values.service | default "unknown" | quote }}
+kuso.sislelabs.com/run: {{ .Release.Name | quote }}
 {{- end }}
 
 {{/*

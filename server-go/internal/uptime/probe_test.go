@@ -107,15 +107,23 @@ func TestProbeClosedPort(t *testing.T) {
 	if r.OK || r.Error != "connection refused" {
 		t.Fatalf("closed port: %+v", r)
 	}
-	if p.Reachable(context.Background(), "http://"+addr+"/") {
-		t.Fatal("closed port reads as reachable")
+	if Dialable(context.Background(), addr, time.Second) {
+		t.Fatal("closed port reads as dialable")
 	}
 }
 
-func TestReachableOn503(t *testing.T) {
+func TestDialableOpenPort(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer srv.Close()
-	if !NewProber(time.Second).Reachable(context.Background(), srv.URL) {
-		t.Fatal("a 503 answer must count as reachable")
+	if !Dialable(context.Background(), srv.Listener.Addr().String(), time.Second) {
+		t.Fatal("a listening port must count as dialable")
+	}
+}
+
+// The self-check must not go through kuso-server's own Service, whose
+// endpoint disappears whenever readyz fails.
+func TestSelfCheckNotTiedToOwnReadiness(t *testing.T) {
+	if strings.Contains(selfCheckAddr, "kuso-server") {
+		t.Fatalf("self-check targets kuso-server itself: %s", selfCheckAddr)
 	}
 }

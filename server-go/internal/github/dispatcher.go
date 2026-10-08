@@ -10,12 +10,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/builds"
@@ -71,6 +73,16 @@ type Dispatcher struct {
 	// a Next.js route, the API is /api/reviews/<token>). Empty = no
 	// review comment is posted.
 	ReviewBaseURL string
+
+	// serial orders async deliveries per PR / per ref (DispatchAsync).
+	serial keyedSerializer
+	// closedPRs tombstones closed PRs ("owner/repo#N" -> closedAt) so a
+	// synchronize delivered after the close can't resurrect the preview.
+	closedMu  sync.Mutex
+	closedPRs map[string]time.Time
+	// droppedNotifiedAt rate-limits NotifyDroppedDelivery per installation.
+	// Guarded by closedMu.
+	droppedNotifiedAt map[int64]time.Time
 }
 
 // PreviewDB is the surface dispatcher needs from previewdb.Cloner.
@@ -87,6 +99,30 @@ func (d *Dispatcher) nsFor(ctx context.Context, project string) string {
 		return d.Namespace
 	}
 	return d.NSResolver.NamespaceFor(ctx, project)
+}
+
+// listProjectServices returns the project's KusoServices, from the informer
+// cache when it is warm. Every push and PR event walks every project, so a
+// live LIST here cost one apiserver round-trip per project per webhook, even
+// for repos no project deploys. The cached objects are shared: read only.
+func (d *Dispatcher) listProjectServices(ctx context.Context, project string) ([]unstructured.Unstructured, error) {
+	ns := d.nsFor(ctx, project)
+	sel := map[string]string{kube.LabelProject: project}
+	if d.Kube.Cache != nil {
+		if items, ok := d.Kube.Cache.ListFromCache(kube.GVRServices, ns, labels.SelectorFromSet(sel)); ok {
+			out := make([]unstructured.Unstructured, 0, len(items))
+			for _, u := range items {
+				out = append(out, *u)
+			}
+			return out, nil
+		}
+	}
+	raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(sel)})
+	if err != nil {
+		return nil, err
+	}
+	return raw.Items, nil
 }
 
 // NewDispatcher constructs a Dispatcher. namespace falls back to "kuso".
@@ -298,8 +334,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		// only those whose effective repo+branch matches this push.
 		// Services live in the project's execution namespace, which may
 		// differ from the home ns when KusoProject.spec.namespace is set.
-		raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+		svcItems, err := d.listProjectServices(ctx, proj.Name)
 		if err != nil {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
 			continue
@@ -310,8 +345,8 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		// project-default-repo match is implied because services fall
 		// back to it in serviceRepoMatches.
 		anyMatch := false
-		for i := range raw.Items {
-			if serviceRepoMatches(&raw.Items[i], &proj, repoFullName) {
+		for i := range svcItems {
+			if serviceRepoMatches(&svcItems[i], &proj, repoFullName) {
 				anyMatch = true
 				break
 			}
@@ -342,7 +377,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		if headSHA == "" {
 			headSHA = p.After
 		}
-		d.Logger.Info("push → trigger builds", "project", proj.Name, "branch", branch, "services", len(raw.Items), "pr", prNumber)
+		d.Logger.Info("push → trigger builds", "project", proj.Name, "branch", branch, "services", len(svcItems), "pr", prNumber)
 
 		// Config-as-code: fetch kuso.yaml from the repo at the pushed
 		// ref and apply it before builds run. Best-effort — a parse/
@@ -390,8 +425,8 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			}
 		}
 
-		for i := range raw.Items {
-			fqn := raw.Items[i].GetName()
+		for i := range svcItems {
+			fqn := svcItems[i].GetName()
 			short := strings.TrimPrefix(fqn, proj.Name+"-")
 			if short == "" {
 				short = fqn
@@ -406,7 +441,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			// branch push" behaviour; in a multi-repo project a push to
 			// repo X builds only X's services (and skips services on
 			// other repos or other branches).
-			svcRepo, svcBranch := serviceEffectiveRepo(&raw.Items[i], &proj)
+			svcRepo, svcBranch := serviceEffectiveRepo(&svcItems[i], &proj)
 			if !repoMatches(svcRepo, repoFullName) {
 				continue
 			}
@@ -421,7 +456,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 				continue
 			}
 			// Monorepo watch paths (see watchpaths.go).
-			if ok, reason := pushTouchesService(serviceWatchPaths(&raw.Items[i]), changes); !ok {
+			if ok, reason := pushTouchesService(serviceWatchPaths(&svcItems[i]), changes); !ok {
 				d.Logger.Info("push build skipped", "project", proj.Name, "service", short, "reason", reason)
 				continue
 			}
@@ -471,19 +506,31 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 	}
 	repoFullName := pr.Repository.FullName
 
+	switch pr.Action {
+	case "closed":
+		d.markPRClosed(repoFullName, pr.Number)
+	case "reopened":
+		d.clearPRClosed(repoFullName, pr.Number)
+	case "opened", "synchronize":
+		if d.prClosed(repoFullName, pr.Number) {
+			d.Logger.Info("preview skipped: PR already closed", "repo", repoFullName, "pr", pr.Number, "action", pr.Action)
+			return nil
+		}
+	}
+
 	projects, err := d.Kube.ListKusoProjects(ctx, d.Namespace)
 	if err != nil {
 		return fmt.Errorf("list projects: %w", err)
 	}
 	for _, proj := range projects {
-		if proj.Spec.Previews == nil || !proj.Spec.Previews.Enabled {
+		previewsOn := proj.Spec.Previews != nil && proj.Spec.Previews.Enabled
+		if !previewsOn && pr.Action != "closed" {
 			continue
 		}
 		// List services up front so repo matching can be PER-SERVICE
 		// (multi-repo projects): a PR on repo X previews only the
 		// services that track repo X, not every service in the project.
-		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+		svcItems, err := d.listProjectServices(ctx, proj.Name)
 		if err != nil {
 			d.Logger.Error("list services for pr", "project", proj.Name, "err", err)
 			continue
@@ -491,13 +538,20 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		// Skip the project unless at least one service tracks this repo
 		// (the project-default-repo match is implied via fallback).
 		anyMatch := false
-		for i := range services.Items {
-			if serviceRepoMatches(&services.Items[i], &proj, repoFullName) {
+		for i := range svcItems {
+			if serviceRepoMatches(&svcItems[i], &proj, repoFullName) {
 				anyMatch = true
 				break
 			}
 		}
 		if !anyMatch {
+			continue
+		}
+		// Teardown runs ahead of the previews/triggers gates: a PR
+		// retargeted off a trigger branch, or closed after previews were
+		// switched off, still has a preview to remove.
+		if pr.Action == "closed" {
+			d.teardownPreview(ctx, &proj, svcItems, pr, previewsOn)
 			continue
 		}
 		// Trigger gating (v0.17.0). When the project declares
@@ -556,28 +610,28 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				continue
 			}
 			previewDeployed := 0
-			for i := range services.Items {
+			for i := range svcItems {
 				// Per-service repo gate: only preview services that track
 				// the PR's repo. A multi-repo project's PR on repo X
 				// shouldn't spin up preview envs for services on repo Y.
-				if !serviceRepoMatches(&services.Items[i], &proj, repoFullName) {
+				if !serviceRepoMatches(&svcItems[i], &proj, repoFullName) {
 					continue
 				}
 				// Per-service opt-out: a service can set
 				// spec.previews.disabled to skip PR previews even when
 				// the project toggle is on. Useful for internal
 				// services (workers, cron) that have no public URL.
-				if svcPreviewsDisabled(&services.Items[i]) {
+				if svcPreviewsDisabled(&svcItems[i]) {
 					continue
 				}
 				// Env-group clones (api-qa, …) are the app for a named env
 				// and mount that env's addons; a PR previews the production
 				// service only.
-				if isEnvGroupCloneService(&services.Items[i]) {
+				if isEnvGroupCloneService(&svcItems[i]) {
 					continue
 				}
-				if err := d.ensurePreviewEnv(ctx, &proj, services.Items[i].GetName(), pr, baseEnv); err != nil {
-					d.Logger.Warn("ensure preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
+				if err := d.ensurePreviewEnv(ctx, &proj, svcItems[i].GetName(), pr, baseEnv); err != nil {
+					d.Logger.Warn("ensure preview env", "service", svcItems[i].GetName(), "pr", pr.Number, "err", err)
 					continue
 				}
 				previewDeployed++
@@ -597,44 +651,92 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 			if pr.Action == "opened" && previewDeployed > 0 {
 				d.ensureReviewerSurface(ctx, &proj, pr)
 			}
-		case "closed":
-			// Cancel any in-flight preview builds for this PR's head ref
-			// FIRST. A PR closed/merged with builds still queued behind the
-			// concurrency limit would otherwise clone a branch that's about
-			// to be (or already) deleted, fail, and page @here for a
-			// non-event. Preview builds carry Branch=pr head ref (see
-			// ensurePreviewEnv), so cancel by that branch. Cancelled builds
-			// emit build.cancelled (info), never build.failed (@here).
-			if d.Builds != nil {
-				if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, pr.PullRequest.Head.Ref, "ref deleted (PR closed)"); cerr != nil {
-					d.Logger.Warn("cancel builds on PR close", "project", proj.Name, "pr", pr.Number, "err", cerr)
-				} else if n > 0 {
-					d.Logger.Info("PR closed → cancelled in-flight builds", "project", proj.Name, "pr", pr.Number, "branch", pr.PullRequest.Head.Ref, "cancelled", n)
-				}
-			}
-			for i := range services.Items {
-				// Always attempt deletion on close — even for opted-out
-				// services. If the user toggled the opt-out on after a
-				// preview already existed, the cleanup path still
-				// needs to run. d.deletePreviewEnv is idempotent.
-				if err := d.deletePreviewEnv(ctx, proj.Name, services.Items[i].GetName(), pr.Number); err != nil {
-					d.Logger.Warn("delete preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
-				}
-			}
-			// Then drop every per-PR addon clone for the project.
-			// Done after preview-env cleanup so the preview pod
-			// terminates before the addon's conn secret vanishes
-			// (avoids spurious crashloops on the way down).
-			if d.PreviewDB != nil {
-				if err := d.PreviewDB.DeletePRAddons(ctx, proj.Name, pr.Number); err != nil {
-					d.Logger.Warn("delete pr addons", "project", proj.Name, "pr", pr.Number, "err", err)
-				}
-			}
-			// Close the reviewer row (audit history stays).
-			d.closeReviewerSurface(ctx, proj.Name, pr.Number)
 		}
 	}
 	return nil
+}
+
+// teardownPreview removes PR #N's preview for the services in proj that
+// track the PR's repo. PR numbers are per repo, so in a multi-repo project
+// another repo's PR #N may have its own preview; that one is left alone,
+// and so are the per-PR clone DBs and reviewer row both PRs share (they are
+// keyed by project + N) until the last preview for #N is gone.
+func (d *Dispatcher) teardownPreview(ctx context.Context, proj *kube.KusoProject, svcItems []unstructured.Unstructured, pr prEvent, previewsOn bool) {
+	ns := d.nsFor(ctx, proj.Name)
+	var envNames, svcFQNs []string
+	existed := false
+	for i := range svcItems {
+		// No previews-disabled / env-group gate here: a service opted out
+		// after its preview was created still needs the cleanup.
+		if !serviceRepoMatches(&svcItems[i], proj, pr.Repository.FullName) {
+			continue
+		}
+		fqn := svcItems[i].GetName()
+		envName := fmt.Sprintf("%s-pr-%d", fqn, pr.Number)
+		svcFQNs = append(svcFQNs, fqn)
+		envNames = append(envNames, envName)
+		if e, err := d.Kube.GetKusoEnvironment(ctx, ns, envName); err == nil && e != nil {
+			existed = true
+		}
+	}
+	if !existed && !previewsOn {
+		return // previews off and nothing was ever deployed for this PR
+	}
+	// Cancel the PR's in-flight preview builds first, so a build queued
+	// behind the concurrency limit doesn't clone a branch that is about to
+	// be deleted and page @here. Only builds made for these preview envs
+	// are touched: matching on the head branch name cancelled production
+	// builds whenever a PR's head was named like a deployed branch.
+	if d.Builds != nil {
+		if n, cerr := d.Builds.CancelPreviewBuilds(ctx, proj.Name, envNames, "ref deleted (PR closed)"); cerr != nil {
+			d.Logger.Warn("cancel builds on PR close", "project", proj.Name, "pr", pr.Number, "err", cerr)
+		} else if n > 0 {
+			d.Logger.Info("PR closed → cancelled in-flight preview builds", "project", proj.Name, "pr", pr.Number, "cancelled", n)
+		}
+	}
+	for _, fqn := range svcFQNs {
+		if err := d.deletePreviewEnv(ctx, proj.Name, fqn, pr.Number); err != nil {
+			d.Logger.Warn("delete preview env", "service", fqn, "pr", pr.Number, "err", err)
+		}
+	}
+	if others := d.otherPreviewEnvsForPR(ctx, ns, proj.Name, pr.Number, envNames); len(others) > 0 {
+		d.Logger.Info("PR closed: per-PR clones kept, another repo's PR with the same number still has a preview",
+			"project", proj.Name, "pr", pr.Number, "repo", pr.Repository.FullName, "remaining", others)
+		return
+	}
+	// Drop the per-PR addon clones after the envs, so the preview pod
+	// terminates before the clone's conn secret vanishes.
+	if d.PreviewDB != nil {
+		if err := d.PreviewDB.DeletePRAddons(ctx, proj.Name, pr.Number); err != nil {
+			d.Logger.Warn("delete pr addons", "project", proj.Name, "pr", pr.Number, "err", err)
+		}
+	}
+	// Close the reviewer row (audit history stays).
+	d.closeReviewerSurface(ctx, proj.Name, pr.Number)
+}
+
+// otherPreviewEnvsForPR lists the project's live preview envs for PR #N
+// other than exclude: previews of the same PR number on another repo.
+func (d *Dispatcher) otherPreviewEnvsForPR(ctx context.Context, ns, project string, prNumber int, exclude []string) []string {
+	envs, err := d.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		// Unknown: keep the shared clones rather than drop a DB another
+		// preview may be using. The TTL sweep reaps them later.
+		d.Logger.Warn("list envs for PR close", "project", project, "pr", prNumber, "err", err)
+		return []string{"(unknown: list failed)"}
+	}
+	var out []string
+	for i := range envs {
+		e := &envs[i]
+		if e.Spec.Kind != "preview" || e.Spec.PullRequest == nil || e.Spec.PullRequest.Number != prNumber {
+			continue
+		}
+		if e.DeletionTimestamp != nil || slices.Contains(exclude, e.Name) {
+			continue
+		}
+		out = append(out, e.Name)
+	}
+	return out
 }
 
 func (d *Dispatcher) onInstallation(ctx context.Context, body []byte) error {
@@ -757,14 +859,13 @@ func isZeroSHA(s string) bool {
 // nothing to cancel. Best-effort: a list error returns false (nothing to
 // cancel there) rather than blocking the whole delete handler.
 func projectTracksRepo(ctx context.Context, d *Dispatcher, proj *kube.KusoProject, repoFullName string) bool {
-	raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+	items, err := d.listProjectServices(ctx, proj.Name)
 	if err != nil {
 		d.Logger.Error("list services for repo-tracks check", "project", proj.Name, "err", err)
 		return false
 	}
-	for i := range raw.Items {
-		if serviceRepoMatches(&raw.Items[i], proj, repoFullName) {
+	for i := range items {
+		if serviceRepoMatches(&items[i], proj, repoFullName) {
 			return true
 		}
 	}
@@ -1019,10 +1120,13 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// legacy mount-all (nil sharedEnvKeys); a per-key subscription reaches
 	// the pod as the secretKeyRefs inherited from the base env, exactly as
 	// production, so the scrub removes the blanket mounts in that case.
-	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
 	// Merge in previewEnvVars: by name, preview overrides win over
 	// the baseEnv copy. Empty list = no overrides (most common).
 	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
+	// Same rule as the envFrom scrub: no per-key path into the production
+	// service secret either.
+	mergedEnvVars = dropSecretKeyRefsTo(mergedEnvVars, kube.ServiceSecretName(proj.Name, short))
 
 	// Per-preview URL rewrite (v0.17.4). The cloned envVars carry
 	// production URLs (NEXT_PUBLIC_API_URL=https://api.tickero.bg) —
@@ -1211,7 +1315,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// before a mount fix (or before a new addon clone) would otherwise
 		// keep mounting production conns on every resync.
 		scrub := func(in []string) []string {
-			return scrubPreviewEnvFrom(in, proj.Name, projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+			return scrubPreviewEnvFrom(in, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
 		}
 		envFromSecrets = scrub(existing.Spec.EnvFromSecrets)
 		env.Spec.EnvFromSecrets = envFromSecrets
@@ -1235,8 +1339,19 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			return fmt.Errorf("create preview env: %w", err)
 		}
 	}
-	if d.Builds != nil {
+	// A runtime=worker service with FromService has no build of its own; it
+	// runs the source service's image.
+	buildService := short
+	if parentSvc != nil && parentSvc.Spec.FromService != "" {
+		buildService = parentSvc.Spec.FromService
+	}
+	prior := d.priorBuildsForSHA(ctx, ns, proj.Name, buildService, pr.PullRequest.Head.SHA, envName)
+	if d.Builds != nil && prior.succeeded == nil && !prior.inFlight {
 		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{
+			// The SHA-keyed build ended without an image (cancelled by a
+			// close, or failed): a reopen or redelivery rebuilds the commit
+			// under its own name instead of colliding with the dead one.
+			Retry:           prior.endedWithoutImage,
 			Branch:          pr.PullRequest.Head.Ref,
 			Ref:             pr.PullRequest.Head.SHA,
 			TriggeredBy:     "webhook",
@@ -1258,12 +1373,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		}
 	}
 	// Self-heal the close→reopen case: the env CR was recreated empty, but
-	// the SHA-keyed build is terminal (done=true) so the poller never
-	// re-promotes its image to the new env → InvalidImageName. If a
-	// succeeded build for this service+SHA already exists, stamp its image
-	// straight onto the freshly-created env. No-op on a genuine first open
-	// (no prior build) — the trigger above builds + promotes normally.
-	d.stampExistingBuildImage(ctx, ns, proj.Name, short, parentSvc, pr.PullRequest.Head.SHA, envName)
+	// the build is terminal (done=true) so the poller never re-promotes its
+	// image to the new env → InvalidImageName. If a succeeded build for
+	// this service+SHA already exists, stamp its image straight onto the
+	// freshly-created env. No-op on a genuine first open (no prior build) —
+	// the trigger above builds + promotes normally.
+	if prior.succeeded != nil {
+		d.stampExistingBuildImage(ctx, ns, prior.succeeded, envName)
+	}
 	// User-defined seed command (v0.17.0 Phase 2). Runs as a one-shot
 	// kube Job in a clone of the build image so it has access to the
 	// app's package scripts / vendored deps. Uses the same envFromSecrets
@@ -1459,27 +1576,71 @@ var (
 	squashCommitRE = regexp.MustCompile(`\(#(\d+)\)\s*$`)
 )
 
-// stampExistingBuildImage patches spec.image onto a (possibly recreated)
-// preview env when a SUCCEEDED build already exists for this service+SHA.
-// Covers PR close→reopen: the env CR is recreated with an empty image, but
-// the SHA-keyed build is terminal (done=true) and the poller never
-// re-promotes a finished build to an env that appeared after it completed.
-// For a runtime=worker service (FromService set) the worker has no build of
-// its own — stamp the parent (api) service's build image, mirroring what
+// priorBuilds summarises the builds that already exist for one service+SHA
+// that could serve a given preview env.
+type priorBuilds struct {
+	succeeded         *kube.KusoBuild // newest succeeded build with an image
+	inFlight          bool            // a build is still queued or running
+	endedWithoutImage bool            // a build reached failed/cancelled
+}
+
+// priorBuildsForSHA looks up the builds of service at sha. Builds made for
+// a different preview env are ignored (their build-time env differs); the
+// unmarked ones are the SHA-keyed builds from before preview builds were
+// marked, or a push build of the same commit.
+func (d *Dispatcher) priorBuildsForSHA(ctx context.Context, ns, project, service, sha, envName string) priorBuilds {
+	var out priorBuilds
+	if sha == "" {
+		return out
+	}
+	list, err := d.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		d.Logger.Warn("list builds for preview", "project", project, "service", service, "err", err)
+		return out
+	}
+	fqn := project + "-" + service
+	var exact, unmarked *kube.KusoBuild
+	for i := range list {
+		b := &list[i]
+		if b.Spec.Service != fqn || b.Spec.Ref != sha || b.Spec.DryRun {
+			continue
+		}
+		target := b.Annotations[builds.AnnPreviewEnv]
+		if target != "" && target != envName {
+			continue
+		}
+		if b.Labels[builds.LabelBuildState] != "done" && !b.Spec.Done {
+			out.inFlight = true
+			continue
+		}
+		if b.Annotations[builds.AnnBuildPhase] != "succeeded" || b.Spec.Image == nil {
+			out.endedWithoutImage = true
+			continue
+		}
+		best := &unmarked
+		if target != "" {
+			best = &exact
+		}
+		if *best == nil || b.CreationTimestamp.After((*best).CreationTimestamp.Time) {
+			*best = b
+		}
+	}
+	out.succeeded = exact
+	if out.succeeded == nil {
+		out.succeeded = unmarked
+	}
+	return out
+}
+
+// stampExistingBuildImage patches a succeeded build's image onto a
+// (possibly recreated) preview env. Covers PR close→reopen: the env CR is
+// recreated with an empty image, but the build is terminal (done=true) and
+// the poller never re-promotes a finished build to an env that appeared
+// after it completed. For a runtime=worker service (FromService set) the
+// caller passes the source service's build, mirroring what
 // promoteToFromServiceConsumers would have done.
-func (d *Dispatcher) stampExistingBuildImage(ctx context.Context, ns, project, short string, parentSvc *kube.KusoService, sha, envName string) {
-	buildService := short
-	if parentSvc != nil && parentSvc.Spec.FromService != "" {
-		buildService = parentSvc.Spec.FromService // worker reuses the source service's image
-	}
-	buildName := fmt.Sprintf("%s-%s-%s", project, buildService, builds.ImageTag(sha))
-	b, err := d.Kube.GetKusoBuild(ctx, ns, buildName)
-	if err != nil || b == nil || b.Spec.Image == nil || b.Spec.DryRun {
-		return // no prior real build → the trigger builds + promotes normally
-	}
-	if b.Annotations["kuso.sislelabs.com/build-phase"] != "succeeded" {
-		return // build exists but didn't produce a promotable image
-	}
+func (d *Dispatcher) stampExistingBuildImage(ctx context.Context, ns string, b *kube.KusoBuild, envName string) {
+	buildName := b.Name
 	patch := fmt.Sprintf(
 		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
 		b.Spec.Image.Repository, b.Spec.Image.Tag,
@@ -1549,8 +1710,12 @@ func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonCon
 //     the source carries (POOLER_URL, DIRECT_URL) would reach the preview.
 //   - With a per-key sharedEnvKeys subscription (non-nil) the blanket shared
 //     mounts go; the subscribed keys arrive as per-key secretKeyRefs.
-func scrubPreviewEnvFrom(in []string, project string, projectAddonConns, subscribedAddons []string, cloneByOrigin map[string]string, sharedEnvKeys []string) []string {
-	out := append([]string(nil), in...)
+//   - The service secret (<project>-<service>-secrets, the `kuso env set`
+//     values production mounts) never reaches a preview: it holds live
+//     payment keys, admin tokens and external DSNs. The base env carries it,
+//     so it arrives through the copied list unless removed here.
+func scrubPreviewEnvFrom(in []string, project, serviceSecret string, projectAddonConns, subscribedAddons []string, cloneByOrigin map[string]string, sharedEnvKeys []string) []string {
+	out := slices.DeleteFunc(append([]string(nil), in...), func(s string) bool { return s == serviceSecret })
 	if subscribedAddons != nil {
 		kept := filterConnsBySubscription(projectAddonConns, subscribedAddons, projectAddonConns, project)
 		unsubscribedClone := map[string]bool{}
@@ -1568,6 +1733,19 @@ func scrubPreviewEnvFrom(in []string, project string, projectAddonConns, subscri
 		out = slices.DeleteFunc(out, func(s string) bool { return slices.Contains(shared, s) })
 	}
 	return dedupePreserveOrder(out)
+}
+
+// dropSecretKeyRefsTo removes every env var whose secretKeyRef reads from
+// secretName.
+func dropSecretKeyRefsTo(vars []kube.KusoEnvVar, secretName string) []kube.KusoEnvVar {
+	return slices.DeleteFunc(slices.Clone(vars), func(v kube.KusoEnvVar) bool {
+		ref, ok := v.ValueFrom["secretKeyRef"].(map[string]any)
+		if !ok {
+			return false
+		}
+		name, _ := ref["name"].(string)
+		return name == secretName
+	})
 }
 
 // swapPGCloneSecrets replaces every "<source>-conn" entry whose
@@ -1796,14 +1974,13 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		return out
 	}
 	ns := d.nsFor(ctx, proj.Name)
-	services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
-		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+	services, err := d.listProjectServices(ctx, proj.Name)
 	if err != nil {
 		return out
 	}
 	prefix := proj.Name + "-"
-	for i := range services.Items {
-		u := &services.Items[i]
+	for i := range services {
+		u := &services[i]
 		fqn := u.GetName()
 		short := strings.TrimPrefix(fqn, prefix)
 		if short == "" {

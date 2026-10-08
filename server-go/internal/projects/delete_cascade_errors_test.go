@@ -232,27 +232,16 @@ func TestCreateEnvGroup_RollbackFailureIsSurfacedNotSwallowed(t *testing.T) {
 			},
 			Spec: kube.KusoAddonSpec{Project: "acme", Kind: "postgres"},
 		}),
-		// Decoy that collides with the "web" clone target so the create
-		// fails AFTER the addon clone landed (same shape as the
-		// provisioned-instance-addon rollback test).
-		typedSeed(kube.GVRServices, "KusoService", "acme-web-staging", &kube.KusoService{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "acme-web-staging",
-				Namespace: "kuso",
-				Labels: map[string]string{
-					labelProject: "acme",
-					labelService: "web-staging",
-					labelEnv:     "other",
-				},
-			},
-			Spec: kube.KusoServiceSpec{Project: "acme", Port: 8080},
-		}),
 	}
 	for _, sd := range seeds {
 		if err := dyn.Tracker().Create(sd.gvr, sd.obj, sd.obj.GetNamespace()); err != nil {
 			t.Fatalf("seed %s: %v", sd.obj.GetName(), err)
 		}
 	}
+	// The service clone fails AFTER the addon clone landed.
+	dyn.PrependReactor("create", "kusoservices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("injected service create failure")
+	})
 	// Rollback's addon delete fails — the cloned addon CR is now an orphan.
 	dyn.PrependReactor("delete", "kusoaddons", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("injected rollback delete failure")

@@ -435,7 +435,7 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "manage_addon",
-		Description: "Add or delete an addon on a project. Adding emits a connection-info Secret that's auto-injected as envFrom into every service in the project (DATABASE_URL etc.). " +
+		Description: "Add or delete an addon on a project. Adding creates the addon and its connection Secret (DATABASE_URL etc.), but services only get that Secret if they are subscribed to the addon, and existing services usually aren't. After adding, call subscribe_addon for every service that needs the connection. " +
 			"Supported kinds: " + strings.Join(allowedAddonKindList, ", ") + ". " +
 			"Other kinds are reserved (no workload would be deployed) and are refused. " +
 			"REQUIRES confirm=true. Refused in --read-only mode.",
@@ -446,6 +446,97 @@ func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("addon %s/%s %s", out.Project, out.Addon, out.Status)}},
+		}, out, nil
+	})
+}
+
+// ---------- subscribe_addon ----------
+
+type subscribeAddonArgs struct {
+	Project     string   `json:"project" jsonschema:"project name"`
+	Service     string   `json:"service" jsonschema:"service short name (no project prefix)"`
+	Subscribe   []string `json:"subscribe,omitempty" jsonschema:"addon names to mount into the service (their connection Secret is injected)"`
+	Unsubscribe []string `json:"unsubscribe,omitempty" jsonschema:"addon names to stop mounting"`
+	Confirm     bool     `json:"confirm" jsonschema:"must be true — changing subscriptions rolls the service's pods"`
+}
+
+type subscribeAddonResult struct {
+	Project    string   `json:"project"`
+	Service    string   `json:"service"`
+	Subscribed []string `json:"subscribed"`
+	Available  []string `json:"available"`
+}
+
+// subscribedAddonsResponse mirrors GET .../subscribed-addons.
+type subscribedAddonsResponse struct {
+	Subscribed []string `json:"subscribed"`
+	Available  []string `json:"available"`
+}
+
+func runSubscribeAddon(ctx context.Context, client *kusoclient.Client, args subscribeAddonArgs) (subscribeAddonResult, error) {
+	if args.Project == "" || args.Service == "" {
+		return subscribeAddonResult{}, errors.New("project and service are required")
+	}
+	if len(args.Subscribe) == 0 && len(args.Unsubscribe) == 0 {
+		return subscribeAddonResult{}, errors.New("nothing to do: pass subscribe and/or unsubscribe")
+	}
+	if !args.Confirm {
+		return subscribeAddonResult{}, errors.New("confirm=true is required — changing addon subscriptions rolls the service's pods")
+	}
+	if client.ReadOnly() {
+		return subscribeAddonResult{}, errors.New("kuso-mcp is in read-only mode; refusing to mutate")
+	}
+	path := apiPath("api", "projects", args.Project, "services", args.Service, "subscribed-addons")
+	var cur subscribedAddonsResponse
+	if err := client.GetJSON(ctx, path, &cur); err != nil {
+		return subscribeAddonResult{}, fmt.Errorf("read subscribed addons: %w", err)
+	}
+	available := make(map[string]bool, len(cur.Available))
+	for _, a := range cur.Available {
+		available[a] = true
+	}
+	for _, a := range args.Subscribe {
+		if !available[a] {
+			return subscribeAddonResult{}, fmt.Errorf("addon %q is not in project %q (available: %s)",
+				a, args.Project, strings.Join(cur.Available, ", "))
+		}
+	}
+	drop := make(map[string]bool, len(args.Unsubscribe))
+	for _, a := range args.Unsubscribe {
+		drop[a] = true
+	}
+	next := make([]string, 0, len(cur.Subscribed)+len(args.Subscribe))
+	seen := map[string]bool{}
+	for _, a := range append(append([]string{}, cur.Subscribed...), args.Subscribe...) {
+		if drop[a] || seen[a] {
+			continue
+		}
+		seen[a] = true
+		next = append(next, a)
+	}
+	if err := client.PutJSON(ctx, path, map[string][]string{"addons": next}, nil); err != nil {
+		return subscribeAddonResult{}, fmt.Errorf("set subscribed addons: %w", err)
+	}
+	return subscribeAddonResult{Project: args.Project, Service: args.Service, Subscribed: next, Available: cur.Available}, nil
+}
+
+func registerSubscribeAddon(server *mcp.Server, client *kusoclient.Client) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "subscribe_addon",
+		Description: "Subscribe a service to project addons (mount their connection Secret: DATABASE_URL, REDIS_URL, …) or unsubscribe it. " +
+			"Only subscribed addons are injected into a service's pods, so run this after manage_addon add for every service that needs the connection. " +
+			"Read-modify-write: addons you don't name keep their current state. REQUIRES confirm=true (pods roll). Refused in --read-only mode.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args subscribeAddonArgs) (*mcp.CallToolResult, subscribeAddonResult, error) {
+		out, err := runSubscribeAddon(ctx, client, args)
+		if err != nil {
+			return nil, subscribeAddonResult{}, err
+		}
+		subs := strings.Join(out.Subscribed, ", ")
+		if subs == "" {
+			subs = "(none)"
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s/%s now subscribed to: %s; pods roll to apply", out.Project, out.Service, subs)}},
 		}, out, nil
 	})
 }

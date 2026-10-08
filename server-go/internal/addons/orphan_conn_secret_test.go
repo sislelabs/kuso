@@ -2,6 +2,7 @@ package addons
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,10 +23,22 @@ import (
 // the Secret is a credential for nothing. Worse, it is what made the
 // leak invisible: all 16 orphaned databases still had a live-looking
 // *-conn Secret, so "is anything referencing this?" answered yes.
+//
+// The drop must actually run (a real Postgres): when it can't, the Secret is
+// kept on purpose as the orphan's trail (TestDelete_InstanceCloneKeepsConnWhenDropSkipped).
 func TestDelete_CloneRemovesConnSecret(t *testing.T) {
-	t.Parallel()
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set")
+	}
 	ctx := context.Background()
 	s := fakeServiceWithSecrets(t, seedProj("bukvite"))
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "kuso-instance-shared", Namespace: "kuso"},
+		Data:       map[string][]byte{"INSTANCE_ADDON_PG_DSN_ADMIN": []byte(dsn)},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed instance secret: %v", err)
+	}
 
 	// An env-group clone: instance-pg backed, labelled env=staging.
 	cr := &unstructured.Unstructured{Object: map[string]any{

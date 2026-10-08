@@ -29,6 +29,7 @@ import {
   BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { hostScheme } from "@/lib/host-scheme";
 
@@ -195,6 +196,7 @@ function MobileServiceCard({
     staleTime: 5_000,
   });
   const [envOpen, setEnvOpen] = useState(false);
+  const [confirmingStop, setConfirmingStop] = useState(false);
   // Redeploy + stop/start are editor-level mutations; disable with a
   // hint for viewers instead of a post-tap 403 toast.
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
@@ -238,6 +240,7 @@ function MobileServiceCard({
     m.mutate(undefined, {
       onSuccess: () => toast.success(stopped ? `Starting ${shortName}` : `Stopping ${shortName}`),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Action failed"),
+      onSettled: () => setConfirmingStop(false),
     });
   };
   const toggling = stop.isPending || start.isPending;
@@ -283,7 +286,9 @@ function MobileServiceCard({
           type="button"
           variant={stopped ? "default" : "outline"}
           size="sm"
-          onClick={toggleStop}
+          // Start is one tap; Stop takes production offline, so it confirms
+          // like the canvas and overlay do.
+          onClick={stopped ? toggleStop : () => setConfirmingStop(true)}
           disabled={toggling || !canWrite}
           title={canWrite ? undefined : "Requires editor access on this project"}
           className={stopped ? "" : "text-[var(--error)]"}
@@ -308,6 +313,16 @@ function MobileServiceCard({
       </div>
 
       {envOpen && <MobileEnvReadout project={project} service={shortName} />}
+      <ConfirmDialog
+        open={confirmingStop}
+        title={`Stop ${shortName}`}
+        body="This takes the service offline; visitors get a 503 until you start it."
+        confirmLabel="Stop service"
+        destructive
+        pending={stop.isPending}
+        onConfirm={toggleStop}
+        onCancel={() => setConfirmingStop(false)}
+      />
     </article>
   );
 }

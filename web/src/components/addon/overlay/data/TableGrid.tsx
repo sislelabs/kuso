@@ -71,10 +71,18 @@ export function TableGrid({
         dir: orderBy ? dir : undefined,
       }),
     staleTime: 10_000,
-    placeholderData: (prev) => prev,
+    // Keep the previous page on screen while paging/sorting the SAME
+    // table only: another table's rows under this table's header and PK
+    // would let an edit or delete hit the wrong row.
+    placeholderData: (prev, prevQuery) => {
+      const k = prevQuery?.queryKey;
+      return k && k[3] === (database ?? "") && k[6] === schema && k[7] === table ? prev : undefined;
+    },
   });
 
   const editable = cols.data?.editable ?? false;
+  // Row actions wait for the real rows of the current page/sort.
+  const rowActions = editable && !rows.isPlaceholderData;
   const pk = cols.data?.primaryKey ?? [];
   const colByName = new Map<string, SQLColumn>((cols.data?.columns ?? []).map((c) => [c.name, c]));
 
@@ -217,18 +225,20 @@ export function TableGrid({
               >
                 {editable && (
                   <td className="px-2 py-1 align-top">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const k = safePkOf(ri);
-                        if (k) setPendingDelete(k);
-                      }}
-                      className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-                      title="delete row"
-                      aria-label="Delete row"
-                    >
-                      <Trash2 className="h-3 w-3 text-red-400/70 hover:text-red-400" />
-                    </button>
+                    {rowActions && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const k = safePkOf(ri);
+                          if (k) setPendingDelete(k);
+                        }}
+                        className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                        title="delete row"
+                        aria-label="Delete row"
+                      >
+                        <Trash2 className="h-3 w-3 text-red-400/70 hover:text-red-400" />
+                      </button>
+                    )}
                   </td>
                 )}
                 {row.map((cell, ci) => {
@@ -237,7 +247,7 @@ export function TableGrid({
                   const isNull = data.nulls[ri][ci];
                   return (
                     <td key={ci} className="border-l border-[var(--border-subtle)]/40 px-0 py-0 align-top first:border-l-0">
-                      {editable && col && !pk.includes(colName) ? (
+                      {rowActions && col && !pk.includes(colName) ? (
                         <CellEditor
                           col={col}
                           value={cell}
@@ -308,7 +318,7 @@ export function TableGrid({
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="Delete this row?"
+        title={`Delete this row from ${schema === "public" ? table : `${schema}.${table}`}?`}
         body={
           pendingDelete && (
             <p className="font-mono text-[11px]">

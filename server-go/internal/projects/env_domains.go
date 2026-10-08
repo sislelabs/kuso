@@ -276,6 +276,9 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 	if !validEnvVarName(name) {
 		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
 	}
+	if reason := envNameReserved(name); reason != "" {
+		return nil, fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
+	}
 	hasValue := req.Value != ""
 	hasRef := req.SecretRef != nil && req.SecretRef.Name != "" && req.SecretRef.Key != ""
 	if hasValue == hasRef {

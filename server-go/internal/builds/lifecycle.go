@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -182,6 +183,44 @@ func (s *Service) CancelBuildsForRef(ctx context.Context, project, branch, reaso
 	return n, nil
 }
 
+// CancelPreviewBuilds cancels every in-flight build made for one of the
+// named preview envs (AnnPreviewEnv). The PR-close path uses this instead
+// of CancelBuildsForRef: a PR's head branch name says nothing about which
+// builds belong to the PR (a fork PR from `mallory:main` shares its head
+// name with production), but the preview env a build was made for does.
+func (s *Service) CancelPreviewBuilds(ctx context.Context, project string, previewEnvs []string, reason string) (int, error) {
+	if s.Kube == nil || len(previewEnvs) == 0 {
+		return 0, nil
+	}
+	ns := s.nsFor(ctx, project)
+	raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list builds for preview cancel: %w", err)
+	}
+	n := 0
+	for i := range raw {
+		b := &raw[i]
+		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
+			continue
+		}
+		target := b.Annotations[AnnPreviewEnv]
+		if target == "" || !slices.Contains(previewEnvs, target) {
+			continue
+		}
+		if cerr := s.cancelBuild(ctx, project, b.Name, reason); cerr != nil {
+			if errors.Is(cerr, ErrInvalid) {
+				continue
+			}
+			slog.Default().Warn("builds: cancel preview build", "build", b.Name, "env", target, "err", cerr)
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
 // RollbackOptions tunes a Rollback. Force skips the branch check (a
 // deliberate cross-branch rollback); Actor names who asked, for the
 // notification card.
@@ -214,7 +253,10 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		if !buildOwnedBy(&b, project, service) {
 			return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
 		}
-		if buildPhase(&b) != "succeeded" {
+		// A hold-expired build is cancelled but its image is complete;
+		// its own message points users here to deploy it.
+		holdExpired := buildPhase(&b) == "cancelled" && b.Annotations[annHoldExpired] != ""
+		if buildPhase(&b) != "succeeded" && !holdExpired {
 			return nil, fmt.Errorf("%w: build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", ErrInvalid, buildName, buildPhase(&b))
 		}
 		if b.Spec.Image == nil || b.Spec.Image.Tag == "" {
@@ -261,7 +303,7 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	envCRName := cur.Name
 	group := envGroupName(cur, project+"-"+service)
 	if !opts.Force && buildBranch != "" {
-		defaultBranch := s.defaultBranchOf(ctx, project)
+		defaultBranch := s.defaultBranchOf(ctx, project, service)
 		if !promotionBranchMatches(buildBranch, cur.Spec.Branch, defaultBranch) {
 			return nil, fmt.Errorf("%w: build %s was built from branch %q but %s deploys %q — pass force to roll back across branches",
 				ErrInvalid, buildName, buildBranch, group, envBranch(cur, defaultBranch))
@@ -291,6 +333,14 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	var e kube.KusoEnvironment
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e); err != nil {
 		return nil, fmt.Errorf("decode rolled-back env %s: %w", envCRName, err)
+	}
+	// Crons inherit the production image; leaving them on the bad build
+	// kept scheduled jobs running it until the next deploy.
+	if isProductionEnv(cur) {
+		img := kube.KusoImage{Repository: imageRepo, Tag: imageTag}
+		if cerr := s.repointCrons(ctx, ns, project, service, img, slog.Default()); cerr != nil {
+			slog.Default().Warn("rollback: repoint crons", "project", project, "service", service, "err", cerr)
+		}
 	}
 	s.emitRolledBack(project, service, group, buildName, prevBuild, imageTag, opts)
 	return &e, nil

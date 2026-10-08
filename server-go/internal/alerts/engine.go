@@ -92,6 +92,16 @@ type Engine struct {
 	// episodicFn is the same seam for episodic kinds; nil means
 	// e.evaluateEpisodic.
 	episodicFn func(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error)
+	// emitFn replaces e.Notify.Emit in tests; nil means e.Notify.Emit.
+	emitFn func(notify.Event)
+}
+
+func (e *Engine) emit(ev notify.Event) {
+	if e.emitFn != nil {
+		e.emitFn(ev)
+		return
+	}
+	e.Notify.Emit(ev)
 }
 
 // lastFiredMaxEntries bounds the in-memory throttle map. Rule counts

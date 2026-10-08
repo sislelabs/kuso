@@ -273,8 +273,11 @@ func SweepImagesPastWindow(
 					succeeded: a.Status == "succeeded",
 				})
 			}
-			if skipped > 0 && logFn != nil {
-				logFn("image-sweep: skipped archived rows from other namespaces",
+			// Expected on every sweep of every namespace: archived rows
+			// carry no namespace, so each sweep skips the others' rows.
+			// At Warn this was 1,680 lines a day of normal operation.
+			if skipped > 0 {
+				slog.Default().Debug("image-sweep: skipped archived rows from other namespaces",
 					"ns", namespace, "skipped", skipped)
 			}
 		}

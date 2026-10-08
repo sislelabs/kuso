@@ -47,6 +47,9 @@ func openHandlerTestDB(t *testing.T) *db.DB {
 	`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+	if _, err := d.DB.Exec(`DELETE FROM "Setting" WHERE key = 'auth.oauthBootstrapConsumed'`); err != nil {
+		t.Fatalf("reset oauth bootstrap marker: %v", err)
+	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }

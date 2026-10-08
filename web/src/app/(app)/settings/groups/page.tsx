@@ -187,6 +187,7 @@ export default function GroupsSettingsPage() {
         <main>
           {selected ? (
             <GroupEditor
+              key={selected}
               groupId={selected}
               groupName={(groups.data ?? []).find((g) => g.id === selected)?.name ?? selected}
               onDeleted={() => setSelected(null)}
@@ -226,7 +227,13 @@ function GroupEditor({
   });
   const tenancy = useQuery({
     queryKey: ["admin", "groups", groupId, "tenancy"],
-    queryFn: () => api<GroupTenancy>(`/api/groups/${encodeURIComponent(groupId)}/tenancy`),
+    queryFn: async () => {
+      const t = await api<GroupTenancy>(`/api/groups/${encodeURIComponent(groupId)}/tenancy`);
+      // The DB default ("member") and the pending group's "pending" grant
+      // no instance-level access, so they render as "none".
+      const known = INSTANCE_ROLES.some((r) => r.value === t.instanceRole);
+      return known ? t : { ...t, instanceRole: "" as const };
+    },
   });
   const users = useQuery({
     queryKey: ["admin", "users"],
@@ -264,6 +271,11 @@ function GroupEditor({
     onError: (e) => toast.error(e instanceof Error ? e.message : "save failed"),
   });
 
+  if (tenancy.isError) {
+    return (
+      <QueryErrorState what="group" error={tenancy.error} onRetry={() => void tenancy.refetch()} />
+    );
+  }
   if (tenancy.isPending || !form) {
     return <Skeleton className="h-72" />;
   }
@@ -429,6 +441,13 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       {/* Roster — one row per member with an inline remove. */}
       {members.isPending ? (
         <LoadingState kind="inline" className="px-3 py-2.5" label="loading members…" />
+      ) : members.isError ? (
+        <QueryErrorState
+          what="members"
+          error={members.error}
+          onRetry={() => void members.refetch()}
+          className="m-3"
+        />
       ) : roster.length === 0 ? (
         <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
           No members yet. Add a user below.

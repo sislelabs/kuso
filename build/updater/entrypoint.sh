@@ -36,14 +36,16 @@ write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 TMP_CRDS=$(mktemp)
 curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
 
-# Server-side dry-run BEFORE the real apply. A CRD schema that
-# retroactively adds a required field, a tightened pattern, or a CEL
-# validation rule can make already-stored CRs unwritable — the apiserver
-# rejects them at admission. If that lands blind, every subsequent
-# reconcile/write against existing resources fails and there's no clean
-# recovery path. --dry-run=server runs the real admission/validation
-# against the live apiserver without persisting, so we catch the
-# rejection here and abort with a clear status instead of bricking.
+# Server-side dry-run BEFORE the real apply. This validates the CRD
+# objects themselves (a structurally invalid schema, an illegal type
+# change the apiserver refuses) and aborts with a clear status instead
+# of a half-applied bundle.
+#
+# It does NOT re-validate stored CRs against the new schema. A tightened
+# pattern/maxLength, a new CEL rule or required field, or a dropped
+# x-kubernetes-preserve-unknown-fields all pass this dry-run and then
+# break (or silently prune) existing CRs on their next write. Those are
+# caught at ship time by hack/crd-guard.py, not here.
 if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
   echo "==> CRD server-side dry-run FAILED — refusing to apply:"
   echo "$dryrun_out" | sed 's/^/    /'
@@ -59,16 +61,16 @@ kubectl apply -f "$TMP_CRDS" >/dev/null
 # bundle — skip cleanly so old release.json payloads still upgrade.
 #
 # BEST-EFFORT BY DESIGN: this Job runs as the kuso-server
-# ServiceAccount, which deliberately CANNOT mutate ClusterRoles /
-# RoleBindings / NetworkPolicies / PriorityClasses (granting the
-# control plane rbac-escalate power would be a worse hole than the
-# drift it fixes). So a forbidden/partial apply must NOT abort the
-# upgrade — we log it to status and roll images anyway. An operator
-# whose release genuinely needs new RBAC applies the bundle manually
-# (or re-runs install.sh), exactly as before this bundle existed.
-# The alternative — hard-failing here — would brick self-update on
-# every cluster the moment a release touched RBAC, with no recovery
-# path, since the fix ships inside the very Job that's failing.
+# ServiceAccount. It may write RBAC objects, but Kubernetes' escalation
+# prevention refuses any Role/ClusterRole granting a permission
+# kuso-server doesn't itself hold cluster-wide (pods/eviction, pods/log
+# watch, deployments/scale, …), so a changed role of that kind comes back
+# Forbidden. A forbidden/partial apply must NOT abort the upgrade —
+# hard-failing would brick self-update with no recovery path, since the
+# fix ships inside the very Job that's failing. Instead the warning is
+# carried through to the final "done" status (MANIFESTS_WARNING) so the
+# UI and `kuso upgrade` show that a manual apply is still owed.
+MANIFESTS_WARNING=""
 if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
   write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
   TMP_MANIFESTS=$(mktemp)
@@ -79,10 +81,13 @@ if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
     else
       echo "==> WARNING: upgrade-manifests apply incomplete (continuing with image roll):"
       echo "$apply_out" | sed 's/^/    /'
-      write_status "applying-manifests" "partial — some platform manifests need manual apply (see updater logs); continuing"
+      forbidden=$(echo "$apply_out" | { grep -iE 'forbidden|error' || true; } | head -3 | tr '\n' ' ' | cut -c1-300)
+      MANIFESTS_WARNING="some platform manifests (RBAC/policy) were NOT applied and need a manual kubectl apply as cluster-admin: ${forbidden}"
+      write_status "applying-manifests" "partial — ${MANIFESTS_WARNING}; continuing"
     fi
   else
     echo "==> WARNING: could not download upgrade-manifests bundle; continuing with image roll"
+    MANIFESTS_WARNING="could not download the upgrade-manifests bundle; platform RBAC/policy changes were not applied"
   fi
 else
   echo "==> no upgrade-manifests bundle in this release; skipping (pre-bundle release)"
@@ -157,5 +162,10 @@ else
   done
 fi
 
-write_status "done" "upgraded to ${KUSO_TARGET_VERSION}"
-echo "==> upgrade to ${KUSO_TARGET_VERSION} complete"
+if [ -n "$MANIFESTS_WARNING" ]; then
+  write_status "done" "upgraded to ${KUSO_TARGET_VERSION} with warnings: ${MANIFESTS_WARNING}"
+  echo "==> upgrade to ${KUSO_TARGET_VERSION} complete WITH WARNINGS: ${MANIFESTS_WARNING}"
+else
+  write_status "done" "upgraded to ${KUSO_TARGET_VERSION}"
+  echo "==> upgrade to ${KUSO_TARGET_VERSION} complete"
+fi

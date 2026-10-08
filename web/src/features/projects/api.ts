@@ -25,15 +25,12 @@ export interface ProjectSummaryMetrics {
 
 // ProjectSummaryItem mirrors the server's projectSummaryItem: the same
 // payload as GET /api/projects/{name} (describe) plus the metrics
-// rollup, one item per project the caller can access. `addons` is not
-// currently populated by the server (parity with describe) but kept
-// optional so consumers can read it uniformly.
+// rollup, one item per project the caller can access.
 export interface ProjectSummaryItem {
   project: KusoProject;
   services: KusoService[];
   environments: KusoEnvironment[];
   metrics: ProjectSummaryMetrics;
-  addons?: KusoAddon[];
 }
 
 // getProjectsSummary is the batched dashboard fetch: ONE request
@@ -595,6 +592,31 @@ export interface ConfigPlan {
   wouldDelete?: string[];
 }
 
+const PLAN_BUCKETS = [
+  "servicesToCreate",
+  "servicesToUpdate",
+  "servicesToDelete",
+  "addonsToCreate",
+  "addonsToUpdate",
+  "addonsToDelete",
+  "cronsToCreate",
+  "cronsToUpdate",
+  "cronsToDelete",
+] as const;
+
+type WirePlan = { [K in (typeof PLAN_BUCKETS)[number]]?: string[] | null } & {
+  wouldDelete?: string[] | null;
+};
+
+// normalizePlan turns the server's nil slices (serialised as null, or
+// absent) into [] so callers can map over every bucket.
+export function normalizePlan(raw: WirePlan | null | undefined): ConfigPlan {
+  const plan = {} as ConfigPlan;
+  for (const k of PLAN_BUCKETS) plan[k] = raw?.[k] ?? [];
+  if (raw?.wouldDelete) plan.wouldDelete = raw.wouldDelete;
+  return plan;
+}
+
 // ConfigStepError mirrors spec.StepError — one failed apply step.
 export interface ConfigStepError {
   resource: string;
@@ -647,7 +669,9 @@ export async function applyConfig(
     },
   );
   if (!res.ok) throw new Error((await res.text()) || `apply failed: ${res.status}`);
-  return res.json();
+  if (dryRun) return normalizePlan((await res.json()) as WirePlan | null);
+  const result = (await res.json()) as { plan?: WirePlan | null; errors?: ConfigStepError[] | null };
+  return { plan: normalizePlan(result.plan), errors: result.errors ?? undefined };
 }
 
 // --- Per-project notification mute -----------------------------------

@@ -14,14 +14,19 @@ import (
 // Commands for API endpoints that had no CLI surface, which pushed
 // agents to kubectl: kube events, node uncordon, project metrics.
 
-var getEventsNamespace string
+var (
+	getEventsNamespace string
+	getEventsType      string
+)
 
 var getEventsCmd = &cobra.Command{
 	Use:   "events",
 	Short: "Show recent Kubernetes events (admin), newest first",
 	Long: `Show the newest 200 Kubernetes events in a namespace (default: the kuso
-namespace). Projects with their own namespace pass --namespace.`,
+namespace). Projects with their own namespace pass --namespace. --type
+keeps only events of that type (Warning or Normal).`,
 	Example: `  kuso get events
+  kuso get events --type Warning
   kuso get events --namespace koreni -o json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,11 +52,19 @@ namespace). Projects with their own namespace pass --namespace.`,
 		}
 		switch outputFormat {
 		case "json":
-			var raw any
+			var raw []map[string]any
 			if err := json.Unmarshal(resp.Body(), &raw); err != nil {
 				return fmt.Errorf("decode response: %w", err)
 			}
-			return jsonOut(raw)
+			// Always an array: the server sends null for an empty
+			// namespace, which breaks `jq '.[]'`.
+			out := make([]map[string]any, 0, len(raw))
+			for _, e := range raw {
+				if t, _ := e["type"].(string); eventTypeMatches(t) {
+					out = append(out, e)
+				}
+			}
+			return jsonOut(out)
 		case "table", "":
 		default:
 			return fmt.Errorf("unsupported output format %q", outputFormat)
@@ -59,6 +72,13 @@ namespace). Projects with their own namespace pass --namespace.`,
 		if err := json.Unmarshal(resp.Body(), &events); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
+		kept := events[:0]
+		for _, e := range events {
+			if eventTypeMatches(e.Type) {
+				kept = append(kept, e)
+			}
+		}
+		events = kept
 		if len(events) == 0 {
 			fmt.Println("no events")
 			return nil
@@ -78,6 +98,10 @@ namespace). Projects with their own namespace pass --namespace.`,
 		t.Render()
 		return nil
 	},
+}
+
+func eventTypeMatches(t string) bool {
+	return getEventsType == "" || strings.EqualFold(t, getEventsType)
 }
 
 var nodeUncordonCmd = &cobra.Command{
@@ -133,6 +157,7 @@ var projectMetricsCmd = &cobra.Command{
 func init() {
 	getCmd.AddCommand(getEventsCmd)
 	getEventsCmd.Flags().StringVar(&getEventsNamespace, "namespace", "", "namespace to read (default: the kuso namespace)")
+	getEventsCmd.Flags().StringVar(&getEventsType, "type", "", "only events of this type: Warning or Normal")
 	nodeCmd.AddCommand(nodeUncordonCmd)
 	projectCmd.AddCommand(projectMetricsCmd)
 	projectMetricsCmd.Flags().StringVarP(&projectMetricsOutput, "output", "o", "table", "output format [table, json]")

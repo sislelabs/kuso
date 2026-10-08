@@ -203,7 +203,7 @@ func init() {
 	environmentDeleteCmd.Flags().BoolVarP(&environmentDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	environmentListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 	environmentAddCmd.Flags().StringVar(&environmentAddBranch, "branch", "", "git branch this env builds from (required)")
-	environmentAddCmd.Flags().StringVar(&environmentAddHost, "host", "", "override the auto-generated host (default: <env>.<service>.<baseDomain>)")
+	environmentAddCmd.Flags().StringVar(&environmentAddHost, "host", "", "override the auto-generated host (default: <service>-<env>.<baseDomain>, or <env>.<baseDomain> when the service is named after the project; without a project baseDomain: <service>-<env>.<project>.<instance-domain>)")
 	environmentAddCmd.Flags().BoolVar(&environmentAddShareAddons, "share-addons", false, "share the project's addons with production instead of giving this env its own DB/redis/s3 (legacy behavior)")
 	environmentAddCmd.Flags().StringVar(&environmentAddSeedFrom, "seed-from", "", "seed this env's postgres DB from the named source env (default: empty DB)")
 	environmentAddCmd.Flags().StringSliceVar(&environmentAddAddons, "addons", nil, "stateful addon kinds to provision per-env (default: all the project has — postgres,redis,s3)")

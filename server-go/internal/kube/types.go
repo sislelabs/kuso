@@ -122,7 +122,9 @@ type KusoProjectQuota struct {
 
 // KusoConfigAsCode is the spec.configAsCode block on KusoProject.
 type KusoConfigAsCode struct {
-	Enabled bool `json:"enabled,omitempty"`
+	// No omitempty: the CRD defaults enabled to true, so a dropped false
+	// re-enabled config-as-code on the next typed project write.
+	Enabled bool `json:"enabled"`
 }
 
 // KusoPlacement pins workloads to a subset of cluster nodes. Either

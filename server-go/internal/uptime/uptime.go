@@ -30,20 +30,22 @@ type Store interface {
 	ListProjectNotificationMutes(ctx context.Context) ([]db.ProjectNotificationMute, error)
 }
 
-// Emitter is notify.Dispatcher's Emit.
+// Emitter is notify.Dispatcher's EmitDurable: an error means the event
+// reached no channel it was meant for.
 type Emitter interface {
-	Emit(notify.Event)
+	EmitDurable(notify.Event) error
 }
 
-// Watcher runs the uptime loop. It keeps nothing between ticks: every
-// tick re-reads the rows, so a new leader continues where the old one
-// stopped.
+// Watcher runs the uptime loop. It keeps no alert state between ticks:
+// every tick re-reads the rows, so a new leader continues where the old
+// one stopped.
 type Watcher struct {
 	Cluster Cluster
 	DB      Store
 	Notify  Emitter
 	Logger  *slog.Logger
-	// Namespace is kuso-server's own namespace, for the self-check.
+	// Namespace is kuso-server's own namespace. Unused since the
+	// self-check moved to the apiserver Service; kept for main.go.
 	Namespace string
 
 	// Test seams. Zero values use the real prober and clock.
@@ -51,7 +53,20 @@ type Watcher struct {
 	SelfCheck func(ctx context.Context) bool
 	Now       func() time.Time
 	Budget    time.Duration
+
+	// skipped counts consecutive ticks lost to a failed self-check.
+	skipped int
 }
+
+// selfCheckAddr is dialled to tell "this pod's network is broken" from
+// "the apps are down". It must not depend on kuso-server's own
+// readiness: the kuso-server Service drops this pod's endpoint whenever
+// readyz fails, which would silently turn uptime off exactly when
+// something is wrong.
+const selfCheckAddr = "kubernetes.default.svc.cluster.local:443"
+
+// blindWarnAfter: consecutive skipped ticks before the log escalates.
+const blindWarnAfter = 5
 
 func (w *Watcher) Run(ctx context.Context) {
 	if w.Logger == nil {
@@ -81,20 +96,27 @@ func (w *Watcher) defaults() {
 	if w.Budget <= 0 {
 		w.Budget = tickBudget
 	}
-	if w.Probe == nil || w.SelfCheck == nil {
-		p := NewProber(ProbeTimeout)
-		if w.Probe == nil {
-			w.Probe = p.Probe
-		}
-		if w.SelfCheck == nil {
-			ns := w.Namespace
-			if ns == "" {
-				ns = "kuso"
-			}
-			self := "http://kuso-server." + ns + ".svc.cluster.local/healthz"
-			w.SelfCheck = func(ctx context.Context) bool { return p.Reachable(ctx, self) }
-		}
+	if w.Probe == nil {
+		w.Probe = NewProber(ProbeTimeout).Probe
 	}
+	if w.SelfCheck == nil {
+		w.SelfCheck = func(ctx context.Context) bool { return Dialable(ctx, selfCheckAddr, ProbeTimeout) }
+	}
+}
+
+// closedReason words a pause reason for the closing message.
+func closedReason(paused string) string {
+	switch paused {
+	case PausedStopped:
+		return "the service was stopped"
+	case PausedAsleep:
+		return "the service went to sleep"
+	case PausedScaledToZero:
+		return "the service was scaled to zero"
+	case PausedNoImage, PausedNoDeployment:
+		return "the service has nothing deployed"
+	}
+	return "checks were paused"
 }
 
 // Tick runs one pass. Any failure before the commit leaves every row
@@ -104,13 +126,19 @@ func (w *Watcher) Tick(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, w.Budget)
 	defer cancel()
 
-	// If kuso-server can't reach its own Service, the failure is in this
-	// pod's network, not in the apps.
+	// If this pod can't reach the apiserver Service, the failure is in
+	// this pod's network, not in the apps.
 	if !w.SelfCheck(ctx) {
-		w.Logger.Warn("uptime: self-check failed, skipping this tick")
+		w.skipped++
+		if w.skipped >= blindWarnAfter {
+			w.Logger.Error("uptime: self-check keeps failing, outages are not being detected", "skippedTicks", w.skipped)
+		} else {
+			w.Logger.Warn("uptime: self-check failed, skipping this tick", "skippedTicks", w.skipped)
+		}
 		return
 	}
-	targets, err := w.Cluster.Targets(ctx)
+	w.skipped = 0
+	targets, err := w.Cluster.Targets(ctx, "")
 	if err != nil {
 		w.Logger.Warn("uptime: read targets", "err", err)
 		return
@@ -126,13 +154,15 @@ func (w *Watcher) Tick(ctx context.Context) {
 	}
 
 	live := make(map[string]struct{}, len(targets))
+	optedOut := map[string]bool{}
 	var toProbe []Target
 	for _, t := range targets {
 		if t.Disabled {
+			optedOut[t.Key()] = true
 			continue
 		}
 		live[t.Key()] = struct{}{}
-		if t.Paused == "" {
+		if t.Paused == "" && !t.Unknown {
 			toProbe = append(toProbe, t)
 		}
 	}
@@ -141,8 +171,11 @@ func (w *Watcher) Tick(ctx context.Context) {
 	now := w.Now()
 	var rows []db.UptimeState
 	var downs, recovered []notify.UptimeTarget
+	// sent maps each transition back to its row, so a failed send can
+	// undo this tick for that target and retry next tick.
+	var sent []transition
 	for _, t := range targets {
-		if t.Disabled {
+		if t.Disabled || t.Unknown {
 			continue
 		}
 		row := priorByKey[t.Key()]
@@ -153,7 +186,7 @@ func (w *Watcher) Tick(ctx context.Context) {
 		}
 		var d Decision
 		if t.Paused != "" {
-			st, d = Decide(st, OutcomePaused, false, now)
+			st, d = Decide(st, OutcomePaused, Signals{}, now)
 			row.Paused = t.Paused
 		} else {
 			res, probed := results[t.Key()]
@@ -166,7 +199,7 @@ func (w *Watcher) Tick(ctx context.Context) {
 				o = OutcomeOK
 				row.LastResult = "ok"
 			}
-			st, d = Decide(st, o, t.PodsBad, now)
+			st, d = Decide(st, o, Signals{PodsBad: t.PodsBad, RollingOut: t.RollingOut}, now)
 			row.Paused = ""
 			row.LastCheckedAt = now
 			row.LastStatusCode = res.StatusCode
@@ -179,16 +212,39 @@ func (w *Watcher) Tick(ctx context.Context) {
 
 		switch d.Action {
 		case ActionDown:
-			downs = append(downs, notify.UptimeTarget{Project: t.Project, Service: t.Service, Reason: row.LastError, Since: d.DownSince})
+			reason := row.LastError
+			if t.PodsBad {
+				reason += "; pods also crash-looping"
+			}
+			downs = append(downs, notify.UptimeTarget{Project: t.Project, Service: t.Service, Reason: reason, Since: d.DownSince})
+			sent = append(sent, transition{key: t.Key(), project: t.Project, down: true})
 		case ActionRecovered:
 			recovered = append(recovered, notify.UptimeTarget{Project: t.Project, Service: t.Service, Since: d.DownSince, DownFor: d.DownFor})
+			sent = append(sent, transition{key: t.Key(), project: t.Project})
+		case ActionClosed:
+			recovered = append(recovered, notify.UptimeTarget{
+				Project: t.Project, Service: t.Service, Since: d.DownSince, DownFor: d.DownFor, Closed: closedReason(t.Paused),
+			})
+			sent = append(sent, transition{key: t.Key(), project: t.Project})
 		}
 	}
 
 	var del []db.UptimeKey
 	for _, r := range prior {
-		if _, ok := live[r.Namespace+"/"+r.Env]; !ok {
-			del = append(del, db.UptimeKey{Namespace: r.Namespace, Env: r.Env})
+		key := r.Namespace + "/" + r.Env
+		if _, ok := live[key]; ok {
+			continue
+		}
+		del = append(del, db.UptimeKey{Namespace: r.Namespace, Env: r.Env})
+		if r.Alerted {
+			why := "the service was deleted"
+			if optedOut[key] {
+				why = "uptime checks were turned off"
+			}
+			recovered = append(recovered, notify.UptimeTarget{
+				Project: r.Project, Service: r.Service, Since: r.DownSince, DownFor: now.Sub(r.DownSince), Closed: why,
+			})
+			sent = append(sent, transition{key: key, project: r.Project})
 		}
 	}
 
@@ -214,10 +270,39 @@ func (w *Watcher) Tick(ctx context.Context) {
 			muted[m.Project] = true
 		}
 	}
+	undo := map[string]bool{}
 	for _, e := range Group(downs, recovered, muted) {
 		w.Logger.Info("uptime: notifying", "type", string(e.Type), "title", e.Title)
-		w.Notify.Emit(e)
+		if err := w.Notify.EmitDurable(e); err != nil {
+			w.Logger.Warn("uptime: notify failed, retrying next tick", "type", string(e.Type), "err", err)
+			for _, tr := range sent {
+				if tr.down == (e.Type == notify.EventUptimeDown) && (tr.project == e.Project || (e.Project == "" && !muted[tr.project])) {
+					undo[tr.key] = true
+				}
+			}
+		}
 	}
+	if len(undo) == 0 {
+		return
+	}
+	// Put the rows back as they were before this tick, so the next tick
+	// reaches the same transition and sends it again. The state was
+	// committed first so a send can never be doubled; this is the other
+	// half, so a send can't be lost either.
+	var restore []db.UptimeState
+	for key := range undo {
+		if r, ok := priorByKey[key]; ok {
+			restore = append(restore, r)
+		}
+	}
+	if err := w.DB.SaveUptimeStates(saveCtx, restore, nil); err != nil {
+		w.Logger.Warn("uptime: restore state after failed notify", "err", err)
+	}
+}
+
+type transition struct {
+	key, project string
+	down         bool
 }
 
 // probeAll checks targets with a bounded worker pool. A target missing

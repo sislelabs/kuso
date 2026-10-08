@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ApiError } from "@/lib/api-client";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { LoadingState } from "@/components/ui/loading-state";
 
 // Project-level shared secrets card. Each row is one env var in the
 // "<project>-shared" Secret; services opt in per key from their
@@ -35,7 +37,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
   const [editingKey, setEditingKey] = useState<string>("");
   const [editingValue, setEditingValue] = useState<string>("");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const [pendingOverwrite, setPendingOverwrite] = useState<string | null>(null);
+  const [pendingOverwrite, setPendingOverwrite] = useState<{ key: string; value: string } | null>(null);
 
   // A 409 "shadowed" means some service sets the same key itself, so
   // the shared value wouldn't reach it. Offer an explicit force instead
@@ -64,16 +66,28 @@ export function SharedSecretsCard({ project }: { project: string }) {
     );
   };
 
-  const doSave = (k: string) =>
-    submit(k, editingValue, false, () => {
-      setEditingKey("");
-      setEditingValue("");
+  const doSave = (k: string, v: string) =>
+    submit(k, v, false, () => {
+      if (editingKey.trim() === k) {
+        setEditingKey("");
+        setEditingValue("");
+      }
       setPendingOverwrite(null);
     });
 
+  // Every add path goes through here so overwriting a stored key always
+  // asks first. Only callable once the list has loaded.
+  const saveOrConfirm = (k: string, v: string) => {
+    if (stored.includes(k)) {
+      setPendingOverwrite({ key: k, value: v });
+      return;
+    }
+    doSave(k, v);
+  };
+
   const onSave = () => {
     const k = editingKey.trim();
-    if (!k || !editingValue) return;
+    if (!k || !editingValue || !listReady) return;
     if (!/^[A-Z][A-Z0-9_]*$/.test(k)) {
       toast.error("Use SCREAMING_SNAKE_CASE for env var names");
       return;
@@ -82,11 +96,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
     // service subscribed to it — those pods pick up the new value on
     // their next restart. Confirm before clobbering; adding a brand-new
     // key is friction-free.
-    if (stored.includes(k)) {
-      setPendingOverwrite(k);
-      return;
-    }
-    doSave(k);
+    saveOrConfirm(k, editingValue);
   };
 
   const onCancel = () => {
@@ -94,6 +104,9 @@ export function SharedSecretsCard({ project }: { project: string }) {
     setEditingValue("");
   };
 
+  // Until the list loads, "not stored" is unknown, so adds stay disabled
+  // rather than skipping the overwrite confirm.
+  const listReady = list.isSuccess;
   const stored = (list.data?.keys ?? []).slice().sort();
   const has = (k: string) => stored.includes(k);
 
@@ -117,6 +130,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
             envVar={it.envVar}
             description={it.description}
             existing={has(it.envVar)}
+            disabled={!listReady}
             onClick={() => {
               setEditingKey(it.envVar);
               setEditingValue("");
@@ -157,7 +171,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
             autoFocus
           />
           <div className="flex items-center justify-end gap-2">
-            <Button size="sm" type="submit" disabled={!editingValue || set.isPending}>
+            <Button size="sm" type="submit" disabled={!editingValue || set.isPending || !listReady}>
               <Plus className="h-3.5 w-3.5" />
               {set.isPending ? "Saving…" : "Save"}
             </Button>
@@ -172,7 +186,11 @@ export function SharedSecretsCard({ project }: { project: string }) {
             stored ({stored.length})
           </h4>
         </header>
-        {stored.length === 0 ? (
+        {list.isPending ? (
+          <LoadingState kind="inline" className="px-3 py-2" label="loading secrets…" />
+        ) : list.isError ? (
+          <QueryErrorState what="project secrets" error={list.error} onRetry={() => void list.refetch()} />
+        ) : stored.length === 0 ? (
           <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
             No project secrets yet. Pick an integration above or add manually below.
           </p>
@@ -210,8 +228,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
           </h4>
         </header>
         <ManualAddRow
-          onAdd={(k, v) => submit(k, v, false)}
-          pending={set.isPending}
+          onAdd={saveOrConfirm}
+          pending={set.isPending || !listReady}
         />
       </section>
 
@@ -268,7 +286,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
         body={
           <p>
             <span className="font-mono text-[var(--text-primary)]">
-              {pendingOverwrite}
+              {pendingOverwrite?.key}
             </span>{" "}
             already exists. The new value reaches every service that uses it on
             that service&apos;s next restart.
@@ -278,7 +296,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
         destructive
         pending={set.isPending}
         onConfirm={() => {
-          if (pendingOverwrite) doSave(pendingOverwrite);
+          if (pendingOverwrite) doSave(pendingOverwrite.key, pendingOverwrite.value);
         }}
         onCancel={() => setPendingOverwrite(null)}
       />
@@ -305,20 +323,23 @@ function IntegrationTile({
   envVar,
   description,
   existing,
+  disabled,
   onClick,
 }: {
   name: string;
   envVar: string;
   description: string;
   existing: boolean;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
+        "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors disabled:opacity-50",
         existing
           ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
           : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"

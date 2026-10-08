@@ -4,7 +4,7 @@
 // the same RunE), plus a `kuso get pods` alias for symmetry with the
 // other `get` reads.
 //
-//	kuso service errors <project> <service> [-o json] [--since 24h] [--limit 50]
+//	kuso service errors <project> <service> [-o json] [--since 24h] [--limit 50] [--env <env>]
 //	kuso service pods   <project> <service> [-o json] [--env <env>]
 //	kuso get pods       <project> <service> [-o json] [--env <env>]
 
@@ -29,6 +29,7 @@ var (
 	serviceErrorsSince  string
 	serviceErrorsLimit  int
 	serviceErrorsOffset int
+	serviceErrorsEnv    string
 	servicePodsEnv      string
 )
 
@@ -50,6 +51,10 @@ func runServiceErrors(cmd *cobra.Command, args []string) error {
 	}
 	if serviceErrorsOffset > 0 {
 		path += sep + fmt.Sprintf("offset=%d", serviceErrorsOffset)
+		sep = "&"
+	}
+	if serviceErrorsEnv != "" {
+		path += sep + "env=" + url.QueryEscape(serviceErrorsEnv)
 	}
 	resp, err := api.RawGet(path)
 	if err := checkRespErr(resp, err); err != nil {
@@ -152,13 +157,15 @@ func newServiceErrorsCmd() *cobra.Command {
 		Use:     "errors <project> <service>",
 		Short:   "Show aggregated error groups for a service (last 24h by default)",
 		Args:    cobra.ExactArgs(2),
-		Example: `  kuso service errors scubatony api --since 6h -o json`,
+		Example: `  kuso service errors scubatony api --since 6h -o json
+  kuso service errors tickero api --env production`,
 		RunE:    runServiceErrors,
 	}
 	c.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	c.Flags().StringVar(&serviceErrorsSince, "since", "", "lookback window (e.g. 6h, 24h; max 30d, server default 24h)")
 	c.Flags().IntVar(&serviceErrorsLimit, "limit", 0, "max groups to return (1-200, server default 50)")
 	c.Flags().IntVar(&serviceErrorsOffset, "offset", 0, "groups to skip (from X-Kuso-Next-Offset when a page was truncated)")
+	c.Flags().StringVar(&serviceErrorsEnv, "env", "", "only this environment's errors (production, staging, preview-pr-N); default: every env")
 	return c
 }
 

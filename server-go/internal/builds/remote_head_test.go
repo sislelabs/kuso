@@ -38,8 +38,10 @@ func TestCreate_ManualTrigger_NoApp_ResolvesBranchHeadFromRemote(t *testing.T) {
 	if got.Spec.Ref != headSHA {
 		t.Errorf("spec.ref = %q, want %q", got.Spec.Ref, headSHA)
 	}
-	if got.Spec.Image == nil || got.Spec.Image.Tag != headSHA[:12] {
-		t.Errorf("image tag = %+v, want %q", got.Spec.Image, headSHA[:12])
+	// A manual build gets its own tag so pods roll even when the commit
+	// was built before (BLD-5).
+	if got.Spec.Image == nil || !strings.HasPrefix(got.Spec.Image.Tag, headSHA[:12]+"-") {
+		t.Errorf("image tag = %+v, want %q-<suffix>", got.Spec.Image, headSHA[:12])
 	}
 	if remote.branch != "staging" || !strings.HasSuffix(remote.url, "/api") {
 		t.Errorf("remote asked for %s@%s", remote.url, remote.branch)

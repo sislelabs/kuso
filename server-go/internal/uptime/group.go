@@ -8,7 +8,7 @@ import (
 
 // Group turns one tick's transitions into events: one per project, or a
 // single cluster-wide event when StormProjects or more unmuted projects
-// changed together. Muted projects always get their own per-project
+// changed together (plus per-project twins for project-scoped channels). Muted projects always get their own per-project
 // event (the dispatcher keeps those to the bell feed) and never count
 // towards the cluster-wide threshold.
 func Group(downs, recovered []notify.UptimeTarget, muted map[string]bool) []notify.Event {
@@ -46,6 +46,11 @@ func groupOne(
 	for _, p := range order {
 		if storm && !muted[p] {
 			stormTargets = append(stormTargets, byProject[p]...)
+			// The cluster event names other projects, so channels scoped
+			// to some projects get this per-project event instead.
+			e := perProject(p, byProject[p])
+			e.Audience = notify.AudienceScoped
+			out = append(out, e)
 			continue
 		}
 		out = append(out, perProject(p, byProject[p]))

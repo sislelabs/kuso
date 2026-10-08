@@ -23,7 +23,7 @@ import {
   type ContextMenuEntry,
   type ContextMenuItem,
 } from "@/components/canvas/CanvasContextMenu";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
 import { relativeTime, stripRepoCredentials } from "@/lib/format";
 import { isProductionGroup } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
@@ -322,7 +322,7 @@ function repoWebURL(raw?: string): string | null {
 }
 
 // ProjectsGrid reads ONE batched /api/projects/summary fetch for every
-// card's live counts (services up, total services, addons) AND the
+// card's live counts (services up, total services) AND the
 // CPU/RAM rollup. This used to be a useQueries fan-out of one describe
 // + one metrics request PER card — 2N HTTP requests per poll cycle for
 // N projects. The server bundles the same describe payload + the same
@@ -451,7 +451,6 @@ function ProjectsGrid({
         // plain text rather than linking somewhere wrong.
         const repoURL = repoWebURL(effectiveRepoRaw);
         const envs = summary?.environments ?? [];
-        const addons = summary?.addons ?? [];
         // "Live" = a production env with at least one pod actually
         // serving traffic. Sources of truth (in order):
         //   1. status.replicas.ready > 0  — the canvas's own check.
@@ -635,7 +634,7 @@ function ProjectsGrid({
 
                 h-full + flex-col makes every card fill its grid row so
                 cards in the same row are equal height regardless of how
-                many body rows (description, addons, metrics) they have. */}
+                many body rows (description, metrics) they have. */}
             <div className="group relative flex h-full cursor-pointer flex-col rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
               <Link
                 href={`/projects/${name}`}
@@ -855,13 +854,6 @@ function ProjectsGrid({
                       </span>
                     );
                   })()}
-                  {addons.length > 0 && (
-                    <span className="inline-flex items-center gap-1">
-                      <Database className="h-3 w-3" />
-                      <span>{addons.length}</span>
-                      <span>addon{addons.length === 1 ? "" : "s"}</span>
-                    </span>
-                  )}
                   {/* Resource line — only shown when we actually have
                       pod metrics. Skipped for offline projects so the
                       card doesn't render a misleading "0m · 0 MiB"

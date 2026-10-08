@@ -382,3 +382,42 @@ func (d *DB) DeleteGroup(ctx context.Context, id string) error {
 	}
 	return tx.Commit()
 }
+
+// GroupProjectRoles returns the effective role each of a group's
+// ProjectGrants confers on its members: the override, else the group's
+// instance role, else viewer. Mirrors ListUserTenancy's per-grant
+// resolution so access-management gates can weigh what touching the
+// group would take away.
+func (d *DB) GroupProjectRoles(ctx context.Context, groupID string) ([]ProjectMembership, error) {
+	var instanceRole sql.NullString
+	if err := d.QueryRowContext(ctx,
+		`SELECT "instanceRole" FROM "UserGroup" WHERE id = $1`, groupID).Scan(&instanceRole); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("db: group instance role: %w", err)
+	}
+	rows, err := d.QueryContext(ctx,
+		`SELECT project, "roleOverride" FROM "ProjectGrant" WHERE "groupId" = $1`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list group project grants: %w", err)
+	}
+	defer rows.Close()
+	var out []ProjectMembership
+	for rows.Next() {
+		var project string
+		var override sql.NullString
+		if err := rows.Scan(&project, &override); err != nil {
+			return nil, fmt.Errorf("db: scan group project grant: %w", err)
+		}
+		role := ProjectRole(override.String)
+		if role == "" {
+			role = ProjectRole(instanceRole.String)
+		}
+		if rankProject(role) == 0 {
+			role = ProjectRoleViewer
+		}
+		out = append(out, ProjectMembership{Project: project, Role: role})
+	}
+	return out, rows.Err()
+}

@@ -91,6 +91,11 @@ jobs:
             echo "::endgroup::"
           done
 
+      # The chart render tests (server-go/internal/kube/chart_render*_test.go)
+      # t.Skip without helm, which would turn them green by not running.
+      - name: helm present (chart render tests must not skip)
+        run: helm version --short
+
       - name: go test
         env:
           # 15 test files t.Skip() without this. Setting it is what
@@ -116,6 +121,38 @@ jobs:
             (cd "$m" && go test -race -p 1 ./...)
             echo "::endgroup::"
           done
+
+  charts:
+    name: charts + CRDs vs apiserver
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tools
+        run: |
+          set -euo pipefail
+          helm version --short
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y python3-yaml
+
+      # Static checks: operator RBAC covers every kind the charts render,
+      # YAML-ambiguous names (2026, no, on) render quoted, and the release
+      # CRD guard still flags every breaking schema change.
+      - name: chart checks
+        run: python3 hack/chart-check.py rbac names
+
+      - name: CRD guard fixtures
+        run: python3 hack/crd_guard_test.py
+
+      # The text checks can't see what only the apiserver rejects: a
+      # document with no apiVersion, a label that decodes as int/bool, a
+      # field the apiserver doesn't serve, a CRD that won't install.
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kuso-ci
+
+      - name: apiserver dry-run (CRDs, samples, rendered charts)
+        run: hack/ci/apiserver-validate.sh
 
   web:
     name: web typecheck + build

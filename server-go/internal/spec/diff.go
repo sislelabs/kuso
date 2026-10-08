@@ -33,6 +33,35 @@ func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.Patc
 		out = append(out, FieldChange{Field: field, From: from, To: to, Destructive: destructive})
 	}
 
+	if req.Repo != nil {
+		var liveRepo kube.KusoRepoRef
+		if ls.Repo != nil {
+			liveRepo = *ls.Repo
+		}
+		livePath := liveRepo.Path
+		if livePath == "" {
+			livePath = "."
+		}
+		// API reads redact credentials, so an exported file carries the
+		// redacted URL; PatchService keeps the stored one in that case.
+		sameURL := req.Repo.URL == liveRepo.URL ||
+			(!kube.RepoURLHasCredentials(req.Repo.URL) && kube.RepoURLEchoesRedacted(liveRepo.URL, req.Repo.URL))
+		n := len(out)
+		if !sameURL {
+			add("repo", orNone(kube.StripRepoURLCredentials(liveRepo.URL)), kube.StripRepoURLCredentials(req.Repo.URL), false)
+		}
+		if req.Repo.Branch != liveRepo.DefaultBranch {
+			add("branch", orNone(liveRepo.DefaultBranch), orNone(req.Repo.Branch), false)
+		}
+		if req.Repo.Path != livePath {
+			add("path", livePath, req.Repo.Path, false)
+		}
+		if len(out) == n {
+			req.Repo = nil
+		} else {
+			req.Repo.Provider = liveRepo.Provider
+		}
+	}
 	if *req.Port == ls.Port {
 		req.Port = nil
 	} else {
@@ -332,7 +361,7 @@ func newEnvDiffer(ctx context.Context, k *kube.Client, ns, project string, svcs 
 		}
 		ref := projects.ServiceRef{FQN: s.Name, Port: port, NS: ns}
 		if len(s.Spec.Domains) > 0 && s.Spec.Domains[0].Host != "" {
-			ref.PublicHost, ref.PublicTLS = s.Spec.Domains[0].Host, s.Spec.Domains[0].TLS
+			ref.PublicHost, ref.PublicTLS = s.Spec.Domains[0].Host, projects.DomainServesTLS(s.Spec.Domains[0])
 		} else if e := prodEnv[s.Name]; e != nil && e.Spec.Host != "" {
 			ref.PublicHost, ref.PublicTLS = e.Spec.Host, e.Spec.TLSEnabled
 		}
@@ -587,13 +616,17 @@ func renderDomain(host string, tls bool, secret string) string {
 	return s
 }
 
+// renderDomains leaves out the tls bit: the CRD defaults it to true, so a
+// file's tls:false (the YAML default) never matches live and would show as
+// drift on every plan. Whether a host gets a cert is decided by
+// computeTLSHosts, not by the bit.
 func renderDomains(in []kube.KusoDomain) string {
 	if len(in) == 0 {
 		return "(none)"
 	}
 	parts := make([]string, 0, len(in))
 	for _, d := range in {
-		parts = append(parts, renderDomain(d.Host, d.TLS, d.TLSSecret))
+		parts = append(parts, renderDomain(d.Host, false, d.TLSSecret))
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }

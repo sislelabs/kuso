@@ -27,6 +27,8 @@ package runs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -182,9 +184,12 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// service's production env. Snapshotting at create time (not
 	// reconcile time) means a build that lands while the run is
 	// in-flight doesn't switch the run to a new image mid-task.
-	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, fqn+"-production")
+	// Owned lookup: in the shared namespace "<project>-<service>-production"
+	// can name another project's env (project "a" service "b-c" vs project
+	// "a-b" service "c"), and the run would inherit its image and secrets.
+	envCR, err := s.Kube.GetOwnedEnv(ctx, ns, project, fqn, fqn+"-production")
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if kube.IsNotFoundOrNotOwned(err) {
 			return nil, fmt.Errorf("%w: production env %s-production not found — deploy the service before adding runs", ErrInvalid, fqn)
 		}
 		return nil, fmt.Errorf("lookup production env: %w", err)
@@ -204,7 +209,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// if neither is readable — a private service's run must never gain
 	// internet egress because of a transient read error.
 	privateEgress, platformAPIEgress := envCR.Spec.PrivateEgress, envCR.Spec.PlatformAPIEgress
-	if svc, serr := s.Kube.GetKusoService(ctx, ns, fqn); serr == nil && svc != nil {
+	if svc, serr := s.Kube.GetOwnedService(ctx, ns, project, fqn); serr == nil && svc != nil {
 		privateEgress, platformAPIEgress = svc.Spec.PrivateEgress, svc.Spec.PlatformAPIEgress
 	} else if !apierrors.IsNotFound(serr) {
 		privateEgress, platformAPIEgress = true, false
@@ -422,9 +427,21 @@ func (s *Service) nsFor(ctx context.Context, project string) string {
 // the same millisecond unless two callers race, in which case the
 // kube CreateAlreadyExists wins one of them and the loser retries
 // at the handler level.
+//
+// The CR name is also the helm release name, so it must fit
+// kube.MaxReleaseNameLen; a long project+service prefix is cut and a hash
+// of the full prefix appended so distinct services stay distinct.
 func genRunName(project, service string) string {
 	suffix := strings.ToLower(base36(time.Now().UnixMilli()))
-	return fmt.Sprintf("%s-%s-run-%s", project, service, suffix)
+	prefix := project + "-" + service
+	tail := "-run-" + suffix
+	if len(prefix)+len(tail) > kube.MaxReleaseNameLen {
+		sum := sha256.Sum256([]byte(prefix))
+		h := hex.EncodeToString(sum[:])[:8]
+		keep := kube.MaxReleaseNameLen - len(tail) - len("-"+h)
+		prefix = strings.TrimRight(prefix[:keep], "-") + "-" + h
+	}
+	return prefix + tail
 }
 
 // mergeRunEnv builds the run's env: the service's own env vars first (both plain

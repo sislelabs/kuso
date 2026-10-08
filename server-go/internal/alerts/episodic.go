@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -133,25 +134,33 @@ func (e *Engine) evalEpisode(ctx context.Context, r *db.AlertRule, now time.Time
 		return
 	}
 	d := decideEpisode(r, f, now)
+	// Persist before notifying, on a deadline of its own: the rule ctx
+	// may be nearly spent by a slow evaluation. A failed write sends
+	// nothing, so the next tick retries the same transition instead of
+	// re-paging every minute off the stale row.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	switch d.action {
 	case actFire:
-		e.Notify.Emit(alertEvent(r, fireBody(f, d.newTargets, len(d.targets))))
 		since := now
 		if r.FiringSince != nil {
 			since = *r.FiringSince
 		}
-		if err := e.DB.SetAlertEpisode(ctx, r.ID, &since, d.targets, &now); err != nil {
-			e.Logger.Warn("alert episode stamp failed — may re-fire next tick", "rule", r.Name, "err", err)
+		if err := e.DB.SetAlertEpisode(wctx, r.ID, &since, d.targets, &now); err != nil {
+			e.Logger.Warn("alert episode stamp failed; not notifying, will retry next tick", "rule", r.Name, "err", err)
+			return
 		}
+		e.emit(alertEvent(r, fireBody(f, d.newTargets, len(d.targets))))
 	case actUpdate:
-		if err := e.DB.SetAlertEpisode(ctx, r.ID, r.FiringSince, d.targets, nil); err != nil {
+		if err := e.DB.SetAlertEpisode(wctx, r.ID, r.FiringSince, d.targets, nil); err != nil {
 			e.Logger.Warn("alert episode update failed", "rule", r.Name, "err", err)
 		}
 	case actResolve:
-		e.Notify.Emit(resolvedEvent(r, now))
-		if err := e.DB.SetAlertEpisode(ctx, r.ID, nil, nil, nil); err != nil {
-			e.Logger.Warn("alert episode clear failed — may resolve again next tick", "rule", r.Name, "err", err)
+		if err := e.DB.SetAlertEpisode(wctx, r.ID, nil, nil, nil); err != nil {
+			e.Logger.Warn("alert episode clear failed; not notifying, will retry next tick", "rule", r.Name, "err", err)
+			return
 		}
+		e.emit(resolvedEvent(r, now))
 	}
 }
 
@@ -580,9 +589,26 @@ func (e *Engine) evalDNS(ctx context.Context, r *db.AlertRule) (finding, error) 
 			hosts = append(hosts, h)
 		}
 	}
+	firing := make(map[string]struct{}, len(r.FiringTargets))
+	for _, t := range r.FiringTargets {
+		firing[t] = struct{}{}
+	}
 	var f finding
-	for _, res := range hostcheck.CheckHosts(ctx, e.Resolver, hosts, expected, dnsLookupTimeout) {
+	results := hostcheck.CheckHosts(ctx, e.Resolver, hosts, expected, dnsLookupTimeout)
+	transient := 0
+	for _, res := range results {
 		scope := hostEnv[res.Host].scope()
+		key := "dns:" + res.Host
+		if res.Status == hostcheck.DNSUnresolved && !dnsDefinitive(res.Err) {
+			// A resolver timeout or SERVFAIL says nothing about the
+			// domain: keep the host's previous state rather than firing
+			// (or resolving) on a CoreDNS blip.
+			transient++
+			if _, was := firing[key]; was {
+				f.add(key, fmt.Sprintf("%s (%s) lookup failed: %v", res.Host, scope, res.Err))
+			}
+			continue
+		}
 		switch res.Status {
 		case hostcheck.DNSMismatch:
 			f.add("dns:"+res.Host, fmt.Sprintf("%s (%s) resolves to %s, expected one of %s",
@@ -595,6 +621,19 @@ func (e *Engine) evalDNS(ctx context.Context, r *db.AlertRule) (finding, error) 
 			f.add("dns:"+res.Host, fmt.Sprintf("%s (%s) does not resolve: %s", res.Host, scope, reason))
 		}
 	}
+	if len(results) > 0 && transient*2 > len(results) {
+		return finding{}, fmt.Errorf("dns lookups failing for %d/%d hosts; resolver unhealthy", transient, len(results))
+	}
 	sort.Strings(f.targets)
 	return f, nil
+}
+
+// dnsDefinitive reports whether a failed lookup is an answer about the
+// domain (NXDOMAIN, no records) rather than a resolver failure.
+func dnsDefinitive(err error) bool {
+	if err == nil {
+		return true
+	}
+	var de *net.DNSError
+	return errors.As(err, &de) && de.IsNotFound
 }

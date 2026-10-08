@@ -8,6 +8,7 @@ import {
   useSetupStatus,
   useInstallations,
   getGithubManifest,
+  getInstallURL,
 } from "@/features/github";
 import type { ConfigureBody, GithubInstallation } from "@/features/github";
 import { api } from "@/lib/api-client";
@@ -108,7 +109,10 @@ function GithubSettingsPage() {
   const qc = useQueryClient();
   const status = useSetupStatus();
   const configure = useConfigureGithub();
-  const [restartPolling, setRestartPolling] = useState(false);
+  // Set while waiting for the restarted pod to load the new App. The old
+  // pod keeps answering during the rollout (maxUnavailable: 0), so a
+  // bare /healthz 200 isn't proof the restart finished.
+  const [restartPolling, setRestartPolling] = useState<{ appSlug: string } | null>(null);
 
   // Paste fields. Match the keys server-go expects in
   // configureRequest. Defaults all blank — pre-filling something here
@@ -127,20 +131,22 @@ function GithubSettingsPage() {
 
   const isConfigured = !!status.data?.configured && !showReconfigure;
 
-  // After a successful configure we poll /healthz to know when the
-  // restart is done. /healthz returns 200 with a {version} body, but
-  // during the rollout the pod is briefly unreachable and the request
-  // fails with a network error or a 502 from traefik. We retry for up
-  // to ~60s.
+  // After a successful configure we poll install-url until it points at
+  // the App we just configured. It's built from the process's in-memory
+  // config (setup-status reads the Secret, which the old pod sees too).
+  // During the rollout requests can fail (network error, 502 from
+  // traefik); we retry for up to ~90s. Re-saving the SAME slug can't be
+  // told apart from the old pod, so that case resolves on first answer.
   useEffect(() => {
     if (!restartPolling) return;
+    const want = `/apps/${restartPolling.appSlug}/`;
     const start = Date.now();
     const id = setInterval(async () => {
       try {
-        const res = await fetch("/healthz", { cache: "no-store" });
-        if (res.ok) {
+        const s = await getInstallURL();
+        if (s.configured && (restartPolling.appSlug === "" || s.url.includes(want))) {
           clearInterval(id);
-          setRestartPolling(false);
+          setRestartPolling(null);
           await Promise.all([
             qc.invalidateQueries({ queryKey: ["github", "setup-status"] }),
             qc.invalidateQueries({ queryKey: ["github", "install-url"] }),
@@ -154,7 +160,7 @@ function GithubSettingsPage() {
       }
       if (Date.now() - start > 90_000) {
         clearInterval(id);
-        setRestartPolling(false);
+        setRestartPolling(null);
         toast.error("Server didn't come back within 90s — reload to check");
       }
     }, 3_000);
@@ -178,7 +184,7 @@ function GithubSettingsPage() {
       toast.success(
         `GitHub App '${created}' created — kuso is restarting to load it (~30s)`,
       );
-      setRestartPolling(true);
+      setRestartPolling({ appSlug: created });
       setShowReconfigure(false);
       setShowManual(false);
     } else if (error) {
@@ -211,7 +217,7 @@ function GithubSettingsPage() {
     try {
       await configure.mutateAsync(body);
       toast.success("Saved — waiting for kuso-server to restart");
-      setRestartPolling(true);
+      setRestartPolling({ appSlug: body.appSlug });
       // Clear the form so a refresh after restart shows a clean state.
       setAppId("");
       setAppSlug("");
@@ -906,6 +912,7 @@ function WizardForm(props: WizardFormProps) {
           >
             <textarea
               id="privateKey"
+              data-no-draft
               value={props.privateKey}
               onChange={(e) => props.setPrivateKey(e.target.value)}
               required

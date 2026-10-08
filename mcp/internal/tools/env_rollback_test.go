@@ -42,6 +42,11 @@ func newRecordingSession(t *testing.T, handler func(r *http.Request) (int, strin
 	server := mcp.NewServer(&mcp.Implementation{Name: "kuso-mcp-test", Version: "test"}, nil)
 	registerSetEnv(server, client)
 	registerRollback(server, client)
+	registerSubscribeAddon(server, client)
+	registerLogs(server, client)
+	registerBuild(server, client)
+	registerDB(server, client)
+	registerStatus(server, client)
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := server.Connect(ctx, serverT, nil); err != nil {
@@ -90,8 +95,72 @@ func TestSetEnv_PerKeyNeverReplacesWholeList(t *testing.T) {
 	if err := json.Unmarshal([]byte(got[0].Body), &body); err != nil || body["value"] != "debug" {
 		t.Fatalf("unexpected upsert body %q", got[0].Body)
 	}
+	// Without auto the server takes the legacy literal path, which stores a
+	// ${{ addon.KEY }} ref verbatim and writes secrets as CR literals.
+	if body["auto"] != true {
+		t.Fatalf("upsert must use the unified auto write, got body %q", got[0].Body)
+	}
 	if got[1].Method != http.MethodDelete || got[1].Path != "/api/projects/shop/services/api/env-vars/OLD_FLAG" {
 		t.Fatalf("unexpected unset request: %+v", got[1])
+	}
+}
+
+// subscribe_addon is a read-modify-write of the whole list: the PUT must keep
+// existing subscriptions, add the new one, and drop the unsubscribed one.
+func TestSubscribeAddon_MergesIntoCurrentList(t *testing.T) {
+	sess, reqs := newRecordingSession(t, func(r *http.Request) (int, string) {
+		if r.Method == http.MethodGet {
+			return http.StatusOK, `{"subscribed":["cache","queue"],"available":["cache","queue","db"]}`
+		}
+		return http.StatusOK, "{}"
+	})
+	text, isErr, err := callText(t, sess, "subscribe_addon", map[string]any{
+		"project": "shop", "service": "api", "confirm": true,
+		"subscribe": []string{"db"}, "unsubscribe": []string{"queue"},
+	})
+	if err != nil || isErr {
+		t.Fatalf("subscribe_addon failed: err=%v text=%s", err, text)
+	}
+	got := reqs()
+	if len(got) != 2 || got[1].Method != http.MethodPut || got[1].Path != "/api/projects/shop/services/api/subscribed-addons" {
+		t.Fatalf("want GET then PUT subscribed-addons, got %+v", got)
+	}
+	var body struct {
+		Addons []string `json:"addons"`
+	}
+	if err := json.Unmarshal([]byte(got[1].Body), &body); err != nil {
+		t.Fatalf("bad PUT body %q: %v", got[1].Body, err)
+	}
+	if strings.Join(body.Addons, ",") != "cache,db" {
+		t.Fatalf("want addons [cache db], got %v", body.Addons)
+	}
+
+	text, isErr, _ = callText(t, sess, "subscribe_addon", map[string]any{
+		"project": "shop", "service": "api", "confirm": true, "subscribe": []string{"typo"},
+	})
+	if !isErr || !strings.Contains(text, "not in project") {
+		t.Fatalf("unknown addon should be refused, got isErr=%v text=%s", isErr, text)
+	}
+}
+
+// A crash-looping env reads phase=deploying replicas=0/1 forever; only the
+// server's state/stateDetail say it's crashing.
+func TestStatus_SurfacesStateAndDetail(t *testing.T) {
+	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
+		return http.StatusOK, `{"project":{"metadata":{"name":"shop"}},"environments":[{"spec":{"service":"shop-api","kind":"production"},` +
+			`"status":{"phase":"deploying","replicas":{"ready":0,"desired":1},"state":"crashlooping","stateDetail":"container \"api\" in CrashLoopBackOff (7 restarts)"}}]}`
+	})
+	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "status", Arguments: map[string]any{"project": "shop"}})
+	if err != nil || res.IsError {
+		t.Fatalf("status failed: err=%v res=%+v", err, res)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "state=crashlooping") || !strings.Contains(text, "CrashLoopBackOff (7 restarts)") {
+		t.Fatalf("status text lost state/stateDetail:\n%s", text)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"state":"crashlooping"`) {
+		t.Fatalf("structured output missing state: %s", raw)
 	}
 }
 

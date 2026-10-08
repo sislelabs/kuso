@@ -45,6 +45,9 @@ type ComposeResponse struct {
 	YAML    string         `json:"yaml"`
 	Notes   []compose.Note `json:"notes"`
 	Flagged bool           `json:"flagged"`
+	// UnresolvedEnvFiles: env_file paths whose values were never read;
+	// services would deploy without them (the CLI refuses --apply).
+	UnresolvedEnvFiles []string `json:"unresolvedEnvFiles,omitempty"`
 }
 
 // Preview converts the compose file. POST /api/import/compose.
@@ -91,9 +94,10 @@ func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, ComposeResponse{
-		Project: doc.Project,
-		YAML:    string(yamlOut),
-		Notes:   rep.Notes,
-		Flagged: rep.HasFlags(),
+		Project:            doc.Project,
+		YAML:               string(yamlOut),
+		Notes:              rep.Notes,
+		Flagged:            rep.HasFlags(),
+		UnresolvedEnvFiles: rep.UnresolvedEnvFiles,
 	})
 }

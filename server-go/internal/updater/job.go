@@ -20,14 +20,14 @@ type batchv1Job struct {
 }
 
 // applyJob creates the kube Job that drives the upgrade. The Job
-// runs as the kuso-server ServiceAccount, which can apply CRDs and
-// roll Deployments/Jobs but deliberately CANNOT mutate cluster RBAC
-// (ClusterRoles/RoleBindings/NetworkPolicies/PriorityClasses) —
-// install.sh removed the legacy cluster-admin binding. The
-// entrypoint's upgrade-manifests apply is therefore best-effort:
-// a forbidden apply logs a warning and the image roll proceeds, so
-// a release that touches RBAC can't brick self-update. A dedicated
-// least-privilege kuso-updater SA remains a possible follow-up.
+// runs as the kuso-server ServiceAccount, which can apply CRDs, roll
+// Deployments/Jobs and write RBAC objects, but Kubernetes' escalation
+// prevention refuses any role granting a permission kuso-server doesn't
+// itself hold cluster-wide (see ESCALATION_EXCLUDED in hack/release.sh).
+// The entrypoint's upgrade-manifests apply is therefore best-effort: a
+// forbidden apply is reported in the final "done" status message and
+// the image roll proceeds, so a release that touches RBAC can't brick
+// self-update.
 func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 	bf := int32(0)
 	one := int32(1)

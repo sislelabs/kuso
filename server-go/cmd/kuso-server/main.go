@@ -555,6 +555,7 @@ func main() {
 				return errors.Join(
 					database.DeleteBuildRecordsForProject(ctx, project),
 					database.DeleteBuildLogsForProject(ctx, project),
+					database.PurgeProjectState(ctx, project),
 				)
 			}
 		}
@@ -886,7 +887,7 @@ func main() {
 			// seed Job already succeeded just get the stale marker cleared.
 			// Leader-gated like the other singleton sweeps so multi-replica
 			// installs don't double-seed, and idempotent across acquisitions.
-			go envAddonCloner.ResumePendingSeeds(workCtx)
+			goSafe(logger, "resume-pending-seeds", func() { envAddonCloner.ResumePendingSeeds(workCtx) })
 			// One-shot backfills for addon state written before two fixes:
 			// named-env clones missing their source annotation, and
 			// instance-backed conn Secrets in custom project namespaces
@@ -965,7 +966,11 @@ func main() {
 				// discipline the cluster-singleton loops use. health.New always
 				// sets Interval=HeartbeatInterval, so registration + beat agree.
 				serverstate.RegisterLoop(serverstate.LoopHealth, health.HeartbeatInterval)
-				goSafe(logger, "health", func() { health.New(kc, *namespace, notifyDisp, logger).Run(workCtx) })
+				goSafe(logger, "health", func() {
+					hw := health.New(kc, *namespace, notifyDisp, logger)
+					hw.Store = database
+					hw.Run(workCtx)
+				})
 			}
 			// Build controller moved out of startSingletons. It
 			// installs informer handlers at boot (one-shot, gated
@@ -975,7 +980,7 @@ func main() {
 			// comments in internal/buildcontroller for the bug
 			// we're avoiding.
 			if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
-				go runPreviewCleanup(workCtx, projSvc, logger)
+				goSafe(logger, "preview-cleanup", func() { runPreviewCleanup(workCtx, projSvc, logger) })
 			}
 			if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
 				sweepNamespaces := func(c context.Context) []string {
@@ -987,7 +992,7 @@ func main() {
 				goSafe(logger, "finalizer-sweep", func() { runFinalizerSweep(workCtx, kc, sweepNamespaces, logger) })
 			}
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-				go runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger)
+				goSafe(logger, "daily-cleanup", func() { runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger) })
 			}
 			// Opt-in: convert the regular LogLine table to daily-
 			// partitioned. Runs once on the leader; subsequent boots

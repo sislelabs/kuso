@@ -357,12 +357,17 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	}
 	// Per-installation token bucket. Cheap (in-memory, microseconds).
 	// 60-burst / 60-per-min steady-state; well above GitHub's normal
-	// cadence, well below "leaked secret" levels. Returning 429 is
-	// safe — GitHub treats it as a soft fail and retries with backoff,
-	// so legitimate bursts catch up after the bucket refills.
+	// cadence, well below "leaked secret" levels. A 429 LOSES the
+	// delivery: GitHub does not redeliver failed webhooks on its own,
+	// only when someone presses Redeliver. So say so, loudly, with the
+	// delivery id needed to find it on the App's Advanced page.
 	if !h.allowInstallation(installID) {
-		h.Logger.Warn("github webhook rate limited", "installation", installID, "event", event)
-		writeErr(w, http.StatusTooManyRequests, "rate limit")
+		h.Logger.Error("github webhook rate limited; delivery dropped (redeliver it from the GitHub App's Advanced page)",
+			"installation", installID, "event", event, "delivery", deliveryID)
+		if h.Dispatcher != nil {
+			h.Dispatcher.NotifyDroppedDelivery(installID, event, deliveryID)
+		}
+		writeErr(w, http.StatusTooManyRequests, "rate limit: delivery dropped, redeliver it from GitHub")
 		return
 	}
 	// Replay-protection. GitHub retries failed deliveries reusing
@@ -419,17 +424,15 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	// We capture the body + event by value because the request goroutine
 	// may unwind (and the body buffer could be reused) before our
 	// goroutine runs.
+	//
+	// Deliveries for the same PR (or pushed ref) run in arrival order, one
+	// at a time: a `closed` that overtook the slower `synchronize` before it
+	// let the synchronize recreate the preview the close had removed.
 	parent := h.BaseCtx
 	if parent == nil {
 		parent = context.Background()
 	}
-	go func(event string, body []byte) {
-		ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
-		defer cancel()
-		if err := h.Dispatcher.Dispatch(ctx, event, body); err != nil {
-			h.Logger.Error("github dispatch", "event", event, "err", err)
-		}
-	}(event, append([]byte(nil), body...))
+	h.Dispatcher.DispatchAsync(parent, event, append([]byte(nil), body...), 5*time.Minute)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -465,6 +468,18 @@ func (h *GithubHandler) WebhookHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		if ev, _ := h.DB.GetSetting(ctx, githubLastDeliveryEventKey); ev != "" {
 			resp["lastDeliveryEvent"] = ev
+		}
+	}
+	// A configured App can still lack permissions its installations never
+	// accepted (commit statuses 403 on every build). Best-effort: a
+	// GitHub error is reported, not fatal to the health response.
+	if h.Client != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if gaps, err := h.Client.InstallationPermissionGaps(ctx); err != nil {
+			resp["permissionCheckError"] = err.Error()
+		} else {
+			resp["permissionGaps"] = gaps
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)

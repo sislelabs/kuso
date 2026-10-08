@@ -415,6 +415,9 @@ func (c *Cache) WaitForSync(ctx context.Context) bool {
 	if c.depSynced != nil {
 		syncs = append(syncs, c.depSynced)
 	}
+	if c.nodeSynced != nil {
+		syncs = append(syncs, c.nodeSynced)
+	}
 	return cache.WaitForCacheSync(ctx.Done(), syncs...)
 }
 

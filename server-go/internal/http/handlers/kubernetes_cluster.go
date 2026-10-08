@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -101,6 +102,14 @@ func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Reques
 	scs, err := h.Kube.Clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		h.Logger.Error("list storage classes", "err", err)
+		// The storage.k8s.io grant was added to deploy/server-go.yaml after
+		// clusters were installed, and the updater can't apply ClusterRole
+		// changes, so older clusters land here until an admin re-applies it.
+		if apierrors.IsForbidden(err) {
+			writeErr(w, http.StatusServiceUnavailable,
+				"kuso-server lacks RBAC to list storageclasses; re-apply the kuso-server ClusterRole from deploy/server-go.yaml")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}

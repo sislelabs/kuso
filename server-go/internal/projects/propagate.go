@@ -168,6 +168,14 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 	// project spec doesn't change during propagation, so one fetch
 	// suffices. Best-effort: a project-fetch error falls back to
 	// copying the raw service placement.
+	// A worker's envs are born hostless; leaving worker needs the default
+	// host back or the env gets no Ingress.
+	var baseDomain string
+	if changed.Runtime && svc.Spec.Runtime != "worker" {
+		if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
+			baseDomain = proj.Spec.BaseDomain
+		}
+	}
 	var effectivePlacement *kube.KusoPlacement
 	if changed.Placement {
 		if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
@@ -233,7 +241,15 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if envScope == "" {
 					envScope = "production"
 				}
-				rescopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, envScope)
+				// Sibling kube Services are named after their env CR. An
+				// env-group clone's CR ends in -production (scope=<group>)
+				// and its spec already targets <sib>-<group>-production, so
+				// rescoping to -<group> would name a Service that doesn't exist.
+				svcRefScope := envScope
+				if strings.HasSuffix(envName, "-production") {
+					svcRefScope = "production"
+				}
+				rescopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, svcRefScope)
 				merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 					ctx, ns, project,
 					svc.Spec.SharedEnvKeys,
@@ -363,6 +379,18 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Runtime {
 				env.Spec.Runtime = svc.Spec.Runtime
+				if svc.Spec.Runtime != "worker" && env.Spec.Host == "" {
+					if host := webHostForEnv(env, project, service, baseDomain); host != "" {
+						env.Spec.Host = host
+						// Only the production env carries the service's custom
+						// domains; custom envs and env-group clones never do.
+						if scope := env.Labels[labelEnv]; scope == "" || scope == "production" {
+							env.Spec.AdditionalHosts = domainHosts(svc.Spec.Domains)
+							env.Spec.WildcardDomains = wildcardDomainsOf(svc.Spec.Domains)
+						}
+						env.Spec.TLSHosts = computeTLSHosts(host, env.Spec.AdditionalHosts)
+					}
+				}
 			}
 			if changed.PrivateEgress {
 				env.Spec.PrivateEgress = svc.Spec.PrivateEgress

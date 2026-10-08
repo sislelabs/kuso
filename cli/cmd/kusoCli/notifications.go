@@ -39,9 +39,18 @@ var notificationsCmd = &cobra.Command{
 	Long: `Manage notification channels.
 
 kuso can send to Discord, Slack, Mattermost, Telegram, Pushover, email and
-generic webhooks. "create" here makes discord, slack and webhook channels;
-create the other kinds in the web UI (Settings > Notifications). Every kind
-shows up in "list" and can be tested or deleted from the CLI.`,
+generic webhooks. discord, webhook, slack and mattermost channels take their
+settings from flags. telegram, pushover and email need --config-file with
+the channel's keys:
+
+  telegram  {"botToken": "...", "chatId": "..."}
+  pushover  {"token": "...", "user": "..."}
+  email     {"host": "...", "port": "587", "from": "...", "to": "...",
+             "username": "...", "password": "..."}
+
+--mention (discord only) pings on matching events: here, everyone,
+role:<id> or none. Without --mention-on it applies to every event;
+with it, only to the listed events.`,
 }
 
 var notificationsListCmd = &cobra.Command{
@@ -135,8 +144,8 @@ var (
 	notifEvents     []string
 	notifPipelines  []string
 	notifEnabled    bool
-	notifMention    string   // global mention: "", "here", "everyone", "<role-id>"
-	notifMentionOn  []string // events that trigger the mention; empty = always
+	notifMention    string   // discord mention: "here", "everyone", "role:<id>", "none"
+	notifMentionOn  []string // events the mention applies to; empty = every event
 	notifReveal     bool     // get: show webhook URL/secret in plaintext
 	notifEditConfig string   // update: replace config from JSON file or '-' for stdin
 )
@@ -144,12 +153,13 @@ var (
 var notificationsCreateCmd = &cobra.Command{
 	Use:     "create <type>",
 	Aliases: []string{"add"},
-	Short:   "Create a notification channel (type: discord, webhook, slack)",
+	Short:   "Create a notification channel (type: discord, webhook, slack, mattermost, telegram, pushover, email)",
 	Args:    cobra.ExactArgs(1),
 	Example: `  kuso notifications create discord --name disco --url 'https://discord.com/api/webhooks/…' \
     --events build.succeeded,build.failed,pod.crashed,addon.crashed \
     --mention here --mention-on build.failed,pod.crashed
-  kuso notifications create webhook --name ci-hook --url 'https://ci.example/hook' --secret topsecret`,
+  kuso notifications create webhook --name ci-hook --url 'https://ci.example/hook' --secret topsecret
+  kuso notifications create telegram --name tg --config-file telegram.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -235,18 +245,17 @@ var notificationsUpdateCmd = &cobra.Command{
 		if cmd.Flags().Changed("channel") {
 			body.Config["channel"] = notifChannel
 		}
-		if cmd.Flags().Changed("mention") {
-			body.Config["mention"] = notifMention
-		}
-		if cmd.Flags().Changed("mention-on") {
-			body.Config["mentionOn"] = stringsToAny(notifMentionOn)
-		}
 		if notifEditConfig != "" {
 			cfg, err := loadConfigFile(notifEditConfig)
 			if err != nil {
 				return err
 			}
 			body.Config = cfg
+		}
+		if cmd.Flags().Changed("mention") || cmd.Flags().Changed("mention-on") {
+			if err := applyMentionFlags(body.Config, notifMention, notifMentionOn); err != nil {
+				return err
+			}
 		}
 		resp2, err := api.UpdateNotification(args[0], body)
 		if err := checkRespErr(resp2, err); err != nil {
@@ -378,8 +387,19 @@ func buildNotifBody(typ string) (kusoApi.NotificationBody, error) {
 		Pipelines: notifPipelines,
 		Config:    map[string]any{},
 	}
-	switch typ {
-	case "discord", "webhook":
+	switch {
+	case notifEditConfig != "":
+		switch typ {
+		case "discord", "webhook", "slack", "mattermost", "telegram", "pushover", "email":
+		default:
+			return body, fmt.Errorf("unknown type %q; expected discord, webhook, slack, mattermost, telegram, pushover or email", typ)
+		}
+		cfg, err := loadConfigFile(notifEditConfig)
+		if err != nil {
+			return body, err
+		}
+		body.Config = cfg
+	case typ == "discord" || typ == "webhook" || typ == "mattermost":
 		if notifURL == "" {
 			return body, fmt.Errorf("--url is required for %s notifications", typ)
 		}
@@ -387,32 +407,77 @@ func buildNotifBody(typ string) (kusoApi.NotificationBody, error) {
 		if notifSecret != "" {
 			body.Config["secret"] = notifSecret
 		}
-	case "slack":
+	case typ == "slack":
 		if notifURL == "" || notifChannel == "" {
 			return body, fmt.Errorf("--url and --channel are required for slack notifications")
 		}
 		body.Config["url"] = notifURL
 		body.Config["channel"] = notifChannel
+	case typ == "telegram" || typ == "pushover" || typ == "email":
+		return body, fmt.Errorf("%s notifications need --config-file with the channel's keys (see 'kuso notifications --help')", typ)
 	default:
-		return body, fmt.Errorf("unknown type %q; expected discord, webhook, or slack", typ)
+		return body, fmt.Errorf("unknown type %q; expected discord, webhook, slack, mattermost, telegram, pushover or email", typ)
 	}
-	if notifMention != "" {
-		body.Config["mention"] = notifMention
-	}
-	if len(notifMentionOn) > 0 {
-		body.Config["mentionOn"] = stringsToAny(notifMentionOn)
-	}
-	if notifEditConfig != "" {
-		cfg, err := loadConfigFile(notifEditConfig)
-		if err != nil {
+	if notifMention != "" || len(notifMentionOn) > 0 {
+		if err := applyMentionFlags(body.Config, notifMention, notifMentionOn); err != nil {
 			return body, err
 		}
-		body.Config = cfg
 	}
 	if body.Name == "" {
 		return body, fmt.Errorf("--name is required")
 	}
 	return body, nil
+}
+
+// applyMentionFlags writes --mention/--mention-on into config.mentions, the
+// {event: rule} map the server's notify.mentionFor and the web editor read.
+// Existing per-event rules are kept unless the flags name the same event.
+// The keys an older CLI wrote ("mention"/"mentionOn") were never read by
+// the server, so they're dropped.
+func applyMentionFlags(cfg map[string]any, mention string, on []string) error {
+	if mention == "" {
+		return fmt.Errorf("--mention-on needs --mention (here, everyone, role:<id> or none)")
+	}
+	rule, err := mentionRule(mention)
+	if err != nil {
+		return err
+	}
+	rules, _ := cfg["mentions"].(map[string]any)
+	if rules == nil {
+		rules = map[string]any{}
+	}
+	if len(on) == 0 {
+		rules["*"] = rule
+	} else {
+		for _, ev := range on {
+			if ev = strings.TrimSpace(ev); ev != "" {
+				rules[ev] = rule
+			}
+		}
+	}
+	cfg["mentions"] = rules
+	delete(cfg, "mention")
+	delete(cfg, "mentionOn")
+	return nil
+}
+
+// mentionRule maps the flag value to the stored rule format: "@here",
+// "@everyone", "role:<id>" or "none". A bare numeric id is taken as a role.
+func mentionRule(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	switch strings.TrimPrefix(v, "@") {
+	case "here":
+		return "@here", nil
+	case "everyone":
+		return "@everyone", nil
+	case "none":
+		return "none", nil
+	}
+	id := strings.TrimPrefix(v, "role:")
+	if id != "" && strings.Trim(id, "0123456789") == "" {
+		return "role:" + id, nil
+	}
+	return "", fmt.Errorf("invalid --mention %q: want here, everyone, role:<id> or none", v)
 }
 
 func unwrapNotifications(buf []byte) ([]map[string]any, error) {
@@ -464,14 +529,6 @@ func asBool(v any) bool {
 	return false
 }
 
-func stringsToAny(in []string) []any {
-	out := make([]any, len(in))
-	for i, s := range in {
-		out[i] = s
-	}
-	return out
-}
-
 // redactURL hides the trailing path segment (Discord webhook tokens
 // always sit at the end of the URL).
 func redactURL(u string) string {
@@ -494,15 +551,15 @@ func init() {
 
 	for _, c := range []*cobra.Command{notificationsCreateCmd, notificationsUpdateCmd} {
 		c.Flags().StringVar(&notifName, "name", "", "human-readable name")
-		c.Flags().StringVar(&notifURL, "url", "", "webhook URL (discord / webhook / slack)")
+		c.Flags().StringVar(&notifURL, "url", "", "webhook URL (discord / webhook / slack / mattermost)")
 		c.Flags().StringVar(&notifSecret, "secret", "", "shared secret for HMAC (webhook only)")
 		c.Flags().StringVar(&notifChannel, "channel", "", "slack channel (slack only)")
 		c.Flags().StringSliceVar(&notifEvents, "events", nil, "comma-separated event whitelist (e.g. build.failed,pod.crashed). empty = all events")
 		c.Flags().StringSliceVar(&notifPipelines, "pipelines", nil, "comma-separated project whitelist; empty = all projects")
 		c.Flags().BoolVar(&notifEnabled, "enabled", true, "enable the channel")
-		c.Flags().StringVar(&notifMention, "mention", "", "mention target: 'here', 'everyone', or '<role-id>'")
-		c.Flags().StringSliceVar(&notifMentionOn, "mention-on", nil, "events that trigger the mention; empty = always")
-		c.Flags().StringVar(&notifEditConfig, "config-file", "", "load config from JSON file (or - for stdin) — overrides --url/--secret/etc")
+		c.Flags().StringVar(&notifMention, "mention", "", "discord mention: 'here', 'everyone', 'role:<id>' or 'none'")
+		c.Flags().StringSliceVar(&notifMentionOn, "mention-on", nil, "events the mention applies to; empty = every event")
+		c.Flags().StringVar(&notifEditConfig, "config-file", "", "load config from JSON file (or - for stdin); overrides --url/--secret/etc, required for telegram/pushover/email")
 	}
 	notificationsCmd.AddCommand(notificationsCreateCmd)
 	notificationsCmd.AddCommand(notificationsUpdateCmd)

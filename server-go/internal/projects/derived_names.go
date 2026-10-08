@@ -40,13 +40,24 @@ func validateServiceNames(project, service string, envCRNames ...string) error {
 	return nil
 }
 
-// checkReleaseNameFree reports a conflict when another kuso kind already
-// owns the helm release name. Services, addons and crons all install as
+// checkReleaseNameFree reports a conflict when any kuso CR already owns
+// the helm release name. Services, envs, addons and crons all install as
 // helm releases named after their CR in the same namespace; a clash makes
 // the second one fail with "duplicate release name" forever while the API
-// returned 201.
+// returned 201. Service and env CR names also prefix their managed Secrets
+// (<name>-secrets), so env "worker" on "api" would share api-worker's.
 func (s *Service) checkReleaseNameFree(ctx context.Context, ns string, names ...string) error {
 	for _, n := range names {
+		if _, err := s.Kube.GetKusoService(ctx, ns, n); err == nil {
+			return fmt.Errorf("%w: name %q is already used by a service in this project", ErrConflict, n)
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check service %s: %w", n, err)
+		}
+		if _, err := s.Kube.GetKusoEnvironment(ctx, ns, n); err == nil {
+			return fmt.Errorf("%w: name %q is already used by an environment in this project", ErrConflict, n)
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check environment %s: %w", n, err)
+		}
 		if _, err := s.Kube.GetKusoAddon(ctx, ns, n); err == nil {
 			return fmt.Errorf("%w: name %q is already used by an addon in this project", ErrConflict, n)
 		} else if !apierrors.IsNotFound(err) {
@@ -69,6 +80,25 @@ func (s *Service) checkRenameSafe(ctx context.Context, ns, project, oldName, new
 	if len(old.Spec.Volumes) > 0 {
 		return fmt.Errorf("%w: service %s/%s has persistent volumes; renaming would delete their data (volumes are bound to the environment name). Create a new service and copy the data, or remove the volumes first",
 			ErrInvalid, project, oldName)
+	}
+	// Crons are named after their service and owned by its CR, so the old
+	// service's teardown would GC them. Refuse rather than drop them.
+	crons, err := s.Kube.ListKusoCrons(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("list crons: %w", err)
+	}
+	oldFQN := serviceCRName(project, oldName)
+	var cronNames []string
+	for i := range crons {
+		c := &crons[i]
+		if c.Spec.Project == project && (c.Spec.Service == oldFQN || c.Spec.Service == oldName) {
+			cronNames = append(cronNames, c.Name)
+		}
+	}
+	if len(cronNames) > 0 {
+		sort.Strings(cronNames)
+		return fmt.Errorf("%w: service %s/%s has crons (%s); renaming would delete them. Delete the crons, rename, then recreate them on %s",
+			ErrInvalid, project, oldName, strings.Join(cronNames, ", "), newName)
 	}
 	newEnvNames := make([]string, 0, len(envs))
 	for i := range envs {
@@ -109,6 +139,9 @@ func (s *Service) copyManagedSecretsForRename(ctx context.Context, ns, project, 
 			continue
 		}
 		candidates = append(candidates, kube.EnvSecretName(project, oldName, envShortName(envs[i].Name, project, oldName)))
+		if scope := envs[i].Labels[labelEnv]; scope != "" {
+			candidates = append(candidates, kube.EnvSecretName(project, oldName, scope))
+		}
 		for _, n := range envs[i].Spec.EnvFromSecrets {
 			if isManagedServiceSecretName(n, project, oldName) {
 				candidates = append(candidates, n)
@@ -144,6 +177,14 @@ func (s *Service) copyManagedSecretsForRename(ctx context.Context, ns, project, 
 			existing, gerr := secrets.Get(ctx, to, metav1.GetOptions{})
 			if gerr != nil {
 				return out, fmt.Errorf("copy secret %s → %s: %w", from, to, gerr)
+			}
+			// Secret names are raw concatenations, so <p>-<new>-… can be
+			// another project's Secret in a shared namespace ("a"+"b-c" vs
+			// "a-b"+"c"). Only a leftover labelled for this project may be
+			// overwritten.
+			if existing.Labels[kube.LabelProject] != project {
+				return out, fmt.Errorf("%w: secret %s already exists and doesn't belong to project %s; delete it or pick another name",
+					ErrConflict, to, project)
 			}
 			existing.Data = src.Data
 			if _, uerr := secrets.Update(ctx, existing, metav1.UpdateOptions{}); uerr != nil {
@@ -316,22 +357,30 @@ func (s *Service) checkDomainsFree(ctx context.Context, project, service string,
 	}
 	prod := envCRNameFor(project, service, "production")
 	for _, h := range added {
-		for i := range envs {
-			if envs[i].Name == prod {
-				continue
+		if err := hostConflict(envs, h, prod); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hostConflict reports which env other than skipEnv already serves host.
+func hostConflict(envs []kube.KusoEnvironment, host, skipEnv string) error {
+	for i := range envs {
+		if envs[i].Name == skipEnv {
+			continue
+		}
+		if strings.EqualFold(envs[i].Spec.Host, host) {
+			return fmt.Errorf("%w: %q is the primary host of env %q", ErrConflict, host, envs[i].Name)
+		}
+		for _, x := range envs[i].Spec.AdditionalHosts {
+			if strings.EqualFold(x, host) {
+				return fmt.Errorf("%w: %q already on env %q", ErrConflict, host, envs[i].Name)
 			}
-			if strings.EqualFold(envs[i].Spec.Host, h) {
-				return fmt.Errorf("%w: %q is the primary host of env %q", ErrConflict, h, envs[i].Name)
-			}
-			for _, x := range envs[i].Spec.AdditionalHosts {
-				if strings.EqualFold(x, h) {
-					return fmt.Errorf("%w: %q already on env %q", ErrConflict, h, envs[i].Name)
-				}
-			}
-			for _, w := range envs[i].Spec.WildcardDomains {
-				if strings.EqualFold(w.Host, h) {
-					return fmt.Errorf("%w: %q already on env %q", ErrConflict, h, envs[i].Name)
-				}
+		}
+		for _, w := range envs[i].Spec.WildcardDomains {
+			if strings.EqualFold(w.Host, host) {
+				return fmt.Errorf("%w: %q already on env %q", ErrConflict, host, envs[i].Name)
 			}
 		}
 	}

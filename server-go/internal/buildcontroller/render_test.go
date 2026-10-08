@@ -874,11 +874,9 @@ func TestNixpacksPlanInjectsBuildArgsChannel(t *testing.T) {
 		t.Error("nixpacks script does not consume KUSO_BUILDARG_KEYS")
 	}
 	// Must inject them as ENV lines in the generated Dockerfile (build-time env).
-	if !strings.Contains(script, `v="$(printenv "KUSO_BA_${k}")"`) {
+	// TestNixpacksEnvInjectScriptPreservesValues runs that block for real.
+	if !strings.Contains(script, `${k}=KUSO_BA_${k}`) {
 		t.Error("nixpacks script does not read KUSO_BA_<key> for the ENV block")
-	}
-	if !strings.Contains(script, `ENV ${k} ${v}`) {
-		t.Error("nixpacks script does not emit ENV lines")
 	}
 }
 

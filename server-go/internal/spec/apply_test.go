@@ -346,13 +346,19 @@ type projectsEnvCall struct {
 }
 
 type fakeProjects struct {
-	created []projectsCreateCall
-	patched []projectsPatchCall
-	deleted []string
-	envSet  []projectsEnvCall
+	projectUpdates []projects.UpdateProjectRequest
+	created        []projectsCreateCall
+	patched        []projectsPatchCall
+	deleted        []string
+	envSet         []projectsEnvCall
 	// existing backs GetService for the mask-sentinel resolution tests:
 	// service name → live CR. Names absent from the map return an error.
 	existing map[string]*kube.KusoService
+}
+
+func (f *fakeProjects) Update(_ context.Context, name string, req projects.UpdateProjectRequest) (*kube.KusoProject, error) {
+	f.projectUpdates = append(f.projectUpdates, req)
+	return &kube.KusoProject{}, nil
 }
 
 func (f *fakeProjects) GetService(_ context.Context, _, service string) (*kube.KusoService, error) {

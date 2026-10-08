@@ -28,6 +28,7 @@ import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
+import { nodeMatchesLabels, placementLabels } from "./placementLabels";
 import { useCan, Perms } from "@/features/auth";
 import { addonBlast } from "@/lib/blast-radius";
 
@@ -562,29 +563,19 @@ function PlacementSection({
   const allHostnames = (nodesQuery.data ?? []).map((n) => n.name);
 
   // Live match preview — same logic as the service variant. Empty rules
-  // schedule everywhere; a partial rule (key set but no value) doesn't
-  // skew the count.
+  // schedule everywhere; a key with a blank value matches on presence.
   const matching = (nodesQuery.data ?? []).filter((n) => {
-    for (const r of labels) {
-      if (!r.key.trim()) continue;
-      if ((n.kusoLabels ?? {})[r.key.trim()] !== r.value) return false;
-    }
+    if (!nodeMatchesLabels(n.kusoLabels ?? {}, labels)) return false;
     if (pickedNodes.length > 0 && !pickedNodes.includes(n.name)) return false;
     return true;
   });
   const totalNodes = (nodesQuery.data ?? []).length;
-  const incompleteRules = labels.filter((r) => !r.key.trim() || !r.value.trim()).length;
-  const hasEffectiveRules =
-    labels.some((r) => r.key.trim() && r.value.trim()) || pickedNodes.length > 0;
+  const incompleteRules = labels.filter((r) => !r.key.trim()).length;
+  const hasEffectiveRules = labels.some((r) => r.key.trim()) || pickedNodes.length > 0;
 
   const save = useMutation({
-    mutationFn: () => {
-      const lbls: Record<string, string> = {};
-      for (const r of labels) {
-        if (r.key.trim() && r.value.trim()) lbls[r.key.trim()] = r.value.trim();
-      }
-      return setAddonPlacement(project, addon, { labels: lbls, nodes: pickedNodes });
-    },
+    mutationFn: () =>
+      setAddonPlacement(project, addon, { labels: placementLabels(labels), nodes: pickedNodes }),
     onSuccess: () => {
       toast.success("Placement saved");
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
@@ -595,13 +586,10 @@ function PlacementSection({
   });
 
   const dirty =
-    JSON.stringify(
-      Object.fromEntries(
-        labels
-          .filter((r) => r.key.trim() && r.value.trim())
-          .map((r) => [r.key.trim(), r.value.trim()]),
-      ),
-    ) !== JSON.stringify(initialLabels) ||
+    JSON.stringify(placementLabels(labels)) !==
+      JSON.stringify(
+        placementLabels(Object.entries(initialLabels).map(([key, value]) => ({ key, value }))),
+      ) ||
     JSON.stringify(pickedNodes) !== JSON.stringify(initialNodes);
 
   // Register with the overlay shell. Discard reverts to the
@@ -687,7 +675,7 @@ function PlacementSection({
                   onChange={(e) => updLabel(i, { value: e.target.value })}
                   className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
-                  <option value="">pick value</option>
+                  <option value="">any value</option>
                   {[...valuesForKey].sort().map((v) => (
                     <option key={v} value={v}>
                       {v}
@@ -698,7 +686,7 @@ function PlacementSection({
                 <Input
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
-                  placeholder={r.key.trim() ? "value" : "eu"}
+                  placeholder={r.key.trim() ? "value (blank = any)" : "eu"}
                   className="h-7 font-mono text-[11px]"
                   disabled={haveAnyLabels && !r.key.trim()}
                 />

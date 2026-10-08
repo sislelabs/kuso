@@ -173,3 +173,48 @@ func TestRetryRelease_RefusesOtherPhases(t *testing.T) {
 		t.Errorf("other project's build: want ErrNotFound, got %v", err)
 	}
 }
+
+func labelled(sd seed) seed {
+	l := sd.obj.GetLabels()
+	if l == nil {
+		l = map[string]string{}
+	}
+	l[kube.LabelProject] = "alpha"
+	l[kube.LabelService] = "alpha-api"
+	sd.obj.SetLabels(l)
+	return sd
+}
+
+// BLD-17: a release retry keeps the done label, so a push during it was
+// dispatched at once and ran its own migration next to the retried one.
+func TestRetryRelease_HoldsTheServiceSlot(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "api"),
+		labelled(seedReleaseFailedBuild("alpha-api-def")),
+	)
+	ctx := context.Background()
+	if _, err := s.RetryRelease(ctx, "alpha", "api", "alpha-api-def"); err != nil {
+		t.Fatalf("RetryRelease: %v", err)
+	}
+	got, err := s.Create(ctx, "alpha", "api", CreateBuildRequest{Ref: "aabbccddeeff00112233445566778899aabbccdd"})
+	if err != nil {
+		t.Fatalf("Create during retry: %v", err)
+	}
+	if got.Labels[LabelBuildState] != "queued" {
+		t.Error("build created during a release retry was not queued behind it")
+	}
+}
+
+func TestRetryRelease_RefusesWhileAnotherBuildRuns(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "api"),
+		labelled(seedReleaseFailedBuild("alpha-api-def")),
+		seedStartedBuild("alpha-api-newer", "alpha", "api", nil),
+	)
+	if _, err := s.RetryRelease(context.Background(), "alpha", "api", "alpha-api-def"); !errors.Is(err, ErrConflict) {
+		t.Errorf("retry while another build runs: want ErrConflict, got %v", err)
+	}
+}

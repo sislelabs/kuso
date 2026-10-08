@@ -2,10 +2,12 @@ package handlers_test
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/http/handlers"
 )
 
 // Guards the first-OAuth-user-becomes-admin race: with OAuth configured
@@ -142,4 +144,65 @@ func TestOAuth_BootstrapGate_EnvFalseAlwaysBlocks(t *testing.T) {
 	if !hasGroup(groups, "kuso-pending") {
 		t.Errorf("blocked user should land in pending: groups=%v", groups)
 	}
+}
+
+// SEC-2 (2026-10-07 review): deactivating the seed admin (reachable via
+// SEC-1) re-opened promotion, and the next OAuth sign-in became admin.
+func TestOAuth_BootstrapGate_DeactivatedSeedAdminStillBlocks(t *testing.T) {
+	t.Setenv("KUSO_OAUTH_BOOTSTRAP_ADMIN", "")
+	r, h, gm, d := newOAuthHarness(t)
+	seedLocalAdmin(t, d)
+	inactive := false
+	if err := d.UpdateUser(context.Background(), "seed-admin", db.UpdateUserInput{IsActive: &inactive}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups := oauthGroupsAfter(t, r, h, gm, d)
+	if hasGroup(groups, "kuso-admins") {
+		t.Fatalf("deactivating the seed admin re-armed OAuth promotion: groups=%v", groups)
+	}
+}
+
+// Even with the explicit opt-in, promotion is one-shot: an instance that
+// has had a real admin never promotes again, whatever the admin count.
+func TestOAuth_BootstrapGate_NotReArmedByAdminRemoval(t *testing.T) {
+	t.Setenv("KUSO_OAUTH_BOOTSTRAP_ADMIN", "true")
+	r, h, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	seedGrantsUser(t, d, "boss")
+	if err := d.SetUserInstanceRole(ctx, "boss", db.InstanceRoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.EnsureAdminGroup(ctx, ""); err != nil { // boot
+		t.Fatal(err)
+	}
+	if err := d.SetUserInstanceRole(ctx, "boss", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	groups := oauthGroupsAfter(t, r, h, gm, d)
+	if hasGroup(groups, "kuso-admins") {
+		t.Fatalf("removing every admin re-armed OAuth promotion: groups=%v", groups)
+	}
+}
+
+func oauthGroupsAfter(t *testing.T, r http.Handler, h *handlers.OAuthHandler, gm *githubMock, d *db.DB) []string {
+	t.Helper()
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback: %d %q", rr.Code, rr.Body.String())
+	}
+	c := jwtCookie(rr)
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+	claims, err := h.Issuer.Verify(c.Value)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	groups, err := d.UserGroupNames(context.Background(), claims.UserID)
+	if err != nil {
+		t.Fatalf("groups: %v", err)
+	}
+	return groups
 }

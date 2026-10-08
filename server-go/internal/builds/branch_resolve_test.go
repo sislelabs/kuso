@@ -64,8 +64,10 @@ func TestCreate_ManualTrigger_ResolvesBranchHeadViaAutoInstallation(t *testing.T
 	if !isBranchHeadBuild(got) {
 		t.Error("resolved manual build must carry the branch-head marker")
 	}
-	if got.Spec.Image == nil || got.Spec.Image.Tag != headSHA[:12] {
-		t.Errorf("image tag = %+v, want %q", got.Spec.Image, headSHA[:12])
+	// The tag is the short SHA plus a per-build suffix: HEAD is usually
+	// already built, and reusing that build's tag never rolls the pods.
+	if got.Spec.Image == nil || !strings.HasPrefix(got.Spec.Image.Tag, headSHA[:12]+"-") {
+		t.Errorf("image tag = %+v, want prefix %q", got.Spec.Image, headSHA[:12]+"-")
 	}
 	if gh.instID != 128668920 || gh.owner != "example" || gh.repo != "api" || gh.branch != "staging" {
 		t.Errorf("resolver asked (%d, %s/%s@%s)", gh.instID, gh.owner, gh.repo, gh.branch)

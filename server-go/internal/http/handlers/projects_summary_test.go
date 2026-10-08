@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -203,6 +204,24 @@ func TestProjectsSummary_DegradesBrokenProject(t *testing.T) {
 		}
 		if it.Project.Name == "p1" && len(it.Services) != 1 {
 			t.Errorf("healthy project degraded alongside the broken one: %+v", it)
+		}
+	}
+}
+
+// The degraded card used to serialize the raw CR, so a deploy token in
+// spec.defaultRepo.url reached any viewer while Describe was failing.
+func TestProjectsSummary_DegradedCardRedactsRepoCreds(t *testing.T) {
+	fake := newSummaryFake()
+	fake.projects[1].Spec.DefaultRepo = &kube.KusoRepoRef{URL: "https://deploy:gldt-secret@gitlab.com/g/app.git"}
+	fake.failDescribe["p2"] = true
+	h := &ProjectsHandler{Svc: fake, DB: nil, Logger: slog.Default(), Namespace: "kuso"}
+
+	got := summaryResponse(t, h,
+		&auth.Claims{UserID: "admin", Permissions: []string{string(auth.PermSettingsAdmin)}})
+	for _, it := range got {
+		if it.Project.Name == "p2" && it.Project.Spec.DefaultRepo != nil &&
+			strings.Contains(it.Project.Spec.DefaultRepo.URL, "gldt-secret") {
+			t.Fatalf("degraded card leaked repo credentials: %s", it.Project.Spec.DefaultRepo.URL)
 		}
 	}
 }

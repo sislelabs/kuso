@@ -438,7 +438,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	if !strings.HasPrefix(service, project+"-") {
 		serviceFQN = project + "-" + service
 	}
-	prod, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
+	prod, err := s.resolveFromProductionEnv(ctx, ns, project, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
@@ -454,10 +454,10 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	// + its rendered CronJob when the service is deleted, even if the
 	// application-level cascade in projects.DeleteService is skipped or
 	// fails partway through.
-	if parent, gerr := s.Kube.GetKusoService(ctx, ns, serviceFQN); gerr == nil && parent != nil {
+	if parent, gerr := s.Kube.GetOwnedService(ctx, ns, project, serviceFQN); gerr == nil && parent != nil {
 		objMeta.OwnerReferences = []metav1.OwnerReference{kube.OwnerRefForService(parent)}
 	}
-	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, serviceFQN)
+	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, project, serviceFQN)
 	cr := &kube.KusoCron{
 		ObjectMeta: objMeta,
 		Spec: kube.KusoCronSpec{
@@ -695,11 +695,15 @@ func defaultStartingDeadline(v int) int {
 // returns the image + envFromSecrets the cron should inherit. Errors
 // when the production env doesn't exist yet — the user has to deploy
 // the service before adding crons.
-func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN string) (*kube.KusoEnvironment, error) {
+//
+// The env must belong to project and serviceFQN: in the shared namespace
+// the derived name can be another project's production env, and the cron
+// would inherit (and on every sync re-pull) its image and secrets.
+func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, project, serviceFQN string) (*kube.KusoEnvironment, error) {
 	envName := serviceFQN + "-production"
-	env, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
+	env, err := s.Kube.GetOwnedEnv(ctx, ns, project, serviceFQN, envName)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if kube.IsNotFoundOrNotOwned(err) {
 			return nil, fmt.Errorf("%w: production env %s not found — deploy the service before adding crons", ErrInvalid, envName)
 		}
 		return nil, fmt.Errorf("lookup production env: %w", err)
@@ -733,11 +737,11 @@ func EnvForCron(vars []kube.KusoEnvVar) []kube.KusoRunEnv {
 // mirror when the service can't be read, and fails closed (private, no
 // platform API) when neither can — a private service's cron must never
 // gain internet egress because of a transient read error.
-func (s *Service) serviceEgress(ctx context.Context, ns, serviceFQN string) (privateEgress, platformAPIEgress bool) {
-	if svc, err := s.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
+func (s *Service) serviceEgress(ctx context.Context, ns, project, serviceFQN string) (privateEgress, platformAPIEgress bool) {
+	if svc, err := s.Kube.GetOwnedService(ctx, ns, project, serviceFQN); err == nil && svc != nil {
 		return svc.Spec.PrivateEgress, svc.Spec.PlatformAPIEgress
 	}
-	if env, err := s.Kube.GetKusoEnvironment(ctx, ns, serviceFQN+"-production"); err == nil && env != nil {
+	if env, err := s.Kube.GetOwnedEnv(ctx, ns, project, serviceFQN, serviceFQN+"-production"); err == nil && env != nil {
 		return env.Spec.PrivateEgress, env.Spec.PlatformAPIEgress
 	}
 	return true, false
@@ -752,21 +756,27 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 	// Verify ownership up front so a cross-project caller gets a clean
 	// 404 (no existence leak) instead of leaking through the production-
 	// env resolution below. The update closure re-checks on retry.
-	if _, err := s.getOwned(ctx, ns, project, fqn); err != nil {
+	owned, err := s.getOwned(ctx, ns, project, fqn)
+	if err != nil {
 		return nil, err
 	}
-	serviceFQN := service
-	if !strings.HasPrefix(service, project+"-") {
-		serviceFQN = project + "-" + service
+	// The cron's own spec.service, not the caller's string: the CR name
+	// only proves "<project>-<service>-<name>" concatenates to fqn.
+	serviceFQN := owned.Spec.Service
+	if serviceFQN == "" {
+		serviceFQN = service
+		if !strings.HasPrefix(service, project+"-") {
+			serviceFQN = project + "-" + service
+		}
 	}
 	// Resolve once outside the retry loop — the production env is the
 	// source of truth and a 409 retry on the cron CR doesn't change
 	// what we'd resolve here.
-	prod, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
+	prod, err := s.resolveFromProductionEnv(ctx, ns, project, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
-	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, serviceFQN)
+	privateEgress, platformAPIEgress := s.serviceEgress(ctx, ns, project, serviceFQN)
 	updated, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
 		if !cronOwnedByProject(cr, project) {
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)

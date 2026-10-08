@@ -11,6 +11,7 @@ import { Database, Cloud, Server, Trash2, RotateCw, CheckCircle2, AlertCircle, L
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 // /settings/database — first-class home for the cluster-shared
 // Postgres. One of three states:
@@ -172,6 +173,7 @@ export default function DatabasePage() {
               ? "This deletes the on-cluster Postgres StatefulSet. ALL data is destroyed. There is no undo."
               : "Disconnect the external Postgres. Projects will lose their database connection on the next pod reconcile."
         }
+        typeToConfirm={status.data?.mode === "managed" ? "delete cluster database" : undefined}
         destructive
         confirmLabel="Disable"
         onConfirm={() => {
@@ -507,6 +509,8 @@ function AdditionalServers() {
   const [newName, setNewName] = useState("");
   const [newDSN, setNewDSN] = useState("");
   const [pendingUnregister, setPendingUnregister] = useState<string | null>(null);
+  // Register is an upsert: re-using a name swaps that server's DSN.
+  const [pendingReplace, setPendingReplace] = useState<{ name: string; dsn: string } | null>(null);
 
   const onSubmit = () => {
     const name = newName.trim().toLowerCase();
@@ -524,6 +528,15 @@ function AdditionalServers() {
       toast.error('"pg" is reserved for the primary cluster database above');
       return;
     }
+    if (!list.isSuccess) return;
+    if (list.data.addons?.some((a) => a.name === name)) {
+      setPendingReplace({ name, dsn });
+      return;
+    }
+    doRegister(name, dsn);
+  };
+
+  const doRegister = (name: string, dsn: string) =>
     register.mutate(
       { name, dsn },
       {
@@ -532,10 +545,10 @@ function AdditionalServers() {
           setNewName("");
           setNewDSN("");
           setShowAdd(false);
+          setPendingReplace(null);
         },
       }
     );
-  };
 
   // The primary slot registers itself as "pg"; it's the card above, so
   // drop it from this list.
@@ -568,6 +581,8 @@ function AdditionalServers() {
 
       {list.isPending ? (
         <Skeleton className="h-16 w-full" />
+      ) : list.isError ? (
+        <QueryErrorState what="shared servers" error={list.error} onRetry={() => void list.refetch()} />
       ) : addons.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
           No additional servers. The primary cluster database above covers most setups; register
@@ -674,7 +689,7 @@ function AdditionalServers() {
             <Button
               size="sm"
               type="submit"
-              disabled={!newName.trim() || !newDSN.trim() || register.isPending}
+              disabled={!newName.trim() || !newDSN.trim() || register.isPending || !list.isSuccess}
             >
               <Plus className="h-3.5 w-3.5" />
               {register.isPending ? "Registering…" : "Register"}
@@ -682,6 +697,27 @@ function AdditionalServers() {
           </div>
         </form>
       )}
+
+      <ConfirmDialog
+        open={pendingReplace !== null}
+        title={`Replace ${pendingReplace?.name ?? ""}?`}
+        body={
+          <p>
+            A shared server named{" "}
+            <span className="font-mono text-[var(--text-primary)]">{pendingReplace?.name}</span> is
+            already registered. Saving swaps its DSN, which every project that opted in uses for
+            new databases and roles.
+          </p>
+        }
+        typeToConfirm={pendingReplace?.name}
+        confirmLabel="Replace"
+        destructive
+        pending={register.isPending}
+        onConfirm={() => {
+          if (pendingReplace) doRegister(pendingReplace.name, pendingReplace.dsn);
+        }}
+        onCancel={() => setPendingReplace(null)}
+      />
 
       <ConfirmDialog
         open={pendingUnregister !== null}

@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,7 +185,17 @@ func (s *Service) ListKeys(ctx context.Context, project, service, env string) ([
 	if err := s.requireOwnedService(ctx, project, service); err != nil {
 		return nil, err
 	}
-	sec, err := s.read(ctx, s.nsFor(ctx, project), Name(project, service, env))
+	ns := s.nsFor(ctx, project)
+	name, _, err := s.scopedSecret(ctx, ns, project, service, env)
+	if errors.Is(err, ErrNotFound) {
+		// Unknown env (the UI asks for the selected scope) or a name that
+		// resolves to another project's Secret: this scope has no keys.
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sec, err := s.read(ctx, ns, name)
 	if err != nil {
 		return nil, err
 	}
@@ -306,15 +317,18 @@ func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, va
 	mu.Lock()
 	defer mu.Unlock()
 
-	name := Name(project, service, env)
-	if err := s.upsertKey(ctx, ns, name, key, value); err != nil {
+	name, envCR, err := s.scopedSecret(ctx, ns, project, service, env)
+	if err != nil {
 		return err
 	}
-	if env != "" {
-		if err := s.attachToEnv(ctx, project, service, env, name); err != nil {
+	if err := s.upsertKey(ctx, ns, project, name, key, value); err != nil {
+		return err
+	}
+	if envCR != nil {
+		if err := s.attachToEnv(ctx, ns, envCR.Name, name); err != nil {
 			return err
 		}
-		return s.bumpRev(ctx, project, service, env)
+		return s.patchEnv(ctx, ns, envCR.Name, secretsRevPatch())
 	}
 	if err := s.attachToAllEnvs(ctx, project, service, name); err != nil {
 		return err
@@ -345,7 +359,10 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 	defer mu.Unlock()
 
 	ns := s.nsFor(ctx, project)
-	name := Name(project, service, env)
+	name, envCR, err := s.scopedSecret(ctx, ns, project, service, env)
+	if err != nil {
+		return err
+	}
 	res, err := s.removeKey(ctx, ns, name, key)
 	if err != nil {
 		return err
@@ -357,16 +374,16 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 		if err := s.deleteSecret(ctx, ns, name); err != nil {
 			return err
 		}
-		if env != "" {
-			if err := s.detachFromEnv(ctx, project, service, env, name); err != nil {
+		if envCR != nil {
+			if err := s.detachFromEnv(ctx, ns, envCR.Name, name); err != nil {
 				return err
 			}
 		} else if err := s.detachFromAllEnvs(ctx, project, service, name); err != nil {
 			return err
 		}
 	}
-	if env != "" {
-		return s.bumpRev(ctx, project, service, env)
+	if envCR != nil {
+		return s.patchEnv(ctx, ns, envCR.Name, secretsRevPatch())
 	}
 	return s.bumpRev(ctx, project, service, "")
 }
@@ -386,7 +403,37 @@ func (s *Service) read(ctx context.Context, ns, name string) (*corev1.Secret, er
 	return sec, nil
 }
 
-func (s *Service) upsertKey(ctx context.Context, ns, name, key, value string) error {
+// scopedSecret resolves the Secret name for (project, service, env) and
+// checks it is safe to touch. Callers must have run requireOwnedService.
+//
+// A non-empty env must name one of this service's own envs: the name is
+// "<project>-<service>-<env>-secrets", and with overlapping project names an
+// arbitrary env string concatenates to another project's Secret. The env is
+// resolved BEFORE any write so a rejected call leaves nothing behind.
+func (s *Service) scopedSecret(ctx context.Context, ns, project, service, env string) (string, *kube.KusoEnvironment, error) {
+	var envCR *kube.KusoEnvironment
+	if env != "" {
+		e, err := s.findEnv(ctx, project, service, env)
+		if err != nil {
+			return "", nil, err
+		}
+		envCR = e
+	}
+	name := Name(project, service, env)
+	if _, err := s.Kube.GetOwnedSecret(ctx, ns, project, name); err != nil {
+		if errors.Is(err, kube.ErrNotOwned) {
+			return "", nil, fmt.Errorf("%w: secret %s", ErrNotFound, name)
+		}
+		if !apierrors.IsNotFound(err) {
+			return "", nil, fmt.Errorf("check owner of secret %s: %w", name, err)
+		}
+	}
+	return name, envCR, nil
+}
+
+// upsertKey creates the Secret stamped with the project label, so later
+// ownership checks (kube.GetOwnedSecret) decide by label, not by name.
+func (s *Service) upsertKey(ctx context.Context, ns, project, name, key, value string) error {
 	enc := base64.StdEncoding.EncodeToString([]byte(value))
 	patch := fmt.Sprintf(`{"data":{%q:%q}}`, key, enc)
 	_, err := s.Kube.Clientset.CoreV1().Secrets(ns).
@@ -402,9 +449,13 @@ func (s *Service) upsertKey(ctx context.Context, ns, name, key, value string) er
 		return fmt.Errorf("encode value: %w", decErr)
 	}
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{key: dec},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    map[string]string{kube.LabelProject: project},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{key: dec},
 	}
 	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -470,7 +521,32 @@ func (s *Service) DeleteForEnv(ctx context.Context, project, service, env string
 	if env == "" {
 		return fmt.Errorf("%w: env is required for per-env secret cleanup", ErrInvalid)
 	}
-	return s.deleteSecret(ctx, s.nsFor(ctx, project), Name(project, service, env))
+	return s.deleteOwnedSecret(ctx, project, service, Name(project, service, env))
+}
+
+// deleteOwnedSecret deletes a derived Secret unless the name resolves to
+// another project's objects. Cleanup runs after the env or service CR may
+// already be gone, so a missing CR is fine; a CR (or Secret label) owned by
+// another project is not.
+func (s *Service) deleteOwnedSecret(ctx context.Context, project, service, name string) error {
+	ns := s.nsFor(ctx, project)
+	if s.Kube.Dynamic != nil {
+		if _, err := s.Kube.GetOwnedService(ctx, ns, project, serviceCRName(project, service)); errors.Is(err, kube.ErrNotOwned) {
+			return fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+		} else if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check owner of service %s/%s: %w", project, service, err)
+		}
+	}
+	if _, err := s.Kube.GetOwnedSecret(ctx, ns, project, name); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if errors.Is(err, kube.ErrNotOwned) {
+			return fmt.Errorf("%w: secret %s", ErrNotFound, name)
+		}
+		return fmt.Errorf("check owner of secret %s: %w", name, err)
+	}
+	return s.deleteSecret(ctx, ns, name)
 }
 
 // DeleteForService removes the service-level managed Secret
@@ -482,7 +558,7 @@ func (s *Service) DeleteForService(ctx context.Context, project, service string)
 	if service == "" {
 		return fmt.Errorf("%w: service is required for service secret cleanup", ErrInvalid)
 	}
-	return s.deleteSecret(ctx, s.nsFor(ctx, project), Name(project, service, ""))
+	return s.deleteOwnedSecret(ctx, project, service, Name(project, service, ""))
 }
 
 // jsonPointerEscape per RFC 6901: ~ → ~0, / → ~1. Order matters — encode
@@ -505,36 +581,50 @@ func isStatusUnprocessable(err error) bool {
 
 // ---- env CR mutations ----------------------------------------------------
 
-func (s *Service) attachToEnv(ctx context.Context, project, service, env, secretName string) error {
-	envCR, err := s.findEnv(ctx, project, service, env)
-	if err != nil {
-		return err
-	}
-	for _, existing := range envCR.Spec.EnvFromSecrets {
-		if existing == secretName {
-			return nil
+// attachToEnv and detachFromEnv edit the LIVE env with a resourceVersion-
+// checked update, retried on conflict. They used to merge-patch the whole
+// envFromSecrets list from the informer snapshot, so an addon refresh that
+// landed inside the cache-lag window (swapping the production conn for the
+// env's clone conn) was reverted: the env went back to mounting
+// production's database. The result keeps the env's own clone conns last
+// (kube.CloneConnsLast) so the appended name can't shadow them.
+func (s *Service) attachToEnv(ctx context.Context, ns, envName, secretName string) error {
+	return s.editEnvFrom(ctx, ns, envName, func(list []string) []string {
+		for _, existing := range list {
+			if existing == secretName {
+				return list
+			}
 		}
-	}
-	patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(append(envCR.Spec.EnvFromSecrets, secretName)))
-	return s.patchEnv(ctx, s.nsFor(ctx, project), envCR.Name, patch)
+		return append(list, secretName)
+	})
 }
 
-func (s *Service) detachFromEnv(ctx context.Context, project, service, env, secretName string) error {
-	envCR, err := s.findEnv(ctx, project, service, env)
-	if err != nil {
-		return err
-	}
-	next := make([]string, 0, len(envCR.Spec.EnvFromSecrets))
-	for _, existing := range envCR.Spec.EnvFromSecrets {
-		if existing != secretName {
-			next = append(next, existing)
+func (s *Service) detachFromEnv(ctx context.Context, ns, envName, secretName string) error {
+	return s.editEnvFrom(ctx, ns, envName, func(list []string) []string {
+		next := make([]string, 0, len(list))
+		for _, existing := range list {
+			if existing != secretName {
+				next = append(next, existing)
+			}
 		}
-	}
-	if len(next) == len(envCR.Spec.EnvFromSecrets) {
+		return next
+	})
+}
+
+func (s *Service) editEnvFrom(ctx context.Context, ns, envName string, edit func([]string) []string) error {
+	_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(live *kube.KusoEnvironment) error {
+		before := live.Spec.EnvFromSecrets
+		next := edit(append([]string(nil), before...))
+		if slices.Equal(next, before) {
+			return nil
+		}
+		live.Spec.EnvFromSecrets = kube.CloneConnsLast(next, live.Labels[kube.LabelEnv])
 		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("update envFromSecrets on env %s: %w", envName, err)
 	}
-	patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(next))
-	return s.patchEnv(ctx, s.nsFor(ctx, project), envCR.Name, patch)
+	return nil
 }
 
 // attachToAllEnvs attaches a shared secret to every NON-preview env of
@@ -552,18 +642,7 @@ func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretN
 		if e.Spec.Kind == "preview" {
 			continue
 		}
-		alreadyAttached := false
-		for _, existing := range e.Spec.EnvFromSecrets {
-			if existing == secretName {
-				alreadyAttached = true
-				break
-			}
-		}
-		if alreadyAttached {
-			continue
-		}
-		patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(append(e.Spec.EnvFromSecrets, secretName)))
-		if err := s.patchEnv(ctx, ns, e.Name, patch); err != nil {
+		if err := s.attachToEnv(ctx, ns, e.Name, secretName); err != nil {
 			return err
 		}
 	}
@@ -587,17 +666,7 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 		if e.Spec.Kind == "preview" {
 			continue
 		}
-		next := make([]string, 0, len(e.Spec.EnvFromSecrets))
-		for _, existing := range e.Spec.EnvFromSecrets {
-			if existing != secretName {
-				next = append(next, existing)
-			}
-		}
-		if len(next) == len(e.Spec.EnvFromSecrets) {
-			continue
-		}
-		patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(next))
-		if err := s.patchEnv(ctx, ns, e.Name, patch); err != nil {
+		if err := s.detachFromEnv(ctx, ns, e.Name, secretName); err != nil {
 			return err
 		}
 	}
@@ -608,8 +677,7 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 // re-renders the Deployment template — without this, value-only Secret
 // updates do NOT restart pods (§6.2 landmine).
 func (s *Service) bumpRev(ctx context.Context, project, service, env string) error {
-	rev := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	patch := fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, rev)
+	patch := secretsRevPatch()
 	ns := s.nsFor(ctx, project)
 	if env != "" {
 		envCR, err := s.findEnv(ctx, project, service, env)
@@ -630,6 +698,10 @@ func (s *Service) bumpRev(ctx context.Context, project, service, env string) err
 	return nil
 }
 
+func secretsRevPatch() string {
+	return fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, strconv.FormatInt(time.Now().UnixMilli(), 10))
+}
+
 func (s *Service) patchEnv(ctx context.Context, ns, name, mergePatch string) error {
 	_, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		Patch(ctx, name, types.MergePatchType, []byte(mergePatch), metav1.PatchOptions{})
@@ -646,7 +718,12 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 	if err != nil {
 		return nil, err
 	}
+	fqn := serviceCRName(project, service)
 	for _, e := range envs {
+		// The label list is only a hint; spec decides ownership.
+		if !kube.EnvOwnedBy(&e, project, fqn) {
+			continue
+		}
 		if e.Name == env || e.Labels[kube.LabelEnv] == env || strings.HasSuffix(e.Name, "-"+env) {
 			return &e, nil
 		}

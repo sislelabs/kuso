@@ -987,7 +987,15 @@ export function ServiceOverlay({
                       // (sticky sidebar nav + sectioned form). Wrapping
                       // in p-5 here would double-pad and break the
                       // sticky-positioning math.
-                      <ServiceSettingsPanel project={project} service={service ?? ""} svc={svc.data} env={envParam} />
+                      // Keyed on identity so ⌘K-switching to another
+                      // service can't carry this form's edits onto it.
+                      <ServiceSettingsPanel
+                        key={`${project}/${service ?? ""}/${envParam ?? ""}`}
+                        project={project}
+                        service={service ?? ""}
+                        svc={svc.data}
+                        env={envParam}
+                      />
                     )}
                   </motion.div>
                 </AnimatePresence>
@@ -1378,11 +1386,10 @@ function RollbackControl({
   const target = useMemo(
     () =>
       pickRollbackTarget(builds.data ?? [], {
-        imageTag: env?.status?.imageTag,
-        commit: env?.status?.commit,
+        envGroup,
         branch: env?.spec.branch,
       }),
-    [builds.data, env?.status?.imageTag, env?.status?.commit, env?.spec.branch],
+    [builds.data, envGroup, env?.spec.branch],
   );
   const m = useMutation({
     meta: { skipGlobalErrorToast: true },

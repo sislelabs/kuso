@@ -9,25 +9,18 @@ function buildTime(b: BuildSummary): number {
 }
 
 export interface LiveRef {
-  // env.status.imageTag / env.status.commit — whichever the server stamped.
-  imageTag?: string;
-  commit?: string;
+  // The env group being rolled back ("production", "staging", …). The
+  // builds list marks the build each group runs in liveEnvs.
+  envGroup?: string;
   // env.spec.branch. The server rejects a rollback to a build from
   // another branch, so the target must match.
   branch?: string;
 }
 
-// findLiveBuild matches the env's running image back to its build.
+// findLiveBuild returns the build currently promoted to the env group.
 export function findLiveBuild(builds: BuildSummary[], live: LiveRef): BuildSummary | undefined {
-  if (live.imageTag) {
-    const byTag = builds.find((b) => b.imageTag && b.imageTag === live.imageTag);
-    if (byTag) return byTag;
-  }
-  if (live.commit) {
-    const succeeded = builds.filter((b) => b.status === "succeeded" && b.commitSha);
-    return succeeded.find((b) => b.commitSha === live.commit || b.commitSha!.startsWith(live.commit!));
-  }
-  return undefined;
+  if (!live.envGroup) return undefined;
+  return builds.find((b) => b.liveEnvs?.includes(live.envGroup!));
 }
 
 // pickRollbackTarget returns the newest succeeded build on the env's

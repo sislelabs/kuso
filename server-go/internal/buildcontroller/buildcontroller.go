@@ -90,6 +90,8 @@ const (
 	jobActiveBudgetMins = int32(60) // ActiveDeadlineSeconds = 1h ceiling
 	jobBackoffLimit     = int32(0)
 
+	buildpacksUnsupportedMessage = "runtime buildpacks is not supported; switch the service to dockerfile or nixpacks"
+
 	// Passive-retry policy for ensureJob failures (resilience W5).
 	// Before this existed, a failed ensureJob only dropped the dedup
 	// key and waited for the NEXT informer event — which never comes
@@ -348,6 +350,18 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 		}
 	}
 
+	// The buildpacks Job runs the CNB creator in the bare lifecycle image,
+	// which ships no buildpacks, so it can never produce an image. Fail
+	// the CR up front instead of scheduling a Job that is doomed to fail.
+	if strategyOf(b) == "buildpacks" {
+		if s.Logger != nil {
+			s.Logger.Warn("buildcontroller: refusing buildpacks build",
+				"build", u.GetName(), "ns", u.GetNamespace())
+		}
+		s.markFailed(ctx, u, buildpacksUnsupportedMessage)
+		return
+	}
+
 	key := u.GetNamespace() + "/" + u.GetName()
 	s.mu.Lock()
 	if _, already := s.running[key]; already {
@@ -553,10 +567,15 @@ func (s *Service) giveUp(ctx context.Context, u *unstructured.Unstructured, atte
 			"build", u.GetName(), "ns", u.GetNamespace(), "attempts", attempts,
 			"hint", "check apiserver health / RBAC / resource quota, then retrigger the build")
 	}
+	s.markFailed(ctx, u, fmt.Sprintf("build controller could not create the build Job after %d attempts — check server logs, then retrigger", attempts+1))
+}
+
+// markFailed stamps the terminal failed contract described on giveUp and
+// deletes the build's clone-token Secret (no Job TTL will reap it).
+func (s *Service) markFailed(ctx context.Context, u *unstructured.Unstructured, msg string) {
 	if s.Kube == nil || s.Kube.Dynamic == nil {
 		return
 	}
-	msg := fmt.Sprintf("build controller could not create the build Job after %d attempts — check server logs, then retrigger", attempts+1)
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{%q:%q}},"spec":{"done":true}}`,
 		builds.AnnBuildPhase,
@@ -568,7 +587,7 @@ func (s *Service) giveUp(ctx context.Context, u *unstructured.Unstructured, atte
 	if _, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(u.GetNamespace()).
 		Patch(pctx, u.GetName(), types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		if s.Logger != nil {
-			s.Logger.Warn("buildcontroller: stamp give-up failure state", "build", u.GetName(), "err", err)
+			s.Logger.Warn("buildcontroller: stamp failure state", "build", u.GetName(), "err", err)
 		}
 		return
 	}

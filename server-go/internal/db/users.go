@@ -254,6 +254,13 @@ WHERE u.id = $1`
 		if err := rows.Scan(&s); err != nil {
 			return nil, fmt.Errorf("db: scan permission: %w", err)
 		}
+		// Reserved instance perms come only from auth.Compute for a real
+		// instance admin. Roles that predate the insert-time filter (the
+		// "admin" Role BootstrapAdmin seeds carries user:write,
+		// audit:read, settings:read) must not confer them.
+		if _, reserved := reservedInstancePerms[s]; reserved {
+			continue
+		}
 		out = append(out, s)
 	}
 	return out, rows.Err()

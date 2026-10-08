@@ -76,3 +76,34 @@ func TestResolveCronWebhookSentinel(t *testing.T) {
 		t.Error("sentinel with nothing stored must be rejected, not stored as the URL")
 	}
 }
+
+// Service crons copy the production env's literal values into spec.env
+// (crons.EnvForCron). The cron routes are viewer-gated, so those values
+// must be masked the way /envs masks them; valueFrom entries are references
+// and stay readable.
+func TestMaskCronsIfNeeded_MasksEnvLiterals(t *testing.T) {
+	t.Parallel()
+	ref := map[string]any{"secretKeyRef": map[string]any{"name": "p1-pg-conn", "key": "DATABASE_URL"}}
+	in := []kube.KusoCron{{Spec: kube.KusoCronSpec{Env: []kube.KusoRunEnv{
+		{Name: "STRIPE_KEY", Value: "sk_live_123"},
+		{Name: "DATABASE_URL", ValueFrom: ref},
+	}}}}
+
+	viewer := maskCronsIfNeeded(maskViewerCtx(), nil, "p1", in)
+	if got := viewer[0].Spec.Env[0].Value; got != envMaskSentinel {
+		t.Errorf("viewer sees env literal %q, want mask", got)
+	}
+	if viewer[0].Spec.Env[1].ValueFrom == nil {
+		t.Error("mask dropped the valueFrom reference")
+	}
+	if in[0].Spec.Env[0].Value != "sk_live_123" {
+		t.Error("masking mutated the caller's (cache's) cron env")
+	}
+	one := in[0]
+	if got := maskCronIfNeeded(maskViewerCtx(), nil, "p1", &one).Spec.Env[0].Value; got != envMaskSentinel {
+		t.Errorf("single-cron mask: got %q", got)
+	}
+	if got := maskCronsIfNeeded(maskAdminCtx(), nil, "p1", in)[0].Spec.Env[0].Value; got != "sk_live_123" {
+		t.Errorf("admin sees %q, want plaintext", got)
+	}
+}

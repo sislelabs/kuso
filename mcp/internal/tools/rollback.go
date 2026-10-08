@@ -131,6 +131,9 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 			}
 			b.WriteString("Only a build with status=succeeded can be a rollback target.")
 		}
+		for i := range out {
+			out[i] = out[i].fenced()
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
 		}, listBuildsResult{Builds: out, More: more}, nil

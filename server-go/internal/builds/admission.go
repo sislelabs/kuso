@@ -17,107 +17,86 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
 
+// admitSlot is one build counted against the caps before the informer can
+// see it: a reservation (Create admitted, CR not written yet) or a recent
+// start (CR written, maybe not in the cache yet).
+type admitSlot struct {
+	project string
+	at      time.Time
+}
+
+// admitRecentTTL bounds how long a just-started build is counted from
+// memory. The informer sees a new CR within seconds; after that the CR
+// itself is counted.
+const admitRecentTTL = time.Minute
+
 // admitBuild enforces the concurrent-build cap. Returns a release
-// function the caller MUST call when its build is done (even if
-// admission failed — release is no-op then). capHit=true tells the
+// function the caller MUST call when it is done creating (even if
+// admission failed — release is a no-op then). capHit=true tells the
 // caller the build was queued, not started.
+//
+// An admitted Create holds a reservation until release, and
+// noteBuildStarted turns it into a recent start once the CR exists. Both
+// count against the caps, so a monorepo push that calls Create for 12
+// services back to back admits only MaxConcurrent of them. Counting only
+// build pods admitted all 12: a CR has no pod for the 1-3s it takes the
+// controller to render its Job.
 func (s *Service) admitBuild(ctx context.Context, project string) (release func(), capHit bool, err error) {
 	cfg := s.loadSettings(ctx)
 	if cfg.MaxConcurrent <= 0 {
 		return func() {}, false, nil
 	}
-	// Per-project lower bound. Cheap CR read; only matters when set.
 	projectCap := s.projectBuildCap(ctx, project)
-	if projectCap > 0 {
-		if active := s.countActiveBuildsForProject(ctx, project); active >= projectCap {
-			return func() {}, true, nil
-		}
-	}
-	// Cluster-wide cap based on reality. Counts running build pods
-	// across every namespace, which catches builds rendered by the
-	// operator from queued CRs, builds left over from a previous
-	// kuso-server replica, and builds re-spawned by a Job retry.
-	if active := s.countRunningBuildPodsCluster(ctx); active >= cfg.MaxConcurrent {
+
+	s.admitMu.Lock()
+	defer s.admitMu.Unlock()
+	if projectCap > 0 && s.countActiveBuildsForProjectLocked(ctx, project) >= projectCap {
 		return func() {}, true, nil
 	}
-	return func() {}, false, nil
+	if s.countRunningBuildPodsClusterLocked(ctx) >= cfg.MaxConcurrent {
+		return func() {}, true, nil
+	}
+	slot := &admitSlot{project: project, at: time.Now()}
+	if s.admitReserved == nil {
+		s.admitReserved = map[*admitSlot]struct{}{}
+	}
+	s.admitReserved[slot] = struct{}{}
+	return func() {
+		s.admitMu.Lock()
+		delete(s.admitReserved, slot)
+		s.admitMu.Unlock()
+	}, false, nil
 }
 
-// countRunningBuildPodsCluster lists pods labelled as kusobuild
-// across all namespaces and returns the count whose phase is Pending
-// or Running. Best-effort: kube errors return 0 (admit) — we'd rather
-// risk one extra build than wedge the system on a transient apiserver
-// hiccup.
+// noteBuildStarted records a build this process just started (a non-queued
+// Create, or a queued build the dispatcher promoted) so the caps count it
+// until the informer has caught up.
+func (s *Service) noteBuildStarted(ns, name, project string) {
+	s.admitMu.Lock()
+	defer s.admitMu.Unlock()
+	if s.admitRecent == nil {
+		s.admitRecent = map[string]admitSlot{}
+	}
+	s.admitRecent[ns+"/"+name] = admitSlot{project: project, at: time.Now()}
+}
+
+// countRunningBuildPodsCluster returns the number of builds currently
+// occupying a cluster-wide build slot. See countActiveBuilds.
 func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
-	if s.Kube == nil {
-		return 0
-	}
-	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	// First: build a set of build-CR names whose state is "done"
-	// (succeeded / failed / cancelled). Pods owned by these CRs
-	// shouldn't count toward the active cap — they're orphans the
-	// operator failed to clean up (we've seen this happen after
-	// operator restarts, where the initial-cache-sync ignores the
-	// state=done watch selector and re-renders cancelled builds).
-	// Without filtering, a single stuck cancelled-build Job pegged
-	// the cluster cap at 1 and wedged every Redeploy.
-	doneNames := map[string]struct{}{}
-	doneSel, _ := labels.Parse("kuso.sislelabs.com/build-state=done")
-	if blist, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, "", doneSel); ok {
-		for _, u := range blist {
-			doneNames[u.GetName()] = struct{}{}
-		}
-	} else if rawBlist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("").List(lctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/build-state=done",
-	}); berr == nil {
-		for i := range rawBlist.Items {
-			doneNames[rawBlist.Items[i].GetName()] = struct{}{}
-		}
-	}
-	seen := map[string]struct{}{}
-	const selStr = "app.kubernetes.io/component=kusobuild"
-	sel, err := labels.Parse(selStr)
-	if err != nil {
-		return 0
-	}
-	pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
-	if !ok {
-		rawPods, lerr := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
-			LabelSelector: selStr,
-		})
-		if lerr != nil {
-			slog.Default().Warn("countRunningBuildPodsCluster", "selector", selStr, "err", lerr)
-			return 0
-		}
-		for i := range rawPods.Items {
-			accept(seen, doneNames, &rawPods.Items[i])
-		}
-		return len(seen)
-	}
-	for _, p := range pods {
-		accept(seen, doneNames, p)
-	}
-	return len(seen)
+	s.admitMu.Lock()
+	defer s.admitMu.Unlock()
+	return s.countRunningBuildPodsClusterLocked(ctx)
 }
 
-// accept records a pod into seen iff it's pending/running and not
-// owned by a build CR in the doneNames orphan set. Shared between
-// the cluster and per-project counters.
-func accept(seen, doneNames map[string]struct{}, p *corev1.Pod) {
-	if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
-		return
-	}
-	if _, isDone := doneNames[p.Labels["app.kubernetes.io/instance"]]; isDone {
-		return
-	}
-	seen[p.Namespace+"/"+p.Name] = struct{}{}
+func (s *Service) countRunningBuildPodsClusterLocked(ctx context.Context) int {
+	return s.countActiveBuilds(ctx, "", "")
 }
 
 // projectBuildCap returns the per-project max-concurrent override
@@ -144,65 +123,151 @@ func (s *Service) projectBuildCap(ctx context.Context, project string) int {
 	return n
 }
 
-// countActiveBuildsForProject returns the number of currently-running
-// build pods for a project (not CRs — queued CRs don't render pods
-// and don't consume resources). Best-effort: kube errors return 0
-// (admit) — we'd rather risk one extra build than wedge.
+// countActiveBuildsForProject returns the number of builds currently
+// occupying one of project's build slots. See countActiveBuilds.
 func (s *Service) countActiveBuildsForProject(ctx context.Context, project string) int {
+	if project == "" {
+		return 0
+	}
+	s.admitMu.Lock()
+	defer s.admitMu.Unlock()
+	return s.countActiveBuildsForProjectLocked(ctx, project)
+}
+
+func (s *Service) countActiveBuildsForProjectLocked(ctx context.Context, project string) int {
 	if s.Kube == nil || project == "" {
 		return 0
 	}
 	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ns := s.nsFor(lctx, project)
-	// Same orphan-pod filter as countRunningBuildPodsCluster: skip
-	// pods owned by build CRs labelled state=done. See that function
-	// for the why.
-	doneNames := map[string]struct{}{}
-	doneSelStr := kube.LabelSelector(map[string]string{
-		kube.LabelProject:                project,
-		"kuso.sislelabs.com/build-state": "done",
-	})
-	if doneSel, perr := labels.Parse(doneSelStr); perr == nil {
-		if blist, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, ns, doneSel); ok {
-			for _, u := range blist {
-				doneNames[u.GetName()] = struct{}{}
-			}
-		} else if rawBlist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
-			LabelSelector: doneSelStr,
-		}); berr == nil {
-			for i := range rawBlist.Items {
-				doneNames[rawBlist.Items[i].GetName()] = struct{}{}
-			}
-		}
-	}
-	seen := map[string]struct{}{}
-	selStr := kube.LabelSelector(map[string]string{
-		"app.kubernetes.io/component": "kusobuild",
-		kube.LabelProject:             project,
-	})
-	sel, err := labels.Parse(selStr)
-	if err != nil {
+	return s.countActiveBuilds(lctx, s.nsFor(lctx, project), project)
+}
+
+// countActiveBuilds counts the builds that occupy a build slot, cluster
+// wide (project == "") or for one project in ns. A build is counted once
+// by name when any of these hold:
+//   - its CR is started and not finished: no build-state label (so neither
+//     queued nor done), and not merely awaiting promotion or a release
+//     hook, which use no build resources;
+//   - it has a Pending or Running build pod whose CR isn't done (catches
+//     Job retries and pods from a previous kuso-server);
+//   - this process started it within admitRecentTTL.
+//
+// Admission reservations are added on top. Best-effort: kube errors count
+// as zero (admit) — we'd rather risk one extra build than wedge the
+// system on a transient apiserver hiccup. Caller holds admitMu.
+func (s *Service) countActiveBuilds(ctx context.Context, ns, project string) int {
+	if s.Kube == nil {
 		return 0
 	}
-	pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
-	if !ok {
-		rawPods, lerr := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: selStr})
-		if lerr != nil {
-			return 0
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	active := map[string]struct{}{}
+	inScope := func(objNS, objProject string) bool {
+		if project == "" {
+			return true
 		}
-		for i := range rawPods.Items {
-			accept(seen, doneNames, &rawPods.Items[i])
-		}
-		return len(seen)
+		return objNS == ns && objProject == project
 	}
-	for _, p := range pods {
-		if p.Namespace != ns {
+
+	// Pods of done CRs are orphans the operator failed to clean up
+	// (seen after operator restarts, where the initial cache sync
+	// re-renders cancelled builds). Without this filter a single stuck
+	// cancelled-build Job pegged the cluster cap and wedged every
+	// Redeploy.
+	doneNames := map[string]struct{}{}
+	for _, b := range s.listBuildsForAdmission(lctx, ns, project, "kuso.sislelabs.com/build-state=done") {
+		doneNames[b.GetName()] = struct{}{}
+	}
+	for _, b := range s.listBuildsForAdmission(lctx, ns, project, "!kuso.sislelabs.com/build-state") {
+		ann := b.GetAnnotations()
+		if ann[annPromoteHold] != "" || ann[annJobSucceeded] != "" {
 			continue
 		}
-		accept(seen, doneNames, p)
+		if done, _, _ := unstructured.NestedBool(b.Object, "spec", "done"); done {
+			continue
+		}
+		active[b.GetNamespace()+"/"+b.GetName()] = struct{}{}
 	}
-	return len(seen)
+
+	podSel := map[string]string{"app.kubernetes.io/component": "kusobuild"}
+	if project != "" {
+		podSel[kube.LabelProject] = project
+	}
+	selStr := kube.LabelSelector(podSel)
+	addPod := func(p *corev1.Pod) {
+		if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+			return
+		}
+		if !inScope(p.Namespace, p.Labels[kube.LabelProject]) {
+			return
+		}
+		inst := p.Labels["app.kubernetes.io/instance"]
+		if _, isDone := doneNames[inst]; isDone {
+			return
+		}
+		if inst == "" {
+			inst = "pod:" + p.Name
+		}
+		active[p.Namespace+"/"+inst] = struct{}{}
+	}
+	if sel, err := labels.Parse(selStr); err == nil {
+		if pods, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
+			for _, p := range pods {
+				addPod(p)
+			}
+		} else if raw, lerr := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: selStr}); lerr == nil {
+			for i := range raw.Items {
+				addPod(&raw.Items[i])
+			}
+		} else {
+			slog.Default().Warn("count active builds: list pods", "selector", selStr, "err", lerr)
+		}
+	}
+
+	now := time.Now()
+	for key, r := range s.admitRecent {
+		if now.Sub(r.at) > admitRecentTTL {
+			delete(s.admitRecent, key)
+			continue
+		}
+		keyNS, _, _ := strings.Cut(key, "/")
+		if inScope(keyNS, r.project) {
+			active[key] = struct{}{}
+		}
+	}
+	n := len(active)
+	for r := range s.admitReserved {
+		if project == "" || r.project == project {
+			n++
+		}
+	}
+	return n
+}
+
+// listBuildsForAdmission lists KusoBuild CRs matching selector (plus the
+// project label when project is set) from the informer, falling back to
+// a live list. ns == "" means every namespace.
+func (s *Service) listBuildsForAdmission(ctx context.Context, ns, project, selector string) []*unstructured.Unstructured {
+	if project != "" {
+		selector += "," + kube.LabelProject + "=" + project
+	}
+	sel, err := labels.Parse(selector)
+	if err != nil {
+		return nil
+	}
+	if list, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, ns, sel); ok {
+		return list
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil
+	}
+	out := make([]*unstructured.Unstructured, 0, len(raw.Items))
+	for i := range raw.Items {
+		out = append(out, &raw.Items[i])
+	}
+	return out
 }
 
 // findRecentForBranch returns the newest in-flight (running / pending
@@ -244,6 +309,18 @@ func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, bra
 	return best, nil
 }
 
+// occupiesServiceSlot reports whether b holds its service's one build
+// slot: it carries no build-state label (dispatched, not finished), or it
+// is a release-failed build re-running its release hook. The retry keeps
+// the done label, so without the second case a push during the retry
+// started a build whose migration ran concurrently with the retried one.
+func occupiesServiceSlot(b *kube.KusoBuild) bool {
+	if b.Labels[LabelBuildState] == "" {
+		return true
+	}
+	return b.Annotations[annRetryRelease] != "" && buildPhase(b) == "running"
+}
+
 // findActiveForService returns the name of an in-flight KusoBuild for
 // (project, fqn), or "" if none. "In-flight" = no `build-state` label
 // yet (running/pending/queued).
@@ -261,7 +338,7 @@ func (s *Service) findActiveForService(ctx context.Context, ns, project, fqn str
 		return "", fmt.Errorf("list active builds: %w", err)
 	}
 	for i := range raw {
-		if raw[i].Labels["kuso.sislelabs.com/build-state"] == "" {
+		if occupiesServiceSlot(&raw[i]) {
 			return raw[i].Name, nil
 		}
 	}
@@ -421,4 +498,3 @@ func (s *Service) ScanNamespaces(ctx context.Context) []string {
 	}
 	return out
 }
-

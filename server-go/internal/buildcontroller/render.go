@@ -611,58 +611,7 @@ for k in $KUSO_BUILDARG_KEYS; do
   esac
 done
 nixpacks build . --out . "$@"
-
-# ENV lines to inject after the FROM line. Toolchain hints (EXTRA_ENVS,
-# KEY=VALUE form) first; then the service's build-time env. The latter
-# arrives as container env vars KUSO_BE_<KEY> (kubelet handles all value
-# escaping — values never pass through shell parsing, so no injection
-# risk) with the key list in KUSO_BUILDENV_KEYS. We use Dockerfile's
-# space-form (ENV KEY VALUE) so values with '='/':'/'/'/spaces are fine.
-# KUSO_BUILDENV_KEYS carries LITERAL vars only: these ENV lines are
-# permanent image layers, so secret-sourced vars are never present here
-# (see buildEnvSecretContainerVars).
-ENV_BLOCK=""
-for env_pair in $EXTRA_ENVS; do
-  k="${env_pair%%=*}"; v="${env_pair#*=}"
-  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
-done
-for k in $KUSO_BUILDENV_KEYS; do
-  # Same RESERVED guard as the --env loop above (defense-in-depth).
-  case " $RESERVED " in
-    *" $k "*) continue ;;
-  esac
-  # value from KUSO_BE_<key>; printf the literal so no re-evaluation.
-  v="$(printenv "KUSO_BE_${k}")"
-  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
-done
-# BuildArgs (KUSO_BUILDARG_KEYS): the explicit non-secret build-time value
-# channel, injected as permanent ENV lines exactly like the literal buildEnv
-# vars above. These are user-authored plain strings (never secret-sourced, see
-# buildArgsContainerVars), so baking them into image layers is the intent.
-# Emitted AFTER the buildEnv block so on a key collision the BuildArgs ENV line
-# is the later one and wins (matching the --env precedence above).
-for k in $KUSO_BUILDARG_KEYS; do
-  case " $RESERVED " in
-    *" $k "*) continue ;;
-  esac
-  v="$(printenv "KUSO_BA_${k}")"
-  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
-done
-if [ -n "$ENV_BLOCK" ]; then
-  awk -v block="$ENV_BLOCK" '
-    BEGIN { inserted = 0 }
-    /^FROM / && !inserted { print; printf "%s", block; inserted = 1; next }
-    { print }
-  ' .nixpacks/Dockerfile > .nixpacks/Dockerfile.patched
-  mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
-fi
-
-# Print FROM + injected ENV KEYS only — never values (build-time env may
-# carry secrets, and build logs are user-visible).
-echo "--- Dockerfile FROM + injected ENV keys ---"
-grep -E '^FROM ' .nixpacks/Dockerfile | head -3
-grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
-`
+` + nixpacksEnvInjectScript
 
 	env := []corev1.EnvVar{
 		{Name: "REPO_PATH", Value: path},
@@ -692,6 +641,82 @@ grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
 		VolumeMounts:    mounts,
 	}
 }
+
+// nixpacksEnvInjectScript inserts ENV lines after the first FROM of the
+// generated .nixpacks/Dockerfile. It is a separate const so tests can run it.
+//
+// Toolchain hints (EXTRA_ENVS) come first, then literal buildEnv
+// (KUSO_BE_<KEY>), then BuildArgs (KUSO_BA_<KEY>), so on a key collision the
+// BuildArgs line is the later one and wins (matching the --env precedence).
+// KUSO_BUILDENV_KEYS carries LITERAL vars only: these ENV lines are permanent
+// image layers, so secret-sourced vars are never present here (see
+// buildEnvSecretContainerVars). BuildArgs are user-authored plain strings
+// (see buildArgsContainerVars), so baking them is the intent.
+//
+// awk reads each value from ENVIRON (never -v, which interprets backslash
+// escapes) and emits ENV KEY="..." with \, " and $ escaped: the characters a
+// Dockerfile double-quoted word treats specially. A value with a newline or CR
+// can't be written on one Dockerfile line, so its ENV line is skipped with a
+// warning; the build commands still see it through nixpacks --env.
+const nixpacksEnvInjectScript = `
+KUSO_ENV_SPEC=""
+for env_pair in $EXTRA_ENVS; do
+  k="${env_pair%%=*}"; v="${env_pair#*=}"
+  export "KUSO_XE_${k}=${v}"
+  KUSO_ENV_SPEC="${KUSO_ENV_SPEC} ${k}=KUSO_XE_${k}"
+done
+for k in $KUSO_BUILDENV_KEYS; do
+  # Same RESERVED guard as the --env loop (defense-in-depth).
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  KUSO_ENV_SPEC="${KUSO_ENV_SPEC} ${k}=KUSO_BE_${k}"
+done
+for k in $KUSO_BUILDARG_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  KUSO_ENV_SPEC="${KUSO_ENV_SPEC} ${k}=KUSO_BA_${k}"
+done
+if [ -n "$KUSO_ENV_SPEC" ]; then
+  export KUSO_ENV_SPEC
+  awk '
+    function esc(s,    out, i, c) {
+      out = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" || c == "\"" || c == "$") out = out "\\"
+        out = out c
+      }
+      return out
+    }
+    BEGIN { n = split(ENVIRON["KUSO_ENV_SPEC"], spec, " ") }
+    /^FROM / && !inserted {
+      print
+      for (i = 1; i <= n; i++) {
+        eq = index(spec[i], "=")
+        k = substr(spec[i], 1, eq - 1)
+        v = ENVIRON[substr(spec[i], eq + 1)]
+        if (v ~ /[\n\r]/) {
+          printf "  ! ENV %s not baked into the image: value contains a newline (build commands still get it via --env)\n", k > "/dev/stderr"
+          continue
+        }
+        printf "ENV %s=\"%s\"\n", k, esc(v)
+      }
+      inserted = 1
+      next
+    }
+    { print }
+  ' .nixpacks/Dockerfile > .nixpacks/Dockerfile.patched
+  mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
+fi
+
+# Print FROM + injected ENV KEYS only — never values (build-time env may
+# carry secrets, and build logs are user-visible).
+echo "--- Dockerfile FROM + injected ENV keys ---"
+grep -E '^FROM ' .nixpacks/Dockerfile | head -3
+grep -E '^ENV ' .nixpacks/Dockerfile | sed -E 's/^ENV[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/ENV \1/' | head -80
+`
 
 // envKeyRE is the POSIX env-var identifier. buildEnv keys are interpolated
 // into both a shell var name (KUSO_BE_<key>) and an `ENV <key>` Dockerfile
@@ -900,6 +925,22 @@ func renderStaticPlanContainer(b *kube.KusoBuild) corev1.Container {
 	// running it via `sh -c "$BUILD_CMD"` evaluates one shell context
 	// regardless of the value's content.
 	build := `set -e
+# Same RESERVED list as the nixpacks plan: runtime-only keys never steer
+# the build (NODE_ENV=production makes npm/pnpm skip devDeps).
+RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
+# Literal buildEnv first, then BuildArgs, so BuildArgs wins on a collision.
+# Keys are identifier-checked at render time; the case guard re-checks
+# before eval. The eval'd text only names the source var, so the value
+# itself is never re-parsed by the shell.
+for src in BE BA; do
+  if [ "$src" = BE ]; then keys="$KUSO_BUILDENV_KEYS"; else keys="$KUSO_BUILDARG_KEYS"; fi
+  for k in $keys; do
+    case "$k" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
+    case " $RESERVED " in *" $k "*) continue ;; esac
+    eval "export $k=\"\${KUSO_${src}_$k}\""
+    echo "  build env: $k"
+  done
+done
 if [ -n "$BUILD_CMD" ]; then
   echo "running build: $BUILD_CMD"
   sh -c "$BUILD_CMD"
@@ -932,6 +973,17 @@ cat .kuso-static.Dockerfile
 		})
 	}
 
+	env := []corev1.EnvVar{
+		{Name: "BUILD_CMD", Value: buildCmd},
+		{Name: "OUTPUT_DIR", Value: outputDir},
+		{Name: "RUNTIME_IMAGE", Value: runtime},
+	}
+	// Literal buildEnv + BuildArgs only, as for nixpacks: the build output is
+	// published as files in the image, and a bundler inlines whatever it reads
+	// (VITE_*, NEXT_PUBLIC_*), so secret-sourced vars stay out of this pod.
+	env = append(env, buildEnvContainerVars(b)...)
+	env = append(env, buildArgsContainerVars(b)...)
+
 	return corev1.Container{
 		Name:            "static-plan",
 		Image:           builder,
@@ -939,12 +991,8 @@ cat .kuso-static.Dockerfile
 		WorkingDir:      "/workspace/src/" + repoPath(b),
 		Command:         []string{"/bin/sh", "-c"},
 		Args:            []string{build},
-		Env: []corev1.EnvVar{
-			{Name: "BUILD_CMD", Value: buildCmd},
-			{Name: "OUTPUT_DIR", Value: outputDir},
-			{Name: "RUNTIME_IMAGE", Value: runtime},
-		},
-		VolumeMounts: mounts,
+		Env:             env,
+		VolumeMounts:    mounts,
 	}
 }
 

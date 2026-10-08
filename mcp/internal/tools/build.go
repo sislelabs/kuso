@@ -1,6 +1,6 @@
 // MCP `build` + `build_status` tools.
 //
-//   build         trigger a build of a service from a branch/ref (mutating)
+//   build         trigger a build of a service from a branch or commit SHA (mutating)
 //   build_status  the newest build's status for a service (read-only)
 //
 // build wraps POST /api/projects/{p}/services/{s}/builds; build_status
@@ -25,7 +25,7 @@ type buildArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
 	Branch  string `json:"branch,omitempty" jsonschema:"branch to build; defaults to the service's default branch"`
-	Ref     string `json:"ref,omitempty" jsonschema:"explicit git ref/SHA to build; overrides branch"`
+	Ref     string `json:"ref,omitempty" jsonschema:"full 40-character commit SHA to build; overrides branch. Branch names, tags and short SHAs are rejected: use branch to build a branch head"`
 	Env     string `json:"env,omitempty" jsonschema:"build for one environment (staging, preview-pr-N): uses its branch and build-time env vars; default production"`
 	DryRun  bool   `json:"dryRun,omitempty" jsonschema:"compile + assemble layers but skip registry push and env promotion (still runs a real build on the shared builder)"`
 	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true for the build tool — a non-dryRun build PROMOTES a new image to the live environment (a production deploy); ignored by build_status"`
@@ -67,6 +67,15 @@ type failureClass struct {
 	Summary string `json:"summary"`
 }
 
+// fenced returns a copy safe for structuredContent: the commit message and
+// the error scraped from build logs are attacker-controllable, so they go
+// out inside the untrusted fence like the text output.
+func (s buildSummary) fenced() buildSummary {
+	s.CommitMessage = fenceUntrusted(s.CommitMessage)
+	s.ErrorMessage = fenceUntrusted(s.ErrorMessage)
+	return s
+}
+
 // promotionNotes renders the "why isn't this live" fields, one per line.
 func promotionNotes(s buildSummary) string {
 	var b strings.Builder
@@ -94,7 +103,7 @@ func promotionNotes(s buildSummary) string {
 func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "build",
-		Description: "Trigger a build of a service from a branch or ref. REQUIRES confirm=true — a non-dryRun build promotes a new image to the live environment (a production deploy). Mutating; refused in --read-only mode. Returns the created build's id + status. Poll build_status to follow it to succeeded/failed.",
+		Description: "Trigger a build of a service from a branch head or a full commit SHA (ref). REQUIRES confirm=true — a non-dryRun build promotes a new image to the live environment (a production deploy). Mutating; refused in --read-only mode. Returns the created build's id + status. Poll build_status to follow it to succeeded/failed.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args buildArgs) (*mcp.CallToolResult, buildSummary, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, buildSummary{}, errors.New("project and service are required")
@@ -102,7 +111,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		if !args.Confirm {
 			return nil, buildSummary{}, errors.New("confirm=true is required — a build promotes a new image to the live environment (production deploy)")
 		}
-		body := buildRequest{Branch: args.Branch, Ref: args.Ref, DryRun: args.DryRun, Env: args.Env}
+		body := buildRequest{Branch: args.Branch, Ref: strings.ToLower(strings.TrimSpace(args.Ref)), DryRun: args.DryRun, Env: args.Env}
 		var out buildSummary
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
 		if err := client.PostJSON(ctx, path, body, &out); err != nil {
@@ -114,7 +123,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
-		}, out, nil
+		}, out.fenced(), nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -149,6 +158,6 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
-		}, out, nil
+		}, out.fenced(), nil
 	})
 }

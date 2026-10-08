@@ -126,8 +126,21 @@ test-db:
 # parity grep that catches new HTTP routes added without a matching
 # CLI command. Not airtight — it's a heuristic — but it surfaces the
 # common "added an endpoint, forgot the CLI" mistake before review.
-.PHONY: verify verify-parity update-goldens
-verify: typecheck test verify-parity verify-sandbox
+.PHONY: verify verify-parity update-goldens chart-check chart-apiserver
+verify: typecheck test verify-parity verify-sandbox chart-check
+
+# chart-check: the text-level chart/CRD checks from CI's `charts` job
+# (operator RBAC coverage, YAML-ambiguous names, CRD guard fixtures).
+chart-check:
+	@python3 hack/chart-check.py rbac names
+	@python3 hack/crd_guard_test.py
+
+# chart-apiserver: CI's apiserver dry-run against a throwaway kind cluster.
+chart-apiserver:
+	@set -e; kind create cluster --name kuso-chart-check --wait 120s >/dev/null; \
+	trap 'kind delete cluster --name kuso-chart-check >/dev/null 2>&1 || true' EXIT; \
+	kubectl config use-context kind-kuso-chart-check >/dev/null; \
+	bash hack/ci/apiserver-validate.sh
 
 verify-parity:
 	@bash hack/verify-parity.sh

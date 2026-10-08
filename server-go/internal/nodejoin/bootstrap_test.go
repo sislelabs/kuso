@@ -15,8 +15,8 @@ func TestBuildInstallCommand_StableLabelOrder(t *testing.T) {
 		"arch":          "amd64",
 		"instance-type": "cpx21",
 	}
-	got1 := BuildInstallCommand("https://kp:6443", "tok", in, "")
-	got2 := BuildInstallCommand("https://kp:6443", "tok", in, "")
+	got1 := BuildInstallCommand("https://kp:6443", "tok", in, "", "")
+	got2 := BuildInstallCommand("https://kp:6443", "tok", in, "", "")
 	if got1 != got2 {
 		t.Fatalf("non-deterministic install command:\n%s\nvs\n%s", got1, got2)
 	}
@@ -26,7 +26,7 @@ func TestBuildInstallCommand_LabelsAndNodeName(t *testing.T) {
 	cmd := BuildInstallCommand("https://kp:6443", "secret", map[string]string{
 		"region": "eu",
 		"tier":   "premium",
-	}, "worker-1")
+	}, "worker-1", "")
 	if !strings.Contains(cmd, `K3S_URL='https://kp:6443'`) {
 		t.Errorf("missing K3S_URL: %s", cmd)
 	}
@@ -52,7 +52,7 @@ func TestBuildInstallCommand_NoLabels(t *testing.T) {
 	if exec != "agent" {
 		t.Errorf("expected bare 'agent' exec arg, got %q", exec)
 	}
-	cmd := BuildInstallCommand("https://kp:6443", "tok", nil, "")
+	cmd := BuildInstallCommand("https://kp:6443", "tok", nil, "", "")
 	if !strings.Contains(cmd, `INSTALL_K3S_EXEC='agent'`) {
 		t.Errorf("expected outer-quoted 'agent' exec arg: %s", cmd)
 	}

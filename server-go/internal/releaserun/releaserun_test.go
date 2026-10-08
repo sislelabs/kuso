@@ -87,8 +87,8 @@ func TestBuildJob_WaitForAddonsInitContainer(t *testing.T) {
 func TestJobName_DistinctForSyntheticRefs(t *testing.T) {
 	env := "acme-web-production"
 	// Same branch slug, different trailing nonce (the synthetic-ref shape).
-	a := JobName(env, "deploy-kuso-lx8f92a3")
-	b := JobName(env, "deploy-kuso-lx8f92b7")
+	a := JobName(env, "registry/acme/web", "deploy-kuso-lx8f92a3")
+	b := JobName(env, "registry/acme/web", "deploy-kuso-lx8f92b7")
 	if a == b {
 		t.Fatalf("distinct tags produced same Job name: %q", a)
 	}
@@ -98,11 +98,11 @@ func TestJobName_DistinctForSyntheticRefs(t *testing.T) {
 		}
 	}
 	// Same tag → same name (idempotency preserved).
-	if JobName(env, "deploy-kuso-lx8f92a3") != a {
+	if JobName(env, "registry/acme/web", "deploy-kuso-lx8f92a3") != a {
 		t.Error("same tag should yield same Job name")
 	}
 	// Very long env + tag still stays under 63 and keeps the uniqueness hash.
-	long := JobName("very-long-environment-name-that-eats-budget-xyz", "another-long-tag-value-9z")
+	long := JobName("very-long-environment-name-that-eats-budget-xyz", "registry/acme/web", "another-long-tag-value-9z")
 	if len(long) > 63 {
 		t.Errorf("long name not truncated: %q (%d)", long, len(long))
 	}

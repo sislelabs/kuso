@@ -100,13 +100,16 @@ var tokenListCmd = &cobra.Command{
 			return jsonOut(items)
 		default:
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"ID", "NAME", "EXPIRES", "LAST USED"})
+			// No LAST USED column: the server never records token use
+			// (the Token."lastUsed" column is never written), so it was
+			// always blank.
+			t.SetHeader([]string{"ID", "NAME", "CREATED", "EXPIRES"})
 			for _, tok := range items {
 				t.Append([]string{
 					asString(tok["id"]),
 					asString(tok["name"]),
+					asString(tok["createdAt"]),
 					asString(tok["expiresAt"]),
-					asString(tok["lastUsed"]),
 				})
 			}
 			t.Render()

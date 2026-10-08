@@ -146,7 +146,75 @@ VALUES ($1, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[
 		// in this group via the disaster-recovery promotion in the
 		// auth handler.
 	}
+	return d.consumeOAuthBootstrapIfRealAdmin(ctx)
+}
+
+// oauthBootstrapConsumedKey is the Setting row that closes OAuth
+// bootstrap promotion for good. Its presence is all that matters.
+const oauthBootstrapConsumedKey = "auth.oauthBootstrapConsumed"
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// countRealAdmins counts instance admins other than the password-seeded
+// local 'admin' account. BOTH admin sources count: membership of an
+// admin group, and User.instanceRole set directly via
+// PUT /api/users/{userId}/instance-role (ListUserTenancy ranks the two
+// identically).
+func countRealAdmins(ctx context.Context, q rowQueryer) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `
+SELECT
+  (SELECT COUNT(*) FROM "_UserToUserGroup" m
+     JOIN "UserGroup" g ON g.id = m."B"
+     JOIN "User" u ON u.id = m."A"
+    WHERE g."instanceRole" = 'admin'
+      AND NOT (u.provider = 'local' AND u.username = 'admin'))
++ (SELECT COUNT(*) FROM "User" u
+    WHERE u."instanceRole" = 'admin'
+      AND NOT (u.provider = 'local' AND u.username = 'admin'))`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("db: count admins: %w", err)
+	}
+	return n, nil
+}
+
+func oauthBootstrapConsumed(ctx context.Context, q rowQueryer) (bool, error) {
+	var v string
+	err := q.QueryRowContext(ctx, `SELECT value FROM "Setting" WHERE key = $1`, oauthBootstrapConsumedKey).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("db: oauth bootstrap marker: %w", err)
+	}
+	return true, nil
+}
+
+func markOAuthBootstrapConsumed(ctx context.Context, q rowQueryer, reason string) error {
+	if _, err := q.ExecContext(ctx, `
+INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (key) DO NOTHING`,
+		oauthBootstrapConsumedKey, reason, time.Now().UTC(), "oauth-bootstrap"); err != nil {
+		return fmt.Errorf("db: mark oauth bootstrap consumed: %w", err)
+	}
 	return nil
+}
+
+// consumeOAuthBootstrapIfRealAdmin closes OAuth bootstrap promotion on
+// an instance that already has a real admin, so installs that predate
+// the marker (or never took the OAuth path) are closed at boot.
+func (d *DB) consumeOAuthBootstrapIfRealAdmin(ctx context.Context) error {
+	n, err := countRealAdmins(ctx, d)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	return markOAuthBootstrapConsumed(ctx, d, "admin-exists")
 }
 
 // PromoteUserToAdminIfNoAdmin atomically checks "does the cluster
@@ -163,8 +231,13 @@ VALUES ($1, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[
 // ($KUSO_ADMIN_EMAIL). Once a real human is admin, this returns
 // false and pending-onboarding takes over.
 //
-// Returns true when promotion happened, false when a real admin
-// already exists.
+// One-shot: the first promotion, or the first time a real admin is seen
+// (here, or at boot via EnsureAdminGroup), persists a Setting marker and
+// promotion never happens again. Counting admins alone let the gate
+// re-arm once every real admin was demoted or deleted, handing instance
+// admin to whoever signed in next.
+//
+// Returns true when promotion happened, false otherwise.
 func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bool, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -182,33 +255,26 @@ func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bo
 		return false, fmt.Errorf("db: promote: advisory lock: %w", err)
 	}
 
-	// Count admins that look like real humans. A seed local admin
-	// (provider='local' AND username='admin') is excluded so the
-	// first OAuth login still triggers promotion. Once any non-seed
-	// admin exists — OAuth or local — promotion stops.
-	//
-	// BOTH admin sources must be counted. Instance-admin comes from a
-	// user's group membership OR from User.instanceRole set directly via
-	// PUT /api/users/{userId}/instance-role; ListUserTenancy ranks the two
-	// identically (highest-wins). Counting only group membership meant an
-	// instance administered purely through direct roles had an empty admin
-	// group, so this gate stayed open and bootstrapOrPending — which runs
-	// on EVERY non-invite login — promoted the next stranger the IdP
-	// admitted to instance admin.
-	var n int
-	if err := tx.QueryRowContext(ctx, `
-SELECT
-  (SELECT COUNT(*) FROM "_UserToUserGroup" m
-     JOIN "UserGroup" g ON g.id = m."B"
-     JOIN "User" u ON u.id = m."A"
-    WHERE g."instanceRole" = 'admin'
-      AND NOT (u.provider = 'local' AND u.username = 'admin'))
-+ (SELECT COUNT(*) FROM "User" u
-    WHERE u."instanceRole" = 'admin'
-      AND NOT (u.provider = 'local' AND u.username = 'admin'))`).Scan(&n); err != nil {
-		return false, fmt.Errorf("db: promote: count admins: %w", err)
+	consumed, err := oauthBootstrapConsumed(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	if consumed {
+		return false, nil
+	}
+	n, err := countRealAdmins(ctx, tx)
+	if err != nil {
+		return false, err
 	}
 	if n > 0 {
+		// A real admin exists: this instance is past bootstrap for good.
+		// Persist that so removing every admin later can't re-arm it.
+		if err := markOAuthBootstrapConsumed(ctx, tx, "admin-exists"); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("db: promote: commit: %w", err)
+		}
 		return false, nil
 	}
 	// Find or create the admin group inside the transaction.
@@ -230,6 +296,9 @@ VALUES ($1, 'kuso-admins', 'instance administrators (auto-created on first login
 		`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2)`,
 		userID, groupID); err != nil {
 		return false, fmt.Errorf("db: promote: attach: %w", err)
+	}
+	if err := markOAuthBootstrapConsumed(ctx, tx, "promoted:"+userID); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("db: promote: commit: %w", err)
@@ -289,7 +358,7 @@ AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
 		userID); err != nil {
 		return fmt.Errorf("db: promote: clear pending: %w", err)
 	}
-	return nil
+	return d.consumeOAuthBootstrapIfRealAdmin(ctx)
 }
 
 // EnsureAdminPassword (re)sets the admin user's password. Idempotent —

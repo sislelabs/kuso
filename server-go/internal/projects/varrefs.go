@@ -428,24 +428,23 @@ func (s *Service) validateSecretRefNameIn(project, service, name string, ownedAd
 	if name == instanceSharedSecretName || name == project+"-shared" {
 		return nil
 	}
-	// This service's own secret(s). Accept the service secret
-	// (<P>-<SVC>-secrets) AND any env-scoped secret
-	// (<P>-<SVC>-<env>-secrets, e.g. <P>-<SVC>-staging-secrets) — both are
-	// owned by this service. We match by the <P>-<SVC>- prefix + -secrets
-	// suffix rather than enumerating env names, since the env segment is a
-	// slugified free-form scope (see kube.EnvSecretName). Accept both the
-	// FQN and short service-name forms callers pass.
-	svcShort := strings.TrimPrefix(service, project+"-")
-	svcSecretPrefix := project + "-" + svcShort + "-"
-	if name == project+"-"+svcShort+"-secrets" ||
-		(strings.HasPrefix(name, svcSecretPrefix) && strings.HasSuffix(name, "-secrets")) {
-		return nil
+	// The KusoService/KusoEnvironment CRDs only admit these names, so
+	// anything else (incl. a service's own <p>-<svc>-secrets, which is
+	// mounted whole via envFromSecrets anyway) would pass here and then
+	// fail the CR write with an opaque 422.
+	if !crdSecretRefNameRE.MatchString(name) {
+		return fmt.Errorf("%w: secretRef.name %q can't be referenced: only addon conn secrets (<addon>-conn) and the shared secrets (%s-shared, %s) can; values set with `kuso env set` are already mounted",
+			ErrInvalid, name, project, instanceSharedSecretName)
 	}
 	if _, ok := ownedAddonConn[name]; ok {
 		return nil
 	}
 	return fmt.Errorf("%w: secretRef.name %q is not a secret owned by project %q", ErrInvalid, name, project)
 }
+
+// crdSecretRefNameRE mirrors the secretKeyRef.name pattern on the
+// KusoService (envVars, previewEnvVars) and KusoEnvironment CRDs.
+var crdSecretRefNameRE = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$`)
 
 // instanceSharedSecretName is the instance-wide shared secret every
 // project may reference. Kept as a const so the validator and the

@@ -102,6 +102,38 @@ func TestRollback_RefusesNonSucceededBuild(t *testing.T) {
 	}
 }
 
+// BLD-23: a build whose promotion hold expired is stamped cancelled, and
+// its message says to deploy it with `kuso build rollback`. Rollback
+// refused every non-succeeded build, so that advice always failed.
+func TestRollback_AcceptsHoldExpiredBuild(t *testing.T) {
+	t.Parallel()
+	mk := func(name string, ann map[string]string) seed {
+		return seedBuild(&kube.KusoBuild{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso", Annotations: ann},
+			Spec: kube.KusoBuildSpec{
+				Project: "alpha", Service: "alpha-web",
+				Image: &kube.KusoImage{Repository: "reg/alpha/web", Tag: name},
+			},
+		})
+	}
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+		mk("alpha-web-held", map[string]string{annPhase: "cancelled", annHoldExpired: "2026-10-07T00:00:00Z"}),
+		mk("alpha-web-cancelled", map[string]string{annPhase: "cancelled"}),
+	)
+	env, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-held", RollbackOptions{})
+	if err != nil {
+		t.Fatalf("Rollback to a hold-expired build: %v", err)
+	}
+	if env.Spec.Image == nil || env.Spec.Image.Tag != "alpha-web-held" {
+		t.Errorf("env image = %+v", env.Spec.Image)
+	}
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-cancelled", RollbackOptions{}); err == nil {
+		t.Error("Rollback accepted a plain cancelled build")
+	}
+}
+
 func TestRollback_RefusesBuildWithNoImage(t *testing.T) {
 	t.Parallel()
 	b := &kube.KusoBuild{

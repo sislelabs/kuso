@@ -287,7 +287,10 @@ fi
 # operator/config/crd/bases/ against the previous released tag and
 # FAILS the ship on anything non-additive: removed CRD files, removed
 # versions, removed fields, removed/newly-added enum restrictions,
-# type changes, changed defaults, newly-required fields.
+# type changes, changed defaults, newly-required fields, a dropped
+# x-kubernetes-preserve-unknown-fields (prunes stored fields), and
+# validation tightening (bounds, pattern, format, new CEL rules).
+# The comparison lives in hack/crd-guard.py (tests: crd_guard_test.py).
 #
 # Runs before anything is built/pushed and before the version rewrite,
 # so a guard failure leaves no side effects and a clean tree. Uses the
@@ -330,96 +333,7 @@ else
       rm -f "$CRD_GUARD_OLD"
       continue  # new CRD this release — additive by definition
     fi
-    if ! python3 - "$CRD_GUARD_OLD" "$f" <<'PYCRD'
-import sys
-import yaml
-
-old_path, new_path = sys.argv[1], sys.argv[2]
-with open(old_path) as fh:
-    old = yaml.safe_load(fh)
-with open(new_path) as fh:
-    new = yaml.safe_load(fh)
-
-problems = []
-
-def walk(o, n, path):
-    """Recursively compare two openAPIV3Schema nodes; append breaking diffs."""
-    if not isinstance(o, dict):
-        return
-    if not isinstance(n, dict):
-        problems.append(f"{path}: schema node removed")
-        return
-    ot, nt = o.get("type"), n.get("type")
-    if ot and nt and ot != nt:
-        problems.append(f"{path}: type changed {ot} -> {nt}")
-    oe, ne = o.get("enum"), n.get("enum")
-    if isinstance(ne, list):
-        if isinstance(oe, list):
-            removed = [v for v in oe if v not in ne]
-            if removed:
-                problems.append(f"{path}: enum values removed: {removed}")
-        else:
-            problems.append(f"{path}: enum added to previously-unrestricted field: {ne}")
-    if "default" in o:
-        if "default" not in n:
-            problems.append(f"{path}: default removed (was {o['default']!r})")
-        elif n["default"] != o["default"]:
-            problems.append(f"{path}: default changed {o['default']!r} -> {n['default']!r}")
-    newly_required = sorted(set(n.get("required") or []) - set(o.get("required") or []))
-    if newly_required:
-        problems.append(f"{path}: newly required: {newly_required}")
-    op, np = o.get("properties") or {}, n.get("properties") or {}
-    if isinstance(op, dict) and isinstance(np, dict):
-        for k, ov in op.items():
-            if k not in np:
-                problems.append(f"{path}.{k}: field removed")
-            else:
-                walk(ov, np[k], f"{path}.{k}")
-    oi, ni = o.get("items"), n.get("items")
-    if isinstance(oi, dict):
-        if isinstance(ni, dict):
-            walk(oi, ni, path + "[]")
-        else:
-            problems.append(f"{path}[]: items schema removed")
-    oa, na = o.get("additionalProperties"), n.get("additionalProperties")
-    if isinstance(oa, dict):
-        if isinstance(na, dict):
-            walk(oa, na, path + ".*")
-        else:
-            problems.append(f"{path}.*: additionalProperties schema removed")
-
-def versions(doc):
-    return {v.get("name"): v for v in ((doc.get("spec") or {}).get("versions") or [])}
-
-# Identity fields: changing any of these re-keys every existing CR.
-for keys in (("spec", "group"), ("spec", "scope"),
-             ("spec", "names", "plural"), ("spec", "names", "kind")):
-    o, n = old, new
-    for k in keys:
-        o = (o or {}).get(k)
-        n = (n or {}).get(k)
-    if o is not None and o != n:
-        problems.append(f"{'.'.join(keys)}: changed {o!r} -> {n!r}")
-
-ov, nv = versions(old), versions(new)
-for name, oldv in ov.items():
-    if name not in nv:
-        problems.append(f"version {name}: removed")
-        continue
-    if oldv.get("served", True) and not nv[name].get("served", True):
-        problems.append(f"version {name}: served flipped to false")
-    os_ = ((oldv.get("schema") or {}).get("openAPIV3Schema")) or {}
-    ns_ = ((nv[name].get("schema") or {}).get("openAPIV3Schema")) or {}
-    walk(os_, ns_, name)
-
-if problems:
-    crd = (new.get("metadata") or {}).get("name", new_path)
-    print(f"  BREAKING: {crd}", file=sys.stderr)
-    for p in problems:
-        print(f"    - {p}", file=sys.stderr)
-    sys.exit(1)
-PYCRD
-    then
+    if ! python3 hack/crd-guard.py "$CRD_GUARD_OLD" "$f"; then
       CRD_GUARD_FAILED=1
     fi
     rm -f "$CRD_GUARD_OLD"
@@ -433,6 +347,30 @@ PYCRD
        --allow-breaking-crds to acknowledge."
   fi
   log "CRD guard passed — all CRD changes since ${CRD_GUARD_PREV_TAG} are additive"
+fi
+
+# ---- 1c. release-impact report -------------------------------------
+#
+# Two things a release can do to live clusters that the image roll hides:
+# RBAC the updater can't apply (escalation prevention; it reports "done"
+# regardless), and a changed pod template that restarts every env/addon
+# at once when the operator rolls. Neither blocks the ship; both are
+# printed here and appended to the GitHub release notes.
+RELEASE_IMPACT_FILE="$(mktemp)"
+if [[ -n "$CRD_GUARD_PREV_TAG" ]] && python3 -c 'import yaml' >/dev/null 2>&1; then
+  if python3 hack/release-impact.py "$CRD_GUARD_PREV_TAG" > "$RELEASE_IMPACT_FILE"; then
+    if [[ -s "$RELEASE_IMPACT_FILE" ]]; then
+      warn "release impact since ${CRD_GUARD_PREV_TAG} (also goes into the release notes):"
+      sed 's/^/    /' "$RELEASE_IMPACT_FILE"
+    else
+      log "release impact: no un-appliable RBAC, no pod-template changes since ${CRD_GUARD_PREV_TAG}"
+    fi
+  else
+    warn "release-impact report failed; check RBAC and pod-template changes by hand"
+    : > "$RELEASE_IMPACT_FILE"
+  fi
+else
+  warn "release-impact report skipped (no previous tag or no PyYAML)"
 fi
 
 # ---- 2. rewrite version files --------------------------------------
@@ -1252,6 +1190,10 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
       fi
     else
       git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    fi
+    if [[ -s "${RELEASE_IMPACT_FILE:-}" ]]; then
+      printf '\n\n## Upgrade notes\n\n' >> "$NOTES_FILE"
+      cat "$RELEASE_IMPACT_FILE" >> "$NOTES_FILE"
     fi
     # Collect CLI assets if they exist; the * glob would fail-fast under
     # `set -e` if dist/kuso-* is empty, so check first.

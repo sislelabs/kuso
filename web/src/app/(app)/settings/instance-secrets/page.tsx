@@ -11,6 +11,7 @@ import { Globe, Plus, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 // /settings/instance-secrets — instance-wide env vars. Admin-only.
 // Every service in every project gets these mounted via envFromSecrets
@@ -56,6 +57,8 @@ export default function InstanceSecretsPage() {
   // so a stray click on the trash icon shouldn't be enough.
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
+  // Saving is an upsert, so replacing a stored key asks first.
+  const [pendingOverwrite, setPendingOverwrite] = useState<string | null>(null);
 
   if (!isAdmin) {
     return (
@@ -78,6 +81,15 @@ export default function InstanceSecretsPage() {
       toast.error("Use Instance addons → Register for INSTANCE_ADDON_*_DSN_ADMIN keys");
       return;
     }
+    if (!list.isSuccess) return;
+    if (list.data.keys.includes(k)) {
+      setPendingOverwrite(k);
+      return;
+    }
+    save(k);
+  };
+
+  const save = (k: string) =>
     set.mutate(
       { key: k, value: newValue },
       {
@@ -85,10 +97,10 @@ export default function InstanceSecretsPage() {
           toast.success(`${k} saved`);
           setNewKey("");
           setNewValue("");
+          setPendingOverwrite(null);
         },
       }
     );
-  };
 
   const visibleKeys = (list.data?.keys ?? [])
     .filter((k) => !isInstanceAddonAdminKey(k))
@@ -120,6 +132,8 @@ export default function InstanceSecretsPage() {
         </header>
         {list.isPending ? (
           <Skeleton className="h-16 w-full" />
+        ) : list.isError ? (
+          <QueryErrorState what="instance secrets" error={list.error} onRetry={() => void list.refetch()} />
         ) : visibleKeys.length === 0 ? (
           <EmptyState
             title="No instance secrets yet"
@@ -204,12 +218,12 @@ export default function InstanceSecretsPage() {
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              SCREAMING_SNAKE_CASE. Updates overwrite the existing value silently.
+              SCREAMING_SNAKE_CASE. Saving an existing key asks before replacing it.
             </p>
             <Button
               size="sm"
               type="submit"
-              disabled={!newKey.trim() || !newValue || set.isPending}
+              disabled={!newKey.trim() || !newValue || set.isPending || !list.isSuccess}
             >
               <Plus className="h-3.5 w-3.5" />
               {set.isPending ? "Saving…" : "Save secret"}
@@ -217,6 +231,25 @@ export default function InstanceSecretsPage() {
           </div>
         </form>
       </section>
+
+      <ConfirmDialog
+        open={pendingOverwrite !== null}
+        title="Replace instance secret?"
+        body={
+          <p>
+            <span className="font-mono text-[var(--text-primary)]">{pendingOverwrite}</span>{" "}
+            already exists. This replaces the value mounted on every workload in every
+            project; each picks it up on its next restart.
+          </p>
+        }
+        confirmLabel="Replace"
+        destructive
+        pending={set.isPending}
+        onConfirm={() => {
+          if (pendingOverwrite) save(pendingOverwrite);
+        }}
+        onCancel={() => setPendingOverwrite(null)}
+      />
 
       <ConfirmDialog
         open={pendingDelete !== null}

@@ -30,6 +30,8 @@ func fakeServiceWithSecrets(t *testing.T, secretObjs []runtime.Object, seeds ...
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	for _, sd := range seeds {
@@ -142,26 +144,26 @@ func TestAddDomain_DuplicateReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestAddDomain_DuplicateWithDifferentTLSFlipsFlag(t *testing.T) {
+// The CRD defaults domains[].tls to true and omitempty drops false, so a
+// stored domain always reads tls:true. Re-adding it with --no-tls used to
+// miss the duplicate check and rewrite the domain on every call.
+func TestAddDomain_DuplicateNoTLSIsConflict(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
 		seedService("alpha", "web", kube.KusoServiceSpec{
 			Project: "alpha", Port: 8080,
-			Domains: []kube.KusoDomain{{Host: "api.example.com", TLS: false}},
+			Domains: []kube.KusoDomain{{Host: "api.example.com", TLS: true}},
 		}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
 	)
 
-	got, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{
+	_, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{
 		Host: "api.example.com",
-		TLS:  true,
+		TLS:  false,
 	})
-	if err != nil {
-		t.Fatalf("AddDomain (flip TLS): %v", err)
-	}
-	if len(got.Spec.Domains) != 1 || !got.Spec.Domains[0].TLS {
-		t.Errorf("expected single domain with TLS=true, got %+v", got.Spec.Domains)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("AddDomain (--no-tls re-add) err = %v, want ErrConflict", err)
 	}
 }
 
@@ -490,11 +492,10 @@ func TestSetEnvPending_AllowsOwnAddonRef(t *testing.T) {
 	}
 }
 
-// TestSetEnvVar_AcceptsEnvScopedSecret proves the ownership guard doesn't
-// reject a legitimate env-scoped secret (<P>-<SVC>-<env>-secrets), which is
-// owned by this service — an earlier version only accepted the plain
-// <P>-<SVC>-secrets form.
-func TestSetEnvVar_AcceptsEnvScopedSecret(t *testing.T) {
+// The KusoService/KusoEnvironment CRDs reject secretKeyRef names other than
+// <x>-conn / <x>-shared / kuso-instance-shared, so the validator must too:
+// accepting a service's own -secrets let the save fail with an opaque 422.
+func TestSetEnvVar_RejectsSecretRefsTheCRDRejects(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
@@ -504,13 +505,15 @@ func TestSetEnvVar_AcceptsEnvScopedSecret(t *testing.T) {
 	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
 		return []string{"alpha-pg-conn"}, nil
 	}
-	// alpha-web-staging-secrets is this service's env-scoped secret.
-	if err := s.validateSecretRefName(context.Background(), "alpha", "web", "alpha-web-staging-secrets"); err != nil {
-		t.Fatalf("env-scoped own secret must be allowed, got %v", err)
+	for _, name := range []string{"alpha-web-secrets", "alpha-web-staging-secrets", "alpha-api-secrets"} {
+		if err := s.validateSecretRefName(context.Background(), "alpha", "web", name); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want ErrInvalid, got %v", name, err)
+		}
 	}
-	// But another service's secret must still be rejected.
-	if err := s.validateSecretRefName(context.Background(), "alpha", "web", "alpha-api-secrets"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("another service's secret must be rejected, got %v", err)
+	for _, name := range []string{"alpha-pg-conn", "alpha-shared", "kuso-instance-shared"} {
+		if err := s.validateSecretRefName(context.Background(), "alpha", "web", name); err != nil {
+			t.Errorf("%s: want allowed, got %v", name, err)
+		}
 	}
 }
 

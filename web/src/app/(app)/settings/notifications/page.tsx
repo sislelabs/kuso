@@ -618,31 +618,28 @@ function NotificationEditor({
       // Only persist the config keys this channel type actually uses,
       // so switching type doesn't leave stale keys (a leftover `url`
       // on a telegram channel, etc.) in the stored config.
-      // When the type is unchanged, keys the form doesn't render (set via
-      // CLI/API) are carried over as stored, since the server replaces the
-      // whole config map on update.
+      // An update with the type unchanged is MERGED into the stored config
+      // server-side: omitted keys are kept (so keys set via CLI/API that the
+      // form doesn't render survive) and only a null deletes. So a field
+      // the user cleared, or removed mention overrides, must be sent as
+      // null. A create or a type change replaces the config, so no nulls.
+      const merging = !!notification && !isNew && notification.type === type;
       const typeConfig: Record<string, unknown> = {};
-      if (notification && notification.type === type) {
-        for (const [k, v] of Object.entries(notification.config ?? {})) {
-          if (k !== "mentions") typeConfig[k] = v;
-        }
-      }
       for (const f of kindFields(type)) {
         if (cfg[f.key]) typeConfig[f.key] = cfg[f.key];
-        else delete typeConfig[f.key];
+        else if (merging) typeConfig[f.key] = null;
       }
+      // mentions only mean anything for discord, but harmless to carry;
+      // the server ignores them on other channel types.
+      if (Object.keys(cleanMentions).length) typeConfig.mentions = cleanMentions;
+      else if (merging) typeConfig.mentions = null;
       const body = {
         name,
         type,
         enabled,
         pipelines: projectsMode === "all" ? [] : pipelines,
         events: eventsMode === "all" ? [] : events,
-        config: {
-          ...typeConfig,
-          // mentions only mean anything for discord, but harmless to
-          // carry; the server ignores them on other channel types.
-          ...(Object.keys(cleanMentions).length ? { mentions: cleanMentions } : {}),
-        },
+        config: typeConfig,
       };
       if (isNew) {
         return api("/api/notifications", { method: "POST", body });

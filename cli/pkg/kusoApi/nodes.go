@@ -148,10 +148,17 @@ func (k *KusoClient) JoinNode(req JoinNodeRequest) (*resty.Response, error) {
 
 // RemoveNode cordons → drains → deletes the node, optionally SSHing in
 // to uninstall k3s when req.Credentials is set. Response:
-// {"removed": "<name>", "uninstallOut": "<log>"}.
-func (k *KusoClient) RemoveNode(name string, req RemoveNodeRequest) (*resty.Response, error) {
+// {"removed": "<name>", "uninstallOut": "<log>"}. The server refuses
+// (409, {"error", "pinned": [...]}) while node-local volumes live on the
+// node unless acceptDataLoss sets ?force=true, which is separate from the
+// body's drain Force.
+func (k *KusoClient) RemoveNode(name string, req RemoveNodeRequest, acceptDataLoss bool) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/kubernetes/nodes/" + esc(name) + "/remove")
+	path := "/api/kubernetes/nodes/" + esc(name) + "/remove"
+	if acceptDataLoss {
+		path += "?force=true"
+	}
+	return k.client.Post(path)
 }
 
 // NodeUpdates returns the per-node host package-update advisory.

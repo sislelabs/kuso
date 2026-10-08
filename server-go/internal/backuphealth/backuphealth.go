@@ -939,6 +939,11 @@ func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) Registry
 		s.Detail = registryGCDetail(s)
 		return s
 	}
+	// The CronJob status is the durable signal: GC Jobs are TTL-deleted
+	// after 24h and (on installs before the jobTemplate label landed)
+	// don't carry registryGCJobLabel at all, so the Job scan is usually
+	// empty. Same pattern as the control-plane backup check.
+	var cronSuccess, cronCreated time.Time
 	if cj, err := kc.Clientset.BatchV1().CronJobs(namespace).
 		Get(ctx, registryGCCronJobName, metav1.GetOptions{}); err == nil {
 		s.CronJobPresent = true
@@ -946,6 +951,10 @@ func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) Registry
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			s.Suspended = true
 		}
+		if cj.Status.LastSuccessfulTime != nil {
+			cronSuccess = cj.Status.LastSuccessfulTime.Time
+		}
+		cronCreated = cj.CreationTimestamp.Time
 	} else if !apierrors.IsNotFound(err) {
 		s.Indeterminate = true
 	}
@@ -955,6 +964,9 @@ func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) Registry
 		s.Indeterminate = true
 	} else {
 		success, failure := newestTerminalTimes(jobs.Items)
+		if cronSuccess.After(success) {
+			success = cronSuccess
+		}
 		if !success.IsZero() {
 			s.LastSuccessAt = success.UTC().Format(time.RFC3339)
 		}
@@ -964,12 +976,15 @@ func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) Registry
 		// A GC that has never run yet (fresh install, first Sunday not
 		// reached) is NOT stale — only flag once it's had a chance and
 		// then lapsed. So: stale iff there's a success that's now old,
-		// OR there's a failure but no success.
+		// OR there's a failure but no success, OR the CronJob has existed
+		// past the stale window without ever succeeding.
 		switch {
 		case !success.IsZero():
 			s.Stale = time.Since(success) > registryGCStaleAfter
 		case !failure.IsZero():
 			s.Stale = true // failing with no success ever
+		case !cronCreated.IsZero() && time.Since(cronCreated) > registryGCStaleAfter:
+			s.Stale = true // had its chances, never succeeded
 		default:
 			s.Stale = false // never run yet — warming up
 		}

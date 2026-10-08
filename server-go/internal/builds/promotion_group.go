@@ -349,10 +349,11 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 		promoteHoldMaxAge, reason, b.Spec.Project,
 		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), b.Name)
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:null,%q:null},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:%q,%q:null,%q:null},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 		annPhase,
 		annCompletedAt, now,
 		annMessage, msg,
+		annHoldExpired, now,
 		annPromoteHold,
 		annPromoteHoldSince,
 	)
@@ -367,6 +368,7 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 	b.Annotations[annPhase] = "cancelled"
 	b.Annotations[annCompletedAt] = now
 	b.Annotations[annMessage] = msg
+	b.Annotations[annHoldExpired] = now
 	delete(b.Annotations, annPromoteHold)
 	delete(b.Annotations, annPromoteHoldSince)
 	p.archiveRecord(ctx, b, "cancelled")

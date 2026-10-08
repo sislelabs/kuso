@@ -265,12 +265,17 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	// We still need to drain incoming frames so gorilla can process
-	// pings/pongs and invoke the close handler. Run it in a goroutine,
-	// but DON'T cancel on read error — let the streaming write side
-	// detect the dead conn and unwind naturally.
+	// pings/pongs and invoke the close handler. Run it in a goroutine.
+	// Only a pong-wait timeout (dead peer) cancels the stream; other
+	// read errors are left to the write side, per the spurious-read
+	// note above.
+	ka := startWSKeepalive(ctx, conn)
 	go func() {
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, err := ka.read(); err != nil {
+				if isWSTimeout(err) {
+					cancel()
+				}
 				return
 			}
 		}

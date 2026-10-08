@@ -28,12 +28,15 @@ var (
 var projectExportArchiveCmd = &cobra.Command{
 	Use:   "export-archive <project>",
 	Short: "Download a project's full spec as a tar.gz",
-	Long: `Streams project + services + envs + addons + per-env secret values
-as a tar.gz to --out (or stdout when --out is omitted).
+	Long: `Streams project + services + envs + addons + project, service and
+per-env secret values + kuso-created external-addon credentials as a
+tar.gz to --out (or stdout when --out is omitted).
 
-The export is portable across kuso instances of the same major
-version. Live addon data is NOT included; copy that separately with
-` + "`kuso addon-backup`" + ` per addon.
+Import onto another kuso instance of the same major version recreates
+the spec and secrets. Not carried: live addon data (copy it with
+` + "`kuso addon-backup`" + ` per addon) and an external addon's Secret that
+you adopted with --secret. Import prints a warning for anything it
+could not restore.
 
 For a human-readable, repo-resident config-as-code document instead,
 use ` + "`kuso project export`" + ` (emits kuso.yaml).`,

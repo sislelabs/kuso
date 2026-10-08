@@ -67,16 +67,16 @@ addon's connection envs via envFrom.
 
 {{- define "kusoaddon.labels" -}}
 app.kubernetes.io/name: kusoaddon
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-kuso.sislelabs.com/project: {{ .Values.project | default "unknown" }}
-kuso.sislelabs.com/addon: {{ .Release.Name }}
-kuso.sislelabs.com/addon-kind: {{ .Values.kind }}
+kuso.sislelabs.com/project: {{ .Values.project | default "unknown" | quote }}
+kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+kuso.sislelabs.com/addon-kind: {{ .Values.kind | quote }}
 {{- end }}
 
 {{- define "kusoaddon.selectorLabels" -}}
 app.kubernetes.io/name: kusoaddon
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- end }}
 
 {{/*

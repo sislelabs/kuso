@@ -3,13 +3,8 @@
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import {
-  useInstallURL,
-  useInstallations,
-  useInstallationRepos,
-  type GithubInstallation,
-  type GithubRepo,
-} from "@/features/github";
+import { useInstallURL, useGithubRepos, type GithubRepoRef } from "@/features/github";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useCreateProject } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,9 +41,12 @@ export default function WelcomePage() {
   const stepParam = search?.get("step");
   const step = ((stepParam ? parseInt(stepParam, 10) : 1) || 1) as Step;
   const project = search?.get("project") ?? "";
-  const installations = useInstallations();
-  const installs = installations.data ?? [];
-  const hasGitHub = installs.length > 0;
+  // /api/github/repos (projects:create) rather than the admin-only
+  // installations endpoints, so instance editors can onboard too.
+  const repos = useGithubRepos();
+  const repoList = repos.data ?? [];
+  const installCount = new Set(repoList.map((r) => r.installationId)).size;
+  const hasGitHub = installCount > 0;
   const [pickedInstall, setPickedInstall] = useState<number | null>(null);
 
   const setStep = (n: Step, params: Record<string, string> = {}) => {
@@ -78,16 +76,20 @@ export default function WelcomePage() {
       <div className="mt-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-6">
         {step === 1 && (
           <Step1InstallGitHub
-            installations={installs}
-            isLoading={installations.isPending}
-            isChecking={installations.isFetching}
-            onCheckAgain={() => void installations.refetch()}
+            installCount={installCount}
+            isLoading={repos.isPending}
+            isChecking={repos.isFetching}
+            error={repos.isError ? repos.error : null}
+            onCheckAgain={() => void repos.refetch()}
             onContinue={() => setStep(2)}
           />
         )}
         {step === 2 && (
           <Step2PickRepo
-            installations={installs}
+            repos={repoList}
+            isLoading={repos.isPending}
+            error={repos.isError ? repos.error : null}
+            onRetry={() => void repos.refetch()}
             pickedInstall={pickedInstall}
             onPickInstall={setPickedInstall}
             onPicked={(p) => setStep(3, { project: p })}
@@ -143,20 +145,22 @@ function Stepper({ current, hasGitHub }: { current: Step; hasGitHub: boolean }) 
 }
 
 function Step1InstallGitHub({
-  installations,
+  installCount,
   isLoading,
   isChecking,
+  error,
   onCheckAgain,
   onContinue,
 }: {
-  installations: GithubInstallation[];
+  installCount: number;
   isLoading: boolean;
   isChecking: boolean;
+  error: unknown;
   onCheckAgain: () => void;
   onContinue: () => void;
 }) {
   const installURL = useInstallURL();
-  const ready = installations.length > 0;
+  const ready = installCount > 0;
   return (
     <div>
       <div className="flex items-start gap-3">
@@ -174,11 +178,13 @@ function Step1InstallGitHub({
       <div className="mt-5 flex flex-wrap items-center gap-3">
         {isLoading ? (
           <Skeleton className="h-8 w-40" />
+        ) : error ? (
+          <QueryErrorState what="GitHub repos" error={error} onRetry={onCheckAgain} className="w-full" />
         ) : ready ? (
           <>
             <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 font-mono text-[11px] text-[var(--success)]">
               <CheckCircle2 className="h-3 w-3" />
-              {installations.length} installation{installations.length === 1 ? "" : "s"} found
+              {installCount} installation{installCount === 1 ? "" : "s"} found
             </span>
             <Button onClick={onContinue} size="sm">
               Continue
@@ -248,21 +254,38 @@ function Step1InstallGitHub({
 }
 
 function Step2PickRepo({
-  installations,
+  repos,
+  isLoading,
+  error,
+  onRetry,
   pickedInstall,
   onPickInstall,
   onPicked,
 }: {
-  installations: GithubInstallation[];
+  repos: GithubRepoRef[];
+  isLoading: boolean;
+  error: unknown;
+  onRetry: () => void;
   pickedInstall: number | null;
   onPickInstall: (id: number | null) => void;
   onPicked: (project: string) => void;
 }) {
+  // One entry per installation, labelled by the owner of its first repo.
+  const installations = Array.from(
+    new Map(repos.map((r) => [r.installationId, r.fullName.split("/")[0]])),
+    ([id, accountLogin]) => ({ id, accountLogin }),
+  );
   const installID = pickedInstall ?? installations[0]?.id ?? null;
-  const repos = useInstallationRepos(installID ?? 0);
+  const installRepos = repos.filter((r) => r.installationId === installID);
   const createProject = useCreateProject();
   const [busyRepo, setBusyRepo] = useState<string | null>(null);
 
+  if (isLoading) {
+    return <Skeleton className="h-40 w-full" />;
+  }
+  if (error) {
+    return <QueryErrorState what="GitHub repos" error={error} onRetry={onRetry} />;
+  }
   if (installations.length === 0) {
     return (
       <div className="space-y-3">
@@ -291,16 +314,16 @@ function Step2PickRepo({
     );
   }
 
-  const onPick = async (repo: GithubRepo) => {
+  const onPick = async (repo: GithubRepoRef) => {
     setBusyRepo(repo.fullName);
     try {
       // Project slug: lowercased repo name, dashes only.
-      const slug = repo.name
+      const slug = (repo.fullName.split("/")[1] ?? repo.fullName)
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 63);
-      // GithubRepo doesn't carry the full HTTPS URL; we synthesise it
+      // GithubRepoRef doesn't carry the full HTTPS URL; we synthesise it
       // from fullName since GitHub installations always live on
       // github.com (kuso doesn't yet support GHE Server).
       const repoURL = `https://github.com/${repo.fullName}`;
@@ -354,14 +377,8 @@ function Step2PickRepo({
       )}
 
       <ul className="mt-4 max-h-80 space-y-1 overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-1">
-        {repos.isPending && [...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
-        {repos.data?.length === 0 && (
-          <li className="px-3 py-4 text-center text-[12px] text-[var(--text-tertiary)]">
-            This installation has access to zero repos. Add some on GitHub.
-          </li>
-        )}
-        {(repos.data ?? []).map((r) => (
-          <li key={r.id}>
+        {installRepos.map((r) => (
+          <li key={r.fullName}>
             <button
               type="button"
               onClick={() => onPick(r)}
@@ -371,11 +388,6 @@ function Step2PickRepo({
               <span className="flex items-center gap-2">
                 <Github className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
                 <span className="font-mono">{r.fullName}</span>
-                {r.private && (
-                  <span className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 font-mono text-[9px] uppercase text-[var(--text-tertiary)]">
-                    private
-                  </span>
-                )}
               </span>
               {busyRepo === r.fullName ? (
                 <span className="font-mono text-[10px] text-[var(--text-tertiary)]">creating…</span>

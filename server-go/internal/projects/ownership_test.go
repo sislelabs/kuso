@@ -222,8 +222,8 @@ func TestAddService_AllowsOwnedSecretRefs(t *testing.T) {
 			{Name: "SHARED_TOKEN", ValueFrom: map[string]any{
 				"secretKeyRef": map[string]any{"name": "alpha-shared", "key": "TOKEN"},
 			}},
-			{Name: "OWN_SECRET", ValueFrom: map[string]any{
-				"secretKeyRef": map[string]any{"name": "alpha-web-secrets", "key": "S"},
+			{Name: "INSTANCE_TOKEN", ValueFrom: map[string]any{
+				"secretKeyRef": map[string]any{"name": "kuso-instance-shared", "key": "TOKEN"},
 			}},
 		},
 	})

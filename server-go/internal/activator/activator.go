@@ -264,9 +264,16 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 // last-activity annotation for a given env.
 const activityStampInterval = 30 * time.Second
 
+// activityWriteTimeout bounds one detached last-activity write. It is
+// shorter than activityStampInterval so at most one write per env is in
+// flight at a time.
+const activityWriteTimeout = 10 * time.Second
+
 // recordActivity stamps LastActivityAnnotation on the env CR with the
-// current time, throttled per-env. Best-effort: a missed stamp just means
-// scaledown falls back to its Prometheus check.
+// current time, throttled per-env. The write runs off the request path
+// (detached from the request ctx, bounded by activityWriteTimeout).
+// Best-effort: a missed stamp just means scaledown falls back to its
+// Prometheus check.
 func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	key := ns + "/" + env
 	now := a.now()
@@ -282,15 +289,19 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	if a.kc == nil {
 		return
 	}
-	if _, err := a.kc.UpdateKusoEnvironmentWithRetry(ctx, ns, env, func(e *kube.KusoEnvironment) error {
-		if e.Annotations == nil {
-			e.Annotations = map[string]string{}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), activityWriteTimeout)
+	go func() {
+		defer cancel()
+		if _, err := a.kc.UpdateKusoEnvironmentWithRetry(wctx, ns, env, func(e *kube.KusoEnvironment) error {
+			if e.Annotations == nil {
+				e.Annotations = map[string]string{}
+			}
+			e.Annotations[scaledown.LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
+			return nil
+		}); err != nil {
+			a.logger.Warn("activator: record activity", "ns", ns, "env", env, "err", err)
 		}
-		e.Annotations[scaledown.LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
-		return nil
-	}); err != nil {
-		a.logger.Warn("activator: record activity", "ns", ns, "env", env, "err", err)
-	}
+	}()
 }
 
 // newProxyTransport builds the transport the activator proxies through.

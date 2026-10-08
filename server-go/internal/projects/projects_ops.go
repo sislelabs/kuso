@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
@@ -121,6 +122,11 @@ func validateProjectName(name string) error {
 	}
 	if !rfc1123Label.MatchString(name) {
 		return fmt.Errorf("%w: name must be lowercase alphanumeric or '-', and start/end alphanumeric (RFC 1123)", ErrInvalid)
+	}
+	// Service names derived from the project (<project>-<svc>) must be
+	// DNS-1035 labels, which can't start with a digit.
+	if name[0] >= '0' && name[0] <= '9' {
+		return fmt.Errorf("%w: name must start with a letter", ErrInvalid)
 	}
 	return nil
 }
@@ -551,7 +557,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	// chart's volumeClaimTemplates don't carry the project label, so
 	// a project-label-only PVC list would miss every StatefulSet
 	// data PVC.
-	var deletedAddons []string
+	var deletedAddons, deletedPostgres []string
 	if addonsList, lerr := s.Kube.ListKusoAddons(ctx, ns); lerr != nil {
 		return fmt.Errorf("list addons: %w", lerr)
 	} else {
@@ -560,6 +566,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				continue
 			}
 			deletedAddons = append(deletedAddons, a.Name)
+			if a.Spec.Kind == "postgres" {
+				deletedPostgres = append(deletedPostgres, a.Name)
+			}
 			if cerr := s.cleanupInstanceClone(ctx, name, a.Name, a.Labels, a.Spec.UseInstanceAddon); cerr != nil {
 				cleanupFail("InstanceAddon", a.Name, cerr)
 			}
@@ -717,6 +726,13 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	if opts.PurgeData {
 		if s.Kube.Clientset == nil {
 			return fmt.Errorf("purge-data: typed kube client not wired")
+		}
+		// HA Postgres replica PVCs belong to the kept CNPG Cluster and
+		// carry neither label swept below; deleting the Cluster cascades them.
+		for _, addonFQN := range deletedPostgres {
+			if err := addons.PurgeHAPostgres(ctx, s.Kube, ns, addonFQN); err != nil {
+				cleanupFail("CNPGCluster", addonFQN, err)
+			}
 		}
 		seen := map[string]bool{}
 		// Pass 1: project-label sweep. Catches non-StatefulSet PVCs
@@ -953,7 +969,16 @@ func (s *Service) listServicesForProject(ctx context.Context, project string) ([
 }
 
 func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kube.KusoEnvironment, error) {
-	return s.listEnvsForProjectWithServices(ctx, project, nil)
+	// One (informer-served) service list instead of a live GET per env
+	// for the autoscale ceiling: /envs is polled every 10s per open tab.
+	var svcByName map[string]*kube.KusoService
+	if services, err := s.listServicesForProject(ctx, project); err == nil {
+		svcByName = make(map[string]*kube.KusoService, len(services))
+		for i := range services {
+			svcByName[services[i].Name] = &services[i]
+		}
+	}
+	return s.listEnvsForProjectWithServices(ctx, project, svcByName)
 }
 
 // listEnvsForProjectWithServices is the hot-path variant: callers that

@@ -75,6 +75,22 @@ func TestImportCompose_FlaggedWhenBuildNoRepo(t *testing.T) {
 	}
 }
 
+func TestImportCompose_ReportsUnresolvedEnvFiles(t *testing.T) {
+	h := newComposeHandler()
+	rec := postCompose(t, h, ComposeRequest{
+		Project: "demo",
+		Compose: "services:\n  api:\n    image: nginx\n    env_file: [.env.api]\n",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp ComposeResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.UnresolvedEnvFiles) != 1 || resp.UnresolvedEnvFiles[0] != ".env.api" {
+		t.Fatalf("unresolvedEnvFiles = %v, want [.env.api]", resp.UnresolvedEnvFiles)
+	}
+}
+
 func TestImportCompose_MissingComposeIs400(t *testing.T) {
 	h := newComposeHandler()
 	rec := postCompose(t, h, ComposeRequest{Project: "x"})

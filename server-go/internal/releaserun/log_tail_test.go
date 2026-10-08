@@ -23,7 +23,7 @@ func TestRun_FailedJobCarriesPodLogTail(t *testing.T) {
 		Spec:       kube.KusoEnvironmentSpec{Release: &kube.KusoReleaseSpec{Command: []string{"migrate"}}},
 	}
 	img := &kube.KusoImage{Repository: "registry/alpha/api", Tag: "abc"}
-	jobName := JobName(env.Name, img.Tag)
+	jobName := JobName(env.Name, img.Repository, img.Tag)
 	cs := fake.NewSimpleClientset(
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Name: jobName + "-x1", Namespace: "kuso",

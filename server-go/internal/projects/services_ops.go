@@ -88,10 +88,14 @@ func normalizeAccessMode(m string) (string, error) {
 
 func validateRuntime(rt string) error {
 	switch rt {
-	case "", "dockerfile", "nixpacks", "buildpacks", "static", "worker", "image":
+	case "", "dockerfile", "nixpacks", "static", "worker", "image":
 		return nil
+	case "buildpacks":
+		// The build Job runs the CNB lifecycle with no buildpacks or
+		// builder, so such a service could never produce an image.
+		return fmt.Errorf("%w: runtime \"buildpacks\" is not supported (its builds cannot produce an image); use nixpacks or dockerfile", ErrInvalid)
 	default:
-		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static, worker, image)", ErrInvalid, rt)
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, static, worker, image)", ErrInvalid, rt)
 	}
 }
 
@@ -360,6 +364,44 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err := validateBuildArgs(req.BuildArgs); err != nil {
 		return nil, err
 	}
+	if err := validateVolumes(req.Volumes); err != nil {
+		return nil, err
+	}
+	createVolumes := make([]kube.KusoVolume, 0, len(req.Volumes))
+	for _, v := range req.Volumes {
+		mode, err := normalizeAccessMode(v.AccessMode)
+		if err != nil {
+			return nil, err
+		}
+		createVolumes = append(createVolumes, kube.KusoVolume{
+			Name: v.Name, MountPath: v.MountPath, SizeGi: v.SizeGi, StorageClass: v.StorageClass, AccessMode: mode,
+		})
+	}
+	if len(createVolumes) == 0 {
+		createVolumes = nil
+	}
+	var createUptime *kube.KusoServiceUptime
+	if req.Uptime != nil {
+		up := kube.KusoServiceUptime{}
+		if req.Uptime.Disabled != nil {
+			up.Disabled = *req.Uptime.Disabled
+		}
+		if req.Uptime.Path != nil {
+			path, err := normalizeUptimePath(*req.Uptime.Path)
+			if err != nil {
+				return nil, err
+			}
+			up.Path = path
+		}
+		if up != (kube.KusoServiceUptime{}) {
+			createUptime = &up
+		}
+	}
+	if req.Placement != nil {
+		if err := s.validatePlacement(ctx, req.Placement); err != nil {
+			return nil, err
+		}
+	}
 	proj, err := s.Get(ctx, project)
 	if err != nil {
 		return nil, err
@@ -378,6 +420,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		return nil, fmt.Errorf("preflight: %w", err)
 	}
 	if err := s.checkReleaseNameFree(ctx, ns, fqn, fqn+"-production"); err != nil {
+		return nil, err
+	}
+	if err := s.checkDomainsFree(ctx, project, req.Name, nil, req.Domains); err != nil {
 		return nil, err
 	}
 
@@ -401,7 +446,6 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	repoURL := ""
 	repoPath := "."
 	repoProvider := ""
-	repoTokenSecret := ""
 	repoBranch := ""
 	if req.Repo != nil {
 		repoURL = req.Repo.URL
@@ -418,16 +462,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			}
 			repoPath = req.Repo.Path
 		}
-		// Clone token supplied on create (GitLab token, GitHub PAT, …) →
-		// store it in a per-service Secret.
-		if req.Repo.Token != "" {
-			secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
-			if serr != nil {
-				return nil, serr
-			}
-			repoTokenSecret = secName
-		}
 	}
+	// A clone token supplied on create (GitLab token, GitHub PAT) is stored
+	// in a per-service Secret,
+	// but only once every validation below has passed.
+	storeToken := req.Repo != nil && req.Repo.Token != ""
 	if repoURL == "" && proj.Spec.DefaultRepo != nil {
 		repoURL = proj.Spec.DefaultRepo.URL
 	}
@@ -572,7 +611,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		Spec: kube.KusoServiceSpec{
 			Project:     project,
 			DisplayName: displayName,
-			Repo:        &kube.KusoRepoRef{URL: repoURL, DefaultBranch: repoBranch, Path: repoPath, Provider: repoProvider, TokenSecret: repoTokenSecret},
+			Repo:        &kube.KusoRepoRef{URL: repoURL, DefaultBranch: repoBranch, Path: repoPath, Provider: repoProvider},
 			Runtime:     req.Runtime,
 			Dockerfile:  req.Dockerfile,
 			WatchPaths:  createWatchPaths,
@@ -599,13 +638,33 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			PublicEnv:            req.PublicEnv,
 			SecurityContext:      req.SecurityContext,
 			Resources:            resources,
+			Internal:             req.Internal,
+			PrivateEgress:        req.PrivateEgress,
+			PlatformAPIEgress:    req.PlatformAPIEgress,
+			WaitForCI:            req.WaitForCI,
+			Placement:            req.Placement,
+			Volumes:              createVolumes,
+			Uptime:               createUptime,
 		},
 	}
 	if req.GitHub != nil && req.GitHub.InstallationID > 0 {
 		svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.GitHub.InstallationID}
 	}
+	dropToken := func() {}
+	if storeToken {
+		secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
+		if serr != nil {
+			return nil, serr
+		}
+		svc.Spec.Repo.TokenSecret = secName
+		dropToken = func() { _ = s.deleteRepoTokenSecret(ctx, ns, project, req.Name) }
+	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
 	if err != nil {
+		dropToken()
+		if apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("%w: service %s/%s already exists", ErrConflict, project, req.Name)
+		}
 		return nil, fmt.Errorf("create service: %w", err)
 	}
 
@@ -798,6 +857,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 		// Best-effort cleanup so we don't leak a service without its env.
 		_ = s.Kube.DeleteKusoService(ctx, ns, fqn)
+		dropToken()
 		return nil, fmt.Errorf("create production env: %w", err)
 	}
 	return created, nil
@@ -955,36 +1015,27 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if err := kube.ValidateReleaseName(envCRName); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	host := req.HostOverride
-	if host == "" {
-		base := proj.Spec.BaseDomain
-		if base == "" {
-			// Instance-default domain (KUSO_DOMAIN): the user doesn't
-			// own a custom suffix, so we group by project to avoid name
-			// collisions across the cluster. Format:
-			//   service==project:  <env>-<project>.<instance-domain>
-			//   else:              <service>-<env>.<project>.<instance-domain>
-			base = config.DefaultBaseDomain()
-			if service == project {
-				host = fmt.Sprintf("%s-%s.%s", req.Name, project, base)
-			} else {
-				host = fmt.Sprintf("%s-%s.%s.%s", service, req.Name, project, base)
-			}
-		} else {
-			// User-supplied baseDomain (the project's BaseDomain field
-			// — e.g. "tickero.bg"). User owns the eTLD+1, so we just
-			// stamp the env-scoped subdomain on top. No project name
-			// in the host; if they wanted that they would have set
-			// baseDomain = "kuso.tickero.bg".
-			//   service==project: <env>.<baseDomain>  e.g. staging.tickero.bg
-			//   else:             <service>-<env>.<baseDomain>
-			//                     e.g. frontend-staging.tickero.bg
-			if service == project {
-				host = fmt.Sprintf("%s.%s", req.Name, base)
-			} else {
-				host = fmt.Sprintf("%s-%s.%s", service, req.Name, base)
-			}
+	// Runs before any addon provisioning: covers a duplicate env (409, not
+	// a 500 from Create) and env "worker" on "api" colliding with service
+	// "api-worker" (same CR name, same <name>-secrets).
+	if err := s.checkReleaseNameFree(ctx, ns, envCRName); err != nil {
+		return nil, err
+	}
+	host := strings.ToLower(strings.TrimSpace(req.HostOverride))
+	if host != "" {
+		if !validHostname(host) {
+			return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 		}
+		envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
+		if err != nil {
+			return nil, fmt.Errorf("list envs for conflict check: %w", err)
+		}
+		if err := hostConflict(envs, host, ""); err != nil {
+			return nil, err
+		}
+	}
+	if host == "" {
+		host = customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
 	}
 	// Workers have no HTTP surface — strip any computed/override host
 	// so we don't ship a dangling KusoEnvironment.spec.host (would
@@ -1227,6 +1278,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		},
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
+	if apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("%w: environment %s already exists", ErrConflict, envCRName)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create env: %w", err)
 	}
@@ -1363,13 +1417,14 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	// the old-service teardown below, so copy them under the new names
 	// first and point the new CRs at the copies.
 	secretRename, err := s.copyManagedSecretsForRename(ctx, ns, project, oldName, newName, envs)
-	if err != nil {
-		return nil, err
-	}
 	dropCopies := func() {
 		for _, to := range secretRename {
 			_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, to, metav1.DeleteOptions{})
 		}
+	}
+	if err != nil {
+		dropCopies()
+		return nil, err
 	}
 
 	// Clone the service spec under the new FQN. ResourceVersion is
@@ -1386,6 +1441,9 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	created, err := s.Kube.CreateKusoService(ctx, ns, clone)
 	if err != nil {
 		dropCopies()
+		if apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("%w: service %s/%s already exists", ErrConflict, project, newName)
+		}
 		return nil, fmt.Errorf("create renamed service: %w", err)
 	}
 
@@ -1403,14 +1461,25 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 		if newHost == defaultHost(oldName, project, proj.Spec.BaseDomain) {
 			newHost = defaultHost(newName, project, proj.Spec.BaseDomain)
 		}
+		// Carry the old env's labels + annotations: an env-group clone is
+		// named <p>-<svc>-<group>-production but scoped env=<group>, so
+		// deriving the scope from the CR name would relabel it production.
+		envLabels := copyLabelsWithService(oldEnv.Labels, project, newName)
+		if envLabels[labelEnv] == "" {
+			envLabels[labelEnv] = envShort
+		}
+		var envAnnotations map[string]string
+		if len(oldEnv.Annotations) > 0 {
+			envAnnotations = make(map[string]string, len(oldEnv.Annotations))
+			for k, v := range oldEnv.Annotations {
+				envAnnotations[k] = v
+			}
+		}
 		newEnv := &kube.KusoEnvironment{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: newEnvName,
-				Labels: map[string]string{
-					labelProject: project,
-					labelService: newName,
-					labelEnv:     envShort,
-				},
+				Name:            newEnvName,
+				Labels:          envLabels,
+				Annotations:     envAnnotations,
 				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(created)},
 			},
 			Spec: oldEnv.Spec,
@@ -1429,6 +1498,10 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 		}
 	}
 
+	// Workers name their image source by short name; left alone they'd stay
+	// pinned to the old service's last image until it's GC'd.
+	consumerErr := s.repointFromServiceConsumers(ctx, ns, project, oldName, newName)
+
 	// Now drop the old envs + service. DeleteService routes each env
 	// through DeleteEnvironment (per-env secret + clone/volume PVC + TLS
 	// reclaim) and cleans the service-level secret, so a single call
@@ -1438,10 +1511,37 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 		// rename is half-done. Surface this to the caller — they
 		// might need to delete the old one manually.
 		recordRename(ctx, rev, project, oldName, newName)
-		return created, fmt.Errorf("rename completed but old service teardown failed: %w", err)
+		return created, errors.Join(fmt.Errorf("rename completed but old service teardown failed: %w", err), consumerErr)
 	}
 	recordRename(ctx, rev, project, oldName, newName)
+	if consumerErr != nil {
+		return created, consumerErr
+	}
 	return created, nil
+}
+
+// repointFromServiceConsumers rewrites spec.fromService on every worker in
+// the project that reused oldName's image.
+func (s *Service) repointFromServiceConsumers(ctx context.Context, ns, project, oldName, newName string) error {
+	svcs, err := s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return fmt.Errorf("rename completed but listing fromService consumers failed: %w", err)
+	}
+	var errs []error
+	for i := range svcs {
+		if svcs[i].Spec.FromService != oldName {
+			continue
+		}
+		if _, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, svcs[i].Name, func(svc *kube.KusoService) error {
+			if svc.Spec.FromService == oldName {
+				svc.Spec.FromService = newName
+			}
+			return nil
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("rename completed but repointing worker %s at %s failed: %w", svcs[i].Name, newName, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // envShortName is the inverse of "<project>-<service>-<short>" → just
@@ -1523,20 +1623,37 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 	// GitLab clone token: like the managed secrets it would otherwise be
 	// inherited by a service recreated at the same name. A rename keeps it
 	// out of scope: the new service's repo still points at the old name.
+	// The deploy hook's URL must not start builds of a different service
+	// that later takes this name.
 	if dropHistory {
-		if derr := s.deleteRepoTokenSecret(ctx, ns, project, service); derr != nil && firstErr == nil {
-			firstErr = derr
-		}
-		// Same for the deploy hook: its URL must not start builds of a
-		// different service that later takes this name.
 		if derr := s.deleteDeployHookSecret(ctx, ns, project, service); derr != nil && firstErr == nil {
 			firstErr = derr
 		}
+	}
+	// Env-group clones inherit the source's TokenSecret and a renamed
+	// service keeps its old-name token, so a token is only reclaimed once
+	// no other service references it.
+	if dropHistory && s.Kube.Clientset != nil {
+		fqnSelf := serviceCRName(project, service)
+		tokens := []string{repoTokenSecretName(project, service)}
 		// A renamed service still references the token under its old name.
-		if r := svcCR.Spec.Repo; r != nil && r.TokenSecret != "" && r.TokenSecret != repoTokenSecretName(project, service) &&
-			strings.HasPrefix(r.TokenSecret, project+"-") && strings.HasSuffix(r.TokenSecret, "-repo-token") && s.Kube.Clientset != nil {
-			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, r.TokenSecret, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
-				firstErr = fmt.Errorf("delete repo token secret %s: %w", r.TokenSecret, derr)
+		if r := svcCR.Spec.Repo; r != nil && r.TokenSecret != "" && r.TokenSecret != tokens[0] &&
+			strings.HasPrefix(r.TokenSecret, project+"-") && strings.HasSuffix(r.TokenSecret, "-repo-token") {
+			tokens = append(tokens, r.TokenSecret)
+		}
+		for _, tok := range tokens {
+			inUse, uerr := s.repoTokenReferencedElsewhere(ctx, ns, tok, fqnSelf)
+			if uerr != nil {
+				if firstErr == nil {
+					firstErr = uerr
+				}
+				continue
+			}
+			if inUse {
+				continue
+			}
+			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, tok, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
+				firstErr = fmt.Errorf("delete repo token secret %s: %w", tok, derr)
 			}
 		}
 	}
@@ -2100,7 +2217,7 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 		var publicTLS bool
 		if len(services[i].Spec.Domains) > 0 && services[i].Spec.Domains[0].Host != "" {
 			publicHost = services[i].Spec.Domains[0].Host
-			publicTLS = services[i].Spec.Domains[0].TLS
+			publicTLS = DomainServesTLS(services[i].Spec.Domains[0])
 		} else if env := prodEnvByService[fqn]; env != nil && env.Spec.Host != "" {
 			publicHost = env.Spec.Host
 			publicTLS = env.Spec.SchemeFor(env.Spec.Host) == "https"
@@ -2628,6 +2745,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.Runtime != nil {
 			svc.Spec.Runtime = *req.Runtime
 			runtimeChanged = true
+			// fromService only means something to a worker; left set, the
+			// build poller keeps promoting the sibling's image onto it.
+			if svc.Spec.Runtime != "worker" {
+				svc.Spec.FromService = ""
+			}
 		}
 		domainsChanged := false
 		if req.Domains != nil {
@@ -3245,6 +3367,51 @@ func convertEnvVars(in []EnvVar) []kube.KusoEnvVar {
 	return out
 }
 
+// customEnvHost is the default host of a named (custom) env.
+func customEnvHost(service, project, env, baseDomain string) string {
+	if baseDomain == "" {
+		// Instance-default domain (KUSO_DOMAIN): the user doesn't
+		// own a custom suffix, so we group by project to avoid name
+		// collisions across the cluster. Format:
+		//   service==project:  <env>-<project>.<instance-domain>
+		//   else:              <service>-<env>.<project>.<instance-domain>
+		base := config.DefaultBaseDomain()
+		if service == project {
+			return fmt.Sprintf("%s-%s.%s", env, project, base)
+		}
+		return fmt.Sprintf("%s-%s.%s.%s", service, env, project, base)
+	}
+	// User-supplied baseDomain (the project's BaseDomain field
+	// — e.g. "tickero.bg"). User owns the eTLD+1, so we just
+	// stamp the env-scoped subdomain on top. No project name
+	// in the host; if they wanted that they would have set
+	// baseDomain = "kuso.tickero.bg".
+	//   service==project: <env>.<baseDomain>  e.g. staging.tickero.bg
+	//   else:             <service>-<env>.<baseDomain>
+	//                     e.g. frontend-staging.tickero.bg
+	if service == project {
+		return fmt.Sprintf("%s.%s", env, baseDomain)
+	}
+	return fmt.Sprintf("%s-%s.%s", service, env, baseDomain)
+}
+
+// webHostForEnv is the host env would have been born with had its service
+// not been a worker. Preview hosts belong to the PR dispatcher: "".
+func webHostForEnv(env *kube.KusoEnvironment, project, service, baseDomain string) string {
+	scope := env.Labels[labelEnv]
+	switch {
+	case env.Spec.Kind == "preview":
+		return ""
+	case scope == "" || scope == "production":
+		return defaultHost(service, project, baseDomain)
+	case strings.HasSuffix(env.Name, "-production"):
+		// Env-group clone: the service short is <source>-<group>.
+		return buildEnvHost(baseDomain, project, strings.TrimSuffix(service, "-"+scope), scope)
+	default:
+		return customEnvHost(service, project, scope, baseDomain)
+	}
+}
+
 // defaultHost computes the auto-generated hostname for a service's
 // production env.
 //
@@ -3270,6 +3437,17 @@ func defaultHost(service, project, baseDomain string) string {
 		return baseDomain
 	}
 	return fmt.Sprintf("%s.%s", service, baseDomain)
+}
+
+// DomainServesTLS reports whether a custom domain is actually served over
+// HTTPS: wildcards via their pre-provisioned secret, everything else when
+// computeTLSHosts certifies it. The stored tls bit can't say this — the
+// CRD defaults it to true, so false is never persisted.
+func DomainServesTLS(d kube.KusoDomain) bool {
+	if d.TLSSecret != "" {
+		return true
+	}
+	return isPublicFQDN(strings.ToLower(strings.TrimSpace(d.Host)))
 }
 
 // computeTLSHosts returns the subset of [primary, extras...] that's
@@ -3350,6 +3528,25 @@ func sameRepoHost(a, b string) bool {
 // token (GitLab token, GitHub PAT): <project>-<service>-repo-token.
 func repoTokenSecretName(project, service string) string {
 	return project + "-" + service + "-repo-token"
+}
+
+// repoTokenReferencedElsewhere reports whether any KusoService in ns other
+// than exceptFQN points spec.repo.tokenSecret at name. Lists live: a stale
+// cache here would delete a token production still clones with.
+func (s *Service) repoTokenReferencedElsewhere(ctx context.Context, ns, name, exceptFQN string) (bool, error) {
+	list, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("list services for repo token %s: %w", name, err)
+	}
+	for i := range list.Items {
+		if list.Items[i].GetName() == exceptFQN {
+			continue
+		}
+		if tok, _, _ := unstructured.NestedString(list.Items[i].Object, "spec", "repo", "tokenSecret"); tok == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Service) deleteRepoTokenSecret(ctx context.Context, ns, project, service string) error {

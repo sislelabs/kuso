@@ -161,6 +161,9 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "forbidden: cannot change your own role or active status")
 		return
 	}
+	if !requireGrantOverUser(w, r, h.DB, userID) {
+		return
+	}
 	if req.RoleID != nil && *req.RoleID != "" && !requireRoleGrant(w, r, h.DB, userID, *req.RoleID) {
 		return
 	}
@@ -195,6 +198,9 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := usersCtx(r)
 	defer cancel()
 	userID := chi.URLParam(r, "id")
+	if !requireGrantOverUser(w, r, h.DB, userID) {
+		return
+	}
 	// Bump the watermark before deletion — once the User row is
 	// gone the FK on UserTokenInvalidation has nothing to point at,
 	// but the row itself is keyed by userID (text PK, no FK), so

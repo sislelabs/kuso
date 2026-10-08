@@ -223,7 +223,27 @@ type Event struct {
 	// falls back to "open the service page". See internal/failures
 	// for the kind taxonomy + per-kind summary text.
 	Classification *failures.Classification `json:"classification,omitempty"`
+
+	// Audience narrows which channels get the event. It only steers
+	// enqueue, so it isn't serialised.
+	Audience Audience `json:"-"`
 }
+
+// Audience splits one cross-project event between channels that see
+// every project and channels filtered to some projects. A summary that
+// names several projects must never reach a channel scoped to one of
+// them; scoped channels get the per-project events instead.
+type Audience int
+
+const (
+	AudienceAll Audience = iota
+	// AudienceUnscoped: only channels with no project filter. Also kept
+	// out of the bell feed, whose project-less rows every user sees; the
+	// per-project AudienceScoped twins are the feed rows.
+	AudienceUnscoped
+	// AudienceScoped: only channels with a project filter.
+	AudienceScoped
+)
 
 // EventField is one row in the rich-card 2-column field block. Mirrors
 // the Discord embed field shape so the renderer can map 1:1; webhook
@@ -362,8 +382,16 @@ const emitWriteTimeout = 2 * time.Second
 // Each DB step is bounded by emitWriteTimeout; failures are logged and
 // counted, never returned — domain code must not branch on notify.
 func (d *Dispatcher) Emit(e Event) {
+	_ = d.EmitDurable(e)
+}
+
+// EmitDurable is Emit for callers that record "already notified" state
+// and must not lose a page: it returns an error when the event was meant
+// for at least one channel and no outbox row was written, so the caller
+// can retry on its next tick.
+func (d *Dispatcher) EmitDurable(e Event) error {
 	if d == nil {
-		return
+		return nil
 	}
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
@@ -376,21 +404,26 @@ func (d *Dispatcher) Emit(e Event) {
 	leader := d.isLeader
 	d.mu.Unlock()
 	if closed {
-		return
+		return fmt.Errorf("notify: dispatcher closed")
 	}
 	if parent == nil {
 		parent = context.Background()
 	}
 	metricsEmitted.WithLabelValues(string(e.Type)).Inc()
+	var err error
 	if d.db != nil {
-		d.persistFeed(parent, e)
-		d.enqueueOutbox(parent, e)
+		if e.Audience != AudienceUnscoped {
+			d.persistFeed(parent, e)
+		}
+		err = d.enqueueOutbox(parent, e)
 	}
 	// Event hook (incidents.Manager): leader-only, after persist. Called
-	// outside d.mu; the hook spawns async work and must not block.
-	if hook != nil && (leader == nil || leader()) {
+	// outside d.mu; the hook spawns async work and must not block. A
+	// scoped twin repeats an event already emitted, so it skips the hook.
+	if hook != nil && e.Audience != AudienceScoped && (leader == nil || leader()) {
 		hook(e)
 	}
+	return err
 }
 
 // persistFeed writes the bell-icon NotificationEvent row. Parented on
@@ -458,14 +491,19 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // on a pod that doesn't hold the "singletons" lease are silently
 // dropped. Single delivery is enforced downstream: the drain workers are
 // leader-gated and ClaimOutboxRow uses FOR UPDATE SKIP LOCKED + a lease.
-func (d *Dispatcher) enqueueOutbox(parent context.Context, e Event) {
+//
+// It returns an error only when nothing was enqueued although at least
+// one channel should have had the event (or the channel list couldn't
+// be read). A partial failure is logged, not returned: retrying would
+// double-send to the channels that did get a row.
+func (d *Dispatcher) enqueueOutbox(parent context.Context, e Event) error {
 	ctx, cancel := context.WithTimeout(parent, emitWriteTimeout)
 	defer cancel()
 	notifs, err := d.cachedNotifications(ctx)
 	if err != nil {
 		metricsDropped.Inc()
 		d.logger.Warn("notify: list configs, webhook fanout skipped", "err", err, "type", string(e.Type))
-		return
+		return fmt.Errorf("notify: list channels: %w", err)
 	}
 	// Per-project mute: muted projects skip external channel delivery
 	// entirely. The bell feed (persistFeed) is untouched, so the in-app
@@ -483,33 +521,58 @@ func (d *Dispatcher) enqueueOutbox(parent context.Context, e Event) {
 		if muted, merr := d.cachedMutedProjects(ctx); merr != nil {
 			d.logger.Warn("notify: list muted projects", "err", merr)
 		} else if muted[e.Project] {
-			return
+			return nil
 		}
 	}
 	var payload []byte
+	var wanted, enqueued int
+	var lastErr error
 	for _, n := range notifs {
-		if !n.Enabled || !deliverableChannel(n.Type) {
+		if !channelAdmits(n, e) {
 			continue
 		}
-		if !eventMatches(string(e.Type), n.Events) || !projectMatches(e.Project, n.Pipelines) {
-			continue
-		}
+		wanted++
 		if payload == nil {
 			p, perr := db.MarshalOutboxPayload(e)
 			if perr != nil {
 				metricsDropped.Inc()
 				d.logger.Warn("notify: marshal outbox payload", "err", perr, "type", string(e.Type))
-				return
+				return fmt.Errorf("notify: marshal payload: %w", perr)
 			}
 			payload = p
 		}
 		if _, err := d.db.EnqueueOutbox(ctx, n.ID, string(e.Type), payload); err != nil {
 			metricsDropped.Inc()
 			d.logger.Warn("notify: enqueue outbox", "err", err, "channel", n.ID, "type", string(e.Type))
+			lastErr = err
 			continue
 		}
+		enqueued++
 		metricsEnqueued.WithLabelValues(string(e.Type)).Inc()
 	}
+	if wanted > 0 && enqueued == 0 {
+		return fmt.Errorf("notify: enqueue outbox: %w", lastErr)
+	}
+	return nil
+}
+
+// channelAdmits reports whether channel n should get e.
+func channelAdmits(n db.Notification, e Event) bool {
+	if !n.Enabled || !deliverableChannel(n.Type) || !eventMatches(string(e.Type), n.Events) {
+		return false
+	}
+	scoped := len(n.Pipelines) > 0
+	switch e.Audience {
+	case AudienceUnscoped:
+		if scoped {
+			return false
+		}
+	case AudienceScoped:
+		if !scoped {
+			return false
+		}
+	}
+	return projectMatches(e.Project, n.Pipelines)
 }
 
 // SendDirect fires a single event at exactly one notification config,

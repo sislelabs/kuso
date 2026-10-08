@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -409,7 +410,48 @@ func (m mapResolver) LookupHost(ctx context.Context, host string) ([]string, err
 	if v, ok := m[host]; ok {
 		return v, nil
 	}
-	return nil, errors.New("no such host")
+	if v, ok := m["timeout:"+host]; ok && v == nil {
+		return nil, &net.DNSError{Err: "i/o timeout", Name: host, IsTimeout: true}
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// A resolver timeout is not "your domain stopped resolving": it must not
+// fire a fresh target, must keep an already-firing one firing, and a
+// mostly-failing resolver is an evaluation error.
+func TestEvaluateDNSResolverTimeoutIsNotABreach(t *testing.T) {
+	t.Parallel()
+	objs := []runtime.Object{
+		envObj(envFixture{ns: "kuso", project: "shop", service: "web", env: "production",
+			host: "web.shop.example.com", extra: []string{"a.shop.com", "b.shop.com"}}),
+	}
+	e := testEngine(fakeKube(objs...), "")
+	e.Resolver = mapResolver{
+		"web.shop.example.com": {"203.0.113.10"},
+		"timeout:a.shop.com":   nil,
+		"b.shop.com":           {"203.0.113.10"},
+	}
+	r := &db.AlertRule{ID: "r", Kind: db.AlertKindDNSMismatch, Project: "shop"}
+	f, err := e.evaluateEpisodic(context.Background(), r, time.Now())
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(f.targets) != 0 {
+		t.Fatalf("targets = %v, want none for a resolver timeout", f.targets)
+	}
+	r.FiringTargets = []string{"dns:a.shop.com"}
+	f, err = e.evaluateEpisodic(context.Background(), r, time.Now())
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if strings.Join(f.targets, ",") != "dns:a.shop.com" {
+		t.Fatalf("targets = %v, want the firing host kept", f.targets)
+	}
+
+	e.Resolver = mapResolver{"timeout:web.shop.example.com": nil, "timeout:a.shop.com": nil, "b.shop.com": {"203.0.113.10"}}
+	if _, err := e.evaluateEpisodic(context.Background(), r, time.Now()); err == nil {
+		t.Fatal("expected an evaluation error when most lookups time out")
+	}
 }
 
 func TestEvaluateDNSMismatch(t *testing.T) {

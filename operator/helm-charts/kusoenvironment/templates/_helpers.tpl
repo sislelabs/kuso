@@ -8,16 +8,16 @@
 
 {{- define "kusoenvironment.labels" -}}
 app.kubernetes.io/name: kusoenvironment
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-kuso.sislelabs.com/project: {{ .Values.project | default "unknown" }}
-kuso.sislelabs.com/service: {{ .Values.service | default "unknown" }}
-kuso.sislelabs.com/env-kind: {{ .Values.kind | default "production" }}
+kuso.sislelabs.com/project: {{ .Values.project | default "unknown" | quote }}
+kuso.sislelabs.com/service: {{ .Values.service | default "unknown" | quote }}
+kuso.sislelabs.com/env-kind: {{ .Values.kind | default "production" | quote }}
 {{- end }}
 
 {{- define "kusoenvironment.selectorLabels" -}}
 app.kubernetes.io/name: kusoenvironment
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- end }}
 
 {{/*
@@ -118,6 +118,24 @@ otherwise replicaCount. The PDB and topology spread both key on it.
 {{- else -}}
 {{- int .Values.replicaCount -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+kusoenvironment.envVars — .Values.envVars minus entries whose valueFrom
+names no source. The CRD schema declares only valueFrom.secretKeyRef, so
+the apiserver prunes a configMapKeyRef/fieldRef written through the API to
+`valueFrom: {}`, which Deployment validation rejects: the env's whole helm
+upgrade failed on every reconcile. Such an entry could never resolve, so
+dropping it leaves running pods as they were. Returns JSON (fromJsonArray).
+*/}}
+{{- define "kusoenvironment.envVars" -}}
+{{- $out := list }}
+{{- range (.Values.envVars | default list) }}
+{{- if not (and (kindIs "map" .) (kindIs "map" .valueFrom) (eq (len .valueFrom) 0)) }}
+{{- $out = append $out . }}
+{{- end }}
+{{- end }}
+{{- toJson $out }}
 {{- end -}}
 
 {{/*

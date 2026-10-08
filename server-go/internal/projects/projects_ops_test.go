@@ -15,7 +15,7 @@ func TestValidateProjectName(t *testing.T) {
 			t.Errorf("validateProjectName(%q) = %v, want nil", n, err)
 		}
 	}
-	bad := []string{"Acme", "my_app", "-lead", "trail-", "has space", "way-too-long-project-name-that-exceeds-the-forty-char-budget"}
+	bad := []string{"Acme", "my_app", "-lead", "trail-", "has space", "2026", "9lives", "way-too-long-project-name-that-exceeds-the-forty-char-budget"}
 	for _, n := range bad {
 		err := validateProjectName(n)
 		if err == nil {

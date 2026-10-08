@@ -196,6 +196,8 @@ export interface BuildSummary {
   // same-repo sibling build of this commit is green. Present only
   // while held.
   promoteHold?: string;
+  // liveEnvs names the env groups currently running this build.
+  liveEnvs?: string[];
   startedAt?: string;
   finishedAt?: string;
   // Trigger context: who/what kicked off the build. Surfaces in the

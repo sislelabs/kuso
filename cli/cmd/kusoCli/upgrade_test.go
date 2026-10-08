@@ -50,6 +50,52 @@ func TestClassifyUpgradePhase(t *testing.T) {
 	}
 }
 
+// The API pod is replaced mid-upgrade, so a connection reset or a 5xx must
+// not abort the poll (CI saw a successful upgrade as failed), while a 4xx
+// must fail fast instead of polling an empty phase for 15 minutes.
+func TestUpgradePollVerdict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/502":
+			w.WriteHeader(http.StatusBadGateway)
+		case "/404":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"not found"}`)
+		case "/html":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html></html>")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"phase":"rolling-server"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	t.Cleanup(func() { api = nil })
+
+	for _, c := range []struct {
+		path               string
+		wantRetry, wantErr bool
+	}{
+		{"/ok", false, false},
+		{"/502", true, true},
+		{"/404", false, true},
+		{"/html", false, true},
+	} {
+		retry, err := upgradePollVerdict(api.RawGet(c.path))
+		if retry != c.wantRetry || (err != nil) != c.wantErr {
+			t.Errorf("%s: retry=%v err=%v, want retry=%v err=%v", c.path, retry, err, c.wantRetry, c.wantErr)
+		}
+	}
+
+	srv.Close()
+	if retry, err := upgradePollVerdict(api.RawGet("/ok")); !retry || err == nil {
+		t.Errorf("transport error: retry=%v err=%v, want a retryable error", retry, err)
+	}
+}
+
 // `kuso upgrade` with no flags used to POST /api/system/update straight
 // away, so someone expecting a CLI self-update rolled the server.
 func TestUpgrade_RefusesWithoutConfirmOffTTY(t *testing.T) {

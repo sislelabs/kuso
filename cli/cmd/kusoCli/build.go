@@ -126,7 +126,7 @@ var buildTriggerCmd = &cobra.Command{
 		}
 		req := kusoApi.CreateBuildRequest{
 			Branch: buildTriggerBranch,
-			Ref:    buildTriggerRef,
+			Ref:    strings.ToLower(strings.TrimSpace(buildTriggerRef)),
 			DryRun: buildTriggerCompileOnly,
 			Env:    buildTriggerEnv,
 		}
@@ -295,12 +295,8 @@ var buildListCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
-		// API already returns newest-first per the handler contract;
-		// re-sort defensively on startedAt so manual rows from the
-		// future-self CLI are still in the right order.
-		sort.SliceStable(items, func(i, j int) bool {
-			return items[i].StartedAt > items[j].StartedAt
-		})
+		// Keep the server's newest-first order. Re-sorting on the startedAt
+		// string sank queued builds (no startedAt yet) to the bottom.
 		switch outputFormat {
 		case "json":
 			return jsonOut(items)
@@ -457,7 +453,7 @@ func init() {
 
 	buildCmd.AddCommand(buildTriggerCmd)
 	buildTriggerCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to build (default: project default branch)")
-	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA to build")
+	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "full 40-character commit SHA to build (use --branch for a branch head)")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	buildTriggerCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
@@ -671,7 +667,7 @@ as a fresh green build would be. Follow the outcome with
 	// which the shared RunE has never done (it polls to a terminal
 	// state) — keep shorthand + help text identical to trigger's.
 	redeployCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to deploy")
-	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")
+	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "full 40-character commit SHA to build (use --branch for a branch head)")
 	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
 	redeployCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	redeployCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")

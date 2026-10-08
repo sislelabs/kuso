@@ -251,7 +251,7 @@ spec:
               value: "1"
             - name: WAIT_FOR_ADDONS_ATTEMPTS
               value: "15"
-            {{- with .Values.envVars }}
+            {{- with (include "kusoenvironment.envVars" . | fromJsonArray) }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- with .Values.envFromSecrets }}
@@ -333,7 +333,7 @@ spec:
             - name: KUSO_PUBLIC_ENV
               value: {{ join " " . | quote }}
             {{- end }}
-            {{- with .Values.envVars }}
+            {{- with (include "kusoenvironment.envVars" . | fromJsonArray) }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
@@ -371,11 +371,20 @@ spec:
             without the wait each replaced pod drops the requests still
             routed to it (a 502 and a hung request per rollout, measured).
             The native sleep action needs no binary in the image.
+
+            Skipped when it can't help or can't apply: a Recreate env's
+            old pod is already out of the endpoints and the new one can't
+            start until it exits, so the sleep is pure added downtime; and
+            the sleep handler needs Kubernetes >= 1.30 (PodLifecycleSleep
+            Action) — on older apiservers the field is dropped, leaving an
+            invalid empty preStop that stops the ReplicaSet creating pods.
           */}}
+          {{- if and (not $rwo) (semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version) }}
           lifecycle:
             preStop:
               sleep:
                 seconds: 5
+          {{- end }}
           {{- if and .Values.healthcheck .Values.healthcheck.path }}
           {{- /*
             HTTP health check (user opted in via spec.healthcheck.path).
@@ -388,11 +397,16 @@ spec:
             startupProbe gates liveness/readiness until it first passes).
           */}}
           {{- $hcPort := .Values.healthcheck.port | default .Values.port }}
+          {{- /* 0 is a valid delay; `default 5` treated it as unset. The
+                 other probe fields below must be >= 1, so default is right
+                 for them. */}}
+          {{- $hcDelay := 5 }}
+          {{- if not (kindIs "invalid" .Values.healthcheck.initialDelaySeconds) }}{{ $hcDelay = int .Values.healthcheck.initialDelaySeconds }}{{ end }}
           readinessProbe:
             httpGet:
               path: {{ .Values.healthcheck.path | quote }}
               port: {{ $hcPort }}
-            initialDelaySeconds: {{ .Values.healthcheck.initialDelaySeconds | default 5 }}
+            initialDelaySeconds: {{ $hcDelay }}
             periodSeconds: {{ .Values.healthcheck.periodSeconds | default 10 }}
             timeoutSeconds: {{ .Values.healthcheck.timeoutSeconds | default 2 }}
             failureThreshold: {{ .Values.healthcheck.failureThreshold | default 3 }}
@@ -401,7 +415,7 @@ spec:
             httpGet:
               path: {{ .Values.healthcheck.path | quote }}
               port: {{ $hcPort }}
-            initialDelaySeconds: {{ .Values.healthcheck.initialDelaySeconds | default 5 }}
+            initialDelaySeconds: {{ $hcDelay }}
             periodSeconds: {{ .Values.healthcheck.periodSeconds | default 10 }}
             timeoutSeconds: {{ .Values.healthcheck.timeoutSeconds | default 2 }}
             failureThreshold: {{ .Values.healthcheck.failureThreshold | default 3 }}

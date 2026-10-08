@@ -3,6 +3,7 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,7 +30,7 @@ func (h *UptimeHandler) ProjectStatus(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	targets, err := h.Cluster.Targets(ctx)
+	targets, err := h.Cluster.Targets(ctx, project)
 	if err != nil {
 		h.Logger.Error("uptime status: read targets", "project", project, "err", err)
 		writeErr(w, http.StatusInternalServerError, "read uptime targets")
@@ -43,6 +44,6 @@ func (h *UptimeHandler) ProjectStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":  !uptime.Disabled(),
-		"services": uptime.Status(project, targets, rows),
+		"services": uptime.Status(project, targets, rows, time.Now()),
 	})
 }

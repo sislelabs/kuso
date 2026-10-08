@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -56,6 +57,8 @@ type Manager struct {
 	Namespace string
 	// now is injected in tests; defaults to time.Now.
 	now func() time.Time
+	// slotMu serializes the MaxConcurrent check with the incident insert.
+	slotMu sync.Mutex
 }
 
 func (m *Manager) clock() time.Time {
@@ -203,10 +206,19 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 		return
 	}
 
+	// Each event runs in its own goroutine, so the count-then-create
+	// below must be serialized or a storm of N distinct targets all read
+	// the same count and spawn past MaxConcurrent.
+	m.slotMu.Lock()
+	defer m.slotMu.Unlock()
 	open, openErr := m.DB.OpenIncidentForTarget(ctx, key)
 	openExists := openErr == nil
 	lastClosed, lastOK, _ := m.DB.LastClosedAtForTarget(ctx, key)
-	openCount, _ := m.DB.CountOpenIncidents(ctx)
+	openCount, countErr := m.DB.CountOpenIncidents(ctx)
+	if countErr != nil && !openExists {
+		log.Warn("incident: event dropped (cannot count open incidents)", "err", countErr)
+		return
+	}
 
 	cooldown := time.Duration(cfg.CooldownHours) * time.Hour
 	switch decide(openExists, lastClosed, lastOK, openCount, cfg.MaxConcurrent, cooldown, m.clock()) {

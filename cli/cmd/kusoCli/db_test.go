@@ -106,6 +106,26 @@ func TestLocalDSNFromSecret(t *testing.T) {
 			wantDSN:  "postgres://u:p@127.0.0.1:15432/app",
 		},
 		{
+			// The mongodb and mysql charts also emit DATABASE_URL as an
+			// alias; launching psql on it fails.
+			name:     "mongodb DATABASE_URL alias is mongo, not postgres",
+			secret:   map[string]string{"DATABASE_URL": "mongodb://kuso:pw@m:27017/app?authSource=admin", "MONGO_URL": "mongodb://kuso:pw@m:27017/app?authSource=admin"},
+			wantKind: "mongo",
+			wantDSN:  "mongodb://kuso:pw@127.0.0.1:15432/app?authSource=admin",
+		},
+		{
+			name:     "mysql DATABASE_URL alias is mysql",
+			secret:   map[string]string{"DATABASE_URL": "mysql://kuso:pw@my:3306/app", "MYSQL_URL": "mysql://kuso:pw@my:3306/app"},
+			wantKind: "mysql",
+			wantDSN:  "mysql://kuso:pw@127.0.0.1:15432/app",
+		},
+		{
+			name:     "mongo without DATABASE_URL",
+			secret:   map[string]string{"MONGODB_URI": "mongodb://kuso:pw@m:27017/app"},
+			wantKind: "mongo",
+			wantDSN:  "mongodb://kuso:pw@127.0.0.1:15432/app",
+		},
+		{
 			name:     "no usable key",
 			secret:   map[string]string{"SOMETHING_ELSE": "x"},
 			wantKind: "",

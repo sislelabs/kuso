@@ -294,7 +294,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      kuso.sislelabs.com/project: {{ .Release.Name }}
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
       kuso.sislelabs.com/network-egress-public: "true"
   policyTypes: [Egress]
   egress:
@@ -311,6 +311,49 @@ spec:
               {{- range (.Values.networkPolicy).extraBlockCIDRs }}
               - {{ . | quote }}
               {{- end }}
+---
+# Hairpin to the cluster's own ingress for public-egress pods. A pod that
+# calls a public domain served by THIS cluster (its own API host, a
+# sibling's, the kuso UI) connects to a node IP that is also the Traefik
+# LoadBalancer IP. kube-proxy DNATs that connection to a Traefik pod IP
+# (10.42.x) before NetworkPolicy is evaluated, so the 10.0.0.0/8 exception
+# above refused it: server-side fetches of the app's own public URL failed
+# with ECONNREFUSED. Allowing the Traefik pods on their entrypoint ports
+# is no wider than public egress already is: anything reachable this way
+# is reachable from the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{ .Release.Name }}-allow-ingress-hairpin
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+      kuso.sislelabs.com/network-egress-public: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ ((.Values.networkPolicy).ingressController).namespace | default "traefik" | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+        # Single-namespace installs where traefik shares the platform ns.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ (.Values.networkPolicy).platformNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        {{- range (((.Values.networkPolicy).ingressController).ports | default (list 8000 8443)) }}
+        - port: {{ int . }}
+          protocol: TCP
+        {{- end }}
 ---
 # Egress to the kuso API (kuso-server) for pods that opted in via
 # KusoService.spec.platformApiEgress. The default-deny above blocks all
@@ -339,7 +382,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      kuso.sislelabs.com/project: {{ .Release.Name }}
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
       kuso.sislelabs.com/network-egress-platform-api: "true"
   policyTypes: [Egress]
   egress:

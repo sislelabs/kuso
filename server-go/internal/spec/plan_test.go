@@ -2,7 +2,9 @@ package spec
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -111,6 +113,15 @@ func TestPlanFor_DiffsCronsAndRoutesDeletesByPrune(t *testing.T) {
 	}
 	if len(plan.WouldDelete) == 0 {
 		t.Fatalf("prune=false must populate WouldDelete: %+v", plan)
+	}
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, k := range []string{"addonsToUpdate", "servicesToDelete", "cronsToUpdate"} {
+		if !strings.Contains(string(raw), `"`+k+`":[]`) {
+			t.Fatalf("%s must encode as [], got %s", k, raw)
+		}
 	}
 }
 

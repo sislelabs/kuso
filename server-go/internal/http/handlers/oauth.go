@@ -461,8 +461,11 @@ func (h *OAuthHandler) mayAutoLink(ctx context.Context, existing *db.User, prof 
 //     oauthBootstrapPromotionAllowed), promote this user to admin.
 //     Covers two cases — (a) first OAuth login on an OAuth-only fresh
 //     install (admin group exists empty after EnsureAdminGroup, no
-//     seed admin user), and (b) the seed admin was deleted and someone
-//     needs to take over (opt in via KUSO_OAUTH_BOOTSTRAP_ADMIN=true).
+//     seed admin user), and (b) a seed-admin install whose first OAuth
+//     user should become admin (opt in via KUSO_OAUTH_BOOTSTRAP_ADMIN=true).
+//     Promotion is one-shot: once used, or once any real admin has
+//     existed, it never fires again (see PromoteUserToAdminIfNoAdmin).
+//     Later recovery goes through KUSO_PROMOTE_USER.
 //  2. Otherwise drop them in the pending group so an admin can grant
 //     access without them stumbling around the UI.
 //
@@ -520,11 +523,11 @@ func (h *OAuthHandler) attachPendingIfGroupless(ctx context.Context, userID stri
 // signed in first won instance admin even though the operator already
 // held a password-seeded admin account. Policy:
 //
-//   - KUSO_OAUTH_BOOTSTRAP_ADMIN=true|1  → always allowed (explicit
-//     opt-in; the disaster-recovery path when the seed admin is gone).
+//   - KUSO_OAUTH_BOOTSTRAP_ADMIN=true|1  → allowed (explicit opt-in),
+//     still subject to the one-shot marker in PromoteUserToAdminIfNoAdmin.
 //   - KUSO_OAUTH_BOOTSTRAP_ADMIN=false|0 → never allowed.
 //   - unset → allowed ONLY when no password-seeded admin path exists
-//     (no active local 'admin' user with a human-usable password) —
+//     (no local 'admin' user with a human-usable password, active or not) —
 //     the OAuth-only fresh install, where gating would brick first
 //     login. A stub-hash 'admin' is an OAuth-created account, not a
 //     password path, so it doesn't gate.
@@ -545,7 +548,9 @@ func (h *OAuthHandler) oauthBootstrapPromotionAllowed(ctx context.Context) (bool
 	if err != nil {
 		return false, "seed-admin lookup failed: " + err.Error()
 	}
-	if seed.Provider.Valid && seed.Provider.String == "local" && seed.IsActive && !auth.IsStubPasswordHash(seed.Password) {
+	// Deliberately ignores IsActive: deactivating the seed admin must not
+	// open promotion to the next OAuth sign-in.
+	if seed.Provider.Valid && seed.Provider.String == "local" && !auth.IsStubPasswordHash(seed.Password) {
 		return false, "password-seeded admin account exists — log in with it to grant roles"
 	}
 	return true, ""

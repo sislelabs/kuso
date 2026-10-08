@@ -69,7 +69,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
           onCreated={() => {
             setAdding(false);
             qc.invalidateQueries({
-              queryKey: ["projects", project, "services", service, "crons"],
+              queryKey: ["projects", project],
             });
           }}
         />
@@ -127,7 +127,7 @@ function CronRow({
     onSuccess: () => {
       toast.success(`Cron ${short} deleted`);
       setConfirming(false);
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "crons"] });
+      qc.invalidateQueries({ queryKey: ["projects", project] });
     },
     onError: (e) => {
       toast.error(e instanceof Error ? e.message : "Delete failed");
@@ -139,7 +139,7 @@ function CronRow({
     mutationFn: () => syncCron(project, service, fqn),
     onSuccess: () => {
       toast.success(`Cron ${short} synced`);
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "crons"] });
+      qc.invalidateQueries({ queryKey: ["projects", project] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Sync failed"),
   });

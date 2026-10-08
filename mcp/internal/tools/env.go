@@ -1,7 +1,7 @@
 // MCP `get_env`, `set_env` + `set_secret` tools.
 //
 //   get_env     read a service's env vars, including valueFrom refs
-//   set_env     upsert / remove individual plain env vars (per key)
+//   set_env     upsert / remove individual env vars (per key; the server picks storage)
 //   set_secret  upsert ONE secret-typed key into the service's Secret
 //
 // set_env used to POST the whole list to /env, which replaced
@@ -38,9 +38,13 @@ type setEnvArgs struct {
 	Confirm bool     `json:"confirm,omitempty" jsonschema:"must be true — set_env writes to the live service and triggers a rolling restart"`
 }
 
-// setEnvVarRequest mirrors apiv1.SetEnvVarRequest (plain-literal form).
+// setEnvVarRequest mirrors apiv1.SetEnvVarRequest in its unified form, the
+// same write `kuso env set` sends: with Auto the server resolves ${{ }} refs
+// into addon/shared wiring and stores anything that isn't build-relevant as
+// a managed secret. Without it the value is stored verbatim as a CR literal.
 type setEnvVarRequest struct {
 	Value string `json:"value"`
+	Auto  bool   `json:"auto"`
 }
 
 type getEnvArgs struct {
@@ -132,7 +136,7 @@ func describeValueFrom(vf map[string]any) string {
 func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "set_env",
-		Description: "Create/overwrite the plain env vars listed in envVars and remove the names listed in unset. Per-key: env vars you don't mention (including addon secretKeyRef entries) are left untouched. REQUIRES confirm=true (a write to the live service; pods roll). Use get_env to read the current list first. For secret values use set_secret instead. Mutating; refused in --read-only mode.",
+		Description: "Create/overwrite the env vars listed in envVars and remove the names listed in unset. This is the same write as `kuso env set`: the server decides storage, so a ${{ addon.KEY }} value becomes an addon secret ref, a build-relevant name stays a spec literal, and everything else (API keys included) becomes a managed secret. Per-key: env vars you don't mention (including addon refs) are left untouched. REQUIRES confirm=true (a write to the live service; pods roll). Use get_env to read the current list first. Use set_secret only to scope a secret to one env or to override a project-shared key. Mutating; refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args setEnvArgs) (*mcp.CallToolResult, struct{}, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, struct{}{}, errors.New("project and service are required")
@@ -151,7 +155,7 @@ func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 		set, unset := 0, 0
 		for _, kv := range args.EnvVars {
 			path := apiPath("api", "projects", args.Project, "services", args.Service, "env-vars", kv.Name)
-			if err := client.PutJSON(ctx, path, setEnvVarRequest{Value: kv.Value}, nil); err != nil {
+			if err := client.PutJSON(ctx, path, setEnvVarRequest{Value: kv.Value, Auto: true}, nil); err != nil {
 				return nil, struct{}{}, fmt.Errorf("set env %s (after %d set, %d unset): %w", kv.Name, set, unset, err)
 			}
 			set++

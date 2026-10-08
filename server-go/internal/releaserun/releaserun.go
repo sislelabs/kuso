@@ -209,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	if image == nil || image.Tag == "" {
 		return Result{}, fmt.Errorf("releaserun: image tag required")
 	}
-	jobName := JobName(env.Name, image.Tag)
+	jobName := JobName(env.Name, image.Repository, image.Tag)
 	timeout := env.Spec.Release.TimeoutSeconds
 	if timeout <= 0 {
 		timeout = 900
@@ -252,17 +252,19 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	return r.poll(ctx, ns, jobName, time.Duration(timeout)*time.Second)
 }
 
-// JobName derives the per-(env, tag) Job name. Exported so the build
-// poller can reference it in CR annotations + the web layer can deep-
+// JobName derives the per-(env, repository:tag) Job name. Exported so the
+// build poller can reference it in CR annotations + the web layer can deep-
 // link to logs without re-deriving.
-func JobName(envName, imageTag string) string {
+func JobName(envName, repository, imageTag string) string {
 	// A readable prefix from the tag PLUS a hash of the FULL tag. Taking
 	// only tag[:12] used to erase the uniqueness nonce that synthetic refs
 	// carry at the END (`<branch-slug>-<unixms36>`): for branch slugs ≳10
 	// chars every deploy produced the same Job name, so Run()'s
 	// already-succeeded fast-path skipped new migrations (or one failure
 	// poisoned every redeploy for the TTL). The full-tag hash guarantees
-	// distinct tags → distinct Job names regardless of length.
+	// distinct tags → distinct Job names regardless of length. The
+	// repository is hashed too: app:1.4.0 → app-v2:1.4.0 is a different
+	// image that needs its own migration run.
 	safe := func(s string) string {
 		return strings.Map(func(r rune) rune {
 			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
@@ -275,7 +277,7 @@ func JobName(envName, imageTag string) string {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	sum := sha256.Sum256([]byte(imageTag))
+	sum := sha256.Sum256([]byte(repository + ":" + imageTag))
 	h := hex.EncodeToString(sum[:])[:8]
 	name := fmt.Sprintf("%s-release-%s-%s", envName, safe(short), h)
 	if len(name) > 63 {
@@ -466,10 +468,10 @@ func (r *Runner) poll(ctx context.Context, ns, jobName string, timeout time.Dura
 }
 
 // Logs returns a stream of the most recent release Job pod's logs for
-// (env, imageTag). Caller closes the stream. Returns ErrNoJob if the
-// Job hasn't been created (or has been GC'd).
-func (r *Runner) Logs(ctx context.Context, ns, envName, imageTag string) (string, error) {
-	jobName := JobName(envName, imageTag)
+// (env, repository:imageTag). Caller closes the stream. Returns ErrNoJob if
+// the Job hasn't been created (or has been GC'd).
+func (r *Runner) Logs(ctx context.Context, ns, envName, repository, imageTag string) (string, error) {
+	jobName := JobName(envName, repository, imageTag)
 	pods, err := r.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})

@@ -135,3 +135,40 @@ func TestImageTagAgreesWithShortRef(t *testing.T) {
 		}
 	}
 }
+
+// BLD-6: a synthetic ref is "<branch-slug>-<base36 ms>". shortRef runs
+// again over it in ImageTag and buildCRName, and its 32-char cap used to
+// cut the timestamp off, so two builds of a long branch hours apart got
+// the same CR name (AlreadyExists) and the same image tag.
+func TestSuffixedRefKeepsSuffixThroughShortRef(t *testing.T) {
+	t.Parallel()
+	for _, branch := range []string{
+		"main",
+		"feature/checkout-redesign-v2",
+		"feature/a-very-long-branch-name-that-goes-on-and-on",
+		"dependabot/npm_and_yarn/@types/node-20.11.5",
+	} {
+		a := suffixedRef(branch, "mg0x1abc")
+		b := suffixedRef(branch, "mg0x9zzz")
+		if ImageTag(a) == ImageTag(b) {
+			t.Errorf("%s: two builds share image tag %q", branch, ImageTag(a))
+		}
+		if buildCRName("alpha", "web", a) == buildCRName("alpha", "web", b) {
+			t.Errorf("%s: two builds share CR name %q", branch, buildCRName("alpha", "web", a))
+		}
+		if shortRef(a) != a || !strings.HasSuffix(a, "-mg0x1abc") {
+			t.Errorf("%s: suffixedRef = %q, not stable under shortRef or suffix lost", branch, a)
+		}
+	}
+}
+
+// BLD-22: Dependabot branches contain '@'; git only forbids "@{".
+func TestValidateGitRefAllowsAt(t *testing.T) {
+	t.Parallel()
+	if err := ValidateGitRef("dependabot/npm_and_yarn/@types/node-20.11.5"); err != nil {
+		t.Errorf("dependabot branch rejected: %v", err)
+	}
+	if err := ValidateGitRef("main@{1}"); err == nil {
+		t.Error("reflog syntax accepted")
+	}
+}

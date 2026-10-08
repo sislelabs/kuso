@@ -153,15 +153,98 @@ func writeGrantErr(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-// requireGrantOverUser gates acting AS another user (password reset,
-// minting their token): a non-admin may only do it to a user whose
-// effective perms are a subset of its own.
+// requireGrantOverUser gates acting on or AS another user (deactivate,
+// delete, role change, password reset, minting their token): a non-admin
+// may only do it to a user it outranks. That means the target is not an
+// instance admin, its instance perms are a subset of the caller's, and
+// on every project the target holds a grant the caller holds at least
+// the same role. Project grants count: a project admin's account is
+// worth as much as their project, whatever their instance perms.
 func requireGrantOverUser(w http.ResponseWriter, r *http.Request, d *db.DB, targetUserID string) bool {
-	perms, err := auth.EffectivePermissions(r.Context(), d, targetUserID)
-	if err != nil {
-		return writeGrantErr(w, err)
+	return writeGrantErr(w, checkOverUser(r, d, targetUserID))
+}
+
+func checkOverUser(r *http.Request, d *db.DB, targetUserID string) error {
+	ctx := r.Context()
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("%w: unauthenticated", errGrantForbidden)
 	}
-	return requireGrant(w, r, "", perms)
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return nil
+	}
+	target, err := d.ListUserTenancyCached(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	if target.InstanceRole == db.InstanceRoleAdmin {
+		return fmt.Errorf("%w: target is an instance admin", errGrantForbidden)
+	}
+	perms, err := auth.EffectivePermissions(ctx, d, targetUserID)
+	if err != nil {
+		return err
+	}
+	if missing := auth.MissingGrantPermission(claims.Permissions, perms); missing != "" {
+		return fmt.Errorf("%w: target holds %s, which you don't", errGrantForbidden, missing)
+	}
+	return checkOutranksProjects(ctx, d, claims.UserID, target.ProjectMemberships)
+}
+
+// requireGrantOverGroup gates changing or removing a group's access
+// (tenancy, instance role, membership, deletion): a non-admin may only
+// touch a group whose instance role and project grants it holds itself.
+func requireGrantOverGroup(w http.ResponseWriter, r *http.Request, d *db.DB, groupID string) bool {
+	return writeGrantErr(w, checkOverGroup(r, d, groupID))
+}
+
+func checkOverGroup(r *http.Request, d *db.DB, groupID string) error {
+	ctx := r.Context()
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("%w: unauthenticated", errGrantForbidden)
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return nil
+	}
+	t, err := d.GetGroupTenancy(ctx, groupID)
+	if errors.Is(err, db.ErrNotFound) {
+		return nil // let the handler report the missing group as before
+	}
+	if err != nil {
+		return err
+	}
+	if t.InstanceRole == db.InstanceRoleAdmin {
+		return fmt.Errorf("%w: group confers instance admin", errGrantForbidden)
+	}
+	if missing := auth.MissingGrantPermission(claims.Permissions, instanceRolePerms(t.InstanceRole)); missing != "" {
+		return fmt.Errorf("%w: group confers %s, which you don't hold", errGrantForbidden, missing)
+	}
+	grants, err := d.GroupProjectRoles(ctx, groupID)
+	if errors.Is(err, db.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return checkOutranksProjects(ctx, d, claims.UserID, grants)
+}
+
+// checkOutranksProjects requires callerID's effective role on every
+// listed project to be at least the listed role.
+func checkOutranksProjects(ctx context.Context, d *db.DB, callerID string, target []db.ProjectMembership) error {
+	if len(target) == 0 {
+		return nil
+	}
+	caller, err := d.ListUserTenancyCached(ctx, callerID)
+	if err != nil {
+		return err
+	}
+	for _, m := range target {
+		if !roleAtLeast(auth.ProjectRoleFor(caller, m.Project), m.Role) {
+			return fmt.Errorf("%w: target is %s on project %q, which outranks you", errGrantForbidden, m.Role, m.Project)
+		}
+	}
+	return nil
 }
 
 // requireRoleGrant gates assigning a custom Role to targetUserID.

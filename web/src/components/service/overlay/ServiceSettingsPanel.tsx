@@ -17,6 +17,7 @@ import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { serviceBlast } from "@/lib/blast-radius";
 import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
+import { releasePatch } from "./settings/releasePatch";
 import { parseWatchPathsText } from "@/features/services/watchPaths";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
@@ -499,10 +500,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       body.volumes = state.volumes.filter((v) => v.name && v.mountPath);
     }
     if (state.previewsDisabled !== baseline.previewsDisabled) {
-      // Send {disabled} when the user opted-out, or {clear:true} when
-      // they re-enabled (drops the override so the service falls back
-      // to the project toggle's setting).
-      body.previews = state.previewsDisabled ? { disabled: true } : { clear: true };
+      // The server merges `disabled` into spec.previews; {clear:true}
+      // would also wipe seed/reviewUrl/previewEnvVars.
+      body.previews = { disabled: state.previewsDisabled };
     }
     if (state.waitForCI !== baseline.waitForCI) {
       body.waitForCI = state.waitForCI;
@@ -524,18 +524,15 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         };
       }
     }
-    if (
-      state.releaseCommand !== baseline.releaseCommand ||
-      state.releaseTimeout !== baseline.releaseTimeout
-    ) {
-      const argv = state.releaseCommand.trim().split(/\s+/).filter(Boolean);
-      const hadHookBefore = baseline.releaseCommand.trim().length > 0;
-      if (argv.length > 0) {
-        body.release = { command: argv, timeoutSeconds: Number(state.releaseTimeout) || 0 };
-      } else if (hadHookBefore) {
-        body.release = { clear: true };
-      }
-      // else: no hook before, none now — nothing to send.
+    {
+      const release = releasePatch(
+        state.releaseCommand,
+        state.releaseTimeout,
+        baseline.releaseCommand,
+        baseline.releaseTimeout,
+        svc?.spec.release?.command,
+      );
+      if (release) body.release = release;
     }
     if (
       state.capAdd !== baseline.capAdd ||

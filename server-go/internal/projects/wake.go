@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
 	"kuso/server/internal/kube"
 	"kuso/server/internal/scaledown"
 )
@@ -51,9 +49,11 @@ func (s *Service) WakeServiceEnv(ctx context.Context, project, service, envName 
 		}
 	}
 
-	env, err := s.Kube.GetKusoEnvironment(ctx, ns, crName)
+	// A caller-supplied full CR name only has to start with "<fqn>-", which
+	// another project's env can (project "a" service "b" vs project "a-b").
+	env, err := s.Kube.GetOwnedEnv(ctx, ns, project, svc.Name, crName)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if kube.IsNotFoundOrNotOwned(err) {
 			return fmt.Errorf("%w: environment %s", ErrNotFound, crName)
 		}
 		return fmt.Errorf("get env %s: %w", crName, err)

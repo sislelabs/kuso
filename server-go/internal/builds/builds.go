@@ -162,6 +162,26 @@ const (
 	// carry synthetic refs and keep that behaviour where the ref shape
 	// mattered — see isBranchHeadBuild.
 	annRefFromBranch = "kuso.sislelabs.com/ref-from-branch"
+	// annImageTag is the tag a build pushes. It is not derivable from
+	// spec.ref (rebuilds and cross-branch builds of one commit get their
+	// own tag), so a queued build carries it until dispatch sets
+	// spec.image.
+	annImageTag = "kuso.sislelabs.com/image-tag"
+	// annJobSucceeded marks a build whose Job completed successfully and
+	// is now promoting (release hooks included). The Job is TTL-reaped
+	// after an hour; a migration that outlives it must not read as a
+	// build whose Job never appeared.
+	annJobSucceeded = "kuso.sislelabs.com/build-job-succeeded"
+	// annHoldExpired marks a build cancelled because its promotion hold
+	// expired. Its image was built and pushed, so Rollback accepts it.
+	annHoldExpired = "kuso.sislelabs.com/hold-expired"
+	// AnnPreviewEnv names the preview KusoEnvironment a build was made
+	// for, and AnnPreviewPR its PR number. A preview build promotes only
+	// into that env (and its PR's worker previews), never by branch name
+	// onto a persistent env; a build without it never promotes into a
+	// preview env. The PR-close path cancels by AnnPreviewEnv.
+	AnnPreviewEnv = "kuso.sislelabs.com/preview-env"
+	AnnPreviewPR  = "kuso.sislelabs.com/preview-pr"
 )
 
 // LabelBuildState is the terminal-state marker label on a KusoBuild CR.
@@ -291,6 +311,15 @@ type Service struct {
 	// in admitBuild. Cluster reality is the only source of truth
 	// that survives kuso-server restarts and operator-rendered
 	// Job pods that bypass Create.
+
+	// admitMu serializes admission decisions. admitReserved holds the
+	// slots of admitted Creates that haven't written their CR yet, and
+	// admitRecent the builds this process started in the last
+	// admitRecentTTL, so back-to-back admissions count each other before
+	// the informer has seen the new CRs (see admission.go).
+	admitMu       sync.Mutex
+	admitReserved map[*admitSlot]struct{}
+	admitRecent   map[string]admitSlot
 
 	// Notifier receives build.superseded events when a new build for
 	// the same (project, service) cancels an in-flight predecessor.
@@ -510,7 +539,7 @@ func (s *Service) findActiveForServiceLive(ctx context.Context, ns, project, fqn
 		}
 		// "In-flight" = no build-state label yet (running/pending/queued
 		// carry no terminal marker; done builds carry build-state=done).
-		if b.Labels["kuso.sislelabs.com/build-state"] == "" {
+		if occupiesServiceSlot(&b) {
 			return b.Name, nil
 		}
 	}
@@ -619,6 +648,11 @@ func New(k *kube.Client, namespace string) *Service {
 // + retry manually. Now we always admit and let the queue absorb the
 // burst.
 
+// BuildpacksUnsupported explains why runtime=buildpacks is refused. The
+// build Job runs the CNB lifecycle image, which ships no buildpacks and
+// no builder, so such a build can never produce an image.
+const BuildpacksUnsupported = "runtime \"buildpacks\" is not supported: its builds cannot produce an image. Use runtime \"nixpacks\" (auto-detected builds) or \"dockerfile\" instead"
+
 // Errors mirroring the rest of the codebase.
 var (
 	ErrNotFound = errors.New("builds: not found")
@@ -662,6 +696,11 @@ type CreateBuildRequest struct {
 	// filtered + PG-clone-swapped by ensurePreviewEnv) instead of the
 	// parent service's production vars.
 	PreviewEnv string `json:"-"`
+	// Retry gives a webhook build its own suffixed CR name instead of the
+	// SHA-keyed one. Set by the PR dispatcher when the SHA-keyed build
+	// already ended without succeeding (cancelled by a PR close, or
+	// failed), so a reopen or redelivery can rebuild that commit.
+	Retry bool `json:"-"`
 	// Env targets one environment by env-group label ("staging",
 	// "preview-pr-7"): the build uses that env's branch when Branch is
 	// empty and bakes that env's build-time vars instead of production's.
@@ -802,8 +841,8 @@ func (s *Service) CreateWithOutcome(ctx context.Context, project, service string
 func (s *Service) create(ctx context.Context, project, service string, req CreateBuildRequest) (_ *kube.KusoBuild, _ bool, err error) {
 	fqn := project + "-" + service
 	ns := s.nsFor(ctx, project)
-	svcCR, err := s.Kube.GetKusoService(ctx, ns, fqn)
-	if apierrors.IsNotFound(err) {
+	svcCR, err := s.Kube.GetOwnedService(ctx, ns, project, fqn)
+	if kube.IsNotFoundOrNotOwned(err) {
 		return nil, false, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
 	}
 	if err != nil {
@@ -834,6 +873,12 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	if svcCR.Spec.Runtime == "worker" && svcCR.Spec.FromService != "" {
 		return nil, false, fmt.Errorf("%w: worker %q reuses %q's image — trigger a build on %q instead", ErrInvalid, service, svcCR.Spec.FromService, svcCR.Spec.FromService)
 	}
+	// The buildpacks Job runs the CNB lifecycle without any buildpacks or
+	// builder image, so it can never produce an image. Refuse instead of
+	// starting a build that is guaranteed to fail.
+	if svcCR.Spec.Runtime == "buildpacks" {
+		return nil, false, fmt.Errorf("%w: %s", ErrInvalid, BuildpacksUnsupported)
+	}
 
 	repoURL := ""
 	repoPath := "."
@@ -862,10 +907,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		return nil, false, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
 
-	defaultBranch := "main"
-	if proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
-		defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
-	}
+	defaultBranch := effectiveDefaultBranch(proj, svcCR)
 	var targetEnv *kube.KusoEnvironment
 	if req.Env != "" {
 		if targetEnv, err = s.resolveEnv(ctx, ns, project, service, req.Env); err != nil {
@@ -913,6 +955,11 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// userRef = a person or API client named the commit. Webhooks carry
 	// GitHub's own SHA and keep the SHA-keyed CR name for redelivery dedup.
 	userRef := !manual && (req.TriggeredBy == "user" || req.TriggeredBy == "api")
+	if userRef {
+		// Some UIs copy SHAs in uppercase; git treats them the same.
+		req.Ref = strings.ToLower(strings.TrimSpace(req.Ref))
+		sha = req.Ref
+	}
 	if userRef && !shaRE.MatchString(req.Ref) {
 		return nil, false, fmt.Errorf("%w: ref %q is not a full 40-character commit SHA (use branch to build a branch head)", ErrInvalid, req.Ref)
 	}
@@ -929,8 +976,11 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// characters, '-', '_' or '.'"), no build pod ever appears, and
 		// the service is stuck at 0 replicas. shortRef is the same
 		// slugifier buildCRName already applies to keep the CR name legal.
-		sha = fmt.Sprintf("%s-%s", shortRef(branch), strconv.FormatInt(time.Now().UnixMilli(), 36))
+		sha = suffixedRef(branch, strconv.FormatInt(time.Now().UnixMilli(), 36))
 	}
+	// identity separates builds of one commit that promote to different
+	// branches or bake a different preview env's vars.
+	identity := buildIdentitySuffix(branch, req.PreviewEnv)
 
 	// Dedup concurrent Create calls for the same (project, service, sha).
 	// A retried GitHub webhook (or two webhooks racing the same push) used
@@ -941,7 +991,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// unique-by-construction. Manual triggers skip it too: they get a
 	// unique CR name below and coalesce under the service lock instead.
 	if !syntheticRef && !manual {
-		key := inFlightKey(project, service, sha)
+		key := inFlightKey(project, service, sha+"/"+identity)
 		entry := &inFlightEntry{done: make(chan struct{})}
 		if existing, loaded := s.inFlight.LoadOrStore(key, entry); loaded {
 			// Another goroutine is already creating this build. Wait for
@@ -975,15 +1025,19 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	}
 	defer release()
 
-	buildName := buildCRName(project, service, sha)
-	if (manual || userRef) && !syntheticRef {
+	// tagRef names both the CR and the pushed image tag.
+	tagRef := sha
+	if (manual || userRef || req.Retry) && !syntheticRef {
 		// A resolved HEAD is usually already built (redeploying an
 		// unchanged branch), and that build owns the SHA-keyed name; the
 		// same goes for a commit someone asks to rebuild by SHA.
-		// Suffix like a synthetic ref so the manual build gets its own CR.
-		buildName = buildCRName(project, service, sha[:12]+"-"+strconv.FormatInt(time.Now().UnixMilli(), 36))
+		// Suffix like a synthetic ref so the manual build gets its own CR
+		// AND its own image tag: pushing over the tag production already
+		// runs changed nothing in the env spec, so pods never rolled and
+		// nodes with the old layers cached kept serving the old build.
+		tagRef = sha[:12] + "-" + strconv.FormatInt(time.Now().UnixMilli(), 36)
 	}
-
+	buildName := buildCRName(project, service, tagRef)
 	// Per-service serialization. Without this, two simultaneous Create
 	// calls (different SHAs) both pass findActiveForService with no
 	// active build, both decide queued=false, both render Jobs in
@@ -995,6 +1049,14 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	svcLock := s.serviceLockFor(project, service)
 	svcLock.Lock()
 	defer svcLock.Unlock()
+
+	if !manual && !userRef && !req.Retry && !syntheticRef {
+		name, ref, nerr := s.webhookBuildName(ctx, ns, project, service, sha, branch, req.PreviewEnv, identity)
+		if nerr != nil {
+			return nil, false, nerr
+		}
+		buildName, tagRef = name, ref
+	}
 
 	// Coalesce rapid synthetic-ref redeploys. A user spam-clicking
 	// Redeploy generates one synthetic ref per click (each carries a
@@ -1140,6 +1202,17 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	if manual && !syntheticRef {
 		annos[annRefFromBranch] = "true"
 	}
+	annos[annImageTag] = ImageTag(tagRef)
+	previewTarget := req.PreviewEnv
+	if previewTarget == "" && targetEnv != nil && targetEnv.Spec.Kind == "preview" {
+		previewTarget = targetEnv.Name // a manual redeploy of a preview env
+	}
+	if previewTarget != "" {
+		annos[AnnPreviewEnv] = previewTarget
+		if penv, perr := s.Kube.GetKusoEnvironment(ctx, ns, previewTarget); perr == nil && penv != nil && penv.Spec.PullRequest != nil {
+			annos[AnnPreviewPR] = strconv.Itoa(penv.Spec.PullRequest.Number)
+		}
+	}
 	spec := kube.KusoBuildSpec{
 		Project: project,
 		Service: fqn,
@@ -1214,7 +1287,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		spec.BuildEnv = be
 	}
 	if !queued {
-		spec.Image = &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)}
+		spec.Image = &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(tagRef)}
 	}
 	if cachePVC != "" {
 		spec.Cache = &kube.KusoBuildCache{PVCName: cachePVC}
@@ -1288,8 +1361,18 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		Spec: spec,
 	}
 	created, cerr := s.Kube.CreateKusoBuild(ctx, ns, build)
+	if apierrors.IsAlreadyExists(cerr) {
+		// The token Secret under this name belongs to the existing build.
+		return nil, false, fmt.Errorf("%w: build %s already exists", ErrConflict, buildName)
+	}
 	if cerr != nil {
-		return created, false, cerr
+		// No CR will ever adopt the token minted above; drop it now
+		// rather than leave a live installation token behind.
+		s.deleteCloneTokenSecret(ns, buildName)
+		return nil, false, fmt.Errorf("create build %s: %w", buildName, cerr)
+	}
+	if !queued {
+		s.noteBuildStarted(ns, buildName, project)
 	}
 	// Adopt the clone-token Secret under the freshly-created KusoBuild CR
 	// so it cascade-deletes with the build (retention sweep, project
@@ -1305,6 +1388,40 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		s.adoptCloneTokenSecret(ctx, ns, buildName, string(created.UID))
 	}
 	return created, false, nil
+}
+
+// webhookBuildName picks the CR name and tag ref for a webhook build of
+// sha. The SHA-keyed name stays the common case, so a redelivery of the
+// same push lands on an existing CR and is reported as ErrConflict before
+// any token is minted. When that name is held by a build of the same
+// commit for a different branch or preview env (a fast-forward of
+// staging into main, a release PR whose head is already built), the
+// build gets a name and tag qualified by identity. Reusing the other
+// build was not an option: it only promotes to its own branch's envs and
+// baked that branch's build-time env.
+//
+// Callers hold the per-service lock, so the live reads here see every
+// earlier Create for this service from this process.
+func (s *Service) webhookBuildName(ctx context.Context, ns, project, service, sha, branch, previewEnv, identity string) (string, string, error) {
+	name := buildCRName(project, service, sha)
+	existing, err := s.Kube.GetKusoBuild(ctx, ns, name)
+	if apierrors.IsNotFound(err) {
+		return name, sha, nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("check existing build %s: %w", name, err)
+	}
+	if existing.Spec.Branch == branch && existing.Annotations[AnnPreviewEnv] == previewEnv {
+		return "", "", fmt.Errorf("%w: build %s already exists for this commit", ErrConflict, name)
+	}
+	ref := sha[:12] + "-" + identity
+	name = buildCRName(project, service, ref)
+	if _, err := s.Kube.GetKusoBuild(ctx, ns, name); err == nil {
+		return "", "", fmt.Errorf("%w: build %s already exists for this commit and branch", ErrConflict, name)
+	} else if !apierrors.IsNotFound(err) {
+		return "", "", fmt.Errorf("check existing build %s: %w", name, err)
+	}
+	return name, ref, nil
 }
 
 // adoptCloneTokenSecret stamps an ownerReference to the KusoBuild CR onto
@@ -2165,15 +2282,20 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 	if cachePVC != "" {
 		cachePatch = fmt.Sprintf(`,"cache":{"pvcName":%q}`, cachePVC)
 	}
+	tag := next.Annotations[annImageTag]
+	if tag == "" {
+		tag = ImageTag(next.Spec.Ref) // queued before the tag annotation existed
+	}
 	patch := fmt.Sprintf(
 		`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending",%q:%q}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
-		annPhase, annDispatchedAt, time.Now().UTC().Format(time.RFC3339), imageRepo, ImageTag(next.Spec.Ref), cachePatch,
+		annPhase, annDispatchedAt, time.Now().UTC().Format(time.RFC3339), imageRepo, tag, cachePatch,
 	)
 	if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
 		p.Logger.Warn("build poller promote queued", "build", next.Name, "ns", ns, "err", perr)
 		return false
 	}
+	p.Svc.noteBuildStarted(ns, next.Name, project)
 	p.Logger.Info("build poller promoted queued build", "build", next.Name, "service", fqn)
 	return true
 }
@@ -2216,7 +2338,10 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 			// Job's 1h TTL fell into the stuck-timeout below and was
 			// force-FAILED — converting a green, waiting build into a
 			// false build.failed page and poisoning its whole wave.
-			if b.Annotations[annPromoteHold] != "" {
+			// Same for a build still promoting after its Job succeeded:
+			// a release hook longer than the Job TTL was force-failed
+			// mid-migration and then promoted anyway.
+			if b.Annotations[annPromoteHold] != "" || b.Annotations[annJobSucceeded] != "" {
 				return p.markSucceededAsync(ctx, ns, b)
 			}
 			// No Job for this build. Either it hasn't rendered yet (young
@@ -2248,6 +2373,7 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	}
 	if cond := completedCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {
+			p.noteJobSucceeded(ctx, ns, b)
 			return p.markSucceededAsync(ctx, ns, b)
 		}
 		return p.markFailed(ctx, ns, b, cond.Message)
@@ -2264,6 +2390,25 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 		return p.markRunning(ctx, ns, b)
 	}
 	return nil
+}
+
+// noteJobSucceeded stamps annJobSucceeded once. Best-effort: until it
+// lands, a reaped Job falls back to the stuck-timeout as before.
+func (p *Poller) noteJobSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) {
+	if b.Annotations[annJobSucceeded] != "" {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annJobSucceeded, now)
+	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		p.logger().Warn("stamp build job succeeded", "build", b.Name, "ns", ns, "err", err)
+		return
+	}
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[annJobSucceeded] = now
 }
 
 // buildAge returns how long ago the build was dispatched: the
@@ -2814,8 +2959,8 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		// stamp it failed (belt to checkBuild's no-Job routing; also
 		// guards any future caller). The gate resolves it: promote,
 		// supersede, or operator cancel.
-		if cur.Annotations[annPromoteHold] != "" {
-			p.logger().Info("build is promotion-held (job succeeded); refusing mark-failed",
+		if cur.Annotations[annPromoteHold] != "" || cur.Annotations[annJobSucceeded] != "" {
+			p.logger().Info("build job already succeeded (promotion held or in progress); refusing mark-failed",
 				"build", b.Name, "reason", msg)
 			return nil
 		}
@@ -2851,7 +2996,18 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// reason and emits build.cancelled at severity=info. On cancel error
 	// (e.g. the build already went terminal in a race) fall through to the
 	// normal failed path so the build never silently disappears.
-	if classification.Kind == failures.KindCloneRefMissing {
+	// A missing production branch is not "deleted while queued": the
+	// service points at a branch the repo doesn't have (a repo on
+	// `master` built as `main`). Cancelling that with "nothing to fix"
+	// hid a Redeploy button that could never deploy.
+	if classification.Kind == failures.KindCloneRefMissing && b.Spec.Branch != "" &&
+		b.Spec.Branch == p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service) {
+		classification.Summary = fmt.Sprintf("Branch %q was not found in the repository.", b.Spec.Branch)
+		classification.Remediation = &failures.Remediation{
+			Title:  "Point the service at a branch that exists",
+			Detail: fmt.Sprintf("This service deploys branch %q, but the clone could not find it. If the repository uses a different default branch (for example master), set it as the service's branch and redeploy.", b.Spec.Branch),
+		}
+	} else if classification.Kind == failures.KindCloneRefMissing {
 		if cerr := p.Svc.cancelBuild(ctx, b.Spec.Project, b.Name, "ref deleted (branch deleted or force-pushed while build was queued)"); cerr == nil {
 			// Persist the classification so an explicit `kuso build why
 			// <id>` still explains a ref-deleted cancel (the auto-pick only
@@ -3200,6 +3356,25 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 // rewrite plan §5 / TS comment in github-webhooks.service.ts, that was
 // a known-incomplete feature. We close it here by matching on
 // spec.branch over the env list filtered to this build's service.
+// previewPromotionAllowed keeps preview builds and persistent envs apart.
+// Branch matching alone can't: a PR's head branch can be a branch a
+// persistent env tracks (a staging -> main release PR, or head = main).
+// A preview build promotes only into the env it was built for (direct) or,
+// for a fromService worker, into that worker's preview for the same PR. A
+// build with no preview marker never promotes into a preview env.
+func previewPromotionAllowed(b *kube.KusoBuild, e *kube.KusoEnvironment, direct bool) bool {
+	target := b.Annotations[AnnPreviewEnv]
+	if target == "" {
+		return e.Spec.Kind != "preview"
+	}
+	if direct {
+		return e.Name == target
+	}
+	pr := b.Annotations[AnnPreviewPR]
+	return e.Spec.Kind == "preview" && e.Spec.PullRequest != nil && pr != "" &&
+		strconv.Itoa(e.Spec.PullRequest.Number) == pr
+}
+
 // promotionBranchMatches decides whether a build on buildBranch may
 // promote to an env whose spec.branch is envBranch, given the project's
 // defaultBranch. Rules (MED-6):
@@ -3253,11 +3428,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// push to `staging` could promote to a branch-unset production env. We
 	// now treat an empty env branch as "the default branch" — it matches
 	// only default-branch builds, not arbitrary feature/staging branches.
-	defaultBranch := "main"
-	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
-		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
-		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
-	}
+	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
 	matched := 0
 	// promoteFailed records whether promoting to ANY matched env hit a
 	// hard error (CAS exhausted, apiserver blip on the env Update). We
@@ -3285,6 +3456,9 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		if e.Spec.Service != b.Spec.Service {
 			continue
 		}
+		if !previewPromotionAllowed(b, &e, true) {
+			continue
+		}
 		if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
 			continue
 		}
@@ -3308,7 +3482,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// keep running on the previous image, and we emit a notify
 		// event so the failure doesn't bury itself.
 		//
-		// Idempotency: the Job name is per-(env, image-tag), so a
+		// Idempotency: the Job name is per-(env, repository:tag), so a
 		// re-deploy of the same tag is a no-op (Job exists, already
 		// succeeded). See releaserun.JobName.
 		if shouldRunRelease(&e) && p.ReleaseRunner != nil {
@@ -3437,7 +3611,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// finishes after a newer one has promoted matches nothing above (the
 	// promoted-at guard skips it) and must not drag the crons back to
 	// its image.
-	if matched > 0 {
+	if matched > 0 && b.Annotations[AnnPreviewEnv] == "" {
 		if err := p.promoteToCrons(ctx, ns, b, shortService); err != nil {
 			p.logger().Warn("promote to crons failed", "service", b.Spec.Service, "err", err)
 		}
@@ -3484,11 +3658,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 		return fmt.Errorf("list services: %w", err)
 	}
 	// MED-6: same empty-env-branch = default-branch semantics as promoteImage.
-	defaultBranch := "main"
-	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
-		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
-		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
-	}
+	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
 	for i := range rawSvcs.Items {
 		var s kube.KusoService
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
@@ -3508,9 +3678,13 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			p.logger().Warn("list worker envs failed", "service", s.Name, "err", err)
 			continue
 		}
+		workerPromoted := 0
 		for j := range rawEnvs.Items {
 			var e kube.KusoEnvironment
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawEnvs.Items[j].Object, &e); err != nil {
+				continue
+			}
+			if !previewPromotionAllowed(b, &e, false) {
 				continue
 			}
 			if !promotionBranchMatches(b.Spec.Branch, e.Spec.Branch, defaultBranch) {
@@ -3529,8 +3703,17 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if !promoted {
 				continue
 			}
+			workerPromoted++
 			p.logger().Info("worker env promoted via fromService",
 				"env", e.Name, "fromService", sourceShortName, "tag", b.Spec.Image.Tag)
+		}
+		// Crons on the worker inherit the same image; without this they
+		// stayed on their creation-time snapshot forever.
+		if workerPromoted > 0 {
+			workerShort := strings.TrimPrefix(s.Name, b.Spec.Project+"-")
+			if err := p.promoteToCrons(ctx, ns, b, workerShort); err != nil {
+				p.logger().Warn("promote worker crons failed", "service", s.Name, "err", err)
+			}
 		}
 	}
 	return nil
@@ -3568,23 +3751,26 @@ func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuil
 	// unreviewed code. The sibling promoter
 	// (promoteToFromServiceConsumers) has carried this guard since MED-6;
 	// this one was written without it.
-	defaultBranch := "main"
-	if pp, perr := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, b.Spec.Project); perr == nil &&
-		pp.Spec.DefaultRepo != nil && pp.Spec.DefaultRepo.DefaultBranch != "" {
-		defaultBranch = pp.Spec.DefaultRepo.DefaultBranch
-	}
+	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
 	if !promotionBranchMatches(b.Spec.Branch, "", defaultBranch) {
 		p.logger().Info("not repointing crons: build is not on the production branch",
 			"build", b.Name, "branch", b.Spec.Branch, "defaultBranch", defaultBranch)
 		return nil
 	}
-	crons, err := p.Svc.Kube.ListKusoCrons(ctx, ns)
+	return p.Svc.repointCrons(ctx, ns, b.Spec.Project, sourceShortName, *b.Spec.Image, p.logger())
+}
+
+// repointCrons moves every non-pinned KusoCron that inherits
+// project/sourceShortName's image to img, refreshing the env it inherits
+// from the production env. Shared by build promotion and rollback.
+func (s *Service) repointCrons(ctx context.Context, ns, project, sourceShortName string, img kube.KusoImage, log *slog.Logger) error {
+	crons, err := s.Kube.ListKusoCrons(ctx, ns)
 	if err != nil {
 		return fmt.Errorf("list crons: %w", err)
 	}
 	for i := range crons {
 		c := &crons[i]
-		if c.Spec.Project != b.Spec.Project {
+		if c.Spec.Project != project {
 			continue
 		}
 		// kind=command crons carry their OWN image and must not be
@@ -3610,33 +3796,33 @@ func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuil
 		if c.Spec.Service == "" {
 			continue
 		}
-		cronShort := strings.TrimPrefix(c.Spec.Service, b.Spec.Project+"-")
+		cronShort := strings.TrimPrefix(c.Spec.Service, project+"-")
 		if c.Spec.Service != sourceShortName && cronShort != sourceShortName {
 			continue
 		}
-		if c.Spec.Image != nil && c.Spec.Image.Tag == b.Spec.Image.Tag {
+		if c.Spec.Image != nil && c.Spec.Image.Tag == img.Tag {
 			continue
 		}
 		name := c.Name
 		// Refresh the env the cron inherits along with the image: vars
 		// set since the cron was created otherwise never reach it.
-		prod, perr := p.Svc.Kube.GetKusoEnvironment(ctx, ns, c.Spec.Service+"-production")
-		if perr != nil && !strings.HasPrefix(c.Spec.Service, b.Spec.Project+"-") {
-			prod, perr = p.Svc.Kube.GetKusoEnvironment(ctx, ns, b.Spec.Project+"-"+c.Spec.Service+"-production")
+		prod, perr := s.Kube.GetKusoEnvironment(ctx, ns, c.Spec.Service+"-production")
+		if perr != nil && !strings.HasPrefix(c.Spec.Service, project+"-") {
+			prod, perr = s.Kube.GetKusoEnvironment(ctx, ns, project+"-"+c.Spec.Service+"-production")
 		}
-		if _, uerr := p.Svc.Kube.UpdateKusoCronWithRetry(ctx, ns, name, func(live *kube.KusoCron) error {
-			img := *b.Spec.Image
-			live.Spec.Image = &img
+		if _, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, name, func(live *kube.KusoCron) error {
+			pinned := img
+			live.Spec.Image = &pinned
 			if perr == nil && prod != nil {
 				live.Spec.EnvFromSecrets = prod.Spec.EnvFromSecrets
 				live.Spec.Env = cronspkg.EnvForCron(prod.Spec.EnvVars)
 			}
 			return nil
 		}); uerr != nil {
-			p.logger().Warn("promote cron image failed", "cron", name, "err", uerr)
+			log.Warn("promote cron image failed", "cron", name, "err", uerr)
 			continue
 		}
-		p.logger().Info("cron image promoted", "cron", name, "service", sourceShortName, "tag", b.Spec.Image.Tag)
+		log.Info("cron image promoted", "cron", name, "service", sourceShortName, "tag", img.Tag)
 	}
 	return nil
 }

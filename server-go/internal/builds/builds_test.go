@@ -268,7 +268,7 @@ func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
 		seedService("alpha", "web"),
 	)
 
-	key := inFlightKey("alpha", "web", ref)
+	key := inFlightKey("alpha", "web", ref+"/"+buildIdentitySuffix("main", ""))
 	entry := &inFlightEntry{done: make(chan struct{})}
 	s.inFlight.Store(key, entry)
 
@@ -1550,6 +1550,27 @@ func TestCheckBuild_StuckNoJob(t *testing.T) {
 		}
 		if ph := buildPhase(got); ph == "failed" {
 			t.Fatalf("freshly dispatched build force-failed; phase=%q", ph)
+		}
+	})
+
+	// BLD-16: a release hook that outlives the Job's 1h TTL. The reaped
+	// Job made a still-migrating build look like one whose Job never
+	// appeared; it was force-failed and then promoted anyway.
+	t.Run("old build whose Job succeeded is not force-failed", func(t *testing.T) {
+		b := mkBuild("alpha-api-migrating", 120, "running")
+		b.Annotations[annJobSucceeded] = time.Now().Add(-110 * time.Minute).UTC().Format(time.RFC3339)
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		if err := p.checkBuild(context.Background(), "kuso", b); err != nil {
+			t.Fatalf("checkBuild: %v", err)
+		}
+		drainPromotions(t, p)
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-migrating")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph == "failed" {
+			t.Fatalf("build past its Job force-failed mid-promotion; phase=%q", ph)
 		}
 	})
 

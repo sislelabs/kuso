@@ -417,7 +417,8 @@ function DiscordSection({
       putDiscordConfig({
         botToken: botToken || undefined,
         kusoBotToken: kusoBotToken || undefined,
-        channelId: channelId !== status.channelId ? channelId : undefined,
+        // "" clears the stored channel; undefined keeps it.
+        channelId: channelId.trim() !== (status.channelId ?? "") ? channelId.trim() : undefined,
       }),
     onSuccess: () => {
       toast.success("Discord config saved — bot restarting");

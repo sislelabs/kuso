@@ -31,6 +31,33 @@ func TestProjectMatches(t *testing.T) {
 	}
 }
 
+// A cross-project uptime summary must not reach a channel scoped to one
+// client project; that channel gets the per-project twin instead.
+func TestChannelAdmitsAudience(t *testing.T) {
+	all := db.Notification{Enabled: true, Type: "discord"}
+	shopOnly := db.Notification{Enabled: true, Type: "discord", Pipelines: []string{"shop"}}
+	cluster := UptimeDownCluster([]UptimeTarget{{Project: "a", Service: "web"}, {Project: "b", Service: "web"}, {Project: "shop", Service: "web"}})
+	twin := UptimeDown("shop", []UptimeTarget{{Project: "shop", Service: "web"}})
+	twin.Audience = AudienceScoped
+	cases := []struct {
+		name string
+		n    db.Notification
+		e    Event
+		want bool
+	}{
+		{"cluster summary to unscoped channel", all, cluster, true},
+		{"cluster summary to scoped channel", shopOnly, cluster, false},
+		{"twin to scoped channel", shopOnly, twin, true},
+		{"twin to unscoped channel (already has the summary)", all, twin, false},
+		{"plain project-less event to scoped channel", shopOnly, NodeRecovered("n1", 0), true},
+	}
+	for _, c := range cases {
+		if got := channelAdmits(c.n, c.e); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestCatalogueMatchesAllEventTypes(t *testing.T) {
 	inAll := map[EventType]bool{}
 	for _, e := range AllEventTypes {
@@ -122,6 +149,36 @@ func TestEmit_EnqueuesOutboxWithoutRun(t *testing.T) {
 	disp.Emit(NodeRecovered("node-1", 0))
 	if n := len(outboxChannels(t, d)); n != 5 {
 		t.Fatalf("after node event: %d pending rows, want 5", n)
+	}
+}
+
+func TestEmit_UptimeStormSplitsByAudience(t *testing.T) {
+	d := openNotifyTestDB(t)
+	addChannel(t, d, "all", nil)
+	addChannel(t, d, "shop-only", []string{"shop"})
+	disp := New(d, quietLogger(), 0)
+
+	cluster := UptimeDownCluster([]UptimeTarget{{Project: "a", Service: "web"}, {Project: "b", Service: "web"}, {Project: "shop", Service: "web"}})
+	if err := disp.EmitDurable(cluster); err != nil {
+		t.Fatal(err)
+	}
+	if got := outboxChannels(t, d); len(got) != 1 || got[0] != "all" {
+		t.Fatalf("cluster summary rows = %v, want [all]", got)
+	}
+	twin := UptimeDown("shop", []UptimeTarget{{Project: "shop", Service: "web"}})
+	twin.Audience = AudienceScoped
+	if err := disp.EmitDurable(twin); err != nil {
+		t.Fatal(err)
+	}
+	if got := outboxChannels(t, d); len(got) != 2 || got[1] != "shop-only" {
+		t.Fatalf("after twin rows = %v, want [all shop-only]", got)
+	}
+	var feed int
+	if err := d.DB.QueryRow(`SELECT count(*) FROM "NotificationEvent" WHERE coalesce(project, '') = ''`).Scan(&feed); err != nil {
+		t.Fatal(err)
+	}
+	if feed != 0 {
+		t.Fatalf("cluster summary landed in the bell feed as a project-less row (%d)", feed)
 	}
 }
 

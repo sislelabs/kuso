@@ -372,7 +372,11 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 	if nodeName == "" {
 		nodeName = req.Hostname
 	}
-	installCmd := nodejoin.BuildInstallCommand(k3sURL, k3sToken, prefixed, tok.NodeName)
+	k3sVersion := ""
+	if h.Kube != nil {
+		k3sVersion = nodejoin.ServerK3sVersion(h.Kube.Clientset)
+	}
+	installCmd := nodejoin.BuildInstallCommand(k3sURL, k3sToken, prefixed, tok.NodeName, k3sVersion)
 
 	// Best-effort: stamp the joined node name on the row so the UI
 	// shows "joined as foo" instead of "consumed". Failures don't

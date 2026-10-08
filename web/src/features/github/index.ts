@@ -11,6 +11,7 @@ export {
 } from "./hooks";
 export {
   getGithubManifest,
+  getInstallURL,
   inspectRepo,
   getDeployHook,
   enableDeployHook,

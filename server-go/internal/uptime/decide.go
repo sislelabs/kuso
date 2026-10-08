@@ -12,6 +12,11 @@ const (
 	UpAfter       = 3
 	Cooldown      = 30 * time.Minute
 	StormProjects = 3
+	// MaxHold caps how long a crash-loop or rollout can hold an outage
+	// back. A surge pod stuck in CrashLoopBackOff can sit there for days
+	// while the old pod serves; without a cap it would silence a later,
+	// unrelated outage of the same env.
+	MaxHold = 15 * time.Minute
 )
 
 type Outcome int
@@ -30,6 +35,10 @@ const (
 	ActionNone Action = iota
 	ActionDown
 	ActionRecovered
+	// ActionClosed: an alerted outage ended because the target stopped
+	// being checked (stopped, asleep, opted out, deleted), not because
+	// it answered again.
+	ActionClosed
 )
 
 // Hold says why a failing target hasn't alerted.
@@ -37,6 +46,7 @@ const (
 	HoldConfirming = "confirming"
 	HoldCrashLoop  = "crash-looping"
 	HoldCooldown   = "cooldown"
+	HoldRollingOut = "rolling-out"
 )
 
 // State is the per-target state carried between ticks. Zero times mean
@@ -60,13 +70,27 @@ type Decision struct {
 	DownFor time.Duration
 }
 
-// Decide advances one target by one check. podsBad reports that the
-// target's pods are crash-looping or can't pull their image, which
-// pod.crashed already alerts on.
-func Decide(s State, o Outcome, podsBad bool, now time.Time) (State, Decision) {
+// Signals are the per-target facts that can hold a failing check back.
+type Signals struct {
+	// PodsBad: pods are crash-looping or can't pull their image, which
+	// pod.crashed already alerts on.
+	PodsBad bool
+	// RollingOut: a deploy, wake or first start is still bringing pods
+	// up, so failing checks are expected.
+	RollingOut bool
+}
+
+// Decide advances one target by one check.
+func Decide(s State, o Outcome, sig Signals, now time.Time) (State, Decision) {
 	switch o {
 	case OutcomePaused:
-		return State{LastAlertAt: s.LastAlertAt}, Decision{}
+		var d Decision
+		if s.Alerted {
+			// A page went out for this outage: close it out loud so the
+			// channel isn't left with an unanswered "down".
+			d = Decision{Action: ActionClosed, DownSince: s.DownSince, DownFor: now.Sub(s.DownSince)}
+		}
+		return State{LastAlertAt: s.LastAlertAt}, d
 
 	case OutcomeFail:
 		s.FailStreak++
@@ -79,10 +103,13 @@ func Decide(s State, o Outcome, podsBad bool, now time.Time) (State, Decision) {
 			s.Hold = ""
 			return s, Decision{}
 		}
+		holdable := now.Sub(s.DownSince) < MaxHold
 		switch {
 		case s.FailStreak < DownAfter:
 			s.Hold = HoldConfirming
-		case podsBad:
+		case sig.RollingOut && holdable:
+			s.Hold = HoldRollingOut
+		case sig.PodsBad && holdable:
 			s.Hold = HoldCrashLoop
 		case !s.LastAlertAt.IsZero() && now.Sub(s.LastAlertAt) < Cooldown:
 			s.Hold = HoldCooldown

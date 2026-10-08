@@ -43,6 +43,8 @@
 #   KUSO_REPO   / --repo        github source for raw manifests
 #   KUSO_ADMIN_PASSWORD         override the auto-generated admin password
 #   KUSO_SKIP_K3S=1             assume k3s + traefik already installed
+#   KUSO_K3S_VERSION            pin the k3s release (e.g. v1.35.4+k3s1);
+#                               default: the k3s stable channel
 #   KUSO_INSECURE_SECRETS=1     reuse the well-known dev secrets (kind/dev only)
 #   KUSO_SKIP_DNS_CHECK=1       skip the pre-flight DNS resolve
 #   KUSO_LE_ENV=staging|prod    which Let's Encrypt environment to use
@@ -124,6 +126,7 @@ Flags / env:
   --github-wizard (KUSO_GITHUB_WIZARD=1) interactive GitHub App setup
   KUSO_ADMIN_PASSWORD                    override the generated admin password
   KUSO_SKIP_K3S=1                        assume k3s + traefik already installed
+  KUSO_K3S_VERSION                       pin the k3s release (default: stable channel)
   KUSO_TCP_PROXY_PORTS                   traefik entrypoint pool for addon
                                          public-TCP endpoints (default
                                          30000-30019; 0 disables)
@@ -292,7 +295,9 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
     K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
   fi
-  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
+  # Node joins pin their agent to the server's version (nodejoin), so this
+  # choice carries to every node added later.
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
 else
   log "k3s already present; skipping install"
 fi
@@ -421,6 +426,14 @@ if ! command -v helm >/dev/null 2>&1; then
   install_helm
 fi
 
+# kusoenvironment's preStop sleep needs Kubernetes >= 1.30; the chart drops
+# the hook below that (each rollout then loses a request or two), so this
+# is a heads-up, not a failure.
+kube_minor="$(kubectl get --raw /version 2>/dev/null | sed -n 's/.*"minor": *"\([0-9]*\).*/\1/p' | head -n1)"
+if [[ -n "$kube_minor" ]] && (( kube_minor < 30 )); then
+  warn "Kubernetes 1.${kube_minor} is older than the 1.30 kuso is tested on; upgrade k3s when you can."
+fi
+
 # -------- 4. traefik --------
 # Public-TCP entrypoint pool: parse KUSO_TCP_PROXY_PORTS into per-port
 # --set flags. Entrypoints are STATIC traefik config, so they have to
@@ -453,6 +466,18 @@ elif [[ -n "$KUSO_TCP_PROXY_PORTS" && "$KUSO_TCP_PROXY_PORTS" != "0" ]]; then
   die "KUSO_TCP_PROXY_PORTS must look like 30000-30019 (or 0 to disable); got: ${KUSO_TCP_PROXY_PORTS}"
 fi
 
+# Traefik carries every public route (all projects, the kuso UI/API and
+# addon public-TCP), so it runs 2 replicas, spread across nodes when there
+# is more than one, behind a PDB: a node drain (pkg-update reboot) or one
+# crashed pod no longer takes down all ingress. On a single node both
+# replicas share it; the anti-affinity is only preferred.
+TRAEFIK_AFFINITY='{"podAntiAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"weight":100,"podAffinityTerm":{"topologyKey":"kubernetes.io/hostname","labelSelector":{"matchLabels":{"app.kubernetes.io/name":"traefik"}}}}]}}'
+TRAEFIK_HA_ARGS=(
+  --set deployment.replicas=2
+  --set podDisruptionBudget.enabled=true
+  --set podDisruptionBudget.minAvailable=1
+  --set-json "affinity=${TRAEFIK_AFFINITY}"
+)
 if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
   log "installing traefik${TCP_POOL_LO:+ (with public-TCP entrypoints tcp-${TCP_POOL_LO}..tcp-${TCP_POOL_HI})}"
   helm repo add traefik https://traefik.github.io/charts >/dev/null 2>&1 || true
@@ -463,6 +488,7 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
     --set ports.websecure.expose.default=true \
     --set service.type=LoadBalancer \
     --set providers.kubernetesIngress.allowExternalNameServices=true \
+    "${TRAEFIK_HA_ARGS[@]}" \
     "${TCP_POOL_ARGS[@]}" \
     --wait --timeout=180s >/dev/null
 else
@@ -480,6 +506,12 @@ else
     warn "  helm upgrade traefik traefik/traefik -n traefik --reuse-values \\"
     warn "    \$(for p in \$(seq ${TCP_POOL_LO} ${TCP_POOL_HI}); do printf -- '--set ports.tcp-%s.port=%s --set ports.tcp-%s.expose.default=true --set ports.tcp-%s.protocol=TCP ' \$p \$p \$p \$p; done)"
     warn "then re-run this installer to wire KUSO_TCP_PROXY_PORTS onto kuso-server."
+  fi
+  traefik_replicas="$(kubectl get deploy -n traefik traefik -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+  if [[ "$traefik_replicas" == "1" ]]; then
+    warn "traefik runs a single replica with no PDB: one pod crash or node drain takes down all ingress."
+    warn "To make it highly available (rolls traefik once):"
+    warn "  helm upgrade traefik traefik/traefik -n traefik --reuse-values --set deployment.replicas=2 --set podDisruptionBudget.enabled=true --set podDisruptionBudget.minAvailable=1 --set-json 'affinity=${TRAEFIK_AFFINITY}'"
   fi
 fi
 
@@ -813,6 +845,8 @@ EXISTING_ADMIN=""
 EXISTING_SESSION=""
 EXISTING_JWT=""
 EXISTING_METRICS_SCRAPE=""
+EXISTING_RELEASE_PUBKEY=""
+EXISTING_REQUIRE_SIGS=""
 # The admin password moved out of kuso-server-secrets into a dedicated
 # `kuso-admin-credentials` Secret mounted as a file. Read from there
 # first; fall back to the legacy kuso-server-secrets key for installs
@@ -827,6 +861,11 @@ if kubectl get secret -n kuso kuso-server-secrets >/dev/null 2>&1; then
   EXISTING_SESSION=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_SESSION_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_JWT=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_METRICS_SCRAPE=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_METRICS_SCRAPE_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  # Release-signing config is operator-chosen (a fork's own key, or an
+  # opt-out for unsigned self-built releases). A re-run that reset it to
+  # the defaults made every later self-update fail signature checks.
+  EXISTING_RELEASE_PUBKEY=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_RELEASE_PUBLIC_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  EXISTING_REQUIRE_SIGS=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_REQUIRE_SIGNATURES}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 fi
 
 if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
@@ -861,7 +900,7 @@ log "applying kuso-server-secrets"
 # Empty falls back to the key embedded in the server binary
 # (server-go/internal/updater/releasekey.pub) — set this only to
 # override for a rotation.
-KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
+KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-${EXISTING_RELEASE_PUBKEY}}"
 #
 # Signature verification is ON by default: releases are signed
 # (release.sh publishes release.json.sig, signed with the project key
@@ -870,7 +909,7 @@ KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
 # KUSO_REQUIRE_SIGNATURES=false only for self-built releases signed
 # with no key at all — with a key embedded, an unsigned or wrongly-
 # signed release.json is refused, which is the point.
-KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-true}"
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-${EXISTING_REQUIRE_SIGS:-true}}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \

@@ -104,6 +104,31 @@ func shortRef(ref string) string {
 	return strings.Trim(string(out), "-")
 }
 
+// suffixedRef joins a slugified base and a uniqueness suffix so the result
+// survives a second shortRef pass unchanged (ImageTag and buildCRName both
+// apply one). The base is truncated to leave room for the suffix inside
+// shortRef's 32-char cap; appending first and truncating after cut the
+// suffix off, so two builds of a long branch shared a CR name and a tag.
+func suffixedRef(base, suffix string) string {
+	const max = 32
+	b := shortRef(base)
+	if room := max - 1 - len(suffix); len(b) > room {
+		b = strings.TrimRight(b[:room], "-")
+	}
+	if b == "" {
+		return suffix
+	}
+	return b + "-" + suffix
+}
+
+// buildIdentitySuffix is a short stable digest of what distinguishes two
+// builds of the same commit: the branch whose envs the image is promoted
+// to, and the preview env whose vars are baked into it.
+func buildIdentitySuffix(branch, previewEnv string) string {
+	sum := sha256.Sum256([]byte(branch + "\x00" + previewEnv))
+	return "b" + hex.EncodeToString(sum[:])[:7]
+}
+
 // buildCacheDisabled reads the per-project escape hatch annotation.
 // Set kuso.sislelabs.com/build-cache-disabled=true on a KusoProject
 // to skip the persistent build cache for every service in that
@@ -219,7 +244,9 @@ func containerNames(cs []corev1.Container) []string {
 // plus . _ - / and the + sometimes used in release branches. That's
 // enough for every real branch/tag name while excluding whitespace,
 // quotes, backslashes, $, backticks, and shell metacharacters outright.
-var gitRefRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]{0,254}$`)
+// '@' is allowed (Dependabot branches carry "@types/..."); git only
+// forbids the "@{" sequence, which ValidateGitRef rejects separately.
+var gitRefRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+@-]{0,254}$`)
 
 // ValidateGitRef checks a branch/tag/ref name. Returns nil when safe.
 //
@@ -237,7 +264,7 @@ func ValidateGitRef(ref string) error {
 	}
 	if !gitRefRe.MatchString(ref) {
 		return fmt.Errorf("%q contains characters that are not allowed in a git ref "+
-			"(allowed: letters, digits, and . _ - / +)", ref)
+			"(allowed: letters, digits, and . _ - / + @)", ref)
 	}
 	switch {
 	case strings.Contains(ref, ".."):

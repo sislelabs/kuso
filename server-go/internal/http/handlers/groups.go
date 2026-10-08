@@ -143,7 +143,7 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	if !requireGrant(w, r, "", instanceRolePerms(req.InstanceRole)) {
+	if !requireGrant(w, r, "", instanceRolePerms(req.InstanceRole)) || !requireGrantOverGroup(w, r, h.DB, chi.URLParam(r, "id")) {
 		return
 	}
 	ctx, cancel := groupsCtx(r)
@@ -219,6 +219,9 @@ func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	userID := chi.URLParam(r, "userId")
 	groupID := chi.URLParam(r, "id")
+	if !requireGrantOverGroup(w, r, h.DB, groupID) {
+		return
+	}
 	if err := h.DB.RemoveUserFromGroup(ctx, userID, groupID); err != nil {
 		h.Logger.Error("remove group member", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
@@ -240,6 +243,9 @@ func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	groupID := chi.URLParam(r, "id")
+	if !requireGrantOverGroup(w, r, h.DB, groupID) {
+		return
+	}
 	// Bump every member's watermark BEFORE the cascade DELETE wipes
 	// the pivot rows — InvalidateUsersByGroup wouldn't find them
 	// after. Spare the acting admin so deleting a group they're in

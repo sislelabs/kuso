@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -725,13 +726,9 @@ func (h *BackupsHandler) SQLUpdateRow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	row, cols, err := queryOneRow(cctx, conn, q, args)
+	row, cols, err := updateExactlyOne(cctx, conn, q, args)
 	if err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	if row == nil {
-		writeErr(w, http.StatusNotFound, "no row matched the primary key")
+		writeRowWriteErr(w, err)
 		return
 	}
 	h.auditWrite(cctx, r, "update", req.Schema, req.Table, req.PK)
@@ -769,25 +766,110 @@ func (h *BackupsHandler) SQLDeleteRow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	res, err := conn.ExecContext(cctx, q, args...)
+	n, err := deleteExactlyOne(cctx, conn, q, args)
 	if err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		writeErr(w, http.StatusNotFound, "no row matched the primary key")
-		return
-	}
-	if n > 1 {
-		// Should be impossible (PK is unique) but never report success on a
-		// multi-row delete — surfaces a schema surprise instead of silently
-		// nuking rows.
-		writeErr(w, http.StatusConflict, "refusing: delete affected more than one row")
+		writeRowWriteErr(w, err)
 		return
 	}
 	h.auditWrite(cctx, r, "delete", req.Schema, req.Table, req.PK)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
+var (
+	errNoRowMatched = errors.New("no row matched the primary key")
+	// The PK is unique, so this means inheritance, a partitioned parent or
+	// some other schema surprise. Rolled back, never reported as success.
+	errMultiRowWrite = errors.New("refusing: the write matched more than one row")
+)
+
+func writeRowWriteErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errNoRowMatched):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, errMultiRowWrite):
+		writeErr(w, http.StatusConflict, err.Error())
+	default:
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+	}
+}
+
+// deleteExactlyOne runs a PK-targeted DELETE in a transaction and commits
+// only when it removed exactly one row.
+func deleteExactlyOne(ctx context.Context, conn *sql.DB, q string, args []any) (int64, error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case n == 0:
+		return 0, errNoRowMatched
+	case n > 1:
+		return n, fmt.Errorf("%w (%d rows)", errMultiRowWrite, n)
+	}
+	return n, tx.Commit()
+}
+
+// updateExactlyOne runs a PK-targeted UPDATE … RETURNING * in a transaction
+// and commits only when it changed exactly one row, which it returns.
+func updateExactlyOne(ctx context.Context, conn *sql.DB, q string, args []any) (row []string, cols []string, err error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	cols, err = rows.Columns()
+	if err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	n := 0
+	for rows.Next() {
+		n++
+		if n > 1 {
+			continue
+		}
+		raw := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range raw {
+			ptrs[i] = &raw[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		row = make([]string, len(cols))
+		for i, v := range raw {
+			row[i] = stringifyCell(v)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+	switch {
+	case n == 0:
+		return nil, cols, errNoRowMatched
+	case n > 1:
+		return nil, cols, fmt.Errorf("%w (%d rows)", errMultiRowWrite, n)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return row, cols, nil
 }
 
 // queryOneRow runs a RETURNING * statement and returns the single row as

@@ -93,8 +93,10 @@ auth/permission layers, so they see the same truth:
 - **The `kuso-mcp` server** — a focused tool set: `list_projects`,
   `describe_project`, `status`, `logs`, `plan`/`apply`, `build`,
   `build_status`, `list_builds`, `rollback`, `sql_tables`, `sql_query`,
-  `set_env`, `set_secret`, `run`, `manage_addon`, `add_service`,
-  `bootstrap_project`, `update_project`. Every mutating tool requires
+  `get_env`, `set_env`, `set_secret`, `run`, `manage_addon`,
+  `subscribe_addon`, `add_service`, `bootstrap_project`, `update_project`.
+  `set_env` stores values the way `kuso env set` does, and a new addon
+  usually reaches a service only after `subscribe_addon`. Every mutating tool requires
   `confirm=true`, and `--read-only` refuses all of them — worth running
   when you only mean to investigate. Auth: `KUSO_URL`/`KUSO_TOKEN` env
   vars win when set; otherwise `kuso-mcp` reuses the CLI's
@@ -581,7 +583,8 @@ kuso db rows <project> <addon> --table users --limit 20      # browse rows
 All `kuso db` commands are **admin-gated**. `kuso db sql` is read-oriented. For
 an interactive session use `kuso db connect <p> <addon>` (`--exec` launches
 psql / redis-cli / mongosh; clickhouse gets a built-in HTTP shell that reads SQL
-on stdin — handy for migrations); for a raw local socket use
+on stdin, handy for migrations; mysql has no built-in client, so use the printed
+DSN); for a raw local socket use
 `kuso db port-forward`. Row writes are intentionally NOT in the CLI — do those
 from a migration or the web data-grid.
 
@@ -804,7 +807,7 @@ kuso status <project>                           # rollup: services, URLs, replic
 kuso get services <project> [-o json]           # service specs
 kuso get addons <project> [-o json]             # addons + connection-secret names
 kuso service pods <project> <service> [--env <e>]   # pods backing an env
-kuso service errors <project> <service> [--since 6h] # aggregated error groups
+kuso service errors <project> <service> [--since 6h] [--env <e>] # aggregated error groups
 kuso service drift <project> <service>          # spec vs live-pod drift report
 kuso health [fix <resource>]                    # cluster-wide reconcile health + one-shot remediation
 kuso usage                                      # node/project resource + cost rollup
@@ -825,7 +828,7 @@ kuso build why <project> <service> [id]         # classified failure cause + sug
 kuso build trigger <project> <service>          # manual rebuild of the default branch
 #   --dry-run prints what would build and creates NOTHING; --compile-only runs a
 #   real build on the shared builder but skips push + promotion.
-kuso redeploy <project> <service>               # alias; --branch <name> or --ref <sha> for a non-tracked ref
+kuso redeploy <project> <service>               # alias; --branch <name>, or --ref <full 40-char sha> for one commit
 kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes)
 kuso build retry-release <project> <service> <id>  # re-run a RELEASE FAILED build's hook; promotes on success
 kuso build cancel <project> <service> <id>      # kill an in-flight build

@@ -96,10 +96,15 @@ func (p *Prober) Probe(ctx context.Context, target string) Result {
 	return r
 }
 
-// Reachable reports whether target answered at all, whatever the status.
-func (p *Prober) Reachable(ctx context.Context, target string) bool {
-	r := p.Probe(ctx, target)
-	return r.StatusCode != 0
+// Dialable reports whether a TCP connection to addr (host:port) opens,
+// which proves DNS, the pod network and kube-proxy all work.
+func Dialable(ctx context.Context, addr string, timeout time.Duration) bool {
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (p *Prober) classify(err error) string {

@@ -192,7 +192,7 @@ func Classify(logLines []string, sig Signal) Classification {
 	// each build-specific detector across ALL lines first: the most
 	// actionable cause wins regardless of where it appears.
 	if !sig.Runtime {
-		if c, ok := matchDetectors(logLines, true); ok {
+		if c, ok := matchDetectors(logLines, true, false); ok {
 			return c
 		}
 	}
@@ -202,6 +202,11 @@ func Classify(logLines []string, sig Signal) Classification {
 	// down, so we preserve most-recent-wins here.
 	if rc, found := matchRuntimeLines(logLines, true); found {
 		return rc
+	}
+	if !sig.Runtime {
+		if c, ok := matchDetectors(logLines, true, true); ok {
+			return c
+		}
 	}
 	return Classification{
 		Kind:    KindGeneric,
@@ -253,14 +258,15 @@ func ClassifyRelease(logLines []string) Classification {
 }
 
 // matchDetectors tries every detector whose buildTime flag equals
-// `buildTime`, in their declared (specific-first) order, against ALL
+// `buildTime` and whose buildFallback flag equals `fallback`, in their
+// declared (specific-first) order, against ALL
 // log lines — so detector priority dominates line position. For the
 // winning detector it picks the MOST-RECENT matching line (reverse
 // scan) so a repeated failure surfaces its freshest occurrence.
 // Returns ok=false when no matching detector fired.
-func matchDetectors(logLines []string, buildTime bool) (Classification, bool) {
+func matchDetectors(logLines []string, buildTime, fallback bool) (Classification, bool) {
 	for _, d := range logDetectors {
-		if d.buildTime != buildTime {
+		if d.buildTime != buildTime || d.buildFallback != fallback {
 			continue
 		}
 		for i := len(logLines) - 1; i >= 0; i-- {
@@ -349,7 +355,10 @@ type logDetector struct {
 	// earlier. Runtime detectors leave this false and use the
 	// most-recent-line reverse walk instead.
 	buildTime bool
-	summarize func(line string) string
+	// buildFallback marks a buildTime detector that only runs after the
+	// runtime detectors found nothing either.
+	buildFallback bool
+	summarize     func(line string) string
 	// remediate is an optional builder for the actionable fix. It
 	// receives the matched line AND the full tail (for cross-line
 	// context). Returns nil when no concrete fix can be named for this
@@ -483,7 +492,7 @@ var logDetectors = []logDetector{
 		kind:      KindBuildOOM,
 		tab:       TabBuild,
 		buildTime: true,
-		re:        regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|out of memory.{0,20}(?:build|compil)`),
+		re:        regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|exit code: 137\b|out of memory.{0,20}(?:build|compil)`),
 		summarize: func(line string) string {
 			return "The build ran out of memory. Cap the toolchain's heap in your Dockerfile (NODE_OPTIONS)."
 		},
@@ -599,7 +608,20 @@ var logDetectors = []logDetector{
 		kind:      KindBuildCommandFailed,
 		tab:       TabLogs,
 		buildTime: true,
-		re:        regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed|failed to solve: process|did not complete successfully: exit code`),
+		re:        regexp.MustCompile(`(?i)build failed|command failed with exit code|error building image|nixpacks build failed|buildpack failed`),
+		summarize: func(line string) string {
+			return "Build command exited non-zero. " + briefLine(line)
+		},
+	},
+	// The buildkit footer ends EVERY failed buildkit build, so it is a
+	// fallback: it only applies when no build or runtime detector named a
+	// more specific cause (a missing env var printed during `next build`).
+	{
+		kind:          KindBuildCommandFailed,
+		tab:           TabLogs,
+		buildTime:     true,
+		buildFallback: true,
+		re:            regexp.MustCompile(`(?i)failed to solve: process|did not complete successfully: exit code`),
 		summarize: func(line string) string {
 			return "Build command exited non-zero. " + briefLine(line)
 		},

@@ -352,7 +352,8 @@ func (k *KusoClient) GetEnvironment(project, env string) (*resty.Response, error
 // on a service. "production" and "pr-*" are reserved server-side. The
 // new env inherits the service's envFromSecrets, addons, and port; the
 // caller can override the host via req.HostOverride to point at a
-// different DNS name than the auto-generated "<env>.<service>.<base>".
+// different DNS name than the auto-generated "<service>-<env>.<base>"
+// (see projects.AddEnvironment for the other variants).
 func (k *KusoClient) AddEnvironment(project, service string, req CreateEnvRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs")

@@ -30,10 +30,12 @@ export function useToggleAddonSubscription(project: string) {
         : vars.current.subscribed.filter((a) => a !== vars.addon);
       await setSubscribedAddons(project, vars.service, next);
     },
-    onSettled: (_d, _e, vars) => {
-      qc.invalidateQueries({ queryKey: subscribedAddonsQueryKey(project, vars.service) });
-      // Subscribing rewrites the env's envFromSecrets: the canvas edges
-      // and env rows come from these two queries.
+    onSettled: () => {
+      // Subscribing rewrites the env's envFromSecrets, which drives the
+      // canvas edges, env rows and the service Variables tab (its rows are
+      // derived server-side from envFromSecrets). The services prefix also
+      // covers the subscribed-addons query.
+      qc.invalidateQueries({ queryKey: ["projects", project, "services"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       invalidateProjectDescribe(qc, project);
     },

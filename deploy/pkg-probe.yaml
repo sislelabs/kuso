@@ -30,7 +30,8 @@ metadata:
 # token, which works identically on every node). kube RBAC can't scope a
 # verb to "the node I run on", so grant nodes get/patch cluster-wide —
 # the minimum the API allows — but the script only ever targets
-# $NODE_NAME (its own, via the downward API).
+# $NODE_NAME (its own, via the downward API). list is for the apply Job's
+# Ready-node count, which decides whether to drain before a reboot.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -38,7 +39,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [nodes]
-    verbs: [get, patch]
+    verbs: [get, list, patch]
   # The apply Job drains the node before a reboot on multi-node clusters:
   # list pods on the node, then evict each non-DaemonSet pod so workloads
   # reschedule onto healthy nodes before the host reboots. list (cluster

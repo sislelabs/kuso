@@ -49,6 +49,15 @@ func (s *Service) RetryRelease(ctx context.Context, project, service, buildName 
 	if b.Spec.Image == nil || b.Spec.Image.Tag == "" {
 		return "", fmt.Errorf("%w: build %s has no image", ErrInvalid, buildName)
 	}
+	// Another build of this service may be running its own release hook;
+	// two migrations against one database must not interleave.
+	active, err := s.findActiveForServiceLive(ctx, ns, project, b.Spec.Service)
+	if err != nil {
+		return "", fmt.Errorf("check active builds: %w", err)
+	}
+	if active != "" && active != buildName {
+		return "", fmt.Errorf("%w: build %s of this service is still in progress; retry the release after it finishes", ErrConflict, active)
+	}
 	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{
 			annRetryRelease:   time.Now().UTC().Format(time.RFC3339),
