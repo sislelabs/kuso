@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.12] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): publish DIRECT_URL for external addons ([f8664bb](https://github.com/sislelabs/kuso/commit/f8664bbde07edf23e0e7c54a73c5475284bdd3a6))
+
 ## [0.25.11] — 2026-09-02
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,22 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.29.0] — 2026-10-08
+
+### Other
+- Sweep orphaned registry repos and keep audit rows without a user ([8dbaa93](https://github.com/sislelabs/kuso/commit/8dbaa930a98cc86d6da7c2eafc74a89a93657634))
+- Clear notifications without a confirmation step ([6890bee](https://github.com/sislelabs/kuso/commit/6890bee2ecbc5e624576de4cbbdfc8a84410c850))
+- Run the sandbox on port 80 and restart pods on a new image ([4177cf2](https://github.com/sislelabs/kuso/commit/4177cf27d2313c26ef59acb7dea41dea98baddcb))
+- Print http links for hosts served without TLS ([e75980e](https://github.com/sislelabs/kuso/commit/e75980e85847ff514bb9578ebc24e3b2249ffa5a))
+- Deploy GitHub repos without a GitHub App ([c2dc92d](https://github.com/sislelabs/kuso/commit/c2dc92d02aaa7b0dd6b085211c76aa3bb3879495))
+- Allow the GitHub App manifest form through the CSP ([c1ac4f3](https://github.com/sislelabs/kuso/commit/c1ac4f3b1c7ec7fdb2f0b96f54ec165166810849))
+
+### ✨ Features
+- Add a Docker sandbox for end-to-end testing ([8a98b41](https://github.com/sislelabs/kuso/commit/8a98b412a33bf3b8026531007983adad787b9c18))
+
+### 🐛 Bug Fixes
+- Fix findings from the 2026-10-07 platform review ([0b1098b](https://github.com/sislelabs/kuso/commit/0b1098b5ee17b06e3ec3f82073f9b619d26b61d4))
+
 ## [0.28.2] — 2026-10-03
 
 ### Other
@@ -416,11 +432,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): subscribing an addon now mounts its conn secret ([44a0bf6](https://github.com/sislelabs/kuso/commit/44a0bf6ecd513e4eff2b3adc2f0c1a1fa9931d55))
-
-## [0.25.12] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): publish DIRECT_URL for external addons ([f8664bb](https://github.com/sislelabs/kuso/commit/f8664bbde07edf23e0e7c54a73c5475284bdd3a6))
 
 
 ---

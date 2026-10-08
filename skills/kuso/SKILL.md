@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.28.2**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.29.0**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
