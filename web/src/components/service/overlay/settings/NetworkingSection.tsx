@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useIngressTargets } from "@/features/cluster";
 import { Section, Row, type SectionProps } from "./_primitives";
+import { hostScheme } from "@/lib/host-scheme";
 
 // NetworkingSection — the single source of truth for "where does
 // this service answer HTTP". Three blocks, in order:
@@ -133,11 +134,11 @@ export function NetworkingSection({
           hint="set by project baseDomain · change in Project Settings to rename for every service"
           control={
             <a
-              href={`https://${autoHost}`}
+              href={`${hostScheme(true, autoHost)}://${autoHost}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex max-w-[420px] items-center gap-1.5 truncate rounded-md bg-[var(--bg-tertiary)] px-2 py-1 font-mono text-[12px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
-              title={`Open https://${autoHost}`}
+              title={`Open ${hostScheme(true, autoHost)}://${autoHost}`}
             >
               <Globe className="h-3 w-3 shrink-0" />
               <span className="truncate">{autoHost}</span>

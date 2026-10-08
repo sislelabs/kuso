@@ -27,6 +27,7 @@ import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, M
 import { relativeTime, stripRepoCredentials } from "@/lib/format";
 import { isProductionGroup } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
+import { hostScheme } from "@/lib/host-scheme";
 
 // ProjectsPage is the landing dashboard listing every project. Each
 // row is a thin card showing the name, repo, base domain, and a small
@@ -781,7 +782,7 @@ function ProjectsGrid({
                       href={
                         p.spec.baseDomain
                           ? `https://${p.spec.baseDomain}`
-                          : publicURL ?? (domain ? `https://${domain}` : undefined)
+                          : publicURL ?? (domain ? `${hostScheme(true, domain)}://${domain}` : undefined)
                       }
                     />
                   )}

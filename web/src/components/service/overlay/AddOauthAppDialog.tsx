@@ -16,6 +16,7 @@ import { Copy, ExternalLink, Github } from "lucide-react";
 import { setServiceEnv, getServiceEnv } from "@/features/services/api";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
+import { hostScheme } from "@/lib/host-scheme";
 
 // "Sign in with GitHub" provisioning helper for a deployed service.
 //
@@ -64,8 +65,8 @@ export function AddOauthAppDialog({
   const [clientSecret, setClientSecret] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const homepage = `https://${serviceHost}`;
-  const callback = `https://${serviceHost}${DEFAULT_CALLBACK_PATH}`;
+  const homepage = `${hostScheme(true, serviceHost)}://${serviceHost}`;
+  const callback = `${homepage}${DEFAULT_CALLBACK_PATH}`;
 
   // Prefill URL — the page reads these query params at load and
   // populates the inputs. Description is short and identifying.

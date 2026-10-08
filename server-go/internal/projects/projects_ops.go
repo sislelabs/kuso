@@ -1009,11 +1009,7 @@ func populateDerivedStatus(e *kube.KusoEnvironment) {
 		return
 	}
 	if _, ok := e.Status["url"]; !ok && e.Spec.Host != "" {
-		scheme := "https"
-		if !e.Spec.TLSEnabled {
-			scheme = "http"
-		}
-		e.Status["url"] = scheme + "://" + e.Spec.Host
+		e.Status["url"] = e.Spec.SchemeFor(e.Spec.Host) + "://" + e.Spec.Host
 	}
 }
 

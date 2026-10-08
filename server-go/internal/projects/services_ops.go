@@ -2103,7 +2103,7 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 			publicTLS = services[i].Spec.Domains[0].TLS
 		} else if env := prodEnvByService[fqn]; env != nil && env.Spec.Host != "" {
 			publicHost = env.Spec.Host
-			publicTLS = env.Spec.TLSEnabled
+			publicTLS = env.Spec.SchemeFor(env.Spec.Host) == "https"
 		}
 		ref := ServiceRef{
 			FQN:        fqn,

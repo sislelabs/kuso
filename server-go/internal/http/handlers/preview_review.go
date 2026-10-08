@@ -149,10 +149,7 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 			if env.Spec.Host == "" {
 				continue
 			}
-			scheme := "https"
-			if !env.Spec.TLSEnabled {
-				scheme = "http"
-			}
+			scheme := env.Spec.SchemeFor(env.Spec.Host)
 			short := env.Spec.Service
 			if i := strings.Index(short, "-"); i >= 0 && strings.HasPrefix(short, review.Project+"-") {
 				short = short[len(review.Project)+1:]

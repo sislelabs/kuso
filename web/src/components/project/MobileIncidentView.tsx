@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
+import { hostScheme } from "@/lib/host-scheme";
 
 interface Props {
   project: string;
@@ -211,9 +212,9 @@ function MobileServiceCard({
   const url = internal
     ? undefined
     : envCustomHost
-      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      ? `${hostScheme(envTLS, envCustomHost)}://${envCustomHost}`
       : envHost
-        ? `${envTLS ? "https" : "http"}://${envHost}`
+        ? `${hostScheme(envTLS, envHost)}://${envHost}`
         : customDomainEntry?.host
           ? `${(customDomainEntry.tls ?? true) ? "https" : "http"}://${customDomainEntry.host}`
           : env?.status?.url;

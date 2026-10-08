@@ -14,6 +14,7 @@ import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
+import { hostScheme } from "@/lib/host-scheme";
 
 export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
@@ -181,9 +182,9 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const url = internal
     ? undefined
     : envCustomHost
-      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      ? `${hostScheme(envTLS, envCustomHost)}://${envCustomHost}`
       : envHost
-        ? `${envTLS ? "https" : "http"}://${envHost}`
+        ? `${hostScheme(envTLS, envHost)}://${envHost}`
         : customDomain
           ? `${customTLS ? "https" : "http"}://${customDomain}`
           : (data.env?.status?.url as string | undefined);

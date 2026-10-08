@@ -63,6 +63,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
+import { hostScheme } from "@/lib/host-scheme";
 
 // OverlayDirtyContext lets every panel inside ServiceOverlay register
 // whether its form has unsaved edits AND (optionally) the save +
@@ -548,9 +549,9 @@ export function ServiceOverlay({
   const url = svcInternal
     ? undefined
     : envCustomHost
-      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      ? `${hostScheme(envTLS, envCustomHost)}://${envCustomHost}`
       : envHost
-        ? `${envTLS ? "https" : "http"}://${envHost}`
+        ? `${hostScheme(envTLS, envHost)}://${envHost}`
         : customDomain
           ? `${customTLS ? "https" : "http"}://${customDomain}`
           : (env?.status?.url as string | undefined);
