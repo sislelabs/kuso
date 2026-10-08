@@ -696,15 +696,8 @@ function NotificationsButton() {
   };
 
   const badge = unreadCount > 0;
-  const [confirmClear, setConfirmClear] = useState(false);
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setConfirmClear(false);
-        onOpenChange(next);
-      }}
-    >
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
         aria-label={badge ? `Notifications, ${unreadCount} unread` : "Notifications"}
         className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
@@ -725,40 +718,18 @@ function NotificationsButton() {
                 admin viewers get a read-only feed with no mutation
                 affordances — the feed is project-scoped and read
                 state isn't tracked per-user yet. */}
-            {isAdmin && (feed.data ?? []).length > 0 && !confirmClear && (
+            {isAdmin && (feed.data ?? []).length > 0 && (
               <button
                 type="button"
-                onClick={() => setConfirmClear(true)}
+                onClick={() => clearAll.mutate()}
                 disabled={clearAll.isPending}
-                title="Clear all notifications"
+                title="Clear all notifications (for everyone)"
                 aria-label="Clear all notifications"
                 className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
               >
                 <Trash2 className="h-3 w-3" aria-hidden />
                 clear
               </button>
-            )}
-            {isAdmin && confirmClear && (
-              <span className="inline-flex items-center gap-1.5 font-mono text-[10px]">
-                <span className="text-[var(--text-secondary)]">clear for everyone?</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmClear(false);
-                    clearAll.mutate();
-                  }}
-                  className="text-red-400 hover:underline"
-                >
-                  yes
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmClear(false)}
-                  className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                >
-                  no
-                </button>
-              </span>
             )}
             {isAdmin && (
               <Link
