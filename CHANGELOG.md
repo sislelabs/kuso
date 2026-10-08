@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.31.0] — 2026-10-08
+
+### Other
+- Stop one app's load from taking down the shared ingress ([90f4a0a](https://github.com/sislelabs/kuso/commit/90f4a0a13e485ffc0d5f5ec3bfb585c015a8d6f7))
+
 ## [0.30.0] — 2026-10-08
 
 ### Other
@@ -420,18 +425,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): wait-for-addons is soft for app pods, strict for the release Job ([ff74149](https://github.com/sislelabs/kuso/commit/ff74149e1016b004f89614c942f67ead2ebc7efc))
-
-## [0.25.14] — 2026-09-02
-
-### ✨ Features
-- Feat(cli): addon pods, and --set on resync-external ([e464a60](https://github.com/sislelabs/kuso/commit/e464a6068d6412ba9b74182af20c75b11bb64431))
-- Feat(env): make per-environment overrides visible ([e71fb45](https://github.com/sislelabs/kuso/commit/e71fb450c3a5d97be4046f00e026ed8ac51da56e))
-
-### 🐛 Bug Fixes
-- Fix(env): wait for addons before starting the app container ([7f41fc9](https://github.com/sislelabs/kuso/commit/7f41fc91cd05bd8ff9c3617802b4e6bd88c7b960))
-- Fix(shared-secret): unset no longer crashes subscribed services ([afbf0a1](https://github.com/sislelabs/kuso/commit/afbf0a19c72cc124352dcc865843f3405ba48efd))
-- Fix(addon): clean up and rotate external credentials ([effc343](https://github.com/sislelabs/kuso/commit/effc343767ac3af7ce7a05b388d7b306a22f9a55))
-- Fix(backup): ship pg_dump 18 so external Postgres backups run ([d94368b](https://github.com/sislelabs/kuso/commit/d94368b88d0fd510a0c2d8deb7162bd4527b80db))
 
 
 ---
