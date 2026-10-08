@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/placement"
@@ -416,16 +418,14 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			}
 			repoPath = req.Repo.Path
 		}
-		// GitLab token supplied on create → store it in a per-service Secret.
+		// Clone token supplied on create (GitLab token, GitHub PAT, …) →
+		// store it in a per-service Secret.
 		if req.Repo.Token != "" {
-			ref := &kube.KusoRepoRef{URL: repoURL, Provider: repoProvider}
-			if kube.RepoProviderForRef(ref) == kube.ProviderGitLab {
-				secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
-				if serr != nil {
-					return nil, serr
-				}
-				repoTokenSecret = secName
+			secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
+			if serr != nil {
+				return nil, serr
 			}
+			repoTokenSecret = secName
 		}
 	}
 	if repoURL == "" && proj.Spec.DefaultRepo != nil {
@@ -1527,6 +1527,11 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 		if derr := s.deleteRepoTokenSecret(ctx, ns, project, service); derr != nil && firstErr == nil {
 			firstErr = derr
 		}
+		// Same for the deploy hook: its URL must not start builds of a
+		// different service that later takes this name.
+		if derr := s.deleteDeployHookSecret(ctx, ns, project, service); derr != nil && firstErr == nil {
+			firstErr = derr
+		}
 		// A renamed service still references the token under its old name.
 		if r := svcCR.Spec.Repo; r != nil && r.TokenSecret != "" && r.TokenSecret != repoTokenSecretName(project, service) &&
 			strings.HasPrefix(r.TokenSecret, project+"-") && strings.HasSuffix(r.TokenSecret, "-repo-token") && s.Kube.Clientset != nil {
@@ -2594,20 +2599,17 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	var changed changedFields
 	var oldEffBranch, newEffBranch string
 	var oldDomains []kube.KusoDomain
-	// A supplied GitLab repo token is stored ONCE here, before the retry
+	// A supplied repo clone token is stored ONCE here, before the retry
 	// loop — storing it inside the closure would re-write the Secret on
 	// every 409 retry. newRepoTokenSecret carries the resulting Secret name
 	// into the closure; empty when no token was supplied.
 	newRepoTokenSecret := ""
 	if req.Repo != nil && req.Repo.URL != "" && req.Repo.Token != "" {
-		refForProvider := &kube.KusoRepoRef{URL: req.Repo.URL, Provider: req.Repo.Provider}
-		if kube.RepoProviderForRef(refForProvider) == kube.ProviderGitLab {
-			secName, serr := s.storeRepoToken(ctx, project, service, req.Repo.Token)
-			if serr != nil {
-				return nil, serr
-			}
-			newRepoTokenSecret = secName
+		secName, serr := s.storeRepoToken(ctx, project, service, req.Repo.Token)
+		if serr != nil {
+			return nil, serr
 		}
+		newRepoTokenSecret = secName
 	}
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		if req.DisplayName != nil {
@@ -2747,9 +2749,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 					Path:          req.Repo.Path,
 					Provider:      req.Repo.Provider,
 				}
-				// Preserve an existing GitLab TokenSecret across a repo edit
-				// that doesn't supply a new token (e.g. changing the branch).
-				if svc.Spec.Repo != nil {
+				// Preserve an existing TokenSecret across a repo edit that
+				// doesn't supply a new token (e.g. changing the branch) — but
+				// only on the same host: git offers the credential to whoever
+				// answers 401, so a token must not follow the repo elsewhere.
+				if svc.Spec.Repo != nil && sameRepoHost(svc.Spec.Repo.URL, effURL) {
 					ref.TokenSecret = svc.Spec.Repo.TokenSecret
 				}
 				// A newly-supplied token was stored before the retry loop;
@@ -3331,8 +3335,19 @@ func isPublicFQDN(host string) bool {
 	return true
 }
 
-// repoTokenSecretName is the per-service Secret that holds a GitLab clone
-// token: <project>-<service>-repo-token.
+// sameRepoHost reports whether two repo URLs point at the same git host.
+// Unparseable or scp-style (git@host:path) URLs only match when identical.
+func sameRepoHost(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ua.Host == "" || ub.Host == "" {
+		return a == b
+	}
+	return strings.EqualFold(ua.Host, ub.Host)
+}
+
+// repoTokenSecretName is the per-service Secret that holds a repo clone
+// token (GitLab token, GitHub PAT): <project>-<service>-repo-token.
 func repoTokenSecretName(project, service string) string {
 	return project + "-" + service + "-repo-token"
 }
@@ -3348,8 +3363,19 @@ func (s *Service) deleteRepoTokenSecret(ctx context.Context, ns, project, servic
 	return nil
 }
 
+func (s *Service) deleteDeployHookSecret(ctx context.Context, ns, project, service string) error {
+	if s.Kube.Clientset == nil {
+		return nil
+	}
+	name := builds.DeployHookSecretName(project, service)
+	if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete deploy hook secret %s: %w", name, err)
+	}
+	return nil
+}
+
 // storeRepoToken upserts the per-service repo-token Secret with the given
-// GitLab clone token (under kube.RepoTokenSecretKey) and returns the Secret
+// clone token (under kube.RepoTokenSecretKey) and returns the Secret
 // name. The token is stored ONLY here — never on the CR, never returned on
 // read.
 func (s *Service) storeRepoToken(ctx context.Context, project, service, token string) (string, error) {

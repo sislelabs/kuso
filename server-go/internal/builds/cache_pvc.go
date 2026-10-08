@@ -26,13 +26,14 @@ import (
 // CreateContainerConfigError.
 func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName string, installationID int64, owner, repo string, repoRef *kube.KusoRepoRef) error {
 	token := ""
-	// GitLab: copy the service's stored token (deploy / project-access /
-	// personal) from its Secret into the <build>-token Secret. No minting —
-	// the token is long-lived and user-supplied. GitHub is handled below.
-	if kube.RepoProviderForRef(repoRef) == kube.ProviderGitLab && repoRef != nil && repoRef.TokenSecret != "" {
+	// Stored token (GitLab deploy/project/personal token, or a GitHub PAT
+	// on an install with no App): copy it from the service's Secret into
+	// the <build>-token Secret. No minting — it is long-lived and
+	// user-supplied. A GitHub App installation, when there is one, wins below.
+	if repoRef != nil && repoRef.TokenSecret != "" {
 		t, err := s.readRepoToken(ctx, ns, repoRef.TokenSecret)
 		if err != nil {
-			return fmt.Errorf("read gitlab repo token: %w", err)
+			return fmt.Errorf("read repo token: %w", err)
 		}
 		token = t
 	}

@@ -31,6 +31,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/drains"
 	"kuso/server/internal/github"
+	"kuso/server/internal/gitremote"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/httperr"
 	"kuso/server/internal/incidents"
@@ -265,6 +266,12 @@ func NewRouter(d Deps) http.Handler {
 	// bearer-protected inside mountAuthenticatedRoutes.
 	(&httphandlers.MarketplaceHandler{Logger: d.Logger}).MountPublic(r)
 
+	// Deploy hooks: the token in the path is the credential, so repo
+	// webhooks and CI can trigger a build without a JWT.
+	if d.Builds != nil {
+		(&httphandlers.DeployHookHandler{Hooks: d.Builds, Logger: d.Logger}).MountPublic(r)
+	}
+
 	// OAuth flows are public (no JWT yet) and end with a redirect
 	// carrying the JWT in a cookie. Only mounted when the corresponding
 	// env vars are configured.
@@ -498,7 +505,10 @@ func mountAuthenticatedRoutes(
 		if d.Builds != nil {
 			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			buildH.Mount(r)
+			(&httphandlers.DeployHookHandler{Hooks: d.Builds, Svc: d.Builds, DB: d.DB, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 		}
+		// Repo inspection by URL (branches, runtime) — works with no GitHub App.
+		(&httphandlers.ReposHandler{Remote: &gitremote.Inspector{}, Logger: d.Logger}).Mount(r)
 		if d.Logs != nil {
 			logsH := &httphandlers.LogsHandler{Svc: d.Logs, DB: d.DB, Logger: d.Logger}
 			logsH.Mount(r)

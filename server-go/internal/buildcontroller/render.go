@@ -289,7 +289,7 @@ func renderCloneContainer(buildName string, b *kube.KusoBuild) corev1.Container 
 		ref = b.Spec.Ref
 	}
 	// Private = a token is needed to clone: a GitHub App installation OR a
-	// GitLab repo with a stored token secret.
+	// stored token secret.
 	provider := kube.RepoProviderForRef(repoRef)
 	private := buildNeedsCloneToken(b)
 
@@ -357,7 +357,7 @@ git remote set-url origin "$(printf '%s' ` + shellQuote(repoURL) + ` | sed -E 's
 }
 
 // buildNeedsCloneToken reports whether a build must clone with a token: a
-// GitHub App installation OR a GitLab repo with a stored token secret.
+// GitHub App installation OR a stored token secret (any provider).
 func buildNeedsCloneToken(b *kube.KusoBuild) bool {
 	if b == nil {
 		return false
@@ -365,8 +365,7 @@ func buildNeedsCloneToken(b *kube.KusoBuild) bool {
 	if b.Spec.GithubInstallationID > 0 {
 		return true
 	}
-	return kube.RepoProviderForRef(b.Spec.Repo) == kube.ProviderGitLab &&
-		b.Spec.Repo != nil && b.Spec.Repo.TokenSecret != ""
+	return b.Spec.Repo != nil && b.Spec.Repo.TokenSecret != ""
 }
 
 // gitTokenEnvVar mounts the clone token from the <build>-token Secret as

@@ -123,13 +123,9 @@ func (c *Client) DetectRuntime(ctx context.Context, installationID int64, owner,
 	if err != nil {
 		return nil, err
 	}
-	has := func(name string) bool {
-		for _, e := range entries {
-			if e.Path == name {
-				return true
-			}
-		}
-		return false
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Path)
 	}
 	prefixed := func(rel string) string {
 		if pathPrefix == "" {
@@ -137,34 +133,50 @@ func (c *Client) DetectRuntime(ctx context.Context, installationID int64, owner,
 		}
 		return strings.TrimRight(pathPrefix, "/") + "/" + rel
 	}
+	return DetectFromFiles(names, func(rel string) string {
+		content, _ := c.ReadFile(ctx, installationID, owner, repo, branch, prefixed(rel))
+		return content
+	}), nil
+}
 
+// DetectFromFiles applies the auto-detect rules to a directory listing.
+// names are the entries of the service's directory; read returns a file's
+// contents ("" when unreadable). Shared by the GitHub App path and the
+// no-App path (internal/gitremote).
+func DetectFromFiles(names []string, read func(rel string) string) *DetectedRuntime {
+	has := func(name string) bool {
+		for _, n := range names {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
 	if has("Dockerfile") {
-		df, _ := c.ReadFile(ctx, installationID, owner, repo, branch, prefixed("Dockerfile"))
-		port := parseExposePort(df)
+		port := parseExposePort(read("Dockerfile"))
 		if port == 0 {
 			port = 8080
 		}
-		return &DetectedRuntime{Runtime: "dockerfile", Port: port, Reason: "Dockerfile detected"}, nil
+		return &DetectedRuntime{Runtime: "dockerfile", Port: port, Reason: "Dockerfile detected"}
 	}
 	staticOnly := has("index.html") && !has("package.json") && !has("go.mod") && !has("Cargo.toml") &&
 		!has("requirements.txt") && !has("pyproject.toml")
 	if staticOnly {
-		return &DetectedRuntime{Runtime: "static", Port: 80, Reason: "index.html only"}, nil
+		return &DetectedRuntime{Runtime: "static", Port: 80, Reason: "index.html only"}
 	}
 	if has("package.json") {
-		pkg, _ := c.ReadFile(ctx, installationID, owner, repo, branch, prefixed("package.json"))
-		return &DetectedRuntime{Runtime: "nixpacks", Port: guessNodePort(pkg), Reason: "package.json detected"}, nil
+		return &DetectedRuntime{Runtime: "nixpacks", Port: guessNodePort(read("package.json")), Reason: "package.json detected"}
 	}
 	if has("go.mod") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "go.mod detected"}, nil
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "go.mod detected"}
 	}
 	if has("Cargo.toml") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Cargo.toml detected"}, nil
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Cargo.toml detected"}
 	}
 	if has("requirements.txt") || has("pyproject.toml") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Python project detected"}, nil
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Python project detected"}
 	}
-	return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "fallback"}, nil
+	return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "fallback"}
 }
 
 var exposeRE = regexp.MustCompile(`(?im)^\s*EXPOSE\s+(\d+)`)

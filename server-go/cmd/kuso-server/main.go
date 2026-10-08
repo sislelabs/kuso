@@ -37,6 +37,7 @@ import (
 	"kuso/server/internal/drains"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
+	"kuso/server/internal/gitremote"
 	"kuso/server/internal/health"
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/imagerelease"
@@ -586,6 +587,8 @@ func main() {
 		}
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
+		// Branch heads for repos no GitHub App installation covers.
+		buildSvc.Remote = &gitremote.Inspector{}
 		buildSvc.Images = builds.NewInClusterImageDeleter(builds.RegistryHost)
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
 		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)

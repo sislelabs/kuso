@@ -112,11 +112,11 @@ type ServiceRepoSpec struct {
 	// DefaultBranch pins the branch this service builds and deploys.
 	// Empty = track the project's default branch.
 	DefaultBranch string `json:"defaultBranch,omitempty"`
-	// Token is a GitLab clone credential (deploy / project-access /
-	// personal token) supplied on write. WRITE-ONLY: the server stores it
-	// in a per-service Secret and NEVER returns it on read. Empty leaves
-	// any existing stored token untouched. Not used for GitHub (which
-	// authenticates via the App installation).
+	// Token is a repo clone credential supplied on write: a GitLab
+	// deploy / project-access / personal token, or a GitHub personal
+	// access token for a repo no GitHub App installation covers.
+	// WRITE-ONLY: the server stores it in a per-service Secret and NEVER
+	// returns it on read. Empty leaves any existing stored token untouched.
 	Token string `json:"token,omitempty"`
 }
 

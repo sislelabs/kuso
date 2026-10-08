@@ -136,3 +136,47 @@ export async function getGithubManifest(org?: string): Promise<ManifestResponse>
     "/api/github/manifest" + (org ? `?org=${encodeURIComponent(org)}` : ""),
   );
 }
+
+// InspectRepoResponse is POST /api/repos/inspect: what a repo URL looks
+// like with no GitHub App involved. runtime is null when it couldn't be
+// detected (non-GitHub host, rate limit); runtimeNote says why.
+export interface InspectRepoResponse {
+  defaultBranch: string;
+  branches: string[];
+  runtime: DetectRuntimeResponse | null;
+  runtimeNote?: string;
+}
+
+export async function inspectRepo(body: {
+  url: string;
+  token?: string;
+  branch?: string;
+  path?: string;
+}): Promise<InspectRepoResponse> {
+  return api("/api/repos/inspect", { method: "POST", body });
+}
+
+export interface DeployHook {
+  enabled: boolean;
+  url?: string;
+}
+
+function deployHookPath(project: string, service: string): string {
+  return `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/deploy-hook`;
+}
+
+export async function getDeployHook(project: string, service: string): Promise<DeployHook> {
+  return api(deployHookPath(project, service));
+}
+
+export async function enableDeployHook(
+  project: string,
+  service: string,
+  rotate = false,
+): Promise<DeployHook> {
+  return api(deployHookPath(project, service), { method: "POST", body: { rotate } });
+}
+
+export async function disableDeployHook(project: string, service: string): Promise<DeployHook> {
+  return api(deployHookPath(project, service), { method: "DELETE" });
+}

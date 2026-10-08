@@ -247,11 +247,12 @@ type PatchRepoRequest struct {
 	// gitlab.com / *gitlab* → gitlab). Set it for self-hosted hosts the
 	// inference can't recognise.
 	Provider string `json:"provider,omitempty"`
-	// Token is a GitLab clone credential (deploy / project-access /
-	// personal token) supplied on write. WRITE-ONLY: the server stores it
-	// in a per-service Secret and NEVER returns it on read, so it never
-	// round-trips through a fetch-then-patch. Empty leaves any existing
-	// stored token untouched. Ignored for GitHub (App-authenticated).
+	// Token is a repo clone credential supplied on write: a GitLab
+	// deploy / project-access / personal token, or a GitHub personal
+	// access token for a repo no GitHub App installation covers.
+	// WRITE-ONLY: the server stores it in a per-service Secret and NEVER
+	// returns it on read, so it never round-trips through a
+	// fetch-then-patch. Empty leaves any existing stored token untouched.
 	Token string `json:"token,omitempty"`
 }
 
@@ -557,4 +558,15 @@ func (k *KusoClient) ImportProject(tarball []byte, policy string) (*resty.Respon
 		path += "?policy=" + policy
 	}
 	return k.client.Post(path)
+}
+
+// EnableDeployHook enables (or, with rotate, replaces) a service's deploy
+// hook and returns its URL.
+func (k *KusoClient) EnableDeployHook(project, service string, rotate bool) (*resty.Response, error) {
+	k.client.SetBody(map[string]bool{"rotate": rotate})
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/deploy-hook")
+}
+
+func (k *KusoClient) DeleteDeployHook(project, service string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/deploy-hook")
 }

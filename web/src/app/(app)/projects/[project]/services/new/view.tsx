@@ -29,6 +29,8 @@ import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { slugifyServiceName } from "@/features/services/slug";
+import { RepoUrlForm } from "@/components/service/RepoUrlForm";
+import { inspectRepo } from "@/features/github";
 
 // A repo pick, normalised across the admin (installations) and
 // non-admin (flat /api/github/repos) sources.
@@ -36,6 +38,16 @@ interface PickableRepo {
   fullName: string;
   defaultBranch: string;
   private?: boolean;
+}
+
+// PickedRepo is the repo the service builds from. byUrl is set when the
+// user pasted a URL instead of picking through the GitHub App: there is
+// no installation (installationId 0) and the clone is anonymous or uses
+// the access token.
+interface PickedRepo {
+  installationId: number;
+  repo: PickableRepo;
+  byUrl?: { url: string; token: string; branches: string[] };
 }
 
 type DetectState = "idle" | "detecting" | "done" | "failed";
@@ -112,7 +124,7 @@ export function AddServiceView() {
   }, [imageRepo, registryCreds.data]);
   const pullSecret = pullSecretChoice ?? autoPullSecret;
 
-  const [picked, setPicked] = useState<{ installationId: number; repo: PickableRepo } | null>(null);
+  const [picked, setPicked] = useState<PickedRepo | null>(null);
   // Display name is the free-form label the user types (e.g. "Todo
   // API"). It's stored as-is on the CR and shown in the canvas /
   // overlay header. The URL slug is auto-derived via slugifyServiceName
@@ -224,7 +236,7 @@ export function AddServiceView() {
     if (!picked) return;
     // Repo name is already kebab-case in 99% of cases, so it doubles
     // as a sensible display-name default — slug derives back to itself.
-    const repoName = picked.repo.fullName.split("/")[1] ?? "service";
+    const repoName = picked.repo.fullName.split("/").pop() || "service";
     // Repo names may carry "_" or "." which the server's display-name
     // rule rejects; swap them so an untouched prefill always submits.
     if (!name) setName(repoName.replace(/[^A-Za-z0-9 -]+/g, "-").slice(0, 60));
@@ -240,8 +252,38 @@ export function AddServiceView() {
     const seq = ++detectSeq.current;
     setDetectState("detecting");
     setReason(null);
+    const byUrl = picked.byUrl;
     const timer = setTimeout(
       () => {
+        if (byUrl) {
+          // No App: the server reads the repo by URL. Addon scanning is
+          // an App-only feature, so there are no suggestions here.
+          setSuggestions([]);
+          inspectRepo({
+            url: byUrl.url,
+            token: byUrl.token || undefined,
+            branch: picked.repo.defaultBranch,
+            path: path.trim() || undefined,
+          })
+            .then((res) => {
+              if (seq !== detectSeq.current) return;
+              if (!res.runtime) {
+                setReason(res.runtimeNote ?? null);
+                setDetectState("failed");
+                return;
+              }
+              setRuntime(res.runtime.runtime);
+              clearFieldError("runtime");
+              if (res.runtime.port) setPort(String(res.runtime.port));
+              setReason(detectedLabel(res.runtime));
+              setDetectState("done");
+            })
+            .catch(() => {
+              if (seq !== detectSeq.current) return;
+              setDetectState("failed");
+            });
+          return;
+        }
         const target = {
           installationId: picked.installationId,
           owner: owner ?? "",
@@ -311,7 +353,7 @@ export function AddServiceView() {
       if (tooLong) errs.name = tooLong;
     }
     if (source === "repo" && !picked) {
-      errs.repo = "Pick a repository to continue.";
+      errs.repo = "Pick a repository or paste its URL to continue.";
     }
     if (source === "image" && !imageRepo.trim()) {
       errs.image = "Image repository is required — e.g. ghcr.io/owner/app.";
@@ -359,9 +401,10 @@ export function AddServiceView() {
           name: slug,
           displayName: name.trim(),
           repo: {
-            url: `https://github.com/${picked!.repo.fullName}`,
+            url: picked!.byUrl?.url ?? `https://github.com/${picked!.repo.fullName}`,
             defaultBranch: picked!.repo.defaultBranch,
             ...(path.trim() ? { path: path.trim() } : {}),
+            ...(picked!.byUrl?.token ? { token: picked!.byUrl.token } : {}),
           },
           runtime: effectiveRuntime,
           ...(effectiveRuntime === "dockerfile" && dockerfile.trim()
@@ -375,7 +418,7 @@ export function AddServiceView() {
           // above so we never submit a worker without it.
           ...(effectiveRuntime === "worker" ? { fromService } : {}),
           ...(port && effectiveRuntime !== "worker" ? { port: parseInt(port, 10) } : {}),
-          github: { installationId: picked!.installationId },
+          ...(picked!.byUrl ? {} : { github: { installationId: picked!.installationId } }),
         };
       }
       // Land on the new service's Deployments tab so the first build is
@@ -671,13 +714,60 @@ export function AddServiceView() {
           <h2 className="text-sm font-semibold tracking-tight">Repository</h2>
         </div>
         <div className="px-4 py-3">
-          {!sessionReady || installURL.isPending || reposQuery.isLoading ? (
+          {picked ? (
+            <div className="flex items-center justify-between rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 py-2 text-[12px]">
+              <span className="flex items-center gap-2 truncate">
+                <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+                <span className="font-mono truncate">{picked.repo.fullName}</span>
+                {picked.byUrl && picked.byUrl.branches.length > 1 ? (
+                  <select
+                    aria-label="Branch"
+                    value={picked.repo.defaultBranch}
+                    onChange={(e) =>
+                      setPicked({ ...picked, repo: { ...picked.repo, defaultBranch: e.target.value } })
+                    }
+                    className="h-6 rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 font-mono text-[10px]"
+                  >
+                    {picked.byUrl.branches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    {picked.repo.defaultBranch}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  // Invalidate any in-flight detection so a late
+                  // response can't stamp the cleared form.
+                  detectSeq.current++;
+                  setPicked(null);
+                  setName("");
+                  setPath("");
+                  setReason(null);
+                  setRuntime("");
+                  setDetectState("idle");
+                  setSuggestions([]);
+                  setAddonPicks(new Set());
+                }}
+                className="font-mono text-[10px] text-[var(--text-secondary)] underline"
+              >
+                change
+              </button>
+            </div>
+          ) : !sessionReady || installURL.isPending || reposQuery.isLoading ? (
             <Skeleton className="h-24 w-full" />
           ) : !installURL.data?.configured ? (
             isAdmin ? (
               <div className="space-y-2">
                 <p className="text-sm text-[var(--text-secondary)]">
-                  GitHub App not configured on this kuso instance.
+                  No GitHub App is connected. Connect one to browse your repositories, deploy on
+                  every push and get PR previews, or paste a repository URL below.
                 </p>
                 <Link
                   href="/settings/github"
@@ -689,8 +779,8 @@ export function AddServiceView() {
               </div>
             ) : (
               <p className="text-sm text-[var(--text-secondary)]">
-                GitHub isn&apos;t set up yet. Ask an admin to connect the GitHub App, or use a
-                pre-built image.
+                No GitHub App is connected. Paste a repository URL below, or ask an admin to
+                connect the App to browse repositories.
               </p>
             )
           ) : reposForbidden ? (
@@ -724,7 +814,7 @@ export function AddServiceView() {
                 Install kuso GitHub App
               </a>
             </div>
-          ) : !picked ? (
+          ) : (
             <div className="space-y-2">
               {fieldErrors.repo && (
                 <p role="alert" className="text-[11px] text-[var(--error)]">
@@ -773,34 +863,22 @@ export function AddServiceView() {
                 )}
               </ul>
             </div>
-          ) : (
-            <div className="flex items-center justify-between rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 py-2 text-[12px]">
-              <span className="flex items-center gap-2 truncate">
-                <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
-                <span className="font-mono truncate">{picked.repo.fullName}</span>
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                  {picked.repo.defaultBranch}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  // Invalidate any in-flight detection so a late
-                  // response can't stamp the cleared form.
-                  detectSeq.current++;
-                  setPicked(null);
-                  setName("");
-                  setPath("");
-                  setReason(null);
-                  setRuntime("");
-                  setDetectState("idle");
-                  setSuggestions([]);
-                  setAddonPicks(new Set());
+          )}
+          {!picked && sessionReady && (
+            <div className="mt-3 space-y-2 border-t border-[var(--border-subtle)] pt-3">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                or paste a repository URL
+              </p>
+              <RepoUrlForm
+                onPicked={(r) => {
+                  setPicked({
+                    installationId: 0,
+                    repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
+                    byUrl: { url: r.url, token: r.token, branches: r.branches },
+                  });
+                  clearFieldError("repo");
                 }}
-                className="font-mono text-[10px] text-[var(--text-secondary)] underline"
-              >
-                change
-              </button>
+              />
             </div>
           )}
         </div>

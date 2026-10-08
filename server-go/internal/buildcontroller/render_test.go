@@ -1020,3 +1020,31 @@ func TestRenderJobGitHubStillUsesXAccessToken(t *testing.T) {
 		t.Errorf("GitHub clone should keep x-access-token auth:\n%s", clone.Args[0])
 	}
 }
+
+// A GitHub repo with a stored token and no App installation clones with
+// that token (how private GitHub repos build without the App).
+func TestRenderJobGitHubStoredTokenWithoutInstallation(t *testing.T) {
+	b := baseBuild()
+	b.Spec.GithubInstallationID = 0
+	b.Spec.Repo = &kube.KusoRepoRef{
+		URL:         "https://github.com/acme/private.git",
+		TokenSecret: "alpha-api-repo-token",
+	}
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	clone := findInit(job.Spec.Template.Spec, "clone")
+	if clone == nil {
+		t.Fatal("clone missing")
+	}
+	hasToken := false
+	for i := range clone.Env {
+		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
+			hasToken = true
+		}
+	}
+	if !hasToken {
+		t.Fatal("stored-token GitHub clone must mount KUSO_GIT_TOKEN")
+	}
+	if !strings.Contains(clone.Args[0], "x-access-token:${KUSO_GIT_TOKEN}") {
+		t.Errorf("GitHub token clone should use x-access-token auth:\n%s", clone.Args[0])
+	}
+}

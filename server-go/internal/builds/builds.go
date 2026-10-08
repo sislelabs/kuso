@@ -221,6 +221,10 @@ type Service struct {
 	// through to the project/service spec InstallationID (which may
 	// also be 0 for public repos).
 	InstallResolver InstallationResolver
+	// Remote resolves a branch head straight from the git remote, for
+	// repos no GitHub App installation covers (no App configured, a
+	// non-GitHub host, a public repo the App isn't installed on).
+	Remote RemoteHeadResolver
 
 	// RepoAccess preflights "can this installation actually read the
 	// repo?" before we spin up the kaniko Job. Optional — nil skips
@@ -691,6 +695,12 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 	return out, nil
 }
 
+// RemoteHeadResolver reads a branch's head commit from a git remote.
+// token is the service's stored clone token, "" for public repos.
+type RemoteHeadResolver interface {
+	HeadSHA(ctx context.Context, repoURL, branch, token string) (string, error)
+}
+
 // branchResolver finds the optional BranchSHAResolver on the wired
 // GitHub collaborators.
 func (s *Service) branchResolver() BranchSHAResolver {
@@ -706,16 +716,11 @@ func (s *Service) branchResolver() BranchSHAResolver {
 // resolveBranchHead returns the HEAD SHA of branch, or "" when it can't
 // be resolved (the caller then synthesizes a ref). Every "" is logged
 // with its reason — a synthetic ref silently hides which commit shipped.
-func (s *Service) resolveBranchHead(ctx context.Context, installationID int64, repoURL, branch, project, service string) string {
+func (s *Service) resolveBranchHead(ctx context.Context, installationID int64, repoURL, branch, project, service, ns, tokenSecret string) string {
 	log := slog.Default().With("project", project, "service", service, "branch", branch, "repo", repoURL)
 	owner, repo := splitGithubURL(repoURL)
-	if owner == "" {
-		log.Info("build: non-github repo, using synthetic ref")
-		return ""
-	}
-	if installationID == 0 {
-		log.Info("build: no GitHub App installation can access repo, using synthetic ref")
-		return ""
+	if owner == "" || installationID == 0 {
+		return s.resolveBranchHeadFromRemote(ctx, log, repoURL, branch, ns, tokenSecret)
 	}
 	r := s.branchResolver()
 	if r == nil {
@@ -731,6 +736,32 @@ func (s *Service) resolveBranchHead(ctx context.Context, installationID int64, r
 	}
 	if !shaRE.MatchString(sha) {
 		log.Warn("build: branch HEAD resolution returned no SHA, using synthetic ref", "installation", installationID, "got", sha)
+		return ""
+	}
+	return sha
+}
+
+// resolveBranchHeadFromRemote is the no-installation path: ask the git
+// remote itself, with the service's stored token when it has one.
+func (s *Service) resolveBranchHeadFromRemote(ctx context.Context, log *slog.Logger, repoURL, branch, ns, tokenSecret string) string {
+	if s.Remote == nil {
+		log.Info("build: no GitHub App installation and no remote resolver, using synthetic ref")
+		return ""
+	}
+	token := ""
+	if tokenSecret != "" {
+		t, err := s.readRepoToken(ctx, ns, tokenSecret)
+		if err != nil {
+			log.Warn("build: could not read the repo token for branch resolution, using synthetic ref", "err", err)
+			return ""
+		}
+		token = t
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	sha, err := s.Remote.HeadSHA(rctx, repoURL, branch, token)
+	if err != nil || !shaRE.MatchString(sha) {
+		log.Warn("build: branch HEAD resolution from the remote failed, using synthetic ref", "err", err)
 		return ""
 	}
 	return sha
@@ -886,7 +917,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		return nil, false, fmt.Errorf("%w: ref %q is not a full 40-character commit SHA (use branch to build a branch head)", ErrInvalid, req.Ref)
 	}
 	if manual {
-		sha = s.resolveBranchHead(ctx, installationID, repoURL, branch, project, service)
+		sha = s.resolveBranchHead(ctx, installationID, repoURL, branch, project, service, ns, repoTokenSecretOf(svcCR))
 	}
 	syntheticRef := !shaRE.MatchString(sha)
 	if syntheticRef {

@@ -384,8 +384,15 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	} else if serviceAddFromService != "" {
 		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
+	if req.Repo != nil {
+		token, terr := resolveRepoToken(cmd)
+		if terr != nil {
+			return terr
+		}
+		req.Repo.Token = token
+	}
 	if req.Runtime == "" && req.Repo != nil {
-		det, derr := detectServiceRuntime(args[0], req.Repo.URL, req.Repo.DefaultBranch, req.Repo.Path)
+		det, derr := detectServiceRuntime(args[0], req.Repo.URL, req.Repo.DefaultBranch, req.Repo.Path, req.Repo.Token)
 		if derr != nil {
 			req.Runtime = "nixpacks"
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: couldn't detect runtime (%v); using nixpacks — pass --runtime to override\n", derr)
@@ -481,7 +488,7 @@ func findGithubRepo(repos []githubRepoEntry, fullName string) (githubRepoEntry, 
 // detectServiceRuntime asks the server to detect runtime + port the same
 // way the web add-service flow does. repoURL/branch fall back to the
 // project's default repo when empty.
-func detectServiceRuntime(project, repoURL, branch, path string) (*detectedRuntime, error) {
+func detectServiceRuntime(project, repoURL, branch, path, token string) (*detectedRuntime, error) {
 	if strings.TrimSpace(repoURL) == "" || branch == "" {
 		resp, err := api.GetProject(project)
 		if err := checkRespErr(resp, err); err != nil {
@@ -505,6 +512,51 @@ func detectServiceRuntime(project, repoURL, branch, path string) (*detectedRunti
 			}
 		}
 	}
+	det, appErr := detectRuntimeViaApp(repoURL, branch, path)
+	if appErr == nil {
+		return det, nil
+	}
+	// No GitHub App, or it can't see this repo: ask the server to read the
+	// repo directly (public, or private with --repo-token).
+	if det, err := detectRuntimeByURL(repoURL, branch, path, token); err == nil {
+		return det, nil
+	} else if strings.TrimSpace(token) != "" || githubFullName(repoURL) == "" {
+		return nil, err
+	}
+	return nil, appErr
+}
+
+// detectRuntimeByURL uses POST /api/repos/inspect, which needs no GitHub App.
+func detectRuntimeByURL(repoURL, branch, path, token string) (*detectedRuntime, error) {
+	if strings.TrimSpace(repoURL) == "" {
+		return nil, fmt.Errorf("no repo URL to inspect")
+	}
+	body, _ := json.Marshal(map[string]string{
+		"url": repoURL, "branch": branch, "path": normalizeRepoSubpath(path), "token": token,
+	})
+	resp, err := api.RawPost("/api/repos/inspect", body, "application/json")
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Runtime     *detectedRuntime `json:"runtime"`
+		RuntimeNote string           `json:"runtimeNote"`
+	}
+	if err := json.Unmarshal(resp.Body(), &out); err != nil {
+		return nil, fmt.Errorf("unexpected repo inspect response")
+	}
+	if out.Runtime == nil || out.Runtime.Runtime == "" {
+		if out.RuntimeNote != "" {
+			return nil, fmt.Errorf("%s", out.RuntimeNote)
+		}
+		return nil, fmt.Errorf("the server could not detect a runtime")
+	}
+	return out.Runtime, nil
+}
+
+// detectRuntimeViaApp is the GitHub App path: the same detection the web
+// repo picker uses.
+func detectRuntimeViaApp(repoURL, branch, path string) (*detectedRuntime, error) {
 	full := githubFullName(repoURL)
 	if full == "" {
 		return nil, fmt.Errorf("not a GitHub repo")
@@ -688,35 +740,52 @@ var (
 	serviceSetProvider          string   // "github" | "gitlab" | "" (infer from URL)
 	serviceSetGitlabToken       string   // GitLab clone credential (write-only)
 	serviceSetGitlabTokenStdin  bool     // read the GitLab token from stdin instead of the flag
+	repoToken                   string   // repo clone token: GitLab token or GitHub PAT (write-only); shared by add + set
+	repoTokenStdin              bool     // read the repo token from stdin instead of the flag
 	serviceSetCapAdd            []string // Linux capabilities to add back (e.g. SETUID,SETGID)
 	serviceSetAllowPrivEsc      string   // "on" | "off" | "" (leave alone)
 )
 
-// resolveGitlabToken returns the GitLab clone token the user supplied,
-// preferring an explicit flag, then stdin, then the KUSO_GITLAB_TOKEN
-// env var. It returns "" (no token) when none of those are present —
-// the caller then leaves any server-stored token untouched. The value
-// is never printed anywhere so it can't leak into logs or output.
-func resolveGitlabToken(cmd *cobra.Command) (string, error) {
-	if cmd.Flags().Changed("gitlab-token-stdin") && serviceSetGitlabTokenStdin {
-		if cmd.Flags().Changed("gitlab-token") {
-			return "", fmt.Errorf("--gitlab-token and --gitlab-token-stdin are mutually exclusive")
+// addRepoTokenFlags registers --repo-token / --repo-token-stdin, read by
+// resolveRepoToken.
+func addRepoTokenFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&repoToken, "repo-token", "", "access token for a private repo (GitHub personal access token, GitLab deploy/project/personal token); stored server-side as a Secret, never returned. Or set KUSO_REPO_TOKEN")
+	cmd.Flags().BoolVar(&repoTokenStdin, "repo-token-stdin", false, "read the repo token from stdin instead of --repo-token (keeps it out of shell history)")
+}
+
+// resolveRepoToken returns the repo clone token the user supplied (a
+// GitLab token or a GitHub personal access token), preferring an explicit
+// flag, then stdin, then the KUSO_REPO_TOKEN / KUSO_GITLAB_TOKEN env vars.
+// It returns "" when none is present — the caller then leaves any
+// server-stored token untouched. The value is never printed. The
+// --gitlab-token* flags are the older spelling of --repo-token*.
+func resolveRepoToken(cmd *cobra.Command) (string, error) {
+	changed := func(name string) bool { return cmd.Flags().Lookup(name) != nil && cmd.Flags().Changed(name) }
+	fromStdin := (changed("repo-token-stdin") && repoTokenStdin) || (changed("gitlab-token-stdin") && serviceSetGitlabTokenStdin)
+	if fromStdin {
+		if changed("repo-token") || changed("gitlab-token") {
+			return "", fmt.Errorf("--repo-token and --repo-token-stdin are mutually exclusive")
 		}
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			return "", fmt.Errorf("read GitLab token from stdin: %w", err)
+			return "", fmt.Errorf("read repo token from stdin: %w", err)
 		}
 		tok := strings.TrimSpace(string(data))
 		if tok == "" {
-			return "", fmt.Errorf("--gitlab-token-stdin set but stdin was empty")
+			return "", fmt.Errorf("--repo-token-stdin set but stdin was empty")
 		}
 		return tok, nil
 	}
-	if cmd.Flags().Changed("gitlab-token") {
+	if changed("repo-token") {
+		return strings.TrimSpace(repoToken), nil
+	}
+	if changed("gitlab-token") {
 		return strings.TrimSpace(serviceSetGitlabToken), nil
 	}
-	if env := strings.TrimSpace(os.Getenv("KUSO_GITLAB_TOKEN")); env != "" {
-		return env, nil
+	for _, name := range []string{"KUSO_REPO_TOKEN", "KUSO_GITLAB_TOKEN"} {
+		if env := strings.TrimSpace(os.Getenv(name)); env != "" {
+			return env, nil
+		}
 	}
 	return "", nil
 }
@@ -747,20 +816,24 @@ Settings → Source / Networking flow.
   --image-pull-secret ghcr.io   # pull a runtime=image service with a 'kuso registry login' credential ('' clears)
   --repo https://gitlab.com/acme/api.git  # re-point the service at a new source repo
   --provider gitlab             # VCS provider (optional; inferred from the URL)
-  --gitlab-token <token>        # GitLab clone credential (stored as a Secret, never returned)
+  --repo-token <token>          # private-repo access token (stored as a Secret, never returned)
   --size medium                 # apply a pod-size preset's requests/limits (none clears)
   --memory-limit 1536Mi         # set one quantity, keeping the rest
   --memory-request 256Mi --cpu-request 100m
 
-The GitLab clone token is write-only: the server stores it in a per-service
-Secret and never returns it. Supply it via --gitlab-token, on stdin with
---gitlab-token-stdin, or the KUSO_GITLAB_TOKEN env var. It is never echoed.`,
+--repo-token is how a private repo builds with no GitHub App: a GitHub
+personal access token (fine-grained, Contents: read) or a GitLab deploy /
+project-access / personal token. The server stores it in a per-service
+Secret and never returns it. Supply it via --repo-token, on stdin with
+--repo-token-stdin, or the KUSO_REPO_TOKEN env var. It is never echoed.
+--gitlab-token / --gitlab-token-stdin / KUSO_GITLAB_TOKEN still work.`,
 	Example: `  kuso project service set hui kuso-demo-todo-web --display-name "Todo Web"
   kuso project service set hui kuso-demo-todo-api --port 8080
   kuso project service set hui worker --internal=on
   kuso project service set hui kuso-demo-todo-web --domains mudo.sislelabs.com
-  kuso project service set hui api --repo https://gitlab.com/acme/api.git --gitlab-token glpat-xxxx
-  printf %s "$TOKEN" | kuso project service set hui api --provider gitlab --gitlab-token-stdin`,
+  kuso project service set hui api --repo https://gitlab.com/acme/api.git --repo-token glpat-xxxx
+  kuso project service set hui api --repo https://github.com/acme/private.git --repo-token github_pat_xxxx
+  printf %s "$TOKEN" | kuso project service set hui api --provider gitlab --repo-token-stdin`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -854,7 +927,9 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 			cmd.Flags().Changed("repo") ||
 			cmd.Flags().Changed("provider") ||
 			cmd.Flags().Changed("gitlab-token") ||
-			cmd.Flags().Changed("gitlab-token-stdin")
+			cmd.Flags().Changed("gitlab-token-stdin") ||
+			cmd.Flags().Changed("repo-token") ||
+			cmd.Flags().Changed("repo-token-stdin")
 		if repoTouched {
 			// Server-side semantic: PatchRepoRequest with empty URL
 			// CLEARS the repo block entirely (intentional, for the
@@ -894,7 +969,7 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 				rp.URL = strings.TrimSpace(serviceSetRepo)
 			}
 			if rp.URL == "" {
-				return fmt.Errorf("--path/--branch/--provider/--gitlab-token require a repo URL on the service; pass --repo <url> or use `kuso service add` to set one")
+				return fmt.Errorf("--path/--branch/--provider/--repo-token require a repo URL on the service; pass --repo <url> or use `kuso service add` to set one")
 			}
 			if cmd.Flags().Changed("path") {
 				rp.Path = serviceSetPath
@@ -909,10 +984,10 @@ Secret and never returns it. Supply it via --gitlab-token, on stdin with
 				}
 				rp.Provider = p
 			}
-			// GitLab clone token — write-only. Read it from --gitlab-token,
-			// --gitlab-token-stdin, or the KUSO_GITLAB_TOKEN env var (in that
+			// Repo clone token — write-only. Read it from --repo-token,
+			// --repo-token-stdin, or the KUSO_REPO_TOKEN env var (in that
 			// order of precedence). We never echo it back.
-			token, err := resolveGitlabToken(cmd)
+			token, err := resolveRepoToken(cmd)
 			if err != nil {
 				return err
 			}
@@ -1694,6 +1769,7 @@ func init() {
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
+	addRepoTokenFlags(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
 	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "", "nixpacks|dockerfile|buildpacks|static|worker|image (default: detected from the repo — Dockerfile → dockerfile, else nixpacks); worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
@@ -1725,6 +1801,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetProvider, "provider", "", "VCS provider: github|gitlab (optional; inferred from the repo URL when unset)")
 	serviceSetCmd.Flags().StringVar(&serviceSetGitlabToken, "gitlab-token", "", "GitLab clone credential (deploy/project-access/personal token); stored server-side as a Secret, never returned. Or set KUSO_GITLAB_TOKEN / use --gitlab-token-stdin")
 	serviceSetCmd.Flags().BoolVar(&serviceSetGitlabTokenStdin, "gitlab-token-stdin", false, "read the GitLab clone token from stdin instead of --gitlab-token (avoids the token landing in shell history)")
+	addRepoTokenFlags(serviceSetCmd)
 	serviceSetCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
 	serviceSetCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
@@ -1779,6 +1856,7 @@ func init() {
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRepo, "repo", "", "source repo URL for this service (default: the project's repo); set it here so the first build clones the right repo")
+	addRepoTokenFlags(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddBranch, "branch", "", "git branch this service builds (default: the project's default branch)")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "", "nixpacks|dockerfile|buildpacks|static|worker|image (default: detected from the repo — Dockerfile → dockerfile, else nixpacks); worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
@@ -1806,6 +1884,7 @@ func init() {
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
+	addRepoTokenFlags(serviceSetTopCmd)
 	// These two mirror the project-scoped `service set` above. They were
 	// missing from the alias, so the SAME RunE silently never saw the
 	// flags as Changed() — `kuso service set … --cap-add SETUID` was a

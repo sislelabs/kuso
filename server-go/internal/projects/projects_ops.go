@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -534,6 +535,9 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		}
 		if derr := s.deleteRepoTokenSecret(ctx, ns, name, shortServiceName(name, svc.Name)); derr != nil {
 			cleanupFail("Secret", repoTokenSecretName(name, shortServiceName(name, svc.Name)), derr)
+		}
+		if derr := s.deleteDeployHookSecret(ctx, ns, name, shortServiceName(name, svc.Name)); derr != nil {
+			cleanupFail("Secret", builds.DeployHookSecretName(name, shortServiceName(name, svc.Name)), derr)
 		}
 	}
 	// Addons — operator owns the StatefulSet + PVC + connection Secret

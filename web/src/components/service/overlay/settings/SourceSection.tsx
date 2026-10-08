@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Section, Row, type SectionProps } from "./_primitives";
+import { DeployHookRow } from "./DeployHookRow";
 
 export function SourceSection({
   state,
@@ -95,6 +96,10 @@ export function SourceSection({
       ) ?? null
     );
   }, [parsed, installs.data]);
+
+  // A stored token is how a private repo clones when no GitHub App
+  // installation reaches it (GitLab, or GitHub with no App).
+  const needsToken = !!state.repoURL.trim() && (isGitlab || !autoResolved);
 
   return (
     <Section id="source" title="Source" icon={Github}>
@@ -197,27 +202,28 @@ export function SourceSection({
             className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
           />
         }
-        last={!isGitlab}
       />
-      {/* GitLab access token — shown only when the URL looks like a
-          GitLab repo (the server does the authoritative detection; this
-          gate is UX). WRITE-ONLY: the server stores it in a Secret and
-          never returns it, so the field starts blank and is never
-          pre-filled. Leaving it blank on save does NOT clear an existing
-          token — the write path omits it unless the user typed one. */}
-      {isGitlab && (
+      {/* Access token for a private repo the GitHub App doesn't cover: a
+          GitLab token, or a GitHub personal access token. Hidden when an
+          App installation already reaches the repo. WRITE-ONLY: the
+          server stores it in a Secret and never returns it, so the field
+          starts blank and is never pre-filled. Leaving it blank on save
+          does NOT clear an existing token — the write path omits it
+          unless the user typed one. */}
+      {needsToken && (
         <Row
-          label="gitlab access token"
+          label={isGitlab ? "gitlab access token" : "access token"}
           hint="private repos only · write-only · blank keeps the existing token"
           control={
-            <GitlabTokenInput
+            <RepoTokenInput
               value={state.repoToken}
+              placeholder={isGitlab ? "glpat-…" : "github_pat_…"}
               onChange={(v) => setState((s) => ({ ...s, repoToken: v }))}
             />
           }
-          last
         />
       )}
+      {state.repoURL.trim() && <DeployHookRow project={project} service={service} />}
       {/* The installation row used to live here. Removed since
           kuso auto-resolves the GitHub App installation from the
           repo URL's owner — the dropdown was a power-user knob
@@ -230,18 +236,20 @@ export function SourceSection({
   );
 }
 
-// GitlabTokenInput is a masked write-only credential field. The token
+// RepoTokenInput is a masked write-only credential field. The token
 // is never read back from the server (it lives in a Secret), so the
 // input is always what the user typed this session — starts blank,
 // masked as a password by default, with an eye toggle to verify the
 // pasted value before saving. Mirrors the masked-input affordance the
 // env editor uses (Eye/EyeOff), minus the reveal-fetch since there's
 // nothing on the server to reveal.
-function GitlabTokenInput({
+function RepoTokenInput({
   value,
+  placeholder,
   onChange,
 }: {
   value: string;
+  placeholder: string;
   onChange: (v: string) => void;
 }) {
   const [shown, setShown] = useState(false);
@@ -251,7 +259,7 @@ function GitlabTokenInput({
         type={shown ? "text" : "password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="glpat-… (leave blank to keep current)"
+        placeholder={`${placeholder} (leave blank to keep current)`}
         className="h-7 flex-1 font-mono text-[12px]"
         spellCheck={false}
         autoComplete="off"
