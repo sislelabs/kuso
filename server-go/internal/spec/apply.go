@@ -123,6 +123,11 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyO
 			out.Errors = append(out.Errors, StepError{Resource: "project:" + f.Project, Op: "update", Message: err.Error()})
 		}
 	}
+	if f.RequestLimits != nil {
+		if _, err := r.Projects.Update(ctx, f.Project, projects.UpdateProjectRequest{RequestLimits: f.RequestLimits.patch()}); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "project:" + f.Project, Op: "update", Message: err.Error()})
+		}
+	}
 
 	desiredAddons := map[string]AddonSpec{}
 	for _, a := range f.Addons {
@@ -288,6 +293,7 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 		disabled, path := s.Uptime.Disabled, s.Uptime.Path
 		req.Uptime = &projects.UpdateUptimeSpec{Disabled: &disabled, Path: &path}
 	}
+	req.RequestLimits = s.RequestLimits.patch()
 	if s.Placement != nil {
 		req.Placement = &kube.KusoPlacement{Labels: s.Placement.Labels, Nodes: s.Placement.Nodes}
 	}
@@ -493,6 +499,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		PlatformAPIEgress: &platformAPIEgress,
 		WaitForCI:         &waitForCI,
 		Uptime:            uptime,
+		RequestLimits:     s.RequestLimits.patch(),
 		Domains:           &domains,
 		Scale:             scale,
 		Sleep:             sleep,

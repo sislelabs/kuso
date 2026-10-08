@@ -164,3 +164,37 @@ write; this covers CRs written around it. Returns JSON (fromJsonArray).
 {{- end }}
 {{- toJson $out }}
 {{- end -}}
+
+{{- /* Per-service ingress limits (templates/ingress-limits.yaml).
+
+       limitsOn is "true" only when the operator has switched the feature
+       on (ingressLimitsEnabled, set from its KUSO_INGRESS_LIMITS env via
+       watches.yaml overrideValues) and the Ingress is a Traefik one. The
+       switch exists because the Middleware needs traefik.io RBAC on the
+       operator: without it the whole release fails, and an Ingress that
+       names a missing Middleware loses its router. The API check covers
+       a cluster whose Traefik was installed without its CRDs. */ -}}
+{{- define "kusoenvironment.limitsOn" -}}
+{{- if and (eq (toString .Values.ingressLimitsEnabled) "true") (eq (toString .Values.ingressClassName) "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/Middleware") -}}true{{- end -}}
+{{- end -}}
+
+{{- define "kusoenvironment.limitsBase" -}}
+{{- include "kusoenvironment.fullname" . | trunc 52 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- /* Comma-separated Traefik references for the Ingress annotation;
+       empty when nothing is limited. */ -}}
+{{- define "kusoenvironment.limitMiddlewares" -}}
+{{- $refs := list -}}
+{{- if include "kusoenvironment.limitsOn" . -}}
+{{- $l := .Values.requestLimits | default dict -}}
+{{- $base := printf "%s-%s" .Release.Namespace (include "kusoenvironment.limitsBase" .) -}}
+{{- if gt (int ($l.maxConcurrent | default 0)) 0 -}}
+{{- $refs = append $refs (printf "%s-inflight@kubernetescrd" $base) -}}
+{{- end -}}
+{{- if gt (int ($l.ratePerSecond | default 0)) 0 -}}
+{{- $refs = append $refs (printf "%s-ratelimit@kubernetescrd" $base) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $refs -}}
+{{- end -}}

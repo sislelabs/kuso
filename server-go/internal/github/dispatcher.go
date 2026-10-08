@@ -1028,6 +1028,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcResources map[string]any
 	var svcVolumes []kube.KusoVolume
 	var svcSecurityContext *kube.KusoSecurityContext
+	var svcRequestLimits *kube.KusoRequestLimits
 	var svcHealthcheck *kube.KusoHealthcheck
 	var svcPublicEnv []string
 	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
@@ -1058,6 +1059,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		svcResources = svc.Spec.Resources
 		svcVolumes = svc.Spec.Volumes
 		svcSecurityContext = svc.Spec.SecurityContext
+		svcRequestLimits = svc.Spec.RequestLimits
 		svcHealthcheck = svc.Spec.Healthcheck
 		svcPublicEnv = svc.Spec.PublicEnv
 		if svc.Spec.Previews != nil {
@@ -1289,6 +1291,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			Resources:            svcResources,
 			Volumes:              svcVolumes,
 			SecurityContext:      svcSecurityContext,
+			RequestLimits:        kube.ResolveRequestLimits(proj.Spec.RequestLimits, svcRequestLimits),
 			Healthcheck:          svcHealthcheck,
 			PublicEnv:            svcPublicEnv,
 			SnapshotBeforeDeploy: svcSnapshotBeforeDeploy,

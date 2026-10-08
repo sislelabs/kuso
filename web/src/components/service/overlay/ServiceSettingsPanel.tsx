@@ -144,6 +144,14 @@ function fieldDiffValues(
     port: (s) => s.port,
     domains: (s) => norm(s.domains),
     internal: (s) => (s.internal ? "internal (no public URL)" : "public"),
+    requestLimits: (s) =>
+      [
+        s.limitMaxConcurrent && `max concurrent ${s.limitMaxConcurrent}`,
+        s.limitRate && `rate ${s.limitRate}/s`,
+        s.limitBurst && `burst ${s.limitBurst}`,
+      ]
+        .filter(Boolean)
+        .join(", "),
     scale: scale,
     sleep: (s) =>
       [
@@ -337,6 +345,22 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     }
     if (state.internal !== baseline.internal) {
       body.internal = state.internal;
+    }
+    // Blank clears the override (0); -1 means no limit.
+    const limitFields = [
+      ["maxConcurrent", "limitMaxConcurrent", -1],
+      ["ratePerSecond", "limitRate", -1],
+      ["burst", "limitBurst", 0],
+    ] as const;
+    for (const [key, field, lo] of limitFields) {
+      const raw = state[field].trim();
+      if (raw === baseline[field].trim()) continue;
+      const n = raw === "" ? 0 : Number(raw);
+      if (!Number.isInteger(n) || n < lo || n > 1000000) {
+        toast.error(`${key} must be a whole number${lo < 0 ? ", or -1 for no limit" : ""}`);
+        return;
+      }
+      body.requestLimits = { ...body.requestLimits, [key]: n };
     }
     const scaleChanged =
       state.scaleMin !== baseline.scaleMin ||

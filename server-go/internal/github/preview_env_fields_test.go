@@ -34,6 +34,7 @@ var previewInheritedFields = []string{
 	"PublicEnv",
 	"Release",
 	"SnapshotBeforeDeploy",
+	"RequestLimits",
 }
 
 // previewExcludedFields are service-derived fields a preview must NOT

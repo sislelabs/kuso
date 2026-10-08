@@ -78,6 +78,9 @@ type KusoProjectSpec struct {
 	// unset field) keeps the chart defaults.
 	NetworkPolicy *KusoProjectNetworkPolicy `json:"networkPolicy,omitempty"`
 	Quota         *KusoProjectQuota         `json:"quota,omitempty"`
+	// RequestLimits is the project default for its services' ingress
+	// limits; a service's own spec.requestLimits wins field by field.
+	RequestLimits *KusoRequestLimits `json:"requestLimits,omitempty"`
 	// Uptime opts the whole project out of uptime checks. nil = checked.
 	Uptime *KusoProjectUptime `json:"uptime,omitempty"`
 }
@@ -330,9 +333,12 @@ type KusoServiceSpec struct {
 	// survive the wire so "subscribe to no addons" (e.g. a public
 	// frontend that must not hold DATABASE_URL) doesn't collapse to nil
 	// and re-mount every addon.
-	SubscribedAddons []string          `json:"subscribedAddons"`
-	Scale            *KusoScaleSpec    `json:"scale,omitempty"`
-	Sleep            *KusoServiceSleep `json:"sleep,omitempty"`
+	SubscribedAddons []string       `json:"subscribedAddons"`
+	Scale            *KusoScaleSpec `json:"scale,omitempty"`
+	// RequestLimits caps what this service may ask of the shared ingress.
+	// Unset fields fall back to the project's, then the chart default.
+	RequestLimits *KusoRequestLimits `json:"requestLimits,omitempty"`
+	Sleep         *KusoServiceSleep  `json:"sleep,omitempty"`
 	// Healthcheck, when its Path is set, makes the env render an HTTP
 	// readiness AND liveness probe against it. Propagated onto every
 	// owned KusoEnvironment. Nil/empty Path = default TCP probes, no
@@ -624,6 +630,47 @@ func ValidateSecurityContext(sc *KusoSecurityContext) error {
 	return nil
 }
 
+// KusoRequestLimits bounds one service's use of the shared ingress
+// (kusoenvironment/templates/ingress-limits.yaml). Counts are per
+// Traefik replica and per Host. Zero means "not set here": the field is
+// omitted from the CR so the next level's value, and finally the chart
+// default, applies.
+type KusoRequestLimits struct {
+	// MaxConcurrent is the number of requests in flight at once; past it
+	// the service answers 429. -1 = no cap.
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// RatePerSecond is the sustained request rate; -1 = no rate limit
+	// (overrides a project default).
+	RatePerSecond int `json:"ratePerSecond,omitempty"`
+	// Burst is how many requests may exceed the rate at once; unset =
+	// RatePerSecond.
+	Burst int `json:"burst,omitempty"`
+}
+
+// ResolveRequestLimits layers a service's limits over its project's,
+// field by field. nil when neither sets anything.
+func ResolveRequestLimits(project, service *KusoRequestLimits) *KusoRequestLimits {
+	out := KusoRequestLimits{}
+	for _, l := range []*KusoRequestLimits{project, service} {
+		if l == nil {
+			continue
+		}
+		if l.MaxConcurrent != 0 {
+			out.MaxConcurrent = l.MaxConcurrent
+		}
+		if l.RatePerSecond != 0 {
+			out.RatePerSecond = l.RatePerSecond
+		}
+		if l.Burst != 0 {
+			out.Burst = l.Burst
+		}
+	}
+	if out == (KusoRequestLimits{}) {
+		return nil
+	}
+	return &out
+}
+
 // MinValue returns scale.Min as an int, falling back to the CRD default
 // of 1 when the pointer is nil. All hot-path code reads through this
 // helper so a nil/0 ambiguity can never produce the wrong replicaCount.
@@ -706,6 +753,9 @@ type KusoEnvironmentSpec struct {
 	// Use Spec.ReplicaCountValue() to read with the nil→1 fallback.
 	ReplicaCount *int             `json:"replicaCount,omitempty"`
 	Autoscaling  *KusoAutoscaling `json:"autoscaling,omitempty"`
+	// RequestLimits is the resolved (service over project) ingress limit
+	// block the chart renders; nil = chart defaults.
+	RequestLimits *KusoRequestLimits `json:"requestLimits,omitempty"`
 	// SpreadPolicy controls how multi-replica pods are placed across
 	// nodes: "hard" → topologySpreadConstraints whenUnsatisfiable=
 	// DoNotSchedule (replicas guaranteed on distinct nodes, so a node

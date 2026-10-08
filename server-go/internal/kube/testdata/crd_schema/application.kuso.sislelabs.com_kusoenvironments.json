@@ -298,6 +298,30 @@
             "default": 1,
             "type": "integer"
           },
+          "requestLimits": {
+            "description": "Limits on this service's use of the shared ingress, per Traefik replica and per Host. Unset fields fall back to the project's requestLimits, then the chart default (maxConcurrent 1000, no rate limit).",
+            "properties": {
+              "burst": {
+                "description": "Requests allowed above the rate at once. Unset = the rate.",
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxConcurrent": {
+                "description": "Requests in flight at once; past it the service answers 429. -1 = no cap.",
+                "maximum": 1000000,
+                "minimum": -1,
+                "type": "integer"
+              },
+              "ratePerSecond": {
+                "description": "Sustained requests per second. -1 = no limit.",
+                "maximum": 1000000,
+                "minimum": -1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
           "resources": {
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -293,6 +294,10 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequest) (*kube.KusoProject, error) {
 	// Ensure the project exists up front so a missing CR returns the
 	// same not-found error as before the WithRetry migration.
+	if err := validateRequestLimits(req.RequestLimits); err != nil {
+		return nil, err
+	}
+	requestLimitsChanged := false
 	if _, err := s.Get(ctx, name); err != nil {
 		return nil, err
 	}
@@ -392,12 +397,26 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 				cur.Spec.Uptime = nil
 			}
 		}
+		if req.RequestLimits != nil {
+			next := applyRequestLimits(cur.Spec.RequestLimits, req.RequestLimits)
+			requestLimitsChanged = !reflect.DeepEqual(next, cur.Spec.RequestLimits)
+			cur.Spec.RequestLimits = next
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	s.invalidateNamespace(name)
+	// The env CR carries the project default resolved with the service's
+	// own block, so a new default has to be restamped on every env.
+	// Best-effort like the propagations below.
+	if requestLimitsChanged {
+		if perr := s.propagateProjectRequestLimits(ctx, name); perr != nil {
+			slog.Warn("propagate requestLimits failed; some envs may still carry the old project default",
+				"project", name, "err", perr)
+		}
+	}
 	// Propagate a baseDomain change to every owned env. Without this
 	// the user changes the project setting, the project CR happily
 	// updates, and every existing service keeps the OLD host on its

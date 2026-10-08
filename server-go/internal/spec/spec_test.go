@@ -8,6 +8,7 @@ apiVersion: kuso/v1
 project: shop
 baseDomain: shop.example.com
 prune: true
+requestLimits: { maxConcurrent: 400 }
 services:
   - name: api
     repo: https://github.com/me/api
@@ -29,6 +30,7 @@ services:
       scaleUpPods: 4
       scaleUpPercent: 100
       scaleDownStabilizationSeconds: 600
+    requestLimits: { maxConcurrent: 200, ratePerSecond: 50, burst: 120 }
     sleep: { enabled: true, afterMinutes: 20 }
     placement:
       labels: { region: eu }
@@ -66,6 +68,12 @@ crons:
 		sc.ScaleUpStabilizationSeconds == nil || *sc.ScaleUpStabilizationSeconds != 0 ||
 		sc.ScaleDownStabilizationSeconds == nil || *sc.ScaleDownStabilizationSeconds != 600 {
 		t.Fatalf("scale not parsed: %+v", sc)
+	}
+	if f.RequestLimits == nil || f.RequestLimits.MaxConcurrent != 400 {
+		t.Fatalf("project requestLimits not parsed: %+v", f.RequestLimits)
+	}
+	if rl := f.Services[0].RequestLimits; rl == nil || rl.MaxConcurrent != 200 || rl.RatePerSecond != 50 || rl.Burst != 120 {
+		t.Fatalf("service requestLimits not parsed: %+v", rl)
 	}
 	if !f.Services[0].PrivateEgress {
 		t.Fatalf("privateEgress not parsed")

@@ -848,6 +848,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				Volumes:         item.svc.Spec.Volumes,
 				Resources:       item.svc.Spec.Resources,
 				SecurityContext: item.svc.Spec.SecurityContext,
+				RequestLimits:   kube.ResolveRequestLimits(proj.Spec.RequestLimits, item.svc.Spec.RequestLimits),
 				Runtime:         item.svc.Spec.Runtime,
 				Command:         item.svc.Spec.Command,
 				// Service-derived fields below. These were missing from this

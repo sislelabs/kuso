@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -380,6 +381,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if len(createVolumes) == 0 {
 		createVolumes = nil
 	}
+	if err := validateRequestLimits(req.RequestLimits); err != nil {
+		return nil, err
+	}
+	var createRequestLimits *kube.KusoRequestLimits
+	if req.RequestLimits != nil {
+		createRequestLimits = applyRequestLimits(nil, req.RequestLimits)
+	}
 	var createUptime *kube.KusoServiceUptime
 	if req.Uptime != nil {
 		up := kube.KusoServiceUptime{}
@@ -603,6 +611,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 				"project", project, "service", req.Name, "err", err)
 		}
 	}
+	if err := validateScaleCeiling(scale, resources); err != nil {
+		return nil, err
+	}
 	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
@@ -652,6 +663,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Placement:            req.Placement,
 			Volumes:              createVolumes,
 			Uptime:               createUptime,
+			RequestLimits:        createRequestLimits,
 		},
 	}
 	if req.GitHub != nil && req.GitHub.InstallationID > 0 {
@@ -841,6 +853,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Healthcheck:     created.Spec.Healthcheck,
 			SecurityContext: created.Spec.SecurityContext,
 			Resources:       created.Spec.Resources,
+			RequestLimits:   kube.ResolveRequestLimits(proj.Spec.RequestLimits, created.Spec.RequestLimits),
 			// Release hook (pre-deploy migration Job). Must be on the env
 			// at create time — the release Job runs off env.Spec.Release,
 			// so a first deploy of a service with a release hook (e.g. a
@@ -1274,6 +1287,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			// in lockstep with the production-env literal in AddService —
 			// TestEnvLiteralsShareServiceDerivedFields trips if they drift.
 			SecurityContext:      svc.Spec.SecurityContext,
+			RequestLimits:        kube.ResolveRequestLimits(proj.Spec.RequestLimits, svc.Spec.RequestLimits),
 			Healthcheck:          svc.Spec.Healthcheck,
 			PublicEnv:            svc.Spec.PublicEnv,
 			Release:              svc.Spec.Release,
@@ -2491,6 +2505,9 @@ type PatchServiceRequest struct {
 	// WaitForCI toggles the wait-for-GitHub-CI build gate. Service-level
 	// only (builds read it off the service CR), so no env propagation.
 	WaitForCI *bool `json:"waitForCI,omitempty"`
+	// RequestLimits edits the service's ingress limits (see
+	// PatchRequestLimits for the 0 / -1 conventions).
+	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
 	// Uptime patches the uptime-check opt-out and path. Service-level
 	// only (the uptime loop reads the service CR), so no env propagation.
 	Uptime *UpdateUptimeSpec `json:"uptime,omitempty"`
@@ -2640,6 +2657,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if err := validateSleepNonProduction(*req.Sleep.NonProduction); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateRequestLimits(req.RequestLimits); err != nil {
+		return nil, err
 	}
 	// BuildArgs keys must be POSIX identifiers (they become KUSO_BA_<KEY>
 	// container vars + `--opt build-arg:KEY=` / `ENV KEY VALUE` at render).
@@ -2972,6 +2992,12 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Volumes = next
 			volumesChanged = true
 		}
+		requestLimitsChanged := false
+		if req.RequestLimits != nil {
+			next := applyRequestLimits(svc.Spec.RequestLimits, req.RequestLimits)
+			requestLimitsChanged = !reflect.DeepEqual(next, svc.Spec.RequestLimits)
+			svc.Spec.RequestLimits = next
+		}
 		resourcesChanged := false
 		if req.Resources != nil {
 			// Replace verbatim. An empty/nil map clears resources (chart
@@ -2985,6 +3011,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				svc.Spec.Resources = *req.Resources
 			}
 			resourcesChanged = true
+		}
+		// Only when this request touches scale or resources: a service
+		// set up before the rule existed keeps accepting unrelated edits.
+		if req.Scale != nil || req.Resources != nil {
+			if err := validateScaleCeiling(svc.Spec.Scale, svc.Spec.Resources); err != nil {
+				return err
+			}
 		}
 		securityContextChanged := false
 		if req.SecurityContext != nil {
@@ -3170,6 +3203,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			Command:           commandChanged,
 			Resources:         resourcesChanged,
 			SecurityContext:   securityContextChanged,
+			RequestLimits:     requestLimitsChanged,
 		}
 		return nil
 	})

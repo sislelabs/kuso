@@ -35,6 +35,9 @@ type UpdateProjectRequest struct {
 	// Uptime sets the project-wide uptime-check opt-out. Omitted = leave
 	// unchanged.
 	Uptime *UptimePatch `json:"uptime,omitempty"`
+	// RequestLimits sets the project default for its services' ingress
+	// limits. Omitted = leave unchanged.
+	RequestLimits *RequestLimitsPatch `json:"requestLimits,omitempty"`
 	// ClearDefaultRepo=true removes the project's default repository.
 	// An omitted or empty defaultRepo leaves it unchanged.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
@@ -45,6 +48,16 @@ type UpdateProjectRequest struct {
 type UptimePatch struct {
 	Disabled *bool   `json:"disabled,omitempty"`
 	Path     *string `json:"path,omitempty"`
+}
+
+// RequestLimitsPatch is the `requestLimits` block of a project or
+// service PATCH: limits on the shared ingress, counted per Traefik
+// replica and per Host. Nil leaves a field alone, 0 clears it (inherit
+// the next level), -1 on maxConcurrent or ratePerSecond means no limit.
+type RequestLimitsPatch struct {
+	MaxConcurrent *int `json:"maxConcurrent,omitempty"`
+	RatePerSecond *int `json:"ratePerSecond,omitempty"`
+	Burst         *int `json:"burst,omitempty"`
 }
 
 // RepoRef pairs a repo URL with optional branch + path. Used by

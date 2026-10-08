@@ -196,6 +196,13 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 	if in.Uptime != nil {
 		out.Uptime = &projects.UpdateUptimeSpec{Disabled: in.Uptime.Disabled, Path: in.Uptime.Path}
 	}
+	if in.RequestLimits != nil {
+		out.RequestLimits = &projects.PatchRequestLimits{
+			MaxConcurrent: in.RequestLimits.MaxConcurrent,
+			RatePerSecond: in.RequestLimits.RatePerSecond,
+			Burst:         in.RequestLimits.Burst,
+		}
+	}
 	return out
 }
 

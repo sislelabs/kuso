@@ -142,6 +142,24 @@ clusterIssuer: letsencrypt-prod
 # ingressClassName: usually "traefik" on k3s. Override per-cluster.
 ingressClassName: traefik
 
+# Per-service limits on the shared ingress (templates/ingress-limits.yaml).
+# Copied from KusoService.spec.requestLimits, falling back to the project's,
+# when either sets them; otherwise these defaults apply.
+#   maxConcurrent  requests in flight at once, per Traefik replica. Past it
+#                  the service answers 429. -1 = no cap. A websocket or SSE
+#                  stream holds a slot for as long as it is open.
+#   ratePerSecond  requests per second, per Traefik replica. 0 = no limit.
+#   burst          requests allowed above the rate in a burst. 0 = the rate.
+# 1000 in flight is far above normal traffic for one service and below what
+# OOM-killed the shared proxy on 2026-10-08.
+requestLimits:
+  maxConcurrent: 1000
+  ratePerSecond: 0
+  burst: 0
+# The operator sets this to "true" from its KUSO_INGRESS_LIMITS env
+# (watches.yaml overrideValues). Not a per-environment setting.
+ingressLimitsEnabled: ""
+
 # envVars: per-env env var overrides. The server merges these on top of the
 # KusoService.spec.envVars at reconcile time before stamping into the values.
 envVars: []

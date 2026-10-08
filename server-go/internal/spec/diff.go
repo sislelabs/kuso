@@ -108,6 +108,19 @@ func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.Patc
 		}
 	}
 
+	if req.RequestLimits != nil {
+		var liveRL kube.KusoRequestLimits
+		if ls.RequestLimits != nil {
+			liveRL = *ls.RequestLimits
+		}
+		want := kube.KusoRequestLimits{MaxConcurrent: *req.RequestLimits.MaxConcurrent, RatePerSecond: *req.RequestLimits.RatePerSecond, Burst: *req.RequestLimits.Burst}
+		if want == liveRL {
+			req.RequestLimits = nil
+		} else {
+			add("requestLimits", renderRequestLimits(liveRL), renderRequestLimits(want), false)
+		}
+	}
+
 	// Domains: order matters (the first is the service's public host).
 	from, to := renderDomains(ls.Domains), renderServiceDomains(*req.Domains)
 	if from == to {
@@ -818,6 +831,25 @@ func sortedMapKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func renderRequestLimits(l kube.KusoRequestLimits) string {
+	var parts []string
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"maxConcurrent", l.MaxConcurrent}, {"ratePerSecond", l.RatePerSecond}, {"burst", l.Burst}} {
+		switch {
+		case f.v < 0:
+			parts = append(parts, f.name+" unlimited")
+		case f.v > 0:
+			parts = append(parts, fmt.Sprintf("%s %d", f.name, f.v))
+		}
+	}
+	if len(parts) == 0 {
+		return "(inherited)"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func renderUptime(u kube.KusoServiceUptime) string {

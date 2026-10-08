@@ -48,6 +48,10 @@ export interface FormState {
   port: string;
   domains: string; // newline-separated
   internal: boolean;
+  // Ingress limits. "" = inherit (project, then platform default).
+  limitMaxConcurrent: string;
+  limitRate: string;
+  limitBurst: string;
   // Scale
   scaleMin: string;
   scaleMax: string;
@@ -161,6 +165,9 @@ export function fromSvc(svc?: KusoService): FormState {
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
     internal: !!svc?.spec?.internal,
+    limitMaxConcurrent: String(svc?.spec?.requestLimits?.maxConcurrent || ""),
+    limitRate: String(svc?.spec?.requestLimits?.ratePerSecond || ""),
+    limitBurst: String(svc?.spec?.requestLimits?.burst || ""),
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),

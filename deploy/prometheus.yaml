@@ -49,6 +49,11 @@ data:
       # the default ("Bearer"); credentials_file lets the secret
       # rotate without a config rebuild.
       - job_name: kubernetes-pods
+        # Per-target caps: these are tenant /metrics endpoints, and this
+        # Prometheus has a 512Mi limit. A target over either cap fails its
+        # own scrape (up=0 for that pod) instead of filling the TSDB.
+        sample_limit: 20000
+        body_size_limit: 20MB
         kubernetes_sd_configs:
           - role: pod
             namespaces:

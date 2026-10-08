@@ -109,6 +109,9 @@ type changedFields struct {
 	// securityContext change must reach the env or the pod keeps the
 	// hardened default (drop ALL) and never gets the requested caps.
 	SecurityContext bool
+	// RequestLimits covers a change on the service or on its project;
+	// the env carries the two resolved into one block.
+	RequestLimits bool
 }
 
 // any reports whether any field changed.
@@ -175,6 +178,16 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
 			baseDomain = proj.Spec.BaseDomain
 		}
+	}
+	var projectRequestLimits *kube.KusoRequestLimits
+	if changed.RequestLimits {
+		proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+		if perr != nil {
+			// Without the project's block the env would be stamped with the
+			// service's alone, silently dropping the project default.
+			return fmt.Errorf("resolve request limits: get project: %w", perr)
+		}
+		projectRequestLimits = proj.Spec.RequestLimits
 	}
 	var effectivePlacement *kube.KusoPlacement
 	if changed.Placement {
@@ -305,6 +318,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Resources {
 				env.Spec.Resources = svc.Spec.Resources
+			}
+			if changed.RequestLimits {
+				env.Spec.RequestLimits = kube.ResolveRequestLimits(projectRequestLimits, svc.Spec.RequestLimits)
 			}
 			// Image, for runtime=image services only. These skip the build
 			// pipeline entirely (builds.Create refuses them and points the
@@ -762,4 +778,29 @@ func (s *Service) HealCronEgress(ctx context.Context, logger *slog.Logger) {
 			}
 		}
 	}
+}
+
+// propagateProjectRequestLimits restamps the resolved requestLimits on
+// every env of every service in the project after the project default
+// changed.
+func (s *Service) propagateProjectRequestLimits(ctx context.Context, project string) error {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	svcs, err := s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return fmt.Errorf("list services: %w", err)
+	}
+	var errs []error
+	for i := range svcs {
+		short := svcs[i].Labels[labelService]
+		if short == "" {
+			continue
+		}
+		if err := s.propagateChangedToEnvs(ctx, ns, project, short, &svcs[i], changedFields{RequestLimits: true}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

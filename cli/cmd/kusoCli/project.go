@@ -152,6 +152,7 @@ installation use --github-installation-clear (sets installationId to 0).`,
 				return fmt.Errorf("--always-on must be on|off (got %q)", projectUpdateAlwaysOn)
 			}
 		}
+		req.RequestLimits = requestLimitFlags(cmd)
 		resp, err := api.UpdateProject(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("update: %w", err)
@@ -311,6 +312,39 @@ var serviceCmd = &cobra.Command{
 	Use:     "service",
 	Aliases: []string{"svc"},
 	Short:   "Manage services (alias for `kuso project service`)",
+}
+
+// requestLimitFlags builds the requestLimits patch from whichever of the
+// three ingress-limit flags were passed; nil when none were.
+func requestLimitFlags(cmd *cobra.Command) *kusoApi.RequestLimitsPatch {
+	var out *kusoApi.RequestLimitsPatch
+	for _, f := range []struct {
+		name string
+		val  int
+		dst  func(*kusoApi.RequestLimitsPatch) **int
+	}{
+		{"max-concurrent", limitMaxConcurrent, func(p *kusoApi.RequestLimitsPatch) **int { return &p.MaxConcurrent }},
+		{"rate-limit", limitRate, func(p *kusoApi.RequestLimitsPatch) **int { return &p.RatePerSecond }},
+		{"rate-burst", limitBurst, func(p *kusoApi.RequestLimitsPatch) **int { return &p.Burst }},
+	} {
+		if !cmd.Flags().Changed(f.name) {
+			continue
+		}
+		if out == nil {
+			out = &kusoApi.RequestLimitsPatch{}
+		}
+		v := f.val
+		*f.dst(out) = &v
+	}
+	return out
+}
+
+// addRequestLimitFlags registers the ingress-limit flags. capFallback
+// and rateFallback say what 0 means at this level.
+func addRequestLimitFlags(cmd *cobra.Command, capFallback, rateFallback string) {
+	cmd.Flags().IntVar(&limitMaxConcurrent, "max-concurrent", 0, "requests in flight at once per ingress replica before the service answers 429 (-1 = no cap, 0 = "+capFallback+")")
+	cmd.Flags().IntVar(&limitRate, "rate-limit", 0, "requests per second per ingress replica (-1 = no limit, 0 = "+rateFallback+")")
+	cmd.Flags().IntVar(&limitBurst, "rate-burst", 0, "requests allowed above --rate-limit in a burst (0 = the rate)")
 }
 
 // runServiceAdd is shared by both `kuso project service add` and the
@@ -738,16 +772,21 @@ var (
 	serviceSetScaleUpPods       int
 	serviceSetScaleUpPercent    int
 	serviceSetScaleDownWindow   int
-	serviceSetPath              string   // monorepo subpath (relative to repo root)
-	serviceSetBranch            string   // git branch override
-	serviceSetRepo              string   // new source repo URL (re-point the service)
-	serviceSetProvider          string   // "github" | "gitlab" | "" (infer from URL)
-	serviceSetGitlabToken       string   // GitLab clone credential (write-only)
-	serviceSetGitlabTokenStdin  bool     // read the GitLab token from stdin instead of the flag
-	repoToken                   string   // repo clone token: GitLab token or GitHub PAT (write-only); shared by add + set
-	repoTokenStdin              bool     // read the repo token from stdin instead of the flag
-	serviceSetCapAdd            []string // Linux capabilities to add back (e.g. SETUID,SETGID)
-	serviceSetAllowPrivEsc      string   // "on" | "off" | "" (leave alone)
+	// Shared by `service set` and `project update`: the two commands
+	// never run in one process.
+	limitMaxConcurrent         int
+	limitRate                  int
+	limitBurst                 int
+	serviceSetPath             string   // monorepo subpath (relative to repo root)
+	serviceSetBranch           string   // git branch override
+	serviceSetRepo             string   // new source repo URL (re-point the service)
+	serviceSetProvider         string   // "github" | "gitlab" | "" (infer from URL)
+	serviceSetGitlabToken      string   // GitLab clone credential (write-only)
+	serviceSetGitlabTokenStdin bool     // read the GitLab token from stdin instead of the flag
+	repoToken                  string   // repo clone token: GitLab token or GitHub PAT (write-only); shared by add + set
+	repoTokenStdin             bool     // read the repo token from stdin instead of the flag
+	serviceSetCapAdd           []string // Linux capabilities to add back (e.g. SETUID,SETGID)
+	serviceSetAllowPrivEsc     string   // "on" | "off" | "" (leave alone)
 )
 
 // addRepoTokenFlags registers --repo-token / --repo-token-stdin, read by
@@ -914,6 +953,7 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 				return fmt.Errorf("--wait-for-ci must be on|off (got %q)", serviceSetWaitForCI)
 			}
 		}
+		req.RequestLimits = requestLimitFlags(cmd)
 		scaleFlags := []struct {
 			name string
 			val  int
@@ -1776,6 +1816,7 @@ func init() {
 	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviewsDomain, "previews-domain", "", "base domain for preview hosts, e.g. tickero.bg (previews become <svc>-pr-N.<domain>); needs wildcard DNS for *.<domain>")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateAlwaysOn, "always-on", "", "force every service to never scale to zero (on|off)")
+	addRequestLimitFlags(projectUpdateCmd, "platform default of 1000", "none")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
@@ -1813,6 +1854,7 @@ func init() {
 	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpPods, "scale-up-pods", 0, "pods the autoscaler may add per 60s (1-100, default 1; 0 resets)")
 	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpPercent, "scale-up-percent", 0, "also allow adding this % of current pods per 60s, whichever is more (1-1000; 0 removes)")
 	serviceSetCmd.Flags().IntVar(&serviceSetScaleDownWindow, "scale-down-stabilization", 0, "seconds the autoscaler waits before removing pods (0-3600, default 300; -1 resets)")
+	addRequestLimitFlags(serviceSetCmd, "project default", "project default")
 	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 	serviceSetCmd.Flags().StringVar(&serviceSetRepo, "repo", "", "re-point the service at a new source repo URL (github or gitlab)")
@@ -1904,6 +1946,7 @@ func init() {
 	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpPods, "scale-up-pods", 0, "pods the autoscaler may add per 60s (1-100, default 1; 0 resets)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpPercent, "scale-up-percent", 0, "also allow adding this % of current pods per 60s, whichever is more (1-1000; 0 removes)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleDownWindow, "scale-down-stabilization", 0, "seconds the autoscaler waits before removing pods (0-3600, default 300; -1 resets)")
+	addRequestLimitFlags(serviceSetTopCmd, "project default", "project default")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 	addRepoTokenFlags(serviceSetTopCmd)

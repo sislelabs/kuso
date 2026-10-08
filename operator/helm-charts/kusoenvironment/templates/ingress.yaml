@@ -96,9 +96,15 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- if and .Values.tlsEnabled $tlsHosts }}
+  {{- $limits := include "kusoenvironment.limitMiddlewares" . }}
+  {{- if or (and .Values.tlsEnabled $tlsHosts) $limits }}
   annotations:
+    {{- if and .Values.tlsEnabled $tlsHosts }}
     cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
+    {{- end }}
+    {{- if $limits }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ $limits | quote }}
+    {{- end }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}

@@ -27,6 +27,9 @@ export interface UpdateProjectBody {
   incidentMonitoring?: boolean;
   // uptime.disabled=true opts the project out of uptime checks.
   uptime?: { disabled?: boolean };
+  // Project default for its services' ingress limits. 0 clears a field
+  // (platform default), -1 means no limit.
+  requestLimits?: { maxConcurrent?: number; ratePerSecond?: number; burst?: number };
 }
 
 async function updateProject(name: string, body: UpdateProjectBody): Promise<unknown> {

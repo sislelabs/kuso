@@ -39,6 +39,7 @@ func seedRichService(project, service string) planSeed {
 				s.SetMin(2)
 				return s
 			}(),
+			RequestLimits:   &kube.KusoRequestLimits{MaxConcurrent: 200, RatePerSecond: 50},
 			Sleep:           &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20, NonProduction: "off", WakeOn: &kube.KusoServiceWake{ExcludePaths: []string{"/hook"}}},
 			Placement:       &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}, Nodes: []string{"n1"}},
 			Volumes:         []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 5, StorageClass: "longhorn", AccessMode: "ReadWriteMany"}},
@@ -227,6 +228,30 @@ func TestServicePatchReq_OmittedScaleIsCreateDefault(t *testing.T) {
 	req := servicePatchReq(ServiceSpec{Name: "api"})
 	if *req.Scale.Min != 1 || *req.Scale.Max != 5 || *req.Scale.TargetCPU != 70 {
 		t.Fatalf("omitted scale = %d/%d/%d, want 1/5/70", *req.Scale.Min, *req.Scale.Max, *req.Scale.TargetCPU)
+	}
+}
+
+// requestLimits follows uptime's rule: a block in the file is written
+// whole, a missing block leaves the live limits alone.
+func TestServiceDiff_RequestLimits(t *testing.T) {
+	live := decodeService(t, seedRichService("shop", "api"))
+	d := exportService("shop", *live)
+	if d.RequestLimits == nil || d.RequestLimits.MaxConcurrent != 200 || d.RequestLimits.RatePerSecond != 50 {
+		t.Fatalf("requestLimits not exported: %+v", d.RequestLimits)
+	}
+	d.RequestLimits = &RequestLimitsSpec{MaxConcurrent: -1}
+	req, fields := diffServiceSpec(live, d)
+	if req.RequestLimits == nil || *req.RequestLimits.MaxConcurrent != -1 || *req.RequestLimits.RatePerSecond != 0 || *req.RequestLimits.Burst != 0 {
+		t.Fatalf("patch = %+v", req.RequestLimits)
+	}
+	if len(fields) != 1 || fields[0].Field != "requestLimits" || fields[0].From != "maxConcurrent 200, ratePerSecond 50" || fields[0].To != "maxConcurrent unlimited" {
+		t.Fatalf("fields = %+v", fields)
+	}
+
+	d.RequestLimits = nil
+	req, fields = diffServiceSpec(live, d)
+	if req.RequestLimits != nil || len(fields) != 0 {
+		t.Fatalf("a missing block must leave the live limits alone: %+v %+v", req.RequestLimits, fields)
 	}
 }
 

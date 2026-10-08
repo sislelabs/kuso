@@ -1,0 +1,46 @@
+{{- /* Per-service limits on the shared ingress. Every public route on the
+       cluster goes through the same Traefik pods, so a flood against one
+       host is everyone's outage unless it is shed at the proxy. These
+       Middlewares answer the excess with 429 for this service only.
+
+       inFlightReq caps requests being served at once, rateLimit caps
+       requests per second. Both count per Host and per Traefik replica.
+       The Ingress references them by name (see ingress.yaml), so the
+       conditions here must match the Ingress's own. */ -}}
+{{- if and
+      (not (eq (default "" .Values.runtime) "worker"))
+      (not .Values.internal)
+      (or .Values.host .Values.additionalHosts)
+      (include "kusoenvironment.limitsOn" .) -}}
+{{- $l := .Values.requestLimits | default dict -}}
+{{- $base := include "kusoenvironment.limitsBase" . -}}
+{{- if gt (int ($l.maxConcurrent | default 0)) 0 }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $base }}-inflight
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  inFlightReq:
+    amount: {{ int $l.maxConcurrent }}
+    sourceCriterion:
+      requestHost: true
+{{- end }}
+{{- if gt (int ($l.ratePerSecond | default 0)) 0 }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $base }}-ratelimit
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  rateLimit:
+    average: {{ int $l.ratePerSecond }}
+    period: 1s
+    burst: {{ int ($l.burst | default $l.ratePerSecond) }}
+    sourceCriterion:
+      requestHost: true
+{{- end }}
+{{- end }}

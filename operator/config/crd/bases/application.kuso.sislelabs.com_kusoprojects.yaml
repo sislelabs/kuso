@@ -215,6 +215,31 @@ spec:
                     extraIngressNamespaces:
                       type: array
                       items: { type: string }
+                requestLimits:
+                  type: object
+                  description: >-
+                    Limits on this service's use of the shared ingress, per
+                    Traefik replica and per Host. Unset fields fall back to
+                    the project's requestLimits, then the chart default
+                    (maxConcurrent 1000, no rate limit).
+                  properties:
+                    maxConcurrent:
+                      type: integer
+                      minimum: -1
+                      maximum: 1000000
+                      description: >-
+                        Requests in flight at once; past it the service
+                        answers 429. -1 = no cap.
+                    ratePerSecond:
+                      type: integer
+                      minimum: -1
+                      maximum: 1000000
+                      description: Sustained requests per second. -1 = no limit.
+                    burst:
+                      type: integer
+                      minimum: 0
+                      maximum: 1000000
+                      description: Requests allowed above the rate at once. Unset = the rate.
                 quota:
                   type: object
                   description: |

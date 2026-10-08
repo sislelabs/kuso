@@ -60,6 +60,9 @@ type UpdateProjectRequest struct {
 	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
 	// Uptime sets the project's uptime-check opt-out.
 	Uptime *UpdateUptimeSpec `json:"uptime,omitempty"`
+	// RequestLimits sets the project default for its services' ingress
+	// limits. Omitted = leave alone.
+	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
 	// ClearDefaultRepo removes spec.defaultRepo. Wins over DefaultRepo.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
 }
@@ -150,6 +153,8 @@ type CreateServiceRequest struct {
 	// already writes to persistent disk.
 	Volumes []VolumePatch     `json:"volumes,omitempty"`
 	Uptime  *UpdateUptimeSpec `json:"uptime,omitempty"`
+	// RequestLimits sets the service's ingress limits at creation.
+	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.
@@ -218,6 +223,15 @@ type EnvVar struct {
 	// edit writes a normal service var of the same name, which takes
 	// precedence over the envFrom mount.
 	Addon string `json:"addon,omitempty"`
+}
+
+// PatchRequestLimits edits a requestLimits block on a service or a
+// project. nil leaves a field alone; 0 clears it (inherit the next
+// level); -1 on maxConcurrent or ratePerSecond means "no limit".
+type PatchRequestLimits struct {
+	MaxConcurrent *int `json:"maxConcurrent,omitempty"`
+	RatePerSecond *int `json:"ratePerSecond,omitempty"`
+	Burst         *int `json:"burst,omitempty"`
 }
 
 type ServiceScale struct {

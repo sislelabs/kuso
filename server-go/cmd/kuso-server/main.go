@@ -1012,7 +1012,10 @@ func main() {
 				})
 			}
 			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
-				goSafe(logger, "platformharden", func() { platformharden.Run(workCtx, kc, logger) })
+				goSafe(logger, "platformharden", func() {
+					platformharden.Run(workCtx, kc, logger)
+					platformharden.EnsureIngressLimits(workCtx, kc, logger)
+				})
 			}
 			// Per-service shared-secret subscription migration
 			// (v0.16.11). Seeds spec.sharedEnvKeys for any service

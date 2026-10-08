@@ -32,6 +32,9 @@ export interface KusoProjectSpec {
   // uptime.disabled=true opts the whole project out of the once-a-minute
   // uptime checks. Absent = checked (the default).
   uptime?: { disabled?: boolean };
+  // Project default for its services' ingress limits (per ingress
+  // replica). -1 = no limit; absent = platform default.
+  requestLimits?: { maxConcurrent?: number; ratePerSecond?: number; burst?: number };
 }
 
 export interface KusoProject {
@@ -128,6 +131,8 @@ export interface KusoServiceSpec {
   // uptime: per-service opt-out and request path for the uptime check.
   // No path = the health check path, or "/".
   uptime?: { disabled?: boolean; path?: string };
+  // Ingress limits for this service; unset fields use the project's.
+  requestLimits?: { maxConcurrent?: number; ratePerSecond?: number; burst?: number };
   // Remaining kube.KusoServiceSpec fields, so callers stop casting.
   internal?: boolean;
   privateEgress?: boolean;

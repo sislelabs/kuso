@@ -94,8 +94,12 @@ rules:
   # kusoaddon/templates/public-tcp.yaml renders an IngressRouteTCP. A
   # missing grant fails the addon's helm release with a Forbidden, and
   # every later change to that addon stops reconciling.
+  # kusoenvironment/templates/ingress-limits.yaml renders a Middleware per
+  # public service (the per-service in-flight cap and rate limit); the
+  # manager's KUSO_INGRESS_LIMITS env below turns that template on and
+  # must only be set where this rule is granted.
   - apiGroups: [traefik.io]
-    resources: [ingressroutetcps]
+    resources: [ingressroutetcps, middlewares]
     verbs: [get, list, watch, create, update, patch, delete]
   # CloudNativePG glue for HA Postgres addons (kept here so a fresh
   # install isn't surprised when ha:true fails). If CNPG isn't
@@ -179,6 +183,14 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "--leader-election-id=kuso-operator"
+          env:
+            # Turns on per-service ingress limits in the kusoenvironment
+            # chart (watches.yaml overrideValues). Needs the traefik.io
+            # middlewares rule on the kuso-operator ClusterRole above.
+            # kuso-server sets this on existing installs once it sees
+            # that rule (internal/platformharden).
+            - name: KUSO_INGRESS_LIMITS
+              value: "true"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

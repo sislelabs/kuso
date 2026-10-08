@@ -20,6 +20,7 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `project` | string | Required. |
 | `baseDomain` | string | Written by `project export`. Accepted, but apply does not change the project's base domain. |
 | `prune` | bool | Default `false`. See above. |
+| `requestLimits` | `{maxConcurrent, ratePerSecond, burst}` | Project default for its services' [ingress limits](#ingress-limits). Leave the block out to keep whatever is set in the UI or CLI. |
 | `services` | list | See [Services](#services). |
 | `addons` | list | See [Addons](#addons). |
 | `crons` | list | Project crons only. See [Crons](#crons). |
@@ -43,6 +44,7 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `domains` | list | `{host, tls, tlsSecret}`. `tlsSecret` is only for wildcard hosts (`*.example.com`) and is required there. |
 | `env` | map | See [Env values](#env-values). |
 | `scale` | `{min, max, targetCPU, scaleUpStabilizationSeconds, scaleUpPods, scaleUpPercent, scaleDownStabilizationSeconds}` | If you leave it out, it resets to min 1, max 5, targetCPU 70. `min: 0` means scale to zero. The last four set how fast the autoscaler moves; see [Autoscaling speed](#autoscaling-speed). |
+| `requestLimits` | `{maxConcurrent, ratePerSecond, burst}` | This service's [ingress limits](#ingress-limits). Leave the block out to keep whatever is set in the UI or CLI. |
 | `sleep` | `{enabled, afterMinutes, nonProduction}` | If you leave it out, it resets to enabled false, afterMinutes 30. `nonProduction: off` keeps non-production envs awake. `sleep.wakeOn` is **not** a kuso.yml field. Set it with a PATCH; apply leaves it alone. |
 | `placement` | `{labels: map, nodes: list}` | If you leave it out, the project default applies. |
 | `volumes` | list | `{name, mountPath, sizeGi}`. |
@@ -84,7 +86,39 @@ scale:
 
 Under enough load this goes from 2 to 8 pods in about two minutes, plus the time the pods take to start. If the spike is scheduled, raising `min` beforehand is faster still.
 
+A faster ramp is only accepted on a service whose pods have a memory limit. That means `scaleUpPods` above 1, any `scaleUpPercent`, or a `scaleUpStabilizationSeconds` under 60. Without a limit, each new pod could grow until its node runs out of memory, and the autoscaler would be adding several a minute. With one, the most the service can use is `max` times the limit. Set it first with a pod size (`kuso project service set <project> <service> --size medium`, or Settings → Scale); apply fails with an error naming this rule otherwise. A service that was already scaling fast without a limit keeps running, and gets the error the next time its `scale` or resources are edited.
+
+CPU is not capped per pod: pod sizes set a CPU request and no CPU limit. Under contention each pod gets CPU in proportion to its request, so an autoscaled service competes with `max` times its request, not with every core on the node.
+
 The same keys are accepted by the service PATCH API, by `kuso project service set` (`--scale-up-stabilization`, `--scale-up-pods`, `--scale-up-percent`, `--scale-down-stabilization`) and in the web UI under Settings → Scale. In a PATCH or CLI call, `-1` resets a stabilization window to its default and `0` resets `scaleUpPods` or `scaleUpPercent`.
+
+### Ingress limits
+
+Every public service on a cluster is served by the same Traefik pods. `requestLimits` caps what one service can ask of them, so a flood against one hostname is answered with `429 Too Many Requests` for that service while the others keep being served.
+
+| Key | Default | Notes |
+|---|---|---|
+| `maxConcurrent` | 1000 | Requests in flight at once. Past it, new requests get 429 until others finish. `-1` removes the cap. A websocket or SSE stream holds a slot for as long as it is open, so raise this for a service with more than a thousand long-lived connections per ingress replica. |
+| `ratePerSecond` | none | Requests per second. `-1` removes a limit inherited from the project. |
+| `burst` | `ratePerSecond` | Requests allowed above the rate in one burst. |
+
+The numbers are counted per hostname and per Traefik replica. A standard install runs two replicas, so the cluster-wide ceiling for a service is twice the number.
+
+A service's block overrides the project's top-level `requestLimits` one key at a time, and the project's overrides the defaults above. Preview and staging environments get the same limits as production.
+
+```yaml
+project: shop
+requestLimits: { maxConcurrent: 500 }        # default for every service
+services:
+  - name: api
+    requestLimits: { maxConcurrent: 2000, ratePerSecond: 300, burst: 600 }
+  - name: stream
+    requestLimits: { maxConcurrent: -1 }     # long-lived connections, no cap
+```
+
+The same settings are in the service PATCH API (`{"requestLimits":{"maxConcurrent":2000}}`), the project PATCH API, `kuso project service set` and `kuso project update` (`--max-concurrent`, `--rate-limit`, `--rate-burst`), and the web UI under service Settings → Networking and Project Settings. In a PATCH or CLI call, `0` clears a key so it is inherited again.
+
+The limits are enforced by Traefik and need the operator to be allowed to create Traefik Middlewares. Installs made before this feature get it when `deploy/operator.yaml` from the new release is applied; until then no limits are rendered and kuso-server logs a warning at boot.
 
 ### Env values
 

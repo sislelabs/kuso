@@ -291,6 +291,71 @@ func validateScalePatch(sc *PatchScaleRequest) error {
 	return validateScaleSpeed(nil, pods, pct, nil)
 }
 
+// maxRequestLimit bounds every requestLimits field. It only keeps typos
+// out; the useful range is far below it.
+const maxRequestLimit = 1000000
+
+func validateRequestLimits(rl *PatchRequestLimits) error {
+	if rl == nil {
+		return nil
+	}
+	for name, v := range map[string]*int{"maxConcurrent": rl.MaxConcurrent, "ratePerSecond": rl.RatePerSecond} {
+		if v != nil && (*v < -1 || *v > maxRequestLimit) {
+			return fmt.Errorf("%w: requestLimits.%s must be 1-%d, -1 for no limit, or 0 to inherit", ErrInvalid, name, maxRequestLimit)
+		}
+	}
+	if rl.Burst != nil && (*rl.Burst < 0 || *rl.Burst > maxRequestLimit) {
+		return fmt.Errorf("%w: requestLimits.burst must be 0-%d", ErrInvalid, maxRequestLimit)
+	}
+	return nil
+}
+
+// applyRequestLimits folds a patch into the current block and returns
+// the new one, nil when every field ends up unset.
+func applyRequestLimits(cur *kube.KusoRequestLimits, rl *PatchRequestLimits) *kube.KusoRequestLimits {
+	out := kube.KusoRequestLimits{}
+	if cur != nil {
+		out = *cur
+	}
+	if rl.MaxConcurrent != nil {
+		out.MaxConcurrent = *rl.MaxConcurrent
+	}
+	if rl.RatePerSecond != nil {
+		out.RatePerSecond = *rl.RatePerSecond
+	}
+	if rl.Burst != nil {
+		out.Burst = *rl.Burst
+	}
+	if out == (kube.KusoRequestLimits{}) {
+		return nil
+	}
+	return &out
+}
+
+// validateScaleCeiling refuses faster-than-default scale-up on a service
+// whose pods have no memory limit. The HPA can then add several pods a
+// minute, each free to grow until the node runs out; with a limit the
+// worst case is max replicas x limit, which the operator chose. CPU is
+// deliberately not required to be limited (the pod-size presets set no
+// CPU limit, because it throttles): the chart gives every autoscaled pod
+// a CPU request, which is what the scheduler and the kernel's CPU shares
+// work from.
+func validateScaleCeiling(sc *kube.KusoScaleSpec, res map[string]any) error {
+	if sc == nil || sc.Max <= sc.MinValue() {
+		return nil
+	}
+	fast := sc.ScaleUpPods > 1 || sc.ScaleUpPercent > 0 ||
+		(sc.ScaleUpStabilizationSeconds != nil && *sc.ScaleUpStabilizationSeconds < 60)
+	if !fast {
+		return nil
+	}
+	limits, _ := res["limits"].(map[string]any)
+	if v, ok := limits["memory"]; !ok || v == nil || fmt.Sprint(v) == "" {
+		return fmt.Errorf("%w: faster scale-up (scaleUpPods, scaleUpPercent or scaleUpStabilizationSeconds under 60) needs a memory limit on the service, so that scale.max pods have a known ceiling; set a pod size first", ErrInvalid)
+	}
+	return nil
+}
+
 // Bounds for the HPA speed overrides. The window cap is the Kubernetes
 // API's own limit for stabilizationWindowSeconds.
 const (

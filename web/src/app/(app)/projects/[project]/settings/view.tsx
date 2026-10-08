@@ -61,6 +61,11 @@ export function ProjectSettingsView() {
   // typing; clamped on blur and on save.
   const [previewsTtl, setPreviewsTtl] = useState("7");
   const [alwaysOn, setAlwaysOn] = useState(false);
+  // Ingress limit defaults for the project's services. "" = platform
+  // default; kept as strings so a field can be emptied while typing.
+  const [limitMaxConcurrent, setLimitMaxConcurrent] = useState("");
+  const [limitRate, setLimitRate] = useState("");
+  const [limitBurst, setLimitBurst] = useState("");
   const [uptimeEnabled, setUptimeEnabled] = useState(true);
   // dirty pins the form once the user edits it: the describe payload
   // carries live env status, so it refetches (and would re-seed every
@@ -96,6 +101,9 @@ export function ProjectSettingsView() {
       setPreviewsEnabled(!!s.previews?.enabled);
       setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
       setAlwaysOn(!!s.alwaysOn);
+      setLimitMaxConcurrent(String(s.requestLimits?.maxConcurrent || ""));
+      setLimitRate(String(s.requestLimits?.ratePerSecond || ""));
+      setLimitBurst(String(s.requestLimits?.burst || ""));
       setUptimeEnabled(s.uptime?.disabled !== true);
     }
     // specKey stands in for spec: re-seed on content change, not on
@@ -126,6 +134,17 @@ export function ProjectSettingsView() {
   const storedRepoURL = spec?.defaultRepo?.url ?? "";
 
   const save = async () => {
+    // Blank = 0 = back to the platform default; -1 = no limit.
+    const limits = { maxConcurrent: limitMaxConcurrent, ratePerSecond: limitRate, burst: limitBurst };
+    const requestLimits: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(limits)) {
+      const n = raw.trim() === "" ? 0 : Number(raw);
+      if (!Number.isInteger(n) || n < (key === "burst" ? 0 : -1) || n > 1000000) {
+        toast.error(`${key} must be a whole number${key === "burst" ? "" : ", or -1 for no limit"}`);
+        return;
+      }
+      requestLimits[key] = n;
+    }
     try {
       await update.mutateAsync({
         // "" clears; the server treats an omitted/null key as "leave alone".
@@ -141,6 +160,7 @@ export function ProjectSettingsView() {
         previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl) },
         alwaysOn,
         uptime: { disabled: !uptimeEnabled },
+        requestLimits,
       });
       await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
       setDirty(false);
@@ -429,6 +449,53 @@ export function ProjectSettingsView() {
               </span>
             </span>
           </label>
+          <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3">
+            <span className="text-[13px] font-medium">Ingress limits (default for every service)</span>
+            <p className="text-[11px] text-[var(--text-tertiary)]">
+              All projects share one ingress. Past these limits a service answers 429 and the
+              other services keep being served. Counted per ingress replica. Leave a field blank
+              for the platform default (1000 concurrent requests, no rate limit); -1 removes the
+              limit. A service can override them under Settings → Networking.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="limitMaxConcurrent">Max concurrent requests</Label>
+                <Input
+                  id="limitMaxConcurrent"
+                  type="number"
+                  value={limitMaxConcurrent}
+                  min={-1}
+                  placeholder="1000"
+                  onChange={(e) => { setLimitMaxConcurrent(e.target.value); setDirty(true); }}
+                  className="w-32 font-mono"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="limitRate">Requests per second</Label>
+                <Input
+                  id="limitRate"
+                  type="number"
+                  value={limitRate}
+                  min={-1}
+                  placeholder="none"
+                  onChange={(e) => { setLimitRate(e.target.value); setDirty(true); }}
+                  className="w-32 font-mono"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="limitBurst">Burst</Label>
+                <Input
+                  id="limitBurst"
+                  type="number"
+                  value={limitBurst}
+                  min={0}
+                  placeholder="rate"
+                  onChange={(e) => { setLimitBurst(e.target.value); setDirty(true); }}
+                  className="w-32 font-mono"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

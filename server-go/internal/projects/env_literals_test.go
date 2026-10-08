@@ -50,6 +50,7 @@ var serviceDerivedEnvSpecFields = []string{
 	"Release",
 	"SnapshotBeforeDeploy",
 	"Placement",
+	"RequestLimits",
 }
 
 // fullyPopulatedServiceSpec returns a KusoServiceSpec with every
@@ -73,6 +74,7 @@ func fullyPopulatedServiceSpec(project string) kube.KusoServiceSpec {
 		PublicEnv:         []string{"NEXT_PUBLIC_API_URL"},
 		Release:           &kube.KusoReleaseSpec{Command: []string{"bin/migrate"}, TimeoutSeconds: 300},
 		Placement:         &kube.KusoPlacement{Labels: map[string]string{"kuso.sislelabs.com/pool": "web"}},
+		RequestLimits:     &kube.KusoRequestLimits{MaxConcurrent: 250},
 		// Image is set (runtime=image) — the env literal must carry it so a
 		// custom env of a runtime=image service isn't born imageless.
 		Image: &kube.KusoImage{Repository: "ghcr.io/x/y", Tag: "v1"},

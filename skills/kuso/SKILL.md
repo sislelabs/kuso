@@ -290,6 +290,28 @@ kuso project service set <p> <svc> --scale-up-stabilization -1 --scale-up-pods 0
 
 Also settable in `kuso.yml` (`services[].scale`), the service PATCH body (`{"scale":{"scaleUpPods":4}}`) and Settings → Scale. In `kuso.yml`, omitting a key resets it to the default. A short scale-up window can add a spare pod during deploys, because new pods report no CPU metrics for up to a minute. Previews never autoscale.
 
+**Faster scale-up needs a memory limit.** `scaleUpPods` above 1, any `scaleUpPercent`, or a scale-up window under 60s is rejected (400) unless the service has a memory limit, so that `scale.max` × limit is a known ceiling. Set a pod size first: `kuso project service set <p> <svc> --size medium`. A service already scaling fast without one keeps running and gets the error on its next scale or resources edit. CPU is not capped per pod (pod sizes set a CPU request, no CPU limit); under contention pods get CPU in proportion to their requests.
+
+### Ingress limits — one service can't take the shared ingress down
+
+All public services share the same Traefik pods. Each service has a cap on requests in flight (default **1000 per ingress replica**); past it that service answers **429** and every other host keeps being served. A rate limit is optional. Counts are per hostname and per Traefik replica (two on a standard install).
+
+```bash
+kuso project service set <p> <svc> --max-concurrent 2000                 # raise the cap
+kuso project service set <p> <svc> --rate-limit 300 --rate-burst 600     # add a rate limit
+kuso project service set <p> <svc> --max-concurrent -1                   # no cap (websocket/SSE fan-out)
+kuso project service set <p> <svc> --max-concurrent 0                    # back to the project default
+kuso project update <p> --max-concurrent 500                             # default for every service in the project
+```
+
+- A websocket or SSE stream holds a slot while it is open. A service with more than 1000 long-lived connections per replica needs a higher cap or `-1`.
+- `kuso.yml`: `requestLimits: {maxConcurrent, ratePerSecond, burst}` on a service or at the top level (project default). A missing block leaves the live limits alone.
+- PATCH: `{"requestLimits":{"maxConcurrent":2000}}` on the service or project. Web UI: service Settings → Networking, and Project Settings.
+- 429s from the cap are in Traefik's metrics as normal responses for the service, not in the app's logs: the request never reaches the pod.
+- Needs the operator's `traefik.io` middlewares RBAC. On installs that predate this feature, apply `deploy/operator.yaml` from the release; kuso-server logs `per-service ingress limits are OFF` at boot until then.
+
+**Logs under load:** a service is stored at up to 6000 log lines a minute (`KUSO_LOG_MAX_LINES_PER_MIN`). Past that kuso stops reading its logs until the minute ends, so the lines in between are not in `kuso logs`. Use a log drain for a service that needs every line.
+
 ### wakeOn excludePaths — keep callback paths warm
 
 ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag and not a kuso.yml field (the strict parser rejects it; `kuso apply` leaves it untouched) — PATCH the service:
@@ -872,6 +894,7 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--domains h1,h2] [--replicas N] [--max-replicas N] [--branch b] [--path dir] \
     [--scale-up-stabilization SEC] [--scale-up-pods N] [--scale-up-percent PCT] \
     [--scale-down-stabilization SEC] \
+    [--max-concurrent N] [--rate-limit RPS] [--rate-burst N] \
     [--internal on|off] [--private-egress on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off]
 #   NOT settable here: release hook (kuso.yml or PATCH), sleep.wakeOn (PATCH only)
@@ -904,7 +927,8 @@ kuso domains list <project> <service>
 # Imperative resource creation
 kuso project create <name> --repo <url> [--domain <d>] [--branch <b>] [--previews]
 kuso project update <name> [--domain <d>] [--previews=on|off] [--previews-ttl <days>] \
-       [--previews-domain <base>] [--github-installation <id>] [--always-on on|off]
+       [--previews-domain <base>] [--github-installation <id>] [--always-on on|off] \
+       [--max-concurrent N] [--rate-limit RPS] [--rate-burst N]
 kuso project addon add <project> <name> --kind <kind> [--version <v>] \
        [--size small|medium|large] [--ha] [--tls disable|require]
 kuso project addon update <project> <addon> [--tls ...] [--version ...] [--size ...]

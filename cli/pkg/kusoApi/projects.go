@@ -32,6 +32,7 @@ func esc(s string) string { return url.PathEscape(s) }
 type (
 	CreateProjectRequest  = apiv1.CreateProjectRequest
 	UpdateProjectRequest  = apiv1.UpdateProjectRequest
+	RequestLimitsPatch    = apiv1.RequestLimitsPatch
 	RepoRef               = apiv1.RepoRef
 	GitHubInstallationRef = apiv1.GitHubInstallationRef
 	PreviewsSettings      = apiv1.PreviewsSettings
@@ -198,6 +199,7 @@ type PatchServiceRequest struct {
 	PlatformAPIEgress *bool                        `json:"platformApiEgress,omitempty"`
 	WaitForCI         *bool                        `json:"waitForCI,omitempty"`
 	Uptime            *UptimePatch                 `json:"uptime,omitempty"`
+	RequestLimits     *RequestLimitsPatch          `json:"requestLimits,omitempty"`
 	Scale             *PatchScaleRequest           `json:"scale,omitempty"`
 	Repo              *PatchRepoRequest            `json:"repo,omitempty"`
 	SecurityContext   *PatchSecurityContextRequest `json:"securityContext,omitempty"`

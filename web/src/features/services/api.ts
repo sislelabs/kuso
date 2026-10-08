@@ -441,6 +441,9 @@ export interface PatchServiceBody {
   // uptime: both fields optional; an absent field is left unchanged and
   // path "" clears the override.
   uptime?: { disabled?: boolean; path?: string };
+  // Ingress limits. 0 clears a field (use the project default), -1 on
+  // maxConcurrent / ratePerSecond means no limit.
+  requestLimits?: { maxConcurrent?: number; ratePerSecond?: number; burst?: number };
 }
 
 export interface PatchRepoBody {

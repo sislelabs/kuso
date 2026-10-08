@@ -472,8 +472,16 @@ fi
 # crashed pod no longer takes down all ingress. On a single node both
 # replicas share it; the anti-affinity is only preferred.
 TRAEFIK_AFFINITY='{"podAntiAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"weight":100,"podAffinityTerm":{"topologyKey":"kubernetes.io/hostname","labelSelector":{"matchLabels":{"app.kubernetes.io/name":"traefik"}}}}]}}'
+# Resources: guaranteed CPU and memory, a memory limit sized for several
+# thousand open connections per replica, and no CPU limit (a throttled
+# proxy queues requests for every host). kuso-server's platformharden
+# keeps these as floors and adds GOMEMLIMIT and the kuso-platform
+# priority class on first boot.
 TRAEFIK_HA_ARGS=(
   --set deployment.replicas=2
+  --set resources.requests.cpu=250m
+  --set resources.requests.memory=256Mi
+  --set resources.limits.memory=1Gi
   --set podDisruptionBudget.enabled=true
   --set podDisruptionBudget.minAvailable=1
   --set-json "affinity=${TRAEFIK_AFFINITY}"

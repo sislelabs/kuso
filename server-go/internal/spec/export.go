@@ -38,6 +38,7 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 			if p.Spec.Uptime != nil && p.Spec.Uptime.Disabled {
 				f.Uptime = &ProjectUptimeSpec{Disabled: true}
 			}
+			f.RequestLimits = requestLimitsSpec(p.Spec.RequestLimits)
 			namespace = projectExecNamespace(&p, namespace)
 			break
 		}
@@ -171,6 +172,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	if cr.Spec.Uptime != nil {
 		s.Uptime = &UptimeSpec{Disabled: cr.Spec.Uptime.Disabled, Path: cr.Spec.Uptime.Path}
 	}
+	s.RequestLimits = requestLimitsSpec(cr.Spec.RequestLimits)
 	if cr.Spec.Sleep != nil {
 		s.Sleep = &SleepSpec{
 			Enabled:       cr.Spec.Sleep.Enabled,

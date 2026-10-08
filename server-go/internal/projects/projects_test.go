@@ -1243,7 +1243,8 @@ func TestPatchService_ScaleSpeedReachesEnv(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000,
+			Resources: map[string]any{"limits": map[string]any{"cpu": "1", "memory": "512Mi"}}}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
 	)
 	ctx := context.Background()
@@ -1296,6 +1297,140 @@ func TestPatchService_ScaleSpeedReachesEnv(t *testing.T) {
 		if v, ok := got[k]; ok {
 			t.Errorf("reset %s still on the env: %v", k, v)
 		}
+	}
+}
+
+// Ingress request limits resolve service-over-project and land on every
+// env of the service, previews included: a preview shares the same
+// ingress as production.
+func TestRequestLimits_ResolveOntoEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedService("alpha", "api", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr-9"),
+		seedEnv("alpha", "api", "production", "main", "alpha-api-production"),
+	)
+	ctx := context.Background()
+	limits := func(env string) kube.KusoRequestLimits {
+		t.Helper()
+		e, err := s.Kube.GetKusoEnvironment(ctx, "kuso", env)
+		if err != nil {
+			t.Fatalf("get %s: %v", env, err)
+		}
+		if e.Spec.RequestLimits == nil {
+			return kube.KusoRequestLimits{}
+		}
+		return *e.Spec.RequestLimits
+	}
+	ip := func(v int) *int { return &v }
+
+	// Project default reaches every service's envs.
+	if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{RequestLimits: &PatchRequestLimits{MaxConcurrent: ip(300), RatePerSecond: ip(50)}}); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	want := kube.KusoRequestLimits{MaxConcurrent: 300, RatePerSecond: 50}
+	for _, env := range []string{"alpha-web-production", "alpha-web-pr-9", "alpha-api-production"} {
+		if got := limits(env); got != want {
+			t.Errorf("%s after project default = %+v, want %+v", env, got, want)
+		}
+	}
+
+	// A service overrides field by field: its own cap, the project's rate.
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{RequestLimits: &PatchRequestLimits{MaxConcurrent: ip(-1), Burst: ip(80)}}); err != nil {
+		t.Fatalf("patch service: %v", err)
+	}
+	want = kube.KusoRequestLimits{MaxConcurrent: -1, RatePerSecond: 50, Burst: 80}
+	for _, env := range []string{"alpha-web-production", "alpha-web-pr-9"} {
+		if got := limits(env); got != want {
+			t.Errorf("%s after service override = %+v, want %+v", env, got, want)
+		}
+	}
+	if got := limits("alpha-api-production"); got != (kube.KusoRequestLimits{MaxConcurrent: 300, RatePerSecond: 50}) {
+		t.Errorf("sibling service changed: %+v", got)
+	}
+
+	// 0 clears an override; with nothing set anywhere the env carries no
+	// block and the chart default applies.
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{RequestLimits: &PatchRequestLimits{MaxConcurrent: ip(0), Burst: ip(0)}}); err != nil {
+		t.Fatalf("clear service: %v", err)
+	}
+	if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{RequestLimits: &PatchRequestLimits{MaxConcurrent: ip(0), RatePerSecond: ip(0)}}); err != nil {
+		t.Fatalf("clear project: %v", err)
+	}
+	for _, env := range []string{"alpha-web-production", "alpha-web-pr-9", "alpha-api-production"} {
+		e, _ := s.Kube.GetKusoEnvironment(ctx, "kuso", env)
+		if e.Spec.RequestLimits != nil {
+			t.Errorf("%s still carries limits after clearing: %+v", env, *e.Spec.RequestLimits)
+		}
+	}
+
+	for name, bad := range map[string]PatchRequestLimits{
+		"cap below -1": {MaxConcurrent: ip(-2)},
+		"cap too big":  {MaxConcurrent: ip(1000001)},
+		"rate too big": {RatePerSecond: ip(1000001)},
+		"burst < 0":    {Burst: ip(-1)},
+	} {
+		b := bad
+		if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{RequestLimits: &b}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("service %s: want ErrInvalid, got %v", name, err)
+		}
+		if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{RequestLimits: &b}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("project %s: want ErrInvalid, got %v", name, err)
+		}
+	}
+}
+
+// Fast scale-up multiplies whatever one pod may use, so it is only
+// accepted on a service whose pods have a memory limit: then max
+// replicas x limit is a known ceiling. A pod-size preset is enough.
+func TestPatchService_FastScaleUpNeedsPodLimits(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	ctx := context.Background()
+	ip := func(v int) *int { return &v }
+	fast := PatchScaleRequest{Min: ip(2), Max: ip(8), ScaleUpPods: ip(4)}
+
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &fast}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("fast scale-up without pod limits: want ErrInvalid, got %v", err)
+	}
+	// The default speed needs nothing, and neither does a service that
+	// cannot autoscale.
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{Min: ip(2), Max: ip(8)}}); err != nil {
+		t.Fatalf("default speed: %v", err)
+	}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{Min: ip(2), Max: ip(2), ScaleUpPods: ip(4)}}); err != nil {
+		t.Fatalf("fixed replicas: %v", err)
+	}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{ScaleUpPods: ip(0)}}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	limits := map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "256Mi"}, "limits": map[string]any{"memory": "1Gi"}}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &fast, Resources: &limits}); err != nil {
+		t.Fatalf("fast scale-up with pod limits: %v", err)
+	}
+	// Dropping the limits afterwards would remove the ceiling.
+	none := map[string]any{}
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Resources: &none}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("clearing limits under fast scale-up: want ErrInvalid, got %v", err)
+	}
+	// An unrelated edit on a service that already runs fast without
+	// limits (set before this rule existed) is not blocked.
+	svc, _ := s.GetService(ctx, "alpha", "web")
+	svc.Spec.Resources = nil
+	if _, err := s.Kube.UpdateKusoService(ctx, "kuso", svc); err != nil {
+		t.Fatalf("seed legacy state: %v", err)
+	}
+	port := int32(4000)
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Port: &port}); err != nil {
+		t.Fatalf("unrelated edit on a legacy fast service: %v", err)
 	}
 }
 

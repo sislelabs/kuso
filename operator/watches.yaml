@@ -46,6 +46,11 @@
   chart: helm-charts/kusoenvironment
   reconcilePeriod: 10m
   maxConcurrentReconciles: 8
+  # Per-service ingress limits render only when the operator Deployment
+  # carries KUSO_INGRESS_LIMITS=true, which goes with the traefik.io
+  # middlewares rule on its ClusterRole. Unset expands to "" (off).
+  overrideValues:
+    ingressLimitsEnabled: $KUSO_INGRESS_LIMITS
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoAddon

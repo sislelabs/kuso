@@ -146,6 +146,51 @@ export function NetworkingSection({
           }
         />
       )}
+      {!state.internal && (
+        <>
+          <Row
+            label="max concurrent requests"
+            hint="per ingress replica · past it this service answers 429 · -1 = no cap · blank = project default, else 1000"
+            control={
+              <Input
+                type="number"
+                value={state.limitMaxConcurrent}
+                onChange={(e) => setState((s) => ({ ...s, limitMaxConcurrent: e.target.value }))}
+                placeholder="default"
+                min={-1}
+                className="h-7 w-24 font-mono text-[12px]"
+              />
+            }
+          />
+          <Row
+            label="rate limit"
+            hint="requests per second per ingress replica / burst · blank = project default, else none"
+            control={
+              <div className="inline-flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  value={state.limitRate}
+                  onChange={(e) => setState((s) => ({ ...s, limitRate: e.target.value }))}
+                  placeholder="none"
+                  aria-label="Requests per second"
+                  min={-1}
+                  className="h-7 w-24 font-mono text-[12px]"
+                />
+                <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+                <Input
+                  type="number"
+                  value={state.limitBurst}
+                  onChange={(e) => setState((s) => ({ ...s, limitBurst: e.target.value }))}
+                  placeholder="rate"
+                  aria-label="Burst"
+                  min={0}
+                  className="h-7 w-24 font-mono text-[12px]"
+                />
+              </div>
+            }
+          />
+        </>
+      )}
       <Row
         label="custom domains"
         hint={`${envName} environment only · ${

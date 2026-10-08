@@ -165,6 +165,9 @@ type Shipper struct {
 	rateMu      sync.Mutex
 	rateCounts  map[string]int
 	rateDropped map[string]int // lines dropped this window (for the warn log)
+	// rateWindowEnd is when the counters next reset; a capped service's
+	// streams stay closed until then.
+	rateWindowEnd time.Time
 
 	// envHints accumulates "missing env var" hits parsed out of pod
 	// stdout. Keyed by "project/service/name" for natural dedupe
@@ -254,6 +257,11 @@ type containerState struct {
 	// doneRestart is the restart count whose terminated instance was
 	// shipped to EOF; -1 when none.
 	doneRestart int32
+	// pausedUntil: the service hit its rate cap, so the stream was closed
+	// and is not reopened before this time. Reading on only to discard
+	// every line made the shipper (and the apiserver and kubelet serving
+	// the stream) do work in proportion to the noisiest app.
+	pausedUntil time.Time
 }
 
 // Run blocks until ctx done. After a restart or leader failover each
@@ -383,7 +391,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 			st = &containerState{doneRestart: -1}
 			s.containers[key] = st
 		}
-		if st.streaming || (terminated && st.doneRestart == restarts) {
+		if st.streaming || (terminated && st.doneRestart == restarts) || time.Now().Before(st.pausedUntil) {
 			s.mu.Unlock()
 			continue
 		}
@@ -524,11 +532,21 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 		if len(line) > maxLineLen {
 			line = line[:maxLineLen] + "…[truncated]"
 		}
-		s.append(db.LogLine{
+		if !s.append(db.LogLine{
 			Ts: time.Now().UTC(), Pod: pod.Name,
 			Project: project, Service: service, Env: env,
 			Line: line,
-		}, emitted, envName, envKind)
+		}, emitted, envName, envKind) {
+			// Over the cap: stop reading instead of draining the stream
+			// to throw it away. The cursor moves to now, so the resume
+			// skips what was written in between; those lines would have
+			// been dropped anyway.
+			s.mu.Lock()
+			st.pausedUntil = s.rateWindowEndsAt()
+			st.lastTs, st.nAtLast = time.Now().UTC(), 0
+			s.mu.Unlock()
+			return
+		}
 		// Pattern-match for missing-env-var crashes. Cheap regex
 		// per line; on hit we record the var name + log line so the
 		// UI can surface "your last crash mentioned $X — set it?"
@@ -700,20 +718,33 @@ func (s *Shipper) resetRateCounters(ctx context.Context) {
 			s.rateMu.Lock()
 			for key, n := range s.rateDropped {
 				if n > 0 {
-					s.Logger.Warn("logship: per-service log rate cap hit, dropping excess",
-						"service", key, "dropped", n, "cap", resolveRateCap(), "window", rateWindow)
+					s.Logger.Warn("logship: per-service log rate cap hit; its log streams were paused until the window reset",
+						"service", key, "cap", resolveRateCap(), "window", rateWindow)
 				}
 			}
 			s.rateCounts = map[string]int{}
 			s.rateDropped = map[string]int{}
+			s.rateWindowEnd = time.Now().Add(rateWindow)
 			s.rateMu.Unlock()
 		}
 	}
 }
 
-func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind string) {
+// rateWindowEndsAt returns when the rate counters next reset.
+func (s *Shipper) rateWindowEndsAt() time.Time {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	if s.rateWindowEnd.IsZero() {
+		s.rateWindowEnd = time.Now().Add(rateWindow)
+	}
+	return s.rateWindowEnd
+}
+
+// append queues a line for storage. It returns false when the line was
+// refused because its service is over the rate cap.
+func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind string) bool {
 	if !s.allowLine(l.Project, l.Service) {
-		return
+		return false
 	}
 	if s.Tap != nil {
 		if emitted.IsZero() {
@@ -741,6 +772,7 @@ func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind strin
 			})
 		}
 	}
+	return true
 }
 
 func (s *Shipper) runFlusher(ctx context.Context) {

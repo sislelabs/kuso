@@ -70,6 +70,9 @@ type File struct {
 	// Uptime is the project-wide uptime-check opt-out. A missing block
 	// leaves the live setting alone.
 	Uptime   *ProjectUptimeSpec `yaml:"uptime,omitempty"`
+	// RequestLimits is the project default for its services' ingress
+	// limits. A missing block leaves the live setting alone.
+	RequestLimits *RequestLimitsSpec `yaml:"requestLimits,omitempty"`
 	Prune    bool               `yaml:"prune,omitempty"`
 	Services []ServiceSpec      `yaml:"services,omitempty"`
 	Addons   []AddonSpec        `yaml:"addons,omitempty"`
@@ -93,6 +96,10 @@ type ServiceSpec struct {
 	// Uptime sets the uptime-check opt-out and path. A missing block
 	// leaves the live settings alone.
 	Uptime *UptimeSpec `yaml:"uptime,omitempty"`
+	// RequestLimits caps the service's use of the shared ingress. A
+	// missing block leaves the live limits alone; a present block is
+	// written whole, omitted keys falling back to the project's.
+	RequestLimits *RequestLimitsSpec `yaml:"requestLimits,omitempty"`
 	Command           []string            `yaml:"command,omitempty"`
 	Domains           []DomainSpec        `yaml:"domains,omitempty"`
 	Env               map[string]EnvValue `yaml:"env,omitempty"`
@@ -270,6 +277,29 @@ type DomainSpec struct {
 	// TLSSecret names a pre-provisioned TLS secret; required for (and
 	// only valid with) wildcard hosts ("*.example.com").
 	TLSSecret string `yaml:"tlsSecret,omitempty"`
+}
+
+// RequestLimitsSpec mirrors kube.KusoRequestLimits: per Traefik replica
+// and per Host; -1 on maxConcurrent or ratePerSecond means no limit.
+type RequestLimitsSpec struct {
+	MaxConcurrent int `yaml:"maxConcurrent,omitempty"`
+	RatePerSecond int `yaml:"ratePerSecond,omitempty"`
+	Burst         int `yaml:"burst,omitempty"`
+}
+
+func (r *RequestLimitsSpec) patch() *projects.PatchRequestLimits {
+	if r == nil {
+		return nil
+	}
+	mc, rate, burst := r.MaxConcurrent, r.RatePerSecond, r.Burst
+	return &projects.PatchRequestLimits{MaxConcurrent: &mc, RatePerSecond: &rate, Burst: &burst}
+}
+
+func requestLimitsSpec(l *kube.KusoRequestLimits) *RequestLimitsSpec {
+	if l == nil {
+		return nil
+	}
+	return &RequestLimitsSpec{MaxConcurrent: l.MaxConcurrent, RatePerSecond: l.RatePerSecond, Burst: l.Burst}
 }
 
 type ScaleSpec struct {
