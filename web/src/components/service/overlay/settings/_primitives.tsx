@@ -52,6 +52,11 @@ export interface FormState {
   scaleMin: string;
   scaleMax: string;
   scaleCPU: string;
+  // Autoscale speed overrides. "" = chart default.
+  scaleUpWindow: string;
+  scaleUpPods: string;
+  scaleUpPercent: string;
+  scaleDownWindow: string;
   // Sleep wake-on exclude paths (newline-separated). When the service
   // sleeps (min=0), any request to a listed path keeps the WHOLE
   // deployment warm — so a Stripe/GitHub webhook on a sleeping service
@@ -159,6 +164,10 @@ export function fromSvc(svc?: KusoService): FormState {
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),
+    scaleUpWindow: String(svc?.spec.scale?.scaleUpStabilizationSeconds ?? ""),
+    scaleUpPods: String(svc?.spec.scale?.scaleUpPods || ""),
+    scaleUpPercent: String(svc?.spec.scale?.scaleUpPercent || ""),
+    scaleDownWindow: String(svc?.spec.scale?.scaleDownStabilizationSeconds ?? ""),
     sleepExcludePaths: (svc?.spec?.sleep?.wakeOn?.excludePaths ?? []).join("\n"),
     sleepEnabled: !!svc?.spec.sleep?.enabled,
     sleepAfter: String(svc?.spec.sleep?.afterMinutes || 30),

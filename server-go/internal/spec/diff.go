@@ -147,6 +147,37 @@ func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.Patc
 		if c := *req.Scale.TargetCPU; c != liveCPU {
 			add("scale.targetCPU", fmt.Sprint(liveCPU), fmt.Sprint(c), false)
 		}
+		// Speed overrides: -1 (windows) / 0 (pods, percent) = chart default.
+		liveUp, liveDown, livePods, livePct := -1, -1, 0, 0
+		if ls.Scale != nil {
+			if v := ls.Scale.ScaleUpStabilizationSeconds; v != nil {
+				liveUp = *v
+			}
+			if v := ls.Scale.ScaleDownStabilizationSeconds; v != nil {
+				liveDown = *v
+			}
+			livePods, livePct = ls.Scale.ScaleUpPods, ls.Scale.ScaleUpPercent
+		}
+		for _, sp := range []struct {
+			field         string
+			live, desired int
+			unset         int
+		}{
+			{"scale.scaleUpStabilizationSeconds", liveUp, *req.Scale.ScaleUpStabilizationSeconds, -1},
+			{"scale.scaleUpPods", livePods, *req.Scale.ScaleUpPods, 0},
+			{"scale.scaleUpPercent", livePct, *req.Scale.ScaleUpPercent, 0},
+			{"scale.scaleDownStabilizationSeconds", liveDown, *req.Scale.ScaleDownStabilizationSeconds, -1},
+		} {
+			if sp.live != sp.desired {
+				show := func(v int) string {
+					if v == sp.unset {
+						return "default"
+					}
+					return fmt.Sprint(v)
+				}
+				add(sp.field, show(sp.live), show(sp.desired), false)
+			}
+		}
 		if len(out) == n {
 			req.Scale = nil
 		}

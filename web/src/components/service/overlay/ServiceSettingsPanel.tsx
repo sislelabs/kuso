@@ -83,7 +83,15 @@ function fieldDiffValues(
       .filter(Boolean)
       .join(", ");
   const scale = (s: FormState) =>
-    `min ${s.scaleMin}, max ${s.scaleMax}, cpu ${s.scaleCPU}%`;
+    [
+      `min ${s.scaleMin}, max ${s.scaleMax}, cpu ${s.scaleCPU}%`,
+      s.scaleUpWindow && `up delay ${s.scaleUpWindow}s`,
+      s.scaleUpPods && `up step ${s.scaleUpPods} pods`,
+      s.scaleUpPercent && `up step ${s.scaleUpPercent}%`,
+      s.scaleDownWindow && `down delay ${s.scaleDownWindow}s`,
+    ]
+      .filter(Boolean)
+      .join(", ");
   const repo = (s: FormState) =>
     [
       s.repoURL,
@@ -333,7 +341,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     const scaleChanged =
       state.scaleMin !== baseline.scaleMin ||
       state.scaleMax !== baseline.scaleMax ||
-      state.scaleCPU !== baseline.scaleCPU;
+      state.scaleCPU !== baseline.scaleCPU ||
+      state.scaleUpWindow !== baseline.scaleUpWindow ||
+      state.scaleUpPods !== baseline.scaleUpPods ||
+      state.scaleUpPercent !== baseline.scaleUpPercent ||
+      state.scaleDownWindow !== baseline.scaleDownWindow;
     const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
     const nonProdChanged = state.sleepNonProduction !== baseline.sleepNonProduction;
     const sleepChanged =
@@ -350,6 +362,24 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       }
       if (scaleChanged) {
         body.scale = { min, max, targetCPU: cpu };
+        // Blank = back to the default: -1 for the delays (0 is a real
+        // value there), 0 for the step.
+        const speed = [
+          ["scaleUpStabilizationSeconds", "scaleUpWindow", -1, 0, 3600],
+          ["scaleUpPods", "scaleUpPods", 0, 1, 100],
+          ["scaleUpPercent", "scaleUpPercent", 0, 1, 1000],
+          ["scaleDownStabilizationSeconds", "scaleDownWindow", -1, 0, 3600],
+        ] as const;
+        for (const [key, field, reset, lo, hi] of speed) {
+          const raw = state[field].trim();
+          if (raw === baseline[field].trim()) continue;
+          const n = raw === "" ? reset : Number(raw);
+          if (raw !== "" && (!Number.isInteger(n) || n < lo || n > hi)) {
+            toast.error(`${key} must be a whole number from ${lo} to ${hi}`);
+            return;
+          }
+          body.scale[key] = n;
+        }
       }
       // min=0 only works behind the activator, so it forces production
       // sleep on. Otherwise sleep.enabled follows the Sleep switch; it used

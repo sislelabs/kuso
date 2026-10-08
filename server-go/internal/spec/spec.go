@@ -276,6 +276,13 @@ type ScaleSpec struct {
 	Min       int `yaml:"min,omitempty"`
 	Max       int `yaml:"max,omitempty"`
 	TargetCPU int `yaml:"targetCPU,omitempty"`
+	// HPA speed overrides; omitted = chart defaults (120s scale-up
+	// window, +1 pod per 60s, 300s scale-down window). The windows are
+	// pointers because 0 is a real value.
+	ScaleUpStabilizationSeconds   *int `yaml:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   int  `yaml:"scaleUpPods,omitempty"`
+	ScaleUpPercent                int  `yaml:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `yaml:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 // UptimeSpec is the kuso.yaml form of a service's uptime-check settings.

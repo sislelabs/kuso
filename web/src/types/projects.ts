@@ -73,7 +73,16 @@ export interface KusoServiceSpec {
   port?: number;
   domains?: { host?: string; tls?: boolean }[];
   envVars?: KusoEnvVar[];
-  scale?: { min?: number; max?: number; targetCPU?: number };
+  scale?: {
+    min?: number;
+    max?: number;
+    targetCPU?: number;
+    // HPA speed overrides; absent = chart defaults (120s / +1 pod / 300s).
+    scaleUpStabilizationSeconds?: number;
+    scaleUpPods?: number;
+    scaleUpPercent?: number;
+    scaleDownStabilizationSeconds?: number;
+  };
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
   resources?: {
     requests?: { cpu?: string; memory?: string };

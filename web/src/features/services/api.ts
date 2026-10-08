@@ -389,7 +389,17 @@ export interface PatchServiceBody {
   // watchPaths replaces the push-build globs; [] restores the default.
   watchPaths?: string[];
   domains?: { host: string; tls?: boolean }[];
-  scale?: { min?: number; max?: number; targetCPU?: number };
+  // Speed overrides: -1 resets a stabilization window to the default
+  // (0 is a real value there); 0 resets scaleUpPods / scaleUpPercent.
+  scale?: {
+    min?: number;
+    max?: number;
+    targetCPU?: number;
+    scaleUpStabilizationSeconds?: number;
+    scaleUpPods?: number;
+    scaleUpPercent?: number;
+    scaleDownStabilizationSeconds?: number;
+  };
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
   // Empty object clears (chart default); absent leaves unchanged.
   resources?: Record<string, unknown>;

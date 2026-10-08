@@ -107,6 +107,8 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
 
 interface Replicas {
   ready: number;
+  // Pods the deployment currently wants; max is the autoscale ceiling.
+  desired: number;
   max: number;
   cpuPct?: number;
 }
@@ -118,12 +120,11 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
   if (!r || (r.desired === undefined && r.ready === undefined && r.max === undefined)) {
     return null;
   }
-  // Prefer max (autoscale ceiling) over desired so the badge reads
-  // 1/5 even when only one pod is currently scheduled. Fall back to
-  // desired when max isn't surfaced yet.
+  // max falls back to desired when the ceiling isn't surfaced yet (and
+  // vice versa for older servers that only sent one of them).
   const ceil = r.max ?? r.desired ?? 0;
   const cpu = (env?.status?.cpuPct as number | undefined) ?? undefined;
-  return { ready: r.ready ?? 0, max: ceil, cpuPct: cpu };
+  return { ready: r.ready ?? 0, desired: r.desired ?? ceil, max: ceil, cpuPct: cpu };
 }
 
 // Footer is always visible so the status line + build sha are
@@ -396,9 +397,9 @@ function ReplicasBadge({
   const ratio = replicas.max > 0 ? replicas.ready / replicas.max : 0;
   let dotCls = "bg-[var(--text-tertiary)]/40";
   // Color the ready-count number too — same color the dot uses, so
-  // "1/5 ready" reads as a unit. The pre-v0.9.4 layout left the
+  // "1/1 ready" reads as a unit. The pre-v0.9.4 layout left the
   // number grey even when the dot was green, which made a healthy
-  // 1/5 look the same as a 0/5.
+  // 1/1 look the same as a 0/1.
   let countCls = "text-[var(--text-secondary)]";
   if (status !== "sleeping" && replicas.ready > 0) {
     if (ratio >= 0.85) {
@@ -417,13 +418,28 @@ function ReplicasBadge({
       <span className="inline-flex items-center gap-1.5">
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
         <span>
-          <span className={countCls}>{replicas.ready}</span>
-          <span className="text-[var(--text-tertiary)]/60">/{replicas.max}</span>{" "}
+          {/* ready/desired is the health reading. The autoscale ceiling
+              sits apart as "max N": "4/8 ready" used to read as four
+              pods down when four were wanted and all four were up. */}
+          {status !== "sleeping" && (
+            <>
+              <span className={countCls}>{replicas.ready}</span>
+              <span className="text-[var(--text-tertiary)]/60">/{replicas.desired}</span>{" "}
+            </>
+          )}
           <span className="text-[var(--text-tertiary)]/80">
             {status === "sleeping" ? "asleep" : "ready"}
           </span>
         </span>
       </span>
+      {replicas.max > replicas.desired && (
+        <span
+          title="Autoscale ceiling (scale.max)"
+          className="whitespace-nowrap text-[var(--text-tertiary)]/70"
+        >
+          max {replicas.max}
+        </span>
+      )}
       {replicas.cpuPct !== undefined && replicas.ready > 0 && (
         <span
           title="Average CPU vs container limit"

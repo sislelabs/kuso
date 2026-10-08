@@ -263,6 +263,13 @@ type PatchScaleRequest struct {
 	Min       *int `json:"min,omitempty"`
 	Max       *int `json:"max,omitempty"`
 	TargetCPU *int `json:"targetCPU,omitempty"`
+	// HPA speed overrides. For the two windows -1 clears the override
+	// (back to the chart default) since 0 is a real value; for pods and
+	// percent 0 clears it.
+	ScaleUpStabilizationSeconds   *int `json:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   *int `json:"scaleUpPods,omitempty"`
+	ScaleUpPercent                *int `json:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 // PatchService applies a partial update to a service spec. Mirrors

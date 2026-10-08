@@ -272,6 +272,24 @@ Three distinct states — don't conflate them:
 - **Wake:** `kuso project service wake <p> <s>` forces a sleeping production env up now. Any request to a sleeping env's URL also wakes it.
 - **Hard-stop:** `kuso project service stop <p> <s>` (or `kuso project stop <p>` for everything) pins 0 replicas and does NOT wake on traffic — visitors get a "service stopped" page until `... start`.
 
+### Autoscaling speed
+
+A service autoscales on CPU when `scale.max > scale.min`. The defaults are deliberately slow: a 120s wait, then +1 pod per 60s, so **min 2 → max 8 takes roughly 8 minutes** of sustained load. Scale-down waits 300s, then removes 1 pod per 60s. For bursty traffic (a ticket on-sale), override per service:
+
+| `scale` key | CLI flag on `service set` | Range | Default |
+|---|---|---|---|
+| `scaleUpStabilizationSeconds` | `--scale-up-stabilization` | 0-3600 | 120 |
+| `scaleUpPods` (pods added per 60s) | `--scale-up-pods` | 1-100 | 1 |
+| `scaleUpPercent` (% of current pods per 60s; the larger of the two applies) | `--scale-up-percent` | 1-1000 | off |
+| `scaleDownStabilizationSeconds` | `--scale-down-stabilization` | 0-3600 | 300 |
+
+```bash
+kuso project service set <p> <svc> --scale-up-stabilization 0 --scale-up-pods 4   # 2 → 8 in ~2 min
+kuso project service set <p> <svc> --scale-up-stabilization -1 --scale-up-pods 0  # back to defaults
+```
+
+Also settable in `kuso.yml` (`services[].scale`), the service PATCH body (`{"scale":{"scaleUpPods":4}}`) and Settings → Scale. In `kuso.yml`, omitting a key resets it to the default. A short scale-up window can add a spare pod during deploys, because new pods report no CPU metrics for up to a minute. Previews never autoscale.
+
 ### wakeOn excludePaths — keep callback paths warm
 
 ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag and not a kuso.yml field (the strict parser rejects it; `kuso apply` leaves it untouched) — PATCH the service:
@@ -852,6 +870,8 @@ kuso project addon subscribe|unsubscribe <project> <service> <addon> [addon...]
 # Service spec edits (patch-shaped: only passed flags change)
 kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--domains h1,h2] [--replicas N] [--max-replicas N] [--branch b] [--path dir] \
+    [--scale-up-stabilization SEC] [--scale-up-pods N] [--scale-up-percent PCT] \
+    [--scale-down-stabilization SEC] \
     [--internal on|off] [--private-egress on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off]
 #   NOT settable here: release hook (kuso.yml or PATCH), sleep.wakeOn (PATCH only)

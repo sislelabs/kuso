@@ -95,7 +95,11 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		out.EnvVars = apiv1EnvVarsToDomain(in.EnvVars)
 	}
 	if in.Scale != nil {
-		out.Scale = &projects.ServiceScale{Min: in.Scale.Min, Max: in.Scale.Max, TargetCPU: in.Scale.TargetCPU}
+		out.Scale = &projects.ServiceScale{
+			Min: in.Scale.Min, Max: in.Scale.Max, TargetCPU: in.Scale.TargetCPU,
+			ScaleUpStabilizationSeconds: in.Scale.ScaleUpStabilizationSeconds, ScaleUpPods: in.Scale.ScaleUpPods,
+			ScaleUpPercent: in.Scale.ScaleUpPercent, ScaleDownStabilizationSeconds: in.Scale.ScaleDownStabilizationSeconds,
+		}
 	}
 	if in.Sleep != nil {
 		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes, NonProduction: in.Sleep.NonProduction}

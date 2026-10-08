@@ -339,6 +339,30 @@
                 "default": 1,
                 "type": "integer"
               },
+              "scaleDownStabilizationSeconds": {
+                "description": "Seconds the HPA waits before scaling down. Unset = chart default (300).",
+                "maximum": 3600,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpPercent": {
+                "description": "Percent of current replicas the HPA may add per 60s, applied alongside scaleUpPods (whichever allows more wins). Unset/0 = no percent policy.",
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpPods": {
+                "description": "Pods the HPA may add per 60s. Unset/0 = 1.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpStabilizationSeconds": {
+                "description": "Seconds the HPA waits before acting on a scale-up signal. Unset = chart default (120).",
+                "maximum": 3600,
+                "minimum": 0,
+                "type": "integer"
+              },
               "targetCPU": {
                 "default": 70,
                 "type": "integer"

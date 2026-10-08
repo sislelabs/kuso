@@ -33,17 +33,22 @@ func seedRichService(project, service string) planSeed {
 			PlatformAPIEgress: true,
 			Command:           []string{"./serve", "--port", "8080"},
 			Domains:           []kube.KusoDomain{{Host: "api.shop.example.com", TLS: true}, {Host: "*.shop.example.com", TLS: true, TLSSecret: "wild"}},
-			Scale:             func() *kube.KusoScaleSpec { s := &kube.KusoScaleSpec{Max: 6, TargetCPU: 65}; s.SetMin(2); return s }(),
-			Sleep:             &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20, NonProduction: "off", WakeOn: &kube.KusoServiceWake{ExcludePaths: []string{"/hook"}}},
-			Placement:         &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}, Nodes: []string{"n1"}},
-			Volumes:           []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 5, StorageClass: "longhorn", AccessMode: "ReadWriteMany"}},
-			Static:            &kube.KusoStaticSpec{BuilderImage: "node:22", RuntimeImage: "nginx:1", BuildCmd: "npm run build", OutputDir: "dist"},
-			Buildpacks:        &kube.KusoBuildpacksSpec{BuilderImage: "paketo/builder", LifecycleImage: "lifecycle:0.20"},
-			Image:             &kube.KusoImage{Repository: "ghcr.io/me/api", Tag: "2.0"},
-			Release:           &kube.KusoReleaseSpec{Command: []string{"node", "migrate.js"}, TimeoutSeconds: 600},
-			BuildArgs:         map[string]string{"VERSION": "1"},
-			PublicEnv:         []string{"NEXT_PUBLIC_API"},
-			SecurityContext:   &kube.KusoSecurityContext{Capabilities: &kube.KusoCapabilities{Add: []string{"SETUID"}}, AllowPrivilegeEscalation: &allowEsc},
+			Scale: func() *kube.KusoScaleSpec {
+				upWindow := 0
+				s := &kube.KusoScaleSpec{Max: 6, TargetCPU: 65, ScaleUpStabilizationSeconds: &upWindow, ScaleUpPods: 4}
+				s.SetMin(2)
+				return s
+			}(),
+			Sleep:           &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20, NonProduction: "off", WakeOn: &kube.KusoServiceWake{ExcludePaths: []string{"/hook"}}},
+			Placement:       &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}, Nodes: []string{"n1"}},
+			Volumes:         []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 5, StorageClass: "longhorn", AccessMode: "ReadWriteMany"}},
+			Static:          &kube.KusoStaticSpec{BuilderImage: "node:22", RuntimeImage: "nginx:1", BuildCmd: "npm run build", OutputDir: "dist"},
+			Buildpacks:      &kube.KusoBuildpacksSpec{BuilderImage: "paketo/builder", LifecycleImage: "lifecycle:0.20"},
+			Image:           &kube.KusoImage{Repository: "ghcr.io/me/api", Tag: "2.0"},
+			Release:         &kube.KusoReleaseSpec{Command: []string{"node", "migrate.js"}, TimeoutSeconds: 600},
+			BuildArgs:       map[string]string{"VERSION": "1"},
+			PublicEnv:       []string{"NEXT_PUBLIC_API"},
+			SecurityContext: &kube.KusoSecurityContext{Capabilities: &kube.KusoCapabilities{Add: []string{"SETUID"}}, AllowPrivilegeEscalation: &allowEsc},
 			EnvVars: []kube.KusoEnvVar{
 				{Name: "LOG_LEVEL", Value: "info"},
 				{Name: "DATABASE_URL", ValueFrom: map[string]any{
@@ -222,6 +227,37 @@ func TestServicePatchReq_OmittedScaleIsCreateDefault(t *testing.T) {
 	req := servicePatchReq(ServiceSpec{Name: "api"})
 	if *req.Scale.Min != 1 || *req.Scale.Max != 5 || *req.Scale.TargetCPU != 70 {
 		t.Fatalf("omitted scale = %d/%d/%d, want 1/5/70", *req.Scale.Min, *req.Scale.Max, *req.Scale.TargetCPU)
+	}
+}
+
+// Scale-speed keys diff like the rest of scale, and dropping one from
+// the file puts it back on the chart default rather than leaving the
+// live override in place.
+func TestServiceDiff_ScaleSpeed(t *testing.T) {
+	live := decodeService(t, seedRichService("shop", "api"))
+	d := exportService("shop", *live)
+	if d.Scale.ScaleUpStabilizationSeconds == nil || *d.Scale.ScaleUpStabilizationSeconds != 0 || d.Scale.ScaleUpPods != 4 {
+		t.Fatalf("scale speed not exported: %+v", d.Scale)
+	}
+	d.Scale.ScaleUpStabilizationSeconds = nil
+	d.Scale.ScaleUpPods = 0
+	d.Scale.ScaleUpPercent = 50
+	req, fields := diffServiceSpec(live, d)
+	if req.Scale == nil || *req.Scale.ScaleUpStabilizationSeconds != -1 || *req.Scale.ScaleUpPods != 0 || *req.Scale.ScaleUpPercent != 50 {
+		t.Fatalf("scale patch = %+v", req.Scale)
+	}
+	want := map[string][2]string{
+		"scale.scaleUpStabilizationSeconds": {"0", "default"},
+		"scale.scaleUpPods":                 {"4", "default"},
+		"scale.scaleUpPercent":              {"default", "50"},
+	}
+	if len(fields) != len(want) {
+		t.Fatalf("fields = %+v", fields)
+	}
+	for _, f := range fields {
+		if w, ok := want[f.Field]; !ok || f.From != w[0] || f.To != w[1] {
+			t.Errorf("unexpected diff %+v", f)
+		}
 	}
 }
 

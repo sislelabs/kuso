@@ -42,7 +42,7 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `command` | list of strings | Overrides the image's CMD. |
 | `domains` | list | `{host, tls, tlsSecret}`. `tlsSecret` is only for wildcard hosts (`*.example.com`) and is required there. |
 | `env` | map | See [Env values](#env-values). |
-| `scale` | `{min, max, targetCPU}` | If you leave it out, it resets to min 1, max 5, targetCPU 70. `min: 0` means scale to zero. |
+| `scale` | `{min, max, targetCPU, scaleUpStabilizationSeconds, scaleUpPods, scaleUpPercent, scaleDownStabilizationSeconds}` | If you leave it out, it resets to min 1, max 5, targetCPU 70. `min: 0` means scale to zero. The last four set how fast the autoscaler moves; see [Autoscaling speed](#autoscaling-speed). |
 | `sleep` | `{enabled, afterMinutes, nonProduction}` | If you leave it out, it resets to enabled false, afterMinutes 30. `nonProduction: off` keeps non-production envs awake. `sleep.wakeOn` is **not** a kuso.yml field. Set it with a PATCH; apply leaves it alone. |
 | `placement` | `{labels: map, nodes: list}` | If you leave it out, the project default applies. |
 | `volumes` | list | `{name, mountPath, sizeGi}`. |
@@ -57,6 +57,34 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `watchPaths` | list of globs | Repo-root globs that gate push builds. The default is `path/**` when `path` is set. |
 
 Not expressible in kuso.yml: addon subscriptions (`kuso project addon subscribe`), shared-secret subscriptions (`kuso env share`), per-environment overrides, and named environments.
+
+### Autoscaling speed
+
+A service autoscales when `scale.max` is greater than `scale.min`. Four optional keys under `scale` control how fast it adds and removes pods. Leaving one out of the file resets it to its default.
+
+| Key | Range | Default | Notes |
+|---|---|---|---|
+| `scaleUpStabilizationSeconds` | 0-3600 | 120 | How long CPU has to stay over `targetCPU` before pods are added. `0` adds them on the first reading. |
+| `scaleUpPods` | 1-100 | 1 | Pods added per 60 seconds. |
+| `scaleUpPercent` | 1-1000 | off | Also allows adding this percent of the current pods per 60 seconds. The autoscaler uses whichever of the two allows more. |
+| `scaleDownStabilizationSeconds` | 0-3600 | 300 | How long load has to stay low before pods are removed. Removal is always 1 pod per 60 seconds. |
+
+With the defaults, a service at min 2, max 8 takes roughly 8 minutes of sustained load to reach 8 pods: a 120 second wait, then one pod a minute. The defaults are slow on purpose. During a deploy, new pods report no CPU metrics for up to a minute, and a short scale-up window lets that gap add pods the service doesn't need.
+
+For traffic that arrives all at once (a ticket on-sale), ask for a faster ramp:
+
+```yaml
+scale:
+  min: 2
+  max: 8
+  targetCPU: 70
+  scaleUpStabilizationSeconds: 0
+  scaleUpPods: 4
+```
+
+Under enough load this goes from 2 to 8 pods in about two minutes, plus the time the pods take to start. If the spike is scheduled, raising `min` beforehand is faster still.
+
+The same keys are accepted by the service PATCH API, by `kuso project service set` (`--scale-up-stabilization`, `--scale-up-pods`, `--scale-up-percent`, `--scale-down-stabilization`) and in the web UI under Settings → Scale. In a PATCH or CLI call, `-1` resets a stabilization window to its default and `0` resets `scaleUpPods` or `scaleUpPercent`.
 
 ### Env values
 

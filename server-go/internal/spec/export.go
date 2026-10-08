@@ -161,6 +161,11 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 			Min:       cr.Spec.Scale.MinValue(),
 			Max:       cr.Spec.Scale.Max,
 			TargetCPU: cr.Spec.Scale.TargetCPU,
+
+			ScaleUpStabilizationSeconds:   cr.Spec.Scale.ScaleUpStabilizationSeconds,
+			ScaleUpPods:                   cr.Spec.Scale.ScaleUpPods,
+			ScaleUpPercent:                cr.Spec.Scale.ScaleUpPercent,
+			ScaleDownStabilizationSeconds: cr.Spec.Scale.ScaleDownStabilizationSeconds,
 		}
 	}
 	if cr.Spec.Uptime != nil {

@@ -40,15 +40,29 @@ spec:
   #     single bad reading can't jump straight to max.
   #   - scale DOWN after a 300s stabilization window so we don't flap, but still
   #     return to baseline once load genuinely subsides.
+  {{- /* The stabilization windows and the scale-up step are overridable per
+         service (KusoService.spec.scale). `default` can't be used for the
+         windows: it treats an explicit 0 (no stabilization) as unset. */}}
+  {{- $a := .Values.autoscaling }}
+  {{- $upWindow := 60 }}
+  {{- if not (kindIs "invalid" $a.scaleUpStabilizationSeconds) }}{{ $upWindow = $a.scaleUpStabilizationSeconds }}{{ end }}
+  {{- $downWindow := 300 }}
+  {{- if not (kindIs "invalid" $a.scaleDownStabilizationSeconds) }}{{ $downWindow = $a.scaleDownStabilizationSeconds }}{{ end }}
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationSeconds | default 60 }}
+      stabilizationWindowSeconds: {{ $upWindow | int }}
       policies:
         - type: Pods
-          value: 1
+          value: {{ $a.scaleUpPods | default 1 | int }}
           periodSeconds: 60
+        {{- if $a.scaleUpPercent }}
+        {{- /* With two policies the HPA applies whichever allows more pods. */}}
+        - type: Percent
+          value: {{ $a.scaleUpPercent | int }}
+          periodSeconds: 60
+        {{- end }}
     scaleDown:
-      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds | default 300 }}
+      stabilizationWindowSeconds: {{ $downWindow | int }}
       policies:
         - type: Pods
           value: 1

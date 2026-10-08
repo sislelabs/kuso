@@ -483,6 +483,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		if req.Scale.TargetCPU > 0 {
 			scale.TargetCPU = req.Scale.TargetCPU
 		}
+		if err := validateScaleSpeed(req.Scale.ScaleUpStabilizationSeconds, req.Scale.ScaleUpPods, req.Scale.ScaleUpPercent, req.Scale.ScaleDownStabilizationSeconds); err != nil {
+			return nil, err
+		}
+		scale.ScaleUpStabilizationSeconds = req.Scale.ScaleUpStabilizationSeconds
+		scale.ScaleUpPods = req.Scale.ScaleUpPods
+		scale.ScaleUpPercent = req.Scale.ScaleUpPercent
+		scale.ScaleDownStabilizationSeconds = req.Scale.ScaleDownStabilizationSeconds
 	}
 	sleep := &kube.KusoServiceSleep{Enabled: false, AfterMinutes: 30}
 	if req.Sleep != nil {
@@ -2320,7 +2327,20 @@ func autoscalingFromScale(scale *kube.KusoScaleSpec) *kube.KusoAutoscaling {
 		MinReplicas:                    minVal,
 		MaxReplicas:                    scale.Max,
 		TargetCPUUtilizationPercentage: target,
+		ScaleUpStabilizationSeconds:    scale.ScaleUpStabilizationSeconds,
+		ScaleUpPods:                    scale.ScaleUpPods,
+		ScaleUpPercent:                 scale.ScaleUpPercent,
+		ScaleDownStabilizationSeconds:  scale.ScaleDownStabilizationSeconds,
 	}
+}
+
+// windowOverride maps a patched stabilization window onto the CR field:
+// -1 clears the override, anything else (0 included) is the value.
+func windowOverride(v int) *int {
+	if v < 0 {
+		return nil
+	}
+	return &v
 }
 
 // ResolvePlacement returns the effective placement for an env, given
@@ -2548,6 +2568,13 @@ type PatchScaleRequest struct {
 	Min       *int `json:"min,omitempty"`
 	Max       *int `json:"max,omitempty"`
 	TargetCPU *int `json:"targetCPU,omitempty"`
+	// HPA speed overrides. For the two windows -1 clears the override
+	// (back to the chart default) since 0 is a real value; for pods and
+	// percent 0 clears it.
+	ScaleUpStabilizationSeconds   *int `json:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   *int `json:"scaleUpPods,omitempty"`
+	ScaleUpPercent                *int `json:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 type PatchSleepRequest struct {
@@ -2791,6 +2818,18 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			if req.Scale.TargetCPU != nil {
 				svc.Spec.Scale.TargetCPU = *req.Scale.TargetCPU
+			}
+			if v := req.Scale.ScaleUpStabilizationSeconds; v != nil {
+				svc.Spec.Scale.ScaleUpStabilizationSeconds = windowOverride(*v)
+			}
+			if v := req.Scale.ScaleDownStabilizationSeconds; v != nil {
+				svc.Spec.Scale.ScaleDownStabilizationSeconds = windowOverride(*v)
+			}
+			if req.Scale.ScaleUpPods != nil {
+				svc.Spec.Scale.ScaleUpPods = *req.Scale.ScaleUpPods
+			}
+			if req.Scale.ScaleUpPercent != nil {
+				svc.Spec.Scale.ScaleUpPercent = *req.Scale.ScaleUpPercent
 			}
 			scaleChanged = true
 		}

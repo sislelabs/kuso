@@ -272,6 +272,48 @@ func validateScalePatch(sc *PatchScaleRequest) error {
 	if sc.TargetCPU != nil && (*sc.TargetCPU < 0 || *sc.TargetCPU > 100) {
 		return fmt.Errorf("%w: scale.targetCPU must be 0-100", ErrInvalid)
 	}
+	// -1 on a window is the patch-only "clear the override" value.
+	for name, v := range map[string]*int{
+		"scaleUpStabilizationSeconds":   sc.ScaleUpStabilizationSeconds,
+		"scaleDownStabilizationSeconds": sc.ScaleDownStabilizationSeconds,
+	} {
+		if v != nil && (*v < -1 || *v > maxScaleStabilizationSeconds) {
+			return fmt.Errorf("%w: scale.%s must be 0-%d (or -1 to reset)", ErrInvalid, name, maxScaleStabilizationSeconds)
+		}
+	}
+	pods, pct := 0, 0
+	if sc.ScaleUpPods != nil {
+		pods = *sc.ScaleUpPods
+	}
+	if sc.ScaleUpPercent != nil {
+		pct = *sc.ScaleUpPercent
+	}
+	return validateScaleSpeed(nil, pods, pct, nil)
+}
+
+// Bounds for the HPA speed overrides. The window cap is the Kubernetes
+// API's own limit for stabilizationWindowSeconds.
+const (
+	maxScaleStabilizationSeconds = 3600
+	maxScaleUpPods               = 100
+	maxScaleUpPercent            = 1000
+)
+
+func validateScaleSpeed(upWindow *int, upPods, upPercent int, downWindow *int) error {
+	for name, v := range map[string]*int{
+		"scaleUpStabilizationSeconds":   upWindow,
+		"scaleDownStabilizationSeconds": downWindow,
+	} {
+		if v != nil && (*v < 0 || *v > maxScaleStabilizationSeconds) {
+			return fmt.Errorf("%w: scale.%s must be 0-%d", ErrInvalid, name, maxScaleStabilizationSeconds)
+		}
+	}
+	if upPods < 0 || upPods > maxScaleUpPods {
+		return fmt.Errorf("%w: scale.scaleUpPods must be 0-%d", ErrInvalid, maxScaleUpPods)
+	}
+	if upPercent < 0 || upPercent > maxScaleUpPercent {
+		return fmt.Errorf("%w: scale.scaleUpPercent must be 0-%d", ErrInvalid, maxScaleUpPercent)
+	}
 	return nil
 }
 

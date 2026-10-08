@@ -204,6 +204,34 @@ spec:
                     targetCPU:
                       type: integer
                       default: 70
+                    scaleUpStabilizationSeconds:
+                      type: integer
+                      minimum: 0
+                      maximum: 3600
+                      description: >-
+                        Seconds the HPA waits before acting on a scale-up
+                        signal. Unset = chart default (120).
+                    scaleUpPods:
+                      type: integer
+                      minimum: 0
+                      maximum: 100
+                      description: >-
+                        Pods the HPA may add per 60s. Unset/0 = 1.
+                    scaleUpPercent:
+                      type: integer
+                      minimum: 0
+                      maximum: 1000
+                      description: >-
+                        Percent of current replicas the HPA may add per
+                        60s, applied alongside scaleUpPods (whichever
+                        allows more wins). Unset/0 = no percent policy.
+                    scaleDownStabilizationSeconds:
+                      type: integer
+                      minimum: 0
+                      maximum: 3600
+                      description: >-
+                        Seconds the HPA waits before scaling down.
+                        Unset = chart default (300).
                 healthcheck:
                   type: object
                   description: >-

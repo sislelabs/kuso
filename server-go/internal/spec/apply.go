@@ -295,7 +295,11 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 		req.Volumes = append(req.Volumes, projects.VolumePatch{Name: v.Name, MountPath: v.MountPath, SizeGi: v.SizeGi})
 	}
 	if s.Scale != nil {
-		req.Scale = &projects.ServiceScale{Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU}
+		req.Scale = &projects.ServiceScale{
+			Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU,
+			ScaleUpStabilizationSeconds: s.Scale.ScaleUpStabilizationSeconds, ScaleUpPods: s.Scale.ScaleUpPods,
+			ScaleUpPercent: s.Scale.ScaleUpPercent, ScaleDownStabilizationSeconds: s.Scale.ScaleDownStabilizationSeconds,
+		}
 	}
 	if s.Sleep != nil {
 		req.Sleep = &projects.ServiceSleep{Enabled: s.Sleep.Enabled, AfterMinutes: s.Sleep.AfterMinutes, NonProduction: s.Sleep.NonProduction}
@@ -371,12 +375,26 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 
 	// An omitted scale: block resets to AddService's defaults (min 1,
 	// max 5, targetCPU 70) — not to zeros, which would be min=0, i.e.
-	// scale-to-zero.
-	scale := &projects.PatchScaleRequest{}
+	// scale-to-zero. Omitted speed keys clear the override: -1 for a
+	// window (0 is a real value there), 0 for pods/percent.
+	scale := &projects.PatchScaleRequest{
+		ScaleUpStabilizationSeconds:   intPtrAlways(-1),
+		ScaleUpPods:                   intPtrAlways(0),
+		ScaleUpPercent:                intPtrAlways(0),
+		ScaleDownStabilizationSeconds: intPtrAlways(-1),
+	}
 	if s.Scale != nil {
 		scale.Min = intPtrAlways(s.Scale.Min)
 		scale.Max = intPtrAlways(s.Scale.Max)
 		scale.TargetCPU = intPtrAlways(s.Scale.TargetCPU)
+		if v := s.Scale.ScaleUpStabilizationSeconds; v != nil {
+			scale.ScaleUpStabilizationSeconds = intPtrAlways(*v)
+		}
+		if v := s.Scale.ScaleDownStabilizationSeconds; v != nil {
+			scale.ScaleDownStabilizationSeconds = intPtrAlways(*v)
+		}
+		scale.ScaleUpPods = intPtrAlways(s.Scale.ScaleUpPods)
+		scale.ScaleUpPercent = intPtrAlways(s.Scale.ScaleUpPercent)
 	} else {
 		scale.Min = intPtrAlways(1)
 		scale.Max = intPtrAlways(5)

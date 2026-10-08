@@ -38,6 +38,26 @@
                 "default": 1,
                 "type": "integer"
               },
+              "scaleDownStabilizationSeconds": {
+                "maximum": 3600,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpPercent": {
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpPods": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scaleUpStabilizationSeconds": {
+                "maximum": 3600,
+                "minimum": 0,
+                "type": "integer"
+              },
               "targetCPUUtilizationPercentage": {
                 "default": 70,
                 "type": "integer"

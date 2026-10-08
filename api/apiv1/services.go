@@ -151,6 +151,11 @@ type ServiceScale struct {
 	Min       int `json:"min,omitempty"`
 	Max       int `json:"max,omitempty"`
 	TargetCPU int `json:"targetCPU,omitempty"`
+	// HPA speed overrides; unset keeps the chart defaults.
+	ScaleUpStabilizationSeconds   *int `json:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   int  `json:"scaleUpPods,omitempty"`
+	ScaleUpPercent                int  `json:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 // ServiceSleep configures scale-to-zero for a service.

@@ -734,6 +734,10 @@ var (
 	serviceSetWaitForCI         string // "on" | "off" | "" (leave alone)
 	serviceSetMinReplicas       int
 	serviceSetMaxReplicas       int
+	serviceSetScaleUpWindow     int
+	serviceSetScaleUpPods       int
+	serviceSetScaleUpPercent    int
+	serviceSetScaleDownWindow   int
 	serviceSetPath              string   // monorepo subpath (relative to repo root)
 	serviceSetBranch            string   // git branch override
 	serviceSetRepo              string   // new source repo URL (re-point the service)
@@ -910,17 +914,27 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 				return fmt.Errorf("--wait-for-ci must be on|off (got %q)", serviceSetWaitForCI)
 			}
 		}
-		if cmd.Flags().Changed("replicas") || cmd.Flags().Changed("max-replicas") {
-			scale := &kusoApi.PatchScaleRequest{}
-			if cmd.Flags().Changed("replicas") {
-				v := serviceSetMinReplicas
-				scale.Min = &v
+		scaleFlags := []struct {
+			name string
+			val  int
+			dst  func(*kusoApi.PatchScaleRequest) **int
+		}{
+			{"replicas", serviceSetMinReplicas, func(s *kusoApi.PatchScaleRequest) **int { return &s.Min }},
+			{"max-replicas", serviceSetMaxReplicas, func(s *kusoApi.PatchScaleRequest) **int { return &s.Max }},
+			{"scale-up-stabilization", serviceSetScaleUpWindow, func(s *kusoApi.PatchScaleRequest) **int { return &s.ScaleUpStabilizationSeconds }},
+			{"scale-up-pods", serviceSetScaleUpPods, func(s *kusoApi.PatchScaleRequest) **int { return &s.ScaleUpPods }},
+			{"scale-up-percent", serviceSetScaleUpPercent, func(s *kusoApi.PatchScaleRequest) **int { return &s.ScaleUpPercent }},
+			{"scale-down-stabilization", serviceSetScaleDownWindow, func(s *kusoApi.PatchScaleRequest) **int { return &s.ScaleDownStabilizationSeconds }},
+		}
+		for _, f := range scaleFlags {
+			if !cmd.Flags().Changed(f.name) {
+				continue
 			}
-			if cmd.Flags().Changed("max-replicas") {
-				v := serviceSetMaxReplicas
-				scale.Max = &v
+			if req.Scale == nil {
+				req.Scale = &kusoApi.PatchScaleRequest{}
 			}
-			req.Scale = scale
+			v := f.val
+			*f.dst(req.Scale) = &v
 		}
 		repoTouched := cmd.Flags().Changed("path") ||
 			cmd.Flags().Changed("branch") ||
@@ -1795,6 +1809,10 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
+	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpWindow, "scale-up-stabilization", 0, "seconds the autoscaler waits before adding pods (0-3600, default 120; -1 resets)")
+	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpPods, "scale-up-pods", 0, "pods the autoscaler may add per 60s (1-100, default 1; 0 resets)")
+	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpPercent, "scale-up-percent", 0, "also allow adding this % of current pods per 60s, whichever is more (1-1000; 0 removes)")
+	serviceSetCmd.Flags().IntVar(&serviceSetScaleDownWindow, "scale-down-stabilization", 0, "seconds the autoscaler waits before removing pods (0-3600, default 300; -1 resets)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 	serviceSetCmd.Flags().StringVar(&serviceSetRepo, "repo", "", "re-point the service at a new source repo URL (github or gitlab)")
@@ -1882,6 +1900,10 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpWindow, "scale-up-stabilization", 0, "seconds the autoscaler waits before adding pods (0-3600, default 120; -1 resets)")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpPods, "scale-up-pods", 0, "pods the autoscaler may add per 60s (1-100, default 1; 0 resets)")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpPercent, "scale-up-percent", 0, "also allow adding this % of current pods per 60s, whichever is more (1-1000; 0 removes)")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleDownWindow, "scale-down-stabilization", 0, "seconds the autoscaler waits before removing pods (0-3600, default 300; -1 resets)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 	addRepoTokenFlags(serviceSetTopCmd)

@@ -48,8 +48,11 @@ autoscaling:
   # max and pin them there. 120s scale-up rides out the window where a freshly
   # rolled pod has no metrics yet (the HPA reports "no metrics returned /
   # invalid metrics" for ~15-60s and would otherwise spuriously scale up during
-  # every deploy). Override per service via scale if a workload needs to scale
-  # up faster.
+  # every deploy). Override per service via KusoService.spec.scale
+  # (scaleUpStabilizationSeconds, scaleUpPods, scaleUpPercent,
+  # scaleDownStabilizationSeconds) if a workload needs to scale up faster.
+  # scaleUpPods (default 1) is the pods added per 60s; scaleUpPercent adds a
+  # second policy and the HPA applies whichever allows more.
   scaleUpStabilizationSeconds: 120
   scaleDownStabilizationSeconds: 300
 

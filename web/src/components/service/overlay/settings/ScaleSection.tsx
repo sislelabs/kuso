@@ -91,6 +91,70 @@ export function ScaleSection({ state, setState }: SectionProps) {
           </div>
         }
       />
+      {autoscales && (
+        <>
+          <Row
+            label="scale-up delay"
+            hint="seconds of sustained load before adding pods"
+            control={
+              <Input
+                type="number"
+                value={state.scaleUpWindow}
+                onChange={(e) => setState((s) => ({ ...s, scaleUpWindow: e.target.value }))}
+                placeholder="120"
+                className="h-7 w-20 font-mono text-[12px]"
+                min={0}
+                max={3600}
+              />
+            }
+          />
+          <Row
+            label="scale-up step"
+            hint="pods added per minute, or % of current pods — whichever is more"
+            control={
+              <div className="inline-flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  value={state.scaleUpPods}
+                  onChange={(e) => setState((s) => ({ ...s, scaleUpPods: e.target.value }))}
+                  placeholder="1"
+                  aria-label="Pods added per minute"
+                  className="h-7 w-16 font-mono text-[12px]"
+                  min={1}
+                  max={100}
+                />
+                <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+                <Input
+                  type="number"
+                  value={state.scaleUpPercent}
+                  onChange={(e) => setState((s) => ({ ...s, scaleUpPercent: e.target.value }))}
+                  placeholder="off"
+                  aria-label="Percent of current pods added per minute"
+                  className="h-7 w-16 font-mono text-[12px]"
+                  min={1}
+                  max={1000}
+                />
+                <span className="font-mono text-[11px] text-[var(--text-tertiary)]">%</span>
+              </div>
+            }
+          />
+          <Row
+            label="scale-down delay"
+            hint="seconds of low load before removing pods"
+            control={
+              <Input
+                type="number"
+                value={state.scaleDownWindow}
+                onChange={(e) => setState((s) => ({ ...s, scaleDownWindow: e.target.value }))}
+                placeholder="300"
+                className="h-7 w-20 font-mono text-[12px]"
+                min={0}
+                max={3600}
+              />
+            }
+          />
+        </>
+      )}
       <Row
         label="pod size"
         hint={

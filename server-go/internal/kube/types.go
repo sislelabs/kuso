@@ -535,6 +535,15 @@ type KusoScaleSpec struct {
 	Min       *int `json:"min,omitempty"`
 	Max       int  `json:"max,omitempty"`
 	TargetCPU int  `json:"targetCPU,omitempty"`
+	// HPA speed overrides. Unset = the env chart's conservative defaults
+	// (120s scale-up window, +1 pod per 60s, 300s scale-down window). The
+	// windows are pointers because 0 ("react immediately") is a real
+	// setting, not "unset". ScaleUpPercent adds a second policy next to
+	// the pods one; the HPA applies whichever allows more.
+	ScaleUpStabilizationSeconds   *int `json:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   int  `json:"scaleUpPods,omitempty"`
+	ScaleUpPercent                int  `json:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 // KusoHealthcheck configures an optional HTTP health check. When Path is
@@ -710,8 +719,8 @@ type KusoEnvironmentSpec struct {
 	// the non-production default-sleep policy applies to it. Written ONLY
 	// by the scaledown watcher (never by service propagation, which owns
 	// Sleep), so the two writers can't fight over one field.
-	AutoSleep bool `json:"autoSleep,omitempty"`
-	Host         string        `json:"host,omitempty"`
+	AutoSleep bool   `json:"autoSleep,omitempty"`
+	Host      string `json:"host,omitempty"`
 	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
 	// env CR so the kusoenvironment chart's Ingress template can emit
 	// one rule per host (the chart reads ONLY the env CR — there's no
@@ -866,6 +875,11 @@ type KusoAutoscaling struct {
 	MinReplicas                    int  `json:"minReplicas,omitempty"`
 	MaxReplicas                    int  `json:"maxReplicas,omitempty"`
 	TargetCPUUtilizationPercentage int  `json:"targetCPUUtilizationPercentage,omitempty"`
+	// Copied from KusoScaleSpec; see there.
+	ScaleUpStabilizationSeconds   *int `json:"scaleUpStabilizationSeconds,omitempty"`
+	ScaleUpPods                   int  `json:"scaleUpPods,omitempty"`
+	ScaleUpPercent                int  `json:"scaleUpPercent,omitempty"`
+	ScaleDownStabilizationSeconds *int `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 type KusoEnvSleep struct {

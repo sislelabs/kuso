@@ -21,7 +21,14 @@ services:
         tls: true
     env:
       LOG_LEVEL: info
-    scale: { min: 2, max: 6, targetCPU: 65 }
+    scale:
+      min: 2
+      max: 6
+      targetCPU: 65
+      scaleUpStabilizationSeconds: 0
+      scaleUpPods: 4
+      scaleUpPercent: 100
+      scaleDownStabilizationSeconds: 600
     sleep: { enabled: true, afterMinutes: 20 }
     placement:
       labels: { region: eu }
@@ -53,6 +60,12 @@ crons:
 	}
 	if f.Services[0].Placement == nil || f.Services[0].Placement.Labels["region"] != "eu" {
 		t.Fatalf("placement not parsed: %+v", f.Services[0].Placement)
+	}
+	sc := f.Services[0].Scale
+	if sc == nil || sc.Max != 6 || sc.ScaleUpPods != 4 || sc.ScaleUpPercent != 100 ||
+		sc.ScaleUpStabilizationSeconds == nil || *sc.ScaleUpStabilizationSeconds != 0 ||
+		sc.ScaleDownStabilizationSeconds == nil || *sc.ScaleDownStabilizationSeconds != 600 {
+		t.Fatalf("scale not parsed: %+v", sc)
 	}
 	if !f.Services[0].PrivateEgress {
 		t.Fatalf("privateEgress not parsed")

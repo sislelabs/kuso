@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -892,14 +893,19 @@ func TestPatchService_RejectsInvalidFields(t *testing.T) {
 	zero, neg := int32(0), int32(-5)
 	bogus := "bogus"
 	minNeg := -3
+	tooLong := 3601
 	badHost := []ServiceDomain{{Host: "Not A Host!!"}}
 	cases := map[string]PatchServiceRequest{
-		"port 0":     {Port: &zero},
-		"port -5":    {Port: &neg},
-		"runtime":    {Runtime: &bogus},
-		"scale.min":  {Scale: &PatchScaleRequest{Min: &minNeg}},
-		"bad host":   {Domains: &badHost},
-		"masked arg": {BuildArgs: &map[string]string{"NPM_TOKEN": EnvMaskSentinel}},
+		"port 0":            {Port: &zero},
+		"port -5":           {Port: &neg},
+		"runtime":           {Runtime: &bogus},
+		"scale.min":         {Scale: &PatchScaleRequest{Min: &minNeg}},
+		"scale up window":   {Scale: &PatchScaleRequest{ScaleUpStabilizationSeconds: &tooLong}},
+		"scale down window": {Scale: &PatchScaleRequest{ScaleDownStabilizationSeconds: &tooLong}},
+		"scale up pods":     {Scale: &PatchScaleRequest{ScaleUpPods: &minNeg}},
+		"scale up percent":  {Scale: &PatchScaleRequest{ScaleUpPercent: &tooLong}},
+		"bad host":          {Domains: &badHost},
+		"masked arg":        {BuildArgs: &map[string]string{"NPM_TOKEN": EnvMaskSentinel}},
 	}
 	for name, req := range cases {
 		if _, err := s.PatchService(ctx, "alpha", "web", req); !errors.Is(err, ErrInvalid) {
@@ -1227,6 +1233,69 @@ func TestUpdate_BaseDomainRewritesEnvHosts(t *testing.T) {
 	// tlsHosts must include the new host AND keep the custom additionalHost.
 	if !containsHost(env.Spec.TLSHosts, "web.new.example.com") || !containsHost(env.Spec.TLSHosts, "custom.example.org") {
 		t.Errorf("tlsHosts wrong after base-domain change: %v", env.Spec.TLSHosts)
+	}
+}
+
+// Scale-speed overrides ride the service spec into the production env's
+// autoscaling block (the chart values the HPA renders from); a service
+// that sets none of them must write none, so the chart defaults apply.
+func TestPatchService_ScaleSpeedReachesEnv(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	ctx := context.Background()
+	autoscaling := func() map[string]any {
+		t.Helper()
+		env, err := s.Kube.GetKusoEnvironment(ctx, "kuso", "alpha-web-production")
+		if err != nil {
+			t.Fatalf("get env: %v", err)
+		}
+		raw, _ := json.Marshal(env.Spec.Autoscaling)
+		out := map[string]any{}
+		_ = json.Unmarshal(raw, &out)
+		return out
+	}
+
+	mn, mx := 2, 8
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{Min: &mn, Max: &mx}}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	for _, k := range []string{"scaleUpStabilizationSeconds", "scaleUpPods", "scaleUpPercent", "scaleDownStabilizationSeconds"} {
+		if v, ok := autoscaling()[k]; ok {
+			t.Errorf("unset %s must not reach the env, got %v", k, v)
+		}
+	}
+
+	upWindow, pods, pct, downWindow := 0, 4, 100, 600
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{
+		ScaleUpStabilizationSeconds: &upWindow, ScaleUpPods: &pods, ScaleUpPercent: &pct, ScaleDownStabilizationSeconds: &downWindow,
+	}}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	got := autoscaling()
+	// An explicit 0 window means "no stabilization" and has to survive.
+	want := map[string]float64{"scaleUpStabilizationSeconds": 0, "scaleUpPods": 4, "scaleUpPercent": 100, "scaleDownStabilizationSeconds": 600, "minReplicas": 2, "maxReplicas": 8}
+	for k, w := range want {
+		if v, ok := got[k]; !ok || v != w {
+			t.Errorf("%s = %v (present %v), want %v", k, v, ok, w)
+		}
+	}
+
+	// -1 puts a window back on the chart default; 0 does it for the step.
+	reset, zero := -1, 0
+	if _, err := s.PatchService(ctx, "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{
+		ScaleUpStabilizationSeconds: &reset, ScaleUpPods: &zero, ScaleUpPercent: &zero, ScaleDownStabilizationSeconds: &reset,
+	}}); err != nil {
+		t.Fatalf("PatchService reset: %v", err)
+	}
+	got = autoscaling()
+	for _, k := range []string{"scaleUpStabilizationSeconds", "scaleUpPods", "scaleUpPercent", "scaleDownStabilizationSeconds"} {
+		if v, ok := got[k]; ok {
+			t.Errorf("reset %s still on the env: %v", k, v)
+		}
 	}
 }
 
