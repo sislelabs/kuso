@@ -273,6 +273,10 @@ func dynamicFallback(dist fs.FS, urlPath string) string {
 //
 // connect-src is open ('self' + websocket schemes for log streaming);
 // img-src + style-src 'unsafe-inline' covers the design system.
+//
+// form-action allows github.com because the one-click GitHub App setup
+// POSTs the app manifest there as an HTML form (GitHub's manifest flow
+// has no other entry point).
 var htmlSecurityHeaders = map[string]string{
 	"Content-Security-Policy": "default-src 'self'; " +
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
@@ -282,7 +286,7 @@ var htmlSecurityHeaders = map[string]string{
 		"connect-src 'self' ws: wss:; " +
 		"frame-ancestors 'none'; " +
 		"base-uri 'self'; " +
-		"form-action 'self'",
+		"form-action 'self' https://github.com",
 	"X-Frame-Options":           "DENY",
 	"X-Content-Type-Options":    "nosniff",
 	"Referrer-Policy":           "strict-origin-when-cross-origin",
