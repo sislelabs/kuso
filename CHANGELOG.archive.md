@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.13] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): subscribing an addon now mounts its conn secret ([44a0bf6](https://github.com/sislelabs/kuso/commit/44a0bf6ecd513e4eff2b3adc2f0c1a1fa9931d55))
+
 ## [0.25.12] — 2026-09-02
 
 ### 🐛 Bug Fixes

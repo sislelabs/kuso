@@ -172,7 +172,7 @@ spec:
           # at apply-time; the literal here is the source of truth
           # for `kubectl apply -f deploy/` direct users — who pulled
           # the long-stale v0.1.0-dev tag pre-v0.9.4.
-          image: ghcr.io/sislelabs/kuso-operator:v0.29.0
+          image: ghcr.io/sislelabs/kuso-operator:v0.30.0
           # Tags are immutable per release and the updater changes the tag
           # on every upgrade, so Always only adds a ghcr dependency to every
           # operator restart.

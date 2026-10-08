@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.30.0] — 2026-10-08
+
+### Other
+- Make autoscaling speed configurable per service ([427130e](https://github.com/sislelabs/kuso/commit/427130ebf62dc53db3566a275fd7dc4f9437349e))
+
 ## [0.29.0] — 2026-10-08
 
 ### Other
@@ -427,11 +432,6 @@ messages on every release. The format is loosely based on
 - Fix(shared-secret): unset no longer crashes subscribed services ([afbf0a1](https://github.com/sislelabs/kuso/commit/afbf0a19c72cc124352dcc865843f3405ba48efd))
 - Fix(addon): clean up and rotate external credentials ([effc343](https://github.com/sislelabs/kuso/commit/effc343767ac3af7ce7a05b388d7b306a22f9a55))
 - Fix(backup): ship pg_dump 18 so external Postgres backups run ([d94368b](https://github.com/sislelabs/kuso/commit/d94368b88d0fd510a0c2d8deb7162bd4527b80db))
-
-## [0.25.13] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): subscribing an addon now mounts its conn secret ([44a0bf6](https://github.com/sislelabs/kuso/commit/44a0bf6ecd513e4eff2b3adc2f0c1a1fa9931d55))
 
 
 ---
