@@ -1683,6 +1683,34 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 //
 // Best-effort: per-step errors log a warning and the loop continues.
 // Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
+// runRegistryOrphanSweep untags registry repos of deleted projects and
+// services (builds.SweepOrphanRepositories). KUSO_REGISTRY_ORPHAN_SWEEP
+// = dryrun (default: log only) | on | off. It recovers its own panic so
+// a registry surprise can't stop the rest of the daily cleanup loop.
+func runRegistryOrphanSweep(ctx context.Context, kc *kube.Client, logger *slog.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("registry orphan-sweep panicked", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	mode := builds.ParseOrphanSweepMode(envOr("KUSO_REGISTRY_ORPHAN_SWEEP", string(builds.OrphanSweepDryRun)))
+	if mode == builds.OrphanSweepOff {
+		return
+	}
+	c, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	res, err := builds.SweepOrphanRepositories(c, kc, builds.NewInClusterRegistryInventory(builds.RegistryHost),
+		mode, builds.OrphanSweepGrace, time.Now(), logger)
+	if err != nil {
+		logger.Warn("registry orphan-sweep aborted", "mode", mode, "err", err)
+		return
+	}
+	logger.Info("registry orphan-sweep done", "mode", res.Mode, "reposScanned", res.ReposScanned,
+		"reposOrphaned", res.ReposOrphaned, "reposSwept", res.ReposSwept, "manifests", res.Manifests,
+		"manifestsKept", res.ManifestsKept, "reposTooYoung", res.ReposTooYoung,
+		"reposBuilding", res.ReposBuilding, "reposErrored", res.ReposSkippedErr)
+}
+
 func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, buildSvc *builds.Service, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
@@ -1820,6 +1848,7 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			if totalOrphans > 0 {
 				logger.Info("daily-cleanup orphan helm releases pruned", "count", totalOrphans, "namespaces", len(nss))
 			}
+			runRegistryOrphanSweep(ctx, kc, logger)
 		}
 		// Build log archive prune: anything older than KUSO_BUILD_LOG_
 		// RETENTION_DAYS (default 30 — rows are ~25 KB, so this is cheap)

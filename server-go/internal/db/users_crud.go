@@ -101,10 +101,10 @@ func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) erro
 	return nil
 }
 
-// DeleteUser removes a user. The Prisma schema marks Audit.user and
-// Token.userId as ON DELETE RESTRICT, so a naive DELETE fails as soon
-// as the user has logged in once or issued a token. Clear the FK
-// rows in the same transaction so the caller gets a usable result.
+// DeleteUser removes a user. Token.userId is ON DELETE RESTRICT, so a
+// naive DELETE fails once the user has issued a token; clear the FK rows
+// in the same transaction. Audit rows are kept: they record what the
+// user did, and Audit.user has no FK (migration 0015).
 //
 // _UserToUserGroup pivot rows have no RESTRICT but are cleared
 // explicitly so the audit log shows what happened on user removal.
@@ -115,7 +115,6 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 		return fmt.Errorf("db: begin: %w", err)
 	}
 	for _, q := range []string{
-		`DELETE FROM "Audit" WHERE "user" = $1`,
 		`DELETE FROM "Token" WHERE "userId" = $1`,
 		`DELETE FROM "_UserToUserGroup" WHERE "A" = $1`,
 		`DELETE FROM "GithubUserLink" WHERE "userId" = $1`,
