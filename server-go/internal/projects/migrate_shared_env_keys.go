@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
+	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 )
 
@@ -82,6 +84,16 @@ func (s *Service) MigrateLegacySharedEnvKeys(ctx context.Context, logger *slog.L
 		for i := range svcs {
 			svc := &svcs[i]
 			if svc.Spec.SharedEnvKeys != nil {
+				if hasAdminKeySubscription(svc.Spec.SharedEnvKeys, availableKeys) {
+					short := shortServiceName(p.Name, svc.Name)
+					if err := s.dropAdminKeySubscriptions(ctx, ns, p.Name, short, availableKeys); err != nil {
+						logger.WarnContext(ctx, "shared-env-keys migration: dropping instance admin DSN subscription failed",
+							"project", p.Name, "service", svc.Name, "err", err)
+					} else {
+						logger.InfoContext(ctx, "shared-env-keys migration: dropped instance admin DSN subscription",
+							"project", p.Name, "service", svc.Name)
+					}
+				}
 				skipped++
 				continue
 			}
@@ -113,6 +125,9 @@ func (s *Service) collectAvailableSharedKeys(ctx context.Context, ns, project st
 			return nil, fmt.Errorf("list keys for %s: %w", name, err)
 		}
 		for _, k := range keys {
+			if hiddenSharedKey(name, k) {
+				continue
+			}
 			if !seen[k] {
 				seen[k] = true
 				out = append(out, k)
@@ -162,4 +177,67 @@ func (s *Service) migrateOneService(ctx context.Context, ns, project, shortServi
 		return updated, nil
 	}
 	return updated, nil
+}
+
+// seedSharedEnvKeys persists the mount-all equivalent subscription on a
+// service whose spec.sharedEnvKeys is still nil (created after the last
+// boot migration, or by a path that doesn't seed). Propagation always
+// converts the shared-secret mounts into per-key refs, so running it on a
+// nil list stripped every shared var from the pod; seeding first keeps
+// exactly the keys the pod already had (minus instance-addon admin DSNs).
+func (s *Service) seedSharedEnvKeys(ctx context.Context, ns, project string, svc *kube.KusoService) (*kube.KusoService, error) {
+	if svc.Spec.SharedEnvKeys != nil || s.Kube.Clientset == nil {
+		return svc, nil
+	}
+	keys, err := s.collectAvailableSharedKeys(ctx, ns, project)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, svc.Name, func(cur *kube.KusoService) error {
+		if cur.Spec.SharedEnvKeys != nil {
+			return kube.ErrAbortRetry
+		}
+		cur.Spec.SharedEnvKeys = append([]string{}, keys...)
+		return nil
+	})
+	if errors.Is(err, kube.ErrAbortRetry) {
+		return s.Kube.GetKusoService(ctx, ns, svc.Name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// hasAdminKeySubscription reports a subscription to an instance-addon admin
+// DSN key that only kuso-instance-shared provides (available excludes those).
+// Earlier migrations seeded every instance key, so every service migrated
+// after an instance PG was registered carries the superuser DSN.
+func hasAdminKeySubscription(keys, available []string) bool {
+	return slices.ContainsFunc(keys, func(k string) bool {
+		return instancesecrets.IsAdminDSNKey(k) && !slices.Contains(available, k)
+	})
+}
+
+// dropAdminKeySubscriptions removes those keys from spec.sharedEnvKeys and
+// propagates, which also drops the stale secretKeyRef from every env CR.
+func (s *Service) dropAdminKeySubscriptions(ctx context.Context, ns, project, shortService string, available []string) error {
+	mu := s.lockService(project, shortService)
+	defer mu.Unlock()
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, shortService), func(svc *kube.KusoService) error {
+		if !hasAdminKeySubscription(svc.Spec.SharedEnvKeys, available) {
+			return kube.ErrAbortRetry
+		}
+		svc.Spec.SharedEnvKeys = slices.DeleteFunc(slices.Clone(svc.Spec.SharedEnvKeys), func(k string) bool {
+			return instancesecrets.IsAdminDSNKey(k) && !slices.Contains(available, k)
+		})
+		return nil
+	})
+	if errors.Is(err, kube.ErrAbortRetry) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("update service: %w", err)
+	}
+	return s.propagateChangedToEnvs(ctx, ns, project, shortService, updated, changedFields{EnvVars: true})
 }

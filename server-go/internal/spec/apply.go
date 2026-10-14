@@ -546,13 +546,12 @@ func addonCreateReq(a AddonSpec) addons.CreateAddonRequest {
 // set.
 func addonBackupUpdateReq(a AddonSpec) addons.UpdateAddonRequest {
 	sched := a.Backup.Schedule
-	retention := a.Backup.RetentionDays
-	return addons.UpdateAddonRequest{
-		Backup: &addons.UpdateBackupPatch{
-			Schedule:      &sched,
-			RetentionDays: &retention,
-		},
+	patch := &addons.UpdateBackupPatch{Schedule: &sched}
+	if a.Backup.RetentionDays != nil {
+		retention := *a.Backup.RetentionDays
+		patch.RetentionDays = &retention
 	}
+	return addons.UpdateAddonRequest{Backup: patch}
 }
 
 // maskedEnvKeys returns (sorted) the env keys whose literal value is

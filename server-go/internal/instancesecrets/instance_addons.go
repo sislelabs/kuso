@@ -48,6 +48,14 @@ func AddonKeyForName(name string) string {
 	return addonKeyPrefix + strings.ToUpper(name) + addonKeySuffix
 }
 
+// IsAdminDSNKey reports whether key holds an instance-addon superuser
+// DSN. Those live in the same Secret as the tenant-mountable instance
+// keys, so every path that hands instance-shared keys to a tenant env
+// must filter them out.
+func IsAdminDSNKey(key string) bool {
+	return addonNameFromKey(key) != ""
+}
+
 // addonNameFromKey is the inverse — strips the prefix/suffix and
 // lowercases. Returns "" if the key isn't an addon key.
 func addonNameFromKey(key string) string {

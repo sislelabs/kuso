@@ -442,6 +442,16 @@ func (s *Service) validateSecretRefNameIn(project, service, name string, ownedAd
 	return fmt.Errorf("%w: secretRef.name %q is not a secret owned by project %q", ErrInvalid, name, project)
 }
 
+// rejectHiddenSharedKeyRef refuses an explicit secretKeyRef to an
+// instance-addon admin DSN: kuso-instance-shared is referenceable by every
+// project, but that key is a superuser login to the shared server.
+func rejectHiddenSharedKeyRef(name, key string) error {
+	if hiddenSharedKey(strings.TrimSpace(name), key) {
+		return fmt.Errorf("%w: %s/%s is an instance admin credential and can't be referenced", ErrInvalid, name, key)
+	}
+	return nil
+}
+
 // crdSecretRefNameRE mirrors the secretKeyRef.name pattern on the
 // KusoService (envVars, previewEnvVars) and KusoEnvironment CRDs.
 var crdSecretRefNameRE = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$`)

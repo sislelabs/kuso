@@ -588,7 +588,14 @@ func diffAddon(live, desired AddonSpec) []FieldChange {
 	cmp("ha", fmt.Sprint(live.HA), fmt.Sprint(desired.HA))
 	cmp("useInstanceAddon", live.UseInstanceAddon, desired.UseInstanceAddon)
 	cmp("pooler", renderJSON(normPooler(live.Pooler)), renderJSON(normPooler(desired.Pooler)))
-	cmp("backup", renderJSON(normBackup(live.Backup)), renderJSON(normBackup(desired.Backup)))
+	desiredBackup := desired.Backup
+	if desiredBackup != nil && desiredBackup.RetentionDays == nil && live.Backup != nil {
+		// Omitted retention leaves the live value alone on apply.
+		b := *desiredBackup
+		b.RetentionDays = live.Backup.RetentionDays
+		desiredBackup = &b
+	}
+	cmp("backup", renderJSON(normBackup(live.Backup)), renderJSON(normBackup(desiredBackup)))
 	cmp("placement", renderPlacementSpec(live.Placement), renderPlacementSpec(desired.Placement))
 	cmp("external", renderJSON(live.External), renderJSON(desired.External))
 	return out

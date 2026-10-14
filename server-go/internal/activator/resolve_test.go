@@ -104,3 +104,36 @@ func TestResolveByHost_Wildcard(t *testing.T) {
 		}
 	}
 }
+
+// The catch-all IngressRoute sends every unmatched host to the activator, so
+// an internal service's host (no Ingress of its own) used to resolve here and
+// get proxied to its ClusterIP Service from the public internet.
+func TestResolveByHost_SkipsInternalAndWorkerEnvs(t *testing.T) {
+	t.Parallel()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
+	seed := func(name string, spec map[string]any) {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+			"kind":       "KusoEnvironment",
+			"metadata":   map[string]any{"name": name, "namespace": "kuso"},
+			"spec":       spec,
+		}}
+		if err := dyn.Tracker().Create(kube.GVREnvironments, u, "kuso"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("alpha-db-api-production", map[string]any{"kind": "production", "host": "db-api.alpha.example.com", "internal": true})
+	seed("alpha-jobs-production", map[string]any{"kind": "production", "host": "jobs.alpha.example.com", "runtime": "worker"})
+	seed("alpha-web-production", map[string]any{"kind": "production", "host": "web.alpha.example.com"})
+
+	a := New(&kube.Client{Dynamic: dyn}, slog.Default())
+	for _, host := range []string{"db-api.alpha.example.com", "jobs.alpha.example.com"} {
+		if env, _, _, err := a.resolveByHost(context.Background(), host); err == nil {
+			t.Errorf("%s resolved to %s; internal/worker envs must not be reachable via the activator", host, env)
+		}
+	}
+	if env, _, _, err := a.resolveByHost(context.Background(), "web.alpha.example.com"); err != nil || env != "alpha-web-production" {
+		t.Errorf("public env: got (%q, %v)", env, err)
+	}
+}

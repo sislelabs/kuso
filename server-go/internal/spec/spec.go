@@ -391,8 +391,10 @@ type AddonPoolerSpec struct {
 }
 
 type AddonBackupSpec struct {
-	Schedule      string `yaml:"schedule,omitempty"`
-	RetentionDays int    `yaml:"retentionDays,omitempty"`
+	Schedule string `yaml:"schedule,omitempty"`
+	// RetentionDays nil = leave the live value (new addons default to 14);
+	// an explicit 0 means keep forever.
+	RetentionDays *int `yaml:"retentionDays,omitempty"`
 }
 
 type AddonExternalSpec struct {

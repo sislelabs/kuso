@@ -26,6 +26,12 @@ const longestEnvSuffix = "-production"
 // derive: the service CR itself, its production/preview env CRs, and
 // any extra env CR names supplied (custom envs).
 func validateServiceNames(project, service string, envCRNames ...string) error {
+	// serviceCRName tolerates a pre-qualified "<project>-x" (CR "<project>-x")
+	// while productionEnvName doubles it ("<project>-<project>-x-production"),
+	// so the env helpers disagree on the CR name and edits silently miss.
+	if strings.HasPrefix(service, project+"-") {
+		return fmt.Errorf("%w: service name %q must not start with the project name %q; use %q", ErrInvalid, service, project+"-", strings.TrimPrefix(service, project+"-"))
+	}
 	fqn := serviceCRName(project, service)
 	if err := kube.ValidateReleaseName(fqn + longestEnvSuffix); err != nil {
 		budget := kube.MaxReleaseNameLen - len(longestEnvSuffix) - len(project) - 1

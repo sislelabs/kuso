@@ -586,6 +586,12 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	var wild *kube.KusoEnvironment
 	for i := range envs {
 		e := &envs[i]
+		// Internal services and workers have no Ingress, but the
+		// catch-all route still lands their host here; proxying would
+		// expose them publicly.
+		if e.Spec.Internal || e.Spec.Runtime == "worker" {
+			continue
+		}
 		if hostMatches(host, e) {
 			return a.cacheHost(host, e)
 		}
