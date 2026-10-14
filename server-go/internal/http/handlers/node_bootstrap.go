@@ -85,8 +85,8 @@ func (h *NodeBootstrapHandler) MountPublic(rt interface {
 	Get(string, http.HandlerFunc)
 	Post(string, http.HandlerFunc)
 }) {
-	rt.Get("/bootstrap", RateLimitedInvite(h.ServeScript))
-	rt.Post("/bootstrap/register-node", RateLimitedInvite(h.RegisterNode))
+	rt.Get("/bootstrap", RateLimitedBootstrap(h.ServeScript))
+	rt.Post("/bootstrap/register-node", RateLimitedBootstrap(h.RegisterNode))
 }
 
 // MintToken creates a fresh single-use bootstrap token. Body:

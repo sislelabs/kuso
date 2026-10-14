@@ -41,6 +41,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/serverstate"
@@ -512,7 +513,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		return fmt.Errorf("read instance pg conn secret: %w", err)
 	}
-	adminDSN := buildAdminDSN(sec.Data)
+	adminDSN := buildAdminDSN(sec.Data, s.Namespace)
 	if adminDSN == "" {
 		// Secret exists but missing required keys — shouldn't happen
 		// post-helm-install, but be defensive.
@@ -694,8 +695,12 @@ func connSecretName() string { return addonCRName() + "-conn" }
 // CREATEROLE — both are granted on the chart's primary user.
 //
 // Returns "" when any required field is missing.
-func buildAdminDSN(data map[string][]byte) string {
-	host := string(data["POSTGRES_HOST"])
+func buildAdminDSN(data map[string][]byte, ns string) string {
+	// The chart emits the bare Service name ("kuso-instance-pg" /
+	// "<name>-rw"). Qualify it with the addon namespace so it resolves from
+	// any namespace and is classified in-cluster below; a bare host used to
+	// fall through to sslmode=require against a plaintext server.
+	host := addons.QualifyInClusterHost(string(data["POSTGRES_HOST"]), ns)
 	port := string(data["POSTGRES_PORT"])
 	user := string(data["POSTGRES_USER"])
 	pw := string(data["POSTGRES_PASSWORD"])

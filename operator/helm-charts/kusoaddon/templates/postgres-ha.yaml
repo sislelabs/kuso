@@ -103,6 +103,15 @@ metadata:
 spec:
   imageName: {{ printf "ghcr.io/cloudnative-pg/postgresql:%s" $version | quote }}
   instances: 3
+  {{- /* CNPG creates the DB pods itself and copies only inheritedMetadata
+         onto them, not the Cluster's own labels. The project
+         NetworkPolicies select on kuso.sislelabs.com/project, so without
+         this the pods are outside the project: app egress to them is
+         dropped (allow-intra-project only targets project pods) and they
+         are not covered by default-deny. */}}
+  inheritedMetadata:
+    labels:
+      {{- include "kusoaddon.cnpgPodLabels" . | nindent 6 }}
   primaryUpdateStrategy: unsupervised
   storage:
     size: {{ include "kusoaddon.storageSize" . }}
@@ -220,5 +229,14 @@ spec:
   type: rw
   pgbouncer:
     poolMode: transaction
+  {{- /* Same reason as the Cluster's inheritedMetadata: app pods reach the
+         pooler only if it carries the project label. CNPG requires the
+         containers key; empty keeps its default pgbouncer container. */}}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.cnpgPodLabels" . | nindent 8 }}
+    spec:
+      containers: []
 {{- end }}
 {{- end }}

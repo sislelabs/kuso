@@ -37,7 +37,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -63,8 +62,12 @@ type Manifest struct {
 }
 
 // ManifestBundle references an applyable YAML asset on the release.
+// SHA256 (hex) pins the asset bytes under the release.json signature;
+// the updater Job refuses to apply a download that doesn't match.
+// Empty on releases cut before v0.31.0's successor.
 type ManifestBundle struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 type ManifestComponents struct {
@@ -83,6 +86,7 @@ type ComponentRef struct {
 
 type ManifestCRDs struct {
 	URL        string      `json:"url"`
+	SHA256     string      `json:"sha256,omitempty"` // see ManifestBundle.SHA256
 	MinServer  string      `json:"minServer,omitempty"`
 	Migrations []Migration `json:"migrations,omitempty"`
 }
@@ -133,14 +137,6 @@ type Service struct {
 	state  State
 	etag   string // for If-None-Match on the GH releases endpoint
 	client *http.Client
-
-	// runCtx is the lifecycle context set by Run. Background watchers
-	// (e.g. watchOperatorHealth) derive from this so a graceful
-	// shutdown cancels in-flight rollbacks instead of leaving them
-	// running against a closed kube client. nil before Run starts —
-	// callers fall back to context.Background() in that case (only
-	// happens in tests).
-	runCtx context.Context
 }
 
 // New builds a Service with sensible defaults. Repo overridable for
@@ -165,9 +161,6 @@ func New(database *db.DB, kc *kube.Client, namespace, current string, logger *sl
 // Run polls the GH releases endpoint forever. First tick is
 // immediate so the UI has a real "latest" within 30s of boot.
 func (s *Service) Run(ctx context.Context) {
-	s.mu.Lock()
-	s.runCtx = ctx
-	s.mu.Unlock()
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	s.tick(ctx)
@@ -774,10 +767,6 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	if updaterImg == "" {
 		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
 	}
-	// Snapshot the pre-update operator image so we can roll back if
-	// the new image fails its readiness probe.
-	priorOperatorImg := s.currentOperatorImage(ctx)
-
 	jobName := fmt.Sprintf("kuso-update-%d", time.Now().Unix())
 	job := &batchv1Job{
 		Name:      jobName,
@@ -788,7 +777,9 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 			"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
 			"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
 			"KUSO_CRDS_URL":         m.CRDs.URL,
+			"KUSO_CRDS_SHA256":      m.CRDs.SHA256,
 			"KUSO_MANIFESTS_URL":    m.Manifests.URL,
+			"KUSO_MANIFESTS_SHA256": m.Manifests.SHA256,
 			"KUSO_NAMESPACE":        s.Namespace,
 			"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
 		},
@@ -797,11 +788,10 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 		_ = s.writeStatus(ctx, UpdateStatus{Phase: "failed", Message: err.Error(), Updated: time.Now().UTC()})
 		return "", err
 	}
-	// Background watchdog: if the new operator image doesn't go Ready
-	// within healthGate, roll it back to the prior tag. The Logger
-	// records every transition; the user sees the result in the
-	// ConfigMap status the UI polls. R5 audit fix.
-	go s.watchOperatorHealth(jobName, priorOperatorImg, m.Components.Operator.Image)
+	// The operator health gate + rollback lives in the Job
+	// (build/updater/entrypoint.sh), not here: the Job replaces this
+	// server process before it touches the operator, so an in-process
+	// watchdog died with the old pod on every real upgrade.
 	return jobName, nil
 }
 
@@ -830,140 +820,6 @@ func (s *Service) activeUpdateJob(ctx context.Context) (string, error) {
 	}
 	return "", nil
 }
-
-// healthGate is how long we give the new operator image before
-// declaring failure and rolling back.
-const healthGate = 5 * time.Minute
-
-// currentOperatorImage reads the operator Deployment's image tag.
-// Returns "" if the Deployment is missing or the read fails — in
-// either case the watchdog has nothing to roll back to and skips.
-func (s *Service) currentOperatorImage(ctx context.Context) string {
-	if s.Kube == nil {
-		return ""
-	}
-	d, err := s.Kube.Clientset.AppsV1().Deployments(operatorNamespace).Get(ctx, operatorDeployment, metav1.GetOptions{})
-	if err != nil {
-		return ""
-	}
-	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name == operatorContainer {
-			return c.Image
-		}
-	}
-	return ""
-}
-
-// watchOperatorHealth polls the operator Deployment every 10s for up
-// to healthGate. If we don't see all replicas Ready by the deadline,
-// we issue a `set image` rollback to priorImg and update the
-// kuso-update ConfigMap with phase=rolled-back so the UI shows the
-// failure.
-//
-// Best-effort: kube errors during the watchdog log a warn and do NOT
-// trigger a false-positive rollback (a transient apiserver hiccup
-// shouldn't undo a healthy deploy).
-func (s *Service) watchOperatorHealth(jobName, priorImg, newImg string) {
-	if priorImg == "" || newImg == "" || priorImg == newImg {
-		// Nothing to roll back to (fresh install) or no real change —
-		// skip.
-		return
-	}
-	// Derive from the server's lifecycle context so a graceful
-	// shutdown cancels the watchdog instead of running against a
-	// closed kube client and possibly firing a spurious rollback.
-	s.mu.RLock()
-	parent := s.runCtx
-	s.mu.RUnlock()
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, healthGate+30*time.Second)
-	defer cancel()
-	deadline := time.Now().Add(healthGate)
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		d, err := s.Kube.Clientset.AppsV1().Deployments(operatorNamespace).Get(ctx, operatorDeployment, metav1.GetOptions{})
-		if err != nil {
-			s.Logger.Warn("updater: watchdog read", "err", err)
-			continue
-		}
-		// Healthy: spec.replicas matches status.readyReplicas AND
-		// the image is the new one. Without the image check, an
-		// old replica still draining would falsely satisfy the gate.
-		var liveImg string
-		for _, c := range d.Spec.Template.Spec.Containers {
-			if c.Name == operatorContainer {
-				liveImg = c.Image
-			}
-		}
-		if liveImg == newImg && d.Status.ReadyReplicas == d.Status.Replicas && d.Status.Replicas > 0 {
-			s.Logger.Info("updater: operator healthy after upgrade", "image", newImg, "job", jobName)
-			return
-		}
-		if time.Now().After(deadline) {
-			s.Logger.Warn("updater: operator unhealthy after gate, rolling back",
-				"newImage", newImg, "priorImage", priorImg, "ready", d.Status.ReadyReplicas, "want", d.Status.Replicas)
-			if err := s.rollbackOperator(ctx, priorImg); err != nil {
-				s.Logger.Error("updater: rollback failed", "err", err)
-				_ = s.writeStatus(ctx, UpdateStatus{
-					Phase:   "rollback-failed",
-					Message: fmt.Sprintf("rollback to %s failed: %v", priorImg, err),
-					Updated: time.Now().UTC(),
-				})
-				return
-			}
-			_ = s.writeStatus(ctx, UpdateStatus{
-				Phase:   "rolled-back",
-				Message: fmt.Sprintf("operator at %s did not become Ready within %s; reverted to %s", newImg, healthGate, priorImg),
-				Updated: time.Now().UTC(),
-			})
-			return
-		}
-	}
-}
-
-// rollbackOperator patches the operator Deployment back to priorImg.
-func (s *Service) rollbackOperator(ctx context.Context, priorImg string) error {
-	patch := fmt.Sprintf(
-		`{"spec":{"template":{"spec":{"containers":[{"name":%q,"image":%q}]}}}}`,
-		operatorContainer, priorImg,
-	)
-	_, err := s.Kube.Clientset.AppsV1().Deployments(operatorNamespace).Patch(
-		ctx, operatorDeployment, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{},
-	)
-	return err
-}
-
-// Constants for operator deployment identification. Kept here rather
-// than in a shared file because they're only used by the watchdog
-// and are tied to the install.sh layout.
-const (
-	operatorNamespace  = "kuso-operator-system"
-	operatorDeployment = "kuso-operator-controller-manager"
-	operatorContainer  = "manager"
-	// serverDeployment/serverContainer name the kuso-server workload the
-	// updater Job rolls. The Go watchdog above deliberately does NOT roll
-	// the server back from here: the server process is killed mid-roll, so
-	// a crashlooping new server image is recovered by the updater Job
-	// itself (build/updater/entrypoint.sh snapshots the old image and
-	// reverts on a failed `rollout status`). These identifiers stay as the
-	// canonical names that entrypoint.sh mirrors (deploy/kuso-server,
-	// container "server"); keep the two in sync.
-	serverDeployment = "kuso-server"
-	serverContainer  = "server"
-)
-
-// Silence unused warnings for the canonical name constants above — they
-// document the server workload identity that the updater Job's shell
-// rollback keys off, and are referenced by that Job rather than Go code.
-var _, _ = serverDeployment, serverContainer
 
 // killSwitchEngaged returns true when the operator has set a hard
 // stop on auto-updates. Reads on every gate check so flipping the

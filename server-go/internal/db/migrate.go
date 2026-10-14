@@ -160,6 +160,11 @@ func (d *DB) runMigrations(ctx context.Context) error {
 			}
 			continue
 		}
+		if isDeferredMigration(m.version) {
+			// Built CONCURRENTLY after the listener is up; recorded by
+			// BuildDeferredIndexes once the index is valid.
+			continue
+		}
 		if err := d.applyMigration(ctx, conn, m); err != nil {
 			return fmt.Errorf("db: migration %04d (%s) failed: %w", m.version, m.name, err)
 		}

@@ -52,6 +52,12 @@ func (s *Service) attachServiceSecretToEnvs(ctx context.Context, ns, project, se
 			return fmt.Errorf("attach %s to env %s: %w", secretName, env.Name, uerr)
 		}
 	}
+	// The managed secret is mounted whole, so crons need the mount too;
+	// a cron refresh failure must not fail the secret write itself.
+	if err := s.refreshServiceCrons(ctx, ns, project, service); err != nil {
+		slog.WarnContext(ctx, "secret attach: refresh service crons failed",
+			"project", project, "service", service, "err", err)
+	}
 	return nil
 }
 

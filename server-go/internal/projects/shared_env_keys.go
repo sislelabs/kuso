@@ -29,8 +29,16 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 )
+
+// hiddenSharedKey reports instance-addon superuser DSNs. They share
+// kuso-instance-shared with the tenant-facing instance keys but must never
+// be subscribable, mounted or revealed to a tenant env.
+func hiddenSharedKey(secretName, key string) bool {
+	return secretName == instanceSharedSecretName && instancesecrets.IsAdminDSNKey(key)
+}
 
 // expandSharedEnvKeysToEnvVars resolves each requested key to its
 // source secret and returns env entries (valueFrom.secretKeyRef
@@ -66,6 +74,9 @@ func (s *Service) expandSharedEnvKeysToEnvVars(
 		}
 		ks := make(map[string]bool, len(sec.Data))
 		for k := range sec.Data {
+			if hiddenSharedKey(name, k) {
+				continue
+			}
 			ks[k] = true
 		}
 		keysBySecret[name] = ks

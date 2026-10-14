@@ -306,7 +306,7 @@ func TestApply_AddonBackupAppliedAsPostCreateUpdate(t *testing.T) {
 		Project: "shop",
 		Addons: []AddonSpec{{
 			Name: "db", Kind: "postgres",
-			Backup: &AddonBackupSpec{Schedule: "0 3 * * *", RetentionDays: 7},
+			Backup: &AddonBackupSpec{Schedule: "0 3 * * *", RetentionDays: intPtr(7)},
 		}},
 	}
 	plan := &Plan{AddonsToCreate: []string{"db"}}

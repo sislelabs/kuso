@@ -299,9 +299,10 @@ func exportAddon(project string, cr kube.KusoAddon) AddonSpec {
 		a.Pooler = &AddonPoolerSpec{Enabled: cr.Spec.Pooler.Enabled}
 	}
 	if cr.Spec.Backup != nil {
+		retention := cr.Spec.Backup.RetentionDays
 		a.Backup = &AddonBackupSpec{
 			Schedule:      cr.Spec.Backup.Schedule,
-			RetentionDays: cr.Spec.Backup.RetentionDays,
+			RetentionDays: &retention,
 		}
 	}
 	if cr.Spec.Placement != nil {

@@ -74,6 +74,15 @@ kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
 kuso.sislelabs.com/addon-kind: {{ .Values.kind | quote }}
 {{- end }}
 
+{{- /* Labels for pods CNPG creates (HA postgres instances + Pooler). Only
+       the kuso.* identity labels: the app.kubernetes.io selector labels
+       would pull them into Services that select this release's own pods. */ -}}
+{{- define "kusoaddon.cnpgPodLabels" -}}
+kuso.sislelabs.com/project: {{ .Values.project | default "unknown" | quote }}
+kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+kuso.sislelabs.com/addon-kind: {{ .Values.kind | quote }}
+{{- end }}
+
 {{- define "kusoaddon.selectorLabels" -}}
 app.kubernetes.io/name: kusoaddon
 app.kubernetes.io/instance: {{ .Release.Name | quote }}

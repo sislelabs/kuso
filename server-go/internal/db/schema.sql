@@ -403,8 +403,12 @@ CREATE INDEX IF NOT EXISTS "LogLine_ts_idx" ON "LogLine"("ts");
 -- EXISTS-on-the-index then correctly skips. The schema apply skips
 -- already-exists errors as a class so this lands cleanly even when
 -- pg_trgm is missing — alert performance just doesn't get the lift.
+--
+-- The index itself is built CONCURRENTLY after boot by
+-- BuildDeferredIndexes (deferred_indexes.go): building a GIN index on a
+-- large LogLine here ran before the listener and outlived the
+-- startupProbe.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS "LogLine_line_trgm_idx" ON "LogLine" USING GIN ("line" gin_trgm_ops);
 
 -- v0.9.7: missing-env-var hints scraped from runtime crash logs by the
 -- log shipper. One row per (project, service, name); upsert on hit so

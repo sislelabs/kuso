@@ -196,8 +196,9 @@ type AddonBackupStatus struct {
 	Namespace string `json:"namespace"`
 	// Kind is the addon's datastore kind (postgres/redis/mysql/…).
 	Kind string `json:"kind,omitempty"`
-	// InstanceShared marks an addon backed by the instance addon, whose
-	// own backups cover it; the UI must not report it as a gap.
+	// InstanceShared marks an instance-shared addon whose database IS
+	// covered by the instance addon's scheduled backup. An instance-shared
+	// addon with no backing backup is reported as a plain gap (false).
 	InstanceShared bool   `json:"instanceShared,omitempty"`
 	Schedule       string `json:"schedule"`
 	// ScheduleConfigured: spec.backup.schedule is set on the addon CR.
@@ -233,8 +234,9 @@ const addonBackupLateGrace = 6 * time.Hour
 // the backup Secret's presence, and for everything else an honest
 // "not covered by scheduled backups" row (Covered=false, Detail says
 // why) — unscheduled addons, kinds with no dump path (clickhouse,
-// meilisearch, rabbitmq, …), external and instance-shared addons. Coverage gaps are Healthy=true
-// so they surface without paging. Addon CRs live in their project's EXECUTION
+// meilisearch, rabbitmq, …) and external addons. Coverage gaps are Healthy=true
+// so they surface without paging. Instance-shared addons take the verdict of
+// the instance addon that dumps their database (resolveInstanceShared). Addon CRs live in their project's EXECUTION
 // namespace (custom-namespace projects — the koreni pattern), so the
 // listing fans out over home + every project spec.namespace; a
 // home-only list silently missed exactly the projects the check
@@ -281,6 +283,10 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 
 	secretPresent := map[string]*bool{} // nil entry = lookup errored
 	var out []AddonBackupStatus
+	// Instance-shared tenant rows are resolved after the loop against the
+	// row of the instance addon that actually holds their database.
+	var shared []instanceSharedRow
+	skipped := map[string]bool{} // CR names whose row was dropped as incomplete
 	for i := range addons {
 		a := &addons[i]
 		project := a.Labels["kuso.sislelabs.com/project"]
@@ -289,11 +295,18 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			ns = a.Namespace
 		}
 		st := AddonBackupStatus{
-			Addon:          a.Name,
-			Project:        project,
-			Namespace:      ns,
-			Kind:           a.Spec.Kind,
-			InstanceShared: a.Spec.UseInstanceAddon != "",
+			Addon:     a.Name,
+			Project:   project,
+			Namespace: ns,
+			Kind:      a.Spec.Kind,
+		}
+		if a.Spec.UseInstanceAddon != "" {
+			if a.Spec.Backup != nil && a.Spec.Backup.Schedule != "" {
+				st.Schedule = a.Spec.Backup.Schedule
+				st.ScheduleConfigured = true
+			}
+			shared = append(shared, instanceSharedRow{st: st, backing: instanceAddonCRName(a.Spec.UseInstanceAddon)})
+			continue
 		}
 		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
 			// No schedule → not covered by scheduled backups. This row
@@ -322,6 +335,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 		if p, seen := secretPresent[ns]; seen {
 			if p == nil {
 				complete = false
+				skipped[a.Name] = true
 				continue // lookup errored earlier — skip, don't guess
 			}
 			st.SecretPresent = *p
@@ -342,6 +356,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 				// ignore the real one.
 				secretPresent[ns] = nil
 				complete = false
+				skipped[a.Name] = true
 				continue
 			}
 		}
@@ -368,6 +383,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			// (or is wedged). Unhealthy, distinct detail below.
 		default:
 			complete = false
+			skipped[a.Name] = true
 			continue // transient — skip, don't guess
 		}
 		switch {
@@ -380,7 +396,63 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 		}
 		out = append(out, st)
 	}
+	for _, r := range shared {
+		if skipped[r.backing] {
+			continue // backing verdict unknown this tick — don't guess
+		}
+		out = append(out, resolveInstanceShared(r, out))
+	}
 	return out, complete
+}
+
+type instanceSharedRow struct {
+	st      AddonBackupStatus
+	backing string
+}
+
+// instanceAddonCRName is the managed instance addon's CR name for a
+// spec.useInstanceAddon value (instancepg: project "kuso-instance", addon
+// "pg" → "kuso-instance-pg"). External instance DSNs have no CR.
+func instanceAddonCRName(useInstanceAddon string) string {
+	return "kuso-instance-" + useInstanceAddon
+}
+
+// resolveInstanceShared derives a tenant row from the instance addon's row.
+// The tenant's own CR never renders a CronJob; its database is dumped only
+// as a per-DB sibling by the instance addon's backup, so coverage and
+// health are the instance addon's. With no scheduled backup there (or an
+// external instance server) the tenant's data has no backup at all, and a
+// tenant that set its own schedule was being told the schedule is merely
+// "inert" while the UI showed "via instance".
+func resolveInstanceShared(r instanceSharedRow, rows []AddonBackupStatus) AddonBackupStatus {
+	st := r.st
+	for _, b := range rows {
+		if b.Addon != r.backing || !b.Covered {
+			continue
+		}
+		st.InstanceShared = true
+		st.Covered = true
+		st.CronJobPresent = b.CronJobPresent
+		st.SecretPresent = b.SecretPresent
+		st.LastSuccessAt = b.LastSuccessAt
+		st.LastScheduleAt = b.LastScheduleAt
+		st.Healthy = b.Healthy
+		st.Detail = "dumped as a per-database backup by instance addon " + r.backing
+		if !b.Healthy && b.Detail != "" {
+			st.Detail += " — " + b.Detail
+		}
+		return st
+	}
+	st.Covered = false
+	// Same no-page policy as any unscheduled addon, unless the tenant
+	// asked for backups: then the silence is the failure.
+	st.Healthy = !st.ScheduleConfigured
+	st.Detail = "instance-shared database is NOT backed up: instance addon " + r.backing +
+		" has no scheduled backup (or the instance server is external)"
+	if st.ScheduleConfigured {
+		st.Detail += "; this addon's own schedule never runs"
+	}
+	return st
 }
 
 // uncoveredDetail explains WHY an addon with no backup schedule is not

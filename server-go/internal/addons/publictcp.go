@@ -74,10 +74,13 @@ var ErrPublicTCPPoolExhausted = fmt.Errorf("%w: every port in the public TCP poo
 
 // publicTCPKinds are the kinds the kusoaddon chart's public-tcp.yaml can
 // route to (single-node topology). Keep in step with that template.
+// redpanda is deliberately absent: it has no auth, auto-creates topics, and
+// advertises only the in-cluster listener, so exposing it would publish an
+// anonymous writable Kafka that off-cluster clients can't even use.
 var publicTCPKinds = map[string]bool{
 	"postgres": true, "redis": true, "valkey": true, "mongodb": true,
 	"mysql": true, "rabbitmq": true, "clickhouse": true, "nats": true,
-	"redpanda": true, "meilisearch": true, "s3": true,
+	"meilisearch": true, "s3": true,
 }
 
 // checkPublicTCPSupported refuses addons the chart can't expose, so the

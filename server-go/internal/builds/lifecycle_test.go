@@ -262,3 +262,32 @@ func TestRollback_RefusesPrunedImage(t *testing.T) {
 		t.Fatalf("present image: %v", err)
 	}
 }
+
+// B-04: a hold-expired build never ran its release hook. Rolling an env
+// that has one onto it would skip the migration, so Rollback refuses.
+func TestRollback_RefusesHoldExpiredBuildWhenEnvHasReleaseHook(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedEnvWithRelease("alpha", "web", []string{"sh", "-c", "migrate up"}),
+		seedBuild(&kube.KusoBuild{
+			ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-held", Namespace: "kuso",
+				Annotations: map[string]string{annPhase: "cancelled", annHoldExpired: "2026-10-07T00:00:00Z"}},
+			Spec: kube.KusoBuildSpec{
+				Project: "alpha", Service: "alpha-web",
+				Image: &kube.KusoImage{Repository: "reg/alpha/web", Tag: "held"},
+			},
+		}),
+	)
+	_, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-held", RollbackOptions{})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Rollback to never-promoted build with a release hook: want ErrInvalid, got %v", err)
+	}
+	env, gerr := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if env.Spec.Image != nil && env.Spec.Image.Tag == "held" {
+		t.Errorf("env patched to the un-migrated image: %+v", env.Spec.Image)
+	}
+}

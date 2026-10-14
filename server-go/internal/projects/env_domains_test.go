@@ -153,10 +153,9 @@ func TestSetEnvScopedVar_ResolvesRefAtSetTime(t *testing.T) {
 	if got == "${{ api.URL }}" || got == "" {
 		t.Fatalf("env-scoped ref should resolve at set time, got %q (raw literal = bug)", got)
 	}
-	// Resolved to a concrete in-cluster URL (same shape the service-level
-	// SetEnv path produces). The point of the fix is that it is RESOLVED,
-	// not raw — so it both works in the pod and survives propagation.
-	const want = "http://alpha-api-production.kuso.svc.cluster.local"
+	// Resolved to a concrete in-cluster URL scoped to THIS env's sibling
+	// (what propagation produces for staging), not the production one.
+	const want = "http://alpha-api-staging.kuso.svc.cluster.local"
 	if got != want {
 		t.Errorf("resolved ref = %q, want %q", got, want)
 	}

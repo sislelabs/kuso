@@ -69,6 +69,7 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 		if err != nil {
 			return nil, fmt.Errorf("list keys for secret %s: %w", name, err)
 		}
+		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return hiddenSharedKey(name, k) })
 		out.Sources = append(out.Sources, SubscribableKeyGroup{
 			Secret: name,
 			Keys:   keys,
@@ -101,7 +102,10 @@ func (s *Service) SharedEnvValues(ctx context.Context, project string, keys []st
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {
-		for _, d := range data {
+		for i, d := range data {
+			if hiddenSharedKey(names[i], k) {
+				continue
+			}
 			if v, ok := d[k]; ok {
 				out[k] = v
 				break

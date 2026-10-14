@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -312,24 +313,29 @@ func listProtectedImages(ctx context.Context, kc *kube.Client) (protectedImages,
 		return p, fmt.Errorf("orphan-sweep list pods: %w", err)
 	}
 	for i := range pods.Items {
-		pod := &pods.Items[i]
-		for _, c := range pod.Spec.InitContainers {
-			p.addRef(c.Image)
-		}
-		for _, c := range pod.Spec.Containers {
-			p.addRef(c.Image)
-		}
-		for _, c := range pod.Spec.EphemeralContainers {
-			p.addRef(c.Image)
-		}
-		for _, st := range pod.Status.InitContainerStatuses {
-			p.addRef(st.ImageID)
-		}
-		for _, st := range pod.Status.ContainerStatuses {
-			p.addRef(st.ImageID)
-		}
+		p.addPod(&pods.Items[i])
 	}
 	return p, nil
+}
+
+// addPod protects every image a pod runs or references, by tag and by
+// the resolved imageID digest.
+func (p protectedImages) addPod(pod *corev1.Pod) {
+	for _, c := range pod.Spec.InitContainers {
+		p.addRef(c.Image)
+	}
+	for _, c := range pod.Spec.Containers {
+		p.addRef(c.Image)
+	}
+	for _, c := range pod.Spec.EphemeralContainers {
+		p.addRef(c.Image)
+	}
+	for _, st := range pod.Status.InitContainerStatuses {
+		p.addRef(st.ImageID)
+	}
+	for _, st := range pod.Status.ContainerStatuses {
+		p.addRef(st.ImageID)
+	}
 }
 
 // buildTerminal reports a build that can no longer push or promote an

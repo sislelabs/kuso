@@ -34,6 +34,7 @@ func fakeService(t *testing.T, seeds ...seed) *Service {
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRBuilds:       "KusoBuildList",
 		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
 	})
 	for _, s := range seeds {
 		if err := dyn.Tracker().Create(s.gvr, s.obj, "kuso"); err != nil {

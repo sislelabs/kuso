@@ -1225,6 +1225,13 @@ curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 
+# Admission fences on kuso's own ServiceAccounts (kuso-server may only
+# write RBAC in kuso-managed namespaces; the internet-facing activator
+# may only flip replicas). kuso-server can't apply or remove these
+# itself, so they're installed here, as cluster-admin.
+curl -sfL "${KUSO_RAW}/deploy/kuso-admission-policy.yaml" | kubectl apply -f - >/dev/null \
+  || warn "deploy/kuso-admission-policy.yaml apply failed — kuso-server's RBAC is not namespace-fenced; apply it manually"
+
 # Node-join: the /bootstrap/register-node endpoint mints a join command
 # pointing at KUSO_K3S_URL. Without it the server falls back to the
 # in-cluster ClusterIP (10.43.0.1), which a NEW VM can't reach — so the
@@ -1262,8 +1269,9 @@ if [[ -n "$TCP_POOL_LO" ]]; then
 fi
 
 # kuso-activator: the scale-to-zero request-holding proxy (runs the same
-# image in --activator mode). Reuses the kuso-server ServiceAccount, so
-# it must apply AFTER server-go.yaml (which declares the SA + RBAC). The
+# image in --activator mode, under its own kuso-activator
+# ServiceAccount declared in the same file). Applied after server-go.yaml
+# (PriorityClass) and the admission policy that fences its RBAC. The
 # traefik errors-Middleware it defines is what wakes slept services.
 # Best-effort: a cluster without scale-to-zero users still works, the
 # activator just sits idle. Same image-tag rewrite as the server.

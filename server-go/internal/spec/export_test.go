@@ -137,7 +137,7 @@ func TestExport_RoundTripsToNoOpPlan(t *testing.T) {
 	if a.Pooler == nil || !a.Pooler.Enabled {
 		t.Fatalf("addon pooler not exported: %+v", a.Pooler)
 	}
-	if a.Backup == nil || a.Backup.Schedule != "0 3 * * *" || a.Backup.RetentionDays != 7 {
+	if a.Backup == nil || a.Backup.Schedule != "0 3 * * *" || a.Backup.RetentionDays == nil || *a.Backup.RetentionDays != 7 {
 		t.Fatalf("addon backup not exported: %+v", a.Backup)
 	}
 

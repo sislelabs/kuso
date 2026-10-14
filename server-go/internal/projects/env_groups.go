@@ -676,6 +676,12 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// service after create.
 		clonedSpec := cloneServiceSpec(item.svc.Spec, project, req.Name)
 		clonedSpec.EnvVars = newEnvVars
+		// A worker whose image source is cloned too must follow the clone;
+		// left verbatim, every PRODUCTION build of the source got promoted
+		// onto this group's worker.
+		if dst, ok := siblingRename[strings.TrimPrefix(clonedSpec.FromService, project+"-")]; ok {
+			clonedSpec.FromService = dst
+		}
 		svcClone := &kube.KusoService{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: newSvcCR,

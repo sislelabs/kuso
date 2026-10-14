@@ -281,7 +281,9 @@ func renderCloneContainer(buildName string, b *kube.KusoBuild) corev1.Container 
 	if b != nil {
 		repoRef = b.Spec.Repo
 		if repoRef != nil {
-			repoURL = repoRef.URL
+			// Builds created before Create normalised scp URLs still
+			// carry git@host:org/repo, which neither clone path handles.
+			repoURL = builds.NormalizeRepoURL(repoRef.URL)
 		}
 		if b.Spec.Branch != "" {
 			branch = b.Spec.Branch

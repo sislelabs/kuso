@@ -89,6 +89,14 @@ networkPolicy:
   ingressController:
     namespace: traefik
     ports: [8000, 8443]
+  # CloudNativePG (HA Postgres addons): where the CNPG operator runs, and
+  # how DB pods reach the apiserver (allow-cnpg-* policies).
+  # apiServerServiceCIDR is the `kubernetes` Service ClusterIP (k3s
+  # default 10.43.0.1); apiServerPort the port behind it (k3s 6443).
+  cnpg:
+    operatorNamespace: cnpg-system
+    apiServerServiceCIDR: 10.43.0.1/32
+    apiServerPort: 6443
 
 # Per-project resource ceiling. ResourceQuota caps CPU/memory/object
 # counts so one tenant can't starve the cluster. LimitRange supplies

@@ -20,11 +20,20 @@
 #     cert-manager-webhook, cert-manager-cainjector) — see the
 #     resourceNames-scoped apps rule below.
 #   - full workload mutation (Secrets writes, pods/exec, jobs/cronjobs,
-#     serviceaccounts, deployments/statefulsets patch) ONLY inside
-#     managed namespaces (home `kuso` + per-project namespaces) via
-#     the kuso-server-managed-ns Role bindings.
-# It can NOT create/patch workloads, Jobs, or ServiceAccounts in
-# kube-system or any other namespace kuso doesn't manage.
+#     serviceaccounts, deployments/statefulsets patch) inside managed
+#     namespaces (home `kuso` + per-project namespaces) via the
+#     kuso-server-managed-ns Role bindings.
+#   - create Roles/RoleBindings in any namespace, `bind` on
+#     kuso-server-managed-ns, and patch on namespaces. RBAC alone would
+#     let it bind kuso-server-managed-ns into kube-system (or cluster-
+#     wide) and so gain the workload verbs above there. That is closed
+#     by the kuso-server-rbac-scope ValidatingAdmissionPolicy
+#     (deploy/kuso-admission-policy.yaml), NOT by the rules below: it
+#     limits Role/RoleBinding writes to namespaces labelled
+#     app.kubernetes.io/managed-by=kuso, refuses a ClusterRoleBinding to
+#     kuso-server-managed-ns, and refuses adding that label to an
+#     existing namespace. An install without that policy applied does
+#     not have this boundary.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -217,10 +226,10 @@ rules:
   # RBAC: kuso-server creates per-project RoleBindings at
   # EnsureNamespace time so it can mutate Secrets + exec into addon
   # pods inside the project namespace. get + list let the stamper
-  # check idempotence; create lets it land the binding. delete/patch
-  # are NOT granted — once stamped, bindings are immutable from the
-  # server's view (project deletion drops the whole namespace, which
-  # cascades to the binding).
+  # check idempotence; create lets it land the binding. The verbs are
+  # cluster-wide because project namespaces are created at runtime;
+  # the namespace restriction is the kuso-server-rbac-scope admission
+  # policy (see the header).
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, list, create]

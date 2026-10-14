@@ -321,12 +321,40 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		if err := s.validateSecretRefName(ctx, project, service, req.SecretRef.Name); err != nil {
 			return nil, err
 		}
+		if err := rejectHiddenSharedKeyRef(req.SecretRef.Name, req.SecretRef.Key); err != nil {
+			return nil, err
+		}
 		next.ValueFrom = map[string]any{
 			"secretKeyRef": map[string]any{"name": req.SecretRef.Name, "key": req.SecretRef.Key},
 		}
 	}
 
+	var cloneByOrigin map[string]string
+	cloneMapLoaded := false
 	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+		// The resolvers above target production (<svc>-production, the
+		// project-level <addon>-conn). This var is pinned as an override and
+		// never re-scoped by propagation, so scope it to THIS env now —
+		// otherwise a staging override points at the production DB/service.
+		v := next
+		if hasValue {
+			envScope := env.Labels[labelEnv]
+			if envScope == "" {
+				envScope = "production"
+			}
+			svcRefScope := envScope
+			if strings.HasSuffix(env.Name, "-production") {
+				svcRefScope = "production"
+			}
+			v = rescopeServiceRefLiterals([]kube.KusoEnvVar{v}, ns, svcRefScope)[0]
+			if envScope != "production" {
+				if !cloneMapLoaded {
+					cloneByOrigin = s.envCloneConnByOrigin(ctx, ns, project, envScope)
+					cloneMapLoaded = true
+				}
+				v = rescopeAddonConnRefsByOrigin([]kube.KusoEnvVar{v}, cloneByOrigin)[0]
+			}
+		}
 		// Record this name as a DELIBERATE per-env override so later
 		// service-level propagation preserves it instead of re-stamping
 		// the service value over it. This explicit marker is what lets
@@ -337,11 +365,11 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		}
 		for i := range env.Spec.EnvVars {
 			if env.Spec.EnvVars[i].Name == name {
-				env.Spec.EnvVars[i] = next
+				env.Spec.EnvVars[i] = v
 				return nil
 			}
 		}
-		env.Spec.EnvVars = append(env.Spec.EnvVars, next)
+		env.Spec.EnvVars = append(env.Spec.EnvVars, v)
 		return nil
 	})
 	if err != nil {

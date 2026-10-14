@@ -313,6 +313,20 @@ func ValidateRepoURL(raw string) error {
 	return fmt.Errorf("repo URL must be http(s):// or git@host:org/repo")
 }
 
+// NormalizeRepoURL rewrites an scp-style remote (git@host:org/repo) to
+// https://host/org/repo. Build pods have no SSH keys and the private
+// clone path splices a token into an https URL, so the scp form can
+// never be cloned as stored. Anything else is returned unchanged.
+func NormalizeRepoURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if !scpStyleRepoRe.MatchString(s) {
+		return raw
+	}
+	_, rest, _ := strings.Cut(s, "@")
+	host, path, _ := strings.Cut(rest, ":")
+	return "https://" + host + "/" + strings.TrimPrefix(path, "/")
+}
+
 // scpStyleRepoRe matches the scp-style remote git accepts:
 // user@host:path/to/repo(.git). Host and path are restricted to the
 // same conservative charset as the rest of this file.

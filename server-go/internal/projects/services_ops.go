@@ -669,6 +669,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if req.GitHub != nil && req.GitHub.InstallationID > 0 {
 		svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.GitHub.InstallationID}
 	}
+	// Seed the subscription with every key the shared secrets carry now —
+	// the per-key equivalent of the old mount-all, minus the instance-addon
+	// admin DSN. A nil list meant the env blanket-mounted kuso-instance-shared
+	// (admin DSN included) until the next boot migration.
+	if s.Kube.Clientset != nil {
+		keys, kerr := s.collectAvailableSharedKeys(ctx, ns, project)
+		if kerr != nil {
+			return nil, fmt.Errorf("list shared keys: %w", kerr)
+		}
+		svc.Spec.SharedEnvKeys = keys
+	}
 	dropToken := func() {}
 	if storeToken {
 		secName, serr := s.storeRepoToken(ctx, project, req.Name, req.Repo.Token)
@@ -744,6 +755,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		if err == nil {
 			prodEnvVars = merged
 			envFromSecrets = prunedFrom
+		} else {
+			// Fail closed: a blanket shared mount would hand the pod every
+			// shared key, the instance-addon admin DSN included. The next
+			// env-var save re-resolves the per-key refs.
+			slog.WarnContext(ctx, "add service: resolve sharedEnvKeys failed; shared vars not mounted",
+				"project", project, "service", req.Name, "err", err)
+			envFromSecrets = pruneSharedSecretsFromEnvFrom(project, envFromSecrets)
 		}
 	}
 	// Workers have no HTTP surface — the env chart drops the
@@ -1102,6 +1120,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// this env's clone conns. Captured here so it's visible after the
 	// per-env-addon block.
 	var envCloneByOrigin map[string]string
+	var excludedConns []string
 	if !req.ShareAddons && (s.EnvAddons != nil || s.EnvAddonsFrom != nil) {
 		// Resolve the seed source's postgres conn-secret if --seed-from was given.
 		var seedAll bool
@@ -1160,6 +1179,11 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 				envCloneByOrigin[src] = clone
 			}
 		}
+		for _, c := range projectAddons {
+			if _, cloned := cloneByOrigin[c]; !cloned {
+				excludedConns = append(excludedConns, c)
+			}
+		}
 	}
 
 	// Re-scope service-ref literals to THIS env before adopting them.
@@ -1182,6 +1206,13 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// envFromSecrets so per-key gating actually works at create
 	// time, not just on the next propagation save.
 	mergedEnvVars := scopedSvcEnvVars
+	if svc.Spec.SharedEnvKeys == nil {
+		seeded, serr := s.seedSharedEnvKeys(ctx, ns, project, svc)
+		if serr != nil {
+			return nil, fmt.Errorf("seed sharedEnvKeys: %w", serr)
+		}
+		svc = seeded
+	}
 	if svc.Spec.SharedEnvKeys != nil {
 		merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 			ctx, ns, project,
@@ -1297,6 +1328,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Image:        envImage,
 			PendingImage: envPendingImage,
 		},
+	}
+	if len(excludedConns) > 0 {
+		env.Annotations = map[string]string{addons.AnnotationExcludedAddonConns: strings.Join(excludedConns, ",")}
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
 	if apierrors.IsAlreadyExists(err) {
@@ -2087,9 +2121,12 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 		// It IS a secretKeyRef: the only cross-project-secret vector, so its
 		// name must resolve to a secret this project owns. An empty name is a
 		// malformed ref we won't persist.
-		refName, _ := secretRefNameOf(ev.ValueFrom)
+		refName, refKey := secretRefNameOf(ev.ValueFrom)
 		if refName == "" {
 			return nil, fmt.Errorf("%w: env var %q: secretKeyRef with an empty name is not supported", ErrInvalid, ev.Name)
+		}
+		if err := rejectHiddenSharedKeyRef(refName, refKey); err != nil {
+			return nil, err
 		}
 		if verr := s.validateSecretRefNameIn(project, service, refName, ownedAddonConn); verr != nil {
 			if !opts.AllowPending || !s.pendingConnOwned(ctx, ns, project, refName) {

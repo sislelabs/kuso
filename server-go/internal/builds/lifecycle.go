@@ -41,6 +41,31 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	return s.cancelBuild(ctx, project, buildName, "cancelled by user")
 }
 
+// deleteReleaseJobs stops any release hook (migration) already running
+// against this build's image: a cancel during the promote phase must not
+// leave the migration applying to the env's database. Best-effort.
+func (s *Service) deleteReleaseJobs(ctx context.Context, ns string, b *kube.KusoBuild) {
+	if b.Spec.Image == nil || b.Spec.Image.Tag == "" {
+		return
+	}
+	jobs := s.Kube.Clientset.BatchV1().Jobs(ns)
+	list, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{
+		"kuso.sislelabs.com/role":        "release",
+		"kuso.sislelabs.com/service":     b.Spec.Service,
+		"kuso.sislelabs.com/release-tag": b.Spec.Image.Tag,
+	})})
+	if err != nil {
+		slog.Default().Warn("builds: list release jobs on cancel", "err", err, "build", b.Name)
+		return
+	}
+	bg := metav1.DeletePropagationBackground
+	for _, j := range list.Items {
+		if derr := jobs.Delete(ctx, j.Name, metav1.DeleteOptions{PropagationPolicy: &bg}); derr != nil && !apierrors.IsNotFound(derr) {
+			slog.Default().Warn("builds: delete release job on cancel", "err", derr, "job", j.Name, "build", b.Name)
+		}
+	}
+}
+
 func envOwnedBy(e *kube.KusoEnvironment, project string) bool {
 	if e.Spec.Project != "" {
 		return e.Spec.Project == project
@@ -111,6 +136,7 @@ func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason st
 		// few more minutes producing an image nothing will use.
 		slog.Default().Warn("builds: delete cancelled job", "err", jerr, "build", buildName)
 	}
+	s.deleteReleaseJobs(ctx, ns, b)
 	// Wait briefly for the build pod to actually disappear so the
 	// caller (and the deployments tab refetch) sees a clean state.
 	awaitPodGone(ctx, s.Kube, ns, buildName, 5*time.Second)
@@ -242,7 +268,8 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	// GC'd it, fall back to the archived BuildRecord (whose image may
 	// still exist in the registry within imageRetentionWindow). Either
 	// path yields (repo, tag) for a SUCCEEDED build, or an error.
-	var imageRepo, imageTag, buildBranch string
+	var imageRepo, imageTag, buildBranch, buildRef string
+	var holdExpired bool
 	bRaw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
 	switch {
 	case err == nil:
@@ -255,7 +282,8 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		}
 		// A hold-expired build is cancelled but its image is complete;
 		// its own message points users here to deploy it.
-		holdExpired := buildPhase(&b) == "cancelled" && b.Annotations[annHoldExpired] != ""
+		holdExpired = buildPhase(&b) == "cancelled" && b.Annotations[annHoldExpired] != ""
+		buildRef = b.Spec.Ref
 		if buildPhase(&b) != "succeeded" && !holdExpired {
 			return nil, fmt.Errorf("%w: build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", ErrInvalid, buildName, buildPhase(&b))
 		}
@@ -302,6 +330,13 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	}
 	envCRName := cur.Name
 	group := envGroupName(cur, project+"-"+service)
+	// A hold-expired build was never promoted anywhere, so its release
+	// hook (migration) never ran. Patching spec.image directly would
+	// roll pods onto code whose schema change was never applied.
+	if holdExpired && shouldRunRelease(cur) {
+		return nil, fmt.Errorf("%w: build %s was never promoted, so its release hook never ran on %s — redeploy the commit instead so the hook runs: `kuso build trigger %s %s --ref %s`",
+			ErrInvalid, buildName, group, project, service, buildRef)
+	}
 	if !opts.Force && buildBranch != "" {
 		defaultBranch := s.defaultBranchOf(ctx, project, service)
 		if !promotionBranchMatches(buildBranch, cur.Spec.Branch, defaultBranch) {

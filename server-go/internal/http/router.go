@@ -240,6 +240,16 @@ func NewRouter(d Deps) http.Handler {
 	// on a fresh boot before main has stitched the DB in, but main
 	// should call this as early as possible.
 	httphandlers.SetRateLimiterDB(d.DB)
+	// Behind Traefik the connection peer is always the ingress pod, so
+	// with KUSO_TRUSTED_PROXIES unset every client shared one limiter
+	// bucket. Default the trusted set to the Traefik ingress pod IPs.
+	if d.Kube != nil && d.Kube.Clientset != nil {
+		trustCtx := d.BaseCtx
+		if trustCtx == nil {
+			trustCtx = context.Background()
+		}
+		httphandlers.StartIngressTrustedProxies(trustCtx, d.Kube.Clientset, d.Logger, time.Minute)
+	}
 
 	// /api/status moved behind auth — it exposes server, kube, and
 	// operator versions which are useful recon for an attacker
@@ -253,7 +263,8 @@ func NewRouter(d Deps) http.Handler {
 		Audit:  d.Audit,
 		Logger: d.Logger,
 	}
-	// Rate-limit login at 10 attempts / 30s / IP. Bcrypt makes offline
+	// Rate-limit login at 10 attempts / 30s per (IP, username), plus a
+	// looser per-IP cap. Bcrypt makes offline
 	// cracking expensive, but online brute-force against a known
 	// username has been unrestricted; cap that here.
 	r.Post("/api/auth/login", httphandlers.RateLimitedLogin(authH.Login))

@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"strings"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/kube"
 	"slices"
@@ -143,6 +144,13 @@ func (c changedFields) any() bool {
 func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService, changed changedFields) error {
 	if !changed.any() {
 		return nil
+	}
+	if changed.EnvVars && svc.Spec.SharedEnvKeys == nil {
+		seeded, err := s.seedSharedEnvKeys(ctx, ns, project, svc)
+		if err != nil {
+			return fmt.Errorf("seed sharedEnvKeys: %w", err)
+		}
+		svc = seeded
 	}
 	// Cached typed list — warm informer = slice filter, cold = one
 	// network call.
@@ -305,6 +313,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
 				}
+				prunedFrom = addons.DropExcludedAddonConns(prunedFrom, env.Annotations)
 				// Env-scoped clones last — the env's own database must win the
 				// last-source-wins race against a project-level addon of the same
 				// kind. See kube.CloneConnsLast.
@@ -438,6 +447,12 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			continue
 		}
 		slog.InfoContext(ctx, "propagate: env updated", "env", envName)
+	}
+	if changed.EnvVars {
+		if err := s.refreshServiceCrons(ctx, ns, project, service); err != nil {
+			slog.WarnContext(ctx, "propagate: refresh service crons failed",
+				"project", project, "service", service, "err", err)
+		}
 	}
 	if len(propagateErrs) > 0 {
 		return fmt.Errorf("propagate to %d/%d env(s) failed: %w",

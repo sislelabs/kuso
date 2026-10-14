@@ -53,9 +53,6 @@ const (
 	// Flush batch buffer this often or when len ≥ flushBatchSize.
 	flushInterval  = 1 * time.Second
 	flushBatchSize = 500
-	// Max line length we store. Past this we truncate. App logs that
-	// dump a 5MB JSON in one line shouldn't blow up FTS5.
-	maxLineLen = 16 * 1024
 
 	// rateWindow / rateMaxLinesPerService bound how many lines a single
 	// (project, service) can write to LogLine per window. A service that
@@ -529,9 +526,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 		if line == "" {
 			continue
 		}
-		if len(line) > maxLineLen {
-			line = line[:maxLineLen] + "…[truncated]"
-		}
+		line = db.SanitizeLogLine(line)
 		if !s.append(db.LogLine{
 			Ts: time.Now().UTC(), Pod: pod.Name,
 			Project: project, Service: service, Env: env,

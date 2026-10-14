@@ -71,10 +71,7 @@ output names the next concrete step for every finding.`,
 		}
 
 		// Token presence — env var beats saved credentials.
-		token := strings.TrimSpace(os.Getenv("KUSO_TOKEN"))
-		if token == "" && credentialsConfig != nil && currentInstanceName != "" {
-			token = strings.TrimSpace(credentialsConfig.GetString(currentInstanceName))
-		}
+		token := resolveToken()
 		if token == "" {
 			report("token", "no KUSO_TOKEN env var or saved login — run: kuso login", "fail")
 		} else {

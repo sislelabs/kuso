@@ -41,6 +41,7 @@ func TestCheckPublicTCPSupported(t *testing.T) {
 		{kube.KusoAddonSpec{Kind: "rabbitmq"}, true},
 		{kube.KusoAddonSpec{Kind: "mailpit"}, false},
 		{kube.KusoAddonSpec{Kind: "kafka"}, false},
+		{kube.KusoAddonSpec{Kind: "redpanda"}, false},
 		{kube.KusoAddonSpec{Kind: "mongodb", HA: true}, false},
 		{kube.KusoAddonSpec{Kind: "postgres", UseInstanceAddon: "pg"}, false},
 		{kube.KusoAddonSpec{Kind: "postgres", External: &kube.KusoAddonExternal{SecretName: "s"}}, false},
