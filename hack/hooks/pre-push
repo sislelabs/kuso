@@ -67,8 +67,12 @@ step() { # step <name> <cmd...>
 # Path membership is the sole trigger (test.yml re-runs everything anyway).
 
 # ---- Go modules: vet + build + test ----------------------------------
+# git exports GIT_DIR (absolute in a linked worktree) to hooks; tests
+# that shell out to `git init`/`git commit` in a temp dir would inherit
+# it and rewrite this repo's index, HEAD and core.bare.
 go_module() { # go_module <dir>
-  ( cd "$1" && go vet ./... && go build ./... && go test ./... -count=1 )
+  ( unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX
+    cd "$1" && go vet ./... && go build ./... && go test ./... -count=1 )
 }
 
 if touched 'server-go/'; then
