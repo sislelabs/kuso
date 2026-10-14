@@ -19,7 +19,8 @@ import (
 // AddonWebUIHandler reverse-proxies the addon's built-in HTTP console
 // (mailpit's mail viewer, NATS monitor, ...) through the kuso server.
 // No new ingress; access is gated by the caller's kuso session +
-// addons:read permission. Kinds without a known UI port return 404.
+// project Viewer role (Editor for non-GET/HEAD/OPTIONS). Kinds without
+// a known UI port return 404.
 //
 // Why proxy instead of issuing an ingress per UI:
 //   - Single sign-on: the user is already authenticated to kuso, no
@@ -80,13 +81,13 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
 
-	// Permission: viewing the mail catcher / NATS monitor is a read
-	// operation, so viewer-on-the-project is enough. (The two web UIs
-	// this proxy serves — mailpit, nats — expose no app secrets the way
-	// a DB browser would, so they are NOT admin-gated.) The JWT carries
-	// no project perms in v2; requireProjectAccess re-resolves the
-	// caller's effective role from the DB and is the real gate.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+	// Permission: reading the mail catcher / NATS monitor is a viewer
+	// operation, but the proxy forwards every method, and the upstream
+	// UIs mutate on non-safe ones (mailpit DELETE wipes the inbox,
+	// RabbitMQ POST/PUT/DELETE manage queues), so those need Editor.
+	// requireProjectAccess re-resolves the caller's effective role from
+	// the DB and is the real gate.
+	if !requireProjectAccess(ctx, w, h.DB, project, addonWebUIMinRole(r.Method)) {
 		return
 	}
 
@@ -144,7 +145,7 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = "/"
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy := newAddonWebUIProxy(target)
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		h.Logger.Warn("addon webui proxy error",
 			"project", project, "addon", addon, "target", target.Host, "err", perr)
@@ -154,6 +155,86 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 	// for upstreams that use Host for SPA route detection (mailpit
 	// embeds an iframe-busting check). We let httputil set it.
 	proxy.ServeHTTP(w, r)
+}
+
+// newAddonWebUIProxy builds the reverse proxy to an addon console with
+// the caller's kuso credentials stripped from every outbound request.
+func newAddonWebUIProxy(target *url.URL) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(out *http.Request) {
+		director(out)
+		stripKusoCredentials(out.Header)
+	}
+	return proxy
+}
+
+// addonWebUIMinRole is Viewer for safe methods and Editor otherwise.
+func addonWebUIMinRole(method string) db.ProjectRole {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return db.ProjectRoleViewer
+	}
+	return db.ProjectRoleEditor
+}
+
+// stripKusoCredentials removes the caller's kuso session from a request
+// headed to an addon pod, so a compromised addon image can't replay it
+// against /api. Drops Bearer Authorization (the kuso JWT; non-Bearer
+// schemes such as RabbitMQ's Basic auth are the addon's own creds and
+// pass through), kuso.* cookies, and the `kuso.bearer, <jwt>` pair in
+// Sec-WebSocket-Protocol.
+func stripKusoCredentials(h http.Header) {
+	if a := h.Get("Authorization"); len(a) >= 7 && strings.EqualFold(a[:7], "bearer ") {
+		h.Del("Authorization")
+	}
+
+	if cookies := h.Values("Cookie"); len(cookies) > 0 {
+		kept := []string{}
+		for _, line := range cookies {
+			for _, part := range strings.Split(line, ";") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				name, _, _ := strings.Cut(part, "=")
+				if strings.HasPrefix(strings.TrimSpace(name), "kuso.") {
+					continue
+				}
+				kept = append(kept, part)
+			}
+		}
+		h.Del("Cookie")
+		if len(kept) > 0 {
+			h.Set("Cookie", strings.Join(kept, "; "))
+		}
+	}
+
+	if protos := h.Values("Sec-WebSocket-Protocol"); len(protos) > 0 {
+		var all []string
+		for _, line := range protos {
+			for _, p := range strings.Split(line, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					all = append(all, p)
+				}
+			}
+		}
+		kept := []string{}
+		for i := 0; i < len(all); i++ {
+			if all[i] == "kuso.bearer" {
+				i++ // the JWT rides in the next slot
+				continue
+			}
+			if strings.HasPrefix(all[i], "eyJ") && strings.Count(all[i], ".") == 2 {
+				continue
+			}
+			kept = append(kept, all[i])
+		}
+		h.Del("Sec-WebSocket-Protocol")
+		if len(kept) > 0 {
+			h.Set("Sec-WebSocket-Protocol", strings.Join(kept, ", "))
+		}
+	}
 }
 
 // addonWebUIPortFor is exported as a helper for the addons handler's

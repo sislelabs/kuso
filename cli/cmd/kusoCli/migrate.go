@@ -320,28 +320,17 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				stats.failed++
 				continue
 			}
-			body := kusoApi.SetEnvRequest{EnvVars: []map[string]any{}}
-			for _, e := range coolify.SelectEnvVars(envs) {
-				body.EnvVars = append(body.EnvVars, map[string]any{
-					"name":  e.Key,
-					"value": e.Value,
-				})
-			}
-			if len(body.EnvVars) == 0 {
+			vars := coolify.SelectEnvVars(envs)
+			if len(vars) == 0 {
 				continue
 			}
-			er, err := api.SetEnv(projectSlug, svcSlug, body)
+			n, err := importCoolifyEnvVars(projectSlug, svcSlug, vars)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "        ⚠ set env: %v\n", err)
+				fmt.Fprintf(os.Stderr, "        ⚠ set env (%d/%d written): %v\n", n, len(vars), err)
 				stats.failed++
 				continue
 			}
-			if er.StatusCode() >= 300 {
-				fmt.Fprintf(os.Stderr, "        ⚠ set env %d: %s\n", er.StatusCode(), string(er.Body()))
-				stats.failed++
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "        ✓ %d env vars\n", len(body.EnvVars))
+			fmt.Fprintf(os.Stderr, "        ✓ %d env vars\n", n)
 		}
 
 		// Databases → addons.
@@ -375,6 +364,25 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 	}
 	return stats
+}
+
+// importCoolifyEnvVars writes each var through the same per-key
+// {value, auto:true} path `kuso env set` uses, so the server routes
+// credentials into the managed <service>-secrets Secret instead of
+// leaving them as plaintext CR literals (the legacy whole-list POST /env
+// did). Build-time vars need no special case: service env reaches the
+// build as build env, with secret-backed values forwarded as buildkit
+// secret mounts rather than baked buildArgs.
+func importCoolifyEnvVars(project, service string, vars []struct{ Key, Value string }) (int, error) {
+	n := 0
+	for _, v := range vars {
+		resp, err := api.SetEnvVar(project, service, v.Key, kusoApi.SetEnvVarRequest{Value: v.Value, Auto: true})
+		if err := checkRespErr(resp, err); err != nil {
+			return n, fmt.Errorf("%s: %w", v.Key, err)
+		}
+		n++
+	}
+	return n, nil
 }
 
 func writeDataMigrationScripts(items []coolify.Item, outDir string) int {

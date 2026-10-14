@@ -346,18 +346,27 @@ func clientIP(r *http.Request) string {
 }
 
 // peerIsTrustedProxy reports whether host (the connection peer) sits
-// inside one of the CIDRs listed in KUSO_TRUSTED_PROXIES. Empty env
-// = no proxy trusted = XFF ignored. Read on every call; list is short.
+// inside one of the CIDRs listed in KUSO_TRUSTED_PROXIES. When the env
+// is unset it falls back to the cluster pod CIDRs (see
+// StartPodCIDRTrustedProxies); with neither, no proxy is trusted and
+// XFF is ignored. Read on every call; list is short.
 func peerIsTrustedProxy(host string) bool {
 	if host == "" {
 		return false
 	}
-	raw := strings.TrimSpace(os.Getenv("KUSO_TRUSTED_PROXIES"))
-	if raw == "" {
-		return false
-	}
 	ip := net.ParseIP(host)
 	if ip == nil {
+		return false
+	}
+	raw := strings.TrimSpace(os.Getenv("KUSO_TRUSTED_PROXIES"))
+	if raw == "" {
+		if def := defaultTrustedProxies.Load(); def != nil {
+			for _, n := range *def {
+				if n.Contains(ip) {
+					return true
+				}
+			}
+		}
 		return false
 	}
 	for _, entry := range strings.Split(raw, ",") {

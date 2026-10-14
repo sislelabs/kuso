@@ -15,17 +15,21 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"kuso/server/internal/db"
 )
 
-// rateLimitMax / rateLimitWindow define the per-IP cap that gates
-// the login + invite-redeem + OAuth-start paths. Centralised so the
-// reset helper agrees with the live config.
+// rateLimitMax / rateLimitWindow define the per-bucket cap that gates
+// the login + invite-redeem + review + bootstrap + OAuth-start paths.
+// Each surface has its own bucket (key prefix in LoginAttempt."ip").
 const (
 	rateLimitMax    = 10
 	rateLimitWindow = 30 * time.Second
@@ -63,11 +67,21 @@ func ResetRateLimiterForTesting() {
 	_ = d.ResetLoginAttemptsForTesting(ctx)
 }
 
-// allowAttempt is the shared check the wrapper helpers call. Returns
-// (true, 0) when the IP is under the cap, (false, retryAfter) when
-// over. Fails open on DB error so a Postgres outage doesn't lock the
-// whole login surface.
-func allowAttempt(ctx context.Context, ip string) (bool, time.Duration) {
+// Login gets two buckets: (ip, username) at rateLimitMax so a password
+// guesser is capped per account, plus a looser per-IP cap so one IP
+// can't spray unlimited usernames. Keying on the pair means one noisy
+// source (or a proxy we failed to see through) can no longer lock
+// every user out of /login.
+const loginPerIPMax = 60
+
+// allowAttemptFn is the bucket check; swapped in tests so the keying
+// can be exercised without Postgres.
+var allowAttemptFn = allowAttempt
+
+// allowAttempt returns (true, 0) when key is under max, (false,
+// retryAfter) when over. Fails open on DB error so a Postgres outage
+// doesn't lock the whole login surface.
+func allowAttempt(ctx context.Context, key string, max int) (bool, time.Duration) {
 	limiterDBMu.RLock()
 	d := limiterDB
 	limiterDBMu.RUnlock()
@@ -76,7 +90,7 @@ func allowAttempt(ctx context.Context, ip string) (bool, time.Duration) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	res, err := d.AllowLoginAttempt(ctx, ip, rateLimitMax, rateLimitWindow)
+	res, err := d.AllowLoginAttempt(ctx, key, max, rateLimitWindow)
 	if err != nil {
 		// Fail open — see package doc.
 		return true, 0
@@ -84,53 +98,91 @@ func allowAttempt(ctx context.Context, ip string) (bool, time.Duration) {
 	return res.Allowed, res.RetryAfter
 }
 
-// withRateLimit wraps the handler with the persistent limiter.
-func withRateLimit(next http.HandlerFunc) http.HandlerFunc {
+func writeTooMany(w http.ResponseWriter, retryAfter time.Duration) {
+	seconds := int(retryAfter.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", itoaShort(seconds))
+	writeErr(w, http.StatusTooManyRequests, "too many requests")
+}
+
+// withRateLimit wraps the handler with a per-IP bucket in its own
+// scope, so exhausting one public surface (e.g. review-token probing)
+// doesn't 429 the others.
+func withRateLimit(scope string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		ok, retryAfter := allowAttempt(r.Context(), ip)
-		if !ok {
-			seconds := int(retryAfter.Seconds())
-			if seconds < 1 {
-				seconds = 1
-			}
-			w.Header().Set("Retry-After", itoaShort(seconds))
-			writeErr(w, http.StatusTooManyRequests, "too many requests")
+		if ok, retryAfter := allowAttemptFn(r.Context(), scope+":"+clientIP(r), rateLimitMax); !ok {
+			writeTooMany(w, retryAfter)
 			return
 		}
 		next(w, r)
 	}
 }
 
-// RateLimitedLogin is the exported wrapper used by the router to gate
-// the login endpoint. Same limiter governs the invite-redemption path
-// (RateLimitedInvite) so an attacker can't bypass the cap by alternating
-// between routes — both feed the same per-IP bucket.
-func RateLimitedLogin(next http.HandlerFunc) http.HandlerFunc {
-	return withRateLimit(next)
+// loginUsername peeks the JSON body for the username and restores the
+// body for the handler. Unparseable bodies bucket under "" — the
+// handler rejects them anyway.
+func loginUsername(r *http.Request) string {
+	if r.Body == nil {
+		return ""
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return ""
+	}
+	var body struct {
+		Username string `json:"username"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(body.Username))
 }
 
-// RateLimitedInvite is the wrapper for invite redemption.
+// RateLimitedLogin gates the login endpoint with the per-(ip, username)
+// and per-IP login buckets.
+func RateLimitedLogin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if ok, retryAfter := allowAttemptFn(r.Context(), "login-ip:"+ip, loginPerIPMax); !ok {
+			writeTooMany(w, retryAfter)
+			return
+		}
+		if ok, retryAfter := allowAttemptFn(r.Context(), "login:"+ip+"|"+loginUsername(r), rateLimitMax); !ok {
+			writeTooMany(w, retryAfter)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// RateLimitedInvite is the wrapper for invite lookup/redemption.
 func RateLimitedInvite(next http.HandlerFunc) http.HandlerFunc {
-	return withRateLimit(next)
+	return withRateLimit("invite", next)
+}
+
+// RateLimitedBootstrap is the wrapper for the node-bootstrap script and
+// register endpoints.
+func RateLimitedBootstrap(next http.HandlerFunc) http.HandlerFunc {
+	return withRateLimit("bootstrap", next)
 }
 
 // RateLimitedReview gates the public, unauthenticated reviewer-page
 // endpoints. The 32-char token is the only credential; without a limit
 // an attacker could brute-force the token space at full request rate.
-// Same per-IP bucket as the other public surfaces.
 func RateLimitedReview(next http.HandlerFunc) http.HandlerFunc {
-	return withRateLimit(next)
+	return withRateLimit("review", next)
 }
 
-// RateLimitedOAuthStart caps OAuth-init requests at the same rate as
-// login. Without this, an attacker can abuse the start endpoint to
-// burn through OAuthState rows / spam the Postgres write path / hit
-// the upstream provider's rate limits with our IP. Same per-IP bucket
-// as RateLimitedLogin so /api/auth/login + /api/auth/github + /api/
-// auth/oauth2 all share the cap.
+// RateLimitedOAuthStart caps OAuth-init requests. Without this, an
+// attacker can abuse the start endpoint to burn through OAuthState
+// rows / spam the Postgres write path / hit the upstream provider's
+// rate limits with our IP.
 func RateLimitedOAuthStart(next http.HandlerFunc) http.HandlerFunc {
-	return withRateLimit(next)
+	return withRateLimit("oauth", next)
 }
 
 // itoaShort avoids strconv.Itoa to keep imports small. Inputs are

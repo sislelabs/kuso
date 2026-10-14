@@ -7,6 +7,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -95,12 +96,62 @@ Use 'kuso build trigger' only for an out-of-band rebuild.
 // doctor and every other command agree. KUSO_API_URL wins, then KUSO_URL
 // (the name the MCP server reads), then the saved instance.
 func resolveAPIURL() string {
+	if v := envAPIURL(); v != "" {
+		return v
+	}
+	return currentInstance.ApiUrl
+}
+
+func envAPIURL() string {
 	for _, k := range []string{"KUSO_API_URL", "KUSO_URL"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 			return v
 		}
 	}
-	return currentInstance.ApiUrl
+	return ""
+}
+
+// resolveToken picks the bearer for the instance resolveAPIURL targets.
+// KUSO_TOKEN wins. When the URL comes from KUSO_API_URL/KUSO_URL the
+// token must belong to THAT instance (matched by saved apiurl, then by
+// instance name == host, as the MCP server does); with no match we send
+// no token rather than leak the current instance's JWT to another host.
+func resolveToken() string {
+	if tok := strings.TrimSpace(os.Getenv("KUSO_TOKEN")); tok != "" {
+		return tok
+	}
+	if credentialsConfig == nil {
+		return ""
+	}
+	envURL := envAPIURL()
+	if envURL == "" {
+		if currentInstanceName == "" {
+			return ""
+		}
+		return strings.TrimSpace(credentialsConfig.GetString(currentInstanceName))
+	}
+	want := strings.TrimRight(envURL, "/")
+	for name, inst := range instanceList {
+		if strings.TrimRight(strings.TrimSpace(inst.ApiUrl), "/") == want {
+			if tok := strings.TrimSpace(credentialsConfig.GetString(name)); tok != "" {
+				return tok
+			}
+		}
+	}
+	if u, err := url.Parse(envURL); err == nil && u.Hostname() != "" {
+		host := u.Hostname()
+		for name := range instanceList {
+			if strings.EqualFold(name, host) {
+				if tok := strings.TrimSpace(credentialsConfig.GetString(name)); tok != "" {
+					return tok
+				}
+			}
+		}
+		if tok := strings.TrimSpace(credentialsConfig.GetString(host)); tok != "" {
+			return tok
+		}
+	}
+	return ""
 }
 
 func Execute() {
@@ -127,10 +178,7 @@ func Execute() {
 	// env var) while every real command failed "not logged in; run
 	// 'kuso login' first". The diagnostic tool actively disagreed with
 	// the thing it was diagnosing.
-	tok := strings.TrimSpace(os.Getenv("KUSO_TOKEN"))
-	if tok == "" && currentInstanceName != "" {
-		tok = credentialsConfig.GetString(currentInstanceName)
-	}
+	tok := resolveToken()
 	// KUSO_API_URL likewise lets a headless caller point at an instance
 	// without a prior `kuso remote add`; the saved instance still wins
 	// when the env var is unset.
