@@ -31,6 +31,7 @@ func newDispatcher(t *testing.T, seeds ...seed) *Dispatcher {
 		kube.GVRServices:     "KusoServiceList",
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRAddons:       "KusoAddonList",
 	})
 	for _, s := range seeds {
 		if err := dyn.Tracker().Create(s.gvr, s.obj, "kuso"); err != nil {

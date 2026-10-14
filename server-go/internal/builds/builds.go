@@ -906,6 +906,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	if err := ValidateRepoURL(repoURL); err != nil {
 		return nil, false, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
+	repoURL = NormalizeRepoURL(repoURL)
 
 	defaultBranch := effectiveDefaultBranch(proj, svcCR)
 	var targetEnv *kube.KusoEnvironment
@@ -1788,8 +1789,14 @@ func (p *Poller) queueArchive(ctx context.Context, ns string, b *kube.KusoBuild,
 	// already GC'd still gets its record. Best-effort; a failure just
 	// means the tab won't backfill this build after the CR is gone.
 	p.archiveRecord(ctx, b, phase)
-	p.startArchiveWorkers(ctx)
-	t := archiveTask{ns: ns, build: b, phase: phase}
+	// Run starts the pool with the poller's lifetime ctx; this fallback
+	// only fires for callers that never went through Run. Never bind the
+	// workers to the caller's per-task ctx (markSucceeded passes a 30-min
+	// promote ctx) or they all exit when it expires and never restart.
+	p.startArchiveWorkers(context.WithoutCancel(ctx))
+	// archiveLogs writes b.Annotations on the worker goroutine while the
+	// caller (markFailed) keeps reading b — hand the worker its own copy.
+	t := archiveTask{ns: ns, build: copyBuild(b), phase: phase}
 	select {
 	case p.archiveQueue <- t:
 	default:
@@ -1867,6 +1874,7 @@ func (p *Poller) Run(ctx context.Context) error {
 	if p.Logger == nil {
 		p.Logger = slog.Default()
 	}
+	p.startArchiveWorkers(ctx)
 	tick := time.NewTicker(p.Interval)
 	defer tick.Stop()
 	for {
@@ -2251,6 +2259,17 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 			p.logger().Info("queued build already terminal; skipping promote",
 				"build", next.Name, "phase", ph)
 			return false
+		}
+	}
+	// The clone token minted at Create is a 1h GitHub installation
+	// token; a build that sat queued or CI-gated past that would clone
+	// with an expired credential. Re-mint right before the Job renders.
+	// A mint failure is logged, not fatal: the old secret still works
+	// for a build that waited less than an hour.
+	if next.Spec.Repo != nil {
+		owner, repo := splitGithubURL(next.Spec.Repo.URL)
+		if terr := p.Svc.ensureCloneTokenSecret(ctx, ns, next.Name, next.Spec.GithubInstallationID, owner, repo, next.Spec.Repo); terr != nil {
+			p.logger().Warn("build poller: refresh clone token at dispatch", "build", next.Name, "err", terr)
 		}
 	}
 	// Promote: remove the queued label (operator's selector now
@@ -3516,6 +3535,14 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 					"env", e.Name, "build", b.Name, "keys", snapKeys)
 			}
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
+			// The hook can run for minutes; a Cancel in that window
+			// (which also deletes the release Job) must win over both
+			// the CAS promote and a release-failed stamp.
+			if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name); gerr == nil && buildPhase(cur) == "cancelled" {
+				p.logger().Info("build cancelled during release hook; not promoting",
+					"env", e.Name, "build", b.Name)
+				return nil
+			}
 			if rerr != nil && ctx.Err() != nil {
 				// Our own budget ran out (a hook longer than
 				// promoteAsyncTimeout) or leadership moved: the Job is

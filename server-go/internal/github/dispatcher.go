@@ -958,9 +958,18 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	expiresAt := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour).UTC().Format(time.RFC3339)
 
 	ns := d.nsFor(ctx, proj.Name)
+	// A close→reopen inside the helm-uninstall finalizer window finds the
+	// env and its clones still present but terminating; updating/reusing
+	// them leaves nothing once the finalizers finish. Wait them out.
+	if err := d.awaitPreviewTeardown(ctx, ns, proj.Name, envName, pr.Number); err != nil {
+		return err
+	}
 	existing, err := d.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get existing env: %w", err)
+	}
+	if existing != nil && existing.DeletionTimestamp != nil {
+		return fmt.Errorf("preview env %s is being deleted; the next push recreates it", envName)
 	}
 	// Attach addon connection secrets + project shared secret so the
 	// preview pod has the same DATABASE_URL / REDIS_URL / RESEND_API_KEY
@@ -1524,6 +1533,63 @@ func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN s
 	return nil
 }
 
+// previewTeardownWait bounds how long a PR reopen waits for the previous
+// close's env + clone deletions to finish. Vars so tests can shrink them.
+var (
+	previewTeardownWait = 90 * time.Second
+	previewTeardownPoll = 2 * time.Second
+)
+
+// awaitPreviewTeardown blocks until neither the preview env nor any of the
+// PR's addon clones is terminating, or errors once previewTeardownWait
+// passes.
+func (d *Dispatcher) awaitPreviewTeardown(ctx context.Context, ns, project, envName string, prNumber int) error {
+	deadline := time.Now().Add(previewTeardownWait)
+	for {
+		what, err := d.previewTerminating(ctx, ns, project, envName, prNumber)
+		if err != nil {
+			return err
+		}
+		if what == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s still terminating after %s; the next push recreates the preview", what, previewTeardownWait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(previewTeardownPoll):
+		}
+	}
+}
+
+func (d *Dispatcher) previewTerminating(ctx context.Context, ns, project, envName string, prNumber int) (string, error) {
+	env, err := d.Kube.GetKusoEnvironment(ctx, ns, envName)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("get existing env: %w", err)
+	}
+	if err == nil && env.DeletionTimestamp != nil {
+		return "preview env " + envName, nil
+	}
+	if d.PreviewDB == nil {
+		return "", nil
+	}
+	clones, err := d.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject:               project,
+		"kuso.sislelabs.com/preview-pr": strconv.Itoa(prNumber),
+	})
+	if err != nil {
+		return "", fmt.Errorf("list preview addon clones: %w", err)
+	}
+	for i := range clones {
+		if clones[i].DeletionTimestamp != nil {
+			return "preview addon " + clones[i].Name, nil
+		}
+	}
+	return "", nil
+}
+
 // repoMatches checks if the configured repo URL points at the same
 // owner/name as the GitHub event's full_name. We tolerate ".git"
 // suffixes and case differences.
@@ -1531,7 +1597,7 @@ func repoMatches(configuredURL, fullName string) bool {
 	if configuredURL == "" {
 		return false
 	}
-	lower := strings.ToLower(strings.TrimSuffix(configuredURL, ".git"))
+	lower := strings.ToLower(strings.TrimSuffix(builds.NormalizeRepoURL(configuredURL), ".git"))
 	return strings.HasSuffix(lower, "/"+strings.ToLower(fullName))
 }
 

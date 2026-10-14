@@ -335,6 +335,30 @@ func SweepImagesPastWindow(
 		}
 	}
 
+	// Runs and live pods too. A wedged rollout keeps the OLD ReplicaSet
+	// serving an image no env references any more (each crashlooping
+	// push already re-pointed spec.image); untagging it means the next
+	// eviction of those pods has no good image to pull. Same pod-aware
+	// view the orphan sweep uses. Fail closed like the lists above.
+	live := protectedImages{tags: map[string]bool{}, digests: map[string]bool{}, repos: map[string]bool{}}
+	runs, rerr := kc.ListKusoRuns(ctx, namespace)
+	if rerr != nil {
+		return 0, fmt.Errorf("image-sweep list runs: %w", rerr)
+	}
+	for i := range runs {
+		live.addKuso(runs[i].Spec.Image)
+	}
+	pods, perr := kc.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if perr != nil {
+		return 0, fmt.Errorf("image-sweep list pods: %w", perr)
+	}
+	for i := range pods.Items {
+		live.addPod(&pods.Items[i])
+	}
+	for k := range live.tags {
+		protected[k] = true
+	}
+
 	targets := imagesToUntag(byKey, keep, protected)
 
 	// Digest-level protection. The tag-string check above is necessary
@@ -354,6 +378,9 @@ func SweepImagesPastWindow(
 		reposWithTargets[t.repo] = true
 	}
 	protectedDigests := map[string]bool{} // "<repo>@<digest>"
+	for k := range live.digests {
+		protectedDigests[k] = true
+	}
 	for pt := range protected {
 		idx := strings.LastIndex(pt, ":")
 		if idx < 0 {

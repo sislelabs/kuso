@@ -57,6 +57,10 @@ func TestRepoMatches(t *testing.T) {
 		{"", "example/alpha", false},
 		// Embedded match without "/" boundary should NOT match (substring guard).
 		{"https://github.com/owner/yalpha", "alpha", false},
+		// B-08: scp-style URLs pass validation and must match too.
+		{"git@github.com:example/alpha.git", "example/alpha", true},
+		{"git@github.com:Example/Alpha", "example/alpha", true},
+		{"git@github.com:example/alpha.git", "example/beta", false},
 	}
 	for _, tc := range cases {
 		if got := repoMatches(tc.url, tc.fullName); got != tc.want {

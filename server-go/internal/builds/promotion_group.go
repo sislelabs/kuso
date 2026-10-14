@@ -345,9 +345,9 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 	// The image itself is fine — it was pushed before the hold — so name
 	// the recovery path rather than implying the build has to be redone.
 	msg := fmt.Sprintf(
-		"not promoted: same-repo promotion hold exceeded %s and was abandoned (%s). The image was built and pushed; deploy it with `kuso build rollback %s %s %s` once the sibling is fixed.",
+		"not promoted: same-repo promotion hold exceeded %s and was abandoned (%s). Once the sibling is fixed, redeploy this commit with `kuso build trigger %[3]s %[4]s --ref %[6]s` (runs the release hook); `kuso build rollback %[3]s %[4]s %[5]s` works only if the service has no release hook.",
 		promoteHoldMaxAge, reason, b.Spec.Project,
-		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), b.Name)
+		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), b.Name, b.Spec.Ref)
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:%q,%q:null,%q:null},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 		annPhase,
