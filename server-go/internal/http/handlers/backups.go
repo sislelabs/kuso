@@ -505,6 +505,17 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// where its own CronJob wrote it, which may not be the destination's
 	// bucket when restoring into a sibling.
 	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env(srcCR.BackupBucket(""))...)
+	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
+	// `--clean` dump of THAT logical database. Fed to the conn Secret's
+	// POSTGRES_DB it would drop and replace the primary DB's tables.
+	siblingDB, err := siblingDumpDB(destCR.Spec.Kind, req.Key)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if siblingDB != "" {
+		restoreEnv = overrideEnv(restoreEnv, corev1.EnvVar{Name: "POSTGRES_DB", Value: siblingDB})
+	}
 
 	job := buildRestoreJob(ns, jobName, project, destAddon, addon, restoreShell,
 		append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...))
@@ -533,6 +544,40 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+}
+
+// siblingDumpRe matches the per-logical-DB dump the postgres backup CronJob
+// writes next to the primary one: <project>/<addon>/<ts>.db-<name>.sql.gz.
+var siblingDumpRe = regexp.MustCompile(`^\d{8}T\d{6}Z\.db-(.*)\.sql\.gz$`)
+
+// siblingDumpDB returns the logical database a sibling dump key belongs to,
+// "" for a primary dump, or an error when the key claims to be a sibling
+// dump but the name can't be a Postgres database (restoring it into the
+// primary DB instead would overwrite the wrong data).
+func siblingDumpDB(kind, key string) (string, error) {
+	base := key[strings.LastIndex(key, "/")+1:]
+	m := siblingDumpRe.FindStringSubmatch(base)
+	if m == nil {
+		return "", nil
+	}
+	if kind != "" && kind != "postgres" {
+		return "", fmt.Errorf("per-database dump %q can only be restored into a postgres addon", base)
+	}
+	if !validDBName.MatchString(m[1]) {
+		return "", fmt.Errorf("per-database dump %q names an invalid database %q", base, m[1])
+	}
+	return m[1], nil
+}
+
+// overrideEnv replaces the env var with the same name (or appends it).
+func overrideEnv(env []corev1.EnvVar, v corev1.EnvVar) []corev1.EnvVar {
+	for i := range env {
+		if env[i].Name == v.Name {
+			env[i] = v
+			return env
+		}
+	}
+	return append(env, v)
 }
 
 // inPlaceRestoreNeedsConfirm decides whether the destructive-in-place

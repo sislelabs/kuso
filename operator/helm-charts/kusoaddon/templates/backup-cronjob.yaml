@@ -253,7 +253,7 @@ spec:
                 # the same precedence chain:
                 #   .Values.database → .Values.project → "kuso"
                 - { name: POSTGRES_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: POSTGRES_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -433,7 +433,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
@@ -569,7 +569,7 @@ spec:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
                 - { name: REDIS_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: REDIS_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -696,7 +696,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: MONGO_URL
                   valueFrom:
                     secretKeyRef:
@@ -819,7 +819,7 @@ spec:
                 - { name: MYSQL_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
                 - { name: MYSQL_USER, value: {{ default "kuso" .Values.username | quote }} }
                 - { name: MYSQL_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: MYSQL_PASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -959,7 +959,7 @@ spec:
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
-                - { name: RETENTION_DAYS, value: {{ (.Values.backup).retentionDays | default 14 | quote }} }
+                - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 # Source bucket: the in-cluster MinIO that this addon manages.
                 - name: SRC_BUCKET
                   valueFrom:

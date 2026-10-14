@@ -38,17 +38,24 @@ func TestBuildAdminDSN(t *testing.T) {
 		{
 			name: "bare service name (chart default) → disable",
 			data: map[string][]byte{
-				"POSTGRES_HOST":     []byte("instance-pg"),
+				"POSTGRES_HOST":     []byte("kuso-instance-pg"),
 				"POSTGRES_PORT":     []byte("5432"),
 				"POSTGRES_USER":     []byte("kuso"),
 				"POSTGRES_PASSWORD": []byte("supersecret"),
 				"POSTGRES_DB":       []byte("postgres"),
 			},
-			// Bare `instance-pg` doesn't match the .svc suffix; we
-			// require SSL on principle. Operators who want plaintext
-			// for the bundled in-cluster chart should point conn
-			// Secrets at the fully-qualified Service DNS instead.
-			want: "postgres://kuso:supersecret@instance-pg:5432/postgres?sslmode=require",
+			// The non-HA chart emits the bare Service name and serves
+			// plaintext; sslmode=require here made every ping fail.
+			want: "postgres://kuso:supersecret@kuso-instance-pg.kuso.svc:5432/postgres?sslmode=disable",
+		},
+		{
+			name: "public host → require",
+			data: map[string][]byte{
+				"POSTGRES_HOST":     []byte("db.example.com"),
+				"POSTGRES_USER":     []byte("kuso"),
+				"POSTGRES_PASSWORD": []byte("pw"),
+			},
+			want: "postgres://kuso:pw@db.example.com:5432/postgres?sslmode=require",
 		},
 		{
 			name: "127.0.0.1 → disable (dev/test)",
@@ -104,7 +111,7 @@ func TestBuildAdminDSN(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := buildAdminDSN(tc.data); got != tc.want {
+			if got := buildAdminDSN(tc.data, "kuso"); got != tc.want {
 				t.Errorf("buildAdminDSN() = %q, want %q", got, tc.want)
 			}
 		})

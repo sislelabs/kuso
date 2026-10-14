@@ -806,6 +806,10 @@ type UpdateAddonRequest struct {
 	TLS *string `json:"tls,omitempty"`
 }
 
+// DefaultBackupRetentionDays mirrors the CRD default and the chart's
+// fallback. RetentionDays 0 is "keep forever", never "unset".
+const DefaultBackupRetentionDays = 14
+
 // UpdateBackupPatch carries the per-addon backup schedule + retention.
 // Pointer fields so callers can update one knob at a time. Setting
 // Schedule = "" disables the cronjob (chart drops the resource); it's
@@ -945,9 +949,10 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 			// Lazy-init the spec.backup struct so we can patch a single
 			// field without overwriting the other one. The chart treats
 			// missing fields as "use default" — Schedule "" → no cronjob,
-			// RetentionDays 0 → keep forever (chart's prune step skips).
+			// RetentionDays 0 → keep forever (chart's prune step skips),
+			// so a fresh block must start at the default, not Go's zero.
 			if addon.Spec.Backup == nil {
-				addon.Spec.Backup = &kube.KusoBackup{}
+				addon.Spec.Backup = &kube.KusoBackup{RetentionDays: DefaultBackupRetentionDays}
 			}
 			if req.Backup.Schedule != nil {
 				s := strings.TrimSpace(*req.Backup.Schedule)
@@ -1056,7 +1061,7 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 // that, replayed, restores exactly that config.
 func revisionState(spec kube.KusoAddonSpec) UpdateAddonRequest {
 	size, tls := spec.Size, spec.TLS
-	backup := kube.KusoBackup{}
+	backup := kube.KusoBackup{RetentionDays: DefaultBackupRetentionDays}
 	if spec.Backup != nil {
 		backup = *spec.Backup
 	}
@@ -1682,6 +1687,7 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			if live.Spec.SubscribedAddons != nil {
 				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
 			}
+			perEnv = DropExcludedAddonConns(perEnv, live.Annotations)
 			// Respect the shared-secret subscription (mirrors projects.
 			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env
 			// gets its subscribed keys as per-key valueFrom entries, so

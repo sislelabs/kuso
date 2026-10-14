@@ -57,3 +57,18 @@ if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
 fi
 # retention-prune:end
 {{- end -}}
+
+{{- /*
+kusoaddon.backupRetentionDays — RETENTION_DAYS for the prune step.
+0 means "keep forever" (the prune skips), so it must survive: `default 14`
+treats 0 as empty and silently re-enabled the 14-day prune. Only a missing
+or null key falls back to 14.
+*/ -}}
+{{- define "kusoaddon.backupRetentionDays" -}}
+{{- $b := .Values.backup | default dict -}}
+{{- if and (hasKey $b "retentionDays") (not (kindIs "invalid" $b.retentionDays)) -}}
+{{- $b.retentionDays | int -}}
+{{- else -}}
+14
+{{- end -}}
+{{- end -}}

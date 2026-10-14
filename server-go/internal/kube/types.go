@@ -1102,8 +1102,11 @@ type KusoSecretKeyRef struct {
 }
 
 type KusoBackup struct {
-	Schedule      string `json:"schedule,omitempty"`
-	RetentionDays int    `json:"retentionDays,omitempty"`
+	Schedule string `json:"schedule,omitempty"`
+	// RetentionDays is serialized even when 0: 0 means "keep forever", and
+	// omitempty used to drop it so the CRD default (14) silently applied.
+	// Absent (nil Backup, or a CR written before this) still defaults to 14.
+	RetentionDays int `json:"retentionDays"`
 	// Bucket overrides the instance-wide backup bucket for this addon.
 	// Empty means "use the bucket from the kuso-backup-s3 Secret". The
 	// endpoint/region/credentials always come from that Secret — only
