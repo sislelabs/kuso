@@ -242,13 +242,13 @@ func NewRouter(d Deps) http.Handler {
 	httphandlers.SetRateLimiterDB(d.DB)
 	// Behind Traefik the connection peer is always the ingress pod, so
 	// with KUSO_TRUSTED_PROXIES unset every client shared one limiter
-	// bucket. Default the trusted set to the cluster pod CIDRs.
+	// bucket. Default the trusted set to the Traefik ingress pod IPs.
 	if d.Kube != nil && d.Kube.Clientset != nil {
 		trustCtx := d.BaseCtx
 		if trustCtx == nil {
 			trustCtx = context.Background()
 		}
-		httphandlers.StartPodCIDRTrustedProxies(trustCtx, d.Kube.Clientset, d.Logger, 5*time.Minute)
+		httphandlers.StartIngressTrustedProxies(trustCtx, d.Kube.Clientset, d.Logger, time.Minute)
 	}
 
 	// /api/status moved behind auth — it exposes server, kube, and

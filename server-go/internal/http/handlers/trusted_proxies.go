@@ -10,17 +10,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 // defaultTrustedProxies is the proxy set used when KUSO_TRUSTED_PROXIES
-// is unset: the cluster's pod CIDRs. kuso-server is reached through the
-// Traefik ingress pod, so without this every client resolves to
-// Traefik's pod IP and shares one rate-limit bucket. The updater never
+// is unset: the pod IPs behind the Traefik ingress Service. kuso-server
+// is reached through those pods, so without this every client resolves
+// to Traefik's pod IP and shares one rate-limit bucket. Only the ingress
+// pods are trusted, not the whole pod CIDR: any other pod that can reach
+// kuso-server could otherwise forge X-Forwarded-For. The updater never
 // re-applies deploy/server-go.yaml env, so the default has to come from
 // the cluster rather than the manifest.
 var defaultTrustedProxies atomic.Pointer[[]*net.IPNet]
+
+// ingressNamespaces are where an install puts the Traefik Service:
+// hack/install.sh uses "traefik", k3s's bundled chart uses kube-system.
+var ingressNamespaces = []string{"traefik", "kube-system"}
+
+const ingressServiceName = "traefik"
 
 // setDefaultTrustedProxies swaps the fallback set. nil/empty = trust nothing.
 func setDefaultTrustedProxies(cidrs []*net.IPNet) {
@@ -32,27 +41,40 @@ func setDefaultTrustedProxies(cidrs []*net.IPNet) {
 	defaultTrustedProxies.Store(&cp)
 }
 
-// podCIDRsFromNodes unions node.Spec.PodCIDRs (falling back to the
-// legacy singular PodCIDR) across every node.
-func podCIDRsFromNodes(ctx context.Context, cs kubernetes.Interface) ([]*net.IPNet, error) {
-	nodes, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
+// ingressProxyNets returns a host-length net for every endpoint address
+// of the Traefik Service's EndpointSlices.
+func ingressProxyNets(ctx context.Context, cs kubernetes.Interface) ([]*net.IPNet, error) {
 	seen := map[string]*net.IPNet{}
-	for i := range nodes.Items {
-		spec := nodes.Items[i].Spec
-		raw := spec.PodCIDRs
-		if len(raw) == 0 && spec.PodCIDR != "" {
-			raw = []string{spec.PodCIDR}
+	var lastErr error
+	listed := false
+	for _, ns := range ingressNamespaces {
+		slices, err := cs.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: discoveryv1.LabelServiceName + "=" + ingressServiceName,
+		})
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		for _, c := range raw {
-			_, n, perr := net.ParseCIDR(strings.TrimSpace(c))
-			if perr != nil {
-				continue
+		listed = true
+		for i := range slices.Items {
+			for _, ep := range slices.Items[i].Endpoints {
+				for _, a := range ep.Addresses {
+					ip := net.ParseIP(strings.TrimSpace(a))
+					if ip == nil {
+						continue
+					}
+					bits := 128
+					if ip.To4() != nil {
+						ip, bits = ip.To4(), 32
+					}
+					n := &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)}
+					seen[n.String()] = n
+				}
 			}
-			seen[n.String()] = n
 		}
+	}
+	if !listed {
+		return nil, lastErr
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {
@@ -66,13 +88,13 @@ func podCIDRsFromNodes(ctx context.Context, cs kubernetes.Interface) ([]*net.IPN
 	return out, nil
 }
 
-// StartPodCIDRTrustedProxies populates the default trusted-proxy set
-// from the cluster's node pod CIDRs and refreshes it every interval
-// until ctx is done, so nodes joining later are picked up. A failed
+// StartIngressTrustedProxies populates the default trusted-proxy set
+// from the Traefik Service's endpoints and refreshes it every interval
+// until ctx is done, so restarted ingress pods are picked up. A failed
 // refresh keeps the previous set. No-op when KUSO_TRUSTED_PROXIES is
-// set (the explicit list always wins) or cs is nil. Uses nodes list,
-// which kuso-server's ClusterRole already grants.
-func StartPodCIDRTrustedProxies(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger, interval time.Duration) {
+// set (the explicit list always wins) or cs is nil. Uses endpointslices
+// list, which kuso-server's ClusterRole already grants.
+func StartIngressTrustedProxies(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger, interval time.Duration) {
 	if cs == nil || strings.TrimSpace(os.Getenv("KUSO_TRUSTED_PROXIES")) != "" {
 		return
 	}
@@ -82,15 +104,15 @@ func StartPodCIDRTrustedProxies(ctx context.Context, cs kubernetes.Interface, lo
 	refresh := func() {
 		lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		cidrs, err := podCIDRsFromNodes(lctx, cs)
+		nets, err := ingressProxyNets(lctx, cs)
 		if err != nil {
-			logger.Warn("trusted proxies: list nodes for pod CIDRs", "err", err)
+			logger.Warn("trusted proxies: list ingress endpointslices", "err", err)
 			return
 		}
-		if len(cidrs) == 0 {
-			logger.Warn("trusted proxies: no node has spec.podCIDRs; X-Forwarded-For stays ignored (set KUSO_TRUSTED_PROXIES)")
+		if len(nets) == 0 {
+			logger.Warn("trusted proxies: no traefik endpoints found; X-Forwarded-For stays ignored (set KUSO_TRUSTED_PROXIES)")
 		}
-		setDefaultTrustedProxies(cidrs)
+		setDefaultTrustedProxies(nets)
 	}
 	go func() {
 		refresh()

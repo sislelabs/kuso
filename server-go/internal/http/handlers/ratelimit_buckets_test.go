@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -42,20 +42,30 @@ func loginReq(remote, xff, user string) *http.Request {
 	return r
 }
 
-// AH-1: behind Traefik with KUSO_TRUSTED_PROXIES unset, the pod-CIDR
-// default must let XFF through so distinct clients get distinct buckets.
-func TestRateLimit_PodCIDRDefaultSeparatesClientsBehindIngress(t *testing.T) {
+// AH-1: behind Traefik with KUSO_TRUSTED_PROXIES unset, the ingress
+// endpoint default must let XFF through so distinct clients get distinct
+// buckets, and must not trust XFF from any other pod.
+func TestRateLimit_IngressDefaultSeparatesClientsBehindIngress(t *testing.T) {
 	t.Setenv("KUSO_TRUSTED_PROXIES", "")
 	memLimiter(t)
-	cs := fake.NewSimpleClientset(
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Spec: corev1.NodeSpec{PodCIDRs: []string{"10.42.0.0/24"}}},
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Spec: corev1.NodeSpec{PodCIDR: "10.42.1.0/24"}},
-	)
-	cidrs, err := podCIDRsFromNodes(context.Background(), cs)
-	if err != nil || len(cidrs) != 2 {
-		t.Fatalf("podCIDRsFromNodes = %v, %v", cidrs, err)
+	slice := func(ns, svc string, addrs ...string) *discoveryv1.EndpointSlice {
+		return &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: svc + "-x", Namespace: ns,
+				Labels: map[string]string{discoveryv1.LabelServiceName: svc}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Endpoints:   []discoveryv1.Endpoint{{Addresses: addrs}},
+		}
 	}
-	setDefaultTrustedProxies(cidrs)
+	cs := fake.NewSimpleClientset(
+		slice("traefik", "traefik", "10.42.1.9", "10.42.0.7"),
+		slice("kuso-evil", "traefik", "10.42.4.4"),
+		slice("traefik", "other", "10.42.4.5"),
+	)
+	nets, err := ingressProxyNets(context.Background(), cs)
+	if err != nil || len(nets) != 2 {
+		t.Fatalf("ingressProxyNets = %v, %v", nets, err)
+	}
+	setDefaultTrustedProxies(nets)
 	t.Cleanup(func() { setDefaultTrustedProxies(nil) })
 
 	traefik := "10.42.1.9:5555"
@@ -68,6 +78,13 @@ func TestRateLimit_PodCIDRDefaultSeparatesClientsBehindIngress(t *testing.T) {
 	h(rr, loginReq(traefik, "198.51.100.7", "admin"))
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("different client behind the ingress got %d, want 204", rr.Code)
+	}
+
+	// Another pod in the pod CIDR is not a trusted proxy.
+	for _, peer := range []string{"10.42.1.10:1", "10.42.4.4:1", "10.42.4.5:1"} {
+		if got := clientIP(loginReq(peer, "198.51.100.7", "admin")); got == "198.51.100.7" {
+			t.Fatalf("XFF trusted from non-ingress pod %s", peer)
+		}
 	}
 
 	// Explicit env still wins: ingress IP not listed → XFF ignored.
