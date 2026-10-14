@@ -186,7 +186,7 @@ func TestMigrateLogLineToPartitioned_HappyPath(t *testing.T) {
 }
 
 // restoreUnpartitionedLogLine puts LogLine back to its fresh-install
-// shape (plain table from schema.sql plus migration 0012's index) so the
+// shape (plain table from schema.sql plus the deferred indexes) so the
 // NotPartitioned tests pass on the next run against the same database.
 func restoreUnpartitionedLogLine(t *testing.T, d *DB) {
 	t.Helper()
@@ -204,12 +204,7 @@ func restoreUnpartitionedLogLine(t *testing.T, d *DB) {
 		t.Errorf("restore LogLine: applySchema: %v", err)
 		return
 	}
-	body, err := migrationsFS.ReadFile("migrations/0012_logline_project_service_id_index.sql")
-	if err != nil {
-		t.Errorf("restore LogLine: read migration 0012: %v", err)
-		return
-	}
-	if _, err := d.ExecContext(ctx, string(body)); err != nil {
-		t.Errorf("restore LogLine: apply migration 0012: %v", err)
+	if err := d.BuildDeferredIndexes(ctx, nil); err != nil {
+		t.Errorf("restore LogLine: deferred indexes: %v", err)
 	}
 }

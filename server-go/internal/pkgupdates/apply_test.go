@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -311,7 +312,7 @@ func TestReconcileRebootsSkipsNodeMidApply(t *testing.T) {
 				Name: "worker",
 				Annotations: map[string]string{
 					CordonAnnotation:     "true", // stamped up-front by Apply()
-					ApplyStateAnnotation: `{"phase":"` + phase + `","at":"","log":""}`,
+					ApplyStateAnnotation: `{"phase":"` + phase + `","at":"` + time.Now().UTC().Format(time.RFC3339) + `","log":""}`,
 				},
 			},
 			// Cordoned (unschedulable) + Ready: exactly the mid-apply state.
@@ -324,7 +325,9 @@ func TestReconcileRebootsSkipsNodeMidApply(t *testing.T) {
 
 	for _, phase := range []string{"running", "draining"} {
 		t.Run(phase, func(t *testing.T) {
-			cs := kubefake.NewSimpleClientset(mkNode(phase))
+			// The Job is still active: the apply is genuinely in flight.
+			job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: applyJobName("worker"), Namespace: "kuso"}}
+			cs := kubefake.NewSimpleClientset(mkNode(phase), job)
 			w := &Watcher{Kube: &kube.Client{Clientset: cs}}
 			w.reconcileReboots(context.Background(), slogDiscard())
 
@@ -340,6 +343,100 @@ func TestReconcileRebootsSkipsNodeMidApply(t *testing.T) {
 			}
 			if got := parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase; got != phase {
 				t.Errorf("phase=%s: apply-state was stomped to %q mid-apply", phase, got)
+			}
+		})
+	}
+}
+
+// TestReconcileFailsStalledApply is the RL-1 regression: an apply whose
+// Job can no longer report (failed, stuck pulling its image, or gone)
+// used to leave the node phase=running + cordoned forever, and
+// anotherNodeRebooting then refused every other node's apply.
+func TestReconcileFailsStalledApply(t *testing.T) {
+	t.Parallel()
+	const node = "worker"
+	stamp := func(ago time.Duration) string {
+		return time.Now().Add(-ago).UTC().Format(time.RFC3339)
+	}
+	mkNode := func(phase, at string, ours bool) *corev1.Node {
+		ann := map[string]string{
+			ApplyStateAnnotation: `{"phase":"` + phase + `","at":"` + at + `","log":""}`,
+		}
+		if ours {
+			ann[CordonAnnotation] = "true"
+		}
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: node, Annotations: ann},
+			Spec:       corev1.NodeSpec{Unschedulable: true},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}},
+		}
+	}
+	jobMeta := metav1.ObjectMeta{Name: applyJobName(node), Namespace: "kuso"}
+	failedJob := &batchv1.Job{ObjectMeta: jobMeta, Status: batchv1.JobStatus{
+		Failed: 1,
+		Conditions: []batchv1.JobCondition{{
+			Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded",
+		}},
+	}}
+	activeJob := &batchv1.Job{ObjectMeta: jobMeta, Status: batchv1.JobStatus{Active: 1}}
+	pullingPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: applyJobName(node) + "-abcde", Namespace: "kuso",
+			Labels: map[string]string{"job-name": applyJobName(node)},
+		},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  "apply",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "pull alpine:3.20"}},
+		}}},
+	}
+
+	cases := []struct {
+		name         string
+		objs         []runtime.Object
+		wantPhase    string
+		wantCordoned bool // expected Spec.Unschedulable after reconcile
+	}{
+		{"job failed, our cordon", []runtime.Object{mkNode("running", stamp(time.Minute), true), failedJob}, "failed", false},
+		{"draining, job failed", []runtime.Object{mkNode("draining", stamp(time.Minute), true), failedJob}, "failed", false},
+		{"image pull stuck", []runtime.Object{mkNode("running", stamp(10*time.Minute), true), activeJob, pullingPod}, "failed", false},
+		{"image pull, inside grace", []runtime.Object{mkNode("running", stamp(time.Minute), true), activeJob, pullingPod}, "running", true},
+		{"job gone", []runtime.Object{mkNode("running", stamp(10*time.Minute), true)}, "failed", false},
+		{"job not created yet", []runtime.Object{mkNode("running", stamp(10*time.Second), true)}, "running", true},
+		// Not our cordon (operator's, or a no-reboot apply): mark failed
+		// but leave scheduling alone.
+		{"job failed, foreign cordon", []runtime.Object{mkNode("running", stamp(time.Minute), false), failedJob}, "failed", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := kubefake.NewSimpleClientset(tc.objs...)
+			w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+			w.reconcileReboots(context.Background(), slogDiscard())
+
+			n, err := cs.CoreV1().Nodes().Get(context.Background(), node, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := parseApplyState(n.Annotations[ApplyStateAnnotation])
+			if st.Phase != tc.wantPhase {
+				t.Errorf("phase = %q (%s), want %q", st.Phase, st.Log, tc.wantPhase)
+			}
+			if n.Spec.Unschedulable != tc.wantCordoned {
+				t.Errorf("unschedulable = %v, want %v", n.Spec.Unschedulable, tc.wantCordoned)
+			}
+			if tc.wantPhase != "failed" {
+				return
+			}
+			if n.Annotations[CordonAnnotation] == "true" {
+				t.Error("cordon marker left on a failed apply")
+			}
+			if _, err := cs.BatchV1().Jobs("kuso").Get(context.Background(), applyJobName(node), metav1.GetOptions{}); err == nil {
+				t.Error("stalled apply Job not deleted")
+			}
+			// The whole point: other nodes can apply again.
+			if busy, err := w.anotherNodeRebooting(context.Background(), "other"); err != nil || busy != "" {
+				t.Errorf("anotherNodeRebooting = %q, %v; want unblocked", busy, err)
 			}
 		})
 	}

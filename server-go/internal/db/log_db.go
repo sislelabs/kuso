@@ -13,9 +13,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/lib/pq"
 )
 
 // LogDB is an alias type around *DB used by the log-search and alerts
@@ -59,10 +63,73 @@ func (d *LogDB) InsertLogLines(ctx context.Context, lines []LogLine) error {
 	return nil
 }
 
+// MaxLogLineChars is LogLine_line_len_chk's limit. Postgres length()
+// counts characters, not bytes.
+const MaxLogLineChars = 16384
+
+const logLineTruncSuffix = "…[truncated]"
+
+// SanitizeLogLine makes s storable in LogLine.line: invalid UTF-8 is
+// replaced, NUL bytes (rejected by Postgres TEXT) are removed, and the
+// result, including the truncation suffix, fits the length CHECK.
+// Truncation is by rune so a multi-byte character is never split.
+func SanitizeLogLine(s string) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\uFFFD")
+	}
+	if strings.IndexByte(s, 0) >= 0 {
+		s = strings.ReplaceAll(s, "\x00", "")
+	}
+	if len(s) <= MaxLogLineChars || utf8.RuneCountInString(s) <= MaxLogLineChars {
+		return s
+	}
+	keep := MaxLogLineChars - utf8.RuneCountInString(logLineTruncSuffix)
+	n := 0
+	for i := range s {
+		if n == keep {
+			return s[:i] + logLineTruncSuffix
+		}
+		n++
+	}
+	return s
+}
+
 func (d *LogDB) insertLogLinesChunk(ctx context.Context, chunk []LogLine) error {
 	if len(chunk) == 0 {
 		return nil
 	}
+	err := d.insertLogLinesStmt(ctx, chunk)
+	if err == nil || !isRowDataError(err) {
+		return err
+	}
+	// One bad row fails the whole multi-VALUES statement, and the
+	// shipper re-queues the batch — so a single unstorable line used to
+	// block every line queued behind it until the buffer cap dropped
+	// them all. Bisect to isolate and drop just the offending rows.
+	if len(chunk) == 1 {
+		d.Stats.WriteErrors.Add(1)
+		return nil
+	}
+	mid := len(chunk) / 2
+	if err := d.insertLogLinesChunk(ctx, chunk[:mid]); err != nil {
+		return err
+	}
+	return d.insertLogLinesChunk(ctx, chunk[mid:])
+}
+
+// isRowDataError reports whether err is caused by a row's content
+// (data exception class 22 or integrity violation class 23) rather
+// than the connection or the database being unavailable.
+func isRowDataError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	class := string(pqErr.Code.Class())
+	return class == "22" || class == "23"
+}
+
+func (d *LogDB) insertLogLinesStmt(ctx context.Context, chunk []LogLine) error {
 	const cols = 6
 	args := make([]any, 0, len(chunk)*cols)
 	var sb strings.Builder
@@ -74,10 +141,7 @@ func (d *LogDB) insertLogLinesChunk(ctx context.Context, chunk []LogLine) error 
 		base := i*cols + 1
 		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d)",
 			base, base+1, base+2, base+3, base+4, base+5)
-		// Strip null bytes — Postgres rejects them outright in TEXT
-		// columns (invalid UTF-8 sequence).
-		line := strings.ReplaceAll(l.Line, "\x00", "")
-		args = append(args, l.Ts.UTC(), l.Pod, l.Project, l.Service, l.Env, line)
+		args = append(args, l.Ts.UTC(), l.Pod, l.Project, l.Service, l.Env, SanitizeLogLine(l.Line))
 	}
 	if _, err := d.DB.DB.ExecContext(ctx, sb.String(), args...); err != nil {
 		return fmt.Errorf("insert log lines: %w", err)
@@ -292,13 +356,16 @@ func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64
 		if err := ctx.Err(); err != nil {
 			return total, err
 		}
-		// Postgres lacks DELETE ... LIMIT, so we use the
-		// `WHERE ctid IN (SELECT ctid ... LIMIT N)` keyset trick.
-		// ctid is the physical row pointer — fastest possible probe.
+		// Postgres lacks DELETE ... LIMIT, so we select a bounded set of
+		// physical row pointers and delete those. ctid alone is only
+		// unique within ONE relation: on a partitioned LogLine the same
+		// (block,offset) exists in every day-partition, so a bare
+		// `ctid IN (...)` also deleted today's rows at the tids of old
+		// ones. (tableoid, ctid) names a row uniquely across partitions.
 		res, err := d.ExecContext(ctx, `
 DELETE FROM "LogLine"
-WHERE ctid IN (
-  SELECT ctid FROM "LogLine"
+WHERE (tableoid, ctid) IN (
+  SELECT tableoid, ctid FROM "LogLine"
   WHERE ts < $1
   LIMIT $2
 )`, before.UTC(), chunk)

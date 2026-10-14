@@ -44,6 +44,9 @@ func openTestDB(t *testing.T) *DB {
 	if _, err := d.DB.Exec(`DELETE FROM "Setting" WHERE key = 'auth.oauthBootstrapConsumed'`); err != nil {
 		t.Fatalf("reset oauth bootstrap marker: %v", err)
 	}
+	if err := d.BuildDeferredIndexes(context.Background(), nil); err != nil {
+		t.Fatalf("BuildDeferredIndexes: %v", err)
+	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }

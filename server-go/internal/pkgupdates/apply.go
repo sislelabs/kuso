@@ -109,9 +109,124 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 
 	job := w.buildApplyJob(node, adv.PkgMgr, allowReboot)
 	if _, err := w.Kube.Clientset.BatchV1().Jobs(w.namespace()).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		// Don't leave the node cordoned + "running" for a Job that
+		// doesn't exist.
+		w.failApply(ctx, node, "could not create apply Job: "+err.Error())
 		return fmt.Errorf("create apply job: %w", err)
 	}
 	return nil
+}
+
+// Bounds for detecting an apply whose Job can no longer report a result
+// (the script patches apply-state itself; if it never starts, or its
+// API calls fail, the node would stay running/draining forever).
+const (
+	// applyStartGrace covers Apply's window between writing
+	// phase=running and creating the Job.
+	applyStartGrace = 2 * time.Minute
+	// applyPodStuckGrace is how long a pod may sit in an image-pull or
+	// config error before we give up on it.
+	applyPodStuckGrace = 5 * time.Minute
+	// maxApplyDuration bounds a running/draining phase outright. The
+	// script re-stamps the phase as it progresses, so this measures one
+	// phase, not the whole apply.
+	maxApplyDuration = 2 * time.Hour
+)
+
+// stalledApplyReason returns why an apply in phase running/draining can
+// no longer finish, or "" if it may still be progressing.
+func (w *Watcher) stalledApplyReason(ctx context.Context, node string, st ApplyState) string {
+	age := maxApplyDuration + time.Second // unparseable stamp → treat as old
+	if at, err := time.Parse(time.RFC3339, st.At); err == nil {
+		age = time.Since(at)
+	}
+	name := applyJobName(node)
+	job, err := w.Kube.Clientset.BatchV1().Jobs(w.namespace()).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if age > applyStartGrace {
+			return "apply Job is gone but the node never reported a result"
+		}
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	if job.Status.Failed > 0 {
+		reason := "apply Job failed without reporting a result"
+		for _, c := range job.Status.Conditions {
+			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+				reason += ": " + c.Reason
+				if c.Message != "" {
+					reason += " (" + c.Message + ")"
+				}
+			}
+		}
+		return reason
+	}
+	if job.Status.Succeeded > 0 {
+		return "apply Job exited without reporting a result (its node-annotation update failed)"
+	}
+	if age > applyPodStuckGrace {
+		pods, err := w.Kube.Clientset.CoreV1().Pods(w.namespace()).List(ctx, metav1.ListOptions{
+			LabelSelector: "job-name=" + name,
+		})
+		if err == nil {
+			for i := range pods.Items {
+				for _, cs := range pods.Items[i].Status.ContainerStatuses {
+					if wt := cs.State.Waiting; wt != nil && applyPodStuckReasons[wt.Reason] {
+						return "apply pod stuck: " + wt.Reason + ": " + wt.Message
+					}
+				}
+			}
+		}
+	}
+	if age > maxApplyDuration {
+		return fmt.Sprintf("apply made no progress for %s", maxApplyDuration)
+	}
+	return ""
+}
+
+var applyPodStuckReasons = map[string]bool{
+	"ImagePullBackOff":           true,
+	"ErrImagePull":               true,
+	"InvalidImageName":           true,
+	"CreateContainerConfigError": true,
+	"CreateContainerError":       true,
+}
+
+// failApply marks a node's apply failed, stops its Job, and lifts the
+// cordon only if Apply placed it (our marker). Best-effort.
+func (w *Watcher) failApply(ctx context.Context, node, reason string) {
+	bg := metav1.DeletePropagationBackground
+	_ = w.Kube.Clientset.BatchV1().Jobs(w.namespace()).Delete(ctx, applyJobName(node), metav1.DeleteOptions{PropagationPolicy: &bg})
+	_ = w.setApplyState(ctx, node, "failed", reason)
+	live, err := w.Kube.Clientset.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
+	if err != nil || live.Annotations[CordonAnnotation] != "true" {
+		return
+	}
+	patch := fmt.Sprintf(
+		`{"spec":{"unschedulable":false},"metadata":{"annotations":{%q:null}}}`,
+		CordonAnnotation)
+	_, _ = w.Kube.Clientset.CoreV1().Nodes().Patch(ctx, node, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+}
+
+// reconcileStalledApply fails a running/draining apply whose Job can no
+// longer report. The node is re-read first so a result the script wrote
+// after our List isn't overwritten.
+func (w *Watcher) reconcileStalledApply(ctx context.Context, node string, st ApplyState, logger *slog.Logger) {
+	reason := w.stalledApplyReason(ctx, node, st)
+	if reason == "" {
+		return
+	}
+	live, err := w.Kube.Clientset.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	if cur := parseApplyState(live.Annotations[ApplyStateAnnotation]); cur != st {
+		return // the script moved on since we listed
+	}
+	logger.Warn("pkgupdates: apply stalled, marking failed", "node", node, "reason", reason)
+	w.failApply(ctx, node, reason)
 }
 
 // namespace returns the home namespace (kuso) for the apply Job. The
@@ -184,6 +299,10 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		// whose phase is NOT a live apply phase.
 		ours := n.Annotations[CordonAnnotation] == "true"
 		inApplyWork := st.Phase == "running" || st.Phase == "draining"
+		if inApplyWork {
+			w.reconcileStalledApply(ctx, n.Name, st, logger)
+			continue
+		}
 		if st.Phase != "rebooting" && st.Phase != "settling" && !(ours && !inApplyWork) {
 			continue
 		}

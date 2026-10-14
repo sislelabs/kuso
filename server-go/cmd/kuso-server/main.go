@@ -1338,6 +1338,16 @@ func main() {
 		}
 	}()
 
+	// LogLine indexes are built CONCURRENTLY here, after the listener,
+	// rather than in db.Open: on a large table the build outlasts the
+	// startupProbe. sigCtx cancellation leaves an INVALID index that the
+	// next boot drops and rebuilds.
+	goSafe(logger, "deferred-indexes", func() {
+		if err := database.BuildDeferredIndexes(sigCtx, logger.With("component", "deferred-indexes")); err != nil {
+			logger.Warn("deferred index build failed; log search/alerts may be slow until next boot", "err", err)
+		}
+	})
+
 	// nodemetrics, nodewatch, logship, and the alerts engine are all
 	// singletons — they sample/scan cluster-wide state and write rows
 	// keyed by (nodeName, ts). Two replicas would emit duplicate rows
