@@ -10,9 +10,64 @@
 #
 # See docs/design/SCALE_TO_ZERO.md.
 #
-# Reuses the kuso-server ServiceAccount + ClusterRole — the activator's
-# kube needs (kusoenvironments + deployments get/patch, endpoints read)
-# are a subset of what kuso-server already holds, so no new RBAC.
+# Runs as its OWN ServiceAccount. It is the one kuso component that
+# parses arbitrary internet traffic (every unclaimed Host lands here via
+# the catch-all route below), so a proxy bug must not hand out
+# kuso-server's token (cluster-wide Secret read, node delete, RBAC
+# writes). Its kube calls, from internal/activator + scaledown.Wake:
+#   kusoenvironments  list (resolve Host), get + update (wake, activity stamp)
+#   endpointslices    list (wake readiness); endpoints get (legacy fallback)
+#   deployments       patch spec.replicas (wake)
+# deployments patch has to be cluster-wide (project namespaces are
+# created at runtime) and kusoenvironments update would let a
+# compromised activator rewrite an env's image; both are narrowed by the
+# kuso-activator-scope ValidatingAdmissionPolicy in
+# deploy/kuso-admission-policy.yaml (managed namespaces only, replicas /
+# replicaCount + activity annotations only).
+#
+# The self-updater cannot apply the ClusterRole/Binding (kuso-server
+# can't grant cluster-wide deployments patch); a cluster admin applies
+# this file once. hack/release.sh excludes them from upgrade-manifests.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-activator
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-activator }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-activator
+  labels: { app.kubernetes.io/name: kuso-activator }
+rules:
+  - apiGroups: [application.kuso.sislelabs.com]
+    resources: [kusoenvironments]
+    verbs: [get, list, update]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-activator
+  labels: { app.kubernetes.io/name: kuso-activator }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-activator
+subjects:
+  - kind: ServiceAccount
+    name: kuso-activator
+    namespace: kuso
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,12 +90,25 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: kuso-activator }
     spec:
-      serviceAccountName: kuso-server
+      serviceAccountName: kuso-activator
       priorityClassName: kuso-platform
+      # uid/gid 100/101 = the image's `kuso` user (server-go/Dockerfile
+      # adduser -S). Numeric because runAsNonRoot can't verify a named
+      # USER. Activator mode writes nothing to disk, hence the read-only
+      # root filesystem.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: activator
           image: ghcr.io/sislelabs/kuso-server-go:v0.31.0
           args: ["--activator"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
             - { name: KUSO_NAMESPACE, value: kuso }

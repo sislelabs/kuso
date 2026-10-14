@@ -44,6 +44,9 @@ const noTraefikCRDs = "<no traefik CRDs>"
 const (
 	inflightRef  = "kuso-alpha-web-production-inflight@kubernetescrd"
 	ratelimitRef = "kuso-alpha-web-production-ratelimit@kubernetescrd"
+	// The env fixture serves TLS on every host, so the HTTPS redirect
+	// leads the middleware chain whenever the operator switch is on.
+	redirectRef = "kuso-alpha-web-production-redirect@kubernetescrd"
 )
 
 // Without the operator's switch the chart must not touch the Ingress:
@@ -72,7 +75,7 @@ func TestKusoEnvironmentChart_IngressLimitsDefaultCap(t *testing.T) {
 		"inFlightReq:",
 		"amount: 1000",
 		"requestHost: true",
-		"traefik.ingress.kubernetes.io/router.middlewares: \"" + inflightRef + "\"",
+		"traefik.ingress.kubernetes.io/router.middlewares: \"" + redirectRef + "," + inflightRef + "\"",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -89,7 +92,7 @@ func TestKusoEnvironmentChart_IngressLimitsOverrides(t *testing.T) {
 		"requestLimits.maxConcurrent=200", "requestLimits.ratePerSecond=50", "requestLimits.burst=120")
 	for _, want := range []string{
 		"amount: 200", "rateLimit:", "average: 50", "burst: 120",
-		"router.middlewares: \"" + inflightRef + "," + ratelimitRef + "\"",
+		"router.middlewares: \"" + redirectRef + "," + inflightRef + "," + ratelimitRef + "\"",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -99,7 +102,7 @@ func TestKusoEnvironmentChart_IngressLimitsOverrides(t *testing.T) {
 	// -1 opts a service out of the cap; the rate limit stands alone.
 	out = renderEnvWithIngress(t, "ingressLimitsEnabled=true",
 		"requestLimits.maxConcurrent=-1", "requestLimits.ratePerSecond=50")
-	if strings.Contains(out, "inFlightReq") || !strings.Contains(out, "router.middlewares: \""+ratelimitRef+"\"") {
+	if strings.Contains(out, "inFlightReq") || !strings.Contains(out, "router.middlewares: \""+redirectRef+","+ratelimitRef+"\"") {
 		t.Errorf("maxConcurrent=-1 must drop only the in-flight cap:\n%s", out)
 	}
 	// burst defaults to the rate.
@@ -108,8 +111,9 @@ func TestKusoEnvironmentChart_IngressLimitsOverrides(t *testing.T) {
 	}
 
 	out = renderEnvWithIngress(t, "ingressLimitsEnabled=true", "requestLimits.maxConcurrent=-1")
-	if strings.Contains(out, "kind: Middleware") || strings.Contains(out, "router.middlewares") {
-		t.Errorf("fully opted out service still has limits:\n%s", out)
+	if strings.Contains(out, "inFlightReq") || strings.Contains(out, "rateLimit:") ||
+		!strings.Contains(out, "router.middlewares: \""+redirectRef+"\"") {
+		t.Errorf("fully opted out service must keep only the redirect:\n%s", out)
 	}
 }
 

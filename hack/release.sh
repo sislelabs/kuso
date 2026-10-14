@@ -231,28 +231,22 @@ if [[ "${KUSO_RELEASE_ALLOW_DIRTY:-0}" != "1" ]]; then
 fi
 
 # CI gate: refuse to ship a HEAD whose GitHub Actions `test` run isn't
-# green. ~20 releases shipped on red before this existed. FORCE=1
-# overrides; a missing/unauthenticated gh only warns (offline releases
-# stay possible). local-roll (SKIP_BUILD) flips an already-released tag,
-# so it isn't gated.
+# green. ~20 releases shipped on red before this existed. Fails closed:
+# a missing or unauthenticated gh is "CI state unknown", which blocks the
+# same as red. FORCE=1 is the one explicit override (offline releases).
+# local-roll (SKIP_BUILD) flips an already-released tag, so it isn't gated.
 ci_gate() {
-  local sha runs
+  local sha runs why=""
   sha="$(git rev-parse HEAD)"
   if ! command -v gh >/dev/null 2>&1; then
-    warn "gh not on PATH — can't check CI for ${sha:0:12}; shipping unchecked"
-    return 0
-  fi
-  if ! runs="$(gh run list --workflow test --commit "$sha" --json status,conclusion \
+    why="gh not on PATH — can't check CI for ${sha:0:12}"
+  elif ! runs="$(gh run list --workflow test --commit "$sha" --json status,conclusion \
       --jq '.[] | "\(.status) \(.conclusion)"' 2>/dev/null)"; then
-    warn "gh run list failed (not authenticated?) — can't check CI for ${sha:0:12}; shipping unchecked"
-    return 0
-  fi
-  if grep -q '^completed success$' <<<"$runs"; then
+    why="gh run list failed (not authenticated? run 'gh auth status') — can't check CI for ${sha:0:12}"
+  elif grep -q '^completed success$' <<<"$runs"; then
     log "CI green for ${sha:0:12}"
     return 0
-  fi
-  local why
-  if [[ -z "$runs" ]]; then
+  elif [[ -z "$runs" ]]; then
     why="no 'test' workflow run for ${sha:0:12} — push it and wait for CI"
   elif grep -qv '^completed ' <<<"$runs"; then
     why="'test' workflow for ${sha:0:12} is still running — wait for it"
@@ -922,9 +916,16 @@ KNOWN_NS = {"kuso", "kuso-operator-system"}
 # dissolve that boundary for the sake of tidier logs. The operator's
 # RBAC is installed once at bootstrap (hack/install.sh) and changes to
 # it need a deliberate `kubectl apply` by a cluster admin.
+#
+# kuso-activator's ClusterRole grants cluster-wide deployments patch
+# (narrowed by the ValidatingAdmissionPolicy in
+# deploy/kuso-admission-policy.yaml), which kuso-server only holds per
+# managed namespace — same escalation refusal.
 ESCALATION_EXCLUDED = {
     ("ClusterRole", "kuso-operator"),
     ("ClusterRoleBinding", "kuso-operator"),
+    ("ClusterRole", "kuso-activator"),
+    ("ClusterRoleBinding", "kuso-activator"),
 }
 
 out, skipped, excluded = [], [], []
@@ -957,6 +958,23 @@ with open(sys.argv[1], "w") as fh:
     yaml.safe_dump_all(out, fh, sort_keys=False)
 print(f"upgrade-manifests: bundled {len(out)} docs")
 PYMANIFESTS
+
+# sha256 of the two applied payloads goes INTO release.json, so the
+# Ed25519 signature below covers them too. The updater Job verifies
+# the downloaded bytes against these before any kubectl apply — without
+# them a re-uploaded (--clobber) crds.yaml would be applied verbatim
+# while the signature check still passed.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+CRDS_SHA256="$(sha256_of "$DIST_DIR/crds.yaml")"
+MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/upgrade-manifests.yaml")"
+[[ "$CRDS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/crds.yaml (got '${CRDS_SHA256}')"
+[[ "$MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/upgrade-manifests.yaml (got '${MANIFESTS_SHA256}')"
 
 # release.json: stable wire shape consumed by internal/updater.Manifest.
 # Keep "additive" as the default migration kind; the moment we ship
@@ -1011,11 +1029,13 @@ cat > "$DIST_DIR/release.json" <<EOF
   },
   "crds": {
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/crds.yaml",
+    "sha256": "${CRDS_SHA256}",
     "minServer": "v0.4.0",
     "migrations": []
   },
   "manifests": {
-    "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/upgrade-manifests.yaml"
+    "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/upgrade-manifests.yaml",
+    "sha256": "${MANIFESTS_SHA256}"
   },
   "breaking": ${BREAKING}
 }

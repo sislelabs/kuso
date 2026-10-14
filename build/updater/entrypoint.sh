@@ -30,11 +30,37 @@ write_status() {
   | kubectl apply -f - >/dev/null
 }
 
+# verify_sha256 <file> <expected-hex> <label>: the expected digest comes
+# from the signed release.json (via the server), so a mismatch means the
+# release asset was replaced after signing. Refuse to apply it.
+#
+# An EMPTY expected digest is tolerated with a warning: a server older
+# than the release that introduced the digests (v0.31.0 and earlier)
+# doesn't know to pass them, and that server is the one launching the
+# first upgrade onto this updater image.
+UNVERIFIED=""
+verify_sha256() {
+  local file="$1" want="$2" label="$3" got
+  if [ -z "$want" ]; then
+    echo "==> WARNING: no sha256 for ${label} (server predates release digests); applying unverified"
+    UNVERIFIED="${UNVERIFIED:+${UNVERIFIED}, }${label}"
+    return 0
+  fi
+  got=$(sha256sum "$file" | awk '{print $1}')
+  if [ "$got" != "$want" ]; then
+    echo "==> ${label} sha256 mismatch: got ${got}, release.json says ${want}"
+    write_status "failed" "${label} does not match the signed release digest (got ${got}, want ${want}) — nothing applied"
+    exit 1
+  fi
+  echo "==> ${label} sha256 verified (${got})"
+}
+
 STARTED_AT="$(now)"
 write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
 TMP_CRDS=$(mktemp)
 curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
+verify_sha256 "$TMP_CRDS" "${KUSO_CRDS_SHA256:-}" "crds.yaml"
 
 # Server-side dry-run BEFORE the real apply. This validates the CRD
 # objects themselves (a structurally invalid schema, an illegal type
@@ -75,6 +101,10 @@ if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
   write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
   TMP_MANIFESTS=$(mktemp)
   if curl -fsSL "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"; then
+    # A mismatch is fatal even though the apply itself is best-effort:
+    # CRDs are already applied at this point, but no RBAC from an
+    # unverified bundle and no image roll happens.
+    verify_sha256 "$TMP_MANIFESTS" "${KUSO_MANIFESTS_SHA256:-}" "upgrade-manifests.yaml"
     # server-side apply, non-fatal: capture output, warn on failure.
     if apply_out=$(kubectl apply -f "$TMP_MANIFESTS" 2>&1); then
       echo "==> applied upgrade manifests"
@@ -150,16 +180,48 @@ if [ -z "${KUSO_OPERATOR_IMAGE:-}" ]; then
   write_status "rolling-operator" "no operator image in manifest — skipping operator roll"
   echo "==> WARNING: no operator image in manifest; server rolled, operator left unchanged"
 else
+  # Operator health gate + rollback. This used to be a goroutine in the
+  # kuso-server process, but this Job replaces that process (above)
+  # before touching the operator, so the watchdog died with the old pod
+  # on every real upgrade. The Job outlives both rolls, so the gate
+  # lives here, mirroring the server revert.
   write_status "rolling-operator" "${KUSO_OPERATOR_IMAGE}"
   OP_NS="${KUSO_OPERATOR_NS:-kuso-operator-system}"
+  OP_TIMEOUT="${KUSO_OPERATOR_ROLLOUT_TIMEOUT:-300s}"
   for d in kuso-operator-controller-manager kuso-operator; do
-    if kubectl get -n "$OP_NS" "deploy/$d" >/dev/null 2>&1; then
-      kubectl set image -n "$OP_NS" "deploy/$d" "manager=${KUSO_OPERATOR_IMAGE}" >/dev/null \
-        || kubectl set image -n "$OP_NS" "deploy/$d" "*=${KUSO_OPERATOR_IMAGE}" >/dev/null
-      kubectl rollout status -n "$OP_NS" "deploy/$d" --timeout=180s
-      break
+    if ! kubectl get -n "$OP_NS" "deploy/$d" >/dev/null 2>&1; then
+      continue
     fi
+    PRIOR_OPERATOR_IMAGE=$(kubectl get -n "$OP_NS" "deploy/$d" \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}' 2>/dev/null || true)
+    OP_CONTAINER=manager
+    if [ -z "$PRIOR_OPERATOR_IMAGE" ]; then
+      OP_CONTAINER='*'
+      PRIOR_OPERATOR_IMAGE=$(kubectl get -n "$OP_NS" "deploy/$d" \
+        -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+    fi
+    kubectl set image -n "$OP_NS" "deploy/$d" "${OP_CONTAINER}=${KUSO_OPERATOR_IMAGE}" >/dev/null
+    if ! kubectl rollout status -n "$OP_NS" "deploy/$d" --timeout="$OP_TIMEOUT"; then
+      echo "==> operator rollout to ${KUSO_OPERATOR_IMAGE} did NOT become ready within ${OP_TIMEOUT}"
+      if [ -n "$PRIOR_OPERATOR_IMAGE" ] && [ "$PRIOR_OPERATOR_IMAGE" != "${KUSO_OPERATOR_IMAGE}" ]; then
+        echo "==> reverting operator to ${PRIOR_OPERATOR_IMAGE}"
+        kubectl set image -n "$OP_NS" "deploy/$d" "${OP_CONTAINER}=${PRIOR_OPERATOR_IMAGE}" >/dev/null || true
+        if kubectl rollout status -n "$OP_NS" "deploy/$d" --timeout="$OP_TIMEOUT"; then
+          write_status "rolled-back" "operator ${KUSO_OPERATOR_IMAGE} did not become Ready within ${OP_TIMEOUT}; operator reverted to ${PRIOR_OPERATOR_IMAGE}. Server + CRDs are at ${KUSO_TARGET_VERSION}"
+        else
+          write_status "rollback-failed" "operator ${KUSO_OPERATOR_IMAGE} did not become Ready AND revert to ${PRIOR_OPERATOR_IMAGE} did not stabilise — manual intervention required"
+        fi
+      else
+        write_status "failed" "operator ${KUSO_OPERATOR_IMAGE} did not become Ready within ${OP_TIMEOUT} and there is no different prior image to revert to — manual intervention required"
+      fi
+      exit 1
+    fi
+    break
   done
+fi
+
+if [ -n "$UNVERIFIED" ]; then
+  MANIFESTS_WARNING="${MANIFESTS_WARNING:+${MANIFESTS_WARNING}; }applied without a release digest check: ${UNVERIFIED}"
 fi
 
 if [ -n "$MANIFESTS_WARNING" ]; then

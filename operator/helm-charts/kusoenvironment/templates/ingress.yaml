@@ -89,6 +89,42 @@
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- /* HTTP→HTTPS redirect (traefik redirectScheme Middleware, the same
+       mechanism the dashboard Ingress uses). A middleware on an Ingress
+       applies to EVERY host on it, so the redirect is added only when
+       every host has a TLS entry: a host deliberately served without
+       TLS (fake TLD, filtered out of tlsHosts) would otherwise be
+       bounced to an https URL with no cert. Mixed Ingresses keep plain
+       HTTP. The websecure router passes through (already https).
+       cert-manager's HTTP-01 solver is its own Ingress with a longer
+       path rule, so it wins over this router and is never redirected.
+       Gated on limitsOn: that switch is what guarantees the operator
+       holds traefik.io middlewares RBAC and the CRD exists — rendering
+       a Middleware without it fails the whole release. No HSTS. */ -}}
+{{- $redirectMain := false -}}
+{{- if and $hosts .Values.tlsEnabled $tlsHosts (include "kusoenvironment.limitsOn" .) -}}
+  {{- $redirectMain = true -}}
+  {{- range $hosts -}}{{- if not (has . $tlsHosts) -}}{{- $redirectMain = false -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- $redirectWild := false -}}
+{{- if and .Values.wildcardDomains .Values.tlsEnabled (include "kusoenvironment.limitsOn" .) -}}
+  {{- $redirectWild = true -}}
+  {{- range .Values.wildcardDomains -}}{{- if not .tlsSecret -}}{{- $redirectWild = false -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- $redirectRef := printf "%s-%s-redirect@kubernetescrd" .Release.Namespace (include "kusoenvironment.limitsBase" .) -}}
+{{- if or $redirectMain $redirectWild }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "kusoenvironment.limitsBase" . }}-redirect
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+{{- end }}
 {{- if $hosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -96,14 +132,16 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- $limits := include "kusoenvironment.limitMiddlewares" . }}
-  {{- if or (and .Values.tlsEnabled $tlsHosts) $limits }}
+  {{- $mw := list -}}
+  {{- if $redirectMain }}{{- $mw = append $mw $redirectRef -}}{{- end -}}
+  {{- with include "kusoenvironment.limitMiddlewares" . }}{{- $mw = append $mw . -}}{{- end -}}
+  {{- if or (and .Values.tlsEnabled $tlsHosts) $mw }}
   annotations:
     {{- if and .Values.tlsEnabled $tlsHosts }}
     cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
     {{- end }}
-    {{- if $limits }}
-    traefik.ingress.kubernetes.io/router.middlewares: {{ $limits | quote }}
+    {{- if $mw }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ join "," $mw | quote }}
     {{- end }}
   {{- end }}
 spec:
@@ -205,6 +243,10 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}-wildcard
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
+  {{- if $redirectWild }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: {{ $redirectRef | quote }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}
   {{- if .Values.tlsEnabled }}

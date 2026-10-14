@@ -445,4 +445,74 @@ spec:
           protocol: TCP
         - port: 6432
           protocol: TCP
+---
+# CloudNativePG (HA Postgres addons). The CNPG Cluster + Pooler pods
+# carry this project's label (so the default-deny above covers them),
+# but CNPG needs three paths the generic allows don't give:
+#   - ingress from the CNPG operator on the instance manager port
+#     (8000: status, promote, backup coordination);
+#   - egress to the kube-apiserver (the instance manager and pgbouncer
+#     pooler watch their own Cluster/Pooler CRs + Secrets). The policy
+#     may see the connection before kube-proxy's DNAT (the kubernetes
+#     Service, 443) or after it (a node IP, 6443 on k3s), so both are
+#     allowed. 6443 is opened to any address because node IPs aren't
+#     known to the chart; only these DB pods get it;
+#   - instance ↔ instance replication (5432) and instance-manager (8000)
+#     traffic. allow-intra-project already covers it; listed here so the
+#     CNPG contract doesn't silently depend on that rule's shape.
+# Inert in projects without an HA Postgres addon (no pod matches).
+{{- $cnpg := (.Values.networkPolicy).cnpg | default dict }}
+{{- range $sel := list (dict "key" "cnpg.io/cluster" "suffix" "cluster") (dict "key" "cnpg.io/poolerName" "suffix" "pooler") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ $.Values.namespace | default $.Release.Namespace }}
+  name: {{ $.Release.Name }}-allow-cnpg-{{ $sel.suffix }}
+  labels:
+    {{- include "kusoproject.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+    matchExpressions:
+      - { key: {{ $sel.key | quote }}, operator: Exists }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $cnpg.operatorNamespace | default "cnpg-system" | quote }}
+      ports:
+        - { port: 8000, protocol: TCP }
+    - from:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+            matchExpressions:
+              - { key: cnpg.io/cluster, operator: Exists }
+      ports:
+        - { port: 5432, protocol: TCP }
+        - { port: 8000, protocol: TCP }
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ $cnpg.apiServerServiceCIDR | default "10.43.0.1/32" | quote }}
+      ports:
+        - { port: 443, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { port: {{ int ($cnpg.apiServerPort | default 6443) }}, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+            matchExpressions:
+              - { key: cnpg.io/cluster, operator: Exists }
+      ports:
+        - { port: 5432, protocol: TCP }
+        - { port: 8000, protocol: TCP }
+{{- end }}
 {{- end }}

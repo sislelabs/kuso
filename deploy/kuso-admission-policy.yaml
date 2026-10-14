@@ -1,0 +1,163 @@
+# Admission-time limits on what kuso's own ServiceAccounts may write.
+# RBAC can't express these (it has no notion of "only in namespaces
+# carrying label X" or "only this field"), so they are
+# ValidatingAdmissionPolicies (GA since Kubernetes 1.30).
+#
+# NOT part of the self-updater bundle: kuso-server holds no
+# admissionregistration verbs, by design — a compromised server must not
+# be able to remove its own fence. A cluster admin applies this file:
+#   kubectl apply -f deploy/kuso-admission-policy.yaml
+# hack/install.sh applies it on fresh installs.
+#
+# Both policies key on the ServiceAccount username, so they assume the
+# home namespace is `kuso` (as deploy/server-go.yaml does).
+---
+# kuso-server: the `bind` verb on kuso-server-managed-ns (needed so
+# EnsureNamespace can stamp the managed-ns RoleBinding into a new project
+# namespace) authorises that binding in ANY namespace, and as a
+# ClusterRoleBinding. Without this policy a compromised server could bind
+# itself secret-write / pods/exec / jobs-create in kube-system.
+#
+# Allowed:
+#   - Role/RoleBinding writes only in namespaces labelled
+#     app.kubernetes.io/managed-by=kuso (home `kuso` + every project
+#     namespace EnsureNamespace created or adopted).
+#   - ClusterRoleBindings, except ones referencing kuso-server-managed-ns.
+#   - Namespace updates, except ADDING the managed-by=kuso label to a
+#     namespace that didn't carry it (that would launder any namespace
+#     into the first rule). The home `kuso` namespace is exempt because
+#     kuso-server labels it itself at boot on pre-label installs. Project
+#     adoption already requires the label to be present beforehand
+#     (internal/projects/namespace_guard.go).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kuso-server-rbac-scope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [roles, rolebindings, clusterrolebindings]
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [namespaces]
+  matchConditions:
+    - name: is-kuso-server
+      expression: request.userInfo.username == 'system:serviceaccount:kuso:kuso-server'
+  variables:
+    - name: managedLabel
+      expression: "'app.kubernetes.io/managed-by'"
+  validations:
+    - expression: >-
+        !(request.resource.resource in ['roles', 'rolebindings']) ||
+        (namespaceObject != null &&
+         has(namespaceObject.metadata.labels) &&
+         variables.managedLabel in namespaceObject.metadata.labels &&
+         namespaceObject.metadata.labels[variables.managedLabel] == 'kuso')
+      messageExpression: >-
+        'kuso-server may only write Roles/RoleBindings in namespaces labelled app.kubernetes.io/managed-by=kuso; ' +
+        request.namespace + ' is not'
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'clusterrolebindings' ||
+        object.roleRef.name != 'kuso-server-managed-ns'
+      message: kuso-server-managed-ns is namespace-scoped by design; kuso-server may not bind it cluster-wide
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'namespaces' ||
+        object.metadata.name == 'kuso' ||
+        !(has(object.metadata.labels) &&
+          variables.managedLabel in object.metadata.labels &&
+          object.metadata.labels[variables.managedLabel] == 'kuso') ||
+        (has(oldObject.metadata.labels) &&
+         variables.managedLabel in oldObject.metadata.labels &&
+         oldObject.metadata.labels[variables.managedLabel] == 'kuso')
+      messageExpression: >-
+        'kuso-server may not mark an existing namespace as kuso-managed (' + object.metadata.name +
+        '); a cluster admin labels it app.kubernetes.io/managed-by=kuso before adoption'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kuso-server-rbac-scope
+spec:
+  policyName: kuso-server-rbac-scope
+  validationActions: [Deny]
+---
+# kuso-activator (deploy/kuso-activator.yaml) is internet-facing. Its
+# ClusterRole needs cluster-wide deployments patch + kusoenvironments
+# update; this narrows both to what a wake / activity stamp writes:
+#   - only in kuso-managed namespaces;
+#   - Deployments: only kusoenvironment-chart Deployments, and nothing
+#     but replicas may change (pod template, selector, labels fixed);
+#   - KusoEnvironments: spec may change only in replicaCount, labels
+#     are fixed. Annotations stay writable (last-activity and
+#     pre-sleep-replicas live there).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kuso-activator-scope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [deployments]
+      - apiGroups: [application.kuso.sislelabs.com]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [kusoenvironments]
+  matchConditions:
+    - name: is-kuso-activator
+      expression: request.userInfo.username == 'system:serviceaccount:kuso:kuso-activator'
+  variables:
+    - name: managedLabel
+      expression: "'app.kubernetes.io/managed-by'"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: newLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  validations:
+    - expression: request.operation == 'UPDATE'
+      message: kuso-activator may only update existing objects
+      reason: Forbidden
+    - expression: >-
+        namespaceObject != null &&
+        has(namespaceObject.metadata.labels) &&
+        variables.managedLabel in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels[variables.managedLabel] == 'kuso'
+      messageExpression: "'kuso-activator may only write in kuso-managed namespaces; ' + request.namespace + ' is not'"
+      reason: Forbidden
+    - expression: variables.newLabels == variables.oldLabels
+      message: kuso-activator may not change labels
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'deployments' ||
+        ('app.kubernetes.io/name' in variables.oldLabels &&
+         variables.oldLabels['app.kubernetes.io/name'] == 'kusoenvironment' &&
+         object.spec.template == oldObject.spec.template &&
+         object.spec.selector == oldObject.spec.selector)
+      message: kuso-activator may only change replicas on kusoenvironment Deployments
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'kusoenvironments' ||
+        (has(object.spec) && has(oldObject.spec) &&
+         object.spec.all(k, k == 'replicaCount' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+         oldObject.spec.all(k, k == 'replicaCount' || k in object.spec))
+      message: kuso-activator may only change spec.replicaCount on a KusoEnvironment
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kuso-activator-scope
+spec:
+  policyName: kuso-activator-scope
+  validationActions: [Deny]
