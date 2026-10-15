@@ -3,8 +3,11 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  addEnvDomain,
   cancelRun,
   createRun,
+  deleteRun,
+  getRun,
   deleteService,
   getDetectedEnv,
   getDrift,
@@ -15,7 +18,9 @@ import {
   listErrors,
   listRuns,
   listServiceCrons,
+  listStorageClasses,
   patchService,
+  removeEnvDomain,
   restartService,
   runPhase,
   startService,
@@ -25,7 +30,7 @@ import {
   type CreateRunRequest,
   type PatchServiceBody,
 } from "./api";
-import { invalidateProjectDescribe } from "@/features/projects/hooks";
+import { envsQueryKey, invalidateProjectDescribe } from "@/features/projects/hooks";
 
 // selfHandledErrors marks a mutation whose call sites handle their own
 // errors (mutateAsync + try/catch, or a per-call onError). The global
@@ -327,6 +332,70 @@ export function useCancelRun(project: string, service: string) {
     meta: selfHandledErrors,
     mutationFn: (runName: string) => cancelRun(project, runName),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });
+    },
+  });
+}
+
+export const storageClassesQueryKey = ["kubernetes", "storageclasses"] as const;
+
+// useStorageClasses lists the cluster's storage classes. Admin-only on
+// the server, so `enabled` lets callers skip it for other roles.
+export function useStorageClasses(enabled = true) {
+  return useQuery({
+    queryKey: storageClassesQueryKey,
+    queryFn: listStorageClasses,
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+// useEnvDomainMutations adds/removes one host on a service's env CR
+// (wildcard hosts carry a pre-provisioned TLS secret).
+export function useEnvDomainMutations(project: string, service: string, env: string) {
+  const qc = useQueryClient();
+  const onSuccess = () => {
+    qc.invalidateQueries({ queryKey: envsQueryKey(project) });
+    invalidateProjectDescribe(qc, project);
+  };
+  const add = useMutation({
+    meta: selfHandledErrors,
+    mutationFn: (body: { host: string; tlsSecret?: string }) => addEnvDomain(project, service, env, body),
+    onSuccess,
+  });
+  const remove = useMutation({
+    meta: selfHandledErrors,
+    mutationFn: (host: string) => removeEnvDomain(project, service, env, host),
+    onSuccess,
+  });
+  return { add, remove };
+}
+
+export const runQueryKey = (project: string, run: string) => ["projects", project, "runs", run] as const;
+
+// useRun fetches one run's detail while its row is expanded; polls while
+// the run is still in flight.
+export function useRun(project: string, run: string, enabled: boolean) {
+  return useQuery({
+    queryKey: runQueryKey(project, run),
+    queryFn: () => getRun(project, run),
+    enabled: enabled && !!project && !!run,
+    refetchInterval: (q) => {
+      const r = q.state.data;
+      const p = r ? runPhase(r) : "pending";
+      return p === "pending" || p === "running" ? 3_000 : false;
+    },
+  });
+}
+
+export function useDeleteRun(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: selfHandledErrors,
+    mutationFn: (runName: string) => deleteRun(project, runName),
+    onSuccess: (_d, runName) => {
+      qc.removeQueries({ queryKey: runQueryKey(project, runName) });
       qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });
     },
   });

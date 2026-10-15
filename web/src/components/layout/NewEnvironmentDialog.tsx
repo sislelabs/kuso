@@ -17,6 +17,7 @@ import {
 import { Plus, Database, Share2, Sparkles, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ServiceEnvironmentForm } from "./ServiceEnvironmentForm";
 
 interface Props {
   project: string;
@@ -52,6 +53,9 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   const addons = useAddons(project);
   const qc = useQueryClient();
 
+  // "project" mirrors every service (env group); "service" adds an env to
+  // one service only.
+  const [scope, setScope] = useState<"project" | "service">("project");
   const [name, setName] = useState("");
   const [policy, setPolicy] = useState<Record<string, AddonPolicy>>({});
   // Set when the server created the env but flagged literals that may
@@ -76,6 +80,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   useEffect(() => {
     if (!open) return;
     setName("");
+    setScope("project");
     setWarned(null);
     // Seed defaults on each open. Stateful kinds default to fresh,
     // others to shared. Users can flip any of them inline.
@@ -190,11 +195,32 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
             <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
               <DialogTitle className="font-heading">New environment</DialogTitle>
               <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
-                  Mirror every service + (optionally) addon under a new name. Send the URL to a
-                  client for review without touching production.
+                {scope === "project"
+                  ? "Mirror every service + (optionally) addon under a new name. Send the URL to a client for review without touching production."
+                  : "Add a long-lived environment (staging, qa…) to one service, building from its own branch."}
               </DialogDescription>
+              <div role="group" aria-label="Environment scope" className="mt-2 inline-flex w-fit items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-[11px]">
+                <PolicyBtn label="whole project" active={scope === "project"} onClick={() => setScope("project")} />
+                <PolicyBtn label="one service" active={scope === "service"} onClick={() => setScope("service")} />
+              </div>
             </DialogHeader>
 
+            {scope === "service" ? (
+              services.length === 0 ? (
+                <p className="p-4 text-[12px] text-[var(--text-secondary)]">Add a service to the project first.</p>
+              ) : (
+                <ServiceEnvironmentForm
+                  project={project}
+                  services={services}
+                  onCancel={onClose}
+                  onCreated={(env) => {
+                    onCreated?.(env);
+                    onClose();
+                  }}
+                />
+              )
+            ) : (
+            <>
             <div className="flex-1 overflow-y-auto">
               <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
                 <Field label="name" hint="becomes part of every cloned service's URL" htmlFor="new-env-name">
@@ -329,6 +355,8 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                 </Button>
               </div>
             </DialogFooter>
+            </>
+            )}
       </DialogContent>
     </Dialog>
   );

@@ -11,6 +11,8 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { CronPicker } from "@/components/shared/CronPicker";
+import { CronPolicyFields } from "@/components/cron/CronPolicyFields";
+import { policyCreateFields, policyForm } from "@/components/cron/cronPatch";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -211,6 +213,10 @@ function CronCreateForm({
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState("0 3 * * *");
   const [cmd, setCmd] = useState("");
+  const [suspend, setSuspend] = useState(false);
+  const [pinImage, setPinImage] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
+  const [policy, setPolicy] = useState(policyForm());
   const create = useMutation({
     mutationFn: () =>
       addCron(project, service, {
@@ -219,6 +225,9 @@ function CronCreateForm({
         // Split on whitespace; users that need shell quoting use
         // `sh -c "<cmd>"`. Same convention as the CLI.
         command: cmd.trim().split(/\s+/).filter(Boolean),
+        ...(suspend ? { suspend: true } : {}),
+        ...(pinImage ? { pinImage: true } : {}),
+        ...policyCreateFields(policy),
       }),
     onSuccess: () => {
       toast.success(`Cron ${name} created`);
@@ -263,6 +272,37 @@ function CronCreateForm({
         placeholder="rails runner Cleanup.run    OR    sh -c &quot;curl … &amp;&amp; …&quot;"
         className="h-7 font-mono text-[12px]"
       />
+      <button
+        type="button"
+        onClick={() => setShowOptions((v) => !v)}
+        aria-expanded={showOptions}
+        className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        {showOptions ? "− fewer options" : "+ more options"}
+      </button>
+      {showOptions && (
+        <div className="space-y-2">
+          <CronPolicyFields value={policy} onChange={setPolicy} />
+          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+            <input
+              type="checkbox"
+              checked={pinImage}
+              onChange={(e) => setPinImage(e.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            Pin the image — stay on the current build instead of following {service}&apos;s deploys
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+            <input
+              type="checkbox"
+              checked={suspend}
+              onChange={(e) => setSuspend(e.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            Create paused — no Jobs run until you unpause it
+          </label>
+        </div>
+      )}
       <div className="flex items-center justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onClose} type="button" disabled={create.isPending}>
           Cancel

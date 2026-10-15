@@ -1,4 +1,4 @@
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { env } from "@/lib/env";
 import { verifyCompleteGzip } from "@/lib/gzip-verify";
 import type {
@@ -74,15 +74,36 @@ export async function startProject(project: string): Promise<void> {
   });
 }
 
+export interface CreateServiceEnvBody {
+  name: string;
+  branch: string;
+  host?: string;
+  // true = use production's addons instead of per-env copies.
+  shareAddons?: boolean;
+  // Seed the env's new postgres from this env's database.
+  seedFrom?: string;
+  // Stateful addon kinds to give their own copy; empty = all.
+  addons?: string[];
+}
+
 export async function createEnvironment(
   project: string,
   service: string,
-  body: { name: string; branch: string; host?: string }
+  body: CreateServiceEnvBody
 ): Promise<KusoEnvironment> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs`,
     { method: "POST", body }
   );
+}
+
+// deleteEnvironment deletes ONE env CR (full name, e.g. shop-api-staging)
+// plus its per-env secret, cloned addon data and volume PVCs. Production
+// envs are refused server-side.
+export async function deleteEnvironment(project: string, envCRName: string): Promise<void> {
+  await api(`/api/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envCRName)}`, {
+    method: "DELETE",
+  });
 }
 
 // EnvGroupSummary mirrors projects.EnvGroupSummary on the server. An
@@ -267,7 +288,13 @@ export interface UpdateAddonBody {
   // pooler.enabled toggles the opt-in PgBouncer pooler (postgres
   // addons only). Omit to leave the current setting unchanged.
   pooler?: {
-    enabled: boolean;
+    enabled?: boolean;
+    // externalBackend pools an external managed database; host/port
+    // are that provider's endpoint. poolSize 0 = chart default (25).
+    externalBackend?: boolean;
+    host?: string;
+    port?: number;
+    poolSize?: number;
   };
   // tls flips in-cluster wire TLS (postgres only). The DB pod
   // restarts serving/dropping TLS and the conn secret re-renders
@@ -707,4 +734,64 @@ export async function listMutedProjects(): Promise<
   { project: string; createdAt: string; createdBy?: string }[]
 > {
   return api(`/api/notifications/muted-projects`);
+}
+
+// ---- Project archive (spec + secrets tarball) ----
+
+async function archiveError(res: Response): Promise<ApiError> {
+  const text = await res.text().catch(() => "");
+  let parsed: unknown = text;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    /* plain-text error body */
+  }
+  return new ApiError(res.status, parsed, `${res.status} ${res.statusText}`);
+}
+
+// exportProjectArchive downloads the project's export tarball (specs +
+// secret values, no addon data). Admin-only server-side.
+export async function exportProjectArchive(project: string): Promise<void> {
+  const res = await fetch(`${env.apiBase}/api/projects/${encodeURIComponent(project)}/export`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw await archiveError(res);
+  const blob = await res.blob();
+  // The archive streams; a mid-stream failure leaves a truncated gzip.
+  await verifyCompleteGzip(blob);
+  const filename =
+    filenameFromDisposition(res.headers.get("Content-Disposition")) ?? `kuso-export-${project}.tar.gz`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// error = refuse when the name exists; rename = suffix the name;
+// overwrite = delete the existing project first.
+export type ImportPolicy = "error" | "rename" | "overwrite";
+
+export interface ImportProjectResult {
+  project: string;
+  services: number;
+  environments: number;
+  addons: number;
+  secrets: number;
+  warnings?: string[];
+}
+
+export async function importProjectArchive(file: Blob, policy: ImportPolicy): Promise<ImportProjectResult> {
+  const res = await fetch(`${env.apiBase}/api/projects/import?policy=${encodeURIComponent(policy)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/gzip" },
+    body: file,
+  });
+  if (!res.ok) throw await archiveError(res);
+  return (await res.json()) as ImportProjectResult;
 }

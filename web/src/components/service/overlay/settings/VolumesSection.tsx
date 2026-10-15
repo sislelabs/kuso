@@ -2,9 +2,25 @@
 
 import { HardDrive, Plus, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { useStorageClasses } from "@/features/services";
+import { cn } from "@/lib/utils";
 import { Section, type SectionProps, type VolumeRow } from "./_primitives";
 
-export function VolumesSection({ state, setState }: SectionProps) {
+const ACCESS_MODES = [
+  { value: "", label: "RWO (default)" },
+  { value: "ReadWriteMany", label: "RWX" },
+] as const;
+
+// existingVolumes is the saved list. The server keys volumes by name and
+// storageClass/accessMode are immutable on a bound PVC, so they're only
+// editable on rows whose name isn't already a saved volume.
+export function VolumesSection({
+  state,
+  setState,
+  existingVolumes,
+}: SectionProps & { existingVolumes: VolumeRow[] }) {
+  const hasNew = state.volumes.some((v) => !existingVolumes.some((e) => e.name === v.name));
+  const classes = useStorageClasses(hasNew);
   const add = () =>
     setState((s) => ({
       ...s,
@@ -70,7 +86,13 @@ export function VolumesSection({ state, setState }: SectionProps) {
             >
               <X className="h-3 w-3" />
             </button>
-            {(v.accessMode || v.storageClass) && (
+            {!existingVolumes.some((e) => e.name === v.name) ? (
+              <NewVolumeOptions
+                volume={v}
+                classes={classes.isError ? null : (classes.data ?? [])}
+                onChange={(patch) => update(i, patch)}
+              />
+            ) : (v.accessMode || v.storageClass) && (
               <p
                 className="col-span-4 font-mono text-[10px] text-[var(--text-tertiary)]"
                 title="Fixed when the volume was created; immutable on a bound PVC"
@@ -90,5 +112,82 @@ export function VolumesSection({ state, setState }: SectionProps) {
         add volume
       </button>
     </Section>
+  );
+}
+
+function NewVolumeOptions({
+  volume,
+  classes,
+  onChange,
+}: {
+  volume: VolumeRow;
+  // null = the list isn't readable (non-admin, or RBAC missing): fall
+  // back to a free-text class name.
+  classes: { name: string; isDefault: boolean }[] | null;
+  onChange: (patch: Partial<VolumeRow>) => void;
+}) {
+  const sc = volume.storageClass ?? "";
+  const options = classes
+    ? [{ value: "", label: "cluster default" }, ...classes.map((c) => ({ value: c.name, label: c.isDefault ? `${c.name} (default)` : c.name }))]
+    : null;
+  if (options && sc && !options.some((o) => o.value === sc)) options.push({ value: sc, label: `${sc} (missing)` });
+  const setClass = (value: string) => onChange({ storageClass: value || undefined });
+  return (
+    <div className="col-span-4 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <span>class</span>
+      {options ? (
+        <Pills options={options} value={sc} onChange={setClass} label="Storage class" />
+      ) : (
+        <Input
+          value={sc}
+          onChange={(e) => setClass(e.target.value.trim())}
+          placeholder="cluster default"
+          aria-label="Storage class"
+          className="h-6 w-36 font-mono text-[10px]"
+          spellCheck={false}
+        />
+      )}
+      <span>access</span>
+      <Pills
+        options={[...ACCESS_MODES]}
+        value={volume.accessMode ?? ""}
+        onChange={(value) => onChange({ accessMode: value || undefined })}
+        label="Access mode"
+      />
+      <span className="basis-full">fixed once the volume is created · RWX needs a class that supports it (e.g. longhorn, nfs)</span>
+    </div>
+  );
+}
+
+function Pills({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (v: string) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value || "default"}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] whitespace-nowrap transition-colors",
+            value === o.value
+              ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+              : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }

@@ -13,16 +13,19 @@ import {
   useRuns,
   useCreateRun,
   useCancelRun,
+  useDeleteRun,
+  useRun,
   runPhase,
   runMessage,
   runCompletedAt,
   type KusoRun,
 } from "@/features/services";
 import { relativeTime } from "@/lib/format";
+import { runResources, type RunResourceFields } from "@/features/services/runResources";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
-import { Play, X, Terminal, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { Play, X, Terminal, AlertCircle, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
@@ -137,6 +140,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
   const [cmd, setCmd] = useState("");
   const [envText, setEnvText] = useState("");
   const [timeoutSec, setTimeoutSec] = useState(1800);
+  const [res, setRes] = useState<RunResourceFields>({ cpuRequest: "", cpuLimit: "", memRequest: "", memLimit: "" });
   const create = useCreateRun(project, service);
 
   const onFire = async () => {
@@ -150,11 +154,17 @@ function NewRunComposer({ project, service }: { project: string; service: string
       toast.error("Env vars must be KEY=VALUE, one per line");
       return;
     }
+    const sized = runResources(res);
+    if ("error" in sized) {
+      toast.error(sized.error);
+      return;
+    }
     try {
       await create.mutateAsync({
         command: parts,
         env: envOverlay.length > 0 ? envOverlay : undefined,
         timeoutSeconds: timeoutSec || undefined,
+        ...sized,
       });
       toast.success("Run started");
       setCmd("");
@@ -199,6 +209,31 @@ function NewRunComposer({ project, service }: { project: string; service: string
           className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[12px] text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           spellCheck={false}
         />
+      </div>
+      <div>
+        <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          resources (optional; blank = default)
+        </label>
+        <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {(
+            [
+              ["cpuRequest", "cpu request", "250m"],
+              ["cpuLimit", "cpu limit", "1"],
+              ["memRequest", "memory request", "256Mi"],
+              ["memLimit", "memory limit", "1Gi"],
+            ] as const
+          ).map(([key, label, ph]) => (
+            <input
+              key={key}
+              value={res[key]}
+              onChange={(e) => setRes((r) => ({ ...r, [key]: e.target.value }))}
+              placeholder={`${label} · ${ph}`}
+              aria-label={label}
+              spellCheck={false}
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]"
+            />
+          ))}
+        </div>
       </div>
       <div className="flex items-center justify-between gap-3">
         <label className="flex items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -341,6 +376,9 @@ function RunRow({
         {inflight && canCancel && (
           <CancelRunButton project={project} service={service} runName={name} />
         )}
+        {!inflight && phase !== "unknown" && canCancel && (
+          <DeleteRunButton project={project} service={service} runName={name} />
+        )}
         <button
           type="button"
           onClick={onToggle}
@@ -356,6 +394,7 @@ function RunRow({
       </div>
       {isOpen && (
         <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+          <RunDetail project={project} runName={name} />
           <div className="h-[360px]">
             <LogStream
               project={project}
@@ -408,6 +447,92 @@ function CancelRunButton({
             },
             onError: (e) => {
               toast.error(e instanceof Error ? e.message : "Cancel failed");
+              setConfirming(false);
+            },
+          })
+        }
+      />
+    </>
+  );
+}
+
+// RunDetail shows the run CR as the server has it now (GET runs/{run}):
+// the image it snapshotted, timeout, env overlay and resources.
+function RunDetail({ project, runName }: { project: string; runName: string }) {
+  const q = useRun(project, runName, true);
+  if (q.isPending) return <Skeleton className="m-3 h-12" />;
+  if (q.isError) {
+    return (
+      <p className="px-3 py-2 font-mono text-[11px] text-[var(--error)]">
+        {q.error instanceof Error ? q.error.message : "Couldn't load run"}
+      </p>
+    );
+  }
+  const r = q.data;
+  const img = r.spec.image;
+  const res = r.spec.resources;
+  const fmtRes = (m?: Record<string, string>) =>
+    m ? Object.entries(m).map(([k, v]) => `${k} ${v}`).join(", ") : "";
+  const rows: [string, string][] = [
+    ["run", r.metadata.name],
+    ["phase", runPhase(r)],
+    ["image", img ? `${img.repository}${img.tag ? `:${img.tag}` : ""}` : "—"],
+    ["timeout", r.spec.timeoutSeconds ? `${r.spec.timeoutSeconds}s` : "default"],
+    ["resources", [fmtRes(res?.requests) && `requests ${fmtRes(res?.requests)}`, fmtRes(res?.limits) && `limits ${fmtRes(res?.limits)}`].filter(Boolean).join(" · ") || "default"],
+    ["env", (r.spec.env ?? []).map((e) => e.name).join(", ") || "—"],
+  ];
+  const msg = runMessage(r);
+  if (msg) rows.push(["message", msg]);
+  return (
+    <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-[var(--border-subtle)] px-3 py-2 font-mono text-[11px]">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-[var(--text-tertiary)]">{k}</dt>
+          <dd className="break-all text-[var(--text-secondary)]">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function DeleteRunButton({
+  project,
+  service,
+  runName,
+}: {
+  project: string;
+  service: string;
+  runName: string;
+}) {
+  const m = useDeleteRun(project, service);
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        disabled={m.isPending}
+        title="Delete this run"
+        aria-label={`Delete run ${runName}`}
+        className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-50"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={`Delete run ${runName}?`}
+        body="Removes the run from the list. Whatever the run changed stays changed."
+        confirmLabel="Delete run"
+        pending={m.isPending}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() =>
+          m.mutate(runName, {
+            onSuccess: () => {
+              toast.success("Run deleted");
+              setConfirming(false);
+            },
+            onError: (e) => {
+              toast.error(e instanceof Error ? e.message : "Delete failed");
               setConfirming(false);
             },
           })

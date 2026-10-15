@@ -62,3 +62,26 @@ export async function issueMyToken(
 export async function revokeMyToken(id: string): Promise<void> {
   return api(`/api/tokens/my/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
+
+// POST /api/users/profile/avatar reads at most 1 MiB of the file and the
+// router caps the whole multipart body at 1 MiB, so leave headroom for
+// the form envelope. The server sniffs the bytes and accepts only these.
+export const AVATAR_MAX_BYTES = 1000 * 1024;
+export const AVATAR_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+
+export function validateAvatarFile(file: { size: number; type: string }): string | null {
+  if (!(AVATAR_TYPES as readonly string[]).includes(file.type)) {
+    return "Avatar must be PNG, JPEG, GIF or WEBP.";
+  }
+  if (file.size === 0) return "File is empty.";
+  if (file.size > AVATAR_MAX_BYTES) {
+    return `Avatar is ${Math.ceil(file.size / 1024)} KiB; the limit is ${AVATAR_MAX_BYTES / 1024} KiB.`;
+  }
+  return null;
+}
+
+export async function uploadAvatar(file: Blob): Promise<void> {
+  const form = new FormData();
+  form.append("avatar", file);
+  await api<{ ok: boolean }>("/api/users/profile/avatar", { method: "POST", body: form });
+}

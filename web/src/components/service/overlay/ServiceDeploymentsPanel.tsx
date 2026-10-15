@@ -23,6 +23,10 @@ import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { BuildRow, formatDuration, type BuildRowStatus } from "./BuildRow";
 import { LiveNowLine } from "./LiveNowLine";
 import { RevisionRow } from "./RevisionRow";
+import { ServicePodsSection } from "./ServicePodsSection";
+import { ServiceAuditSection } from "./ServiceAuditSection";
+import { UptimeBadge } from "@/components/uptime/UptimeBadge";
+import { useProjectUptime } from "@/features/uptime";
 
 interface Props {
   project: string;
@@ -66,6 +70,10 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
 
   const redeployBody = env?.spec?.branch ? { branch: env.spec.branch } : {};
   const group = envGroupName(env);
+  // Uptime checks only run against production; other groups get no badge.
+  const uptime = useProjectUptime(project);
+  const uptimeStatus =
+    group === "production" ? (uptime.data?.services ?? []).find((s) => s.service === service) : undefined;
   // Redeploy is a real production build+rollout on one click. Confirm
   // for the production env (a misclick rebuilds live); preview/staging
   // redeploys fire straight through — they're cheap and expected.
@@ -97,6 +105,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           {env && (
             <span className="font-mono text-[var(--text-tertiary)]">{group}</span>
           )}
+          {uptimeStatus && <UptimeBadge status={uptimeStatus} />}
         </div>
         {isImage ? (
           <span
@@ -143,6 +152,9 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           canDeploy={canDeploy}
         />
       )}
+
+      <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} />
+      <ServiceAuditSection project={project} service={service} />
 
       <ConfirmDialog
         open={confirmRedeploy}

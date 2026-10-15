@@ -15,8 +15,10 @@ import {
 export interface UpdateProjectBody {
   description?: string | null;
   baseDomain?: string | null;
-  previews?: { enabled?: boolean; ttlDays?: number };
+  previews?: { enabled?: boolean; ttlDays?: number; baseDomain?: string };
   defaultRepo?: { url?: string; defaultBranch?: string };
+  // installationId 0 detaches the project from its GitHub App install.
+  github?: { installationId: number };
   // clearDefaultRepo=true removes spec.defaultRepo; wins over defaultRepo.
   clearDefaultRepo?: boolean;
   // alwaysOn=true overrides every per-service sleep config so all
@@ -53,6 +55,8 @@ export interface CreateProjectBody {
   name: string;
   description?: string;
   baseDomain?: string;
+  // Execution namespace for the project's resources; empty = kuso-<name>.
+  namespace?: string;
   defaultRepo?: { url: string; defaultBranch?: string };
   github?: { installationId?: number };
   previews?: { enabled?: boolean; ttlDays?: number };

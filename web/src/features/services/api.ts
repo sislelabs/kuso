@@ -1,5 +1,5 @@
 import { api } from "@/lib/api-client";
-import type { KusoEnvVar, KusoService } from "@/types/projects";
+import type { KusoEnvVar, KusoEnvironment, KusoService } from "@/types/projects";
 
 export async function getService(project: string, service: string): Promise<KusoService> {
   return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`);
@@ -388,7 +388,7 @@ export interface PatchServiceBody {
   image?: { repository: string; tag?: string; pullSecret?: string };
   // watchPaths replaces the push-build globs; [] restores the default.
   watchPaths?: string[];
-  domains?: { host: string; tls?: boolean }[];
+  domains?: { host: string; tls?: boolean; tlsSecret?: string }[];
   // Speed overrides: -1 resets a stabilization window to the default
   // (0 is a real value there); 0 resets scaleUpPods / scaleUpPercent.
   scale?: {
@@ -444,6 +444,20 @@ export interface PatchServiceBody {
   // Ingress limits. 0 clears a field (use the project default), -1 on
   // maxConcurrent / ratePerSecond means no limit.
   requestLimits?: { maxConcurrent?: number; ratePerSecond?: number; burst?: number };
+  // privateEgress=true cuts public-internet egress; platformApiEgress
+  // grants egress to the kuso API pods. Absent leaves either unchanged.
+  privateEgress?: boolean;
+  platformApiEgress?: boolean;
+  // snapshotBeforeDeploy takes a postgres snapshot before each deploy.
+  snapshotBeforeDeploy?: boolean;
+  // command replaces the container argv; [] clears it.
+  command?: string[];
+  // buildArgs / publicEnv / static / buildpacks replace their block
+  // wholesale. A buildArgs value of the mask sentinel keeps the stored one.
+  buildArgs?: Record<string, string>;
+  publicEnv?: string[];
+  static?: { builderImage?: string; runtimeImage?: string; buildCmd?: string; outputDir?: string };
+  buildpacks?: { builderImage?: string; lifecycleImage?: string };
 }
 
 export interface PatchRepoBody {
@@ -531,6 +545,10 @@ export interface CreateCronBody {
   suspend?: boolean;
   concurrencyPolicy?: "Allow" | "Forbid" | "Replace";
   activeDeadlineSeconds?: number;
+  // 0/absent = server default (300).
+  startingDeadlineSeconds?: number;
+  // pinImage freezes the image at create instead of following deploys.
+  pinImage?: boolean;
 }
 
 export async function listServiceCrons(project: string, service: string): Promise<KusoCron[]> {
@@ -648,6 +666,7 @@ export interface KusoRun {
     triggeredByUser?: string;
     done?: boolean;
     image?: { repository: string; tag: string; pullPolicy?: string };
+    resources?: { requests?: Record<string, string>; limits?: Record<string, string> };
   };
 }
 
@@ -673,6 +692,8 @@ export interface CreateRunRequest {
   command: string[];
   env?: { name: string; value: string }[];
   timeoutSeconds?: number;
+  // k8s ResourceRequirements for the run container; absent = chart default.
+  resources?: { requests?: Record<string, string>; limits?: Record<string, string> };
 }
 
 export async function listRuns(project: string, service: string): Promise<KusoRun[]> {
@@ -697,4 +718,65 @@ export async function cancelRun(project: string, run: string): Promise<void> {
     `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/cancel`,
     { method: "POST" },
   );
+}
+
+export async function getRun(project: string, run: string): Promise<KusoRun> {
+  return api(`/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}`);
+}
+
+// deleteRun removes a finished run (and its Job/logs). The server
+// refuses in-flight runs: cancel first.
+export async function deleteRun(project: string, run: string): Promise<void> {
+  await api(`/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}`, {
+    method: "DELETE",
+  });
+}
+
+// ---- Storage classes (admin-only; raw k8s StorageClass items) ----
+
+export interface StorageClassItem {
+  metadata: { name: string; annotations?: Record<string, string> };
+  provisioner?: string;
+}
+
+export interface StorageClassOption {
+  name: string;
+  isDefault: boolean;
+}
+
+export function storageClassOptions(items: StorageClassItem[] | null | undefined): StorageClassOption[] {
+  return (items ?? [])
+    .map((sc) => ({
+      name: sc.metadata.name,
+      isDefault: sc.metadata.annotations?.["storageclass.kubernetes.io/is-default-class"] === "true",
+    }))
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+}
+
+export async function listStorageClasses(): Promise<StorageClassOption[]> {
+  return storageClassOptions(await api<StorageClassItem[] | null>("/api/kubernetes/storageclasses"));
+}
+
+// ---- Per-env domains (single host; wildcard hosts need tlsSecret) ----
+
+function envDomainsPath(project: string, service: string, env: string): string {
+  return `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(env)}/domains`;
+}
+
+export async function addEnvDomain(
+  project: string,
+  service: string,
+  env: string,
+  body: { host: string; tlsSecret?: string },
+): Promise<KusoEnvironment> {
+  return api(envDomainsPath(project, service, env), { method: "POST", body });
+}
+
+export async function removeEnvDomain(
+  project: string,
+  service: string,
+  env: string,
+  host: string,
+): Promise<KusoEnvironment> {
+  return api(`${envDomainsPath(project, service, env)}/${encodeURIComponent(host)}`, { method: "DELETE" });
 }
