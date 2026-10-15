@@ -30,7 +30,7 @@ func init() {
 		envSetCmd, envUnsetCmd, envShareCmd, envUnshareCmd,
 		secretSetCmd, secretUnsetCmd,
 		roleCreateCmd, roleEditCmd, roleDeleteCmd,
-		githubStatusCmd, githubRefreshCmd, githubConfigureCmd,
+		githubRefreshCmd, githubConfigureCmd,
 	)
 	markOutput(outputJSONOnly,
 		instanceConfigGetCmd, buildSettingsGetCmd, sessionSettingsGetCmd,

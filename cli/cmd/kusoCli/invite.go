@@ -5,14 +5,20 @@
 //   kuso invite create [--group <id>] [--role editor] [--expires-in 168h] [--max-uses N] [--note '...']
 //   kuso invite list [-o json]
 //   kuso invite revoke <id>
+//   kuso invite accept <token> --username u --email e [--password-stdin] [--api url]   (no login needed)
 
 package kusoCli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
+	"syscall"
+
+	"golang.org/x/term"
 
 	"kuso/pkg/kusoApi"
 
@@ -196,4 +202,98 @@ func inviteExpiry(v any) string {
 		return "never"
 	}
 	return asString(m["Time"])
+}
+
+var inviteAccept struct {
+	api, username, email string
+	passwordStdin        bool
+}
+
+// readNewPassword takes one line from stdin with --password-stdin,
+// otherwise prompts twice on the terminal without echo.
+func readNewPassword(fromStdin bool) (string, error) {
+	if fromStdin {
+		sc := bufio.NewScanner(secretStdin)
+		if !sc.Scan() {
+			if err := sc.Err(); err != nil {
+				return "", fmt.Errorf("read stdin: %w", err)
+			}
+			return "", fmt.Errorf("no password on stdin")
+		}
+		return strings.TrimSuffix(sc.Text(), "\r"), nil
+	}
+	if !stdinIsTTYFn() {
+		return "", fmt.Errorf("no terminal to prompt on; pipe the password with --password-stdin")
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	a, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprint(os.Stderr, "Repeat password: ")
+	b, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	if string(a) != string(b) {
+		return "", fmt.Errorf("passwords don't match")
+	}
+	return string(a), nil
+}
+
+var inviteAcceptCmd = &cobra.Command{
+	Use:   "accept <token>",
+	Short: "Accept an invite by creating a local username/password account",
+	Long: `Redeem an invite token by creating a local account, the same as the
+signup page's username/password form. Doesn't need a login: pass the
+instance with --api (default: the current instance). The password needs
+at least 8 characters; usernames are lowercase letters, digits, '_' and
+'-'. To join with GitHub/OAuth instead, open the invite link in a browser.
+
+This doesn't touch your saved CLI session. Sign in as the new account
+afterwards with 'kuso login --api <url> -u <username>'.`,
+	Example: `  kuso invite accept 9f3c… --api https://kuso.example.com --username ada --email ada@example.com
+  printf '%s\n' "$PW" | kuso invite accept 9f3c… --username ada --email ada@example.com --password-stdin`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		f := &inviteAccept
+		base := f.api
+		if base == "" && api != nil {
+			base = api.BaseURL()
+		}
+		if base == "" {
+			return fmt.Errorf("no instance: pass --api https://kuso.example.com")
+		}
+		if f.username == "" || f.email == "" {
+			return fmt.Errorf("--username and --email are required")
+		}
+		pw, err := readNewPassword(f.passwordStdin)
+		if err != nil {
+			return err
+		}
+		if len(pw) < 8 {
+			return fmt.Errorf("password must be at least 8 characters")
+		}
+		// A fresh client with no bearer: the redeem route is public, and
+		// the caller's own session must not be attached to it.
+		anon := &kusoApi.KusoClient{}
+		anon.Init(base, "")
+		resp, err := anon.RedeemInviteLocal(args[0], f.username, f.email, pw)
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("accept invite: %w", err)
+		}
+		fmt.Printf("account %q created. Sign in with: kuso login --api %s -u %s\n", f.username, base, f.username)
+		return nil
+	},
+}
+
+func init() {
+	inviteCmd.AddCommand(inviteAcceptCmd)
+	af := inviteAcceptCmd.Flags()
+	af.StringVar(&inviteAccept.api, "api", "", "kuso instance URL (default: the current instance)")
+	af.StringVar(&inviteAccept.username, "username", "", "username for the new account (required)")
+	af.StringVar(&inviteAccept.email, "email", "", "email for the new account (required)")
+	af.BoolVar(&inviteAccept.passwordStdin, "password-stdin", false, "read the password from stdin instead of prompting")
 }

@@ -17,6 +17,8 @@ import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon, KeyRound } from "l
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { AdminTokensSection } from "@/components/settings/AdminTokensSection";
+import { useCan, Perms } from "@/features/auth";
 
 // Preset expiry choices. There is no "Never": the server clamps every
 // personal token to 365 days (baked-in perms must not outlive a demotion),
@@ -31,6 +33,7 @@ const PRESETS: { label: string; days: number }[] = [
 
 export default function TokensPage() {
   const qc = useQueryClient();
+  const canManageAll = useCan(Perms.UserWrite);
   const tokens = useQuery({ queryKey: ["tokens", "my"], queryFn: listMyTokens });
   const issue = useMutation({
     // Handled by the caller's try/catch toast — opt out of the global
@@ -38,14 +41,14 @@ export default function TokensPage() {
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ name, expiresAt }: { name: string; expiresAt: string }) =>
       issueMyToken(name, expiresAt),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens", "my"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens"] }),
   });
   const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null);
   const revoke = useMutation({
     mutationFn: (id: string) => revokeMyToken(id),
     onSuccess: () => {
       setRevoking(null);
-      qc.invalidateQueries({ queryKey: ["tokens", "my"] });
+      qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });
 
@@ -274,6 +277,8 @@ export default function TokensPage() {
         onConfirm={() => revoking && revoke.mutate(revoking.id)}
         onCancel={() => setRevoking(null)}
       />
+
+      {canManageAll && <AdminTokensSection />}
     </div>
   );
 }

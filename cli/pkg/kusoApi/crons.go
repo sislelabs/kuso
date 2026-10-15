@@ -11,6 +11,27 @@ type CreateCronRequest struct {
 	PinImage              bool     `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string   `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int      `json:"activeDeadlineSeconds,omitempty"`
+	// 0 = the server default (300s).
+	StartingDeadlineSeconds int `json:"startingDeadlineSeconds,omitempty"`
+}
+
+// CronSecretKeyRef points at one key of a project Secret.
+type CronSecretKeyRef struct {
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
+}
+
+// CronOnFailure is the create-time failure webhook.
+type CronOnFailure struct {
+	WebhookURL string            `json:"webhookURL,omitempty"`
+	SecretRef  *CronSecretKeyRef `json:"secretRef,omitempty"`
+}
+
+// CronOnFailureUpdate edits the failure webhook; Clear drops it.
+type CronOnFailureUpdate struct {
+	WebhookURL string            `json:"webhookURL,omitempty"`
+	SecretRef  *CronSecretKeyRef `json:"secretRef,omitempty"`
+	Clear      bool              `json:"clear,omitempty"`
 }
 
 // CronImage mirrors the helm chart's image{repository,tag,pullPolicy}
@@ -37,30 +58,37 @@ type CreateProjectCronRequest struct {
 	PinImage              bool       `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string     `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int        `json:"activeDeadlineSeconds,omitempty"`
+	// 0 = the server default (300s).
+	StartingDeadlineSeconds int            `json:"startingDeadlineSeconds,omitempty"`
+	OnFailure               *CronOnFailure `json:"onFailure,omitempty"`
 }
 
 // UpdateProjectCronRequest is the partial-update body for project-
 // scoped crons. Pointer fields distinguish "leave alone" from
 // "set to zero".
 type UpdateProjectCronRequest struct {
-	DisplayName           *string    `json:"displayName,omitempty"`
-	Schedule              *string    `json:"schedule,omitempty"`
-	Suspend               *bool      `json:"suspend,omitempty"`
-	PinImage              *bool      `json:"pinImage,omitempty"`
-	URL                   *string    `json:"url,omitempty"`
-	Image                 *CronImage `json:"image,omitempty"`
-	Command               []string   `json:"command,omitempty"`
-	ConcurrencyPolicy     *string    `json:"concurrencyPolicy,omitempty"`
-	ActiveDeadlineSeconds *int       `json:"activeDeadlineSeconds,omitempty"`
+	DisplayName             *string              `json:"displayName,omitempty"`
+	Schedule                *string              `json:"schedule,omitempty"`
+	Suspend                 *bool                `json:"suspend,omitempty"`
+	PinImage                *bool                `json:"pinImage,omitempty"`
+	URL                     *string              `json:"url,omitempty"`
+	Image                   *CronImage           `json:"image,omitempty"`
+	Command                 []string             `json:"command,omitempty"`
+	ConcurrencyPolicy       *string              `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds   *int                 `json:"activeDeadlineSeconds,omitempty"`
+	StartingDeadlineSeconds *int                 `json:"startingDeadlineSeconds,omitempty"`
+	OnFailure               *CronOnFailureUpdate `json:"onFailure,omitempty"`
 }
 
 type UpdateCronRequest struct {
-	Schedule              *string  `json:"schedule,omitempty"`
-	Command               []string `json:"command,omitempty"`
-	Suspend               *bool    `json:"suspend,omitempty"`
-	PinImage              *bool    `json:"pinImage,omitempty"`
-	ConcurrencyPolicy     *string  `json:"concurrencyPolicy,omitempty"`
-	ActiveDeadlineSeconds *int     `json:"activeDeadlineSeconds,omitempty"`
+	DisplayName             *string  `json:"displayName,omitempty"`
+	StartingDeadlineSeconds *int     `json:"startingDeadlineSeconds,omitempty"`
+	Schedule                *string  `json:"schedule,omitempty"`
+	Command                 []string `json:"command,omitempty"`
+	Suspend                 *bool    `json:"suspend,omitempty"`
+	PinImage                *bool    `json:"pinImage,omitempty"`
+	ConcurrencyPolicy       *string  `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds   *int     `json:"activeDeadlineSeconds,omitempty"`
 }
 
 func (k *KusoClient) ListCrons(project string) (*resty.Response, error) {

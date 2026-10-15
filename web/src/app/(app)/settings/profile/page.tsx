@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { sessionQueryKey } from "@/features/auth";
 import {
   changePassword,
+  AVATAR_TYPES,
   getMyProfile,
   updateProfile,
+  uploadAvatar,
+  validateAvatarFile,
   type UpdateProfileBody,
 } from "@/features/profile/api";
 import { Input } from "@/components/ui/input";
@@ -15,7 +18,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
-import { Save, KeyRound } from "lucide-react";
+import { Save, KeyRound, ImageUp } from "lucide-react";
 
 // ProfilePage is the user's account home: identity + password. Two
 // stacked cards with a thin border, dense rows, and trailing action
@@ -71,6 +74,8 @@ function ProfilePage() {
   const [pwNew, setPwNew] = useState("");
   const [pwNew2, setPwNew2] = useState("");
   const [savingPw, setSavingPw] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (profile.data) {
@@ -95,6 +100,29 @@ function ProfilePage() {
       toast.error(err instanceof Error ? err.message : "Failed to save profile");
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const onAvatarPicked = async (file: File | undefined) => {
+    if (avatarInput.current) avatarInput.current.value = "";
+    if (!file) return;
+    const problem = validateAvatarFile(file);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      await uploadAvatar(file);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: sessionQueryKey }),
+        qc.invalidateQueries({ queryKey: ["users", "me"] }),
+      ]);
+      toast.success("Avatar updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload avatar");
+    } finally {
+      setUploadingAvatar(false);
     }
   };
 
@@ -175,6 +203,27 @@ function ProfilePage() {
           <p className="font-mono text-[11px] text-[var(--text-tertiary)] truncate">
             {user?.email ?? ""}
           </p>
+        </div>
+        <div className="ml-auto flex flex-col items-end gap-0.5">
+          <input
+            ref={avatarInput}
+            type="file"
+            accept={AVATAR_TYPES.join(",")}
+            className="hidden"
+            onChange={(e) => void onAvatarPicked(e.target.files?.[0])}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={uploadingAvatar}
+            onClick={() => avatarInput.current?.click()}
+          >
+            <ImageUp className="h-3.5 w-3.5" />
+            {uploadingAvatar ? "Uploading…" : "Change avatar"}
+          </Button>
+          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            PNG, JPEG, GIF, WEBP · max 1000 KiB
+          </span>
         </div>
       </header>
 

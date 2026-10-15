@@ -18,6 +18,7 @@ import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfi
 import { serviceBlast } from "@/lib/blast-radius";
 import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
 import { releasePatch } from "./settings/releasePatch";
+import { extraServicePatch } from "./settings/servicePatchExtras";
 import { parseWatchPathsText } from "@/features/services/watchPaths";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
@@ -126,7 +127,7 @@ function fieldDiffValues(
   const volumes = (s: FormState) =>
     s.volumes
       .filter((v) => v.name && v.mountPath)
-      .map((v) => `${v.name}→${v.mountPath} (${v.sizeGi}Gi)`)
+      .map((v) => `${v.name}→${v.mountPath} (${[`${v.sizeGi}Gi`, v.accessMode, v.storageClass].filter(Boolean).join(", ")})`)
       .join(", ");
   const release = (s: FormState) =>
     s.releaseCommand.trim()
@@ -174,6 +175,28 @@ function fieldDiffValues(
     uptime: (s) => (s.uptimeEnabled ? `checked at ${s.uptimePath.trim() || "default path"}` : "not checked"),
     release: release,
     securityContext: security,
+    privateEgress: (s) => (s.privateEgress ? "namespace-only egress" : "internet egress"),
+    platformApiEgress: (s) => (s.platformApiEgress ? "can reach the kuso API" : "no kuso API access"),
+    snapshotBeforeDeploy: (s) => (s.snapshotBeforeDeploy ? "snapshot before deploy" : "no snapshot"),
+    command: (s) => s.startCommand.trim(),
+    buildArgs: (s) => norm(s.buildArgs.replace(/=.*$/gm, "")),
+    publicEnv: (s) => norm(s.publicEnv),
+    static: (s) =>
+      [
+        s.staticBuildCmd && `build: ${s.staticBuildCmd}`,
+        s.staticOutputDir && `output: ${s.staticOutputDir}`,
+        s.staticBuilderImage && `builder: ${s.staticBuilderImage}`,
+        s.staticRuntimeImage && `runtime: ${s.staticRuntimeImage}`,
+      ]
+        .filter(Boolean)
+        .join(", "),
+    buildpacks: (s) =>
+      [
+        s.buildpacksBuilderImage && `builder: ${s.buildpacksBuilderImage}`,
+        s.buildpacksLifecycleImage && `lifecycle: ${s.buildpacksLifecycleImage}`,
+      ]
+        .filter(Boolean)
+        .join(", "),
   };
   const fmt = pick[field];
   if (!fmt) return ["current", "changed"];
@@ -331,6 +354,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         // change doesn't leak to sibling envs. Staged here; applyPatch
         // PUTs them after the confirm dialog.
         if (activeEnv) {
+          const wild = a.split("\n").find((h) => h.startsWith("*."));
+          if (wild) {
+            toast.error(`${wild}: add wildcard hosts under "wildcard domains" with their TLS secret`);
+            return;
+          }
           envHosts = a.split("\n").filter(Boolean);
         } else {
           // No active env CR resolved (legacy fallback): use the old
@@ -606,6 +634,15 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       };
     }
 
+    {
+      const extra = extraServicePatch(state, baseline, svc?.spec.command);
+      if ("error" in extra) {
+        toast.error(extra.error);
+        return;
+      }
+      Object.assign(body, extra.body);
+    }
+
     if (Object.keys(body).length === 0 && envHosts === null) {
       // Nothing actually changed (user shuffled empty rows around or
       // typed-then-deleted). Reset the baseline so the save bar
@@ -744,17 +781,39 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             <EnvBranchSection project={project} env={env} service={service} svc={svc} />
           )}
           <SourceSection state={state} setState={setState} project={project} service={service} />
-          <NetworkingSection state={state} setState={setState} autoHost={autoHost} envName={env || "production"} />
+          <NetworkingSection
+            state={state}
+            setState={setState}
+            autoHost={autoHost}
+            envName={env || "production"}
+            savedHosts={baseline.domains.split("\n").map((h) => h.trim().toLowerCase()).filter(Boolean)}
+            wildcard={
+              activeEnv
+                ? { project, service, domains: activeEnv.spec.wildcardDomains ?? [], canWrite }
+                : undefined
+            }
+          />
           <ScaleSection state={state} setState={setState} />
           <SleepSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
-          <VolumesSection state={state} setState={setState} />
+          <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
           <BuildSection state={state} setState={setState} project={project} />
           <DeploySection project={project} state={state} setState={setState} />
           <ReleaseSection state={state} setState={setState} />
           {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
           <SecuritySection state={state} setState={setState} />
-          <DangerSection project={project} service={service} />
+          <DangerSection
+            project={project}
+            service={service}
+            env={
+              !onProduction &&
+              env &&
+              activeEnv &&
+              activeEnv.metadata.labels?.["kuso.sislelabs.com/env"] === env
+                ? { group: env, crName: activeEnv.metadata.name }
+                : undefined
+            }
+          />
         </div>
 
         <nav className="sticky top-0 hidden self-start px-4 py-6 text-sm md:block">

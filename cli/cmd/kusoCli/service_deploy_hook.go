@@ -8,6 +8,7 @@ import (
 )
 
 var (
+	deployHookEnable  bool
 	deployHookRotate  bool
 	deployHookDisable bool
 )
@@ -30,8 +31,10 @@ Use it in one of two ways:
 The URL is the credential: anyone who has it can start a build. --rotate
 replaces it and the old URL stops working.
 
-With no flags, enables the hook if needed and prints the URL.`,
+With no flags, shows whether the hook is enabled and its URL, changing
+nothing. --enable turns it on (keeping an existing URL) and prints the URL.`,
 	Example: `  kuso service deploy-hook shop api
+  kuso service deploy-hook shop api --enable
   kuso service deploy-hook shop api --rotate
   kuso service deploy-hook shop api --disable`,
 	Args: cobra.ExactArgs(2),
@@ -39,10 +42,29 @@ With no flags, enables the hook if needed and prints the URL.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		if deployHookRotate && deployHookDisable {
-			return fmt.Errorf("--rotate and --disable are mutually exclusive")
+		if deployHookDisable && (deployHookRotate || deployHookEnable) {
+			return fmt.Errorf("--disable can't be combined with --enable / --rotate")
 		}
 		project, service := args[0], args[1]
+		if !deployHookEnable && !deployHookRotate && !deployHookDisable {
+			resp, err := api.GetDeployHook(project, service)
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("get deploy hook: %w", err)
+			}
+			var out struct {
+				Enabled bool   `json:"enabled"`
+				URL     string `json:"url"`
+			}
+			if err := json.Unmarshal(resp.Body(), &out); err != nil {
+				return fmt.Errorf("unexpected deploy hook response")
+			}
+			if !out.Enabled {
+				fmt.Fprintf(cmd.ErrOrStderr(), "deploy hook for %s/%s is disabled; turn it on with: kuso service deploy-hook %s %s --enable\n", project, service, project, service)
+				return nil
+			}
+			fmt.Println(out.URL)
+			return nil
+		}
 		if deployHookDisable {
 			resp, err := api.DeleteDeployHook(project, service)
 			if err := checkRespErr(resp, err); err != nil {
@@ -70,6 +92,7 @@ With no flags, enables the hook if needed and prints the URL.`,
 }
 
 func init() {
+	serviceDeployHookCmd.Flags().BoolVar(&deployHookEnable, "enable", false, "turn the hook on (keeps an existing URL) and print the URL")
 	serviceDeployHookCmd.Flags().BoolVar(&deployHookRotate, "rotate", false, "replace the URL; the old one stops working")
 	serviceDeployHookCmd.Flags().BoolVar(&deployHookDisable, "disable", false, "turn the hook off")
 	projectServiceCmd.AddCommand(serviceDeployHookCmd)

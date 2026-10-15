@@ -16,7 +16,8 @@ import {
   type Drain,
   type DrainType,
 } from "@/features/drains";
-import { Plus, Send, Trash2, Waves } from "lucide-react";
+import { Pencil, Plus, Send, Trash2, Waves } from "lucide-react";
+import { DrainEditForm } from "@/components/settings/DrainEditForm";
 import { toast } from "sonner";
 
 // /settings/drains — forward app logs to external sinks, plus the
@@ -41,6 +42,10 @@ const TYPE_HINTS: Record<DrainType, { label: string; placeholder: string; hint: 
   },
 };
 
+const TYPE_LABELS = Object.fromEntries(
+  (Object.keys(TYPE_HINTS) as DrainType[]).map((t) => [t, TYPE_HINTS[t].label])
+) as Record<DrainType, string>;
+
 const labelCls = "mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
 
 export default function DrainsPage() {
@@ -51,6 +56,7 @@ export default function DrainsPage() {
   const test = useTestDrain();
   const [pendingDelete, setPendingDelete] = useState<Drain | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [type, setType] = useState<DrainType>("otlp");
   const [url, setUrl] = useState("");
@@ -134,37 +140,55 @@ export default function DrainsPage() {
             {drains.map((d) => (
               <li
                 key={d.id}
-                className="flex items-center gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2 last:border-b-0"
+                className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 last:border-b-0"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-[13px] text-[var(--text-primary)]">{d.name}</span>
-                    <span className="rounded bg-[var(--bg-tertiary)] px-1.5 font-mono text-[10px] text-[var(--text-secondary)]">
-                      {TYPE_HINTS[d.type]?.label ?? d.type}
-                    </span>
-                    {!d.enabled && (
-                      <span className="font-mono text-[10px] text-[var(--text-tertiary)]">paused</span>
-                    )}
+                <div className="flex items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[13px] text-[var(--text-primary)]">{d.name}</span>
+                      <span className="rounded bg-[var(--bg-tertiary)] px-1.5 font-mono text-[10px] text-[var(--text-secondary)]">
+                        {TYPE_HINTS[d.type]?.label ?? d.type}
+                      </span>
+                      {!d.enabled && (
+                        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">paused</span>
+                      )}
+                    </div>
+                    <p className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
+                      {d.project ? `project ${d.project}` : "all projects"} · {d.url}
+                      {d.headers && Object.keys(d.headers).length > 0 && ` · headers: ${Object.keys(d.headers).join(", ")}`}
+                      {d.secret && " · signed"}
+                    </p>
                   </div>
-                  <p className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
-                    {d.project ? `project ${d.project}` : "all projects"} · {d.url}
-                    {d.headers && Object.keys(d.headers).length > 0 && ` · headers: ${Object.keys(d.headers).join(", ")}`}
-                    {d.secret && " · signed"}
-                  </p>
+                  <Button size="sm" variant="outline" disabled={testingId !== null} onClick={() => onTest(d)}>
+                    <Send className="h-3.5 w-3.5" />
+                    {testingId === d.id ? "Sending…" : "Test"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(editingId === d.id ? null : d.id)}
+                    className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                    aria-label={`Edit ${d.name}`}
+                    aria-expanded={editingId === d.id}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingDelete(d)}
+                    disabled={remove.isPending}
+                    className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
+                    aria-label={`Delete ${d.name}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-                <Button size="sm" variant="outline" disabled={testingId !== null} onClick={() => onTest(d)}>
-                  <Send className="h-3.5 w-3.5" />
-                  {testingId === d.id ? "Sending…" : "Test"}
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => setPendingDelete(d)}
-                  disabled={remove.isPending}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
-                  aria-label={`Delete ${d.name}`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {editingId === d.id && (
+                  <DrainEditForm
+                    drain={d}
+                    typeLabels={TYPE_LABELS}
+                    onDone={() => setEditingId(null)}
+                  />
+                )}
               </li>
             ))}
           </ul>

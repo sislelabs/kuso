@@ -1109,6 +1109,7 @@ function AddNodeModal({
 }) {
   const [mode, setMode] = useState<AddNodeMode>("bootstrap");
   const qc = useQueryClient();
+  const canDeleteKeys = useCan(Perms.SettingsAdmin);
   const keys = useQuery({
     queryKey: ["ssh-keys"],
     queryFn: () => api<SSHKey[]>("/api/ssh-keys"),
@@ -1124,8 +1125,24 @@ function AddNodeModal({
     checks: { label: string; ok: boolean; detail?: string }[];
   } | null>(null);
   const [showNewKey, setShowNewKey] = useState(false);
+  const [confirmKeyDelete, setConfirmKeyDelete] = useState(false);
 
   const selectedKey = (keys.data ?? []).find((k) => k.id === keyId);
+
+  // Inline two-step confirm rather than a ConfirmDialog: this modal's own
+  // window Escape handler would also close it underneath a nested dialog.
+  const deleteKey = useMutation({
+    meta: { skipGlobalErrorToast: true },
+    mutationFn: (id: string) => api<void>(`/api/ssh-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: (_, id) => {
+      toast.success("SSH key deleted");
+      if (keyId === id) setKeyId("");
+      setValidation(null);
+      void qc.invalidateQueries({ queryKey: ["ssh-keys"] });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Delete failed"),
+    onSettled: () => setConfirmKeyDelete(false),
+  });
 
   const validate = useMutation({
     mutationFn: () =>
@@ -1278,6 +1295,7 @@ function AddNodeModal({
                 onChange={(e) => {
                   setKeyId(e.target.value);
                   setValidation(null);
+                  setConfirmKeyDelete(false);
                 }}
                 className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[12px]"
               >
@@ -1308,6 +1326,30 @@ function AddNodeModal({
                 >
                   Copy public key
                 </Button>
+                {confirmKeyDelete ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-2 py-1.5">
+                    <span className="flex-1 font-mono text-[10px] text-[var(--error)]">
+                      Delete {selectedKey.name}? Joined nodes keep running; the private key is gone from kuso for good.
+                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmKeyDelete(false)} disabled={deleteKey.isPending}>
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => deleteKey.mutate(selectedKey.id)}
+                      disabled={deleteKey.isPending}
+                    >
+                      {deleteKey.isPending ? "Deleting…" : "Delete key"}
+                    </Button>
+                  </div>
+                ) : (
+                  canDeleteKeys && (
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmKeyDelete(true)}>
+                      <Trash2 className="h-3 w-3" /> Delete key
+                    </Button>
+                  )
+                )}
               </div>
             )}
             <Button

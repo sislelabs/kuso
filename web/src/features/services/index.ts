@@ -16,7 +16,12 @@ export {
   useRuns,
   useCreateRun,
   useCancelRun,
+  useRun,
+  useDeleteRun,
+  runQueryKey,
   useServiceCrons,
+  useStorageClasses,
+  useEnvDomainMutations,
   serviceQueryKey,
   serviceEnvQueryKey,
   buildsQueryKey,
@@ -38,6 +43,7 @@ export {
   runPhase,
   runMessage,
   runCompletedAt,
+  storageClassOptions,
 } from "./api";
 export { buildTriggerMessage } from "./buildTrigger";
 export {
@@ -62,4 +68,5 @@ export type {
   LogSearchResponse,
   KusoRun,
   CreateRunRequest,
+  StorageClassOption,
 } from "./api";

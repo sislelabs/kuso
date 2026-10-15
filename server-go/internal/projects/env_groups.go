@@ -1115,6 +1115,9 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 // informational record instead of one a revert would misroute.
 func (s *Service) setEnvBranch(ctx context.Context, rev *revisionScope, ns, project, crName, branch string) error {
 	cur, err := s.Kube.GetKusoEnvironment(ctx, ns, crName)
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: environment %s", ErrNotFound, crName)
+	}
 	if err != nil {
 		return fmt.Errorf("get env: %w", err)
 	}

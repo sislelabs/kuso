@@ -17,6 +17,8 @@ import (
 //
 //   kuso drain list [-o json]
 //   kuso drain add --type otlp|http|loki --url … [--header K=V]… [--project p] [--secret s]
+//   kuso drain get <id> [-o json]
+//   kuso drain update <id> [--url …] [--name …] [--project p] [--header K=V]… [--remove-header K]… [--secret s | --clear-secret] [--enabled=bool]
 //   kuso drain test <id>
 //   kuso drain delete <id> [--yes]
 
@@ -195,9 +197,195 @@ var drainDeleteCmd = &cobra.Command{
 	},
 }
 
+var drainGetOutput string
+
+var drainGetCmd = &cobra.Command{
+	Use:   "get <id>",
+	Short: "Show one log drain (header values and secret are masked)",
+	Example: `  kuso drain get d1
+  kuso drain get d1 -o json`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.GetDrain(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return err
+		}
+		var d map[string]any
+		if err := json.Unmarshal(resp.Body(), &d); err != nil {
+			return fmt.Errorf("decode drain: %w", err)
+		}
+		switch drainGetOutput {
+		case "json":
+			return jsonOut(d)
+		case "table", "":
+		default:
+			return fmt.Errorf("unsupported output format %q", drainGetOutput)
+		}
+		scope := asString(d["project"])
+		if scope == "" {
+			scope = "(all projects)"
+		}
+		fmt.Printf("id:       %s\n", asString(d["id"]))
+		fmt.Printf("name:     %s\n", asString(d["name"]))
+		fmt.Printf("type:     %s\n", asString(d["type"]))
+		fmt.Printf("url:      %s\n", asString(d["url"]))
+		fmt.Printf("scope:    %s\n", scope)
+		fmt.Printf("enabled:  %v\n", d["enabled"])
+		secret := "none"
+		if asString(d["secret"]) != "" {
+			secret = "set"
+		}
+		fmt.Printf("secret:   %s\n", secret)
+		if h, ok := d["headers"].(map[string]any); ok && len(h) > 0 {
+			keys := make([]string, 0, len(h))
+			for k := range h {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			fmt.Printf("headers:  %s (values masked)\n", strings.Join(keys, ", "))
+		}
+		return nil
+	},
+}
+
+var drainUpdate struct {
+	url, name, project, secret, typ string
+	headers, removeHeaders          []string
+	clearSecret, enabled            bool
+}
+
+// drainFromRead converts a masked GET into an update body. Masked header
+// values and a masked secret are sent back as-is: the server reads the
+// mask sentinel as "keep the stored value".
+func drainFromRead(raw []byte) (kusoApi.DrainBody, error) {
+	var cur struct {
+		Name    string            `json:"name"`
+		Type    string            `json:"type"`
+		URL     string            `json:"url"`
+		Project string            `json:"project"`
+		Headers map[string]string `json:"headers"`
+		Secret  string            `json:"secret"`
+		Enabled bool              `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &cur); err != nil {
+		return kusoApi.DrainBody{}, fmt.Errorf("decode drain: %w", err)
+	}
+	enabled := cur.Enabled
+	return kusoApi.DrainBody{
+		Name: cur.Name, Type: cur.Type, URL: cur.URL, Project: cur.Project,
+		Headers: cur.Headers, Secret: cur.Secret, Enabled: &enabled,
+	}, nil
+}
+
+func applyDrainUpdateFlags(cmd *cobra.Command, body kusoApi.DrainBody) (kusoApi.DrainBody, error) {
+	f := &drainUpdate
+	ch := cmd.Flags().Changed
+	if ch("secret") && f.clearSecret {
+		return body, fmt.Errorf("pass --secret or --clear-secret, not both")
+	}
+	if ch("url") {
+		body.URL = f.url
+	}
+	if ch("name") {
+		body.Name = f.name
+	}
+	if ch("type") {
+		body.Type = strings.ToLower(f.typ)
+	}
+	if ch("project") {
+		body.Project = f.project
+	}
+	if ch("secret") {
+		body.Secret = f.secret
+	}
+	if f.clearSecret {
+		body.Secret = ""
+	}
+	if ch("enabled") {
+		e := f.enabled
+		body.Enabled = &e
+	}
+	add, err := parseHeaderFlags(f.headers)
+	if err != nil {
+		return body, err
+	}
+	if len(add) > 0 || len(f.removeHeaders) > 0 {
+		h := make(map[string]string, len(body.Headers)+len(add))
+		for k, v := range body.Headers {
+			h[k] = v
+		}
+		for _, k := range f.removeHeaders {
+			if _, ok := h[k]; !ok {
+				return body, fmt.Errorf("--remove-header %q: drain has no such header", k)
+			}
+			delete(h, k)
+		}
+		for k, v := range add {
+			h[k] = v
+		}
+		body.Headers = h
+	}
+	return body, nil
+}
+
+var drainUpdateCmd = &cobra.Command{
+	Use:   "update <id>",
+	Short: "Change a log drain's URL, name, scope, headers, secret or enabled state",
+	Long: `Change a log drain. Only the flags you pass change; header values and
+the HMAC secret you don't touch keep their stored values (they are masked
+on read and never round-trip in clear). --header adds or replaces one
+header, --remove-header drops one, --clear-secret stops signing batches.
+--project '' widens the drain to every project.`,
+	Example: `  kuso drain update d1 --url https://logs-prod-012.grafana.net
+  kuso drain update d1 --header "Authorization=Bearer $NEW_TOKEN"
+  kuso drain update d1 --enabled=false
+  kuso drain update d1 --project '' --remove-header X-Scope-OrgID`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if cmd.Flags().NFlag() == 0 {
+			return fmt.Errorf("nothing to change: pass at least one flag (see --help)")
+		}
+		resp, err := api.GetDrain(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return err
+		}
+		body, err := drainFromRead(resp.Body())
+		if err != nil {
+			return err
+		}
+		body, err = applyDrainUpdateFlags(cmd, body)
+		if err != nil {
+			return err
+		}
+		resp, err = api.UpdateDrain(args[0], body)
+		if err := checkRespErr(resp, err); err != nil {
+			return err
+		}
+		fmt.Printf("drain %s updated. Verify it with: kuso drain test %s\n", args[0], args[0])
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(drainCmd)
-	drainCmd.AddCommand(drainListCmd, drainAddCmd, drainTestCmd, drainDeleteCmd)
+	drainCmd.AddCommand(drainListCmd, drainAddCmd, drainTestCmd, drainDeleteCmd, drainGetCmd, drainUpdateCmd)
+	drainGetCmd.Flags().StringVarP(&drainGetOutput, "output", "o", "table", "output format [table, json]")
+	uf := drainUpdateCmd.Flags()
+	uf.StringVar(&drainUpdate.url, "url", "", "new sink URL")
+	uf.StringVar(&drainUpdate.name, "name", "", "new display name")
+	uf.StringVar(&drainUpdate.typ, "type", "", "change the drain type: otlp, http or loki")
+	uf.StringVar(&drainUpdate.project, "project", "", "only forward this project's logs ('' = all projects)")
+	uf.StringVar(&drainUpdate.secret, "secret", "", "new HMAC-SHA256 signing key")
+	uf.BoolVar(&drainUpdate.clearSecret, "clear-secret", false, "remove the signing key")
+	uf.StringArrayVar(&drainUpdate.headers, "header", nil, "add or replace a request header KEY=VALUE (repeatable)")
+	uf.StringArrayVar(&drainUpdate.removeHeaders, "remove-header", nil, "drop a request header by name (repeatable)")
+	uf.BoolVar(&drainUpdate.enabled, "enabled", true, "--enabled=false pauses the drain, --enabled resumes it")
 	drainListCmd.Flags().StringVarP(&drainListOutput, "output", "o", "table", "output format [table, json]")
 	f := drainAddCmd.Flags()
 	f.StringVar(&drainType, "type", "", "drain type: otlp, http or loki")

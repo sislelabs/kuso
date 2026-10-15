@@ -9,6 +9,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { settingsPatch, updateClusterSettings } from "@/features/cluster-config/api";
 import { DefaultPodSizeSection } from "@/components/settings/DefaultPodSizeSection";
+import { InstanceInfoSection } from "@/components/settings/InstanceInfoSection";
+import { PodSizePresetsSection } from "@/components/settings/PodSizePresetsSection";
+import { RunpacksSection } from "@/components/settings/RunpacksSection";
+import { instanceInfoQueryKey } from "@/features/instance-config";
 import { toast } from "sonner";
 import { Settings as SettingsIcon, Save } from "lucide-react";
 
@@ -52,6 +56,7 @@ export default function ClusterConfigPage() {
     onSuccess: () => {
       toast.success("Cluster config saved");
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
+      qc.invalidateQueries({ queryKey: instanceInfoQueryKey });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });
@@ -117,6 +122,8 @@ export default function ClusterConfigPage() {
         </p>
       )}
 
+      <InstanceInfoSection />
+
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="border-b border-[var(--border-subtle)] px-4 py-2.5">
           <h2 className="text-sm font-semibold tracking-tight">Common settings</h2>
@@ -150,6 +157,10 @@ export default function ClusterConfigPage() {
       </section>
 
       <DefaultPodSizeSection canEdit={canEdit} />
+
+      <PodSizePresetsSection canEdit={canEdit} />
+
+      <RunpacksSection canEdit={canEdit} />
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="border-b border-[var(--border-subtle)] px-4 py-2.5">

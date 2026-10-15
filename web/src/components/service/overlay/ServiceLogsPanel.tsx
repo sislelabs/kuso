@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { searchServiceLogs } from "@/features/services";
-import type { LogLine, LogSearchResponse } from "@/features/services";
+import type { LogSearchResponse } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -229,18 +229,32 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv 
   );
 }
 
-function LogList({
+// The fields LogList renders; both the per-service and project-wide
+// search responses satisfy it.
+export interface LogListLine {
+  id: number;
+  ts: string;
+  pod: string;
+  line: string;
+  service?: string;
+}
+
+// LogList is shared with the project-wide search (ProjectLogsSheet), which
+// passes serviceLabel to add a service column.
+export function LogList({
   lines,
   highlight,
   hasMore,
   loadingMore,
   onLoadMore,
+  serviceLabel,
 }: {
-  lines: LogLine[];
+  lines: LogListLine[];
   highlight: string;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  serviceLabel?: (l: LogListLine) => string;
 }) {
   // Reverse — server returns newest-first; humans tail-follow oldest-first.
   const ordered = useMemo(() => [...lines].reverse(), [lines]);
@@ -333,6 +347,11 @@ function LogList({
               <td className="w-20 align-top px-2 py-1 text-[10px] text-[var(--text-tertiary)] whitespace-nowrap sm:w-44">
                 {isContinuation ? "" : fmtTs(l.ts)}
               </td>
+              {serviceLabel && (
+                <td className="w-24 align-top px-1 py-1 text-[10px] text-[var(--text-secondary)] truncate" title={l.service}>
+                  {isContinuation ? "" : serviceLabel(l)}
+                </td>
+              )}
               <td className="hidden w-32 align-top px-1 py-1 text-[10px] text-[var(--text-tertiary)] truncate sm:table-cell" title={l.pod}>
                 {isContinuation ? "" : shortPod(l.pod)}
               </td>

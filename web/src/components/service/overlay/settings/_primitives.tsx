@@ -115,6 +115,22 @@ export interface FormState {
   // is the cap in seconds as a string; "" = server default (900).
   releaseCommand: string;
   releaseTimeout: string;
+  // Egress gates (spec.privateEgress / spec.platformApiEgress).
+  privateEgress: boolean;
+  platformApiEgress: boolean;
+  snapshotBeforeDeploy: boolean;
+  // Start command: the stored argv joined by spaces; "" = image default.
+  startCommand: string;
+  // Build-time config. buildArgs is KEY=VALUE per line; publicEnv is
+  // one env-var name per line.
+  buildArgs: string;
+  publicEnv: string;
+  staticBuilderImage: string;
+  staticRuntimeImage: string;
+  staticBuildCmd: string;
+  staticOutputDir: string;
+  buildpacksBuilderImage: string;
+  buildpacksLifecycleImage: string;
 }
 
 export interface SectionProps {
@@ -211,6 +227,21 @@ export function fromSvc(svc?: KusoService): FormState {
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
     releaseCommand: (svc?.spec.release?.command ?? []).join(" "),
     releaseTimeout: svc?.spec.release?.timeoutSeconds ? String(svc.spec.release.timeoutSeconds) : "",
+    privateEgress: !!svc?.spec.privateEgress,
+    platformApiEgress: !!svc?.spec.platformApiEgress,
+    snapshotBeforeDeploy: !!svc?.spec.snapshotBeforeDeploy,
+    startCommand: (svc?.spec.command ?? []).join(" "),
+    buildArgs: Object.keys(svc?.spec.buildArgs ?? {})
+      .sort()
+      .map((k) => `${k}=${svc?.spec.buildArgs?.[k] ?? ""}`)
+      .join("\n"),
+    publicEnv: (svc?.spec.publicEnv ?? []).join("\n"),
+    staticBuilderImage: svc?.spec.static?.builderImage ?? "",
+    staticRuntimeImage: svc?.spec.static?.runtimeImage ?? "",
+    staticBuildCmd: svc?.spec.static?.buildCmd ?? "",
+    staticOutputDir: svc?.spec.static?.outputDir ?? "",
+    buildpacksBuilderImage: svc?.spec.buildpacks?.builderImage ?? "",
+    buildpacksLifecycleImage: svc?.spec.buildpacks?.lifecycleImage ?? "",
   };
 }
 
@@ -291,5 +322,38 @@ export function Row({
         {control}
       </div>
     </div>
+  );
+}
+
+// Toggle is the small pill switch the Deploy/Security rows use.
+export function Toggle({
+  on,
+  onChange,
+  label,
+}: {
+  on: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      aria-pressed={on}
+      aria-label={label}
+      className={cn(
+        "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+        on
+          ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
+          : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+          on ? "translate-x-4" : "translate-x-0.5",
+        )}
+      />
+    </button>
   );
 }

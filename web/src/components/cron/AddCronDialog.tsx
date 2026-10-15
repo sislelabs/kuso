@@ -10,6 +10,8 @@ import { X, Plus, Globe, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
+import { CronOnFailureFields, CronPolicyFields } from "./CronPolicyFields";
+import { onFailureCreateField, onFailureForm, policyCreateFields, policyForm } from "./cronPatch";
 
 interface Props {
   project: string;
@@ -43,6 +45,9 @@ export function AddCronDialog({ project, open, onClose }: Props) {
   const [imageRepo, setImageRepo] = useState("");
   const [imageTag, setImageTag] = useState("latest");
   const [cmd, setCmd] = useState("");
+  const [suspend, setSuspend] = useState(false);
+  const [policy, setPolicy] = useState(policyForm());
+  const [onFailure, setOnFailure] = useState(onFailureForm());
 
   const qc = useQueryClient();
 
@@ -56,11 +61,15 @@ export function AddCronDialog({ project, open, onClose }: Props) {
         url?: string;
         image?: { repository: string; tag?: string };
         command?: string[];
-      } = {
+        suspend?: boolean;
+      } & Record<string, unknown> = {
         name: name.trim(),
         displayName: displayName.trim() || undefined,
         kind,
         schedule: schedule.trim(),
+        ...(suspend ? { suspend: true } : {}),
+        ...policyCreateFields(policy),
+        ...onFailureCreateField(onFailure),
       };
       if (kind === "http") {
         body.url = url.trim();
@@ -91,6 +100,9 @@ export function AddCronDialog({ project, open, onClose }: Props) {
       setImageRepo("");
       setImageTag("latest");
       setCmd("");
+      setSuspend(false);
+      setPolicy(policyForm());
+      setOnFailure(onFailureForm());
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to add cron"),
   });
@@ -278,6 +290,18 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                   </div>
                 </>
               )}
+
+              <CronPolicyFields value={policy} onChange={setPolicy} />
+              <CronOnFailureFields value={onFailure} onChange={setOnFailure} project={project} />
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+                <input
+                  type="checkbox"
+                  checked={suspend}
+                  onChange={(e) => setSuspend(e.target.checked)}
+                  className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+                />
+                Create paused — no Jobs run until you unpause it
+              </label>
             </div>
 
             <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">

@@ -236,6 +236,7 @@ FROM "Audit" WHERE pipeline = $1`
 }
 
 // GetForApp returns the newest rows filtered by pipeline+phase+app.
+// phase "*" matches every env: most actions record no phase at all.
 // `more` reports whether older rows exist beyond the returned page
 // (exact — determined by over-fetching one row).
 func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, limit int) (entries []Entry, total int, more bool, err error) {
@@ -247,7 +248,7 @@ func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, li
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3
+FROM "Audit" WHERE pipeline = $1 AND ($2 = '*' OR phase = $2) AND app = $3
 ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit+1) // +1 row detects truncation
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("audit: get app: %w", err)
@@ -269,7 +270,7 @@ ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit+1) // +1 row detects tru
 		out = out[:limit]
 	}
 	_ = s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3`,
+		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1 AND ($2 = '*' OR phase = $2) AND app = $3`,
 		pipeline, phase, app).Scan(&total)
 	return out, total, more, nil
 }

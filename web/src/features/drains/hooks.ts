@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createDrain, deleteDrain, listDrains, testDrain, type DrainInput } from "./api";
+import { createDrain, deleteDrain, listDrains, testDrain, updateDrain, type DrainInput, type DrainUpdateBody } from "./api";
 
 export const drainsQueryKey = ["drains"] as const;
 
@@ -15,6 +15,16 @@ export function useCreateDrain() {
     // Callers pass a per-call onError; skip the global toast so failures toast once.
     meta: { skipGlobalErrorToast: true },
     mutationFn: (input: DrainInput) => createDrain(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: drainsQueryKey }),
+  });
+}
+
+export function useUpdateDrain() {
+  const qc = useQueryClient();
+  return useMutation({
+    // Callers pass a per-call onError; skip the global toast so failures toast once.
+    meta: { skipGlobalErrorToast: true },
+    mutationFn: ({ id, body }: { id: string; body: DrainUpdateBody }) => updateDrain(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: drainsQueryKey }),
   });
 }
