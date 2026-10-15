@@ -19,6 +19,20 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.32.0] — 2026-10-15
+
+### Other
+- Clear git env before the pre-push hook runs Go tests ([9b40974](https://github.com/sislelabs/kuso/commit/9b40974d317557eedd34d7ea7da39f05bda58398))
+- Trust X-Forwarded-For only from the Traefik ingress pods ([1bb221e](https://github.com/sislelabs/kuso/commit/1bb221e084384aec5596a0e9d380b2d7bb50b02a))
+- Scope kuso-server RBAC, isolate the activator and verify release bundles ([40ff8af](https://github.com/sislelabs/kuso/commit/40ff8af4f2d3f12e31130ebdf6b95001970b89a6))
+- Keep production credentials and images out of non-production envs ([d5e65fc](https://github.com/sislelabs/kuso/commit/d5e65fcbce55eb56332bc5fa7bc7d181beab3334))
+- Stop one client IP locking out logins and stop leaking JWTs to addon UIs ([f9fd55f](https://github.com/sislelabs/kuso/commit/f9fd55f4c34dcac13da31d79cbb4a312271cf32c))
+- Keep fresh log lines on prune and stop one long line failing a batch ([3f09a36](https://github.com/sislelabs/kuso/commit/3f09a36f90dd47f1fec49d9b447d103d4ecdf2dc))
+
+### 🐛 Bug Fixes
+- Fix backup retention, sibling restores and instance PG connection setup ([ba1ca3c](https://github.com/sislelabs/kuso/commit/ba1ca3cf1d1f5bd3717e19a579d168db930713a3))
+- Fix cancel, rollback, image sweep and clone gaps in the build pipeline ([20980b8](https://github.com/sislelabs/kuso/commit/20980b86b50ca56d5ae700a0d31e4ee08d283503))
+
 ## [0.31.0] — 2026-10-08
 
 ### Other
@@ -420,11 +434,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(builds): pin that the image sweep protects staging env images ([89140d8](https://github.com/sislelabs/kuso/commit/89140d879c7ef052150e376065f70befc483b6fa))
-
-## [0.25.15] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(env): wait-for-addons is soft for app pods, strict for the release Job ([ff74149](https://github.com/sislelabs/kuso/commit/ff74149e1016b004f89614c942f67ead2ebc7efc))
 
 
 ---

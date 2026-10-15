@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.15] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): wait-for-addons is soft for app pods, strict for the release Job ([ff74149](https://github.com/sislelabs/kuso/commit/ff74149e1016b004f89614c942f67ead2ebc7efc))
+
 ## [0.25.14] — 2026-09-02
 
 ### ✨ Features
