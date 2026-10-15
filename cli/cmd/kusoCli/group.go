@@ -11,6 +11,8 @@
 //   kuso group member rm  <id> <userId>
 //   kuso group role <id> --role editor   (or --role '' to clear)
 //   kuso group tenancy <id> [-o json]    (read tenancy)
+//   kuso group tenancy set <id> --project p=role … [--instance-role r]
+//   kuso group update <id> [--name n] [--description d]
 
 package kusoCli
 
@@ -18,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"kuso/pkg/kusoApi"
 
@@ -270,6 +273,151 @@ var groupTenancyCmd = &cobra.Command{
 	},
 }
 
+var (
+	groupUpdateName        string
+	groupUpdateDescription string
+)
+
+var groupUpdateCmd = &cobra.Command{
+	Use:   "update <id>",
+	Short: "Rename a group or change its description",
+	Example: `  kuso group update <id> --name platform
+  kuso group update <id> --description 'on-call rotation'`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("description") {
+			return fmt.Errorf("pass --name and/or --description")
+		}
+		// PUT replaces both fields and requires name, so fill in the
+		// one the caller didn't pass from the current group.
+		name, desc := groupUpdateName, groupUpdateDescription
+		if !cmd.Flags().Changed("name") || !cmd.Flags().Changed("description") {
+			resp, err := api.ListGroups()
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("read group: %w", err)
+			}
+			var groups []map[string]any
+			if err := json.Unmarshal(resp.Body(), &groups); err != nil {
+				return fmt.Errorf("decode groups: %w", err)
+			}
+			found := false
+			for _, g := range groups {
+				if asString(g["id"]) != args[0] {
+					continue
+				}
+				found = true
+				if !cmd.Flags().Changed("name") {
+					name = asString(g["name"])
+				}
+				if !cmd.Flags().Changed("description") {
+					desc = asString(g["description"])
+				}
+			}
+			if !found {
+				return fmt.Errorf("group %s not found (list ids with 'kuso group list')", args[0])
+			}
+		}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("--name can't be empty")
+		}
+		resp, err := api.UpdateGroup(args[0], kusoApi.GroupRequest{Name: name, Description: desc})
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("update group: %w", err)
+		}
+		fmt.Printf("group %s updated (name=%q)\n", args[0], name)
+		return nil
+	},
+}
+
+var (
+	groupTenancySetProjects     []string
+	groupTenancySetInstanceRole string
+	groupTenancySetClear        bool
+)
+
+// parseProjectRoles turns repeated project=role flags into memberships.
+func parseProjectRoles(in []string) ([]kusoApi.ProjectMembership, error) {
+	out := make([]kusoApi.ProjectMembership, 0, len(in))
+	seen := map[string]bool{}
+	for _, kv := range in {
+		p, r, ok := strings.Cut(kv, "=")
+		p, r = strings.TrimSpace(p), strings.TrimSpace(r)
+		if !ok || p == "" {
+			return nil, fmt.Errorf("--project %q: want PROJECT=ROLE", kv)
+		}
+		if r != "admin" && r != "editor" && r != "viewer" {
+			return nil, fmt.Errorf("--project %q: role must be admin, editor or viewer", kv)
+		}
+		if seen[p] {
+			return nil, fmt.Errorf("--project: %q given twice", p)
+		}
+		seen[p] = true
+		out = append(out, kusoApi.ProjectMembership{Project: p, Role: r})
+	}
+	return out, nil
+}
+
+var groupTenancySetCmd = &cobra.Command{
+	Use:   "set <id>",
+	Short: "Replace a group's per-project roles (and optionally its instance role)",
+	Long: `Replace the group's project memberships with exactly the --project
+entries given; projects you leave out lose the group's access. Pass
+--clear to remove every project membership. The instance role is kept
+unless --instance-role is passed ('' clears it). Members pick the change
+up within about a minute, without logging in again.`,
+	Example: `  kuso group tenancy set <id> --project shop=editor --project blog=viewer
+  kuso group tenancy set <id> --project shop=admin --instance-role viewer
+  kuso group tenancy set <id> --clear`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if len(groupTenancySetProjects) == 0 && !groupTenancySetClear && !cmd.Flags().Changed("instance-role") {
+			return fmt.Errorf("pass --project PROJECT=ROLE (repeatable), --clear, or --instance-role")
+		}
+		if len(groupTenancySetProjects) > 0 && groupTenancySetClear {
+			return fmt.Errorf("pass --project or --clear, not both")
+		}
+		r := groupTenancySetInstanceRole
+		if r != "" && r != "admin" && r != "editor" && r != "viewer" {
+			return fmt.Errorf("invalid --instance-role %q (want admin|editor|viewer, or '' to clear)", r)
+		}
+		resp, err := api.GetGroupTenancy(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("read tenancy: %w", err)
+		}
+		var ten kusoApi.GroupTenancy
+		if err := json.Unmarshal(resp.Body(), &ten); err != nil {
+			return fmt.Errorf("decode tenancy: %w", err)
+		}
+		if cmd.Flags().Changed("instance-role") {
+			ten.InstanceRole = r
+		}
+		if groupTenancySetClear {
+			ten.ProjectMemberships = []kusoApi.ProjectMembership{}
+		} else if len(groupTenancySetProjects) > 0 {
+			ms, err := parseProjectRoles(groupTenancySetProjects)
+			if err != nil {
+				return err
+			}
+			ten.ProjectMemberships = ms
+		}
+		if ten.ProjectMemberships == nil {
+			ten.ProjectMemberships = []kusoApi.ProjectMembership{}
+		}
+		resp, err = api.SetGroupTenancy(args[0], ten)
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("set tenancy: %w", err)
+		}
+		fmt.Printf("group %s: instance role %s, %d project membership(s)\n", args[0], orNone(ten.InstanceRole), len(ten.ProjectMemberships))
+		return nil
+	},
+}
+
 func orNone(s string) string {
 	if s == "" {
 		return "(none)"
@@ -284,6 +432,13 @@ func init() {
 	groupCmd.AddCommand(groupDeleteCmd)
 	groupCmd.AddCommand(groupRoleCmd)
 	groupCmd.AddCommand(groupTenancyCmd)
+	groupCmd.AddCommand(groupUpdateCmd)
+	groupTenancyCmd.AddCommand(groupTenancySetCmd)
+	groupUpdateCmd.Flags().StringVar(&groupUpdateName, "name", "", "new group name")
+	groupUpdateCmd.Flags().StringVar(&groupUpdateDescription, "description", "", "new description ('' clears it)")
+	groupTenancySetCmd.Flags().StringArrayVar(&groupTenancySetProjects, "project", nil, "project membership PROJECT=ROLE, role admin|editor|viewer (repeatable; replaces the list)")
+	groupTenancySetCmd.Flags().StringVar(&groupTenancySetInstanceRole, "instance-role", "", "instance role admin|editor|viewer, or '' to clear (default: keep)")
+	groupTenancySetCmd.Flags().BoolVar(&groupTenancySetClear, "clear", false, "remove every project membership")
 
 	groupCmd.AddCommand(groupMemberCmd)
 	groupMemberCmd.AddCommand(groupMemberListCmd)

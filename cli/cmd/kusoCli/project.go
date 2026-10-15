@@ -86,6 +86,9 @@ var (
 	projectUpdatePreviewsTTL    int
 	projectUpdatePreviewsDomain string // base domain for preview hosts, "" = leave alone
 	projectUpdateAlwaysOn       string // "on" | "off" | "" (leave alone)
+	projectUpdateIncidentMon    string // "on" | "off" | "" (leave alone)
+	projectUpdateRepoPath       string
+	projectUpdateRepoClear      bool
 )
 
 var projectUpdateCmd = &cobra.Command{
@@ -99,7 +102,10 @@ installation use --github-installation-clear (sets installationId to 0).`,
 	Example: `  kuso project update analiz --previews=on
   kuso project update analiz --branch develop --domain analiz.example.com
   kuso project update analiz --github-installation 128668920
-  kuso project update analiz --github-installation-clear`,
+  kuso project update analiz --github-installation-clear
+  kuso project update analiz --repo-path apps/api
+  kuso project update analiz --repo-clear
+  kuso project update analiz --incident-monitoring=on`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -111,10 +117,31 @@ installation use --github-installation-clear (sets installationId to 0).`,
 		if cmd.Flags().Changed("domain") {
 			req.BaseDomain = kusoApi.StringPtr(projectUpdateDomain)
 		}
-		if cmd.Flags().Changed("repo") || cmd.Flags().Changed("branch") {
+		if projectUpdateRepoClear {
+			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("branch") || cmd.Flags().Changed("repo-path") {
+				return fmt.Errorf("--repo-clear can't be combined with --repo / --branch / --repo-path")
+			}
+			req.ClearDefaultRepo = true
+		} else if cmd.Flags().Changed("repo") || cmd.Flags().Changed("branch") || cmd.Flags().Changed("repo-path") {
 			req.DefaultRepo = &kusoApi.RepoRef{
 				URL:           projectUpdateRepo,
 				DefaultBranch: projectUpdateBranch,
+				Path:          projectUpdateRepoPath,
+			}
+			// The server reads an all-empty defaultRepo as "remove it";
+			// only --repo-clear should do that.
+			if *req.DefaultRepo == (kusoApi.RepoRef{}) {
+				return fmt.Errorf("--repo / --branch / --repo-path are empty; use --repo-clear to remove the default repo")
+			}
+		}
+		if cmd.Flags().Changed("incident-monitoring") {
+			switch projectUpdateIncidentMon {
+			case "on", "true", "yes":
+				req.IncidentMonitoring = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.IncidentMonitoring = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--incident-monitoring must be on|off (got %q)", projectUpdateIncidentMon)
 			}
 		}
 		if projectUpdateInstallReset {
@@ -443,6 +470,9 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	req.Resources = res
+	if err := applyServiceAddFields(cmd, &req); err != nil {
+		return err
+	}
 	resp, err := api.AddService(args[0], req)
 	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("add service: %w", err)
@@ -669,7 +699,12 @@ var serviceAddCmd = &cobra.Command{
   # Multi-repo project: build this service from its own repo:
   kuso project service add analiz api --repo https://github.com/acme/api --branch develop
   # Force a Dockerfile build instead of auto-detection:
-  kuso service add analiz api --runtime dockerfile --port 8080`,
+  kuso service add analiz api --runtime dockerfile --port 8080
+  # Run migrations before each deploy, with a postgres snapshot first:
+  kuso service add analiz api --release-cmd 'npx prisma migrate deploy' --snapshot-before-deploy=on
+  # Static site with build-time config:
+  kuso service add analiz web --runtime static --static-build-cmd 'npm run build' --static-output-dir dist \
+    --build-arg NODE_ENV=production --public-env NEXT_PUBLIC_API_URL`,
 	RunE: runServiceAdd,
 }
 
@@ -863,6 +898,23 @@ Settings → Source / Networking flow.
   --size medium                 # apply a pod-size preset's requests/limits (none clears)
   --memory-limit 1536Mi         # set one quantity, keeping the rest
   --memory-request 256Mi --cpu-request 100m
+  --target-cpu 70               # autoscaler CPU target (% of request)
+  --command ./worker            # replace the run argv ('' clears)
+  --dockerfile Dockerfile.prod  # Dockerfile name relative to the repo path
+  --release-cmd 'npm run migrate' --release-timeout 300   # pre-deploy hook
+  --release-clear               # remove the release hook
+  --snapshot-before-deploy=on   # back up subscribed postgres before the hook
+  --previews=off                # never build PR previews for this service
+  --build-arg NODE_ENV=production --build-arg API=https://x  # replaces ALL build args
+  --build-args-clear
+  --public-env NEXT_PUBLIC_API_URL   # bake a placeholder, fill it at pod start
+  --public-env-clear
+  --static-build-cmd 'npm run build' --static-output-dir dist   # runtime=static
+  --buildpacks-builder paketobuildpacks/builder-jammy-full      # runtime=buildpacks
+  --image-repo ghcr.io/acme/app --image-tag v2                 # runtime=image
+
+Volumes and node placement have their own commands:
+'kuso service volume' and 'kuso service placement'.
 
 --repo-token is how a private repo builds with no GitHub App: a GitHub
 personal access token (fine-grained, Contents: read) or a GitLab deploy /
@@ -876,7 +928,10 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
   kuso project service set hui kuso-demo-todo-web --domains mudo.sislelabs.com
   kuso project service set hui api --repo https://gitlab.com/acme/api.git --repo-token glpat-xxxx
   kuso project service set hui api --repo https://github.com/acme/private.git --repo-token github_pat_xxxx
-  printf %s "$TOKEN" | kuso project service set hui api --provider gitlab --repo-token-stdin`,
+  printf %s "$TOKEN" | kuso project service set hui api --provider gitlab --repo-token-stdin
+  kuso service set hui api --release-cmd './bin/migrate' --snapshot-before-deploy=on
+  kuso service set hui web --runtime static --static-build-cmd 'npm run build' --static-output-dir dist
+  kuso service set hui app --image-tag v1.4.2`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -1108,15 +1163,27 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 			req.WatchPaths = &wp
 		}
 		if cmd.Flags().Changed("image-pull-secret") {
-			cur, err := api.GetService(args[0], args[1])
-			if err := checkRespErr(cur, err); err != nil {
-				return fmt.Errorf("fetch current service spec: %w", err)
+			if cmd.Flags().Changed("image-repo") {
+				// The service may not have an image yet; applyServiceSetFields
+				// fills repository/tag and keeps this pull secret.
+				ref := strings.TrimSpace(serviceSetImagePullSecret)
+				req.Image = &kusoApi.PatchImageRequest{PullSecret: &ref}
+			} else {
+				cur, err := api.GetService(args[0], args[1])
+				if err := checkRespErr(cur, err); err != nil {
+					return fmt.Errorf("fetch current service spec: %w", err)
+				}
+				img, err := imagePullSecretPatch(cur.Body(), serviceSetImagePullSecret)
+				if err != nil {
+					return err
+				}
+				req.Image = img
 			}
-			img, err := imagePullSecretPatch(cur.Body(), serviceSetImagePullSecret)
-			if err != nil {
-				return err
-			}
-			req.Image = img
+		}
+		if err := applyServiceSetFields(cmd, &req, func() (*currentServiceSpec, error) {
+			return fetchServiceSpec(args[0], args[1])
+		}); err != nil {
+			return err
 		}
 		res, err := serviceSetResources(cmd, args[0], args[1])
 		if err != nil {
@@ -1140,6 +1207,11 @@ var (
 	addonAddSize    string
 	addonAddHA      bool
 	addonAddTLS     string
+	// addonAddStorageSize / addonAddDatabase mirror `addon update`.
+	addonAddStorageSize string
+	addonAddDatabase    string
+	addonAddPooler      bool
+	addonAddPoolSize    int32
 )
 
 // supportedAddonKinds mirrors addons.SupportedKinds in server-go (the
@@ -1175,7 +1247,9 @@ After the add, the command prints which services mount it.`,
 	Args: cobra.ExactArgs(2),
 	Example: `  kuso project addon add analiz pg --kind postgres --version 16
   kuso project addon add analiz pg --kind postgres --tls require
-  kuso project addon add analiz cache --kind redis --version 7 --size small`,
+  kuso project addon add analiz cache --kind redis --version 7 --size small
+  kuso project addon add analiz pg --kind postgres --storage-size 20Gi --database analiz
+  kuso project addon add analiz pg --kind postgres --pooler --pool-size 20`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -1201,13 +1275,27 @@ After the add, the command prints which services mount it.`,
 				fmt.Fprintln(cmd.ErrOrStderr(), note)
 			}
 		}
+		if (addonAddPooler || cmd.Flags().Changed("pool-size")) && addonAddKind != "postgres" {
+			return fmt.Errorf("--pooler is only supported with --kind postgres")
+		}
+		if cmd.Flags().Changed("pool-size") && !addonAddPooler {
+			return fmt.Errorf("--pool-size needs --pooler")
+		}
+		if addonAddPoolSize < 0 {
+			return fmt.Errorf("--pool-size must be >= 0 (0 = the default of 25)")
+		}
 		req := kusoApi.CreateAddonRequest{
-			Name:    args[1],
-			Kind:    addonAddKind,
-			Version: addonAddVersion,
-			Size:    addonAddSize,
-			HA:      addonAddHA,
-			TLS:     addonAddTLS,
+			Name:        args[1],
+			Kind:        addonAddKind,
+			Version:     addonAddVersion,
+			Size:        addonAddSize,
+			HA:          addonAddHA,
+			TLS:         addonAddTLS,
+			StorageSize: addonAddStorageSize,
+			Database:    addonAddDatabase,
+		}
+		if addonAddPooler {
+			req.Pooler = &kusoApi.AddonPoolerSpec{Enabled: true, PoolSize: addonAddPoolSize}
 		}
 		resp, err := api.AddAddon(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -1417,11 +1505,11 @@ producing one out of band. Repeat --set per key; at minimum pass the kind's
 connection URL (DATABASE_URL for postgres, REDIS_URL for redis, ...).
 
 To front an external postgres with the addon's PgBouncer — worth it when the
-provider caps connections — set pooler.externalBackend on the addon after
+provider caps connections — enable the pooler with an external backend after
 creating it:
 
-  kuso api PATCH projects/<p>/addons/<name> --data '{"pooler":{"enabled":true,
-    "externalBackend":true,"host":"<provider-host>","port":5432,"poolSize":6}}'
+  kuso project addon pooler enable <p> <name> --external-backend=on \
+    --host <provider-host> --port 5432 --pool-size 6
 
 poolSize is PgBouncer's default_pool_size (backend connections per user/db).
 Keep it below what the provider actually leaves you: PlanetScale's 25-slot
@@ -1816,6 +1904,9 @@ func init() {
 	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviewsDomain, "previews-domain", "", "base domain for preview hosts, e.g. tickero.bg (previews become <svc>-pr-N.<domain>); needs wildcard DNS for *.<domain>")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateAlwaysOn, "always-on", "", "force every service to never scale to zero (on|off)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateIncidentMon, "incident-monitoring", "", "let the incident-response agent watch this project (on|off)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateRepoPath, "repo-path", "", "default monorepo subpath new services build from, e.g. apps/api")
+	projectUpdateCmd.Flags().BoolVar(&projectUpdateRepoClear, "repo-clear", false, "remove the project's default repo")
 	addRequestLimitFlags(projectUpdateCmd, "platform default of 1000", "none")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
@@ -1835,6 +1926,7 @@ func init() {
 	serviceAddCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	serviceAddCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
 	serviceAddCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
+	addServiceAddFieldFlags(serviceAddCmd)
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectServiceCmd.AddCommand(serviceRenameCmd)
@@ -1866,6 +1958,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
 	serviceSetCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
+	addServiceSetFieldFlags(serviceSetCmd)
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -1876,6 +1969,10 @@ func init() {
 	addonAddCmd.Flags().StringVar(&addonAddVersion, "version", "", "engine version")
 	addonAddCmd.Flags().StringVar(&addonAddSize, "size", "small", "small|medium|large")
 	addonAddCmd.Flags().BoolVar(&addonAddHA, "ha", false, "use clustered chart variant where supported")
+	addonAddCmd.Flags().StringVar(&addonAddStorageSize, "storage-size", "", "PVC size, e.g. 20Gi (default from --size; can't change later on most storage classes)")
+	addonAddCmd.Flags().StringVar(&addonAddDatabase, "database", "", "default database name")
+	addonAddCmd.Flags().BoolVar(&addonAddPooler, "pooler", false, "put a PgBouncer pooler in front (postgres only; reach it via ${{ <addon>.POOLER_URL }})")
+	addonAddCmd.Flags().Int32Var(&addonAddPoolSize, "pool-size", 0, "pooler default_pool_size (with --pooler; 0 = default 25)")
 	addonAddCmd.Flags().StringVar(&addonAddTLS, "tls", "", "in-cluster wire TLS for postgres: disable|require (conn secret advertises the matching sslmode)")
 	_ = addonAddCmd.MarkFlagRequired("kind")
 	projectAddonCmd.AddCommand(addonDeleteCmd)
@@ -1927,6 +2024,7 @@ func init() {
 	serviceAddTopCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
+	addServiceAddFieldFlags(serviceAddTopCmd)
 	// Top-level alias `kuso service set` mirrors the long form. Cobra
 	// commands can't have two parents, so we mint a fresh shell and
 	// dispatch to the same RunE + share the flag vars (already
@@ -1959,6 +2057,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
+	addServiceSetFieldFlags(serviceSetTopCmd)
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same

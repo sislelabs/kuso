@@ -2,9 +2,8 @@
 //
 // These mirror the server's /api/projects/{project}/addons/{addon}/sql/*
 // endpoints (server-go/internal/http/handlers/sql_data.go + backups.go).
-// Only the READ + arbitrary-query paths are wired here; the destructive
-// row-mutation endpoints (POST/PATCH/DELETE .../sql/rows) are the
-// grid-editor ops and are deliberately out of scope for the CLI.
+// The row-mutation endpoints (POST/PATCH/DELETE .../sql/rows) live in
+// admin_parity.go (SQLInsertRow / SQLUpdateRow / SQLDeleteRow).
 //
 // All of these are admin-gated server-side (same secret-bearing-read
 // boundary as env values / shell) — the caller gets a 403 otherwise.

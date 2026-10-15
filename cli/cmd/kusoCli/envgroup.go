@@ -194,8 +194,36 @@ var envGroupDeleteCmd = &cobra.Command{
 	},
 }
 
+var envGroupSetBranchCmd = &cobra.Command{
+	Use:   "set-branch <project> <group> <service> <branch>",
+	Short: "Point one service in a non-production env group at a different branch",
+	Long: `Change the git branch one service tracks inside a non-production env
+group (e.g. try a feature branch of api in staging while the other services
+stay on theirs). Production is not env-scoped: change its branch with
+'kuso service set <project> <service> --branch'. The new branch deploys on its next
+build; trigger one with 'kuso build trigger <project> <service> --env <group>'.`,
+	Example: `  kuso env-group set-branch shop staging api feat/new-checkout
+  kuso env-group set-branch shop qa web main`,
+	Args: cobra.ExactArgs(4),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, group, branch := args[0], args[1], args[3]
+		// The route takes the short service name; accept the CR form too.
+		service := strings.TrimPrefix(args[2], project+"-")
+		resp, err := api.SetEnvGroupServiceBranch(project, group, service, branch)
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("set branch: %w", err)
+		}
+		fmt.Printf("%s/%s in env-group %s now tracks branch %s\n", project, service, group, branch)
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(envGroupCmd)
+	envGroupCmd.AddCommand(envGroupSetBranchCmd)
 	envGroupCmd.AddCommand(envGroupListCmd)
 	envGroupCmd.AddCommand(envGroupGetCmd)
 	envGroupCmd.AddCommand(envGroupCreateCmd)
