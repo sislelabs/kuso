@@ -115,9 +115,10 @@ type DetectedRuntime struct {
 //
 //   1. Dockerfile present → runtime=dockerfile, port=parseExpose() ?? 8080
 //   2. index.html only (no package.json/go.mod/...) → runtime=static, port=80
-//   3. package.json → runtime=nixpacks, port=guessNodePort
-//   4. go.mod / Cargo.toml / requirements.txt / pyproject.toml → nixpacks, port=8080
-//   5. fallback → nixpacks, port=8080
+//   3. *.csproj → runtime=buildpacks, port=8080 (Paketo binds ASPNETCORE_URLS to $PORT)
+//   4. package.json → runtime=nixpacks, port=guessNodePort
+//   5. go.mod / Cargo.toml / requirements.txt / pyproject.toml → nixpacks, port=8080
+//   6. fallback → nixpacks, port=8080
 func (c *Client) DetectRuntime(ctx context.Context, installationID int64, owner, repo, branch, pathPrefix string) (*DetectedRuntime, error) {
 	entries, err := c.ListRepoTree(ctx, installationID, owner, repo, branch, pathPrefix)
 	if err != nil {
@@ -164,6 +165,21 @@ func DetectFromFiles(names []string, read func(rel string) string) *DetectedRunt
 	if staticOnly {
 		return &DetectedRuntime{Runtime: "static", Port: 80, Reason: "index.html only"}
 	}
+	// Checked before package.json: ASP.NET templates often carry one for
+	// front-end tooling. Not nixpacks: its C# provider defaults to the
+	// .NET 6 SDK and hardcodes port 3000.
+	var nestedCsproj string
+	for _, n := range names {
+		if !strings.HasSuffix(n, ".csproj") {
+			continue
+		}
+		if !strings.Contains(n, "/") {
+			return &DetectedRuntime{Runtime: "buildpacks", Port: 8080, Reason: ".NET project detected"}
+		}
+		if nestedCsproj == "" {
+			nestedCsproj = n
+		}
+	}
 	if has("package.json") {
 		return &DetectedRuntime{Runtime: "nixpacks", Port: guessNodePort(read("package.json")), Reason: "package.json detected"}
 	}
@@ -175,6 +191,10 @@ func DetectFromFiles(names []string, read func(rel string) string) *DetectedRunt
 	}
 	if has("requirements.txt") || has("pyproject.toml") {
 		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Python project detected"}
+	}
+	if nestedCsproj != "" {
+		dir := nestedCsproj[:strings.LastIndex(nestedCsproj, "/")]
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: ".NET project found in " + dir + "/ — re-run with --path " + dir}
 	}
 	return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "fallback"}
 }
