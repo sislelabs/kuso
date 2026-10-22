@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.16] — 2026-09-02
+
+### ✨ Features
+- Feat(health): flag environments whose image is gone from the registry ([4b3e7b7](https://github.com/sislelabs/kuso/commit/4b3e7b784507c5969410018178dfa110f79add0a))
+
+### 🧪 Tests
+- Test(builds): pin that the image sweep protects staging env images ([89140d8](https://github.com/sislelabs/kuso/commit/89140d879c7ef052150e376065f70befc483b6fa))
+
 ## [0.25.15] — 2026-09-02
 
 ### 🐛 Bug Fixes

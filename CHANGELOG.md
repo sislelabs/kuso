@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.32.1] — 2026-10-22
+
+### Other
+- Detect .NET projects and build them with buildpacks ([b0ca608](https://github.com/sislelabs/kuso/commit/b0ca608f8a842aa7fc025a95f462becce2413bc2))
+
 ## [0.32.0] — 2026-10-15
 
 ### Other
@@ -426,14 +431,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(health): wire the registry probe into the scanner that serves the report ([cf67012](https://github.com/sislelabs/kuso/commit/cf67012a85b0f80950083c1333d56f8d80a64cb3))
-
-## [0.25.16] — 2026-09-02
-
-### ✨ Features
-- Feat(health): flag environments whose image is gone from the registry ([4b3e7b7](https://github.com/sislelabs/kuso/commit/4b3e7b784507c5969410018178dfa110f79add0a))
-
-### 🧪 Tests
-- Test(builds): pin that the image sweep protects staging env images ([89140d8](https://github.com/sislelabs/kuso/commit/89140d879c7ef052150e376065f70befc483b6fa))
 
 
 ---
