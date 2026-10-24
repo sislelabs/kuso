@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.32.2] — 2026-10-24
+
+### 🐛 Bug Fixes
+- Fix GitHub App manifest and single-node buildkitd scheduling ([d3d9ae7](https://github.com/sislelabs/kuso/commit/d3d9ae793fb99eccc43756eedc3797f5643db667))
+
 ## [0.32.1] — 2026-10-22
 
 ### Other
@@ -426,11 +431,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(env): pin clone-last ordering at the propagation layer ([401f0db](https://github.com/sislelabs/kuso/commit/401f0dbdd0c66a217fc057885d5eaca4bde11918))
-
-## [0.25.17] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(health): wire the registry probe into the scanner that serves the report ([cf67012](https://github.com/sislelabs/kuso/commit/cf67012a85b0f80950083c1333d56f8d80a64cb3))
 
 
 ---

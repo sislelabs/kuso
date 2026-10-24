@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.17] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(health): wire the registry probe into the scanner that serves the report ([cf67012](https://github.com/sislelabs/kuso/commit/cf67012a85b0f80950083c1333d56f8d80a64cb3))
+
 ## [0.25.16] — 2026-09-02
 
 ### ✨ Features
