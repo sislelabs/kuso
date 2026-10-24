@@ -1126,11 +1126,11 @@ fi
 
 KUSO_RELEASE_CLI="${KUSO_RELEASE_CLI:-1}"
 if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
-  log "cross-building CLI binaries (darwin/linux × amd64/arm64) in parallel"
+  log "cross-building CLI binaries (darwin/linux/windows × amd64/arm64) in parallel"
   CLI_LDFLAGS="-X kuso/cmd/kusoCli/version.ldflagsVersion=${VERSION}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
-      dry "(cd cli && GOOS=${target%-*} GOARCH=${target#*-} go build -ldflags='$CLI_LDFLAGS' -o ${DIST_DIR}/kuso-${target} ./cmd)"
+    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 windows-arm64; do
+      dry "(cd cli && GOOS=${target%-*} GOARCH=${target#*-} go build -ldflags='$CLI_LDFLAGS' -o ${DIST_DIR}/kuso-${target}$([[ $target == windows-* ]] && echo .exe) ./cmd)"
     done
   else
     # Fan out the four targets concurrently. They have no shared
@@ -1139,10 +1139,11 @@ if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
     # box wall-clock drops from ~4× to ~1.1×. PIDs collected so we
     # can fail loudly if any single target errored.
     declare -a build_pids=()
-    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 windows-arm64; do
       GOOS="${target%-*}"
       GOARCH="${target#*-}"
       out="${DIST_DIR}/kuso-${target}"
+      [[ "$GOOS" == "windows" ]] && out="${out}.exe"
       (
         cd cli && GOOS="$GOOS" GOARCH="$GOARCH" \
           go build -ldflags="$CLI_LDFLAGS" -o "$out" ./cmd
@@ -1219,7 +1220,8 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
     # `set -e` if dist/kuso-* is empty, so check first.
     CLI_ASSETS=()
     for f in "$DIST_DIR"/kuso-darwin-arm64 "$DIST_DIR"/kuso-darwin-amd64 \
-             "$DIST_DIR"/kuso-linux-amd64 "$DIST_DIR"/kuso-linux-arm64; do
+             "$DIST_DIR"/kuso-linux-amd64 "$DIST_DIR"/kuso-linux-arm64 \
+             "$DIST_DIR"/kuso-windows-amd64.exe "$DIST_DIR"/kuso-windows-arm64.exe; do
       [[ -f "$f" ]] && CLI_ASSETS+=("$f")
     done
     if [[ "$DRY_RUN" == "1" ]]; then
