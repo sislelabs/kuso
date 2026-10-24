@@ -97,7 +97,32 @@ const SERVICE_BLAST: Record<string, BlastInfo> = {
   },
   command: {
     level: "warn",
-    message: "Rolling restart with the new argv (worker runtime only).",
+    message: "Rolling restart with the new container command in every environment.",
+  },
+  privateEgress: {
+    level: "warn",
+    message:
+      "Changes the pod's network-policy label → rolling restart. Turning it on blocks calls to the public internet.",
+  },
+  platformApiEgress: {
+    level: "warn",
+    message: "Changes the pod's network-policy label → rolling restart. On lets the pods call the kuso API in-cluster.",
+  },
+  publicEnv: {
+    level: "info",
+    message: "Build-time only: changes which variables are inlined into the next build.",
+  },
+  static: {
+    level: "info",
+    message: "Only the next build uses it; running pods are untouched until that build deploys.",
+  },
+  buildpacks: {
+    level: "info",
+    message: "Only the next build uses it; running pods are untouched until that build deploys.",
+  },
+  snapshotBeforeDeploy: {
+    level: "info",
+    message: "Takes effect on the next deploy that runs a release hook.",
   },
   previews: {
     level: "info",

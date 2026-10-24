@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectCronPatch, serviceCronPatch, type CronForm } from "./cronPatch";
+import { onFailureCreateField, policyCreateFields, projectCronPatch, serviceCronPatch, type CronForm } from "./cronPatch";
 
 const base: CronForm = {
   kind: "command",
@@ -55,5 +55,53 @@ describe("command round-trip", () => {
       "echo",
       "hi",
     ]);
+  });
+});
+
+describe("policy + onFailure", () => {
+  const policy = { concurrencyPolicy: "Forbid", activeDeadlineSeconds: "600", startingDeadlineSeconds: "300" };
+
+  it("sends only changed policy fields; blank timeout clears to 0", () => {
+    const body = serviceCronPatch({
+      ...base,
+      kind: "service",
+      policy: { ...policy, activeDeadlineSeconds: "", concurrencyPolicy: "Replace" },
+      initialPolicy: policy,
+    });
+    expect(body.concurrencyPolicy).toBe("Replace");
+    expect(body.activeDeadlineSeconds).toBe(0);
+    expect(body).not.toHaveProperty("startingDeadlineSeconds");
+  });
+
+  it("never sends onFailure for service crons", () => {
+    const body = serviceCronPatch({
+      ...base,
+      kind: "service",
+      onFailure: { webhookURL: "https://hook", secretName: "", secretKey: "" },
+      initialOnFailure: { webhookURL: "", secretName: "", secretKey: "" },
+    });
+    expect(body).not.toHaveProperty("onFailure");
+  });
+
+  it("clears a project cron's webhook when the URL is emptied", () => {
+    const of = { webhookURL: "https://hook", secretName: "p-shared", secretKey: "HMAC" };
+    expect(projectCronPatch({ ...base, onFailure: { ...of, webhookURL: "" }, initialOnFailure: of }).onFailure).toEqual({
+      clear: true,
+    });
+    expect(
+      projectCronPatch({ ...base, onFailure: { ...of, webhookURL: "https://new" }, initialOnFailure: of }).onFailure,
+    ).toEqual({ webhookURL: "https://new", secretRef: { name: "p-shared", key: "HMAC" } });
+  });
+
+  it("rejects a bad deadline and policy", () => {
+    expect(() =>
+      serviceCronPatch({ ...base, kind: "service", policy: { ...policy, activeDeadlineSeconds: "-1" }, initialPolicy: policy }),
+    ).toThrow();
+    expect(() => policyCreateFields({ ...policy, concurrencyPolicy: "Sometimes" })).toThrow();
+  });
+
+  it("create fields omit blanks", () => {
+    expect(policyCreateFields({ concurrencyPolicy: "", activeDeadlineSeconds: "", startingDeadlineSeconds: "" })).toEqual({});
+    expect(onFailureCreateField({ webhookURL: "", secretName: "", secretKey: "" })).toEqual({});
   });
 });

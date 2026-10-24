@@ -31,6 +31,7 @@ var notificationsGetOutput string
 //   kuso notifications test   <id>
 //   kuso notifications enable <id>
 //   kuso notifications disable <id>
+//   kuso notifications event-types [-o json]
 
 var notificationsCmd = &cobra.Command{
 	Use:     "notifications",
@@ -540,6 +541,87 @@ func redactURL(u string) string {
 	return "***"
 }
 
+type notifEventType struct {
+	Type           string `json:"type"`
+	Label          string `json:"label"`
+	Group          string `json:"group"`
+	DefaultMention string `json:"defaultMention"`
+}
+
+func fetchNotifEventTypes() ([]notifEventType, error) {
+	resp, err := api.NotificationEventTypes()
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, err
+	}
+	var out []notifEventType
+	if err := json.Unmarshal(resp.Body(), &out); err != nil {
+		return nil, fmt.Errorf("decode event types: %w", err)
+	}
+	return out, nil
+}
+
+var notificationsEventTypesOutput string
+
+var notificationsEventTypesCmd = &cobra.Command{
+	Use:   "event-types",
+	Short: "List the event names a channel's --events and --mention-on accept",
+	Long: `List every notification event kuso emits, with its group and the
+mention a Discord channel uses for it by default (@here for events at error
+severity). These are the values for --events and --mention-on.`,
+	Example: `  kuso notifications event-types
+  kuso notifications event-types -o json | jq -r '.[].type'`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		types, err := fetchNotifEventTypes()
+		if err != nil {
+			return fmt.Errorf("event types: %w", err)
+		}
+		switch notificationsEventTypesOutput {
+		case "json":
+			return jsonOut(types)
+		case "table", "":
+		default:
+			return fmt.Errorf("unsupported output format %q", notificationsEventTypesOutput)
+		}
+		t := tablewriter.NewWriter(os.Stdout)
+		t.SetHeader([]string{"TYPE", "GROUP", "LABEL", "DEFAULT MENTION"})
+		for _, e := range types {
+			t.Append([]string{e.Type, e.Group, e.Label, dashIfEmpty(e.DefaultMention)})
+		}
+		t.Render()
+		return nil
+	},
+}
+
+// completeNotifEvents completes the comma-separated --events /
+// --mention-on lists from the server's catalogue.
+func completeNotifEvents(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if api == nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	types, err := fetchNotifEventTypes()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	prefix := ""
+	if i := strings.LastIndex(toComplete, ","); i >= 0 {
+		prefix = toComplete[:i+1]
+	}
+	out := make([]string, 0, len(types))
+	for _, e := range types {
+		out = append(out, prefix+e.Type+"\t"+e.Label)
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
+}
+
+func init() {
+	notificationsCmd.AddCommand(notificationsEventTypesCmd)
+	notificationsEventTypesCmd.Flags().StringVarP(&notificationsEventTypesOutput, "output", "o", "table", "output format [table, json]")
+}
+
 func init() {
 	rootCmd.AddCommand(notificationsCmd)
 	notificationsCmd.AddCommand(notificationsListCmd)
@@ -568,4 +650,13 @@ func init() {
 	notificationsCmd.AddCommand(notificationsTestCmd)
 	notificationsCmd.AddCommand(notificationsEnableCmd)
 	notificationsCmd.AddCommand(notificationsDisableCmd)
+}
+
+// Registered after the init above that defines --events / --mention-on;
+// init()s in one file run top to bottom.
+func init() {
+	for _, c := range []*cobra.Command{notificationsCreateCmd, notificationsUpdateCmd} {
+		_ = c.RegisterFlagCompletionFunc("events", completeNotifEvents)
+		_ = c.RegisterFlagCompletionFunc("mention-on", completeNotifEvents)
+	}
 }

@@ -231,12 +231,14 @@ The footgun this replaces: people stuff `migrate up && exec /app/api` into the A
 
 `spec.release.command` runs as a **separate Job against the NEW build's image** before the image tag is promoted to the env. On non-zero exit, the build is marked `release-failed`, the image is NOT promoted, and existing pods keep running on the previous image. A `build.failed` notify event fires.
 
-There is no dedicated CLI flag for the release block — set it via `kuso.yml`'s `services[].release` (then `kuso apply`), or PATCH the service. The `kuso api` escape hatch is the cleanest PATCH path (auth handled for you):
+Set it with `service set` (or `service add`, or `kuso.yml`'s `services[].release` + `kuso apply`):
 
 ```bash
-# Set the release hook (kuso api injects the bearer token; no raw curl needed)
-kuso api PATCH projects/tickero/services/api \
-  --data '{"release":{"command":["npx","prisma","migrate","deploy"],"timeoutSeconds":600}}'
+# --release-cmd is shell-quoted; --release-timeout is seconds (default 900).
+# Passing only one of them keeps the other's current value.
+kuso project service set tickero api --release-cmd 'npx prisma migrate deploy' --release-timeout 600
+# Back up subscribed postgres addons right before the hook runs (one-click restore on failure):
+kuso project service set tickero api --snapshot-before-deploy on
 
 # Trigger a build — the release Job fires automatically before promote
 kuso build trigger tickero api
@@ -247,7 +249,7 @@ kuso build why tickero api
 
 Job naming: `<env-name>-release-<short-image-tag>`. Re-deploying the same tag is a no-op (Job exists, already succeeded). The Job runs with the env's effective envVars + envFromSecrets (so `DATABASE_URL` etc. are available) and waits for addons to be reachable first.
 
-To clear the hook: PATCH `{"release":{"clear":true}}`.
+To clear the hook: `kuso project service set <p> <svc> --release-clear`.
 
 ## GitHub commit statuses and wait-for-CI
 
@@ -314,16 +316,14 @@ kuso project update <p> --max-concurrent 500                             # defau
 
 ### wakeOn excludePaths — keep callback paths warm
 
-ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. No CLI flag and not a kuso.yml field (the strict parser rejects it; `kuso apply` leaves it untouched) — PATCH the service:
+ePay.bg / Stripe / GitHub webhooks have short retry timeouts; a cold-start can exceed the sender's window. `spec.sleep.wakeOn.excludePaths` is the "this deployment MUST stay reachable" signal: when set, no env of the service sleeps, even with `scale.min=0`. Not a kuso.yml field (the strict parser rejects it; `kuso apply` leaves it untouched) — set it with the sleep command:
 
 ```bash
-curl -X PATCH ... \
-  -d '{"scale":{"min":0,"max":3,"targetCPU":70},
-       "sleep":{"enabled":true,"wakeOn":{"excludePaths":["/api/v1/payments/notify"]}}}' \
-  https://kuso.example.com/api/projects/tickero/services/api
+kuso project service sleep tickero api --exclude-path /api/v1/payments/notify   # repeatable; replaces the list
+kuso project service sleep tickero api --exclude-paths-clear                    # envs can sleep again
 ```
 
-**Semantic:** whole-deployment, not per-path routing. If any path matters, the whole deployment stays warm. For per-path isolation, split into two services. Clear with `{"sleep":{"wakeOn":{"clear":true}}}`.
+**Semantic:** whole-deployment, not per-path routing. If any path matters, the whole deployment stays warm. For per-path isolation, split into two services.
 
 ## Cron jobs & failure webhooks
 
@@ -334,18 +334,25 @@ kuso cron add-http <p> --name ping --schedule '*/5 * * * *' --url 'https://...'
 kuso cron sync <p> <svc> <name>       # re-resolve image/env from production after a deploy
 kuso cron edit <p> <name> --schedule '...' --suspend=false              # project crons (http / command)
 kuso cron edit-service <p> <svc> <name> --schedule '...' --suspend=false  # service crons
+kuso cron edit-service <p> <svc> <name> --cmd './bin/sweep --all' --concurrency Replace --display-name 'Nightly sweep'
+kuso cron get <p> <svc> <name> [-o json]                                  # one service cron
+# Deadlines (seconds) on every add/edit: --timeout kills a run that's still going
+# (0 = no limit); --starting-deadline skips a missed run once it's that late (default 300).
+# add-command / edit: --pull-policy Always|IfNotPresent|Never
 # --schedule: 5-field cron (`*/15 * * * *`, names OK: `0 9 * * MON-FRI`, `0 0 1 JAN *`)
 # or @yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly. Rejected: @every, @reboot, `?`, seconds field.
 ```
 
-Crons can POST an HMAC-signed payload to a webhook when they fail — anything where silent cron failure is a revenue leak. No CLI flag and not a kuso.yml field; PATCH the cron:
+Crons can POST an HMAC-signed payload to a webhook when they fail — anything where silent cron failure is a revenue leak. Project crons (`add-http` / `add-command` / `edit`) take it as flags; it is not a kuso.yml field:
 
 ```bash
-curl -X PATCH ... \
-  -d '{"onFailure":{"webhookURL":"https://hooks.slack.com/services/...",
-                    "secretRef":{"name":"tickero-slack-conn","key":"signing-secret"}}}' \
-  https://kuso.example.com/api/projects/tickero/crons/refund-deadline-sweep
+kuso cron edit tickero refund-deadline-sweep \
+  --on-failure-webhook https://hooks.slack.com/services/... \
+  --on-failure-secret tickero-slack-conn:signing-secret     # optional signing key, <secret>:<key>
+kuso cron edit tickero refund-deadline-sweep --on-failure-clear
 ```
+
+The signing secret must be an addon conn Secret of the project (a name ending in `-conn`); the CRD rejects anything else. Editing the webhook always needs `--on-failure-webhook`, since the URL and secret are replaced together.
 
 The watcher polls Jobs labeled `kuso.sislelabs.com/cron` every 30s; on terminal failure it POSTs `{project, service, cron, jobName, startedAt, finishedAt, logsURL}` with `X-Kuso-Signature: sha256=<hex>` when `secretRef` is set, retrying 3x with linear backoff. It also emits `cron.failed` to notify subscribers — make sure the Discord/Slack channel subscribes to that event.
 
@@ -499,7 +506,7 @@ the build log: `secret-sourced build env vars are no longer passed as build-args
 
 - **`prisma migrate deploy` (or any DB-connecting step) in the build script.**
   It needs a live `DATABASE_URL`, now empty at build time. Fix: move it to a
-  **release hook** (`kuso.yml` `release: { command: [...] }`, or PATCH the service)
+  **release hook** (`kuso.yml` `release: { command: [...] }`, or `service set --release-cmd`)
   — it then runs post-build, pre-promote, WITH runtime secrets and last-green
   semantics (a failed migration blocks promotion instead of half-deploying). See
   "Release hooks". Keep schema-only steps like `prisma generate` in the build —
@@ -517,13 +524,16 @@ the build log: `secret-sourced build env vars are no longer passed as build-args
 **Non-secret build-time values are unaffected.** Plain `env set` literals still
 flow to the build (as `--build-arg` for dockerfile, `ENV` for nixpacks), and the
 `NEXT_PUBLIC_*`-style build-time-inlining problem has its own mechanism
-(`publicEnv` sentinels — see docs/FRONTEND_BUILD_TIME_ENVS.md). Only
+(`publicEnv` sentinels — see docs/FRONTEND_BUILD_TIME_ENVS.md; set the names with
+`service set --public-env NEXT_PUBLIC_API_URL`, repeatable, `--public-env-clear` to drop). Only
 `secretKeyRef`-sourced values are withheld.
 
 **Dedicated non-secret build-time channel: `buildArgs` (v0.23.1+).** When you want
 a value available at build time that is NOT part of the app's runtime env, set it
 as a service `buildArgs` entry (a plain `KEY: value` map in `kuso.yml`'s
-`services[].buildArgs`, or PATCH `{"buildArgs":{...}}`). It flows to both dockerfile
+`services[].buildArgs`, or `kuso project service set <p> <svc> --build-arg KEY=value`
+— repeatable, and it replaces ALL build args, so pass every one; `--build-args-clear`
+removes them). It flows to both dockerfile
 builds (as `--build-arg`) and nixpacks builds (as build-time `ENV`), and — unlike
 runtime env — is the *explicit* build-time-constant channel. It can only hold plain
 literals: a `secretKeyRef` can never be routed through `buildArgs` (the server drops
@@ -581,6 +591,24 @@ kuso env set <p> api 'DATABASE_READ_URL=${{ db.DATABASE_URL }}'
   start — they keep the stale `sslmode` until restarted. Flip the addon, then
   restart every subscribed env (`kuso redeploy` or an env-var touch).
 
+### Connection pooler (postgres)
+
+An opt-in PgBouncer in front of a postgres addon. Apps reach it via
+`${{ <addon>.POOLER_URL }}`; `DATABASE_URL` stays direct.
+
+```bash
+kuso project addon add <p> db --kind postgres --pooler [--pool-size 20]       # at create
+kuso project addon pooler enable <p> <addon> [--pool-size N]
+kuso project addon pooler set <p> <addon> --pool-size N                       # tune, on/off untouched
+kuso project addon pooler disable <p> <addon>                                 # POOLER_URL users lose the DB
+# External managed postgres that caps connections (connect-external first):
+kuso project addon pooler enable <p> <addon> --external-backend on --host <provider-host> --port 5432 --pool-size 6
+```
+
+`--pool-size` is PgBouncer's `default_pool_size` (0 = 25). With an external
+backend keep it below what the provider leaves you (PlanetScale's 25-slot plan:
+6).
+
 ### Public (external) addon access — the `:PORT` NodePort + `PUBLIC_URL`
 
 The conn keys above are all **in-cluster** — `POSTGRES_HOST` is an in-cluster DNS
@@ -625,8 +653,9 @@ an interactive session use `kuso db connect <p> <addon>` (`--exec` launches
 psql / redis-cli / mongosh; clickhouse gets a built-in HTTP shell that reads SQL
 on stdin, handy for migrations; mysql has no built-in client, so use the printed
 DSN); for a raw local socket use
-`kuso db port-forward`. Row writes are intentionally NOT in the CLI — do those
-from a migration or the web data-grid.
+`kuso db port-forward`. Single-row edits (`kuso db row insert|update|delete`,
+same as the web data-grid) exist for fixing one record; anything bigger belongs
+in a migration.
 
 ### Picking a DB access path — decision guide
 
@@ -662,8 +691,8 @@ done. Leaving it open is the failure mode — nothing expires it for you.
 ### Writing to a database — do it as a migration, not by hand
 
 Ad-hoc `UPDATE`/`DELETE` against production is the most common way to lose data
-on any PaaS. kuso deliberately gives the CLI no row-write verbs so the easy path
-is the safe one.
+on any PaaS. `kuso db row` edits exactly one row by primary key, which is fine for
+fixing a single record; for anything broader, write a migration.
 
 ```bash
 # Preferred: the change lives in the repo, runs once, is reviewable + repeatable
@@ -896,10 +925,21 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--scale-down-stabilization SEC] \
     [--max-concurrent N] [--rate-limit RPS] [--rate-burst N] \
     [--internal on|off] [--private-egress on|off] \
-    [--cap-add CAP]... [--allow-privilege-escalation on|off]
-#   NOT settable here: release hook (kuso.yml or PATCH), sleep.wakeOn (PATCH only)
-#   (sleep itself: `kuso project service sleep`),
-#   container command override, dockerfile path (create-time --dockerfile only).
+    [--cap-add CAP]... [--allow-privilege-escalation on|off] \
+    [--target-cpu PCT] [--command ARG]... [--dockerfile <rel>] \
+    [--release-cmd '...'] [--release-timeout SEC] [--release-clear] \
+    [--snapshot-before-deploy on|off] [--previews on|off] \
+    [--build-arg K=V]... [--build-args-clear] [--public-env NAME]... [--public-env-clear] \
+    [--static-build-cmd '...'] [--static-output-dir dir] [--buildpacks-builder img] \
+    [--image-repo X] [--image-tag Y]
+#   --build-arg / --public-env / --command REPLACE the whole list.
+#   --previews off opts this service out of PR previews; on follows the project.
+#   Sleep (incl. wakeOn --exclude-path): `kuso project service sleep`.
+kuso project service volume list|add|rm <project> <service> [name]   # persistent disks
+kuso project service volume add <p> <s> data --mount /data --size 5 [--storage-class sc] [--access-mode rwx]
+       # rm unmounts but KEEPS the PVC; an RWO volume makes every deploy stop-then-start
+kuso project service placement show|set|clear <project> <service> [--label k=v]... [--node n]...
+kuso project service deploy-hook <project> <service>   # show URL; --enable / --rotate / --disable
 
 # Crons
 kuso cron list <project> [service]
@@ -908,7 +948,9 @@ kuso cron add-command <project> --name N --schedule '...' --image IMG --image-ta
 kuso cron add-http <project> --name N --schedule '...' --url 'https://...'
 kuso cron sync <project> <service> <name>       # re-resolve image/env from production
 kuso cron edit <project> <name> [--schedule ...] [--suspend ...]   # project crons (http/command)
-kuso cron edit-service <project> <service> <name> [--schedule ...] # service crons
+kuso cron edit-service <project> <service> <name> [--schedule ...] [--cmd ...] [--concurrency ...] \
+       [--display-name ...] [--timeout SEC] [--starting-deadline SEC]   # service crons
+kuso cron get <project> <service> <name>       # one service cron
 kuso cron delete <project> <service> <name>     # kind=service
 kuso cron delete-project <project> <name>       # kind=http|command
 
@@ -928,16 +970,24 @@ kuso domains list <project> <service>
 kuso project create <name> --repo <url> [--domain <d>] [--branch <b>] [--previews]
 kuso project update <name> [--domain <d>] [--previews=on|off] [--previews-ttl <days>] \
        [--previews-domain <base>] [--github-installation <id>] [--always-on on|off] \
-       [--max-concurrent N] [--rate-limit RPS] [--rate-burst N]
+       [--max-concurrent N] [--rate-limit RPS] [--rate-burst N] \
+       [--repo <url>] [--branch <b>] [--repo-path <dir>] [--repo-clear] \
+       [--incident-monitoring on|off]
 kuso project addon add <project> <name> --kind <kind> [--version <v>] \
-       [--size small|medium|large] [--ha] [--tls disable|require]
+       [--size small|medium|large] [--ha] [--tls disable|require] \
+       [--storage-size 20Gi] [--database <name>] [--pooler [--pool-size N]]
+kuso project addon pooler enable|set|disable <project> <addon> [--pool-size N] \
+       [--external-backend on|off --host h --port p]
 kuso project addon update <project> <addon> [--tls ...] [--version ...] [--size ...]
        # NB: version/size/ha/storageSize are rejected as immutable on live addons —
        # migrate via addon-backup instead. --tls flips live (restart consumers after).
 kuso project addon placement show|set|clear <project> <addon>   # pin to labeled nodes
 kuso project service add <project> <name> --runtime <rt> [--port N] [--path <subdir>] \
        [--dockerfile <rel>] [--replicas N] [--max-replicas N] \
-       [--from-service <svc> --command ./worker]
+       [--from-service <svc> --command ./worker] \
+       [--release-cmd '...' [--release-timeout SEC]] [--snapshot-before-deploy on|off] \
+       [--build-arg K=V]... [--public-env NAME]... \
+       [--static-build-cmd '...' --static-output-dir dir] [--buildpacks-builder img]
        # runtime: dockerfile | nixpacks | buildpacks | static | worker | image
        # for --runtime image: --image-repo X --image-tag Y (do NOT put X:Y in --image-repo)
 kuso environment add <project> <service> <name> --branch <b> [--seed-from <env>] \
@@ -970,6 +1020,46 @@ kuso instance-secret list                       # instance-wide shared secrets
 kuso role list|create|edit|delete               # RBAC roles
 kuso node add-token / pending / list / label    # cluster node bootstrap + labels
 kuso instance-config podsize list               # pod-size presets
+```
+
+## Admin & inspection commands
+
+The rest of the web UI's admin and inspection screens. Commands marked
+(admin) return 403 for other users. Changes go live as soon as the command
+returns, so preview them with `--dry-run` where it exists.
+
+```bash
+# Inspect
+kuso service metrics <p> <s> [--env staging] [--range 24h] [-o json]  # pod CPU/mem + req/s, 5xx ratio, p95
+kuso logs search <p> --q 'timeout' --since 1h     # whole project; add a service to narrow it
+kuso get storageclasses | kuso get domains        # (admin) volume classes; every Ingress host
+kuso github status | kuso github tree <owner/repo> [--path apps]   # app config; pick a monorepo subpath
+kuso notifications event-types                    # values for --events / --mention-on
+kuso health orphans                               # leftover conn Secrets / PVCs of deleted addons
+
+# Single-row DB edits (admin). The full primary key is required, the row is
+# returned, and delete prompts unless --yes. Bulk or schema changes still
+# belong in a migration (see "Writing to a database").
+kuso db row insert <p> <addon> --table todo --set title=x [--null col]
+kuso db row update <p> <addon> --table todo --where id=7 --set done=true
+kuso db row delete <p> <addon> --table todo --where id=7 --yes
+
+kuso env-group set-branch <p> <group> <service> <branch>   # one service on another branch (not production)
+kuso node remove <node> --dry-run                 # (admin) list the volumes that would be lost
+
+# Access (admin)
+kuso user get|set <id> [--email …] [--active=false]
+kuso user profile set-password [--stdin]          # your own; revokes ALL your tokens → kuso login again
+kuso group update <id> --name … | kuso group tenancy set <id> --project shop=editor
+kuso token list --all | token create --user <id> | token revoke <id> --any
+kuso invite accept <token> --username u --email e --password-stdin --api <url>   # no login needed
+
+# Platform (admin)
+kuso drain get|update <id> [--header K=V] [--remove-header K] [--enabled=false]
+kuso incident-agent settings get | settings set --enabled[=false] [--cooldown-hours N] [--dry-run]
+kuso incident-agent set-discord --bot-token-file - --channel <id> [--dry-run]
+kuso incident feedback <id> --text "…"            # records a reply; never approves a fix
+kuso health orphans delete --kind orphan_addon_pvc --namespace ns --name n [--dry-run]   # data is gone
 ```
 
 ## How a deployment actually flows
@@ -1057,9 +1147,9 @@ kuso redeploy <project> <service>
 **Container command override (v0.18+):** any runtime (not just `worker`)
 can override the image's default CMD via `spec.command`. Use it when an
 image bundles several processes that contend for the same `PORT` — point
-the command at the single process kuso should serve. `worker` runtime has
-`--command` on `service add`; for other runtimes it's kuso.yml/API-only:
-`PATCH /api/projects/<p>/services/<s>` with `{"command":["node","server.js"]}`.
+the command at the single process kuso should serve. Set it with
+`kuso project service set <p> <s> --command node --command server.js` (replaces
+the argv; `--command ''` clears it) or `--command` on `service add` (worker only).
 
 Only edit production env-vars when you mean to. The web UI shows a **Diff Confirm** modal before applying; the CLI applies immediately. Every spec edit is snapshotted — `kuso revision list/revert` undoes a bad one.
 
@@ -1111,7 +1201,7 @@ nothing else in this skill, read this.
 
 - You need to inspect a non-kuso pod or raw cluster state → `kubectl` is fine, but you'll need a kubeconfig pointing at the cluster (which the user typically does NOT have on their dev machine).
 - You're debugging the operator itself → `ssh` to the cluster + `kubectl logs -n kuso-operator-system deploy/kuso-operator-controller-manager`.
-- A feature has no CLI verb yet (release hooks, cron `onFailure`, `sleep.wakeOn`, non-worker `command` override) → set it in `kuso.yml` + `kuso apply` where the field exists there (release hooks, `command`), otherwise `kuso api PATCH …` or `curl` the REST API with the bearer token (`$(awk '{print $2}' ~/.kuso/credentials.yaml)`), as shown in those sections. That's the sanctioned path, not a workaround.
+- A feature has no CLI verb yet → set it in `kuso.yml` + `kuso apply` where the field exists there, otherwise `kuso api PATCH …` (auth handled for you). That's the sanctioned path, not a workaround.
 
 For everything else — **reach for `kuso`**. If a CLI command fails or returns confusing output, that's a real bug; don't paper over it with raw `kubectl`.
 
@@ -1155,8 +1245,8 @@ services:
     sleep:
       enabled: true
       afterMinutes: 30
-    # sleep.wakeOn.excludePaths is NOT a kuso.yml field — set it via PATCH
-    # (see "wakeOn excludePaths"); apply leaves it untouched.
+    # sleep.wakeOn.excludePaths is NOT a kuso.yml field — set it with
+    # `kuso project service sleep --exclude-path` (see "wakeOn excludePaths"); apply leaves it untouched.
     scale: { min: 0, max: 5, targetCPU: 70 }
 
 addons:
@@ -1216,13 +1306,16 @@ domains add/remove/list       custom hostnames (--env <n> to scope; else mirrors
 get addons <p>                addons + their conn-secret names
 environment add <p> <s> <n> --branch <b>   long-lived env tracking a branch
 addon-backup download|list|restore|schedule    addon data backups
-cron list/add/add-http/add-command/sync/edit/edit-service/delete[-project]
+cron list/get/add/add-http/add-command/sync/edit/edit-service/delete[-project]
 marketplace list/info/deploy  one-click apps (gitea, n8n, uptime-kuma, ...)
 import compose <file>         convert docker-compose (dry-run by default)
 project create --repo --domain
-project addon add --kind [--tls require]
+project addon add --kind [--tls require] [--pooler]
+project addon pooler enable|set|disable   PgBouncer in front of postgres
 project service add --runtime [image|dockerfile|nixpacks|buildpacks|static|worker]
-project service set           patch port/domains/replicas/branch/caps on a live service
+project service set           patch port/domains/replicas/branch/caps/release/build config on a live service
+project service volume|placement   persistent disks / node pinning
+project service deploy-hook   show (default) / --enable / --rotate / --disable the deploy URL
 project service stop|start    hard-stop (no wake-on-traffic) / resume
 project delete <p>            cascades to services/envs/addons
 health [fix <r>]              reconcile health + one-click remediation

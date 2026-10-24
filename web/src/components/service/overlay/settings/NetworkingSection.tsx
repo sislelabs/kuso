@@ -6,8 +6,10 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useIngressTargets } from "@/features/cluster";
-import { Section, Row, type SectionProps } from "./_primitives";
+import { Section, Row, Toggle, type SectionProps } from "./_primitives";
 import { hostScheme } from "@/lib/host-scheme";
+import { WildcardDomainsRow } from "./WildcardDomainsRow";
+import { HostClashHint } from "@/components/shared/HostClashHint";
 
 // NetworkingSection — the single source of truth for "where does
 // this service answer HTTP". Three blocks, in order:
@@ -33,7 +35,21 @@ export function NetworkingSection({
   setState,
   autoHost,
   envName,
-}: SectionProps & { envName: string }) {
+  wildcard,
+  savedHosts = [],
+}: SectionProps & {
+  envName: string;
+  // Hosts already saved on this env; they're served by this service's own
+  // ingress, so only newly typed hosts are checked for clashes.
+  savedHosts?: string[];
+  // Present when the active env CR resolved; wildcard hosts live there.
+  wildcard?: {
+    project: string;
+    service: string;
+    domains: { host: string; tlsSecret?: string }[];
+    canWrite: boolean;
+  };
+}) {
   const lines = state.domains.split("\n").map((s) => s.trim());
   const hosts = lines.filter((s) => s.length > 0);
 
@@ -112,6 +128,32 @@ export function NetworkingSection({
               Internal-only
             </span>
           </button>
+        }
+      />
+      <Row
+        label="private egress"
+        hint={
+          state.privateEgress
+            ? "pods reach only this project's namespace — no public internet"
+            : "pods can reach the public internet"
+        }
+        control={
+          <Toggle
+            on={state.privateEgress}
+            onChange={(v) => setState((s) => ({ ...s, privateEgress: v }))}
+            label="Toggle private egress"
+          />
+        }
+      />
+      <Row
+        label="kuso API access"
+        hint="let pods call the kuso API in-cluster (for apps that orchestrate kuso)"
+        control={
+          <Toggle
+            on={state.platformApiEgress}
+            onChange={(v) => setState((s) => ({ ...s, platformApiEgress: v }))}
+            label="Toggle kuso API egress"
+          />
         }
       />
       <Row
@@ -240,10 +282,22 @@ export function NetworkingSection({
               Add domain
             </Button>
             {!state.internal && <DnsTargetHint host={hosts[0]} />}
+            {!state.internal && (
+              <HostClashHint hosts={hosts.map((h) => h.toLowerCase()).filter((h) => !savedHosts.includes(h))} />
+            )}
           </div>
         }
-        last
+        last={!wildcard || state.internal}
       />
+      {wildcard && !state.internal && (
+        <WildcardDomainsRow
+          project={wildcard.project}
+          service={wildcard.service}
+          envName={envName}
+          domains={wildcard.domains}
+          canWrite={wildcard.canWrite}
+        />
+      )}
     </Section>
   );
 }

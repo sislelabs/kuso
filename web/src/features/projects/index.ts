@@ -21,6 +21,7 @@ export {
   listServices,
   listEnvironments,
   createEnvironment,
+  deleteEnvironment,
   stopProject,
   startProject,
   listAddons,
@@ -56,6 +57,8 @@ export {
   muteProjectNotifications,
   unmuteProjectNotifications,
   listMutedProjects,
+  exportProjectArchive,
+  importProjectArchive,
 } from "./api";
 export type {
   ProjectSummaryItem,
@@ -74,6 +77,9 @@ export type {
   ConfigPlan,
   ConfigStepError,
   ConfigApplyResult,
+  ImportPolicy,
+  CreateServiceEnvBody,
+  ImportProjectResult,
 } from "./api";
 export {
   useUpdateProject,
@@ -84,3 +90,4 @@ export {
   useStartProject,
 } from "./mutations";
 export type { UpdateProjectBody, CreateProjectBody } from "./mutations";
+export { buildServiceEnvBody, type ServiceEnvForm } from "./serviceEnvBody";

@@ -10,6 +10,8 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useCan, Perms } from "@/features/auth";
+import { ControlPlaneBackupSection } from "@/components/settings/ControlPlaneBackupSection";
 
 interface HealthEntry {
   healthy: boolean;
@@ -202,6 +204,7 @@ interface BackupSettings {
 // with a backup.schedule kicks pg_dump → S3 every cron tick.
 export default function BackupSettingsPage() {
   const qc = useQueryClient();
+  const isAdmin = useCan(Perms.SettingsAdmin);
   const settings = useQuery({
     queryKey: ["admin", "backup-settings"],
     queryFn: () => api<BackupSettings>("/api/admin/backup-settings"),
@@ -247,6 +250,8 @@ export default function BackupSettingsPage() {
       </header>
 
       <MaintenanceHealthBanners />
+
+      {isAdmin && <ControlPlaneBackupSection />}
 
       {settings.isPending ? (
         <Skeleton className="h-72 w-full rounded-md" />

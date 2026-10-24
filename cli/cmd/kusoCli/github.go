@@ -31,7 +31,13 @@ var githubCmd = &cobra.Command{
 var githubStatusCmd = &cobra.Command{
 	Use:   "status",
 	Args:  cobra.NoArgs,
-	Short: "Show GitHub App install URL + configured state",
+	Short: "Show whether the GitHub App is configured, its slug/id and install URL",
+	Long: `Show the GitHub App state. "configured" is what the running server
+has loaded; "secret stored" (admin only) is whether the kuso-github-app
+Secret holds a complete app config. Stored but not configured means the
+server hasn't picked the new config up yet.`,
+	Example: `  kuso github status
+  kuso github status -o json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -44,9 +50,101 @@ var githubStatusCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
+		// setup-status is admin-only; a non-admin still gets the
+		// install-url half.
+		var setup map[string]any
+		if sresp, serr := api.GithubSetupStatus(); checkRespErr(sresp, serr) == nil {
+			_ = json.Unmarshal(sresp.Body(), &setup)
+		}
+		if outputFormat == "json" {
+			out := map[string]any{"configured": data["configured"], "installUrl": data["url"]}
+			if setup != nil {
+				out["setup"] = setup
+			}
+			return jsonOut(out)
+		}
 		fmt.Printf("configured: %v\n", data["configured"])
+		if setup != nil {
+			fmt.Printf("secret stored: %v\n", setup["configured"])
+			if v := asString(setup["appSlug"]); v != "" {
+				fmt.Printf("app slug: %s\n", v)
+			}
+			if v := asString(setup["appId"]); v != "" {
+				fmt.Printf("app id: %s\n", v)
+			}
+		}
 		if u, ok := data["url"].(string); ok && u != "" {
 			fmt.Printf("install URL: %s\n", u)
+		}
+		return nil
+	},
+}
+
+var githubTreeCmd = &cobra.Command{
+	Use:   "tree <owner/repo>",
+	Short: "List a repo's files at a branch (pick a monorepo subpath)",
+	Long: `List the files and directories in a repo at the head of a branch,
+optionally under --path (the prefix is stripped from the output). Useful
+for finding the subdirectory to pass as a service's --path in a monorepo.
+The installation is resolved from the owner unless --installation-id is
+given; the branch defaults to the repo's default branch. Admin only.`,
+	Example: `  kuso github tree acme/monorepo
+  kuso github tree acme/monorepo --path services --ref main
+  kuso github tree acme/monorepo -o json | jq -r '.[] | select(.type=="tree") | .path'`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		owner, repo, err := splitRepo(args[0])
+		if err != nil {
+			return err
+		}
+		installID := ghInstallIDFlag
+		if installID == 0 {
+			installID, err = resolveInstallation(owner)
+			if err != nil {
+				return fmt.Errorf("resolve installation: %w", err)
+			}
+			if installID == 0 {
+				return fmt.Errorf("no GitHub App installation found for owner %q — pass --installation-id or install the kuso App on that account", owner)
+			}
+		}
+		branch := ghRefFlag
+		if branch == "" {
+			branch = resolveDefaultBranch(installID, owner, repo)
+			if branch == "" {
+				return fmt.Errorf("could not resolve default branch for %s/%s — pass --ref", owner, repo)
+			}
+		}
+		resp, err := api.GithubRepoTree(installID, owner, repo, branch, ghPathFlag)
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("repo tree: %w", err)
+		}
+		var entries []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+			Size int    `json:"size"`
+		}
+		if err := json.Unmarshal(resp.Body(), &entries); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		if outputFormat == "json" {
+			if entries == nil {
+				return jsonOut([]any{})
+			}
+			return jsonOut(entries)
+		}
+		if len(entries) == 0 {
+			fmt.Println("no entries (empty repo, or nothing under --path)")
+			return nil
+		}
+		for _, e := range entries {
+			if e.Type == "tree" {
+				fmt.Println(e.Path + "/")
+			} else {
+				fmt.Println(e.Path)
+			}
 		}
 		return nil
 	},
@@ -564,12 +662,14 @@ func init() {
 	githubCmd.AddCommand(githubCheckRepoCmd)
 	githubCmd.AddCommand(githubDetectRuntimeCmd)
 	githubCmd.AddCommand(githubScanAddonsCmd)
+	githubCmd.AddCommand(githubTreeCmd)
 
 	for _, c := range []*cobra.Command{githubCheckRepoCmd, githubDetectRuntimeCmd, githubScanAddonsCmd} {
 		c.Flags().StringVar(&ghRepoFlag, "repo", "", "target repo as owner/name (required)")
 		c.Flags().Int64Var(&ghInstallIDFlag, "installation-id", 0, "installation id (0 = auto-resolve from owner)")
 	}
-	for _, c := range []*cobra.Command{githubDetectRuntimeCmd, githubScanAddonsCmd} {
+	githubTreeCmd.Flags().Int64Var(&ghInstallIDFlag, "installation-id", 0, "installation id (0 = auto-resolve from owner)")
+	for _, c := range []*cobra.Command{githubDetectRuntimeCmd, githubScanAddonsCmd, githubTreeCmd} {
 		c.Flags().StringVar(&ghRefFlag, "ref", "", "git branch (default: repo's default branch)")
 		c.Flags().StringVar(&ghPathFlag, "path", "", "subdirectory within the repo")
 	}

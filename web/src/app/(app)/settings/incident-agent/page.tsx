@@ -24,6 +24,7 @@ import {
   type IncidentAgentConfig,
 } from "@/features/incident-agent";
 import { useProjects, useSetIncidentMonitoring } from "@/features/projects";
+import { IncidentsSection } from "@/components/incidents/IncidentsSection";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +60,7 @@ export default function IncidentAgentPage() {
       </header>
 
       <ConfigSection config={config} status={status} readOnly={readOnly} onSaved={invalidate} />
+      <IncidentsSection canAdmin={canAdmin} />
       <MonitoredProjectsSection agentEnabled={config.enabled} readOnly={readOnly} />
       <CredentialsSection status={status} readOnly={readOnly} onSaved={invalidate} />
       <DiscordSection status={status} readOnly={readOnly} onSaved={invalidate} />

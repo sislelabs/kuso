@@ -530,18 +530,49 @@ control-plane node.
 If volumes store their data only on this node (local-path PVCs for
 addons or service volumes), the server refuses and lists them. Move or
 back them up first, or pass --accept-data-loss to remove the node anyway.
---force only skips graceful pod eviction during the drain.`,
+--force only skips graceful pod eviction during the drain.
+
+--dry-run only lists the volumes that would be lost and changes nothing.`,
 	Example: `  kuso node remove worker-2
   kuso node remove worker-2 --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
   kuso node remove worker-2 --force
   kuso node remove dead-worker --force --accept-data-loss --yes
-  kuso node remove worker-2 --yes`,
+  kuso node remove worker-2 --yes
+  kuso node remove worker-2 --dry-run`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		name := args[0]
+		// Preflight before the prompt so the operator sees what would be
+		// stranded. Best-effort outside --dry-run: the remove call itself
+		// re-checks and refuses with the same list.
+		pinned, perr := nodeRemovePreflight(name)
+		if nodeRemoveDryRun {
+			if perr != nil {
+				return fmt.Errorf("remove preflight: %w", perr)
+			}
+			if len(pinned) == 0 {
+				fmt.Printf("dry run: no volumes store data only on %s; removing it strands no data\n", name)
+				return nil
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "dry run: %d volume(s) store data only on %s and would be lost:", len(pinned), name)
+			formatPinnedVolumes(&b, pinned)
+			fmt.Println(b.String())
+			return nil
+		}
+		if perr == nil && len(pinned) > 0 {
+			var b strings.Builder
+			fmt.Fprintf(&b, "%d volume(s) store data only on %s:", len(pinned), name)
+			formatPinnedVolumes(&b, pinned)
+			if !nodeRemoveAcceptDataLoss {
+				b.WriteString("\nMove or back them up first, or re-run with --accept-data-loss to remove the node anyway.")
+				return errors.New(b.String())
+			}
+			fmt.Fprintln(cmd.ErrOrStderr(), b.String())
+		}
 		prompt := fmt.Sprintf("Cordon, drain, and remove node %q from the cluster? Its workloads reschedule elsewhere.", name)
 		if nodeRemoveAcceptDataLoss {
 			prompt += " Data on volumes stored only on this node is LOST."
@@ -583,28 +614,25 @@ back them up first, or pass --accept-data-loss to remove the node anyway.
 	},
 }
 
-var nodeRemoveAcceptDataLoss bool
+var (
+	nodeRemoveAcceptDataLoss bool
+	nodeRemoveDryRun         bool
+)
 
-// pinnedVolumesConflict renders the server's 409 for node-local volumes, or
-// "" when the body isn't that shape.
-func pinnedVolumesConflict(body []byte) string {
-	var conflict struct {
-		Error  string `json:"error"`
-		Pinned []struct {
-			Namespace string `json:"namespace"`
-			PVC       string `json:"pvc"`
-			Kind      string `json:"kind"`
-			Owner     string `json:"owner"`
-			Size      string `json:"size"`
-		} `json:"pinned"`
-	}
-	if json.Unmarshal(body, &conflict) != nil || len(conflict.Pinned) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(strings.TrimSuffix(conflict.Error, ", or retry with force=true"))
-	for _, p := range conflict.Pinned {
-		fmt.Fprintf(&b, "\n  %s/%s  %s", p.Namespace, p.PVC, p.Kind)
+// pinnedVolume is one node-local PVC from the server's remove preflight
+// or its 409 refusal (handlers.PinnedVolume).
+type pinnedVolume struct {
+	Namespace string `json:"namespace"`
+	PVC       string `json:"pvc"`
+	Kind      string `json:"kind"`
+	Project   string `json:"project"`
+	Owner     string `json:"owner"`
+	Size      string `json:"size"`
+}
+
+func formatPinnedVolumes(b *strings.Builder, pinned []pinnedVolume) {
+	for _, p := range pinned {
+		fmt.Fprintf(b, "\n  %s/%s  %s", p.Namespace, p.PVC, p.Kind)
 		if p.Owner != "" {
 			b.WriteString("  " + p.Owner)
 		}
@@ -612,8 +640,39 @@ func pinnedVolumesConflict(body []byte) string {
 			b.WriteString("  " + p.Size)
 		}
 	}
+}
+
+// pinnedVolumesConflict renders the server's 409 for node-local volumes, or
+// "" when the body isn't that shape.
+func pinnedVolumesConflict(body []byte) string {
+	var conflict struct {
+		Error  string         `json:"error"`
+		Pinned []pinnedVolume `json:"pinned"`
+	}
+	if json.Unmarshal(body, &conflict) != nil || len(conflict.Pinned) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimSuffix(conflict.Error, ", or retry with force=true"))
+	formatPinnedVolumes(&b, conflict.Pinned)
 	b.WriteString("\nRe-run with --accept-data-loss to remove the node anyway.")
 	return b.String()
+}
+
+// nodeRemovePreflight asks the server which volumes store data only on
+// the node.
+func nodeRemovePreflight(name string) ([]pinnedVolume, error) {
+	resp, err := api.NodeRemovePreflight(name)
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Pinned []pinnedVolume `json:"pinned"`
+	}
+	if err := json.Unmarshal(resp.Body(), &out); err != nil {
+		return nil, fmt.Errorf("decode preflight: %w", err)
+	}
+	return out.Pinned, nil
 }
 
 var nodeUpdatesCmd = &cobra.Command{
@@ -941,6 +1000,7 @@ func init() {
 	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveForce, "force", false, "skip graceful pod eviction during drain")
 	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveAcceptDataLoss, "accept-data-loss", false, "remove even when volumes store data only on this node (that data is lost)")
 	nodeRemoveCmd.Flags().BoolVarP(&nodeRemoveYes, "yes", "y", false, "skip the confirmation prompt")
+	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveDryRun, "dry-run", false, "only list the volumes that store data on this node; remove nothing")
 	nodeCmd.AddCommand(nodeRemoveCmd)
 
 	nodeUpdatesCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

@@ -16,7 +16,10 @@ import {
   getProjectNotificationMute,
   muteProjectNotifications,
   unmuteProjectNotifications,
+  exportProjectArchive,
+  type UpdateProjectBody,
 } from "@/features/projects";
+import { useInstallations } from "@/features/github";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { RegistryCredentialsCard } from "@/components/project/RegistryCredentialsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
@@ -25,7 +28,7 @@ import { friendlyApiError } from "@/features/projects/names";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
 import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
-import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon } from "lucide-react";
+import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon, Download } from "lucide-react";
 
 // Empty or non-numeric input falls back to the 7-day default; anything
 // else is clamped to the 1..30 range the input advertises.
@@ -60,6 +63,12 @@ export function ProjectSettingsView() {
   // Kept as the raw input string so the field can be cleared while
   // typing; clamped on blur and on save.
   const [previewsTtl, setPreviewsTtl] = useState("7");
+  const [previewsDomain, setPreviewsDomain] = useState("");
+  // GitHub App installation the project clones with; 0 = none.
+  const [installationId, setInstallationId] = useState(0);
+  const installations = useInstallations();
+  const [exporting, setExporting] = useState(false);
+  const [confirmExport, setConfirmExport] = useState(false);
   const [alwaysOn, setAlwaysOn] = useState(false);
   // Ingress limit defaults for the project's services. "" = platform
   // default; kept as strings so a field can be emptied while typing.
@@ -100,6 +109,8 @@ export function ProjectSettingsView() {
       setRepoBranch(s.defaultRepo?.defaultBranch ?? "");
       setPreviewsEnabled(!!s.previews?.enabled);
       setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
+      setPreviewsDomain(s.previews?.baseDomain ?? "");
+      setInstallationId(s.github?.installationId ?? 0);
       setAlwaysOn(!!s.alwaysOn);
       setLimitMaxConcurrent(String(s.requestLimits?.maxConcurrent || ""));
       setLimitRate(String(s.requestLimits?.ratePerSecond || ""));
@@ -145,8 +156,14 @@ export function ProjectSettingsView() {
       }
       requestLimits[key] = n;
     }
+    const storedInstallation = spec?.github?.installationId ?? 0;
+    const github: Pick<UpdateProjectBody, "github"> =
+      installationId !== storedInstallation ? { github: { installationId } } : {};
+    const previewsBaseDomain =
+      previewsDomain.trim() !== (spec?.previews?.baseDomain ?? "") ? { baseDomain: previewsDomain.trim() } : {};
     try {
       await update.mutateAsync({
+        ...github,
         // "" clears; the server treats an omitted/null key as "leave alone".
         description: description.trim(),
         baseDomain: baseDomain.trim(),
@@ -157,7 +174,7 @@ export function ProjectSettingsView() {
           : storedRepoURL
             ? { clearDefaultRepo: true }
             : {}),
-        previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl) },
+        previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl), ...previewsBaseDomain },
         alwaysOn,
         uptime: { disabled: !uptimeEnabled },
         requestLimits,
@@ -273,6 +290,30 @@ export function ProjectSettingsView() {
               trigger builds and preview envs. Leave blank if every service sets its own repo.
             </p>
           </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="installation">GitHub App installation</Label>
+            <select
+              id="installation"
+              value={installationId}
+              onChange={(e) => { setInstallationId(Number(e.target.value)); setDirty(true); }}
+              className="block h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[13px]"
+            >
+              <option value={0}>none</option>
+              {(installations.data ?? []).map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.accountLogin} ({i.accountType.toLowerCase()})
+                </option>
+              ))}
+              {installationId > 0 && !(installations.data ?? []).some((i) => i.id === installationId) && (
+                <option value={installationId}>#{installationId} (not visible to kuso)</option>
+              )}
+            </select>
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              The installation kuso mints clone tokens from for private repos. None = public repos only,
+              unless a service sets its own.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -335,6 +376,19 @@ export function ProjectSettingsView() {
                 onBlur={(e) => setPreviewsTtl(String(clampPreviewTtl(e.target.value)))}
                 className="w-32 font-mono"
               />
+              <Label htmlFor="previewsDomain" className="block pt-2">Preview domain</Label>
+              <Input
+                id="previewsDomain"
+                value={previewsDomain}
+                onChange={(e) => { setPreviewsDomain(e.target.value); setDirty(true); }}
+                placeholder={baseDomain || "same as base domain"}
+                className="font-mono"
+              />
+              <p className="text-[10px] text-[var(--text-tertiary)]">
+                Previews are served at{" "}
+                <span className="font-mono">&lt;svc&gt;-pr-&lt;N&gt;.{previewsDomain.trim() || baseDomain || "<base>"}</span>
+                . Needs a wildcard DNS record for that domain. Blank = the base domain.
+              </p>
               <p className="text-[10px] text-[var(--text-tertiary)]">
                 Each preview gets its own Postgres and Redis addons (Postgres starts as a
                 copy of production data), so reviewers never write to production. This is on
@@ -547,6 +601,54 @@ export function ProjectSettingsView() {
 
       {/* Config as code — kuso.yaml export / dry-run / apply */}
       <ConfigTab project={projectName} />
+
+      {/* Archive export — the whole project incl. secret values (admin-only server-side). */}
+      {isProjectAdmin && (
+        <section className="space-y-3">
+          <header>
+            <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              archive
+            </h2>
+          </header>
+          <div className="flex items-start gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+            <p className="flex-1 text-[11px] text-[var(--text-secondary)]">
+              Download a tarball of this project&apos;s services, environments, addons and{" "}
+              <span className="text-[var(--text-primary)]">secret values</span> to move it to another kuso
+              instance (import it from New project). Addon data isn&apos;t included; use addon backups
+              for that. Store the file like a credential.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => setConfirmExport(true)} disabled={exporting}>
+              <Download className="h-4 w-4" />
+              {exporting ? "Exporting…" : "Export archive"}
+            </Button>
+          </div>
+          <ConfirmDialog
+            open={confirmExport}
+            title="Export with secrets?"
+            body={
+              <>
+                The archive contains every secret value in <span className="font-mono">{projectName}</span>{" "}
+                in plain text. The export is recorded in the audit log.
+              </>
+            }
+            destructive={false}
+            confirmLabel="Download"
+            pending={exporting}
+            onConfirm={async () => {
+              setExporting(true);
+              try {
+                await exportProjectArchive(projectName);
+                setConfirmExport(false);
+              } catch (e) {
+                toast.error(friendlyApiError(e, "Export failed"));
+              } finally {
+                setExporting(false);
+              }
+            }}
+            onCancel={() => setConfirmExport(false)}
+          />
+        </section>
+      )}
 
       {/* Danger zone — project-admin only, mirroring the server gate */}
       {isProjectAdmin && (

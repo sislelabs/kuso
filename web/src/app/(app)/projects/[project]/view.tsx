@@ -14,6 +14,7 @@ import { ServiceOverlay } from "@/components/service/ServiceOverlay";
 import { AddonOverlay } from "@/components/addon/AddonOverlay";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { MobileIncidentView } from "@/components/project/MobileIncidentView";
+import { ProjectStatusStrip } from "@/components/project/ProjectStatusStrip";
 import { Package, Database } from "lucide-react";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
@@ -368,6 +369,7 @@ export function ProjectDetailView() {
             </button>
           </div>
         )}
+        <ProjectStatusStrip project={projectName} selectedEnv={selectedEnv} />
         <ProjectCanvas
           project={projectName}
           selectedEnv={selectedEnv}

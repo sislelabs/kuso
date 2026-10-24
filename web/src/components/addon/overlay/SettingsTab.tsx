@@ -6,6 +6,8 @@ import {
   deleteAddon,
   disableAddonPublicTCP,
   enableAddonPublicTCP,
+  resyncExternalAddon,
+  resyncInstanceAddon,
   setAddonPlacement,
   updateAddon,
   type UpdateAddonBody,
@@ -31,6 +33,7 @@ import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
 import { nodeMatchesLabels, placementLabels } from "./placementLabels";
 import { useCan, Perms } from "@/features/auth";
 import { addonBlast } from "@/lib/blast-radius";
+import { poolerForm, poolerPatch } from "./poolerPatch";
 
 // addonReconcileState reads the addon CR's real helm-reconcile condition
 // instead of inferring health from the form's dirty flag. "in sync" must
@@ -99,10 +102,13 @@ export function SettingsTab({
   return (
     <div className="space-y-4 p-5">
       {isExternal ? (
-        <ExternalSummarySection cr={cr} />
+        <ExternalSummarySection project={project} addon={addon} cr={cr} />
       ) : (
         <>
           <ConfigurationSection project={project} addon={addon} cr={cr} />
+          {cr?.spec.useInstanceAddon && (
+            <ResyncInstanceSection project={project} addon={addon} instance={cr.spec.useInstanceAddon} />
+          )}
           <PlacementSection project={project} addon={addon} cr={cr} />
           <PublicTCPSection project={project} addon={addon} cr={cr} />
           <RepairPasswordSection project={project} addon={addon} cr={cr} />
@@ -187,6 +193,7 @@ function ConfigurationSection({
     storageSize: cr?.spec.storageSize ?? "",
     database: cr?.spec.database ?? "",
     pooler: !!cr?.spec.pooler?.enabled,
+    poolSize: cr?.spec.pooler?.poolSize ? String(cr.spec.pooler.poolSize) : "",
     requireTLS: cr?.spec.tls === "require",
   };
 
@@ -196,6 +203,7 @@ function ConfigurationSection({
   const [storageSize, setStorageSize] = useState(initial.storageSize);
   const [database, setDatabase] = useState(initial.database);
   const [pooler, setPooler] = useState(initial.pooler);
+  const [poolSize, setPoolSize] = useState(initial.poolSize);
   const [requireTLS, setRequireTLS] = useState(initial.requireTLS);
 
   // Re-baseline whenever the CR changes (e.g. after a successful save
@@ -209,6 +217,7 @@ function ConfigurationSection({
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
     setPooler(initial.pooler);
+    setPoolSize(initial.poolSize);
     setRequireTLS(initial.requireTLS);
   }, [
     initial.version,
@@ -217,6 +226,7 @@ function ConfigurationSection({
     initial.storageSize,
     initial.database,
     initial.pooler,
+    initial.poolSize,
     initial.requireTLS,
   ]);
 
@@ -227,6 +237,7 @@ function ConfigurationSection({
     storageSize !== initial.storageSize ||
     database !== initial.database ||
     pooler !== initial.pooler ||
+    poolSize !== initial.poolSize ||
     requireTLS !== initial.requireTLS;
 
   const save = useMutation({
@@ -240,7 +251,13 @@ function ConfigurationSection({
       if (ha !== initial.ha) body.ha = ha;
       if (storageSize !== initial.storageSize) body.storageSize = storageSize.trim();
       if (database !== initial.database) body.database = database.trim();
-      if (pooler !== initial.pooler) body.pooler = { enabled: pooler };
+      const pp = poolerPatch(
+        { enabled: pooler, host: "", port: "", poolSize },
+        { enabled: initial.pooler, host: "", port: "", poolSize: initial.poolSize },
+        false,
+      );
+      if (pp && "error" in pp) throw new Error(pp.error);
+      if (pp) body.pooler = pp.pooler;
       if (requireTLS !== initial.requireTLS) body.tls = requireTLS ? "require" : "disable";
       return updateAddon(project, addon, body);
     },
@@ -260,6 +277,7 @@ function ConfigurationSection({
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
     setPooler(initial.pooler);
+    setPoolSize(initial.poolSize);
     setRequireTLS(initial.requireTLS);
   };
   // Register with the overlay shell so the unified SaveBar at the
@@ -410,6 +428,21 @@ function ConfigurationSection({
             </span>
           </label>
         )}
+        {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && pooler && (
+          <label className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+            <span className="text-[12px] font-medium">Pool size</span>
+            <Input
+              type="number"
+              min={1}
+              value={poolSize}
+              onChange={(e) => setPoolSize(e.target.value)}
+              placeholder="25"
+              aria-label="Pool size"
+              className="ml-auto h-7 w-24 font-mono text-[12px]"
+            />
+            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">server connections per db/user</span>
+          </label>
+        )}
         {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
           <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
             <label className="flex cursor-pointer items-center gap-2">
@@ -465,13 +498,56 @@ function ConfigurationSection({
 // so the panel states what kuso actually does here instead of showing a column
 // of disabled inputs that imply otherwise.
 function ExternalSummarySection({
+  project,
+  addon,
   cr,
 }: {
+  project: string;
+  addon: string;
   cr?: import("@/types/projects").KusoAddon;
 }) {
+  const qc = useQueryClient();
   const secretName = cr?.spec.external?.secretName ?? "";
-  const pooler = cr?.spec.pooler;
-  const pooled = !!pooler?.enabled && !!pooler?.externalBackend;
+  const isPostgres = (cr?.spec.kind ?? "").toLowerCase() === "postgres";
+  const base = poolerForm(cr?.spec.pooler);
+  const baseKey = JSON.stringify(base);
+  const [form, setForm] = useState(base);
+  useEffect(() => {
+    setForm(JSON.parse(baseKey) as typeof base);
+  }, [baseKey]);
+  const dirty = JSON.stringify(form) !== baseKey;
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+    // Connection details (DSN, TLS, pooler) render from this cache.
+    qc.invalidateQueries({ queryKey: ["addons", project] });
+  };
+  const resync = useMutation({
+    mutationFn: () => resyncExternalAddon(project, addon),
+    onSuccess: () => {
+      toast.success("Credentials re-mirrored — services pick them up on their next restart");
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Resync failed"),
+  });
+  const save = useMutation({
+    mutationFn: () => {
+      const pp = poolerPatch(form, base, true);
+      if (pp && "error" in pp) throw new Error(pp.error);
+      return updateAddon(project, addon, pp ? { pooler: pp.pooler } : {});
+    },
+    onSuccess: () => {
+      toast.success("Pooler saved");
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+  });
+  useAddonOverlayDirty("addon-external-pooler", dirty, {
+    onSave: () => save.mutateAsync(),
+    onDiscard: () => setForm(base),
+    saving: save.isPending,
+    saveError: save.error instanceof Error ? save.error.message : undefined,
+  });
 
   return (
     <section className="space-y-3 rounded-md border border-[var(--border-subtle)] p-4">
@@ -488,25 +564,115 @@ function ExternalSummarySection({
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 font-mono text-[11px]">
         <dt className="text-[var(--text-tertiary)]">credentials</dt>
         <dd className="truncate">{secretName || "—"}</dd>
-        <dt className="text-[var(--text-tertiary)]">pooling</dt>
-        <dd>
-          {pooled ? (
-            <>
-              PgBouncer → {pooler?.host}:{pooler?.port ?? 5432}
-            </>
-          ) : (
-            "direct (no pooler)"
-          )}
-        </dd>
       </dl>
 
-      <p className="text-xs text-[var(--text-secondary)]">
-        Rotated the password upstream? Re-mirror it with{" "}
-        <code className="font-mono text-[11px]">
-          kuso project addon resync-external
-        </code>
-        .
+      {isPostgres && (
+        <div className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+              className="h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            <span className="text-[12px] font-medium">Connection pooling (PgBouncer)</span>
+            <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+              point apps at {"${{ <addon>.POOLER_URL }}"}
+            </span>
+          </label>
+          {form.enabled && (
+            <div className="flex flex-wrap items-center gap-2 pl-5">
+              <Input
+                value={form.host}
+                onChange={(e) => setForm({ ...form, host: e.target.value })}
+                placeholder="db.provider.com"
+                aria-label="Provider host"
+                spellCheck={false}
+                className="h-7 min-w-0 flex-1 font-mono text-[12px]"
+              />
+              <Input
+                type="number"
+                value={form.port}
+                onChange={(e) => setForm({ ...form, port: e.target.value })}
+                placeholder="5432"
+                aria-label="Provider port"
+                className="h-7 w-20 font-mono text-[12px]"
+              />
+              <Input
+                type="number"
+                value={form.poolSize}
+                onChange={(e) => setForm({ ...form, poolSize: e.target.value })}
+                placeholder="25"
+                aria-label="Pool size"
+                title="Pool size (server connections per db/user)"
+                className="h-7 w-20 font-mono text-[12px]"
+              />
+            </div>
+          )}
+          {dirty && (
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setForm(base)} disabled={save.isPending}>
+                Reset
+              </Button>
+              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+                {save.isPending ? "Saving…" : "Save pooler"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <p className="flex-1 text-xs text-[var(--text-secondary)]">
+          Rotated the password upstream? Re-mirror the credentials so new pods
+          get them.
+        </p>
+        <Button variant="outline" size="sm" disabled={resync.isPending} onClick={() => resync.mutate()}>
+          <RefreshCw className="h-3.5 w-3.5" />
+          {resync.isPending ? "Resyncing…" : "Resync credentials"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+// ResyncInstanceSection re-runs the provisioner for an addon whose
+// database lives on an instance-shared postgres: recreates the per-project
+// database/role if missing and rewrites the conn Secret. The password is
+// kept; consuming envs restart only if the Secret content changed.
+function ResyncInstanceSection({
+  project,
+  addon,
+  instance,
+}: {
+  project: string;
+  addon: string;
+  instance: string;
+}) {
+  const qc = useQueryClient();
+  const resync = useMutation({
+    mutationFn: () => resyncInstanceAddon(project, addon),
+    onSuccess: () => {
+      toast.success("Database re-provisioned on the shared instance");
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      qc.invalidateQueries({ queryKey: ["addons", project] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Resync failed"),
+  });
+  return (
+    <section className="rounded-md border border-[var(--border-subtle)] p-4">
+      <h4 className="text-sm font-semibold">Shared instance</h4>
+      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+        This addon&apos;s database lives on the instance-shared postgres{" "}
+        <span className="font-mono">{instance}</span>. Resync re-creates the
+        project&apos;s database and role there if they went missing and rewrites
+        the connection secret. The password is kept; subscribed services restart
+        only if the connection details changed.
       </p>
+      <Button variant="outline" size="sm" className="mt-3" disabled={resync.isPending} onClick={() => resync.mutate()}>
+        <RefreshCw className="h-3.5 w-3.5" />
+        {resync.isPending ? "Resyncing…" : "Resync database"}
+      </Button>
     </section>
   );
 }

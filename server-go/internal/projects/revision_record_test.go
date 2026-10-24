@@ -551,3 +551,15 @@ func TestRevertEnvBranchSnapshot(t *testing.T) {
 		t.Fatalf("replay revision summary = %q", last.summary)
 	}
 }
+
+func TestSetServiceBranchInEnvUnknownServiceIsNotFound(t *testing.T) {
+	t.Parallel()
+	s := revisionFixture(t, kube.KusoServiceSpec{})
+	if _, err := s.Kube.CreateKusoEnvironment(context.Background(), "kuso", groupEnvCR("alpha", "web", "qa", "main")); err != nil {
+		t.Fatal(err)
+	}
+	err := s.SetServiceBranchInEnv(aliceCtx(), "alpha", "qa", "nope", "feature-x")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown service: err = %v, want ErrNotFound", err)
+	}
+}

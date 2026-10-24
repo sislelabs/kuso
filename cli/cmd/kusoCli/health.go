@@ -156,6 +156,138 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 	},
 }
 
+// orphanKinds are the reconcile-health issue kinds DELETE /api/admin/orphans
+// accepts.
+var orphanKinds = map[string]bool{"orphan_conn_secret": true, "orphan_addon_pvc": true}
+
+func fetchOrphans() ([]healthIssue, error) {
+	resp, err := api.ReconcileHealth()
+	if err := checkRespErr(resp, err); err != nil {
+		return nil, err
+	}
+	var rep healthReport
+	if err := json.Unmarshal(resp.Body(), &rep); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	out := []healthIssue{}
+	for _, is := range rep.Issues {
+		if orphanKinds[is.Kind] {
+			out = append(out, is)
+		}
+	}
+	return out, nil
+}
+
+var healthOrphansOutput string
+
+var healthOrphansCmd = &cobra.Command{
+	Use:   "orphans",
+	Short: "List addon leftovers (conn Secrets, data volumes) whose addon is gone",
+	Long: `List the orphaned addon resources the reconcile scan flags: a conn
+Secret or data PVC whose KusoAddon no longer exists. Addon delete keeps
+both on purpose, and while they exist the addon name can't be reused.
+Delete one with 'kuso health orphans delete'.`,
+	Example: `  kuso health orphans
+  kuso health orphans -o json`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		orphans, err := fetchOrphans()
+		if err != nil {
+			return err
+		}
+		switch healthOrphansOutput {
+		case "json":
+			return jsonOut(orphans)
+		case "table", "":
+		default:
+			return fmt.Errorf("unsupported output format %q", healthOrphansOutput)
+		}
+		if len(orphans) == 0 {
+			fmt.Println("no orphaned addon resources")
+			return nil
+		}
+		tw := tablewriter.NewWriter(os.Stdout)
+		tw.SetHeader([]string{"KIND", "NAMESPACE", "NAME", "PROJECT", "SUMMARY"})
+		tw.SetAutoWrapText(false)
+		for _, is := range orphans {
+			tw.Append([]string{is.Kind, is.Namespace, is.Resource, dashIfEmpty(is.Project), is.Summary})
+		}
+		tw.Render()
+		return nil
+	},
+}
+
+var healthOrphansDelete struct {
+	kind, namespace, name string
+	yes, dryRun           bool
+}
+
+var healthOrphansDeleteCmd = &cobra.Command{
+	Use:     "delete",
+	Aliases: []string{"rm"},
+	Short:   "Delete one orphaned addon conn Secret or data volume",
+	Long: `Delete one orphan the reconcile scan flagged. The server re-checks
+that the owning addon is really gone and refuses (409) otherwise. Deleting
+an orphan_addon_pvc destroys that volume's data and it is not recoverable;
+an orphan_conn_secret holds the old addon's password. Back up anything you
+need first. Prompts for the name unless --yes. --dry-run only confirms the
+target is currently flagged as an orphan.`,
+	Example: `  kuso health orphans delete --kind orphan_addon_pvc --namespace kuso-shop --name data-shop-db-0
+  kuso health orphans delete --kind orphan_conn_secret --namespace kuso --name shop-cache-conn --yes
+  kuso health orphans delete --kind orphan_addon_pvc --namespace kuso-shop --name data-shop-db-0 --dry-run`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		f := &healthOrphansDelete
+		if !orphanKinds[f.kind] {
+			return fmt.Errorf("--kind must be orphan_conn_secret or orphan_addon_pvc")
+		}
+		if f.namespace == "" || f.name == "" {
+			return fmt.Errorf("--namespace and --name are required (see 'kuso health orphans')")
+		}
+		if f.dryRun {
+			orphans, err := fetchOrphans()
+			if err != nil {
+				return err
+			}
+			for _, is := range orphans {
+				if is.Kind == f.kind && is.Namespace == f.namespace && is.Resource == f.name {
+					fmt.Printf("dry run: would delete %s %s/%s: %s\n", f.kind, f.namespace, f.name, is.Summary)
+					return nil
+				}
+			}
+			return fmt.Errorf("dry run: %s %s/%s is not flagged as an orphan; the delete would be refused", f.kind, f.namespace, f.name)
+		}
+		if err := confirmTypedName(f.yes, f.name,
+			fmt.Sprintf("Delete %s %s/%s? This is not recoverable.", f.kind, f.namespace, f.name)); err != nil {
+			return err
+		}
+		resp, err := api.DeleteOrphan(f.kind, f.namespace, f.name)
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("delete orphan: %w", err)
+		}
+		fmt.Printf("deleted %s %s/%s\n", f.kind, f.namespace, f.name)
+		return nil
+	},
+}
+
+func init() {
+	healthCmd.AddCommand(healthOrphansCmd)
+	healthOrphansCmd.AddCommand(healthOrphansDeleteCmd)
+	healthOrphansCmd.Flags().StringVarP(&healthOrphansOutput, "output", "o", "table", "output format [table, json]")
+	of := healthOrphansDeleteCmd.Flags()
+	of.StringVar(&healthOrphansDelete.kind, "kind", "", "orphan_conn_secret or orphan_addon_pvc")
+	of.StringVar(&healthOrphansDelete.namespace, "namespace", "", "namespace of the orphan")
+	of.StringVar(&healthOrphansDelete.name, "name", "", "Secret or PVC name")
+	of.BoolVarP(&healthOrphansDelete.yes, "yes", "y", false, "skip the confirmation prompt")
+	of.BoolVar(&healthOrphansDelete.dryRun, "dry-run", false, "only check the target is currently flagged as an orphan")
+}
+
 func init() {
 	healthCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	healthFixCmd.Flags().StringVar(&healthFixAction, "action", "", "remediation action (default: server resolves it)")

@@ -3,6 +3,7 @@
 import { Cloud } from "lucide-react";
 import { useProject } from "@/features/projects";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { Section, Row, type SectionProps } from "./_primitives";
 
 export function DeploySection({
@@ -51,6 +52,20 @@ export function DeploySection({
           </p>
         )}
       </div>
+      <Row
+        label="start command"
+        hint="overrides the image's CMD · split on spaces · blank = image default"
+        control={
+          <Input
+            value={state.startCommand}
+            onChange={(e) => setState((s) => ({ ...s, startCommand: e.target.value }))}
+            placeholder="image default"
+            aria-label="Start command"
+            className="h-7 w-full max-w-[320px] font-mono text-[12px]"
+            spellCheck={false}
+          />
+        }
+      />
       <Row
         label="wait for CI"
         hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."

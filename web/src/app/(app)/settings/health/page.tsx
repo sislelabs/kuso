@@ -39,6 +39,7 @@ import {
   type ReconcileIssue,
 } from "@/features/health";
 import { cn } from "@/lib/utils";
+import { KubeEventsSection } from "@/components/health/KubeEventsSection";
 
 type Severity = ReconcileIssue["severity"];
 
@@ -120,6 +121,8 @@ export default function HealthPage() {
       ) : !data ? null : (
         <HealthBody report={data} />
       )}
+
+      <KubeEventsSection />
     </div>
   );
 }

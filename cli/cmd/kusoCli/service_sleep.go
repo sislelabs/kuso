@@ -19,8 +19,10 @@ import (
 )
 
 var (
-	serviceSleepAfter   string
-	serviceSleepNonProd string
+	serviceSleepAfter        string
+	serviceSleepNonProd      string
+	serviceSleepExcludePaths []string
+	serviceSleepExcludeClear bool
 )
 
 var serviceSleepCmd = &cobra.Command{
@@ -36,6 +38,10 @@ few seconds).
                     them always on
   --after           idle window before sleeping (default 30m), shared by
                     production and non-production envs
+  --exclude-path    a callback path (repeatable) that must never hit a cold
+                    start, e.g. /webhooks/stripe. Any path keeps EVERY env
+                    of the service warm (min 1 replica). Replaces the list.
+  --exclude-paths-clear  drop the list so envs can sleep again
 
 With no state and no flags, prints the current settings.
 
@@ -45,7 +51,9 @@ timeout.`,
 	Example: `  kuso project service sleep scubatony api
   kuso project service sleep scubatony api on --after 15m
   kuso project service sleep scubatony api off
-  kuso project service sleep scubatony api --non-production off`,
+  kuso project service sleep scubatony api --non-production off
+  kuso project service sleep shop api --exclude-path /webhooks/stripe --exclude-path /api/epay
+  kuso project service sleep shop api --exclude-paths-clear`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -56,7 +64,8 @@ timeout.`,
 		if len(args) == 3 {
 			state = args[2]
 		}
-		if state == "" && !cmd.Flags().Changed("after") && !cmd.Flags().Changed("non-production") {
+		if state == "" && !cmd.Flags().Changed("after") && !cmd.Flags().Changed("non-production") &&
+			!cmd.Flags().Changed("exclude-path") && !cmd.Flags().Changed("exclude-paths-clear") {
 			cur, err := fetchSleep(project, service)
 			if err != nil {
 				return err
@@ -64,7 +73,7 @@ timeout.`,
 			fmt.Println(describeSleep(cur))
 			return nil
 		}
-		req, err := buildSleepPatch(state, serviceSleepAfter, serviceSleepNonProd)
+		req, err := buildSleepPatch(state, serviceSleepAfter, serviceSleepNonProd, serviceSleepExcludePaths, serviceSleepExcludeClear)
 		if err != nil {
 			return err
 		}
@@ -140,7 +149,7 @@ func describeSleep(s sleepWire) string {
 
 // buildSleepPatch validates the user's inputs into a PATCH body. Empty
 // inputs leave that field alone; at least one must be set.
-func buildSleepPatch(state, after, nonProd string) (kusoApi.PatchSleepRequest, error) {
+func buildSleepPatch(state, after, nonProd string, excludePaths []string, clearExclude bool) (kusoApi.PatchSleepRequest, error) {
 	var req kusoApi.PatchSleepRequest
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "":
@@ -167,8 +176,26 @@ func buildSleepPatch(state, after, nonProd string) (kusoApi.PatchSleepRequest, e
 	default:
 		return req, fmt.Errorf("--non-production must be on|off (got %q)", nonProd)
 	}
-	if req.Enabled == nil && req.AfterMinutes == nil && req.NonProduction == "" {
-		return req, fmt.Errorf("nothing to change: pass on|off, --after or --non-production")
+	var paths []string
+	for _, p := range excludePaths {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	switch {
+	case clearExclude && len(paths) > 0:
+		return req, fmt.Errorf("--exclude-path and --exclude-paths-clear are mutually exclusive")
+	case clearExclude:
+		req.WakeOn = &kusoApi.PatchWakeOnRequest{Clear: true}
+	case len(paths) > 0:
+		req.WakeOn = &kusoApi.PatchWakeOnRequest{ExcludePaths: paths}
+	case len(excludePaths) > 0:
+		// The server ignores an empty list, so `--exclude-path ""` would
+		// otherwise report success without changing anything.
+		return req, fmt.Errorf("--exclude-path is empty; use --exclude-paths-clear to drop the list")
+	}
+	if req.Enabled == nil && req.AfterMinutes == nil && req.NonProduction == "" && req.WakeOn == nil {
+		return req, fmt.Errorf("nothing to change: pass on|off, --after, --non-production or --exclude-path")
 	}
 	return req, nil
 }
@@ -196,6 +223,8 @@ func parseSleepAfter(s string) (int, error) {
 func init() {
 	serviceSleepCmd.Flags().StringVar(&serviceSleepAfter, "after", "", "idle window before sleeping, e.g. 30m or 1h (default 30m)")
 	serviceSleepCmd.Flags().StringVar(&serviceSleepNonProd, "non-production", "", "on|off: whether non-production envs sleep when idle (default on)")
+	serviceSleepCmd.Flags().StringArrayVar(&serviceSleepExcludePaths, "exclude-path", nil, "callback path that must never cold-start, repeatable (replaces the list; keeps every env warm)")
+	serviceSleepCmd.Flags().BoolVar(&serviceSleepExcludeClear, "exclude-paths-clear", false, "drop the wakeOn exclude-path list so envs can sleep again")
 	projectServiceCmd.AddCommand(serviceSleepCmd)
 	// Registered here rather than in service_toplevel_alias.go: aliasOf
 	// copies flags, so it must run after the flags above exist.

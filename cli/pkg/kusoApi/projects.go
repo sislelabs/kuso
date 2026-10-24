@@ -61,6 +61,7 @@ type (
 	ServiceSleep      = apiv1.ServiceSleep
 	ServiceStatic     = apiv1.ServiceStatic
 	ServiceBuildpacks = apiv1.ServiceBuildpacks
+	ServiceRelease    = apiv1.ServiceRelease
 )
 
 // Pointer helpers re-exported so existing call sites keep their
@@ -79,6 +80,8 @@ type (
 	CreateServiceRequest = apiv1.CreateServiceRequest
 	ServiceImageSpec     = apiv1.ServiceImage
 	CreateAddonRequest   = apiv1.CreateAddonRequest
+	AddonPoolerSpec      = apiv1.AddonPoolerSpec
+	UpdateAddonPooler    = apiv1.AddonPoolerPatch
 	AddonExternalRequest = apiv1.AddonExternalSpec
 )
 
@@ -209,6 +212,63 @@ type PatchServiceRequest struct {
 	WatchPaths *[]string `json:"watchPaths,omitempty"`
 	// Image replaces spec.image (runtime=image services).
 	Image *PatchImageRequest `json:"image,omitempty"`
+	// Dockerfile overrides the Dockerfile filename; "" resets to "Dockerfile".
+	Dockerfile *string `json:"dockerfile,omitempty"`
+	// Command replaces the run argv; an empty list clears it.
+	Command *[]string `json:"command,omitempty"`
+	// Release edits the pre-deploy release hook; {"clear":true} drops it.
+	Release *PatchReleaseRequest `json:"release,omitempty"`
+	// SnapshotBeforeDeploy toggles the pre-release postgres snapshot.
+	SnapshotBeforeDeploy *bool `json:"snapshotBeforeDeploy,omitempty"`
+	// Previews sets the per-service PR-preview opt-out; {"clear":true}
+	// goes back to inheriting the project setting.
+	Previews *PatchServicePreviewsRequest `json:"previews,omitempty"`
+	// Static / Buildpacks replace their block WHOLESALE server-side, so
+	// callers editing one sub-field must resend the others.
+	Static     *ServiceStatic     `json:"static,omitempty"`
+	Buildpacks *ServiceBuildpacks `json:"buildpacks,omitempty"`
+	// BuildArgs / PublicEnv replace the build-time env config wholesale;
+	// an empty map / list clears it.
+	BuildArgs *map[string]string `json:"buildArgs,omitempty"`
+	PublicEnv *[]string          `json:"publicEnv,omitempty"`
+	// Placement replaces the node placement; {"clear":true} drops the
+	// override so the project default applies.
+	Placement *PatchPlacementRequest `json:"placement,omitempty"`
+	// Volumes replaces the whole volume list; an empty list drops all.
+	Volumes *[]VolumePatch `json:"volumes,omitempty"`
+}
+
+// PatchReleaseRequest mirrors the server's projects.PatchReleaseRequest.
+type PatchReleaseRequest struct {
+	Command        []string `json:"command,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	Clear          bool     `json:"clear,omitempty"`
+}
+
+// PatchServicePreviewsRequest mirrors the server's projects.PatchPreviewsRequest.
+// Disabled is serialized even when false: {"disabled":false} is how a
+// service opts back in while still overriding the project.
+type PatchServicePreviewsRequest struct {
+	Disabled bool `json:"disabled"`
+	Clear    bool `json:"clear,omitempty"`
+}
+
+// PatchPlacementRequest mirrors the server's projects.PatchPlacementRequest.
+type PatchPlacementRequest struct {
+	Labels map[string]string `json:"labels,omitempty"`
+	Nodes  []string          `json:"nodes,omitempty"`
+	Clear  bool              `json:"clear,omitempty"`
+}
+
+// VolumePatch mirrors the server's projects.VolumePatch. StorageClass and
+// AccessMode are immutable on a bound PVC; the server keeps the stored
+// values when they're omitted for an existing volume.
+type VolumePatch struct {
+	Name         string `json:"name"`
+	MountPath    string `json:"mountPath"`
+	SizeGi       int    `json:"sizeGi,omitempty"`
+	StorageClass string `json:"storageClass,omitempty"`
+	AccessMode   string `json:"accessMode,omitempty"`
 }
 
 // PatchImageRequest mirrors the server's projects.ServiceImageSpec.
@@ -568,6 +628,12 @@ func (k *KusoClient) ImportProject(tarball []byte, policy string) (*resty.Respon
 		path += "?policy=" + policy
 	}
 	return k.client.Post(path)
+}
+
+// GetDeployHook reports whether a service's deploy hook is enabled and,
+// for editors, its URL. Read-only.
+func (k *KusoClient) GetDeployHook(project, service string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/deploy-hook")
 }
 
 // EnableDeployHook enables (or, with rotate, replaces) a service's deploy

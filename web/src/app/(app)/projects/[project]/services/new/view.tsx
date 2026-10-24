@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import { Perms, useCan, useSession } from "@/features/auth";
 import { useRegistryCredentials } from "@/features/registry-credentials";
 import { addonLabel } from "@/components/addon/AddonIcon";
 import { triggerBuild } from "@/features/services";
+import { SIZE_NONE, sizingBody, type SizingInput } from "@/features/services/createSizing";
+import { listPodSizes } from "@/features/cluster-config/api";
 import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -165,7 +167,28 @@ export function AddServiceView() {
     repo?: string;
     runtime?: string;
     fromService?: string;
+    sizing?: string;
   }>({});
+  // Result of the optional "Check access" preflight for the picked repo,
+  // keyed by repo so a re-pick doesn't show a stale verdict.
+  const [access, setAccess] = useState<{ repo: string; state: "checking" | "ok" | "fail"; message?: string } | null>(null);
+  const checkAccess = async (fullName: string, installationId: number) => {
+    const [owner, repo] = fullName.split("/");
+    setAccess({ repo: fullName, state: "checking" });
+    try {
+      const res = await api<{ ok: boolean; error?: string }>("/api/github/check-repo", {
+        method: "POST",
+        body: { owner, repo, installationId },
+      });
+      setAccess({ repo: fullName, state: res.ok ? "ok" : "fail", message: res.error });
+    } catch (e) {
+      setAccess({ repo: fullName, state: "fail", message: friendlyApiError(e, "check failed") });
+    }
+  };
+  // Pod size + replicas. "" size = the instance default pod size.
+  const [sizing, setSizing] = useState<SizingInput>({ size: "", replicas: "", maxReplicas: "" });
+  // Same cache key as the service settings Scale section.
+  const podSizes = useQuery({ queryKey: ["admin", "podsizes"], queryFn: listPodSizes });
   const clearFieldError = (key: keyof typeof fieldErrors) =>
     setFieldErrors((prev) => (prev[key] ? { ...prev, [key]: undefined } : prev));
   // Refs so submit can focus the first invalid field. The two name
@@ -364,6 +387,8 @@ export function AddServiceView() {
     if (source === "repo" && picked && kind === "web" && !runtime) {
       errs.runtime = "Pick a runtime.";
     }
+    const sized = sizingBody(sizing, podSizes.data ?? []);
+    if ("error" in sized) errs.sizing = sized.error;
     setFieldErrors(errs);
     if (Object.keys(errs).some((k) => errs[k as keyof typeof errs])) {
       // Focus follows visual order: repo picker sits above the name
@@ -421,6 +446,7 @@ export function AddServiceView() {
           ...(picked!.byUrl ? {} : { github: { installationId: picked!.installationId } }),
         };
       }
+      if (!("error" in sized)) Object.assign(body, sized);
       // Land on the new service's Deployments tab so the first build is
       // the first thing the user sees, not the bare canvas.
       const serviceHref = `/projects/${encodeURIComponent(project)}?service=${encodeURIComponent(slug)}&tab=deployments`;
@@ -688,6 +714,7 @@ export function AddServiceView() {
                 ))}
               </select>
             </Field>
+            <SizingFields value={sizing} onChange={setSizing} presets={podSizes.data ?? []} error={fieldErrors.sizing} />
             <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
               Pulled as-is, no build. Push a new tag from your CI, then bump it here.
             </p>
@@ -715,6 +742,7 @@ export function AddServiceView() {
         </div>
         <div className="px-4 py-3">
           {picked ? (
+            <>
             <div className="flex items-center justify-between rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 py-2 text-[12px]">
               <span className="flex items-center gap-2 truncate">
                 <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
@@ -760,6 +788,37 @@ export function AddServiceView() {
                 change
               </button>
             </div>
+            {(!picked.byUrl || (/github\.com/i.test(picked.byUrl.url) && !picked.byUrl.token)) && (
+              <div className="mt-1.5 flex items-center gap-2 font-mono text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => void checkAccess(picked.repo.fullName, picked.installationId)}
+                  disabled={access?.repo === picked.repo.fullName && access.state === "checking"}
+                  className="text-[var(--accent)] hover:underline disabled:opacity-50"
+                >
+                  Check access
+                </button>
+                {access?.repo === picked.repo.fullName && (
+                  <span
+                    role="status"
+                    className={
+                      access.state === "ok"
+                        ? "text-[var(--success)]"
+                        : access.state === "fail"
+                          ? "text-[var(--error)]"
+                          : "text-[var(--text-tertiary)]"
+                    }
+                  >
+                    {access.state === "checking"
+                      ? "checking…"
+                      : access.state === "ok"
+                        ? "the GitHub App can read this repo"
+                        : access.message || "the GitHub App can't read this repo"}
+                  </span>
+                )}
+              </div>
+            )}
+            </>
           ) : !sessionReady || installURL.isPending || reposQuery.isLoading ? (
             <Skeleton className="h-24 w-full" />
           ) : !installURL.data?.configured ? (
@@ -814,6 +873,7 @@ export function AddServiceView() {
                 Install kuso GitHub App
               </a>
             </div>
+
           ) : (
             <div className="space-y-2">
               {fieldErrors.repo && (
@@ -1065,6 +1125,7 @@ export function AddServiceView() {
                 </p>
               </Field>
             )}
+            <SizingFields value={sizing} onChange={setSizing} presets={podSizes.data ?? []} error={fieldErrors.sizing} />
             {addonSuggestions.length > 0 && (
               <Field label="needs">
                 <div className="flex flex-wrap gap-1.5">
@@ -1156,6 +1217,71 @@ function Field({
         </div>
       ) : (
         hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>
+      )}
+    </div>
+  );
+}
+
+function SizingFields({
+  value,
+  onChange,
+  presets,
+  error,
+}: {
+  value: SizingInput;
+  onChange: (next: SizingInput) => void;
+  presets: { Name: string; CPURequest: string; MemoryRequest: string; MemoryLimit: string }[];
+  error?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="size" hint="pod CPU / memory" htmlFor="svc-size">
+          <select
+            id="svc-size"
+            value={value.size}
+            onChange={(e) => onChange({ ...value, size: e.target.value })}
+            className="block h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
+          >
+            <option value="">instance default</option>
+            {presets.map((p) => (
+              <option key={p.Name} value={p.Name}>
+                {p.Name} · {p.CPURequest || "-"} / {p.MemoryRequest || "-"}
+                {p.MemoryLimit ? ` (max ${p.MemoryLimit})` : ""}
+              </option>
+            ))}
+            <option value={SIZE_NONE}>none (no requests/limits)</option>
+          </select>
+        </Field>
+        <Field label="replicas" hint="minimum; default 1" htmlFor="svc-replicas">
+          <Input
+            id="svc-replicas"
+            type="number"
+            min={1}
+            value={value.replicas}
+            onChange={(e) => onChange({ ...value, replicas: e.target.value })}
+            placeholder="1"
+            aria-invalid={error ? true : undefined}
+            className="h-8 font-mono text-[12px]"
+          />
+        </Field>
+        <Field label="max replicas" hint="autoscale ceiling; default 5" htmlFor="svc-max-replicas">
+          <Input
+            id="svc-max-replicas"
+            type="number"
+            min={1}
+            value={value.maxReplicas}
+            onChange={(e) => onChange({ ...value, maxReplicas: e.target.value })}
+            placeholder="5"
+            aria-invalid={error ? true : undefined}
+            className="h-8 font-mono text-[12px]"
+          />
+        </Field>
+      </div>
+      {error && (
+        <div role="alert" className="text-[11px] text-[var(--error)]">
+          {error}
+        </div>
       )}
     </div>
   );

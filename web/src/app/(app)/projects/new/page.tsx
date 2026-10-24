@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
 import { friendlyApiError, projectNameError } from "@/features/projects/names";
+import { buildCreateProjectBody, DEFAULT_PREVIEW_TTL_DAYS } from "@/features/projects/createProjectBody";
+import { useInstallations } from "@/features/github";
+import { HostClashHint } from "@/components/shared/HostClashHint";
+import { ImportArchiveCard } from "./ImportArchiveCard";
 import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
@@ -32,6 +36,13 @@ export default function NewProjectPage() {
   // version hardcoded enabled:true and users got surprise preview
   // envs on their first PR.
   const [previewsEnabled, setPreviewsEnabled] = useState(true);
+  const [previewsTTLDays, setPreviewsTTLDays] = useState("");
+  const [namespace, setNamespace] = useState("");
+  const [repoURL, setRepoURL] = useState("");
+  const [repoBranch, setRepoBranch] = useState("");
+  const [installationId, setInstallationId] = useState(0);
+  const [formError, setFormError] = useState<string | null>(null);
+  const installations = useInstallations();
   const [submitting, setSubmitting] = useState(false);
   // Inline validation for the name field — shown under the input and
   // marked via aria-invalid, instead of a toast that auto-dismisses
@@ -69,14 +80,25 @@ export default function NewProjectPage() {
       return;
     }
     setNameError(null);
+    const body = buildCreateProjectBody({
+      name: trimmed,
+      description,
+      baseDomain,
+      namespace,
+      repoURL,
+      repoBranch,
+      installationId,
+      previewsEnabled,
+      previewsTTLDays,
+    });
+    if ("error" in body) {
+      setFormError(body.error);
+      return;
+    }
+    setFormError(null);
     setSubmitting(true);
     try {
-      await create.mutateAsync({
-        name: trimmed,
-        description: description.trim() || undefined,
-        baseDomain: baseDomain.trim() || undefined,
-        previews: { enabled: previewsEnabled, ttlDays: 7 },
-      });
+      await create.mutateAsync(body);
       toast.success("Project created");
       router.replace(`/projects/${encodeURIComponent(trimmed)}/services/new`);
     } catch (err) {
@@ -115,6 +137,8 @@ export default function NewProjectPage() {
         </span>
         <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
       </Link>
+
+      {isAdmin && <ImportArchiveCard />}
 
       {isAdmin && (
         <Link
@@ -191,7 +215,52 @@ export default function NewProjectPage() {
               className="h-8 font-mono text-[13px]"
             />
           </Field>
-          <Field label="Preview envs" hint="open a PR → kuso spins up a preview URL (TTL 7 days)">
+          <Field label="Default repo" hint="optional; services without their own repo use it" htmlFor="project-repo">
+            <div className="flex gap-2">
+              <Input
+                id="project-repo"
+                value={repoURL}
+                onChange={(e) => setRepoURL(e.target.value)}
+                placeholder="https://github.com/org/repo"
+                className="h-8 flex-1 font-mono text-[13px]"
+              />
+              <Input
+                value={repoBranch}
+                onChange={(e) => setRepoBranch(e.target.value)}
+                placeholder="main"
+                aria-label="Default branch"
+                className="h-8 w-28 font-mono text-[13px]"
+              />
+            </div>
+          </Field>
+          {(installations.data ?? []).length > 0 && (
+            <Field label="GitHub App" hint="installation used to clone private repos" htmlFor="project-installation">
+              <select
+                id="project-installation"
+                value={installationId}
+                onChange={(e) => setInstallationId(Number(e.target.value))}
+                className="block h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
+              >
+                <option value={0}>none</option>
+                {(installations.data ?? []).map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.accountLogin} ({i.accountType.toLowerCase()})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <Field label="Namespace" hint="optional; where the project's workloads run" htmlFor="project-namespace">
+            <Input
+              id="project-namespace"
+              value={namespace}
+              onChange={(e) => setNamespace(e.target.value)}
+              placeholder={`kuso-${name.trim() || "<name>"}`}
+              className="h-8 font-mono text-[13px]"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Preview envs" hint="open a PR → kuso spins up a preview URL">
             <label className="flex items-center gap-2 text-[13px]">
               <input
                 type="checkbox"
@@ -201,13 +270,24 @@ export default function NewProjectPage() {
               />
               <span>
                 Enable preview deploys
-                {previewsEnabled && (
-                  <span className="ml-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-                    (7-day TTL)
-                  </span>
-                )}
               </span>
             </label>
+            {previewsEnabled && (
+              <label className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+                Auto-expire after
+                <Input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={previewsTTLDays}
+                  onChange={(e) => setPreviewsTTLDays(e.target.value)}
+                  placeholder={String(DEFAULT_PREVIEW_TTL_DAYS)}
+                  aria-label="Preview TTL in days"
+                  className="h-7 w-20 font-mono text-[12px]"
+                />
+                days
+              </label>
+            )}
           </Field>
           <Field label="URL preview" hint="where a service named web would be served">
             <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
@@ -225,8 +305,16 @@ export default function NewProjectPage() {
                 </>
               )}
             </p>
+            <div className="mt-1">
+              <HostClashHint hosts={[exampleHost, sameNameHost]} />
+            </div>
           </Field>
         </div>
+        {formError && (
+          <p role="alert" className="px-4 pb-3 text-[11px] text-[var(--error)]">
+            {formError}
+          </p>
+        )}
         <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
           <Link
             href="/projects"

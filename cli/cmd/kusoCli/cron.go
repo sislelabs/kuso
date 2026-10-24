@@ -38,10 +38,10 @@ func splitCmd(s string) []string {
 // preserve the repository when only --image-tag is bumped (the server
 // replaces spec.image wholesale, so we must resend the repository).
 // Returns "" (no error) when the cron exists but carries no image.
-func currentProjectCronImage(project, name string) (repo, tag string, err error) {
+func currentProjectCronImage(project, name string) (repo, tag, pullPolicy string, err error) {
 	resp, err := api.ListCrons(project)
 	if err := checkRespErr(resp, err); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	var items []struct {
 		Metadata struct {
@@ -51,21 +51,23 @@ func currentProjectCronImage(project, name string) (repo, tag string, err error)
 			Image *struct {
 				Repository string `json:"repository"`
 				Tag        string `json:"tag"`
+				PullPolicy string `json:"pullPolicy"`
 			} `json:"image"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(resp.Body(), &items); err != nil {
-		return "", "", fmt.Errorf("decode crons: %w", err)
+		return "", "", "", fmt.Errorf("decode crons: %w", err)
 	}
 	for _, c := range items {
-		if c.Metadata.Name == name {
+		// The list carries CR names (<project>-<name>); users pass the short one.
+		if c.Metadata.Name == name || c.Metadata.Name == project+"-"+name {
 			if c.Spec.Image != nil {
-				return c.Spec.Image.Repository, c.Spec.Image.Tag, nil
+				return c.Spec.Image.Repository, c.Spec.Image.Tag, c.Spec.Image.PullPolicy, nil
 			}
-			return "", "", nil
+			return "", "", "", nil
 		}
 	}
-	return "", "", fmt.Errorf("cron %q not found in project %q", name, project)
+	return "", "", "", fmt.Errorf("cron %q not found in project %q", name, project)
 }
 
 var cronCmd = &cobra.Command{
@@ -81,6 +83,8 @@ var (
 	cronAddSuspend           bool
 	cronAddPinImage          bool
 	cronAddConcurrencyPolicy string
+	cronAddTimeout           int
+	cronAddStartingDeadline  int
 )
 
 var cronListCmd = &cobra.Command{
@@ -149,7 +153,8 @@ case, e.g. '0 9 * * MON-FRI'). The macros @yearly, @annually, @monthly,
 and a step without a base ('/5').`,
 	Args: cobra.ExactArgs(2),
 	Example: `  kuso cron add myproj api --name daily-cleanup --schedule '0 3 * * *' --cmd 'rails runner Cleanup.run'
-  kuso cron add myproj api --name every-15min --schedule '*/15 * * * *' --cmd 'sh -c "echo tick"'`,
+  kuso cron add myproj api --name every-15min --schedule '*/15 * * * *' --cmd 'sh -c "echo tick"'
+  kuso cron add myproj api --name report --schedule '@daily' --cmd './bin/report' --timeout 1800 --starting-deadline 600`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -157,14 +162,19 @@ and a step without a base ('/5').`,
 		if cronAddName == "" || cronAddSchedule == "" || cronAddCmdString == "" {
 			return fmt.Errorf("--name, --schedule, and --cmd are required")
 		}
+		if err := checkCronDeadlines(cronAddTimeout, cronAddStartingDeadline); err != nil {
+			return err
+		}
 		argv := splitCmd(cronAddCmdString)
 		req := kusoApi.CreateCronRequest{
-			Name:              cronAddName,
-			Schedule:          cronAddSchedule,
-			Command:           argv,
-			Suspend:           cronAddSuspend,
-			PinImage:          cronAddPinImage,
-			ConcurrencyPolicy: cronAddConcurrencyPolicy,
+			Name:                    cronAddName,
+			Schedule:                cronAddSchedule,
+			Command:                 argv,
+			Suspend:                 cronAddSuspend,
+			PinImage:                cronAddPinImage,
+			ConcurrencyPolicy:       cronAddConcurrencyPolicy,
+			ActiveDeadlineSeconds:   cronAddTimeout,
+			StartingDeadlineSeconds: cronAddStartingDeadline,
 		}
 		resp, err := api.AddCron(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -226,15 +236,20 @@ var cronSyncCmd = &cobra.Command{
 // suspend state or pinImage from the CLI at all — the flag existed but
 // was unreachable for the exact cron type it matters most for.
 var (
-	cronSetSchedule string
-	cronSetSuspend  bool
-	cronSetPinImage bool
+	cronSetSchedule         string
+	cronSetSuspend          bool
+	cronSetPinImage         bool
+	cronSetCmdString        string
+	cronSetConcurrency      string
+	cronSetDisplayName      string
+	cronSetTimeout          int
+	cronSetStartingDeadline int
 )
 
 var cronEditServiceCmd = &cobra.Command{
 	Use:     "edit-service <project> <service> <name>",
 	Aliases: []string{"set"},
-	Short:   "Edit a service-attached cron (schedule / suspend / pin-image)",
+	Short:   "Edit a service-attached cron (schedule, command, suspend, deadlines, ...)",
 	Long: `Edit a cron that runs a parent service's image (kind=service).
 
 --pin-image freezes the cron on its current build instead of following
@@ -245,7 +260,9 @@ as in-use. Pin when the job must run a known-good build.
 
 Use ` + "`kuso cron edit`" + ` for project-scoped (http / command) crons.`,
 	Example: `  kuso cron edit-service scubatony internal-system daily-sweeps --pin-image
-  kuso cron edit-service scubatony internal-system daily-sweeps --schedule '0 4 * * *'`,
+  kuso cron edit-service scubatony internal-system daily-sweeps --schedule '0 4 * * *'
+  kuso cron edit-service myproj api report --cmd './bin/report --full' --concurrency Replace
+  kuso cron edit-service myproj api report --display-name "Nightly report" --timeout 3600 --starting-deadline 600`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -263,6 +280,31 @@ Use ` + "`kuso cron edit`" + ` for project-scoped (http / command) crons.`,
 		if cmd.Flags().Changed("pin-image") {
 			v := cronSetPinImage
 			req.PinImage = &v
+		}
+		if cmd.Flags().Changed("cmd") {
+			req.Command = splitCmd(cronSetCmdString)
+			if len(req.Command) == 0 {
+				return fmt.Errorf("--cmd is empty; a cron needs a command")
+			}
+		}
+		if cmd.Flags().Changed("concurrency") {
+			v := cronSetConcurrency
+			req.ConcurrencyPolicy = &v
+		}
+		if cmd.Flags().Changed("display-name") {
+			v := cronSetDisplayName
+			req.DisplayName = &v
+		}
+		if err := checkCronDeadlines(cronSetTimeout, cronSetStartingDeadline); err != nil {
+			return err
+		}
+		if cmd.Flags().Changed("timeout") {
+			v := cronSetTimeout
+			req.ActiveDeadlineSeconds = &v
+		}
+		if cmd.Flags().Changed("starting-deadline") {
+			v := cronSetStartingDeadline
+			req.StartingDeadlineSeconds = &v
 		}
 		resp, err := api.UpdateCron(args[0], args[1], args[2], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -286,13 +328,21 @@ var (
 	pCronCmdString         string
 	pCronSuspend           bool
 	pCronConcurrencyPolicy string
+	pCronTimeout           int
+	pCronStartingDeadline  int
+	pCronOnFailureWebhook  string
+	pCronOnFailureSecret   string // "name:key"
+	pCronOnFailureClear    bool
+	pCronPullPolicy        string
 )
 
 var cronAddHTTPCmd = &cobra.Command{
-	Use:     "add-http <project>",
-	Short:   "Schedule a recurring HTTP probe (curl <url>; fail on non-2xx)",
-	Args:    cobra.ExactArgs(1),
-	Example: `  kuso cron add-http myproj --name healthcheck --schedule '*/5 * * * *' --url https://api.example.com/healthz`,
+	Use:   "add-http <project>",
+	Short: "Schedule a recurring HTTP probe (curl <url>; fail on non-2xx)",
+	Args:  cobra.ExactArgs(1),
+	Example: `  kuso cron add-http myproj --name healthcheck --schedule '*/5 * * * *' --url https://api.example.com/healthz
+  kuso cron add-http myproj --name warm --schedule '*/10 * * * *' --url https://x.example.com --timeout 60 \
+    --on-failure-webhook https://hooks.example.com/kuso --on-failure-secret myproj-db-conn:WEBHOOK_KEY`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -310,6 +360,9 @@ var cronAddHTTPCmd = &cobra.Command{
 			PinImage:          pCronPinImage,
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
+		if err := applyProjectCronCreateFlags(cmd, &req); err != nil {
+			return err
+		}
 		resp, err := api.AddProjectCron(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -320,10 +373,12 @@ var cronAddHTTPCmd = &cobra.Command{
 }
 
 var cronAddCommandCmd = &cobra.Command{
-	Use:     "add-command <project>",
-	Short:   "Schedule a recurring command run (user-supplied image + argv)",
-	Args:    cobra.ExactArgs(1),
-	Example: `  kuso cron add-command myproj --name nightly-prune --schedule '0 4 * * *' --image alpine:3.21 --cmd 'sh -c "rm -rf /tmp/*"'`,
+	Use:   "add-command <project>",
+	Short: "Schedule a recurring command run (user-supplied image + argv)",
+	Args:  cobra.ExactArgs(1),
+	Example: `  kuso cron add-command myproj --name nightly-prune --schedule '0 4 * * *' --image alpine:3.21 --cmd 'sh -c "rm -rf /tmp/*"'
+  kuso cron add-command myproj --name sync --schedule '@hourly' --image ghcr.io/acme/sync --image-tag v3 --pull-policy Always \
+    --cmd './sync' --timeout 900 --starting-deadline 300`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -336,11 +391,14 @@ var cronAddCommandCmd = &cobra.Command{
 			DisplayName:       pCronDisplayName,
 			Kind:              "command",
 			Schedule:          pCronSchedule,
-			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag},
+			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag, PullPolicy: pCronPullPolicy},
 			Command:           splitCmd(pCronCmdString),
 			Suspend:           pCronSuspend,
 			PinImage:          pCronPinImage,
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
+		}
+		if err := applyProjectCronCreateFlags(cmd, &req); err != nil {
+			return err
 		}
 		resp, err := api.AddProjectCron(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -356,9 +414,12 @@ var cronEditCmd = &cobra.Command{
 	Aliases: []string{"edit-project"},
 	Short:   "Edit a project-scoped cron (kind=http or kind=command)",
 	Long: `Patch fields on an existing project-scoped cron in place.
-Service-attached crons (kind=service) use 'kuso cron sync' for the
-parent-image refresh and the schedule/command pair on each delete +
-add roundtrip via the per-service path.`,
+Service-attached crons (kind=service) use 'kuso cron edit-service'.`,
+	Example: `  kuso cron edit myproj healthcheck --schedule '*/2 * * * *'
+  kuso cron edit myproj sync --image-tag v4 --pull-policy IfNotPresent
+  kuso cron edit myproj sync --timeout 600 --starting-deadline 120
+  kuso cron edit myproj healthcheck --on-failure-webhook https://hooks.example.com/kuso --on-failure-secret myproj-db-conn:WEBHOOK_KEY
+  kuso cron edit myproj healthcheck --on-failure-clear`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -381,7 +442,7 @@ add roundtrip via the per-service path.`,
 			v := pCronURL
 			req.URL = &v
 		}
-		if cmd.Flags().Changed("image") || cmd.Flags().Changed("image-tag") {
+		if cmd.Flags().Changed("image") || cmd.Flags().Changed("image-tag") || cmd.Flags().Changed("pull-policy") {
 			repo := pCronImage
 			// Editing ONLY --image-tag must not blank out the repository.
 			// The server replaces spec.image verbatim, so sending
@@ -391,12 +452,12 @@ add roundtrip via the per-service path.`,
 			// the image it's already running.
 			tag := pCronImageTag
 			if !cmd.Flags().Changed("image") {
-				cur, _, cerr := currentProjectCronImage(args[0], args[1])
+				cur, _, _, cerr := currentProjectCronImage(args[0], args[1])
 				if cerr != nil {
 					return fmt.Errorf("--image-tag needs the current image; %w (pass --image to set it explicitly)", cerr)
 				}
 				if cur == "" {
-					return fmt.Errorf("--image-tag requires an existing image on cron %q — none found; pass --image too", args[1])
+					return fmt.Errorf("--image-tag / --pull-policy require an existing image on cron %q — none found; pass --image too", args[1])
 				}
 				repo = cur
 			}
@@ -404,13 +465,21 @@ add roundtrip via the per-service path.`,
 			// TAG. --image-tag defaults to "latest", so sending it
 			// unconditionally silently unpinned a cron from e.g.
 			// alpine:3.21 → alpine:latest on an unrelated repo change.
-			if !cmd.Flags().Changed("image-tag") {
-				_, curTag, cerr := currentProjectCronImage(args[0], args[1])
-				if cerr == nil && curTag != "" {
-					tag = curTag
+			// spec.image is replaced whole, so an unset pullPolicy would
+			// reset to the chart default; keep the stored one.
+			pullPolicy := pCronPullPolicy
+			if !cmd.Flags().Changed("image-tag") || !cmd.Flags().Changed("pull-policy") {
+				_, curTag, curPolicy, cerr := currentProjectCronImage(args[0], args[1])
+				if cerr == nil {
+					if !cmd.Flags().Changed("image-tag") && curTag != "" {
+						tag = curTag
+					}
+					if !cmd.Flags().Changed("pull-policy") {
+						pullPolicy = curPolicy
+					}
 				}
 			}
-			req.Image = &kusoApi.CronImage{Repository: repo, Tag: tag}
+			req.Image = &kusoApi.CronImage{Repository: repo, Tag: tag, PullPolicy: pullPolicy}
 		}
 		if cmd.Flags().Changed("pin-image") {
 			v := pCronPinImage
@@ -423,6 +492,22 @@ add roundtrip via the per-service path.`,
 			v := pCronConcurrencyPolicy
 			req.ConcurrencyPolicy = &v
 		}
+		if err := checkCronDeadlines(pCronTimeout, pCronStartingDeadline); err != nil {
+			return err
+		}
+		if cmd.Flags().Changed("timeout") {
+			v := pCronTimeout
+			req.ActiveDeadlineSeconds = &v
+		}
+		if cmd.Flags().Changed("starting-deadline") {
+			v := pCronStartingDeadline
+			req.StartingDeadlineSeconds = &v
+		}
+		of, err := cronOnFailureUpdate(cmd)
+		if err != nil {
+			return err
+		}
+		req.OnFailure = of
 		resp, err := api.UpdateProjectCron(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -470,12 +555,19 @@ func init() {
 	cronAddCommand.Flags().BoolVar(&cronAddSuspend, "suspend", false, "create suspended")
 	cronAddCommand.Flags().BoolVar(&cronAddPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
 	cronAddCommand.Flags().StringVar(&cronAddConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
+	cronAddCommand.Flags().IntVar(&cronAddTimeout, "timeout", 0, "kill a run after this many seconds (0 = no limit)")
+	cronAddCommand.Flags().IntVar(&cronAddStartingDeadline, "starting-deadline", 0, "skip a missed run once it's this many seconds late (default 300)")
 	cronDeleteCmd.Flags().BoolVarP(&cronDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	cronCmd.AddCommand(cronDeleteCmd)
 	cronCmd.AddCommand(cronSyncCmd)
 	cronEditServiceCmd.Flags().StringVar(&cronSetSchedule, "schedule", "", "5-field cron or @daily-style macro, e.g. '*/15 * * * *', '0 9 * * MON-FRI' (see 'kuso cron add --help')")
 	cronEditServiceCmd.Flags().BoolVar(&cronSetSuspend, "suspend", false, "pause the cron (schedule stays saved)")
 	cronEditServiceCmd.Flags().BoolVar(&cronSetPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
+	cronEditServiceCmd.Flags().StringVar(&cronSetCmdString, "cmd", "", "replace the command argv (shell-quoted; e.g. 'sh -c \"echo tick\"')")
+	cronEditServiceCmd.Flags().StringVar(&cronSetConcurrency, "concurrency", "", "Allow|Forbid|Replace")
+	cronEditServiceCmd.Flags().StringVar(&cronSetDisplayName, "display-name", "", "free-form label shown in the UI")
+	cronEditServiceCmd.Flags().IntVar(&cronSetTimeout, "timeout", 0, "kill a run after this many seconds (0 = no limit)")
+	cronEditServiceCmd.Flags().IntVar(&cronSetStartingDeadline, "starting-deadline", 0, "skip a missed run once it's this many seconds late")
 	cronCmd.AddCommand(cronEditServiceCmd)
 
 	// Project-scoped commands.
@@ -501,7 +593,13 @@ func init() {
 		c.Flags().StringVar(&pCronCmdString, "cmd", "", "command argv (shell-quoted; e.g. 'sh -c \"echo tick\"')")
 		c.Flags().BoolVar(&pCronSuspend, "suspend", false, "create / set suspended")
 		c.Flags().StringVar(&pCronConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
+		c.Flags().IntVar(&pCronTimeout, "timeout", 0, "kill a run after this many seconds (0 = no limit)")
+		c.Flags().IntVar(&pCronStartingDeadline, "starting-deadline", 0, "skip a missed run once it's this many seconds late (default 300)")
+		c.Flags().StringVar(&pCronOnFailureWebhook, "on-failure-webhook", "", "URL to POST to when a run fails")
+		c.Flags().StringVar(&pCronOnFailureSecret, "on-failure-secret", "", "addon conn Secret key that signs the failure webhook, as <secret>:<key> (e.g. myproj-db-conn:POSTGRES_PASSWORD)")
+		c.Flags().StringVar(&pCronPullPolicy, "pull-policy", "", "image pull policy (kind=command): Always|IfNotPresent|Never")
 	}
+	cronEditCmd.Flags().BoolVar(&pCronOnFailureClear, "on-failure-clear", false, "remove the failure webhook")
 	cronCmd.AddCommand(cronAddHTTPCmd)
 	cronCmd.AddCommand(cronAddCommandCmd)
 	cronCmd.AddCommand(cronEditCmd)

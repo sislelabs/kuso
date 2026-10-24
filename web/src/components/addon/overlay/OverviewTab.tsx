@@ -11,6 +11,7 @@ import { cn, serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { AddonPodsSection } from "./AddonPodsSection";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
 // helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
@@ -70,6 +71,11 @@ export function OverviewTab({
       </section>
 
       <UsedBy project={project} addon={serviceShortName(project, addon)} />
+
+      {/* External addons render no workload unless a pooler fronts them. */}
+      {(!cr?.spec.external || cr.spec.pooler?.enabled) && (
+        <AddonPodsSection project={project} addon={addon} />
+      )}
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">

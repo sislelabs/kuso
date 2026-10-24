@@ -2,7 +2,7 @@
 
 import { Rocket } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Section, Row, type SectionProps } from "./_primitives";
+import { Section, Row, Toggle, type SectionProps } from "./_primitives";
 
 // ReleaseSection configures the pre-deploy release hook: a one-off Job
 // that runs before a rollout is promoted (migrations, etc). Empty
@@ -42,6 +42,17 @@ export function ReleaseSection({ state, setState }: SectionProps) {
             placeholder="900"
             className="h-7 w-24 font-mono text-[12px]"
             min={1}
+          />
+        }
+      />
+      <Row
+        label="snapshot before deploy"
+        hint="back up the service's postgres addon(s) before the hook runs · only fires when a hook is set"
+        control={
+          <Toggle
+            on={state.snapshotBeforeDeploy}
+            onChange={(v) => setState((s) => ({ ...s, snapshotBeforeDeploy: v }))}
+            label="Toggle snapshot before deploy"
           />
         }
         last

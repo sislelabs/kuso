@@ -13,7 +13,16 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { nextRuns } from "@/lib/cron-next";
-import { projectCronPatch, serviceCronPatch, type CronForm } from "./cronPatch";
+import {
+  onFailureForm,
+  policyForm,
+  projectCronPatch,
+  serviceCronPatch,
+  type CronForm,
+  type CronOnFailureForm,
+  type CronPolicy,
+} from "./cronPatch";
+import { CronOnFailureFields, CronPolicyFields } from "./CronPolicyFields";
 
 // EditCronDialog opens when a CronNode is clicked. Lets the user edit
 // schedule / target / suspend state, and delete the cron entirely.
@@ -45,6 +54,8 @@ interface CronShape {
     envFromSecrets?: string[];
     concurrencyPolicy?: string;
     activeDeadlineSeconds?: number;
+    startingDeadlineSeconds?: number;
+    onFailure?: { webhookURL?: string; secretRef?: { name?: string; key?: string } };
   };
 }
 
@@ -108,6 +119,8 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
   const [suspend, setSuspend] = useState(false);
   const [pinImage, setPinImage] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [policy, setPolicy] = useState<CronPolicy>(policyForm());
+  const [onFailure, setOnFailure] = useState<CronOnFailureForm>(onFailureForm());
 
   useEffect(() => {
     if (!cron) return;
@@ -119,6 +132,8 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
     setCmd((cron.spec.command ?? []).join(" "));
     setImageRepo(cron.spec.image?.repository ?? "");
     setImageTag(cron.spec.image?.tag ?? "latest");
+    setPolicy(policyForm(cron.spec));
+    setOnFailure(onFailureForm(cron.spec.onFailure));
   }, [cron]);
 
   const qc = useQueryClient();
@@ -151,6 +166,10 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
         imageTag,
         cmd,
         initialCommand: cron.spec.command ?? [],
+        policy,
+        initialPolicy: policyForm(cron.spec),
+        onFailure,
+        initialOnFailure: onFailureForm(cron.spec.onFailure),
       };
       if (isProjectScoped) {
         return api(
@@ -521,6 +540,12 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   unpaused.
                 </span>
               </label>
+
+              <CronPolicyFields value={policy} onChange={setPolicy} />
+
+              {isProjectScoped && (
+                <CronOnFailureFields value={onFailure} onChange={setOnFailure} project={project} />
+              )}
             </div>
 
             <footer className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-4 py-3">

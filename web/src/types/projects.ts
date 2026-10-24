@@ -22,7 +22,8 @@ export interface KusoProjectSpec {
   namespace?: string;
   defaultRepo?: KusoRepoRef;
   github?: { installationId?: number };
-  previews?: { enabled?: boolean; ttlDays?: number };
+  // previews.baseDomain: host suffix for preview envs (<svc>-pr-N.<domain>).
+  previews?: { enabled?: boolean; ttlDays?: number; baseDomain?: string };
   // alwaysOn=true overrides every per-service sleep config so all
   // services in this project run with scale-to-zero disabled.
   alwaysOn?: boolean;
@@ -74,7 +75,7 @@ export interface KusoServiceSpec {
   // image with this command instead of its default ENTRYPOINT).
   command?: string[];
   port?: number;
-  domains?: { host?: string; tls?: boolean }[];
+  domains?: { host?: string; tls?: boolean; tlsSecret?: string }[];
   envVars?: KusoEnvVar[];
   scale?: {
     min?: number;
@@ -217,6 +218,9 @@ export interface KusoEnvironmentSpec {
   // spec.domains no longer propagates here. The chart renders one
   // Ingress rule per (host, ...additionalHosts).
   additionalHosts?: string[];
+  // wildcardDomains: per-env wildcard hosts served with a pre-provisioned
+  // TLS secret (Let's Encrypt can't HTTP-01 a wildcard).
+  wildcardDomains?: { host: string; tlsSecret?: string }[];
   tlsEnabled?: boolean;
   // envFromSecrets is the list of Kubernetes Secret names that get
   // envFrom-mounted into every pod for this env. The server stamps
@@ -292,6 +296,9 @@ export interface KusoAddonSpec {
     secretName?: string;
     secretKeys?: string[];
   };
+  // useInstanceAddon names the instance-shared postgres this addon's
+  // per-project database lives on (kuso provisions the DB + role there).
+  useInstanceAddon?: string;
   // pooler: opt-in PgBouncer in front of a kind=postgres addon.
   // When enabled the addon's <name>-conn Secret gains
   // POOLER_HOST/POOLER_PORT/POOLER_URL keys; DATABASE_URL stays
