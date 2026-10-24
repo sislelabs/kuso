@@ -141,8 +141,9 @@ func (h *GithubConfigureHandler) ManifestConfig(w http.ResponseWriter, r *http.R
 		CallbackURLs: []string{base + "/api/auth/github/callback"},
 		SetupURL:     base + "/api/github/setup-callback",
 		Public:       false,
-		// Match what the manual wizard asked for so behaviour is identical.
-		DefaultEvents: []string{"push", "pull_request", "installation"},
+		// No "installation": GitHub always delivers it to Apps and rejects
+		// the whole manifest if it's listed as a subscribable event.
+		DefaultEvents: []string{"push", "pull_request"},
 		DefaultPermissions: map[string]string{
 			"contents":      "write",
 			"metadata":      "read",

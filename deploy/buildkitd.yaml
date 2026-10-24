@@ -93,7 +93,7 @@ spec:
       # (postgres, server-go, activator) already sets this; buildkitd
       # was the lone omission.
       #
-      # The anti-affinity keeps it OFF the control-plane node. A build
+      # The anti-affinity steers it OFF the control-plane node. A build
       # is a CPU and IO storm, and on k3s the control-plane node also
       # holds the SQLite datastore (state.db) on local disk — so a
       # build sharing that node starves the API server and every
@@ -104,12 +104,15 @@ spec:
       # This rule only takes effect on a volume bound to a non-control-
       # plane node; if you are moving an existing install, the PVC must
       # be recreated or the pod will go Pending against the old PV.
+      # Preferred, not required: on a single-node install the control
+      # plane is the only node and a hard rule leaves builds Pending.
       priorityClassName: kuso-platform
       affinity:
         nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
                   - key: node-role.kubernetes.io/control-plane
                     operator: DoesNotExist
       containers:
