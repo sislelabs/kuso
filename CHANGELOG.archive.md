@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.18] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): an environment's own addon clones always mount last ([28bd71c](https://github.com/sislelabs/kuso/commit/28bd71cb9fd0f9d564a381c8f8fd83e0cad91b2d))
+
+### 🧪 Tests
+- Test(env): pin clone-last ordering at the propagation layer ([401f0db](https://github.com/sislelabs/kuso/commit/401f0dbdd0c66a217fc057885d5eaca4bde11918))
+
 ## [0.25.17] — 2026-09-02
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.32.3] — 2026-10-25
+
+### Other
+- Bring the web UI to parity with the CLI ([4d0c26c](https://github.com/sislelabs/kuso/commit/4d0c26c10b237fd6c2decedcb0258ccf8b2e971a))
+- Return 404 for unknown env-group services and allow any-env audit lookups ([a049913](https://github.com/sislelabs/kuso/commit/a049913afc8c915da3e326e98ffcd7e6ec058237))
+- Bring the CLI to parity with the web UI ([bc0f83b](https://github.com/sislelabs/kuso/commit/bc0f83b332798fd5844528bdf79a11b32b5dd378))
+- Publish Windows CLI binaries and detect Git Bash in install-cli.sh ([5f989d3](https://github.com/sislelabs/kuso/commit/5f989d34e3cf78a1f30ea553c4785ffcb64da694))
+
 ## [0.32.2] — 2026-10-24
 
 ### 🐛 Bug Fixes
@@ -423,14 +431,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(backup): pull the :latest backup image on every run ([dc2d80b](https://github.com/sislelabs/kuso/commit/dc2d80b32c8ec20ae8c74653b76375a5aa7fa753))
-
-## [0.25.18] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(env): an environment's own addon clones always mount last ([28bd71c](https://github.com/sislelabs/kuso/commit/28bd71cb9fd0f9d564a381c8f8fd83e0cad91b2d))
-
-### 🧪 Tests
-- Test(env): pin clone-last ordering at the propagation layer ([401f0db](https://github.com/sislelabs/kuso/commit/401f0dbdd0c66a217fc057885d5eaca4bde11918))
 
 
 ---
