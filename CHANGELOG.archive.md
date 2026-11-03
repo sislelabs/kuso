@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.19] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): pull the :latest backup image on every run ([dc2d80b](https://github.com/sislelabs/kuso/commit/dc2d80b32c8ec20ae8c74653b76375a5aa7fa753))
+
 ## [0.25.18] — 2026-09-02
 
 ### 🐛 Bug Fixes

@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.32.4] — 2026-11-03
+
+### Other
+- Sync embedded install-cli.sh with hack/install-cli.sh ([876f226](https://github.com/sislelabs/kuso/commit/876f2262f05970b453dafa80737091eb16dd8a8c))
+- Stop the apply-updates drain from evicting its own pod ([72d7dc5](https://github.com/sislelabs/kuso/commit/72d7dc5e32f9cf55e20c2ea821164aa6e87c2be2))
+
 ## [0.32.3] — 2026-10-25
 
 ### Other
@@ -426,11 +432,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): propagation restores an environment's own addon clones ([355a439](https://github.com/sislelabs/kuso/commit/355a439bbcbf584de4c535aacb65ef71ec6ad555))
-
-## [0.25.19] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(backup): pull the :latest backup image on every run ([dc2d80b](https://github.com/sislelabs/kuso/commit/dc2d80b32c8ec20ae8c74653b76375a5aa7fa753))
 
 
 ---
