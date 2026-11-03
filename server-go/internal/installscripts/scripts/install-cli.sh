@@ -35,6 +35,7 @@ uname_os() {
   case "$(uname -s)" in
     Darwin*) echo "darwin" ;;
     Linux*)  echo "linux" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
     *) die "unsupported OS: $(uname -s)" ;;
   esac
 }
@@ -49,11 +50,13 @@ uname_arch() {
 
 OS="$(uname_os)"
 ARCH="$(uname_arch)"
+EXT=""
+[ "$OS" = "windows" ] && EXT=".exe"
 
 if [ "$(id -u)" = "0" ]; then
-  DEST="/usr/local/bin/kuso"
+  DEST="/usr/local/bin/kuso${EXT}"
 else
-  DEST="${HOME}/.local/bin/kuso"
+  DEST="${HOME}/.local/bin/kuso${EXT}"
   mkdir -p "$(dirname "$DEST")"
 fi
 
@@ -71,7 +74,7 @@ if [ "$VERSION" = "latest" ]; then
   VERSION="$(resolve_latest)"
 fi
 
-ASSET="kuso-${OS}-${ARCH}"
+ASSET="kuso-${OS}-${ARCH}${EXT}"
 URL=""
 if [ -n "${VERSION:-}" ]; then
   URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
@@ -103,8 +106,8 @@ if [ -z "$URL" ]; then
       # `go install` writes the binary as the package's *directory* name
       # (`cmd`) — rename to `kuso`. Quietly tolerate the "already there"
       # case (re-run install, target exists with the same name).
-      if [ -f "${GOBIN}/cmd" ] && [ "${GOBIN}/cmd" != "${DEST}" ]; then
-        mv -f "${GOBIN}/cmd" "${DEST}"
+      if [ -f "${GOBIN}/cmd${EXT}" ] && [ "${GOBIN}/cmd${EXT}" != "${DEST}" ]; then
+        mv -f "${GOBIN}/cmd${EXT}" "${DEST}"
       fi
       log "installed kuso (go install) to ${DEST}"
     else
