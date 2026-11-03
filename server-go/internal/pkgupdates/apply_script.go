@@ -92,12 +92,9 @@ drain_node() {
   # Select drainable pods with jq: skip DaemonSet-owned pods (tolerated/
   # replaced per-node, not drainable) and mirror/static pods (owner
   # kind=Node), and skip already-terminal pods. Emit "namespace/name".
-  printf '%s' "$pods_json" | jq -r '
-    .items[]
-    | select(([.metadata.ownerReferences[]?.kind] | (contains(["DaemonSet"]) or contains(["Node"]))) | not)
-    | select(.status.phase != "Succeeded" and .status.phase != "Failed")
-    | .metadata.namespace + "/" + .metadata.name
-  ' 2>/dev/null | sort -u > /tmp/drain_pods || true
+  # Never evict ourselves: this Job pod runs on the node being drained,
+  # and evicting it kills the apply before the reboot (BackoffLimit 0).
+  printf '%s' "$pods_json" | jq -r --arg self "${POD_NAMESPACE}/${POD_NAME}" '` + drainPodsFilter + `' 2>/dev/null | sort -u > /tmp/drain_pods || true
 
   count=$(wc -l < /tmp/drain_pods 2>/dev/null | tr -d ' ')
   echo "pkg-apply: drain: $count pod(s) to evict from $NODE"
@@ -187,4 +184,14 @@ echo "pkg-apply: reboot scheduled"
 # the node going down.
 sleep 30
 exit 0
+`
+
+// drainPodsFilter selects the pods drain_node evicts, as "ns/name", from
+// a pod list. $self is the apply pod's own "ns/name".
+const drainPodsFilter = `
+    .items[]
+    | select(([.metadata.ownerReferences[]?.kind] | (contains(["DaemonSet"]) or contains(["Node"]))) | not)
+    | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+    | .metadata.namespace + "/" + .metadata.name
+    | select(. != $self)
 `

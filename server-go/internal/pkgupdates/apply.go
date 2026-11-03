@@ -493,6 +493,8 @@ func (w *Watcher) buildApplyJob(node, pkgMgr string, allowReboot bool) *batchv1.
 							{Name: "ALLOW_REBOOT", Value: rebootFlag},
 							{Name: "APPLY_ANNOTATION", Value: ApplyStateAnnotation},
 							{Name: "CORDON_ANNOTATION", Value: CordonAnnotation},
+							{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+							{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
 						},
 						SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 					}},

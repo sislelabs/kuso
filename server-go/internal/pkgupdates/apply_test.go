@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -439,5 +441,30 @@ func TestReconcileFailsStalledApply(t *testing.T) {
 				t.Errorf("anotherNodeRebooting = %q, %v; want unblocked", busy, err)
 			}
 		})
+	}
+}
+
+// The drain must never evict the apply pod itself: it runs on the node
+// being drained, and evicting it killed the apply before the reboot.
+func TestDrainPodsFilterSkipsSelf(t *testing.T) {
+	t.Parallel()
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Skip("jq not installed")
+	}
+	pods := `{"items":[
+	  {"metadata":{"namespace":"kuso-a","name":"web","ownerReferences":[{"kind":"ReplicaSet"}]},"status":{"phase":"Running"}},
+	  {"metadata":{"namespace":"kuso","name":"kuso-pkg-apply-n1-abcde","ownerReferences":[{"kind":"Job"}]},"status":{"phase":"Running"}},
+	  {"metadata":{"namespace":"kube-system","name":"svclb","ownerReferences":[{"kind":"DaemonSet"}]},"status":{"phase":"Running"}},
+	  {"metadata":{"namespace":"kuso","name":"done-job","ownerReferences":[{"kind":"Job"}]},"status":{"phase":"Succeeded"}}
+	]}`
+	cmd := exec.Command(jq, "-r", "--arg", "self", "kuso/kuso-pkg-apply-n1-abcde", drainPodsFilter)
+	cmd.Stdin = strings.NewReader(pods)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("jq: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "kuso-a/web" {
+		t.Errorf("drain set = %q, want only kuso-a/web", got)
 	}
 }
