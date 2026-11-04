@@ -175,6 +175,12 @@ func (w *Worker) advance(ctx context.Context, s db.VulnScan) {
 		return
 	}
 	if err != nil {
+		// A persistent error (RBAC, apiserver down) must not hold the
+		// one-at-a-time queue forever.
+		if w.now().Sub(s.StartedAt) > scanMaxRuntime {
+			w.fail(ctx, s, "scan job unreadable: "+err.Error())
+			return
+		}
 		w.log().Warn("vulnscan: get scan job", "scan", s.ID, "err", err)
 		return
 	}
