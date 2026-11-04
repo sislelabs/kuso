@@ -333,7 +333,7 @@ func (d *Dispatcher) SetLeaderHook(fn func() bool) {
 	d.mu.Unlock()
 }
 
-// SetEventHook installs a callback invoked (leader-only, after persist)
+// SetEventHook installs a callback invoked (on the emitting replica, after persist)
 // for every emitted event. The incidents.Manager uses it to open/attach
 // incidents. The hook must return quickly — it runs on the Emit path.
 // Pass nil to clear.
