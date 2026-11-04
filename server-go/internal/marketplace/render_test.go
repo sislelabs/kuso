@@ -125,3 +125,24 @@ func TestRenderTemplate_TemplateSizeWins(t *testing.T) {
 		t.Fatalf("service size = %q, want small", got)
 	}
 }
+
+// An unanswered prompt renders its manifest default: the CLI only sends
+// --set keys and the web dialog only sends edited fields.
+func TestRenderTemplate_UnansweredPromptUsesDefault(t *testing.T) {
+	m := mustManifest(t,
+		Prompt{Key: "host", Title: "Host", Kind: "domain", Required: true},
+		Prompt{Key: "admin_email", Title: "Email", Kind: "string", Required: true, Default: "ops@example.com"},
+	)
+	for name, answers := range map[string]map[string]string{
+		"absent": {"host": "app.example.com"},
+		"empty":  {"host": "app.example.com", "admin_email": ""},
+	} {
+		f, _, err := RenderTemplate(m, []byte(tmplWithPrompt), "shop", answers)
+		if err != nil {
+			t.Fatalf("%s: unexpected err: %v", name, err)
+		}
+		if got := f.Services[0].Env["ADMIN_EMAIL"].Value; got != "ops@example.com" {
+			t.Fatalf("%s: ADMIN_EMAIL = %q, want the default", name, got)
+		}
+	}
+}

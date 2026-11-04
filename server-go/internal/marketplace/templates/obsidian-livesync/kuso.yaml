@@ -1,0 +1,66 @@
+apiVersion: kuso/v1
+project: obsidian-livesync
+services:
+  - name: couchdb
+    runtime: image
+    port: 5984
+    image:
+      repository: couchdb
+      tag: "3.5.3"
+    # Writes the LiveSync server settings (from the plugin's
+    # utils/couchdb/provision.ts) into default.d, which is in the image
+    # layer, so every start picks up the template's version. Runtime
+    # _config edits land in local.d (a volume) and still win. The
+    # entrypoint only runs its setup when $1 is /opt/couchdb/bin/couchdb.
+    # No "$(" anywhere: kubelet expands $(VAR) in container commands.
+    command:
+      - tini
+      - --
+      - sh
+      - -c
+      - |
+        cat > /opt/couchdb/etc/default.d/90-livesync.ini <<'EOF'
+        [couchdb]
+        single_node = true
+        max_document_size = 50000000
+
+        [chttpd]
+        require_valid_user = true
+        max_http_request_size = 4294967296
+        enable_cors = true
+
+        [chttpd_auth]
+        require_valid_user = true
+
+        [httpd]
+        WWW-Authenticate = Basic realm="couchdb"
+        enable_cors = true
+
+        [cors]
+        origins = app://obsidian.md,capacitor://localhost,http://localhost
+        credentials = true
+        EOF
+        exec /docker-entrypoint.sh /opt/couchdb/bin/couchdb
+    env:
+      COUCHDB_USER: "${{ prompt.admin_user }}"
+      COUCHDB_PASSWORD: { generate: hex32 }
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /opt/couchdb/data
+        sizeGi: 5
+      # docker.ini: admin hash (written once by the entrypoint), node
+      # uuid, cookie secret and every runtime _config change.
+      - name: config
+        mountPath: /opt/couchdb/etc/local.d
+        sizeGi: 1
+    # RWO volumes: two CouchDB processes on one data dir corrupt it.
+    scale: { min: 1, max: 1 }
+    # The entrypoint starts as root, chowns /opt/couchdb, then drops to
+    # the couchdb user via setpriv.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
