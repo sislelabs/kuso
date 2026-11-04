@@ -1357,7 +1357,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if parentSvc != nil && parentSvc.Spec.FromService != "" {
 		buildService = parentSvc.Spec.FromService
 	}
-	prior := d.priorBuildsForSHA(ctx, ns, proj.Name, buildService, pr.PullRequest.Head.SHA, envName)
+	prior := d.priorBuildsForSHA(ctx, ns, proj.Name, buildService, pr.PullRequest.Head.SHA, envName, buildService != short, pr.Number)
 	if d.Builds != nil && prior.succeeded == nil && !prior.inFlight {
 		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{
 			// The SHA-keyed build ended without an image (cancelled by a
@@ -1653,11 +1653,14 @@ type priorBuilds struct {
 	endedWithoutImage bool            // a build reached failed/cancelled
 }
 
-// priorBuildsForSHA looks up the builds of service at sha. Builds made for
-// a different preview env are ignored (their build-time env differs); the
-// unmarked ones are the SHA-keyed builds from before preview builds were
-// marked, or a push build of the same commit.
-func (d *Dispatcher) priorBuildsForSHA(ctx context.Context, ns, project, service, sha, envName string) priorBuilds {
+// priorBuildsForSHA looks up the builds of service at sha that were made
+// for envName. Only builds marked for this preview count: an unmarked push
+// build of the same commit baked a persistent env's build-time vars and
+// never promotes into a preview env, so treating it as in-flight or
+// reusable leaves the preview on a stale or wrong image. For a fromService
+// worker (viaSource) the source service's preview build for the same PR is
+// the one that promotes into the worker's preview.
+func (d *Dispatcher) priorBuildsForSHA(ctx context.Context, ns, project, service, sha, envName string, viaSource bool, prNumber int) priorBuilds {
 	var out priorBuilds
 	if sha == "" {
 		return out
@@ -1668,14 +1671,14 @@ func (d *Dispatcher) priorBuildsForSHA(ctx context.Context, ns, project, service
 		return out
 	}
 	fqn := project + "-" + service
-	var exact, unmarked *kube.KusoBuild
+	pr := strconv.Itoa(prNumber)
 	for i := range list {
 		b := &list[i]
 		if b.Spec.Service != fqn || b.Spec.Ref != sha || b.Spec.DryRun {
 			continue
 		}
 		target := b.Annotations[builds.AnnPreviewEnv]
-		if target != "" && target != envName {
+		if target == "" || (target != envName && !(viaSource && b.Annotations[builds.AnnPreviewPR] == pr)) {
 			continue
 		}
 		if b.Labels[builds.LabelBuildState] != "done" && !b.Spec.Done {
@@ -1686,17 +1689,9 @@ func (d *Dispatcher) priorBuildsForSHA(ctx context.Context, ns, project, service
 			out.endedWithoutImage = true
 			continue
 		}
-		best := &unmarked
-		if target != "" {
-			best = &exact
+		if out.succeeded == nil || b.CreationTimestamp.After(out.succeeded.CreationTimestamp.Time) {
+			out.succeeded = b
 		}
-		if *best == nil || b.CreationTimestamp.After((*best).CreationTimestamp.Time) {
-			*best = b
-		}
-	}
-	out.succeeded = exact
-	if out.succeeded == nil {
-		out.succeeded = unmarked
 	}
 	return out
 }
