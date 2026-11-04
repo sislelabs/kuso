@@ -154,3 +154,18 @@ func TestHook_DoesNotBlockOnConfigRead(t *testing.T) {
 		t.Fatal("config was never read for a triggerable event")
 	}
 }
+
+// An alert recovery reuses the alert.fired type; it must never open or
+// attach to an incident (LOOP-01).
+func TestHook_IgnoresAlertResolved(t *testing.T) {
+	t.Parallel()
+	bc := &blockingConfig{release: make(chan struct{}), gotCtx: make(chan context.Context, 1)}
+	defer close(bc.release)
+	m := &Manager{Config: bc}
+	m.Hook(notify.AlertResolved("http_5xx_rate", "back to normal", map[string]string{"project": "p", "service": "s"}))
+	select {
+	case <-bc.gotCtx:
+		t.Fatal("resolved alert reached incident handling")
+	case <-time.After(200 * time.Millisecond):
+	}
+}

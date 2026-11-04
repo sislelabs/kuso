@@ -133,6 +133,11 @@ func (m *Manager) Hook(e notify.Event) {
 	if !triggerEnabled(db.IncidentAgentConfig{TriggerPod: true, TriggerAlert: true, TriggerNode: true}, e.Type) {
 		return
 	}
+	// AlertResolved keeps the alert.fired type for channel delivery; a
+	// recovery is not a new problem.
+	if e.Extra["state"] == "resolved" {
+		return
+	}
 	safego.Go(m.log(), "incident-handle", func() { m.handle(context.Background(), e) })
 }
 
