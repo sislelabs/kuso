@@ -1040,7 +1040,15 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcRequestLimits *kube.KusoRequestLimits
 	var svcHealthcheck *kube.KusoHealthcheck
 	var svcPublicEnv []string
-	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
+	// Fail closed: building the preview from zero values would publish an
+	// internal service, skip its release hook and mount every addon, and
+	// the update path below would overwrite a correct preview with that.
+	// Leave the env untouched; the next push retries.
+	svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN)
+	if err != nil {
+		return fmt.Errorf("get service %s for PR #%d preview: %w", serviceFQN, pr.Number, err)
+	}
+	if svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
 		}

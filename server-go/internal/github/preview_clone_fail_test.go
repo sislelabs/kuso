@@ -7,9 +7,43 @@ import (
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/builds"
 )
+
+// LIFE-12: a transient GET failure on the parent service used to create
+// (or overwrite) the preview with zero-valued service fields: a public
+// Ingress for an internal service, no release hook, legacy mount-all.
+func TestDispatch_PROpened_ServiceGetFailureFailsClosed(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	d.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "kusoservices",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewServiceUnavailable("apiserver blip")
+		})
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 43,
+		"pull_request": {
+			"head": {"ref": "feat/y", "sha": "abcdef0123456789abcdef0123456789abcdef02"},
+			"base": {"ref": "main"},
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	_ = d.Dispatch(context.Background(), "pull_request", body)
+
+	if env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-43"); !apierrors.IsNotFound(err) {
+		t.Fatalf("preview env created without its parent service's fields (env=%v, err=%v)", env, err)
+	}
+}
 
 type failingPreviewDB struct{}
 
