@@ -9,6 +9,9 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
@@ -181,5 +184,38 @@ func TestVulnGate_QuietFailOpenPromotesWithoutAlert(t *testing.T) {
 	}
 	if slices.Contains(em.types(), eventScanFailed) {
 		t.Errorf("the breaker already alerted for this outage: %v", em.types())
+	}
+}
+
+func TestVulnGate_ClockSurvivesLostSinceAnnotation(t *testing.T) {
+	build := vulnGatedBuild(nil)
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "kusobuilds",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("apiserver unavailable")
+		})
+	gate := &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnPending}}
+	em := &recordingEmitter{}
+	t0 := time.Now()
+	now := t0
+	p := &Poller{Svc: s, Interval: time.Hour, Notifier: em, VulnGate: gate, vulnClock: func() time.Time { return now }}
+	ctx := context.Background()
+	// Each tick sees the informer's copy: the since-annotation never lands.
+	if stop, err := p.runVulnGate(ctx, "kuso", vulnGatedBuild(nil)); !stop || err != nil {
+		t.Fatalf("first tick must hold: stop=%v err=%v", stop, err)
+	}
+	now = t0.Add(5 * time.Minute)
+	if stop, _ := p.runVulnGate(ctx, "kuso", vulnGatedBuild(nil)); !stop {
+		t.Fatal("5 minutes in still holds")
+	}
+	if got := gate.calls[1].Since; !got.Equal(t0) {
+		t.Fatalf("since = %v, want the first sighting %v", got, t0)
+	}
+	now = t0.Add(vulnGateMaxWait + time.Second)
+	if stop, err := p.runVulnGate(ctx, "kuso", vulnGatedBuild(nil)); stop || err != nil {
+		t.Fatalf("past the max wait the gate must fail open even without the annotation: stop=%v err=%v", stop, err)
+	}
+	if !slices.Contains(em.types(), eventScanFailed) {
+		t.Errorf("events = %v", em.types())
 	}
 }

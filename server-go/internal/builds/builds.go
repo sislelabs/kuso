@@ -1651,6 +1651,11 @@ type Poller struct {
 	// VulnGate scans a built image before promotion (vulngate.go).
 	// Optional: nil → promote without scanning.
 	VulnGate VulnGate
+	// vulnGateSeen: ns/build → when this process first gated it, the
+	// fallback clock when the since-annotation doesn't stick.
+	vulnGateMu   sync.Mutex
+	vulnGateSeen map[string]time.Time
+	vulnClock    func() time.Time // tests; nil = time.Now
 
 	// CommitStatuses posts GitHub commit statuses as builds transition
 	// (commit_status.go). Optional: nil → no statuses.

@@ -83,8 +83,16 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 		return false, nil
 	}
 	now := time.Now()
-	since := now
-	if t, perr := time.Parse(time.RFC3339, b.Annotations[annVulnGateSince]); perr == nil {
+	if p.vulnClock != nil {
+		now = p.vulnClock()
+	}
+	key := ns + "/" + b.Name
+	// The earliest of the annotation and this process's own first
+	// sighting: a lost annotation patch (or an informer still showing
+	// the old object) must not restart the clock every tick, or the
+	// fail-open below never fires.
+	since := p.vulnGateFirstSeen(key, now)
+	if t, perr := time.Parse(time.RFC3339, b.Annotations[annVulnGateSince]); perr == nil && t.Before(since) {
 		since = t
 	}
 	short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
@@ -108,6 +116,7 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 		p.notePromotionHold(ctx, ns, b, VulnScanHoldMessage)
 		return true, nil
 	case VulnBlock:
+		p.forgetVulnGate(key)
 		return true, p.markVulnBlocked(ctx, ns, b, v.Message)
 	case VulnFailOpen:
 		p.patchBuildAnnotations(ctx, ns, b, map[string]string{annVulnGate: "failed-open"})
@@ -117,11 +126,43 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 		}
 		return false, nil
 	default:
+		p.forgetVulnGate(key)
 		if v.Scanned {
 			p.patchBuildAnnotations(ctx, ns, b, map[string]string{annVulnGate: "passed"})
 		}
 		return false, nil
 	}
+}
+
+// vulnGateSeenTTL drops first-sighting entries of builds the gate never
+// decided (cancelled, superseded, failed open): well past
+// vulnGateMaxWait, so a still-waiting build never loses its entry.
+const vulnGateSeenTTL = 4 * vulnGateMaxWait
+
+// vulnGateFirstSeen returns when this process first gated key,
+// recording now on the first call.
+func (p *Poller) vulnGateFirstSeen(key string, now time.Time) time.Time {
+	p.vulnGateMu.Lock()
+	defer p.vulnGateMu.Unlock()
+	if p.vulnGateSeen == nil {
+		p.vulnGateSeen = map[string]time.Time{}
+	}
+	if t, ok := p.vulnGateSeen[key]; ok {
+		return t
+	}
+	for k, t := range p.vulnGateSeen {
+		if now.Sub(t) > vulnGateSeenTTL {
+			delete(p.vulnGateSeen, k)
+		}
+	}
+	p.vulnGateSeen[key] = now
+	return now
+}
+
+func (p *Poller) forgetVulnGate(key string) {
+	p.vulnGateMu.Lock()
+	delete(p.vulnGateSeen, key)
+	p.vulnGateMu.Unlock()
 }
 
 // patchBuildAnnotations merges annotations onto the build CR and its
