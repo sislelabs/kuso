@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -154,6 +156,13 @@ func (h *DrainsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	// Keeping a stored credential is only safe for the same destination;
+	// otherwise a masked PUT would send it to whatever host was typed in.
+	if drainHost(body.URL) != drainHost(existing.URL) &&
+		(body.Secret == envMaskSentinel || containsMask(body.Headers)) {
+		writeErr(w, http.StatusBadRequest, "the drain URL's host changed — re-enter its secret and header values instead of keeping the stored ones")
+		return
+	}
 	d := *existing
 	d.Name, d.Type, d.URL, d.Project = body.Name, body.Type, body.URL, body.Project
 	if body.Enabled != nil {
@@ -177,6 +186,16 @@ func (h *DrainsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Headers = headers
 	h.save(ctx, w, r, d, http.StatusOK)
+}
+
+// drainHost is the lowercased host:port of a drain URL ("" if unparsable,
+// which never equals a real stored host).
+func drainHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }
 
 func (h *DrainsHandler) save(ctx context.Context, w http.ResponseWriter, r *http.Request, d drains.Drain, status int) {
