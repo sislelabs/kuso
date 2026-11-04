@@ -127,3 +127,14 @@ func TestDeployHook_QueryParamsPickBranchAndCommit(t *testing.T) {
 		t.Errorf("created = %+v", f.created)
 	}
 }
+
+func TestDeployHook_QueryBranchMustBeDeployed(t *testing.T) {
+	f := &fakeHookBuilds{token: "tok", branches: []string{"main"}}
+	rec := postHook(hookServer(f), "/api/hooks/deploy/shop/api/tok?branch=feature", "", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if len(f.created) != 0 {
+		t.Errorf("an undeployed ?branch= started %d build(s)", len(f.created))
+	}
+}
