@@ -250,9 +250,11 @@ func TestLookupNotification_FallsThroughStaleCache(t *testing.T) {
 }
 
 // A replica without the singletons lease must still enqueue to the
-// durable outbox (the leader's workers deliver it) but must not run the
-// leader-only event hook.
-func TestEmit_NonLeaderEnqueuesButSkipsHook(t *testing.T) {
+// durable outbox (the leader's workers deliver it), and must still run
+// the event hook: alert.fired / node.unreachable come from loops on the
+// cluster-singletons lease, which may live on a different replica than
+// the singletons lease (LOOP-04). The emitters are singletons already.
+func TestEmit_NonLeaderEnqueuesAndRunsHook(t *testing.T) {
 	d := openNotifyTestDB(t)
 	addChannel(t, d, "all", nil)
 
@@ -265,7 +267,7 @@ func TestEmit_NonLeaderEnqueuesButSkipsHook(t *testing.T) {
 	if got := outboxChannels(t, d); len(got) != 1 || got[0] != "all" {
 		t.Fatalf("non-leader outbox rows = %v, want [all]", got)
 	}
-	if hookCalls != 0 {
-		t.Errorf("event hook ran %d times on a non-leader, want 0", hookCalls)
+	if hookCalls != 1 {
+		t.Errorf("event hook ran %d times on a non-singletons-leader, want 1", hookCalls)
 	}
 }
