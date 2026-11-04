@@ -225,7 +225,11 @@ function ConnectionRows({
     const sb = score(b);
     return sa !== sb ? sa - sb : a.localeCompare(b);
   });
-  const isSensitive = (k: string) => /url$|password|secret|token/i.test(k);
+  // Mask by default; only plainly non-secret keys show in the clear. A
+  // denylist missed MONGODB_URI, MEILI_MASTER_KEY and external *_DSN/*_KEY.
+  const isSensitive = (k: string) =>
+    !/(^|_)(HOST|HOSTNAME|PORT|DATABASE|DB|USER|USERNAME|REGION|BUCKET|SSLMODE)$/i.test(k) ||
+    /:\/\/[^/\s]*@/.test(values[k] ?? "");
 
   // The single public DSN: rewrite the primary connection URL's host:port →
   // <cluster-host>:<public-port>, keeping scheme / user:password / path / query.
