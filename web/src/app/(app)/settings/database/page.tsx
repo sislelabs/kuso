@@ -409,6 +409,8 @@ function ExternalDialog({
         <div className="mt-4">
           <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">DSN</label>
           <Input
+            type="password"
+            autoComplete="off"
             value={dsn}
             onChange={(e) => setDsn(e.target.value)}
             className="mt-1 h-7 font-mono text-[11px]"
