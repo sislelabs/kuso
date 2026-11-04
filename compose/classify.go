@@ -122,6 +122,11 @@ func classifyDatastore(image string) (kind, version string) {
 	if !ok {
 		return "", ""
 	}
+	// The redpanda chart renders redpanda:<version> with the full tag
+	// (default v24.1.1); a bare major isn't a published tag.
+	if kind == "redpanda" && tag != "" && tag != "latest" {
+		return kind, tag
+	}
 	return kind, majorVersion(tag)
 }
 
