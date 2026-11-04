@@ -63,7 +63,7 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 		// fail with a clearer error than parse-stage panic.
 		k.baseURL = apiURL
 		k.host = apiURL
-	} else if strings.Contains(parsed.Host, "localhost") {
+	} else if h := strings.ToLower(parsed.Hostname()); h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		k.baseURL = parsed.Scheme + "://localhost"
 		if parsed.Port() != "" {
 			k.baseURL += ":" + parsed.Port()
