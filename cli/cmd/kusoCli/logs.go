@@ -100,7 +100,7 @@ log lines until ^C — same surface as the web UI's Logs tab.`,
 		}
 		// Non-follow path: hit the REST endpoint, dump, exit.
 		path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
-			args[0], args[1], url.QueryEscape(envSelector), logsLines)
+			url.PathEscape(args[0]), url.PathEscape(args[1]), url.QueryEscape(envSelector), logsLines)
 		resp, err := api.RawGet(path)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -170,9 +170,14 @@ func streamLogs(project, service, env string, tail int) error {
 	case "http":
 		u.Scheme = "ws"
 	}
-	u.Path = strings.TrimRight(u.Path, "/") +
-		fmt.Sprintf("/ws/projects/%s/services/%s/logs",
-			url.PathEscape(project), url.PathEscape(service))
+	// Path holds the decoded form and RawPath the escaped one; putting
+	// escaped segments into Path alone double-encodes them (%2F → %252F).
+	basePath := strings.TrimRight(u.EscapedPath(), "/")
+	u.RawPath = basePath + fmt.Sprintf("/ws/projects/%s/services/%s/logs",
+		url.PathEscape(project), url.PathEscape(service))
+	if u.Path, err = url.PathUnescape(u.RawPath); err != nil {
+		return fmt.Errorf("build ws url: %w", err)
+	}
 	q := u.Query()
 	q.Set("env", env)
 	q.Set("tail", fmt.Sprintf("%d", tail))

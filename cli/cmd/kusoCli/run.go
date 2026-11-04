@@ -15,6 +15,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -144,7 +145,7 @@ func streamRunUntilDone(project, service, runName string) error {
 // tailRunPods machinery so we don't open a parallel code path.
 func fetchRunLines(project, service, runName string, lines int) ([]string, error) {
 	path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
-		project, service, "run%3A"+runName, lines)
+		url.PathEscape(project), url.PathEscape(service), url.QueryEscape("run:"+runName), lines)
 	resp, err := api.RawGet(path)
 	if err := checkRespErr(resp, err); err != nil {
 		return nil, fmt.Errorf("get logs: %w", err)
