@@ -293,3 +293,36 @@ func TestClaimNextVulnScan_RacingClaimLosesCleanly(t *testing.T) {
 		t.Fatalf("running scans = %d (%v), want 1", running, err)
 	}
 }
+
+func TestPruneVulnScans_KeepsLastSucceededPastFailures(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	finish := func(status string, age time.Duration) int64 {
+		id, _, err := d.EnqueueVulnScan(ctx, VulnScanRequest{Digest: "sha256:x", ImageRef: "r@x", Reason: VulnReasonNightly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.ExecContext(ctx, `UPDATE "VulnScan" SET "status"=$2, "createdAt"=now()-$3::interval WHERE "id"=$1`,
+			id, status, age.String()); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	good := finish(VulnStatusSucceeded, 10*time.Hour)
+	for i := 0; i < 7; i++ {
+		finish(VulnStatusFailed, time.Duration(7-i)*time.Hour)
+	}
+	if err := d.UpsertVulnImages(ctx, []VulnImage{{Digest: "sha256:x", ImageRef: "r", OwnerKind: VulnOwnerPlatform, Namespace: "kuso", Workload: "x"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	n, err := d.PruneVulnScans(ctx, time.Now(), 5, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("pruned %d, want 2 (failures beyond the newest 5)", n)
+	}
+	if _, err := d.GetVulnScan(ctx, good); err != nil {
+		t.Fatalf("a run of failures must not prune the last succeeded scan: %v", err)
+	}
+}

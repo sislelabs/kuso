@@ -660,7 +660,9 @@ func (d *DB) MarkVulnsNotified(ctx context.Context, ownerKey string, vulnIDs []s
 }
 
 // PruneVulnScans applies retention: keep the newest keepPerDigest
-// finished scans per digest, and drop finished scans older than
+// succeeded AND the newest keepPerDigest failed scans per digest (ranked
+// apart, so a run of failures never pushes out the last good result the
+// UI and gate read), and drop finished scans older than
 // goneAfter whose digest no inventory row has seen since then. Queued
 // and running scans are never pruned. Findings cascade.
 func (d *DB) PruneVulnScans(ctx context.Context, now time.Time, keepPerDigest int, goneAfter time.Duration) (int64, error) {
@@ -670,7 +672,7 @@ func (d *DB) PruneVulnScans(ctx context.Context, now time.Time, keepPerDigest in
 		WHERE s."status" IN ('succeeded','failed') AND (
 			s."id" IN (
 				SELECT "id" FROM (
-					SELECT "id", row_number() OVER (PARTITION BY "digest" ORDER BY "createdAt" DESC, "id" DESC) AS rn
+					SELECT "id", row_number() OVER (PARTITION BY "digest", "status" ORDER BY "createdAt" DESC, "id" DESC) AS rn
 					FROM "VulnScan" WHERE "status" IN ('succeeded','failed') AND "digest" <> ''
 				) ranked WHERE rn > $1)
 			OR (s."createdAt" < $2 AND NOT EXISTS (
