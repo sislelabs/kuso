@@ -25,9 +25,9 @@ import (
 //   - RuntimeForBuildPack defaults to "dockerfile" on unknown — the
 //     imported app needs *some* runtime, and Dockerfile is the lowest
 //     common denominator.
-//   - ParseFirstPort accepts "3000:3000" and takes the left
-//     (listening) side — Coolify port specs occasionally arrive in
-//     that form.
+//   - ParseFirstPort accepts "8080:3000" and takes the right
+//     (container, i.e. listening) side — Coolify port specs
+//     occasionally arrive in host:container form.
 //   - SlugifyName + AssignKusoSlugs return "x-unnamed" rather than
 //     empty when the input is unusable, so the importer doesn't
 //     create a service with no name.
@@ -176,16 +176,16 @@ func RuntimeForBuildPack(bp string) string {
 
 // ParseFirstPort takes a comma-separated Coolify port list and returns
 // the first numeric port, or 0 on no match. Coolify ports may arrive
-// as bare integers ("3000") or host:container pairs ("3000:3000"); we
-// take the listening (left) side.
+// as bare integers ("3000") or host:container pairs ("8080:3000"); we
+// take the container side, which is what the app listens on.
 func ParseFirstPort(s string) int {
 	for _, part := range strings.Split(s, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if i := strings.Index(part, ":"); i > 0 {
-			part = part[:i]
+		if i := strings.LastIndex(part, ":"); i >= 0 {
+			part = part[i+1:]
 		}
 		if n, err := strconv.Atoi(part); err == nil && n > 0 && n < 65536 {
 			return n
