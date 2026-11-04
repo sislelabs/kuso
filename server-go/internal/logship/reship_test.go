@@ -195,6 +195,23 @@ func TestPodFinishedBetweenTicksIsShipped(t *testing.T) {
 	assertExactlyOnce(t, shipped(s), "job: boom")
 }
 
+// LOOP-06: one line past the scanner cap used to end every stream at the
+// same spot, so nothing after it was ever shipped.
+func TestOverlongLineDoesNotStopShipping(t *testing.T) {
+	base := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	logs := &fakeLogs{lines: map[string][]fakeLine{}}
+	logs.add("web", "main", base, "before")
+	logs.add("web", "main", base.Add(time.Second), strings.Repeat("x", 2<<20))
+	logs.add("web", "main", base.Add(2*time.Second), "after")
+	s, _ := newTestShipper(logs, testPod("web", corev1.PodRunning, false))
+	tick(t, s)
+	tick(t, s)
+	got := shipped(s)
+	if got["web: before"] != 1 || got["web: after"] != 1 {
+		t.Fatalf("lines around the over-long one: before=%d after=%d, want 1 each", got["web: before"], got["web: after"])
+	}
+}
+
 func TestStateEvictedForVanishedPods(t *testing.T) {
 	logs := &fakeLogs{lines: map[string][]fakeLine{}}
 	logs.add("gone", "main", time.Now(), "x")

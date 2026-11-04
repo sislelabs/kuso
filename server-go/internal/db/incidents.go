@@ -165,6 +165,17 @@ WHERE "state" IN ('investigating','awaiting_feedback','implementing','pr_open')`
 	return n, err
 }
 
+// CountActiveIncidents returns how many incidents have an agent Job in
+// flight (investigating / implementing). awaiting_feedback and pr_open
+// wait on a human, so they don't count toward MaxConcurrent.
+func (d *DB) CountActiveIncidents(ctx context.Context) (int, error) {
+	var n int
+	err := d.QueryRowContext(ctx, `
+SELECT count(*) FROM "Incident" WHERE "state" IN ($1, $2)`,
+		IncidentInvestigating, IncidentImplementing).Scan(&n)
+	return n, err
+}
+
 // ListIncidents returns the newest `limit` incidents after skipping
 // `offset` (UI feed). When state is non-empty, only incidents in that
 // state are returned (the Discord bot filters to "awaiting_feedback").

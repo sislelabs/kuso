@@ -3,6 +3,8 @@ package uptime
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -621,5 +623,28 @@ func TestStatusStates(t *testing.T) {
 	}
 	if got["failing"].Reason != HoldConfirming || got["paused"].Reason != PausedStopped || got["down"].Since == nil {
 		t.Errorf("reasons/since wrong: %+v", got)
+	}
+}
+
+// LOOP-11: a panicking probe must neither crash the process nor stop the
+// other targets from being checked.
+func TestProbeAllSurvivesPanickingProbe(t *testing.T) {
+	w := &Watcher{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Probe: func(_ context.Context, url string) Result {
+		if url == "boom" {
+			panic("nil field in odd response")
+		}
+		return Result{}
+	}}
+	var targets []Target
+	for i := 0; i < 3*probeWorkers; i++ {
+		u := "ok"
+		if i%3 == 0 {
+			u = "boom"
+		}
+		targets = append(targets, Target{Namespace: "ns", Env: strings.Repeat("e", i+1), URL: u})
+	}
+	got := w.probeAll(context.Background(), targets)
+	if len(got) != 2*probeWorkers {
+		t.Fatalf("probed %d targets, want %d (every non-panicking one)", len(got), 2*probeWorkers)
 	}
 }

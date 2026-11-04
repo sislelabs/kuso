@@ -277,7 +277,7 @@ type Dispatcher struct {
 	isLeader func() bool
 
 	// eventHook, when set, is called synchronously from Emit AFTER the
-	// event is persisted, on the leader only. The incidents.Manager
+	// event is persisted, on the emitting replica. The incidents.Manager
 	// registers one to react to pod.crashed / alert.fired /
 	// node.unreachable. It must be cheap + non-blocking (it spawns work
 	// async); a slow hook would stall the Emit caller. nil = no hook.
@@ -333,7 +333,7 @@ func (d *Dispatcher) SetLeaderHook(fn func() bool) {
 	d.mu.Unlock()
 }
 
-// SetEventHook installs a callback invoked (leader-only, after persist)
+// SetEventHook installs a callback invoked (on the emitting replica, after persist)
 // for every emitted event. The incidents.Manager uses it to open/attach
 // incidents. The hook must return quickly — it runs on the Emit path.
 // Pass nil to clear.
@@ -401,7 +401,6 @@ func (d *Dispatcher) EmitDurable(e Event) error {
 	closed := d.closed
 	parent := d.baseCtx
 	hook := d.eventHook
-	leader := d.isLeader
 	d.mu.Unlock()
 	if closed {
 		return fmt.Errorf("notify: dispatcher closed")
@@ -417,10 +416,13 @@ func (d *Dispatcher) EmitDurable(e Event) error {
 		}
 		err = d.enqueueOutbox(parent, e)
 	}
-	// Event hook (incidents.Manager): leader-only, after persist. Called
-	// outside d.mu; the hook spawns async work and must not block. A
-	// scoped twin repeats an event already emitted, so it skips the hook.
-	if hook != nil && e.Audience != AudienceScoped && (leader == nil || leader()) {
+	// Event hook (incidents.Manager), after persist. Called outside d.mu;
+	// the hook spawns async work and must not block. NOT gated on the
+	// singletons lease: its trigger events come from loops on either
+	// lease (health on singletons, alerts/nodewatch on cluster-singletons)
+	// and those emitters are already single-replica. A scoped twin
+	// repeats an event already emitted, so it skips the hook.
+	if hook != nil && e.Audience != AudienceScoped {
 		hook(e)
 	}
 	return err

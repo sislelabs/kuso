@@ -179,8 +179,26 @@ func IsReservedIP(ip net.IP) bool {
 	if ip.IsPrivate() {
 		return true
 	}
+	for _, c := range specialPurposeCIDRs {
+		if c.Contains(ip) {
+			return true
+		}
+	}
 	return false
 }
+
+// specialPurposeCIDRs are IPv4 ranges IsPrivate misses that still reach
+// internal hosts: 0/8 ("this network"), 100.64/10 (CGNAT — Tailscale
+// peers on home-box installs), 192.0.0/24 (IETF protocol assignments),
+// 198.18/15 (benchmarking, used by some internal networks).
+var specialPurposeCIDRs = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15"} {
+		_, n, _ := net.ParseCIDR(c)
+		out = append(out, n)
+	}
+	return out
+}()
 
 func isAllowPrivateOutbound() bool {
 	return os.Getenv("KUSO_ALLOW_PRIVATE_OUTBOUND") == "true"

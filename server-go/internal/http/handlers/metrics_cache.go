@@ -59,6 +59,15 @@ var podMetricsGVR = schema.GroupVersionResource{
 // never the dominant source of lag.
 const podMetricsTTL = 5 * time.Second
 
+// podMetricsFetchTimeout bounds the shared upstream LIST.
+const podMetricsFetchTimeout = 10 * time.Second
+
+// listPodMetrics is the upstream LIST; a var so tests can observe the
+// context it runs under.
+var listPodMetrics = func(ctx context.Context, kc *kube.Client, ns string) (*unstructured.UnstructuredList, error) {
+	return kc.Dynamic.Resource(podMetricsGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+}
+
 type podMetricsEntry struct {
 	items   []unstructured.Unstructured
 	fetched time.Time
@@ -108,7 +117,12 @@ func listPodMetricsCached(ctx context.Context, kc *kube.Client, ns string) ([]un
 		// No label selector: we fetch the whole namespace once and let
 		// callers filter in memory. That is what collapses N per-project
 		// queries into one.
-		list, lerr := kc.Dynamic.Resource(podMetricsGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+		//
+		// The fetch is shared by every waiter, so it must not die with
+		// the first caller's request (a closed tab cancels it).
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), podMetricsFetchTimeout)
+		defer cancel()
+		list, lerr := listPodMetrics(fetchCtx, kc, ns)
 		if lerr != nil {
 			return nil, lerr
 		}

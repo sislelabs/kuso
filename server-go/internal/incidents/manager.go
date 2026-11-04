@@ -133,6 +133,11 @@ func (m *Manager) Hook(e notify.Event) {
 	if !triggerEnabled(db.IncidentAgentConfig{TriggerPod: true, TriggerAlert: true, TriggerNode: true}, e.Type) {
 		return
 	}
+	// AlertResolved keeps the alert.fired type for channel delivery; a
+	// recovery is not a new problem.
+	if e.Extra["state"] == "resolved" {
+		return
+	}
 	safego.Go(m.log(), "incident-handle", func() { m.handle(context.Background(), e) })
 }
 
@@ -142,6 +147,15 @@ func targetKeyFor(e notify.Event) string {
 	if e.Type == notify.EventNodeUnreachable {
 		// node.unreachable carries the node name in a field, not Service.
 		svc = nodeNameFromEvent(e)
+	}
+	// Cluster-scoped alerts (node pressure, cert expiry) carry no
+	// project/service; key them on the node or the rule instead.
+	if e.Type == notify.EventAlertFired && e.Project == "" && svc == "" {
+		if n := e.Extra["node"]; n != "" {
+			svc = "node:" + n
+		} else if id := e.Extra["rule_id"]; id != "" {
+			svc = "rule:" + id
+		}
 	}
 	return string(e.Type) + "|" + e.Project + "|" + svc
 }
@@ -214,7 +228,7 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 	open, openErr := m.DB.OpenIncidentForTarget(ctx, key)
 	openExists := openErr == nil
 	lastClosed, lastOK, _ := m.DB.LastClosedAtForTarget(ctx, key)
-	openCount, countErr := m.DB.CountOpenIncidents(ctx)
+	openCount, countErr := m.DB.CountActiveIncidents(ctx)
 	if countErr != nil && !openExists {
 		log.Warn("incident: event dropped (cannot count open incidents)", "err", countErr)
 		return

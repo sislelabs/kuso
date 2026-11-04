@@ -156,6 +156,9 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo) *bat
 	// Keep finished Jobs for a day so the operator can read agent stdout
 	// before kube GCs the pod.
 	var ttl int32 = 86400
+	// A hung agent otherwise runs (and holds its MaxConcurrent slot)
+	// forever; the reaper's investigate timeout is the same bound.
+	deadline := int64(investigateTimeout.Seconds())
 
 	// Feedback so far, newline-joined, for the agent prompt (re-investigate
 	// after operator correction, or the "go" that triggered implement).
@@ -224,6 +227,7 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo) *bat
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   &deadline,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{

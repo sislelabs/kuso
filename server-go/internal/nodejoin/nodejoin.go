@@ -21,9 +21,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -66,6 +68,8 @@ type JoinResult struct {
 // so tests can swap it.
 var TokenFile = "/etc/kuso/k3s-token"
 
+var serverTokenWarn sync.Once
+
 // ReadServerToken returns the k3s server token. Three sources, in
 // order of preference:
 //   1. KUSO_K3S_TOKEN env var (set when the install script copies the
@@ -76,7 +80,18 @@ var TokenFile = "/etc/kuso/k3s-token"
 //      works when the pod is on the control-plane node). Kept as a
 //      fallback so existing deploys keep working without a re-install.
 //   3. Friendly error pointing at the install script.
+//
+// KUSO_K3S_AGENT_TOKEN wins over all of these. The server token also
+// authorizes /v1-k3s/server-bootstrap (cluster CA keys) and joining as
+// a server, so a worker that holds it can take over the cluster; an
+// agent token (k3s --agent-token) can only join agents.
 func ReadServerToken() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("KUSO_K3S_AGENT_TOKEN")); v != "" {
+		return v, nil
+	}
+	serverTokenWarn.Do(func() {
+		slog.Warn("nodejoin: KUSO_K3S_AGENT_TOKEN not set; joining nodes receive the k3s SERVER token. Start k3s with --agent-token and add it to the kuso-k3s-token Secret.")
+	})
 	if v := strings.TrimSpace(os.Getenv("KUSO_K3S_TOKEN")); v != "" {
 		return v, nil
 	}
@@ -284,12 +299,19 @@ func dial(ctx context.Context, c Credentials) (*ssh.Client, error) {
 	// a real node and would turn this admin endpoint into an internal
 	// probe / metadata-reach primitive (MED-4). Resolve first, then check
 	// every resolved address.
-	if err := rejectLoopbackOrLinkLocal(ctx, c.Host); err != nil {
+	vetted, err := rejectLoopbackOrLinkLocal(ctx, c.Host)
+	if err != nil {
 		return nil, err
 	}
+	// addr (with the host name) keys the host-key pin; dialAddr is the
+	// address that passed the check.
 	addr := net.JoinHostPort(c.Host, fmt.Sprintf("%d", port))
+	dialAddr := addr
+	if vetted != nil {
+		dialAddr = net.JoinHostPort(vetted.String(), fmt.Sprintf("%d", port))
+	}
 	dialer := net.Dialer{Timeout: cfg.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
 	if err != nil {
 		return nil, fmt.Errorf("ssh: dial %s: %w", addr, err)
 	}
@@ -395,6 +417,27 @@ func buildHostKeyCallback() (ssh.HostKeyCallback, error) {
 	if os.Getenv("KUSO_NODEJOIN_INSECURE_HOSTKEY") == "1" {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
+	if store := currentKnownHostStore(); store != nil {
+		return func(hostname string, _ net.Addr, key ssh.PublicKey) error {
+			ctx, cancel := context.WithTimeout(context.Background(), knownHostsTimeout)
+			defer cancel()
+			expected, err := store.Lookup(ctx, hostname)
+			if err != nil {
+				return fmt.Errorf("read pinned host key for %s: %w", hostname, err)
+			}
+			presented := key.Marshal()
+			if expected == nil {
+				if err := store.Pin(ctx, hostname, presented); err != nil {
+					return fmt.Errorf("pin host key for %s: %w", hostname, err)
+				}
+				return nil
+			}
+			if !bytes.Equal(expected, presented) {
+				return fmt.Errorf("host key for %s does not match pinned key — possible MITM. Remove its entry from the %s Secret if you intended to rotate", hostname, KnownHostsSecret)
+			}
+			return nil
+		}, nil
+	}
 	path := os.Getenv("KUSO_NODEJOIN_KNOWN_HOSTS")
 	if path == "" {
 		home, _ := os.UserHomeDir()
@@ -488,9 +531,13 @@ func decodeBase64(s string) ([]byte, error) {
 // so blocking them stops this admin endpoint being used as an internal
 // probe or a reach to 169.254.169.254. RFC1918 is deliberately NOT blocked
 // — nodes legitimately live on private networks.
-func rejectLoopbackOrLinkLocal(ctx context.Context, host string) error {
+//
+// Returns the first vetted address so the caller dials exactly what was
+// checked (a second lookup at dial time could rebind to a blocked IP).
+// nil means the name didn't resolve; the dial then surfaces that error.
+func rejectLoopbackOrLinkLocal(ctx context.Context, host string) (net.IP, error) {
 	if host == "" {
-		return errors.New("ssh: host required")
+		return nil, errors.New("ssh: host required")
 	}
 	var resolver net.Resolver
 	ips, err := resolver.LookupIPAddr(ctx, host)
@@ -500,13 +547,16 @@ func rejectLoopbackOrLinkLocal(ctx context.Context, host string) error {
 		if ip := net.ParseIP(host); ip != nil {
 			ips = []net.IPAddr{{IP: ip}}
 		} else {
-			return nil
+			return nil, nil
 		}
 	}
 	for _, a := range ips {
 		if a.IP.IsLoopback() || a.IP.IsLinkLocalUnicast() || a.IP.IsLinkLocalMulticast() {
-			return fmt.Errorf("ssh: refusing to connect to reserved address %s (resolved from %q)", a.IP, host)
+			return nil, fmt.Errorf("ssh: refusing to connect to reserved address %s (resolved from %q)", a.IP, host)
 		}
 	}
-	return nil
+	if len(ips) == 0 {
+		return nil, nil
+	}
+	return ips[0].IP, nil
 }

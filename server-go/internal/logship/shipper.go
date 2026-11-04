@@ -32,6 +32,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/linescan"
 	"kuso/server/internal/safego"
 	"kuso/server/internal/serverstate"
 )
@@ -502,6 +503,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 	skippedAtLast := 0
 	for scanner.Scan() {
 		ts, line, ok := splitTimestamp(scanner.Text())

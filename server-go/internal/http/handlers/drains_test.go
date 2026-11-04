@@ -160,6 +160,29 @@ func TestDrainsUpdateKeepsMaskedCredentials(t *testing.T) {
 	}
 }
 
+// LOOP-23: "keep the stored value" must not follow a drain to a new host,
+// or a masked PUT ships the Loki/Grafana token to whoever set the URL.
+func TestDrainsUpdateRejectsMaskOnHostChange(t *testing.T) {
+	h, st, _ := newDrainsHandler()
+	r := drainRouter(h, auth.PermSettingsAdmin)
+	doDrain(t, r, "POST", "/api/drains", `{"type":"http","url":"https://hook.example.com","headers":{"Authorization":"Bearer real"},"secret":"s1"}`)
+	for _, body := range []string{
+		`{"type":"http","url":"https://attacker.example.net","headers":{"Authorization":"` + drainMask + `"}}`,
+		`{"type":"http","url":"https://attacker.example.net","secret":"` + drainMask + `"}`,
+	} {
+		if rr := doDrain(t, r, "PUT", "/api/drains/d1", body); rr.Code != http.StatusBadRequest {
+			t.Errorf("masked credential carried to a new host: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+	if d := st.m["d1"]; d.URL != "https://hook.example.com" {
+		t.Fatalf("drain was repointed: %+v", d)
+	}
+	rr := doDrain(t, r, "PUT", "/api/drains/d1", `{"type":"http","url":"https://new.example.org","headers":{"Authorization":"Bearer new"},"secret":"s2"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("moving with fresh credentials should work: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestDrainsCreateRejectsInvalid(t *testing.T) {
 	h, _, _ := newDrainsHandler()
 	r := drainRouter(h, auth.PermSettingsAdmin)

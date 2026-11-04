@@ -68,6 +68,38 @@ func TestStreamPods_ReturnsWhenPodStreamsEnd(t *testing.T) {
 	}
 }
 
+// LOOP-21: a container restart ends the follow stream but keeps the pod
+// UID; the env tail must reattach once the restart count moves.
+func TestStreamPods_EnvTailReattachesAfterContainerRestart(t *testing.T) {
+	old := streamPodsRelistInterval
+	streamPodsRelistInterval = 50 * time.Millisecond
+	defer func() { streamPodsRelistInterval = old }()
+
+	pod := testPod("web-1")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", RestartCount: 0}}
+	restarted := *pod.DeepCopy()
+	restarted.Status.ContainerStatuses[0].RestartCount = 1
+	s := &Service{Kube: &kube.Client{Clientset: fake.NewSimpleClientset(&pod)}}
+	relist := func(context.Context) ([]corev1.Pod, error) { return []corev1.Pod{restarted}, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sink := &recordingSink{}
+	errc := make(chan error, 1)
+	go func() { errc <- s.streamPods(ctx, "kuso", []corev1.Pod{pod}, 10, sink, relist) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for sink.logsFrom("web-1") < 2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if n := sink.logsFrom("web-1"); n < 2 {
+		t.Fatalf("got %d log frames from web-1; the restarted container was never reattached", n)
+	}
+}
+
 // After a redeploy the old pods' streams end and new pods appear. An env
 // tail must attach them instead of going silent.
 func TestStreamPods_EnvTailAttachesNewPods(t *testing.T) {

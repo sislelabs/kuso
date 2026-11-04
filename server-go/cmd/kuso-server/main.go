@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -49,6 +50,7 @@ import (
 	"kuso/server/internal/logs"
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
+	"kuso/server/internal/nodejoin"
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
@@ -214,7 +216,6 @@ func main() {
 	defer stop()
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
-	const workerDrain = 30 * time.Second
 	// ctx is the alias most code below uses for "the long-running
 	// context" — point it at workerCtx so existing callers extend
 	// their lifetime through drain. The HTTP server is shut down
@@ -393,6 +394,8 @@ func main() {
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
 		kubeClient = kc
+		// SSH host-key pins for node join must outlive this pod.
+		nodejoin.SetKnownHostStore(&nodejoin.SecretKnownHosts{Client: kc.Clientset, Namespace: *namespace})
 		// Runtime gauges for /metrics: DB pool in-use/idle/open and
 		// build queue depth + running pods. Pool stats are free
 		// (sql.DB.Stats); build stats come from a cluster-wide list
@@ -834,8 +837,9 @@ func main() {
 			}
 		}
 
+		var singletonsTenure leaseTenure
 		startSingletons := func(workCtx context.Context) {
-			leaderActive.Store(true)
+			gen := singletonsTenure.begin(func() { leaderActive.Store(true) })
 			// Liveness registry for THIS lease's ticking loops (runs-poller,
 			// errorscan, health, instancepg). Each is registered next to its
 			// own start guard below with the SAME "register only when it will
@@ -857,12 +861,14 @@ func main() {
 			//     scope; left as-is.
 			go func() {
 				<-workCtx.Done()
-				serverstate.UnregisterLoop(
-					serverstate.LoopRunsPoller,
-					serverstate.LoopErrorScan,
-					serverstate.LoopHealth,
-					serverstate.LoopInstancePG,
-				)
+				singletonsTenure.end(gen, func() {
+					serverstate.UnregisterLoop(
+						serverstate.LoopRunsPoller,
+						serverstate.LoopErrorScan,
+						serverstate.LoopHealth,
+						serverstate.LoopInstancePG,
+					)
+				})
 			}()
 			// Updater poll loop: leader-only. Every replica used to run
 			// it, so an N-replica deploy made N GitHub calls per tick
@@ -920,8 +926,10 @@ func main() {
 			}
 			go func() {
 				<-workCtx.Done()
-				leaderActive.Store(false)
-				serverstate.SetLeading(false)
+				singletonsTenure.end(gen, func() {
+					leaderActive.Store(false)
+					serverstate.SetLeading(false)
+				})
 			}()
 			if pollerEnabled {
 				buildPoller := &builds.Poller{
@@ -1357,6 +1365,7 @@ func main() {
 	// because they need kubeClient, which is initialised in a sibling
 	// branch above.
 	if kubeClient != nil {
+		var clusterTenure leaseTenure
 		startKubeSingletons := func(workCtx context.Context) {
 			// Liveness heartbeat registry. Each singleton loop below stamps
 			// a beat once per iteration (serverstate.LoopHeartbeat inside the
@@ -1381,23 +1390,26 @@ func main() {
 			// registry. LoopScaledown is listed unconditionally —
 			// UnregisterLoop ignores names that were never registered (the
 			// KUSO_SCALEDOWN_DISABLED case), so it is safe either way.
+			gen := clusterTenure.begin(nil)
 			go func() {
 				<-workCtx.Done()
-				serverstate.UnregisterLoop(
-					serverstate.LoopNodeMetrics,
-					serverstate.LoopProjectMetrics,
-					serverstate.LoopNodeWatch,
-					serverstate.LoopScaledown,
-					serverstate.LoopImageRelease,
-					serverstate.LoopPkgUpdates,
-					serverstate.LoopCronWatch,
-					serverstate.LoopLogship,
-					serverstate.LoopAlerts,
-					serverstate.LoopBackupHealth,
-					serverstate.LoopIncidents,
-					serverstate.LoopAutoRemediate,
-					serverstate.LoopUptime,
-				)
+				clusterTenure.end(gen, func() {
+					serverstate.UnregisterLoop(
+						serverstate.LoopNodeMetrics,
+						serverstate.LoopProjectMetrics,
+						serverstate.LoopNodeWatch,
+						serverstate.LoopScaledown,
+						serverstate.LoopImageRelease,
+						serverstate.LoopPkgUpdates,
+						serverstate.LoopCronWatch,
+						serverstate.LoopLogship,
+						serverstate.LoopAlerts,
+						serverstate.LoopBackupHealth,
+						serverstate.LoopIncidents,
+						serverstate.LoopAutoRemediate,
+						serverstate.LoopUptime,
+					)
+				})
 			}()
 
 			serverstate.RegisterLoop(serverstate.LoopNodeMetrics, nodemetrics.SampleInterval)
@@ -1606,12 +1618,11 @@ func main() {
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
-	// Step 1: stop accepting new HTTP requests. 30s deadline gives
+	// Step 1: stop accepting new HTTP requests. The deadline gives
 	// in-flight WS log-tails room to close their conn frame after
-	// their BaseContext (sigCtx) cancels — pre-bump 10s wasn't
-	// enough and rolling updates left orphan WS readers on the
-	// outgoing pod.
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+	// their BaseContext (sigCtx) cancels — 10s wasn't enough and
+	// rolling updates left orphan WS readers on the outgoing pod.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
@@ -1626,9 +1637,48 @@ func main() {
 	// Brief settle to let any goroutine that read ctx.Done() finish
 	// its return path. Doesn't need to be exact — Postgres
 	// connections close fast.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(shutdownSettle)
 	logger.Info("shutdown complete")
 }
+
+// leaseTenure numbers leader-lease tenures. A tenure's cleanup runs in a
+// goroutine woken by its workCtx; after a renew failure the elector can
+// reacquire before that goroutine runs, and an unguarded cleanup would
+// then switch off the NEW tenure (leaderActive=false, loops unregistered)
+// until the next flap. end only acts if no newer tenure has begun.
+type leaseTenure struct {
+	mu  sync.Mutex
+	gen uint64
+}
+
+func (t *leaseTenure) begin(start func()) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.gen++
+	if start != nil {
+		start()
+	}
+	return t.gen
+}
+
+func (t *leaseTenure) end(gen uint64, cleanup func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.gen == gen {
+		cleanup()
+	}
+}
+
+// Shutdown budget. preStop (deploy/server-go.yaml) + these must stay
+// inside terminationGracePeriodSeconds, or SIGKILL lands before
+// cancelWorkers releases the leader leases (ReleaseOnCancel) and the
+// next pod waits a whole LeaseDuration with no singletons running.
+// TestShutdownFitsTerminationGrace enforces it.
+const (
+	httpShutdownTimeout = 20 * time.Second
+	workerDrain         = 15 * time.Second
+	shutdownSettle      = 500 * time.Millisecond
+)
 
 // parseTTL accepts the same "<seconds>s" form the TS server's
 // JWT_EXPIRESIN env honours, plus standard Go duration strings. Empty
@@ -1728,6 +1778,7 @@ func runRegistryOrphanSweep(ctx context.Context, kc *kube.Client, logger *slog.L
 func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, buildSvc *builds.Service, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
+	deadLetterDays := envInt("KUSO_NOTIFY_DEADLETTER_RETENTION_DAYS", 30)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
 	// Deliberately generous: BuildRecord backs the Deployments tab, so
 	// this is history a human reads, not machine chatter. 90 days plus a
@@ -1748,12 +1799,25 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 		}
 		// Outbox prune: drop successfully-delivered rows older than the
 		// same window. Dead-letter rows (attempts >= cap, no deliveredAt)
-		// stay forever so operators can audit what was lost — non-zero
-		// dead-letter count is itself the alert.
+		// are kept deadLetterDays so operators can audit what was lost —
+		// non-zero dead-letter count is itself the alert.
 		if n, err := database.PruneOutboxDelivered(c, now.AddDate(0, 0, -notifyDays)); err != nil {
 			logger.Warn("daily-cleanup outbox", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup outbox pruned", "rows", n, "days", notifyDays)
+		}
+		// Dead letters get a longer audit window, but not forever: each
+		// row is a full event payload.
+		if n, err := database.PruneOutboxDeadLetters(c, now.AddDate(0, 0, -deadLetterDays)); err != nil {
+			logger.Warn("daily-cleanup outbox dead letters", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup outbox dead letters pruned", "rows", n, "days", deadLetterDays)
+		}
+		// Env-var hints carry a raw log line; keep them no longer than logs.
+		if n, err := database.PruneEnvHints(c, now.AddDate(0, 0, -logDays)); err != nil {
+			logger.Warn("daily-cleanup env-hints", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup env-hints pruned", "rows", n, "days", logDays)
 		}
 		// OAuth states past their TTL are dead weight; drop them
 		// daily. The window is fixed at 24h (way past any realistic

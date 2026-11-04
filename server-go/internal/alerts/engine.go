@@ -22,6 +22,7 @@ import (
 	"kuso/server/internal/hostcheck"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/safego"
 	"kuso/server/internal/serverstate"
 )
 
@@ -204,13 +205,13 @@ func (e *Engine) evalRules(ctx context.Context, rules []db.AlertRule, now time.T
 		r := rules[i]
 		wg.Add(1)
 		sem <- struct{}{}
-		go func() {
+		safego.Go(e.Logger, "alert-rule-eval", func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			ruleCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			e.evalOne(ruleCtx, &r, now)
-		}()
+		})
 	}
 	wg.Wait()
 }

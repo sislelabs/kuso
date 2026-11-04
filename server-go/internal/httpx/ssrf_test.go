@@ -50,6 +50,15 @@ func TestIsReservedIP_DefaultPolicy(t *testing.T) {
 		{"multicast-v4", "224.0.0.1", true},
 		{"multicast-v6", "ff02::1", true},
 
+		// LOOP-18: special-purpose ranges that reach internal hosts.
+		{"cgnat-tailscale", "100.100.1.2", true},
+		{"cgnat-low", "100.64.0.1", true},
+		{"this-network", "0.1.2.3", true},
+		{"benchmarking", "198.18.0.1", true},
+		{"ietf-protocol", "192.0.0.8", true},
+		{"public-100-128", "100.128.0.1", false},
+		{"public-198-20", "198.20.0.1", false},
+
 		// Public addresses MUST be allowed — over-blocking breaks
 		// legitimate webhooks/imports.
 		{"public-google-dns", "8.8.8.8", false},

@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/linescan"
 )
 
 // BuildLogReader is the read-side of the BuildLog archive (db.DB).
@@ -299,6 +300,7 @@ func (s *Service) tailPodStream(ctx context.Context, ns string, pod *corev1.Pod,
 	out := make([]Line, 0, tailLines)
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 	for scanner.Scan() {
 		ts, line := splitTimestamp(scanner.Text())
 		if line == "" {
@@ -348,6 +350,7 @@ func (s *Service) tailBuildPods(ctx context.Context, ns, buildName string, lines
 			}
 			scanner := bufio.NewScanner(stream)
 			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+			scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 			for scanner.Scan() {
 				line := scanner.Text()
 				if line == "" {
@@ -402,6 +405,7 @@ func (s *Service) tailRunPods(ctx context.Context, ns, runName string, lines int
 		}
 		scanner := bufio.NewScanner(stream)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {

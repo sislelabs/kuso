@@ -154,3 +154,35 @@ func TestHook_DoesNotBlockOnConfigRead(t *testing.T) {
 		t.Fatal("config was never read for a triggerable event")
 	}
 }
+
+// LOOP-12: project-less alerts (node pressure, cert expiry) must not all
+// share one dedup key.
+func TestTargetKeyFor_ClusterAlertsDistinct(t *testing.T) {
+	t.Parallel()
+	nodeA := notify.AlertFired("disk pressure", "", "warn", map[string]string{"node": "a"})
+	nodeB := notify.AlertFired("disk pressure", "", "warn", map[string]string{"node": "b"})
+	cert := notify.AlertFired("cert expiry", "", "warn", map[string]string{"rule_id": "r1"})
+	keys := map[string]bool{targetKeyFor(nodeA): true, targetKeyFor(nodeB): true, targetKeyFor(cert): true}
+	if len(keys) != 3 {
+		t.Errorf("cluster-scoped alerts collapsed onto shared keys: %v", keys)
+	}
+	scoped := notify.AlertFired("5xx", "", "warn", map[string]string{"project": "p", "service": "s", "rule_id": "r2"})
+	if got := targetKeyFor(scoped); got != "alert.fired|p|s" {
+		t.Errorf("service-scoped alert key = %q, must stay alert.fired|p|s", got)
+	}
+}
+
+// An alert recovery reuses the alert.fired type; it must never open or
+// attach to an incident (LOOP-01).
+func TestHook_IgnoresAlertResolved(t *testing.T) {
+	t.Parallel()
+	bc := &blockingConfig{release: make(chan struct{}), gotCtx: make(chan context.Context, 1)}
+	defer close(bc.release)
+	m := &Manager{Config: bc}
+	m.Hook(notify.AlertResolved("http_5xx_rate", "back to normal", map[string]string{"project": "p", "service": "s"}))
+	select {
+	case <-bc.gotCtx:
+		t.Fatal("resolved alert reached incident handling")
+	case <-time.After(200 * time.Millisecond):
+	}
+}

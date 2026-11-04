@@ -48,10 +48,9 @@ const (
 // thresholds are DERIVED from each loop's own interval instead of a global
 // constant. A slow loop must not read as stuck at a fast loop's window.
 //
-//   - Readiness: unready once a loop is stale beyond readyzLoopStaleMult ×
-//     its interval (min readyzLoopStaleFloor). Modest multiple → drains the
-//     pod from the LB on a genuinely stuck loop within a few missed ticks,
-//     while tolerating one slow tick / brief apiserver hiccup.
+//   - Readiness: a loop stale beyond readyzLoopStaleMult × its interval
+//     (min readyzLoopStaleFloor) is reported as "stalled" in the /readyz
+//     body only. It never makes the pod unready (see readyz).
 //
 //   - Liveness: 503 only once a loop is HARD-stuck — stale beyond
 //     healthzLoopHardMult × its interval OR the healthzLoopHardFloor,
@@ -220,17 +219,15 @@ func readyz(d Deps) http.HandlerFunc {
 			checks["buildPoller"] = "ok"
 		}
 
-		// Singleton-loop registry readiness — leader-gated (empty on a
-		// non-leader). Each registered loop stale past its own per-interval
-		// readiness window drains the pod from the LB; the escalation to an
-		// actual restart is the healthz hard-stuck window above. Per-loop
-		// thresholds so a 15min backuphealth loop and a 15s imagerelease
-		// loop are each judged against their own cadence.
+		// Singleton-loop registry — leader-gated (empty on a non-leader).
+		// A loop stale past its per-interval window is REPORTED but does
+		// not de-ready the pod: with replicas=1, unready empties the
+		// Service and a notification side-loop would take the whole API
+		// down. Recovery is the healthz hard-stuck restart above.
 		loopsOK := true
 		for _, ls := range loopStaleness() {
 			if ls.StaleFor > readyzLoopStale(ls.Interval) {
 				checks["loop:"+ls.Name] = "stalled"
-				ready = false
 				loopsOK = false
 				if d.Logger != nil {
 					d.Logger.Error("readyz: singleton loop heartbeat stale — loop may be dead",

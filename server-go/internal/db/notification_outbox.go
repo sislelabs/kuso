@@ -185,9 +185,9 @@ func (d *DB) MarkOutboxAttempt(ctx context.Context, id int64, errMsg string, nex
 }
 
 // PruneOutboxDelivered drops successfully-delivered rows older than
-// `before`. Called from the daily cleanup tick. We never prune dead-
-// letter rows (attempts >= cap, deliveredAt IS NULL) — those are the
-// audit trail operators dig through after a webhook outage.
+// `before`. Called from the daily cleanup tick. Dead-letter rows
+// (attempts >= cap, deliveredAt IS NULL) are the audit trail after a
+// webhook outage and get a longer window (PruneOutboxDeadLetters).
 func (d *DB) PruneOutboxDelivered(ctx context.Context, before time.Time) (int64, error) {
 	res, err := d.ExecContext(ctx, `
 		DELETE FROM "NotificationOutbox"
@@ -196,6 +196,24 @@ func (d *DB) PruneOutboxDelivered(ctx context.Context, before time.Time) (int64,
 	`, before.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return 0, fmt.Errorf("prune outbox: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// PruneOutboxDeadLetters drops rows that exhausted their attempts and
+// were created before `before`. Each carries the full event JSON (log
+// tails, URLs), so a channel left broken would otherwise collect every
+// event forever.
+func (d *DB) PruneOutboxDeadLetters(ctx context.Context, before time.Time) (int64, error) {
+	res, err := d.ExecContext(ctx, `
+		DELETE FROM "NotificationOutbox"
+		WHERE "deliveredAt" IS NULL
+		  AND "attempts" >= $1
+		  AND "createdAt" < $2
+	`, MaxOutboxAttempts, before.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("prune outbox dead letters: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n, nil

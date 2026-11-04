@@ -77,6 +77,7 @@ func (m *Manager) Run(ctx context.Context) {
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			reapStuck(rctx, m.DB, investigateTimeout, m.clock(), m.log())
 			m.reapStuckImplementing(rctx)
+			m.reapIdleOpen(rctx)
 			cancel()
 			serverstate.LoopHeartbeat(serverstate.LoopIncidents)
 		}
@@ -110,6 +111,36 @@ func reapStuck(ctx context.Context, store reaperStore, timeout time.Duration, no
 			"id", in.ID, "title", in.Title, "openFor", now.Sub(in.CreatedAt).String())
 	}
 	return reaped
+}
+
+// idleOpenTTL is how long an incident may wait on a human (findings not
+// answered, PR merged/closed on GitHub without telling kuso) before it is
+// closed. Measured from updatedAt, so a recurring problem keeps it open.
+const idleOpenTTL = 7 * 24 * time.Hour
+
+// reapIdleOpen times out awaiting_feedback / pr_open incidents nobody has
+// touched for idleOpenTTL, so new events for that target investigate
+// afresh instead of attaching to a stale incident forever.
+func (m *Manager) reapIdleOpen(ctx context.Context) {
+	cutoff := m.clock().Add(-idleOpenTTL)
+	for _, state := range []string{db.IncidentAwaitingFeedback, db.IncidentPROpen} {
+		list, err := m.DB.IncidentsInState(ctx, state)
+		if err != nil {
+			m.log().Warn("incident reaper: list idle", "state", state, "err", err)
+			continue
+		}
+		for _, in := range list {
+			if !in.UpdatedAt.Before(cutoff) {
+				continue
+			}
+			_ = m.DB.AppendIncidentFeedback(ctx, in.ID, db.IncidentFeedback{
+				Text: fmt.Sprintf("timed out: no activity in %s state for %s", state, idleOpenTTL),
+			})
+			if err := m.DB.SetIncidentState(ctx, in.ID, db.IncidentTimedOut); err != nil {
+				m.log().Warn("incident reaper: transition idle", "id", in.ID, "err", err)
+			}
+		}
+	}
 }
 
 // implementGrace is how long an incident may stay "implementing" after its

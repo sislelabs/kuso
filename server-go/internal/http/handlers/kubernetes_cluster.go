@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -63,11 +64,23 @@ func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
-	events, err := h.Kube.Clientset.CoreV1().Events(ns).List(ctx, metav1.ListOptions{Limit: 200})
-	if err != nil {
-		h.Logger.Error("list events", "ns", ns, "err", err)
-		writeErr(w, http.StatusInternalServerError, "internal")
-		return
+	// The apiserver pages events in key order, not time order, so read
+	// every page (bounded) and keep the newest eventsReturned.
+	const eventsReturned, eventsPage, eventsMaxScan = 200, 500, 10000
+	events := &corev1.EventList{}
+	opts := metav1.ListOptions{Limit: eventsPage}
+	for {
+		page, err := h.Kube.Clientset.CoreV1().Events(ns).List(ctx, opts)
+		if err != nil {
+			h.Logger.Error("list events", "ns", ns, "err", err)
+			writeErr(w, http.StatusInternalServerError, "internal")
+			return
+		}
+		events.Items = append(events.Items, page.Items...)
+		if page.Continue == "" || len(events.Items) >= eventsMaxScan {
+			break
+		}
+		opts.Continue = page.Continue
 	}
 	// Sort newest first by lastTimestamp (fall back to eventTime).
 	sort.SliceStable(events.Items, func(i, j int) bool {
@@ -81,6 +94,9 @@ func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
 		}
 		return ti.After(tj)
 	})
+	if len(events.Items) > eventsReturned {
+		events.Items = events.Items[:eventsReturned]
+	}
 	writeJSON(w, http.StatusOK, events.Items)
 }
 

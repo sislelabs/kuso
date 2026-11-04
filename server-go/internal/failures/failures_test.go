@@ -3,7 +3,18 @@ package failures
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+// LOOP-07: byte-offset cuts must not split a multi-byte rune.
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	long := "x" + strings.Repeat("я", 400)
+	for _, s := range []string{truncateLine(long), briefLine(long)} {
+		if !utf8.ValidString(s) {
+			t.Errorf("invalid UTF-8: %q", s)
+		}
+	}
+}
 
 func TestClassify_PodStatusSignals(t *testing.T) {
 	tests := []struct {

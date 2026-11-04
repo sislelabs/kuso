@@ -50,6 +50,26 @@ func podMetric(name, instance string, cpu, mem string) *unstructured.Unstructure
 	}}
 }
 
+// LOOP-22: the coalesced fetch ran on the first caller's request
+// context, so one closed tab failed every waiter on the same flight.
+func TestPodMetricsCache_FetchSurvivesFirstCallerCancel(t *testing.T) {
+	ResetPodMetricsCacheForTesting()
+	kc, _ := newMetricsKube(t, podMetric("p1", "alpha-web-production", "100m", "128Mi"))
+	prev := listPodMetrics
+	t.Cleanup(func() { listPodMetrics = prev })
+	listPodMetrics = func(ctx context.Context, kc *kube.Client, ns string) (*unstructured.UnstructuredList, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return prev(ctx, kc, ns)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the first caller's tab is already gone
+	if items, ok := listPodMetricsCached(ctx, kc, "kuso"); !ok || len(items) != 1 {
+		t.Fatalf("got ok=%v items=%d; the shared fetch must not inherit the caller's cancellation", ok, len(items))
+	}
+}
+
 // The whole point of this cache: the projects dashboard renders one
 // card per project, each polling its own metrics endpoint. Those used
 // to be N separate metrics-server LISTs per cycle, and metrics-server

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/notify"
+	"kuso/server/internal/pkgupdates"
 )
 
 func slogDiscard() *slog.Logger {
@@ -162,6 +165,45 @@ func TestCordonSkipsAlreadyUnschedulable(t *testing.T) {
 	}
 	if _, has := got.Annotations[CordonAnnotation]; has {
 		t.Error("cordon() must NOT stamp ownership marker on an already-unschedulable node")
+	}
+}
+
+// LOOP-15: a host-patch reboot (pkgupdates marker) must not page at the
+// normal 5-minute threshold, a reboot that never returns still pages, and
+// "auto-cordoned" is only claimed for a cordon nodewatch actually made.
+func TestTickPlannedRebootAndCordonWording(t *testing.T) {
+	t.Parallel()
+	since := func(ago time.Duration) map[string]string {
+		return map[string]string{
+			pkgupdates.CordonAnnotation: "true",
+			NotReadySinceAnnotation:     time.Now().Add(-ago).UTC().Format(time.RFC3339),
+		}
+	}
+	run := func(n *corev1.Node) []notify.Event {
+		var got []notify.Event
+		d := notify.New(nil, slogDiscard(), 0)
+		d.SetEventHook(func(e notify.Event) { got = append(got, e) })
+		w := &Watcher{Kube: &kube.Client{Clientset: kubefake.NewSimpleClientset(n)}, Notify: d, Logger: slogDiscard()}
+		w.notReadySince = map[string]time.Time{}
+		w.alerted = map[string]struct{}{}
+		w.tick(context.Background())
+		return got
+	}
+
+	if got := run(notReadyNode("worker", true, since(10*time.Minute))); len(got) != 0 {
+		t.Errorf("planned reboot 10m in paged: %+v", got)
+	}
+	got := run(notReadyNode("worker", true, since(time.Hour)))
+	if len(got) != 1 {
+		t.Fatalf("reboot that never came back: %d events, want 1", len(got))
+	}
+	if strings.Contains(got[0].Description, "auto-cordoned") {
+		t.Errorf("claims auto-cordon for a cordon nodewatch didn't make: %q", got[0].Description)
+	}
+	plain := map[string]string{NotReadySinceAnnotation: time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)}
+	got = run(notReadyNode("worker", false, plain))
+	if len(got) != 1 || !strings.Contains(got[0].Description, "auto-cordoned") {
+		t.Errorf("unplanned outage: %+v, want one auto-cordoned page", got)
 	}
 }
 

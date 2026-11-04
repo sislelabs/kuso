@@ -178,3 +178,24 @@ func TestProbes_RegisteredLoopHardStuck503s(t *testing.T) {
 		t.Fatalf("healthz with a registered hard-stuck loop: got %d, want 503", rec.Code)
 	}
 }
+
+// LOOP-03: a stale side-loop must not de-ready the pod — on the default
+// replicas=1 install that empties the Service and takes the whole API
+// down for a loop that only sends notifications. It is still surfaced in
+// the body; restart escalation stays with healthz.
+func TestProbes_StaleLoopStaysReady(t *testing.T) {
+	stubPollerClock(t, 0, true)
+	stubLoopStaleness(t, []serverstate.LoopStale{
+		{Name: "alerts", StaleFor: 7 * time.Minute, Interval: time.Minute},
+	})
+	if rec := doHealthz(t); rec.Code != http.StatusOK {
+		t.Fatalf("healthz: got %d, want 200 inside the hard-stuck window", rec.Code)
+	}
+	rec := doReadyz(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readyz with a stale side-loop: got %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"loop:alerts":"stalled"`) {
+		t.Errorf("readyz body should still report the stalled loop: %s", rec.Body.String())
+	}
+}

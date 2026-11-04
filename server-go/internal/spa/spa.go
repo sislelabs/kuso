@@ -72,6 +72,11 @@ func Handler(dist fs.FS, apiPrefixes ...string) (http.Handler, error) {
 			if strings.HasPrefix(urlPath, "_next/static/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
+			// A page fetched by its .html name is still a page: same
+			// CSP / frame guards as the extensionless route.
+			if strings.HasSuffix(urlPath, ".html") {
+				applyHTMLSecurityHeaders(w)
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		} else if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"kuso/server/internal/linescan"
 )
 
 // Caps. maxTailLinesPerPod bounds the historical tail kube returns
@@ -341,13 +344,43 @@ func (s *Service) streamPods(ctx context.Context, ns string, pods []corev1.Pod, 
 	// aren't capped: a long-lived tail legitimately streams far more.
 	var backlogEmitted int
 
-	seen := map[string]bool{}
+	// seenPods is keyed by UID; seenRuns by UID + the primary container's
+	// restart count. A container restart ends the follow stream but
+	// keeps the UID, so a new run of a seen pod gets reattached.
+	seenPods := map[string]bool{}
+	seenRuns := map[string]bool{}
+	podKey := func(p corev1.Pod) string { return p.Namespace + "/" + p.Name + "/" + string(p.UID) }
+	runKey := func(p corev1.Pod) string {
+		restarts := int32(0)
+		if len(p.Spec.Containers) > 0 {
+			for _, cs := range p.Status.ContainerStatuses {
+				if cs.Name == p.Spec.Containers[0].Name {
+					restarts = cs.RestartCount
+				}
+			}
+		}
+		return podKey(p) + "/" + strconv.Itoa(int(restarts))
+	}
 	start := func(pod corev1.Pod, tail int) {
-		seen[pod.Namespace+"/"+pod.Name+"/"+string(pod.UID)] = true
+		seenPods[podKey(pod)] = true
+		seenRuns[runKey(pod)] = true
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			s.streamOnePod(streamCtx, ns, pod, tail, frames)
+		}()
+	}
+	// reattach follows only the primary container: init containers and
+	// the phase watcher were already handled by the first attach.
+	reattach := func(pod corev1.Pod) {
+		seenRuns[runKey(pod)] = true
+		if len(pod.Spec.Containers) == 0 {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.streamOneContainer(streamCtx, ns, pod.Name, pod.Spec.Containers[0].Name, false, maxTailLinesPerPod, frames)
 		}()
 	}
 	for i := range pods {
@@ -410,7 +443,11 @@ func (s *Service) streamPods(ctx context.Context, ns string, pods []corev1.Pod, 
 			}
 			for i := range current {
 				p := current[i]
-				if seen[p.Namespace+"/"+p.Name+"/"+string(p.UID)] || p.DeletionTimestamp != nil {
+				if seenRuns[runKey(p)] || p.DeletionTimestamp != nil {
+					continue
+				}
+				if seenPods[podKey(p)] {
+					reattach(p)
 					continue
 				}
 				// Everything a pod logged since it appeared is new to
@@ -519,6 +556,7 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 	read := 0
 	for scanner.Scan() {
 		read++

@@ -122,7 +122,15 @@ func (s *Sender) post(ctx context.Context, d Drain, body []byte) (int, error) {
 		sig := hex.EncodeToString(mac.Sum(nil))
 		req.Header.Set("X-Hub-Signature-256", "sha256="+sig)
 		req.Header.Set("X-Kuso-Signature", sig)
-		req.Header.Set("X-Kuso-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		req.Header.Set("X-Kuso-Timestamp", ts)
+		// The two headers above sign the body only, so a captured batch
+		// replays under any timestamp. V2 binds the timestamp; the old
+		// ones stay for receivers already verifying them.
+		tsMac := hmac.New(sha256.New, []byte(d.Secret))
+		tsMac.Write([]byte(ts + "."))
+		tsMac.Write(body)
+		req.Header.Set("X-Kuso-Signature-V2", hex.EncodeToString(tsMac.Sum(nil)))
 	}
 	resp, err := s.Client.Do(req)
 	if err != nil {
