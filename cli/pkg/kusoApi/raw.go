@@ -16,25 +16,19 @@ import (
 // no body; headers nil -> none. Returns the raw *resty.Response so the
 // caller decides how to render it.
 func (k *KusoClient) Raw(method, path string, body []byte, headers map[string]string) (*resty.Response, error) {
-	req := k.client
+	req := k.client.take()
 	for key, val := range headers {
 		req.SetHeader(key, val)
 		// resty writes the stored token over any Authorization header,
 		// so `-H 'Authorization: …'` was silently ignored. Drop the
 		// stored token for this call when the caller supplies one.
 		if strings.EqualFold(key, "Authorization") {
-			saved := req.Token
 			req.Token = ""
-			defer func() { req.Token = saved; req.Header.Del("Authorization") }()
 		}
 	}
 	if body != nil {
-		// Default content type for a JSON passthrough; a caller-supplied
-		// Content-Type header above still wins (SetHeader ran first, but
-		// SetBody won't override an explicit header).
-		if _, ok := headers["Content-Type"]; !ok {
-			req.SetHeader("Content-Type", "application/json")
-		}
+		// The JSON Content-Type default comes from the base request; a
+		// caller-supplied Content-Type header above wins.
 		req.SetBody(body)
 	}
 	return req.Execute(strings.ToUpper(method), path)
