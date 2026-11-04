@@ -603,6 +603,18 @@ spec:
         - name: server
           image: ghcr.io/sislelabs/kuso-server-go:v0.32.4
           imagePullPolicy: IfNotPresent
+          # Same identity the activator runs this image with (the
+          # Dockerfile's `kuso` user, uid 100 / gid 101; runAsNonRoot
+          # needs it numeric). Root filesystem stays writable: the
+          # server writes temp files (pg_dump backups) and the image
+          # default KUSO_DB_PATH.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
           # Burstable QoS. Setting requests below limits puts us in
           # Burstable — survives host pressure without pre-allocating
           # capacity we won't use 95% of the time.
