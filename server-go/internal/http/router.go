@@ -475,7 +475,7 @@ func mountAuthenticatedRoutes(
 
 		if d.Status != nil {
 			statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
-			r.Get("/api/status", statusH.Handler())
+			r.With(httphandlers.RequireNotPending(d.DB)).Get("/api/status", statusH.Handler())
 		}
 
 		if d.Projects != nil {
@@ -519,7 +519,7 @@ func mountAuthenticatedRoutes(
 			(&httphandlers.DeployHookHandler{Hooks: d.Builds, Svc: d.Builds, DB: d.DB, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 		}
 		// Repo inspection by URL (branches, runtime) — works with no GitHub App.
-		(&httphandlers.ReposHandler{Remote: &gitremote.Inspector{}, Logger: d.Logger}).Mount(r)
+		(&httphandlers.ReposHandler{Remote: &gitremote.Inspector{}, Logger: d.Logger}).Mount(r.With(httphandlers.RequireNotPending(d.DB)))
 		if d.Logs != nil {
 			logsH := &httphandlers.LogsHandler{Svc: d.Logs, DB: d.DB, Logger: d.Logger}
 			logsH.Mount(r)

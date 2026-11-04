@@ -239,6 +239,9 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 // behaviour. Used by the service settings panel's "Test access"
 // button.
 func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) {
+	if !requireNotPending(r.Context(), w, h.DB) {
+		return
+	}
 	if h.Client == nil {
 		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
@@ -287,6 +290,9 @@ func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) 
 // .env.example / docker-compose hints. Used by the project-creation
 // fast path to pre-check checkboxes.
 func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
+	if !requireNotPending(r.Context(), w, h.DB) {
+		return
+	}
 	if h.Client == nil {
 		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return
@@ -686,6 +692,9 @@ func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
 
 // DetectRuntime auto-detects runtime + port from a service's repo+path.
 func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
+	if !requireNotPending(r.Context(), w, h.DB) {
+		return
+	}
 	if h.Client == nil {
 		writeErr(w, http.StatusServiceUnavailable, "github not configured: an admin can set up the GitHub App under Settings -> GitHub")
 		return

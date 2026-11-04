@@ -57,6 +57,11 @@ func (h *UpdaterHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 // (or a kuso-server pod under load) returns 504-ish quickly rather
 // than blocking the UI.
 func (h *UpdaterHandler) RefreshVersion(w http.ResponseWriter, r *http.Request) {
+	// Forces an outbound GitHub poll; only callers who can act on the
+	// answer (StartUpdate's perm) may trigger it.
+	if !requirePerm(w, r, auth.PermSystemUpdate) {
+		return
+	}
 	if h.Svc == nil {
 		writeErr(w, http.StatusServiceUnavailable, "updater unavailable")
 		return

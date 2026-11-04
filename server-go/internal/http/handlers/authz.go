@@ -54,6 +54,45 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermSettingsAdmin)
 }
 
+// requireNotPending 403s callers who are authenticated but have no
+// access yet: an open OAuth sign-up lands with a valid session and no
+// grants. Instance admins and instance editors (projects:create, they
+// need the repo probes to create their first project) pass on claims;
+// everyone else needs at least one project grant.
+func requireNotPending(ctx context.Context, w http.ResponseWriter, dbConn *db.DB) bool {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) || auth.Has(claims.Permissions, auth.PermProjectsCreate) {
+		return true
+	}
+	if dbConn == nil {
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
+	if err != nil || auth.IsPending(tenancy) {
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// RequireNotPending is the middleware form of requireNotPending, for
+// routes whose handler has no DB of its own.
+func RequireNotPending(dbConn *db.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !requireNotPending(r.Context(), w, dbConn) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // actingUserID returns the ID of the authenticated caller, or "" if no
 // claims are present. Used to spare the acting admin from bulk token
 // invalidations they themselves triggered (so editing a group you're

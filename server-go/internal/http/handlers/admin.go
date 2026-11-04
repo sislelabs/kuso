@@ -222,6 +222,9 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if !requireNotPending(r.Context(), w, h.DB) {
+		return
+	}
 	var req createTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
