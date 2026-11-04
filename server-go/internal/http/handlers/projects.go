@@ -797,7 +797,19 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), apiv1UpdateToDomain(wire))
+	upd := apiv1UpdateToDomain(wire)
+	var updURLs []string
+	var updInsts []int64
+	if upd.DefaultRepo != nil {
+		updURLs = append(updURLs, upd.DefaultRepo.URL)
+	}
+	if upd.GitHub != nil {
+		updInsts = append(updInsts, upd.GitHub.InstallationID)
+	}
+	if !h.requireRepoBound(ctx, w, chi.URLParam(r, "project"), updURLs, updInsts) {
+		return
+	}
+	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), upd)
 	if err != nil {
 		h.fail(w, "update project", err)
 		return
@@ -932,7 +944,19 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
-	out, err := h.Svc.AddService(ctx, project, apiv1CreateServiceToDomain(wire))
+	addReq := apiv1CreateServiceToDomain(wire)
+	var addURLs []string
+	var addInsts []int64
+	if addReq.Repo != nil {
+		addURLs = append(addURLs, addReq.Repo.URL)
+	}
+	if addReq.GitHub != nil {
+		addInsts = append(addInsts, addReq.GitHub.InstallationID)
+	}
+	if !h.requireRepoBound(ctx, w, project, addURLs, addInsts) {
+		return
+	}
+	out, err := h.Svc.AddService(ctx, project, addReq)
 	if err != nil {
 		h.fail(w, "add service", err)
 		return
@@ -1073,6 +1097,13 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	applyURLs := make([]string, 0, len(f.Services))
+	for _, s := range f.Services {
+		applyURLs = append(applyURLs, s.Repo)
+	}
+	if !h.requireRepoBound(ctx, w, f.Project, applyURLs, nil) {
+		return
+	}
 
 	plan, err := spec.PlanFor(ctx, h.Kube, spec.ExecNamespace(ctx, h.Kube, h.Namespace, f.Project), f)
 	if err != nil {
@@ -1175,6 +1206,9 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	}
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
+	if req.Repo != nil && !h.requireRepoBound(ctx, w, project, []string{req.Repo.URL}, []int64{req.Repo.InstallationID}) {
+		return
+	}
 	out, err := h.Svc.PatchService(ctx, project, service, req)
 	if err != nil {
 		h.fail(w, "patch service", err)
