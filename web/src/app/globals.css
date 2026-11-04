@@ -153,6 +153,19 @@
   --chart-3: #ACBEA3;
   --chart-4: #5B5941;
   --chart-5: #AFBBF2;
+
+  /* CVE severity scale (vulnerability scanning). Aliases of the status
+     hues, so both themes follow automatically. */
+  --sev-critical: var(--error);
+  --sev-critical-subtle: var(--error-subtle);
+  --sev-high: var(--warning);
+  --sev-high-subtle: var(--warning-subtle);
+  --sev-medium: var(--building);
+  --sev-medium-subtle: var(--building-subtle);
+  --sev-low: var(--info);
+  --sev-low-subtle: var(--info-subtle);
+  --sev-unknown: var(--text-tertiary);
+  --sev-unknown-subtle: var(--bg-tertiary);
 }
 
 .dark {

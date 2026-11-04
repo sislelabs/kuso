@@ -20,6 +20,7 @@ import {
   Search,
   Activity,
   ShieldCheck,
+  ShieldAlert,
   ArrowDown,
   DollarSign,
   FileUp,
@@ -70,6 +71,7 @@ const CARDS: Card[] = [
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update" },
   { href: "/settings/usage",            title: "Usage + cost",     description: "Per-node CPU + memory rollup with monthly cost projection.",        icon: DollarSign,   perm: Perms.SettingsRead,  group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },
   { href: "/settings/health",           title: "Health",           description: "Reconcile-health scan: failed helm releases, stuck addons, orphaned envs — with one-click fixes.", icon: ShieldCheck, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook" },
+  { href: "/settings/vulnerabilities",  title: "Vulnerability scanning", description: "CVE scanning with Trivy: deploy gate mode, nightly sweep, platform image findings.", icon: ShieldAlert, perm: Perms.SettingsAdmin, group: "cluster", keywords: "cve vulnerability security trivy scan image gate block enforce report" },
 
   // Team: users + groups + roles + audit log.
   { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "team", keywords: "user account login oauth invite" },

@@ -15,6 +15,7 @@ import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 import { hostScheme } from "@/lib/host-scheme";
+import { VulnNodeBadge } from "@/components/vulns/VulnNodeBadge";
 
 export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
@@ -23,6 +24,8 @@ export interface ServiceNodeData extends Record<string, unknown> {
   // Latest build for this service. Polled at the canvas level so
   // statusFor can prefer fresh build state over a stale env phase.
   latestBuild?: BuildSummary;
+  // Fixable critical CVEs in the live image (project vulns rollup).
+  fixableCritical?: number;
   // Injected by ProjectCanvas — fires the right-click context menu.
   __onContext?: (e: React.MouseEvent) => void;
   // Injected by ProjectCanvas — true when the keyboard focus index
@@ -265,6 +268,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{displayName}</span>
+          <VulnNodeBadge count={data.fixableCritical} />
         </span>
         <UptimeBadge env={data.env} status={status} latestBuild={data.latestBuild} />
       </div>
