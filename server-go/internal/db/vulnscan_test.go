@@ -211,7 +211,9 @@ func TestVulnScanSettings_RoundTrip(t *testing.T) {
 	if _, err := d.ExecContext(ctx, `DELETE FROM "Setting" WHERE key LIKE 'vulnscan.%'`); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = d.ExecContext(context.Background(), `DELETE FROM "Setting" WHERE key LIKE 'vulnscan.%'`) })
+	t.Cleanup(func() {
+		_, _ = d.ExecContext(context.Background(), `DELETE FROM "Setting" WHERE key LIKE 'vulnscan.%'`)
+	})
 	got, err := d.GetVulnScanSettings(ctx)
 	if err != nil || got != DefaultVulnScanSettings() {
 		t.Fatalf("defaults = %+v %v", got, err)

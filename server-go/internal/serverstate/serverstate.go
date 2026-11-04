@@ -87,6 +87,7 @@ const (
 	LoopAutoRemediate  = "auto-remediate"
 	LoopLogship        = "logship"
 	LoopUptime         = "uptime"
+	LoopVulnScan       = "vulnscan"
 
 	// Loops under the SECOND lease (kuso-server-singletons, startSingletons
 	// in main.go). Same registry, same leader-gated discipline — registered
