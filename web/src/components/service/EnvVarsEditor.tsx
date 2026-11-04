@@ -11,6 +11,7 @@ import { Check, ChevronRight, Eye, EyeOff, Link2, Lock, Search, Trash2 } from "l
 import { useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
 import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { setSharedSecret } from "@/features/project-secrets/api";
+import { applySubscriptionDelta } from "@/features/addons/subscriptionDelta";
 import { useProject, useAddons } from "@/features/projects";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
@@ -133,9 +134,16 @@ export function EnvVarsEditor({
   // Replaces the service's shared-secret subscription. Applied immediately,
   // not through the SaveBar: it's its own spec field with its own rollout.
   const [pendingUnsub, setPendingUnsub] = useState<string | null>(null);
-  const setSubscription = async (keys: string[]) => {
+  const setSubscription = async (wanted: string[]) => {
     setSubscriptionSaving(true);
     try {
+      // The PUT replaces the whole list. Apply only this tab's delta to a
+      // fresh read so a key another user subscribed meanwhile isn't dropped.
+      const base = sharedSub.data?.subscribed ?? [];
+      const fresh = await api<SubscribableShape>(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
+      );
+      const keys = applySubscriptionDelta(fresh.subscribed ?? [], base, wanted);
       await api<unknown>(
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
         { method: "PUT", body: { keys } },
