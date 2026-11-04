@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api-client";
-import { friendlyApiError, projectNameError, serviceSlugError } from "./names";
+import { friendlyApiError, projectNameError, projectSlugFromRepo, serviceSlugError } from "./names";
 
 describe("projectNameError", () => {
   it("rejects names the server reserves, including summary", () => {
@@ -12,6 +12,19 @@ describe("projectNameError", () => {
   it("caps length at the server's 40, not 63", () => {
     expect(projectNameError("a".repeat(40))).toBeNull();
     expect(projectNameError("a".repeat(41))).toMatch(/40/);
+  });
+});
+
+describe("projectSlugFromRepo", () => {
+  it("produces names the server accepts for awkward repos", () => {
+    for (const repo of ["2048-game", "kuso-site", "x".repeat(70), "new", "Foo_Bar.js", "---"]) {
+      const slug = projectSlugFromRepo(repo);
+      expect(projectNameError(slug), `${repo} → ${slug}`).toBeNull();
+    }
+  });
+
+  it("avoids existing project names", () => {
+    expect(projectSlugFromRepo("site", new Set(["site", "site-2"]))).toBe("site-3");
   });
 });
 

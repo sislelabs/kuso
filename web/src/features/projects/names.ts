@@ -22,11 +22,35 @@ export function projectNameError(name: string): string | null {
   if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)) {
     return "Lowercase letters, digits, and dashes only; must start and end with a letter or digit.";
   }
+  if (/^[0-9]/.test(name)) return "Project names must start with a letter.";
   if (RESERVED_PROJECT_NAMES.has(name)) {
     return `"${name}" is reserved — it collides with an app route. Pick another name.`;
   }
   if (name.startsWith("kuso-")) return `Names starting with "kuso-" are reserved for kuso itself.`;
   return null;
+}
+
+// projectSlugFromRepo derives a project name the server will accept from
+// a repo name: ≤40 chars, starts with a letter, no reserved name or
+// "kuso-" prefix, and not one of `taken` (adds -2, -3, …). The onboarding
+// wizard has no rename field, so an invalid slug used to strand the user.
+export function projectSlugFromRepo(repo: string, taken: ReadonlySet<string> = new Set()): string {
+  let base = repo
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  base = base.replace(/^(kuso-)+/, "");
+  if (!base) base = "app";
+  if (/^[0-9]/.test(base)) base = `app-${base}`;
+  if (RESERVED_PROJECT_NAMES.has(base) || base === "kuso") base = `${base}-app`;
+  const fit = (s: string, max: number) => s.slice(0, max).replace(/-+$/, "");
+  let slug = fit(base, 40);
+  for (let n = 2; taken.has(slug); n++) {
+    const suffix = `-${n}`;
+    slug = fit(base, 40 - suffix.length) + suffix;
+  }
+  return slug;
 }
 
 // Helm caps release names at 53 chars and the production env CR is
