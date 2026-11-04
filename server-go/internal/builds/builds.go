@@ -2858,6 +2858,9 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	}
 	if !b.Spec.DryRun {
 		if err := p.promoteImage(ctx, ns, b); err != nil {
+			if promoteRetryExhausted(b, err, time.Now()) {
+				return p.stampPromoteAbandoned(ctx, ns, b, err)
+			}
 			p.logger().Error("build promote failed; leaving build non-terminal for retry",
 				"build", b.Name, "ns", ns, "err", err)
 			return fmt.Errorf("promote image (build stays retriable): %w", err)
@@ -3449,7 +3452,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// only default-branch builds, not arbitrary feature/staging branches.
 	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
 	matched := 0
-	// promoteFailed records whether promoting to ANY matched env hit a
+	// promoteErr records whether promoting to ANY matched env hit a
 	// hard error (CAS exhausted, apiserver blip on the env Update). We
 	// do NOT abort the loop on the first such error — abandoning the
 	// remaining envs would leave e.g. production promoted but staging
@@ -3458,7 +3461,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// declines to mark the build terminal and the next poller tick
 	// retries the whole promotion (promoteEnvImageCAS is idempotent —
 	// already-promoted envs skip via the last-trigger-wins guard).
-	promoteFailed := false
+	var promoteErr error
 	// releaseBlocked records whether a release hook (migration) failed or
 	// errored for ANY of this build's source envs. When it did, the build's
 	// image is unverified (migrations didn't apply), so we must NOT promote
@@ -3549,7 +3552,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 				// still running, not broken. Leave the build
 				// non-terminal; the next tick polls the same Job. Marking
 				// it release-failed here paged a false "infra error".
-				return fmt.Errorf("release hook for %s still running when the promote budget ended: %w", e.Name, ctx.Err())
+				return fmt.Errorf("%w: release hook for %s still running when the promote budget ended: %w", errReleaseStillRunning, e.Name, ctx.Err())
 			}
 			if rerr != nil {
 				// Infra error talking to kube — do NOT promote: the image
@@ -3591,7 +3594,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			// Don't abort — log and keep promoting the other envs so a
 			// transient error on one doesn't strand the rest on the old
 			// image. The end-of-func error keeps the build retriable.
-			promoteFailed = true
+			promoteErr = fmt.Errorf("env %s: %w", e.Name, err)
 			p.logger().Error("promote env failed; continuing with remaining envs",
 				"env", e.Name, "build", b.Name, "err", err)
 			continue
@@ -3651,13 +3654,13 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		p.logger().Warn("promote to fromService consumers failed",
 			"service", b.Spec.Service, "err", err)
 	}
-	if promoteFailed {
+	if promoteErr != nil {
 		// At least one matched env failed to promote. Return an error so
 		// markSucceeded does NOT stamp the build terminal — the next
 		// poller tick re-enters checkBuild → markSucceeded → promoteImage
 		// and retries the failed env(s). Idempotent for the ones that
 		// already landed.
-		return fmt.Errorf("one or more envs failed to promote for build %s", b.Name)
+		return fmt.Errorf("one or more envs failed to promote for build %s (last: %w)", b.Name, promoteErr)
 	}
 	return nil
 }

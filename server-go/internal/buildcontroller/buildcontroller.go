@@ -301,7 +301,11 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 	// same-repo gate is waiting on sibling builds. Re-ensuring here
 	// would recreate the TTL-reaped Job on the next leadership
 	// handover's ResyncActive and re-run the entire kaniko build.
-	if b.Annotations["kuso.sislelabs.com/promote-hold"] != "" {
+	// Same for a build whose Job succeeded and is still promoting (a
+	// release hook, or a promote being retried): rebuilding would re-push
+	// the tag under envs that may already run it.
+	if b.Annotations["kuso.sislelabs.com/promote-hold"] != "" ||
+		b.Annotations["kuso.sislelabs.com/build-job-succeeded"] != "" {
 		return
 	}
 	// Belt-and-braces validity check, mirroring the chart's top-level

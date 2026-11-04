@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -877,6 +878,48 @@ func TestPoller_PromoteFailureLeavesBuildRetriable(t *testing.T) {
 	}
 	if envCR.Spec.Image != nil && envCR.Spec.Image.Tag == "zzz" {
 		t.Errorf("env promoted despite update failure: %+v", envCR.Spec.Image)
+	}
+}
+
+// BUILD-04: a promote error that persists (a 422 from one env, CAS never
+// winning) used to keep the build non-terminal forever, holding the
+// service's build slot so every later build queued silently. Past
+// promoteRetryMaxAge since its Job succeeded, the build must end failed.
+func TestPoller_PromoteFailurePastMaxAgeEndsBuild(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old", Namespace: "kuso", Annotations: map[string]string{
+			annJobSucceeded: time.Now().Add(-promoteRetryMaxAge - time.Minute).UTC().Format(time.RFC3339),
+		}},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha", Service: "alpha-web", Ref: "old",
+			Image: &kube.KusoImage{Repository: "registry/alpha/web", Tag: "old"},
+		},
+	}
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("update", "kusoenvironments",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("admission webhook denied the request")
+		})
+	// A long migration still running is progress, never a give-up reason.
+	if promoteRetryExhausted(build, fmt.Errorf("%w: x", errReleaseStillRunning), time.Now()) {
+		t.Error("a release hook still running must not exhaust promote retries")
+	}
+	p := &Poller{Svc: s, Interval: time.Hour}
+	_ = p.markSucceeded(context.Background(), "kuso", build)
+
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-old")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "failed" {
+		t.Errorf("phase = %q, want failed", ph)
+	}
+	if !got.Spec.Done || got.Labels[LabelBuildState] != "done" {
+		t.Errorf("build not terminal (done=%v, state=%q): it would keep the service's build slot", got.Spec.Done, got.Labels[LabelBuildState])
+	}
+	if !strings.Contains(got.Annotations[annMessage], "admission webhook denied") && !strings.Contains(got.Annotations[annMessage], "failed to promote") {
+		t.Errorf("message does not explain the promote failure: %q", got.Annotations[annMessage])
 	}
 }
 

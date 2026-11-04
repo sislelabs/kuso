@@ -80,6 +80,33 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) bool {
 	return cond()
 }
 
+// BUILD-04: a build whose Job already succeeded and is still promoting
+// (release hook, or a retried promote) must not get a fresh Job once the
+// old one is TTL-reaped: a leader resync would re-run the whole build and
+// re-push the tag under envs that may already run it.
+func TestReconcileSkipsJobSucceededBuild(t *testing.T) {
+	ns := "kuso-skip-job-succeeded"
+	cs := kubefake.NewSimpleClientset(managedNS(ns))
+	var jobCreates atomic.Int32
+	cs.PrependReactor("create", "jobs", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		jobCreates.Add(1)
+		return false, nil, nil
+	})
+	s := &Service{
+		Kube:      &kube.Client{Clientset: cs},
+		Logger:    retryTestLogger(),
+		running:   map[string]struct{}{},
+		retryBase: 2 * time.Millisecond,
+	}
+	u := retryTestBuild(ns, "b-promoting")
+	u.SetAnnotations(map[string]string{"kuso.sislelabs.com/build-job-succeeded": "2026-11-04T10:00:00Z"})
+	s.reconcile(context.Background(), u, "resync")
+	time.Sleep(100 * time.Millisecond)
+	if n := jobCreates.Load(); n != 0 {
+		t.Fatalf("reconcile recreated the Job of a build whose Job already succeeded (%d creates)", n)
+	}
+}
+
 // TestRetryEventuallySucceeds: Job create fails twice (transient
 // apiserver blip), the backoff ladder re-fires reconcile, and the third
 // attempt lands the Job. Retry state must be fully cleared afterwards.
