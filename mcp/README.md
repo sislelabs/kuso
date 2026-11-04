@@ -79,7 +79,7 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `build_status`      | build state for a service, incl. promotion hold / not-promoted reason |
 | `run`               | one-shot Job in a service's context (mutating) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
-| `apply`             | reconcile kuso.yaml (mutating; `confirm: true`) |
+| `apply`             | reconcile kuso.yaml (mutating; `confirm: true` only when the YAML sets `prune: true` — creates/updates apply without it, so `plan` first) |
 | `list_builds`       | recent builds for a service, newest first (read-only) |
 | `rollback`          | re-point an env at a previous build's image (mutating; `confirm: true`) |
 | `sql_tables`        | list an addon database's tables (read-only) |
