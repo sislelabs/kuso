@@ -1248,21 +1248,29 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 	if cpuPct, ok := s.aggregateCPUPercent(ctx, ns, e.Name, &dep.Spec); ok {
 		e.Status["cpuPct"] = cpuPct
 	}
-	// Phase: ready when all desired replicas are ready; otherwise
-	// deploying when an update is in flight; otherwise unknown.
 	if _, set := e.Status["phase"]; !set {
-		switch {
-		case desired > 0 && ready == desired:
-			e.Status["phase"] = "active"
-			e.Status["ready"] = true
-		case dep.Status.UpdatedReplicas < desired:
-			e.Status["phase"] = "deploying"
-		case ready == 0 && desired > 0:
-			e.Status["phase"] = "deploying"
-		default:
-			e.Status["phase"] = "active"
+		phase, ok := envPhase(desired, ready, dep.Status.UpdatedReplicas, e.Spec.Stopped)
+		e.Status["phase"] = phase
+		if ok {
 			e.Status["ready"] = true
 		}
+	}
+}
+
+// envPhase derives the legacy status.phase / status.ready pair from the
+// backing Deployment. ready is true only when every desired replica is.
+func envPhase(desired, ready, updated int32, stopped bool) (string, bool) {
+	switch {
+	case desired == 0 && stopped:
+		return "stopped", false
+	case desired == 0:
+		return "sleeping", false
+	case ready == desired:
+		return "active", true
+	case updated < desired, ready == 0:
+		return "deploying", false
+	default:
+		return "degraded", false
 	}
 }
 
