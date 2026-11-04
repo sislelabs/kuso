@@ -128,15 +128,16 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hold := resolveHoldTimeout()
 	return &Activator{
 		kc:             kc,
 		logger:         logger,
-		holdTimeout:    resolveHoldTimeout(),
+		holdTimeout:    hold,
 		pollInterval:   250 * time.Millisecond,
 		waking:         map[string]*wakeState{},
 		hostCache:      map[string]hostEntry{},
 		hostTTL:        30 * time.Second,
-		proxyTransport: newProxyTransport(),
+		proxyTransport: newProxyTransport(hold),
 		lastStamp:      map[string]time.Time{},
 		nowFn:          time.Now,
 	}
@@ -314,9 +315,9 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 //
 // Each dial gets a SHORT timeout so a black-holed ClusterIP fails fast
 // instead of hanging the whole hold budget, and retryTransport retries
-// both error classes until the request context (the hold deadline)
-// expires.
-func newProxyTransport() http.RoundTripper {
+// both error classes for up to retryBudget (the hold budget) or until the
+// client goes away.
+func newProxyTransport(retryBudget time.Duration) http.RoundTripper {
 	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
 	base := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -329,7 +330,7 @@ func newProxyTransport() http.RoundTripper {
 		// scaled — fresh dial each time during the cold-start window.
 		DisableKeepAlives: false,
 	}
-	return &retryTransport{base: base, wait: 250 * time.Millisecond}
+	return &retryTransport{base: base, wait: 250 * time.Millisecond, budget: retryBudget}
 }
 
 // retryTransport retries connection-establishment failures during the
@@ -341,6 +342,11 @@ func newProxyTransport() http.RoundTripper {
 type retryTransport struct {
 	base http.RoundTripper
 	wait time.Duration
+	// budget caps how long one RoundTrip keeps retrying dial failures
+	// (0 = until the request context ends). The proxied request runs on
+	// the client's context, which can live indefinitely, so without a cap
+	// an app that refuses forever pins a goroutine per held connection.
+	budget time.Duration
 }
 
 // maxRetryBodyBytes caps how much request body retryTransport buffers so
@@ -356,6 +362,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		r := req
 		if attempt > 0 && req.GetBody != nil {
@@ -371,6 +378,9 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 		if !canRetry || !retriableDialErr(err) {
+			return nil, err
+		}
+		if t.budget > 0 && time.Since(start) >= t.budget {
 			return nil, err
 		}
 		select {
