@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -426,6 +427,11 @@ func (h *IncidentsHandler) PR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body.PRUrl = strings.TrimSpace(body.PRUrl)
+	if !isGitHubPRURL(body.PRUrl) {
+		writeErr(w, http.StatusBadRequest, "prUrl must be an https://github.com/ URL")
+		return
+	}
 	if err := h.DB.SetIncidentPR(ctx, in.ID, body.PRUrl, body.PRNumber); err != nil {
 		if errors.Is(err, db.ErrIncidentNotFound) {
 			writeErr(w, http.StatusNotFound, "incident not found")
@@ -437,6 +443,16 @@ func (h *IncidentsHandler) PR(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditFor(ctx, in, "incident.pr", "agent opened PR "+body.PRUrl)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// isGitHubPRURL reports whether raw is a plain https://github.com/ URL. The
+// agent only works on github.com repos, and the UI renders this as a link.
+func isGitHubPRURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && strings.EqualFold(u.Host, "github.com") && u.User == nil
 }
 
 // --- audit helpers ---

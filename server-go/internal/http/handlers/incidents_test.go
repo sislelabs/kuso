@@ -137,3 +137,23 @@ func TestIncidentsList_PagesWithTruncationHeaders(t *testing.T) {
 		t.Errorf("last page: %d rows, truncated=%q; want 1 row, no header", len(body.Incidents), w.Header().Get(headerTruncated))
 	}
 }
+
+// WEB-22: the PR link is agent-supplied and rendered as an <a href>, so only
+// plain https://github.com/ URLs are stored.
+func TestIsGitHubPRURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://github.com/acme/app/pull/12":       true,
+		"https://GitHub.com/acme/app/pull/12":       true,
+		"http://github.com/acme/app/pull/12":        false,
+		"https://github.com.evil.example/acme/pull": false,
+		"https://evil.example/github.com/pull/1":    false,
+		"https://user:tok@github.com/acme/pull/1":   false,
+		"https://github.com:8443/acme/app/pull/1":   false,
+		"javascript:alert(1)":                       false,
+		"github.com/acme/app/pull/12":               false,
+	} {
+		if got := isGitHubPRURL(raw); got != want {
+			t.Errorf("isGitHubPRURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
