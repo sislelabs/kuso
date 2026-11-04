@@ -480,32 +480,41 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	var errs []error
 	for i := range envs {
 		env := &envs[i]
-		// defaultHost takes the SHORT service name (the env auto-host is
-		// "<short>.<base>"), but env.Spec.Service is the FQN
-		// "<project>-<short>". Strip the prefix — otherwise `expected`
-		// becomes "<project>-<short>.<base>" which never matches the
-		// stored "<short>.<base>", the guard below always treats the env
-		// as user-customised, and a base-domain change silently never
-		// rewrites any env host.
+		// The generators take the SHORT service name, but
+		// env.Spec.Service is the FQN "<project>-<short>". Strip the
+		// prefix, or `expected` never matches and every env reads as
+		// user-customised.
 		short := shortServiceName(project, env.Spec.Service)
-		expected := defaultHost(short, project, oldBase)
-		if env.Spec.Host != expected {
+		// webHostForEnv covers production, custom-env and env-group
+		// clone shapes. Previews return "": the PR dispatcher rewrites
+		// their host on the next sync.
+		expected := webHostForEnv(env, project, short, oldBase)
+		if expected == "" || env.Spec.Host != expected {
 			// User-customised host — leave it.
+			continue
+		}
+		newHost := webHostForEnv(env, project, short, newBase)
+		if newHost == env.Spec.Host {
+			continue
+		}
+		if err := s.checkHostsFree(ctx, env.Name, newHost); err != nil {
+			errs = append(errs, fmt.Errorf("env %s keeps %s: %w", env.Name, env.Spec.Host, err))
 			continue
 		}
 		// RMW retry so a status-patch race doesn't lose the new
 		// host while the helm-operator status-patches in parallel.
 		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
-			live.Spec.Host = defaultHost(short, project, newBase)
+			live.Spec.Host = newHost
 			live.Spec.TLSHosts = computeTLSHosts(live.Spec.Host, live.Spec.AdditionalHosts)
 			return nil
 		}); uerr != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, uerr)
+			errs = append(errs, fmt.Errorf("update env %s: %w", env.Name, uerr))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // propagateDefaultBranch restamps env.Spec.Branch on every owned env

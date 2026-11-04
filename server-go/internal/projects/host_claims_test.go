@@ -107,3 +107,43 @@ func TestHostClaims_GeneratedHostConflict(t *testing.T) {
 		t.Fatalf("AddEnvironment(generated host taken) err = %v, want ErrConflict", err)
 	}
 }
+
+// LIFE-05: a baseDomain change moved only production hosts; custom envs
+// and env-group clones kept serving the old domain. User-set hosts stay.
+func TestUpdate_BaseDomainMovesEveryGeneratedHost(t *testing.T) {
+	t.Setenv("KUSO_DOMAIN", "kuso.example.com")
+	const old = "old.example.com"
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}, BaseDomain: old}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedService("alpha", "web-qa", kube.KusoServiceSpec{Project: "alpha"}),
+		seedService("alpha", "alpha", kube.KusoServiceSpec{Project: "alpha"}),
+		seedHostedEnv("alpha", "web", "production", "alpha-web-production", "web."+old),
+		seedHostedEnv("alpha", "web", "staging", "alpha-web-staging", "web-staging."+old),
+		seedHostedEnv("alpha", "web", "demo", "alpha-web-demo", "demo.customer.org"),
+		seedHostedEnv("alpha", "web-qa", "qa", "alpha-web-qa-production", "web-qa.alpha."+old),
+		seedHostedEnv("alpha", "alpha", "production", "alpha-alpha-production", old),
+	)
+	ctx := context.Background()
+	// Moving onto the control-plane host must not hand the project-named
+	// service's apex to the dashboard's host.
+	newBase := "kuso.example.com"
+	if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{BaseDomain: &newBase}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for name, want := range map[string]string{
+		"alpha-web-production":    "web.kuso.example.com",
+		"alpha-web-staging":       "web-staging.kuso.example.com",
+		"alpha-web-demo":          "demo.customer.org",
+		"alpha-web-qa-production": "web-qa.alpha.kuso.example.com",
+		"alpha-alpha-production":  old,
+	} {
+		env, err := s.Kube.GetKusoEnvironment(ctx, "kuso", name)
+		if err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		if env.Spec.Host != want {
+			t.Errorf("%s host = %q, want %q", name, env.Spec.Host, want)
+		}
+	}
+}
