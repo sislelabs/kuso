@@ -73,8 +73,10 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 	// on lookup failure fall through to the Secret's bucket, which is the
 	// pre-override behaviour.
 	var bucketOverride string
+	external := false
 	if cr, err := a.addons.GetOwned(ctx, project, addon); err == nil {
 		bucketOverride = cr.BackupBucket("")
+		external = cr.Spec.External != nil && cr.Spec.External.SecretName != ""
 	}
 
 	// The snapshot Job sources BUCKET/S3_ENDPOINT/AWS creds from the
@@ -94,7 +96,7 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 	}
 
 	jobName := fmt.Sprintf("%s-snapshot-%d", release, time.Now().Unix())
-	job := buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride)
+	job := buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride, external)
 	if _, err := a.kc.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		return "", fmt.Errorf("create snapshot job: %w", err)
 	}
@@ -114,7 +116,7 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 // buildSnapshotJob renders the one-shot pre-deploy snapshot Job. Mirrors the
 // postgres backup CronJob's script (kusoaddon/templates/backup-cronjob.yaml):
 // temp-file dump → sha256 → upload artifact + manifest.
-func buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride string) *batchv1.Job {
+func buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride string, external bool) *batchv1.Job {
 	release := addons.CRName(project, addon)
 	script := fmt.Sprintf(`
 set -eo pipefail
@@ -126,11 +128,21 @@ echo "==> pre-deploy snapshot %s → s3://${BUCKET}/${KEY}"
 # A fresh pod in a project namespace is network-isolated for ~5-20s until
 # kube-router syncs the NetworkPolicy for its IP; with BackoffLimit 0 the
 # first refused connect would fail the snapshot and block the deploy.
+# External addons are reached through the provider DSN (all they may carry),
+# exactly as the scheduled external backup does.
+SNAP_DSN="${SNAP_DIRECT_URL:-${SNAP_DATABASE_URL:-}}"
+if [ -n "${EXTERNAL_SNAPSHOT:-}" ] && [ -z "${SNAP_DSN}" ]; then
+  echo "==> external addon conn secret has neither DIRECT_URL nor DATABASE_URL" >&2; exit 1
+fi
+pg_target_ready() {
+  if [ -n "${SNAP_DSN}" ]; then pg_isready -d "${SNAP_DSN}" -q
+  else pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; fi
+}
 i=0
-until pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
+until pg_target_ready; do
   i=$((i+1))
-  if [ "$i" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST} unreachable after 60s" >&2; exit 1; fi
-  echo "==> waiting for postgres ${POSTGRES_HOST} ($i)"; sleep 2
+  if [ "$i" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST:-(external)} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for postgres ${POSTGRES_HOST:-(external)} ($i)"; sleep 2
 done
 # Match the client to the server, as the backup CronJob and the previewdb
 # seed do. The default client is 18, whose SET transaction_timeout is unknown
@@ -143,7 +155,12 @@ pgbin() { # major tool
   done
   echo "$2"
 }
-if ! PGVER=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc "SHOW server_version_num"); then
+if [ -n "${SNAP_DSN}" ]; then
+  PGVER=$($(pgbin "" psql) "${SNAP_DSN}" -tAc "SHOW server_version_num") || PGVER=""
+else
+  PGVER=$(PGPASSWORD="${POSTGRES_PASSWORD}" $(pgbin "" psql) -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc "SHOW server_version_num") || PGVER=""
+fi
+if [ -z "${PGVER}" ]; then
   echo "==> could not read the server version of ${POSTGRES_HOST}; refusing to pick a pg_dump client blind" >&2; exit 1
 fi
 PGMAJOR=$(echo "${PGVER}" | tr -dc '0-9')
@@ -151,7 +168,11 @@ if [ -z "${PGMAJOR}" ]; then echo "==> unparseable server_version_num '${PGVER}'
 PGMAJOR=$((PGMAJOR / 10000))
 PG_DUMP=$(pgbin "${PGMAJOR}" pg_dump)
 echo "==> server major=${PGMAJOR}, using ${PG_DUMP}"
-PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
+if [ -n "${SNAP_DSN}" ]; then
+  "${PG_DUMP}" --clean --if-exists --no-owner --no-acl "${SNAP_DSN}" | gzip > /tmp/dump.gz
+else
+  PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
+fi
 SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
 BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
 aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
@@ -166,6 +187,9 @@ echo "==> snapshot done (sha256=${SHA})"
 	// Reap the Job and its pod an hour after it finishes, like seed Jobs;
 	// the snapshot itself lives in S3.
 	ttl := int32(3600)
+	// The caller stops waiting after snapshotPollTimeout; this ends a pod that
+	// can't start (or a hung dump) as Failed instead of leaking it.
+	deadline := int64(time.Hour / time.Second)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -178,6 +202,7 @@ echo "==> snapshot done (sha256=${SHA})"
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &zero,
+			ActiveDeadlineSeconds:   &deadline,
 			Completions:             &one,
 			Parallelism:             &one,
 			TTLSecondsAfterFinished: &ttl,
@@ -199,22 +224,37 @@ echo "==> snapshot done (sha256=${SHA})"
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"sh", "-c"},
 						Args:            []string{script},
-						Env: []corev1.EnvVar{
-							{Name: "KEY", Value: key},
-							snapEnvFromSecret("POSTGRES_HOST", release+"-conn", "POSTGRES_HOST"),
-							snapEnvFromSecret("POSTGRES_USER", release+"-conn", "POSTGRES_USER"),
-							snapEnvFromSecret("POSTGRES_DB", release+"-conn", "POSTGRES_DB"),
-							snapEnvFromSecret("POSTGRES_PASSWORD", release+"-conn", "POSTGRES_PASSWORD"),
+						Env: append(append([]corev1.EnvVar{{Name: "KEY", Value: key}}, snapshotConnEnv(release, external)...),
 							snapshotBucketEnv(bucketOverride),
 							snapEnvFromSecretOpt("S3_ENDPOINT", snapshotBackupSecretName, "endpoint"),
 							snapEnvFromSecretOpt("AWS_ACCESS_KEY_ID", snapshotBackupSecretName, "accessKeyId"),
 							snapEnvFromSecretOpt("AWS_SECRET_ACCESS_KEY", snapshotBackupSecretName, "secretAccessKey"),
 							snapEnvFromSecretOpt("AWS_DEFAULT_REGION", snapshotBackupSecretName, "region"),
-						},
+						),
 					}},
 				},
 			},
 		},
+	}
+}
+
+// snapshotConnEnv sources the DB connection from the addon's conn Secret. An
+// external conn is mirrored from the user's Secret and may carry only a DSN,
+// so its keys are optional and the script dumps through the DSN; a required
+// POSTGRES_HOST ref left the pod in CreateContainerConfigError forever.
+func snapshotConnEnv(release string, external bool) []corev1.EnvVar {
+	if external {
+		return []corev1.EnvVar{
+			{Name: "EXTERNAL_SNAPSHOT", Value: "1"},
+			snapEnvFromSecretOpt("SNAP_DIRECT_URL", release+"-conn", "DIRECT_URL"),
+			snapEnvFromSecretOpt("SNAP_DATABASE_URL", release+"-conn", "DATABASE_URL"),
+		}
+	}
+	return []corev1.EnvVar{
+		snapEnvFromSecret("POSTGRES_HOST", release+"-conn", "POSTGRES_HOST"),
+		snapEnvFromSecret("POSTGRES_USER", release+"-conn", "POSTGRES_USER"),
+		snapEnvFromSecret("POSTGRES_DB", release+"-conn", "POSTGRES_DB"),
+		snapEnvFromSecret("POSTGRES_PASSWORD", release+"-conn", "POSTGRES_PASSWORD"),
 	}
 }
 

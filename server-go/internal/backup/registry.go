@@ -98,15 +98,31 @@ echo "==> piping into psql"
 # and still aborts loudly under ON_ERROR_STOP.
 # The download proved egress works, not that the DB's ingress policy has
 # admitted this pod yet. Wait for the server before psql, bounded to 60s.
+#
+# External addons carry a provider DSN rather than POSTGRES_* (the scheduled
+# backup dumps them via DATABASE_URL too), so the handler passes it as
+# RESTORE_DIRECT_URL / RESTORE_DATABASE_URL with EXTERNAL_RESTORE=1.
+RESTORE_DSN="${RESTORE_DIRECT_URL:-${RESTORE_DATABASE_URL:-}}"
+if [ -n "${EXTERNAL_RESTORE:-}" ] && [ -z "${RESTORE_DSN}" ]; then
+  echo "==> external addon conn secret has neither DIRECT_URL nor DATABASE_URL" >&2; exit 1
+fi
+pg_target_ready() {
+  if [ -n "${RESTORE_DSN}" ]; then pg_isready -d "${RESTORE_DSN}" -q
+  else pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; fi
+}
+pg_apply() {
+  if [ -n "${RESTORE_DSN}" ]; then psql -v ON_ERROR_STOP=1 --single-transaction "${RESTORE_DSN}"
+  else PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"; fi
+}
 _i=0
-until pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
+until pg_target_ready; do
   _i=$((_i+1))
-  if [ "${_i}" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST} unreachable after 60s" >&2; exit 1; fi
-  echo "==> waiting for postgres ${POSTGRES_HOST} (${_i})"; sleep 2
+  if [ "${_i}" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST:-(external)} unreachable after 60s" >&2; exit 1; fi
+  echo "==> waiting for postgres ${POSTGRES_HOST:-(external)} (${_i})"; sleep 2
 done
 gunzip -c /tmp/dump.sql.gz \
   | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
-  | PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
+  | pg_apply
 echo "==> done"
 `
 }

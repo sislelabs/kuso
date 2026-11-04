@@ -166,7 +166,7 @@ func TestMirrorBackupSecret_CopiesIntoTargetNS(t *testing.T) {
 // pg_dump's first connect.
 func TestBuildSnapshotJob_WaitsForPostgresBeforeDump(t *testing.T) {
 	t.Parallel()
-	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "")
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "", false)
 	script := job.Spec.Template.Spec.Containers[0].Args[0]
 	wait := strings.Index(script, `pg_isready -h "${POSTGRES_HOST}"`)
 	dump := strings.Index(script, "pg_dump ")
@@ -186,7 +186,7 @@ func TestBuildSnapshotJob_WaitsForPostgresBeforeDump(t *testing.T) {
 // the S3 upload is blocked. Same pair the restore Job and backup CronJob carry.
 func TestBuildSnapshotJob_PodInsideProjectNetpol(t *testing.T) {
 	t.Parallel()
-	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "k", "e2e", "db", "t", "b", "")
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "k", "e2e", "db", "t", "b", "", false)
 	labels := job.Spec.Template.Labels
 	if got := labels["kuso.sislelabs.com/project"]; got != "e2e" {
 		t.Errorf("pod label project = %q, want e2e", got)
@@ -204,7 +204,7 @@ func TestBuildSnapshotJob_PodInsideProjectNetpol(t *testing.T) {
 // rather than dump blind.
 func TestBuildSnapshotJob_UsesVersionMatchedClient(t *testing.T) {
 	t.Parallel()
-	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "")
+	job := buildSnapshotJob("kuso-e2e", "e2e-db-snapshot-1", "e2e/e2e-db/k.sql.gz", "e2e", "db", "pre-deploy", "abc", "", false)
 	script := job.Spec.Template.Spec.Containers[0].Args[0]
 	if out, err := testsh.Command(t, script, "-n").CombinedOutput(); err != nil {
 		t.Fatalf("snapshot script does not parse: %v\n%s", err, out)
@@ -286,7 +286,7 @@ func runSnapshotScript(t *testing.T, script, psqlBody string) (string, string, e
 // snapshotBeforeDeploy service left one behind forever (live, e2e3).
 func TestBuildSnapshotJob_HasTTL(t *testing.T) {
 	t.Parallel()
-	job := buildSnapshotJob("kuso", "p-db-snapshot-1", "k", "p", "db", "t", "b", "")
+	job := buildSnapshotJob("kuso", "p-db-snapshot-1", "k", "p", "db", "t", "b", "", false)
 	if ttl := job.Spec.TTLSecondsAfterFinished; ttl == nil || *ttl <= 0 {
 		t.Fatalf("snapshot Job has no TTL (%v); finished Jobs pile up", ttl)
 	}

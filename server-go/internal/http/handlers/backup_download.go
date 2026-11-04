@@ -28,6 +28,7 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // Download streams a fresh, on-demand dump of the addon's data straight
@@ -99,7 +100,7 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	switch cr.Spec.Kind {
 	case "postgres":
-		h.downloadPostgres(ctx, w, project, addon, ns, releaseName, stamp)
+		h.downloadPostgres(ctx, w, project, addon, ns, cr, stamp)
 	case "s3", "minio":
 		h.downloadS3(ctx, w, project, addon, ns, releaseName, stamp)
 	default:
@@ -116,8 +117,8 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 // refuse with "server version too new" — the client gets a 502 with
 // pg_dump's error, not a corrupt file. Bump the Dockerfile's
 // client version when we ship a newer Postgres addon.
-func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
-	dsn, err := h.addonDSN(ctx, ns, releaseName)
+func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns string, cr *kube.KusoAddon, stamp string) {
+	dsn, err := h.addonDSN(ctx, ns, cr)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: "+err.Error())
 		return
@@ -319,7 +320,8 @@ func (h *BackupsHandler) streamS3Object(ctx context.Context, cli *s3.Client, tw 
 // addonDSN resolves a libpq DSN string for pg_dump from the addon's
 // <release>-conn Secret. Sibling of pgConn (backups.go), which returns a
 // *sql.DB; pg_dump wants the DSN as a CLI arg instead.
-func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (string, error) {
+func (h *BackupsHandler) addonDSN(ctx context.Context, ns string, cr *kube.KusoAddon) (string, error) {
+	releaseName := cr.Name
 	connSecret := addons.ConnSecretName(releaseName)
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -327,6 +329,32 @@ func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (
 	}
 	if err != nil {
 		return "", err
+	}
+	// An external provider is reached over the internet: dump through the
+	// DSN it gave us (it may carry nothing else) and never in plaintext
+	// unless that DSN explicitly asks for it.
+	if isExternalAddon(cr) {
+		raw := string(sec.Data["DIRECT_URL"])
+		if raw == "" {
+			raw = string(sec.Data["DATABASE_URL"])
+		}
+		if raw == "" {
+			return "", fmt.Errorf("external addon -conn secret has neither DIRECT_URL nor DATABASE_URL")
+		}
+		u, perr := url.Parse(raw)
+		if perr != nil {
+			// Static message: the parse error would echo the DSN, password included.
+			return "", fmt.Errorf("external addon DSN does not parse")
+		}
+		q := u.Query()
+		if q.Get("sslmode") == "" {
+			q.Set("sslmode", "require")
+		}
+		if q.Get("connect_timeout") == "" {
+			q.Set("connect_timeout", "5")
+		}
+		u.RawQuery = q.Encode()
+		return u.String(), nil
 	}
 	host := releaseName + "-postgresql"
 	port := "5432"
@@ -359,7 +387,7 @@ func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (
 		User:     url.UserPassword(user, pass),
 		Host:     net.JoinHostPort(host, port),
 		Path:     "/" + dbName,
-		RawQuery: "sslmode=disable&connect_timeout=5",
+		RawQuery: "sslmode=" + browserSSLMode(cr) + "&connect_timeout=5",
 	}
 	return u.String(), nil
 }

@@ -31,7 +31,7 @@ func TestSiblingDumpDB(t *testing.T) {
 
 func TestOverrideEnv_ReplacesSecretBackedDB(t *testing.T) {
 	t.Parallel()
-	env := overrideEnv(restoreConnEnv("postgres", "p-pg"), corev1.EnvVar{Name: "POSTGRES_DB", Value: "acme_pg"})
+	env := overrideEnv(restoreConnEnv("postgres", "p-pg", false), corev1.EnvVar{Name: "POSTGRES_DB", Value: "acme_pg"})
 	n := 0
 	for _, e := range env {
 		if e.Name != "POSTGRES_DB" {

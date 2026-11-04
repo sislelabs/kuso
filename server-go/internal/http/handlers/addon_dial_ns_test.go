@@ -96,7 +96,7 @@ func TestAddonDSN_QualifiesHostForCustomNamespace(t *testing.T) {
 		"POSTGRES_PASSWORD": "pw",
 		"POSTGRES_DB":       "e2e",
 	})
-	dsn, err := h.addonDSN(context.Background(), customNS, "e2e-db")
+	dsn, err := h.addonDSN(context.Background(), customNS, &kube.KusoAddon{ObjectMeta: metav1.ObjectMeta{Name: "e2e-db"}})
 	if err != nil {
 		t.Fatalf("addonDSN: %v", err)
 	}

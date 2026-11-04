@@ -42,7 +42,7 @@ func TestAddonDSN_EscapesPassword(t *testing.T) {
 		},
 	})
 	h := &BackupsHandler{Kube: &kube.Client{Clientset: cs}}
-	dsn, err := h.addonDSN(context.Background(), "kuso", "shop-db")
+	dsn, err := h.addonDSN(context.Background(), "kuso", &kube.KusoAddon{ObjectMeta: metav1.ObjectMeta{Name: "shop-db"}})
 	if err != nil {
 		t.Fatal(err)
 	}

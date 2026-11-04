@@ -504,13 +504,19 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// Bucket from the SOURCE addon — the artifact being restored lives
 	// where its own CronJob wrote it, which may not be the destination's
 	// bucket when restoring into a sibling.
-	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env(srcCR.BackupBucket(""))...)
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3Env(srcCR.BackupBucket(""))...)
 	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
 	// `--clean` dump of THAT logical database. Fed to the conn Secret's
 	// POSTGRES_DB it would drop and replace the primary DB's tables.
 	siblingDB, err := siblingDumpDB(destCR.Spec.Kind, req.Key)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if siblingDB != "" && isExternalAddon(destCR) {
+		// The external restore goes through the conn's DSN, which names the
+		// primary database; a per-database dump would overwrite it.
+		writeErr(w, http.StatusBadRequest, "per-database dumps cannot be restored into an external addon")
 		return
 	}
 	if siblingDB != "" {
@@ -616,7 +622,17 @@ func restoreScriptForKind(kind string) (string, error) {
 // for a given kind, sourced from the addon's <release>-conn Secret.
 // postgres keeps the exact POSTGRES_* set it always had; mongodb needs
 // only the MONGO_URL connection URI.
-func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
+func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
+	if kind == "postgres" && external {
+		// An external conn is mirrored from the user's Secret and may carry
+		// only a DSN; the script restores through it, like the scheduled
+		// backup dumps through DATABASE_URL.
+		return []corev1.EnvVar{
+			{Name: "EXTERNAL_RESTORE", Value: "1"},
+			envFromSecretOptional("RESTORE_DIRECT_URL", releaseName+"-conn", "DIRECT_URL"),
+			envFromSecretOptional("RESTORE_DATABASE_URL", releaseName+"-conn", "DATABASE_URL"),
+		}
+	}
 	if kind == "mongodb" {
 		return []corev1.EnvVar{
 			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
@@ -1412,6 +1428,12 @@ func stringifyCell(v any) string {
 func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell string, env []corev1.EnvVar) *batchv1.Job {
 	one := int32(1)
 	zero := int32(0)
+	// BackoffLimit never fires for a pod that can't start (a missing conn
+	// key is CreateContainerConfigError forever), so bound the Job's life:
+	// it ends Failed instead of Pending with the API having reported 201.
+	// Generous, so a large restore isn't cut off; --single-transaction
+	// rolls a killed restore back rather than leaving it half-applied.
+	deadline := int64(6 * 60 * 60)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// The project's execution namespace: the <release>-conn
@@ -1430,9 +1452,10 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &zero,
-			Completions:  &one,
-			Parallelism:  &one,
+			BackoffLimit:          &zero,
+			ActiveDeadlineSeconds: &deadline,
+			Completions:           &one,
+			Parallelism:           &one,
 			Template: corev1.PodTemplateSpec{
 				// Same pair the chart's backup CronJob pod carries: the
 				// project label puts the pod inside the project netpols so
