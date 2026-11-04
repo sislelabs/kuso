@@ -141,13 +141,15 @@ func (d *DB) AddProjectGrant(ctx context.Context, project, userID, groupID strin
 	return outID, nil
 }
 
-// RemoveProjectGrant deletes a grant by id.
-func (d *DB) RemoveProjectGrant(ctx context.Context, id string) error {
+// RemoveProjectGrant deletes a grant by id, scoped to project so a grant
+// id from another project can't be deleted through this project's URL
+// (which would also skip the handler's grantee delegation checks).
+func (d *DB) RemoveProjectGrant(ctx context.Context, project, id string) error {
 	// Capture grantee for cache eviction before deleting.
 	var uid, gid sql.NullString
 	_ = d.QueryRowContext(ctx,
-		`SELECT "userId", "groupId" FROM "ProjectGrant" WHERE id = $1`, id).Scan(&uid, &gid)
-	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectGrant" WHERE id = $1`, id)
+		`SELECT "userId", "groupId" FROM "ProjectGrant" WHERE id = $1 AND project = $2`, id, project).Scan(&uid, &gid)
+	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectGrant" WHERE id = $1 AND project = $2`, id, project)
 	if err != nil {
 		return fmt.Errorf("db: remove project grant: %w", err)
 	}

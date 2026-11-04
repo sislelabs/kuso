@@ -180,6 +180,19 @@ func (h *DeployHookHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.Branch = strings.TrimSpace(r.URL.Query().Get("branch"))
 		req.Ref = strings.TrimSpace(r.URL.Query().Get("ref"))
+		// Same filter as the push path: the hook URL is pasted into
+		// third-party CI, so it must not deploy a branch no env tracks.
+		if req.Branch != "" {
+			deployed, err := h.Hooks.DeployedBranches(ctx, project, service)
+			if err != nil {
+				h.fail(w, "deploy hook branches", err)
+				return
+			}
+			if !containsString(deployed, req.Branch) {
+				writeErr(w, http.StatusBadRequest, fmt.Sprintf("no environment of %s/%s deploys branch %q", project, service, req.Branch))
+				return
+			}
+		}
 	}
 
 	out, err := h.Hooks.CreateWithOutcome(ctx, project, service, req)

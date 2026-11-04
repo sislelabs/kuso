@@ -68,3 +68,43 @@ func (s *Service) validateProjectNamespace(ctx context.Context, project, ns stri
 	}
 	return nil
 }
+
+// RetainedData lists data a deleted project left behind that creating req
+// would hand to its creator: kept addon Secrets (helm resource-policy
+// keep, which carry the old DB credentials) labelled for the project, and
+// PVCs in the project's own namespace. A non-purge delete keeps both on
+// purpose so a re-created project re-attaches its data; the handler only
+// lets an instance admin do that.
+func (s *Service) RetainedData(ctx context.Context, req CreateProjectRequest) ([]string, error) {
+	if s.Kube.Clientset == nil {
+		return nil, nil
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = derivedProjectNamespace(req.Name)
+	}
+	var out []string
+	for _, n := range []string{s.Namespace, ns} {
+		secs, err := s.Kube.Clientset.CoreV1().Secrets(n).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector(map[string]string{labelProject: req.Name}),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list retained secrets in %s: %w", n, err)
+		}
+		for i := range secs.Items {
+			if secs.Items[i].Annotations["helm.sh/resource-policy"] == "keep" {
+				out = append(out, "Secret "+n+"/"+secs.Items[i].Name)
+			}
+		}
+	}
+	if ns != s.Namespace {
+		pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("list retained volumes in %s: %w", ns, err)
+		}
+		for i := range pvcs.Items {
+			out = append(out, "PersistentVolumeClaim "+ns+"/"+pvcs.Items[i].Name)
+		}
+	}
+	return out, nil
+}
