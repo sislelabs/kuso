@@ -1,7 +1,7 @@
 package builds
 
 // Vulnerability promotion gate (docs/VULN_SCANNING.md). Sits in
-// markSucceeded after the same-repo hold: while the image's scan runs
+// markSucceeded before the same-repo hold: while the image's scan runs
 // the build stays non-terminal on the existing promote-hold annotation;
 // a blocked image ends the build failed (classification vuln-blocked)
 // and the previous image keeps serving. The gate fails OPEN — a scanner

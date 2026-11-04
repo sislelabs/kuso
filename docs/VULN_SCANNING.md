@@ -24,7 +24,7 @@ This file is the build spec AND the user doc. Sections marked _(contract)_ are b
 
 ### Promotion gate
 
-After a build's Job succeeds and before promotion (same slot as the existing promotion hold in `builds.markSucceeded`):
+After a build's Job succeeds and before promotion (in `builds.markSucceeded`, **before** the same-repo sibling hold):
 
 1. Resolve the image digest; request a scan (or reuse a < 20h result for the same digest).
 2. While the scan is pending/running the build stays non-terminal with a hold message `scanning image for vulnerabilities…` (re-checked every poller tick, like the existing hold).
@@ -36,7 +36,8 @@ After a build's Job succeeds and before promotion (same slot as the existing pro
 5. **Fail-open**: if the scan fails or is still not done 15 minutes after the gate first asked for it, promotion proceeds and `security.scan_failed` is emitted with `promoted unscanned`. A broken scanner must never freeze deploys.
    - **Circuit breaker**: when the last 3 finished scans (any reason) all failed within the last 2h, the scanner is treated as broken and every gated build fails open **immediately** instead of waiting 15 minutes. The scan is still queued, so the first success closes the breaker. `security.scan_failed` fires once per breaker-open period (per server process), not per build.
    - A scan pod that stays unschedulable (`PodScheduled=False`, reason `Unschedulable`) for more than 2 minutes, or sits Pending while the `kuso-trivy-cache` PVC is still Pending, fails at once with that reason instead of running out the 12-minute backstop.
-6. Effective mode = service policy if not `inherit`, else instance `vulnscan.mode`. Instance default: **`enforce`**. Instance `off` disables the whole feature (no gate, no nightly).
+6. **Monorepo siblings** (same-repo atomic promotion): the gate runs first, so a build waiting on its scan holds with `scanning image for vulnerabilities…` and its siblings treat it as **not green** — they wait. Only after its scan clears does a build join the sibling wait (any other hold reason). A vuln-blocked build is a failed sibling: the wave holds until it is retried green, cancelled, or the 2h hold expiry, same as any failed sibling build.
+7. Effective mode = service policy if not `inherit`, else instance `vulnscan.mode`. Instance default: **`enforce`**. Instance `off` disables the whole feature (no gate, no nightly).
 
 ### Nightly sweep
 

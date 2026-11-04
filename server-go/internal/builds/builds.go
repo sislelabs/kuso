@@ -2845,6 +2845,15 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// non-terminal with a hold annotation; the next tick re-checks.
 	// A held build superseded by a newer build of its own service is
 	// stamped terminal-not-promoted so its queue advances.
+	// Vulnerability gate (vulngate.go): runs BEFORE the same-repo hold
+	// so a build still waiting on its scan is never mistaken by its
+	// siblings for "green, waiting on the wave". While scanning it holds
+	// with VulnScanHoldMessage, which promotionHoldVerdict treats as not
+	// green; any other hold reason means the scan cleared. A vuln-blocked
+	// build is terminal failed and holds its wave like any failed sibling.
+	if stop, err := p.runVulnGate(ctx, ns, b); stop || err != nil {
+		return err
+	}
 	if !b.Spec.DryRun && shaRE.MatchString(b.Spec.Ref) {
 		all, lerr := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
 			kube.LabelProject: b.Spec.Project,
@@ -2865,13 +2874,6 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			p.notePromotionHold(ctx, ns, b, hold)
 			return nil // stays active; re-checked next tick
 		}
-	}
-	// Vulnerability gate (vulngate.go): runs once the wave is green, and
-	// reuses the hold annotation while the scan is in flight — so the
-	// hold is cleared only after it, or a scanning build would flap
-	// between held and unheld every tick.
-	if stop, err := p.runVulnGate(ctx, ns, b); stop || err != nil {
-		return err
 	}
 	p.clearPromotionHold(ctx, ns, b)
 	notDeployed := false

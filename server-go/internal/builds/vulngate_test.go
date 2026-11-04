@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -217,5 +218,63 @@ func TestVulnGate_ClockSurvivesLostSinceAnnotation(t *testing.T) {
 	}
 	if !slices.Contains(em.types(), eventScanFailed) {
 		t.Errorf("events = %v", em.types())
+	}
+}
+
+// monorepoBuild is one service's build of shaA in a same-repo wave.
+func monorepoBuild(service string, ann map[string]string) *kube.KusoBuild {
+	b := vulnGatedBuild(ann)
+	b.Name = "alpha-" + service + "-" + shaA[:7]
+	b.Labels = map[string]string{kube.LabelProject: "alpha", kube.LabelService: "alpha-" + service}
+	b.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Minute))
+	b.Spec.Service = "alpha-" + service
+	b.Spec.Ref = shaA
+	b.Spec.Branch = "main"
+	b.Spec.Repo = &kube.KusoRepoRef{URL: "https://github.com/acme/mono"}
+	b.Spec.Image = &kube.KusoImage{Repository: RegistryHost + "/alpha/" + service, Tag: shaA[:12]}
+	return b
+}
+
+// A sibling still waiting on its vulnerability scan is not green: the
+// other half of the monorepo must not promote ahead of it.
+func TestVulnGate_ScanPendingSiblingHoldsTheWave(t *testing.T) {
+	scanning := monorepoBuild("api", map[string]string{
+		annPromoteHold: VulnScanHoldMessage, annVulnGateSince: time.Now().UTC().Format(time.RFC3339),
+	})
+	web := monorepoBuild("web", nil)
+	s := fakeService(t, seedBuild(scanning), seedBuild(web), seedProductionEnv("alpha", "web"))
+	p := &Poller{Svc: s, Interval: time.Hour, VulnGate: &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnPass, Scanned: true}}}
+	ctx := context.Background()
+	if err := p.markSucceeded(ctx, "kuso", web); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := s.Kube.GetKusoEnvironment(ctx, "kuso", "alpha-web-production")
+	got, _ := s.Kube.GetKusoBuild(ctx, "kuso", web.Name)
+	if env.Spec.Image != nil && env.Spec.Image.Tag == web.Spec.Image.Tag {
+		t.Fatal("web promoted while its sibling's scan was still pending")
+	}
+	if hold := got.Annotations[annPromoteHold]; !strings.Contains(hold, "waiting for sibling build: api") {
+		t.Fatalf("web hold = %q, want a sibling wait", hold)
+	}
+	if got.Annotations[annVulnGate] != "passed" {
+		t.Errorf("web's own scan cleared before the sibling check: %v", got.Annotations)
+	}
+}
+
+// The gate runs before the sibling check, so a build held on its own
+// scan carries the scanning message, never a sibling reason.
+func TestVulnGate_RunsBeforeSiblingHold(t *testing.T) {
+	sibling := monorepoBuild("api", nil) // still building
+	web := monorepoBuild("web", nil)
+	s := fakeService(t, seedBuild(sibling), seedBuild(web), seedProductionEnv("alpha", "web"))
+	gate := &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnPending}}
+	p := &Poller{Svc: s, Interval: time.Hour, VulnGate: gate}
+	ctx := context.Background()
+	if err := p.markSucceeded(ctx, "kuso", web); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Kube.GetKusoBuild(ctx, "kuso", web.Name)
+	if len(gate.calls) != 1 || got.Annotations[annPromoteHold] != VulnScanHoldMessage {
+		t.Fatalf("gate calls=%d hold=%q, want the scan hold first", len(gate.calls), got.Annotations[annPromoteHold])
 	}
 }
