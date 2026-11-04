@@ -75,6 +75,7 @@ var sweepGuardedCommands = []struct {
 	{"node cleanup", nodeCleanupCmd, []string{"recoverable"}},
 	{"revision revert", revisionRevertCmd, []string{"overwritten"}},
 	{"addon-backup unschedule", addonBackupUnscheduleCmd, []string{"no new backups"}},
+	{"vulns ignore rm", vulnsIgnoreRmCmd, []string{"deploy gate"}},
 }
 
 func TestConfirmTypedName_FailsClosedOffTTY(t *testing.T) {
