@@ -113,7 +113,7 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	addonByCompose := map[string]addonRef{} // compose service name → addon slug+kind
 	for _, name := range names {
 		svc := proj.Services[name]
-		if kind, _ := classifyDatastore(svc.Image); kind != "" {
+		if kind, _ := addonKind(svc); kind != "" {
 			addonByCompose[name] = addonRef{slug: slugFor[name], kind: kind, composeName: name,
 				creds: datastoreCreds(kind, svc.Environment)}
 		}
@@ -122,7 +122,7 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	for _, name := range names {
 		svc := proj.Services[name]
 		slug := slugFor[name]
-		if kind, version := classifyDatastore(svc.Image); kind != "" {
+		if kind, version := addonKind(svc); kind != "" {
 			doc.Addons = append(doc.Addons, convertAddon(svc, slug, kind, version, rep))
 			continue
 		}
@@ -130,6 +130,23 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 
 	return doc, rep
+}
+
+// addonKind classifies a compose service as a managed addon. A service
+// that builds its own image stays a service even when its image name is
+// a datastore: the managed addon would run the stock image and silently
+// drop the custom build.
+func addonKind(svc types.ServiceConfig) (kind, version string) {
+	if svc.Build != nil {
+		return "", ""
+	}
+	return classifyDatastore(svc.Image)
+}
+
+// datastoreVariants are datastore images that add something the stock
+// managed addon doesn't ship.
+var datastoreVariants = map[string]string{
+	"postgis/postgis": "the postgis extension",
 }
 
 // Marshal renders the Doc as kuso.yaml bytes.
@@ -157,8 +174,12 @@ func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Repo
 	if len(svc.EnvFiles) > 0 {
 		rep.flag(svc.Name, "datastore env_file(s) NOT read — any users/passwords/db names in them are NOT carried over; kuso mints its own credentials in the addon's conn-secret")
 	}
-	if len(svc.Entrypoint) > 0 {
-		rep.skip(svc.Name, "entrypoint not imported — the managed addon runs the stock image")
+	if len(svc.Command) > 0 || len(svc.Entrypoint) > 0 {
+		rep.flag(svc.Name, "command/entrypoint %q NOT imported — the managed addon runs the stock %s server with kuso's settings; flags such as passwords, persistence or connection limits are dropped", strings.Join(append(append([]string{}, svc.Entrypoint...), svc.Command...), " "), kind)
+	}
+	repo, _ := imageParts(svc.Image)
+	if what, ok := datastoreVariants[baseImageName(repo)]; ok {
+		rep.flag(svc.Name, "image %q includes %s, but the managed %s addon runs the stock image — anything relying on it (e.g. CREATE EXTENSION postgis) will fail", svc.Image, what, kind)
 	}
 	verNote := version
 	if verNote == "" {
@@ -177,6 +198,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 	case svc.Build != nil:
 		out.Runtime = "dockerfile"
 		rep.service(svc.Name, "build context %q → runtime=dockerfile; set `repo:` to the service's git URL before deploying", svc.Build.Context)
+		if kind, _ := classifyDatastore(svc.Image); kind != "" {
+			rep.flag(svc.Name, "image %q is a %s datastore but the service has its own build — kept as a service (NOT a managed %s addon) so the custom build isn't lost; it gets no conn-secret or backups", svc.Image, kind, kind)
+		}
 		rep.flag(svc.Name, "no repo set — kuso builds from a git repo; fill in `repo:` for service `%s`", slug)
 		if p := repoSubPath(svc.Build.Context); p != "" {
 			out.Path = p

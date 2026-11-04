@@ -121,6 +121,38 @@ services:
 	}
 }
 
+func TestConvert_DatastoreCustomisationsNotSilentlyDropped(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  custompg:
+    image: postgres:16
+    build: ./custom-pg
+  cache:
+    image: redis:7
+    command: redis-server --requirepass x --appendonly yes
+  geo:
+    image: postgis/postgis:16-3.4
+`)
+	if findAddon(doc, "custompg") != nil {
+		t.Error("a datastore image with build: must stay a service (the custom build would be lost)")
+	}
+	if s := findService(doc, "custompg"); s == nil || s.Runtime != "dockerfile" {
+		t.Errorf("custompg should be a dockerfile service, got %+v", s)
+	}
+	if !hasFlag(rep, "custompg", "build") {
+		t.Error("custompg: keeping it as a service should be flagged")
+	}
+	if findAddon(doc, "cache") == nil {
+		t.Fatal("cache should still become an addon")
+	}
+	if !hasFlag(rep, "cache", "command") {
+		t.Error("cache: dropped datastore command must be flagged")
+	}
+	if !hasFlag(rep, "geo", "postgis") {
+		t.Error("geo: postgis variant mapped onto stock postgres must be flagged")
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}
