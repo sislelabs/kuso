@@ -215,7 +215,6 @@ func main() {
 	defer stop()
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
-	const workerDrain = 30 * time.Second
 	// ctx is the alias most code below uses for "the long-running
 	// context" — point it at workerCtx so existing callers extend
 	// their lifetime through drain. The HTTP server is shut down
@@ -1608,12 +1607,11 @@ func main() {
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
-	// Step 1: stop accepting new HTTP requests. 30s deadline gives
+	// Step 1: stop accepting new HTTP requests. The deadline gives
 	// in-flight WS log-tails room to close their conn frame after
-	// their BaseContext (sigCtx) cancels — pre-bump 10s wasn't
-	// enough and rolling updates left orphan WS readers on the
-	// outgoing pod.
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+	// their BaseContext (sigCtx) cancels — 10s wasn't enough and
+	// rolling updates left orphan WS readers on the outgoing pod.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
@@ -1628,9 +1626,20 @@ func main() {
 	// Brief settle to let any goroutine that read ctx.Done() finish
 	// its return path. Doesn't need to be exact — Postgres
 	// connections close fast.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(shutdownSettle)
 	logger.Info("shutdown complete")
 }
+
+// Shutdown budget. preStop (deploy/server-go.yaml) + these must stay
+// inside terminationGracePeriodSeconds, or SIGKILL lands before
+// cancelWorkers releases the leader leases (ReleaseOnCancel) and the
+// next pod waits a whole LeaseDuration with no singletons running.
+// TestShutdownFitsTerminationGrace enforces it.
+const (
+	httpShutdownTimeout = 20 * time.Second
+	workerDrain         = 15 * time.Second
+	shutdownSettle      = 500 * time.Millisecond
+)
 
 // parseTTL accepts the same "<seconds>s" form the TS server's
 // JWT_EXPIRESIN env honours, plus standard Go duration strings. Empty
