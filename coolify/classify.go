@@ -64,11 +64,15 @@ func ClassifyDatabase(d Database) Verdict {
 	case "redis":
 		return Verdict{Kind: KindDatabase, Action: "migrate", Reason: "redis → KusoAddon kind=redis"}
 	case "mongodb":
-		return Verdict{Kind: KindDatabase, Action: "flag", Reason: "mongodb addon is skeleton-only on kuso v0.6 — review before migrating"}
-	case "mysql", "mariadb":
-		return Verdict{Kind: KindDatabase, Action: "flag", Reason: short + " addon is skeleton-only on kuso v0.6 — review before migrating"}
-	case "clickhouse", "dragonfly", "keydb":
-		return Verdict{Kind: KindDatabase, Action: "flag", Reason: short + " is unsupported on kuso v0.6 — manual migration"}
+		return Verdict{Kind: KindDatabase, Action: "migrate", Reason: "mongodb → KusoAddon kind=mongodb"}
+	case "mysql":
+		return Verdict{Kind: KindDatabase, Action: "migrate", Reason: "mysql → KusoAddon kind=mysql"}
+	case "clickhouse":
+		return Verdict{Kind: KindDatabase, Action: "migrate", Reason: "clickhouse → KusoAddon kind=clickhouse"}
+	case "mariadb":
+		return Verdict{Kind: KindDatabase, Action: "flag", Reason: "mariadb has no kuso addon — the closest is kind=mysql; verify dump/restore compatibility, then create it by hand"}
+	case "dragonfly", "keydb":
+		return Verdict{Kind: KindDatabase, Action: "flag", Reason: short + " has no kuso addon — redis or valkey are the closest; manual migration"}
 	default:
 		return Verdict{Kind: KindDatabase, Action: "flag", Reason: "unknown database_type=" + d.DatabaseType + " — review manually"}
 	}
@@ -89,6 +93,8 @@ func AddonKindFromCoolify(coolifyType string) string {
 		return "mysql"
 	case "mariadb":
 		return "mysql" // closest kuso equivalent; addon helm doesn't distinguish
+	case "clickhouse":
+		return "clickhouse"
 	}
 	return ""
 }
