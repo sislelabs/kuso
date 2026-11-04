@@ -95,6 +95,13 @@ type Activator struct {
 	activityMu sync.Mutex
 	lastStamp  map[string]time.Time
 
+	// readyMu / readyAt remember when each env (ns/name) was last seen
+	// with a ready endpoint, so the per-request fast path doesn't LIST
+	// EndpointSlices on every proxied request. A ClusterRole without
+	// endpointslices watch rules out an informer; see fastReady.
+	readyMu sync.Mutex
+	readyAt map[string]time.Time
+
 	// nowFn is time.Now, overridable in tests. Read via now().
 	nowFn func() time.Time
 }
@@ -139,6 +146,7 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		hostTTL:        30 * time.Second,
 		proxyTransport: newProxyTransport(hold),
 		lastStamp:      map[string]time.Time{},
+		readyAt:        map[string]time.Time{},
 		nowFn:          time.Now,
 	}
 }
@@ -247,6 +255,7 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	proxy.Transport = a.proxyTransport
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		a.logger.Warn("activator: proxy error", "ns", ns, "env", env, "err", perr)
+		a.forgetReady(ns, env)
 		rw.Header().Set("Retry-After", "2")
 		http.Error(rw, "service is starting, please retry", http.StatusServiceUnavailable)
 	}
@@ -449,7 +458,7 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	// or the route reached us a beat late.) Endpoint-ready, not just
 	// deployment-ready, so we never hand back to the proxy before the
 	// Service can route.
-	if ready, _ := a.endpointReady(ctx, ns, name); ready {
+	if a.fastReady(ctx, ns, name) {
 		return nil
 	}
 
@@ -514,6 +523,7 @@ func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 	defer ticker.Stop()
 	for {
 		if ready, _ := a.endpointReady(ctx, ns, name); ready {
+			a.markReady(ns, name)
 			return nil
 		}
 		select {
@@ -522,6 +532,54 @@ func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+const (
+	// readyTTL is how long a ready observation answers the fast path
+	// without a LIST. Short: sleep only ever follows a long idle period,
+	// and a proxy dial failure drops the entry (forgetReady).
+	readyTTL = 2 * time.Second
+	// readyStaleOnError is how long a ready observation still counts when
+	// the LIST itself fails. An apiserver blip must not read as "asleep"
+	// for an env that was serving moments ago.
+	readyStaleOnError = 30 * time.Second
+)
+
+// fastReady is the per-request readiness check. It serves recent ready
+// observations from memory and only LISTs past readyTTL. A LIST error is
+// "unknown", not "asleep": a recently-ready env is still proxied.
+func (a *Activator) fastReady(ctx context.Context, ns, name string) bool {
+	key := ns + "/" + name
+	now := a.now()
+	a.readyMu.Lock()
+	last, seen := a.readyAt[key]
+	a.readyMu.Unlock()
+	if seen && now.Sub(last) < readyTTL {
+		return true
+	}
+	ready, err := a.endpointReady(ctx, ns, name)
+	if err != nil {
+		a.logger.Warn("activator: endpoint readiness unknown", "ns", ns, "env", name, "err", err)
+		return seen && now.Sub(last) < readyStaleOnError
+	}
+	if ready {
+		a.markReady(ns, name)
+	} else {
+		a.forgetReady(ns, name)
+	}
+	return ready
+}
+
+func (a *Activator) markReady(ns, name string) {
+	a.readyMu.Lock()
+	a.readyAt[ns+"/"+name] = a.now()
+	a.readyMu.Unlock()
+}
+
+func (a *Activator) forgetReady(ns, name string) {
+	a.readyMu.Lock()
+	delete(a.readyAt, ns+"/"+name)
+	a.readyMu.Unlock()
 }
 
 // endpointReady reports whether the env's Service (same name as the env)
