@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,8 +30,13 @@ import (
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/serverstate"
 )
+
+// plannedRebootGrace is how long a node mid host-patch reboot may stay
+// NotReady before nodewatch pages (slow BIOS, fsck).
+const plannedRebootGrace = 30 * time.Minute
 
 const (
 	// CordonAnnotation marks nodes that nodewatch cordoned itself, so
@@ -249,7 +255,14 @@ func (w *Watcher) tick(ctx context.Context) {
 			w.alerted[n.Name] = struct{}{}
 			continue
 		}
-		if now.Sub(first) < w.Config.threshold() {
+		threshold := w.Config.threshold()
+		// A host-patch reboot (pkgupdates' cordon marker) is planned
+		// downtime: give it room before paging, but still page if the
+		// node never comes back.
+		if n.Annotations[pkgupdates.CordonAnnotation] == "true" && threshold < plannedRebootGrace {
+			threshold = plannedRebootGrace
+		}
+		if now.Sub(first) < threshold {
 			continue
 		}
 		// We DO mark alerted optimistically here so subsequent ticks
@@ -300,6 +313,13 @@ func (w *Watcher) tick(ctx context.Context) {
 			// Best-effort; a kube outage here just leaves the field off.
 			if count := w.countPodsOnNode(ctx, a.node.Name); count > 0 {
 				a.emit = notify.NodeUnreachable(a.node.Name, reasonFor(a.node), a.downFor, count)
+			}
+			// cordon() leaves an already-unschedulable node alone, so
+			// don't claim we cordoned it.
+			if a.node.Spec.Unschedulable {
+				a.emit.Description = strings.Replace(a.emit.Description,
+					"auto-cordoned, new pods won't schedule here.",
+					"already cordoned (not by kuso), new pods won't schedule here.", 1)
 			}
 			w.Notify.Emit(a.emit)
 		case "uncordon":
