@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/safego"
 )
 
 // Severity ranks an issue for sorting + UI emphasis.
@@ -302,13 +303,13 @@ func (s *Scanner) classifyEnvImages(ctx context.Context, envs []kube.KusoEnviron
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int) {
+		safego.Go(nil, "reconcilehealth-image-probe", func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if iss, ok := ClassifyEnvImage(ctx, s.Images, s.RegistryHost, &envs[i]); ok {
 				out[i] = &iss
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 	return out

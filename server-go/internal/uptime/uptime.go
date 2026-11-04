@@ -9,6 +9,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/safego"
 	"kuso/server/internal/serverstate"
 )
 
@@ -305,6 +306,17 @@ type transition struct {
 	down         bool
 }
 
+// safeProbe runs w.Probe, turning a panic into ok=false.
+func (w *Watcher) safeProbe(ctx context.Context, url string) (r Result, ok bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			w.Logger.Error("uptime: probe panicked; recovered", "url", url, "panic", p)
+			ok = false
+		}
+	}()
+	return w.Probe(ctx, url), true
+}
+
 // probeAll checks targets with a bounded worker pool. A target missing
 // from the result wasn't checked before the budget ran out.
 func (w *Watcher) probeAll(ctx context.Context, targets []Target) map[string]Result {
@@ -314,21 +326,24 @@ func (w *Watcher) probeAll(ctx context.Context, targets []Target) map[string]Res
 	work := make(chan Target)
 	for i := 0; i < probeWorkers; i++ {
 		wg.Add(1)
-		go func() {
+		// safego keeps a panicking probe from killing the process; the
+		// worker then stops, so recover per target too, or a dead pool
+		// would block the sender below.
+		safego.Go(w.Logger, "uptime-probe", func() {
 			defer wg.Done()
 			for t := range work {
 				if ctx.Err() != nil {
 					continue
 				}
-				r := w.Probe(ctx, t.URL)
-				if ctx.Err() != nil {
-					continue // cut short by the budget, not by the app
+				r, ok := w.safeProbe(ctx, t.URL)
+				if !ok || ctx.Err() != nil {
+					continue // panicked, or cut short by the budget
 				}
 				mu.Lock()
 				results[t.Key()] = r
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	for _, t := range targets {
 		work <- t
