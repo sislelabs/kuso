@@ -38,6 +38,7 @@ import {
   type ContextMenuEntry,
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
+import { canvasVulnBadges, useProjectVulns } from "@/features/vulns";
 import { servicesQueryKey } from "@/features/projects";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { anySurfaceOpen } from "@/lib/escape-layer";
@@ -163,6 +164,13 @@ export function ProjectCanvas({
   // dangling edge) and there's a single source of truth.
   const visibleAddons: KusoAddon[] = addons;
 
+  // One rollup request per project; every node reads its badge from it.
+  const projectVulns = useProjectVulns(project);
+  const vulnBadges = useMemo(
+    () => canvasVulnBadges(projectVulns.data?.images ?? [], project, selectedEnv),
+    [projectVulns.data, project, selectedEnv],
+  );
+
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     services.forEach((s) => {
@@ -194,7 +202,13 @@ export function ProjectCanvas({
         id: `svc:${s.metadata.name}`,
         type: "service",
         position: { x: 0, y: 0 },
-        data: { project, service: s, env, latestBuild } satisfies ServiceNodeData,
+        data: {
+          project,
+          service: s,
+          env,
+          latestBuild,
+          fixableCritical: vulnBadges.services[shortName],
+        } satisfies ServiceNodeData,
       });
     });
     visibleAddons.forEach((a) => {
@@ -202,7 +216,11 @@ export function ProjectCanvas({
         id: `addon:${a.metadata.name}`,
         type: "addon",
         position: { x: 0, y: 0 },
-        data: { project, addon: a } satisfies AddonNodeData,
+        data: {
+          project,
+          addon: a,
+          fixableCritical: vulnBadges.addons[serviceShortName(project, a.metadata.name)],
+        } satisfies AddonNodeData,
       });
     });
     (allCrons.data ?? []).forEach((c) => {
@@ -214,7 +232,7 @@ export function ProjectCanvas({
       });
     });
     return out;
-  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data]);
+  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnBadges]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];

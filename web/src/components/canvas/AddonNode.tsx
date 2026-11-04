@@ -5,10 +5,13 @@ import { MoreHorizontal } from "lucide-react";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
+import { VulnNodeBadge } from "@/components/vulns/VulnNodeBadge";
 
 export interface AddonNodeData extends Record<string, unknown> {
   project: string;
   addon: KusoAddon;
+  // Fixable critical CVEs in the live image (project vulns rollup).
+  fixableCritical?: number;
   __onContext?: (e: React.MouseEvent) => void;
 }
 
@@ -73,7 +76,10 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       <div className="flex items-center gap-2 pr-7">
         <AddonIcon kind={data.addon.spec.kind} className="h-5 w-5" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{data.addon.metadata.name}</p>
+          <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+            <span className="truncate">{data.addon.metadata.name}</span>
+            <VulnNodeBadge count={data.fixableCritical} />
+          </p>
           <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
             {/* Three pieces of glance info packed onto one line:
                  - kind + version  (Postgres · 16)
