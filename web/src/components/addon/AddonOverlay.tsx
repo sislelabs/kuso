@@ -52,17 +52,28 @@ export function useAddonOverlayDirty(
   }
 ) {
   const api = useContext(AddonOverlayDirtyContext);
+  // Same loop guard as useOverlayDirty in ServiceOverlay: callers pass
+  // fresh closures every render, and registering them directly re-ran
+  // the effect → setPanel → re-render forever. Read them through refs.
+  const onSaveRef = useRef(opts?.onSave);
+  const onDiscardRef = useRef(opts?.onDiscard);
+  useEffect(() => {
+    onSaveRef.current = opts?.onSave;
+    onDiscardRef.current = opts?.onDiscard;
+  });
+  const hasSave = !!opts?.onSave;
+  const hasDiscard = !!opts?.onDiscard;
   useEffect(() => {
     if (!api) return;
     api.setPanel(panelKey, {
       dirty,
-      onSave: opts?.onSave,
-      onDiscard: opts?.onDiscard,
+      onSave: hasSave ? () => onSaveRef.current?.() : undefined,
+      onDiscard: hasDiscard ? () => onDiscardRef.current?.() : undefined,
       saving: opts?.saving,
       saveError: opts?.saveError,
     });
     return () => api.clearPanel(panelKey);
-  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
+  }, [api, panelKey, dirty, hasSave, hasDiscard, opts?.saving, opts?.saveError]);
 }
 
 type Tab = "overview" | "backups" | "sql" | "settings";
