@@ -44,6 +44,29 @@ func TestSenderPostsHeadersAndSignature(t *testing.T) {
 	}
 }
 
+// LOOP-24: the body-only signature lets a captured batch be replayed with
+// a fresh X-Kuso-Timestamp. X-Kuso-Signature-V2 binds the timestamp.
+func TestSenderSignsTimestamp(t *testing.T) {
+	var ts, sig string
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts, sig = r.Header.Get("X-Kuso-Timestamp"), r.Header.Get("X-Kuso-Signature-V2")
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	s := &Sender{Client: srv.Client(), Retry: fastRetry()}
+	if err := s.Deliver(context.Background(), Drain{Type: TypeHTTP, URL: srv.URL, Secret: "k"}, sampleLines()); err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte("k"))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	if want := hex.EncodeToString(mac.Sum(nil)); ts == "" || sig != want {
+		t.Fatalf("X-Kuso-Signature-V2 = %q (ts %q), want HMAC(ts.body) %q", sig, ts, want)
+	}
+}
+
 func TestSenderRetriesTransientThenSucceeds(t *testing.T) {
 	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
