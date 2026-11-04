@@ -253,3 +253,43 @@ func TestVulnPolicy_InheritDeletes(t *testing.T) {
 		t.Fatalf("after inherit = %q", m)
 	}
 }
+
+func TestClaimNextVulnScan_RacingClaimLosesCleanly(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	a, _, _ := d.EnqueueVulnScan(ctx, VulnScanRequest{Digest: "sha256:a", ImageRef: "r@a", Reason: VulnReasonNightly})
+	if _, _, err := d.EnqueueVulnScan(ctx, VulnScanRequest{Digest: "sha256:b", ImageRef: "r@b", Reason: VulnReasonNightly}); err != nil {
+		t.Fatal(err)
+	}
+	// Another leader's claim of a, not yet committed: our claim can't
+	// see it, so only the index stops a second running scan.
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE "VulnScan" SET "status"='running' WHERE "id"=$1`, a); err != nil {
+		t.Fatal(err)
+	}
+	type res struct {
+		s   *VulnScan
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		s, err := d.ClaimNextVulnScan(ctx)
+		done <- res{s, err}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.s != nil {
+		t.Fatalf("a claim racing a running scan must come back empty, got %+v %v", r.s, r.err)
+	}
+	var running int
+	if err := d.QueryRowContext(ctx, `SELECT count(*) FROM "VulnScan" WHERE "status"='running'`).Scan(&running); err != nil || running != 1 {
+		t.Fatalf("running scans = %d (%v), want 1", running, err)
+	}
+}

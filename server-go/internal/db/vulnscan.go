@@ -333,6 +333,9 @@ func (d *DB) ClaimNextVulnScan(ctx context.Context) (*VulnScan, error) {
 			LIMIT 1 FOR UPDATE SKIP LOCKED)
 		AND NOT EXISTS (SELECT 1 FROM "VulnScan" WHERE "status" = 'running')
 		RETURNING `+vulnScanCols)
+	if IsUniqueViolation(err) {
+		return nil, nil // another claim won the race for the one running slot
+	}
 	if err != nil {
 		return nil, fmt.Errorf("claim vuln scan: %w", err)
 	}

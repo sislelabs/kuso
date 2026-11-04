@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS "VulnScan" (
 );
 CREATE INDEX IF NOT EXISTS "VulnScan_digest_idx" ON "VulnScan" ("digest", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "VulnScan_status_idx" ON "VulnScan" ("status") WHERE "status" IN ('queued', 'running');
+-- Global scan concurrency is one: at most one running row, enforced
+-- here because two claims can each miss the other's uncommitted row.
+CREATE UNIQUE INDEX IF NOT EXISTS "VulnScan_one_running_idx" ON "VulnScan" ((true)) WHERE "status" = 'running';
 
 CREATE TABLE IF NOT EXISTS "VulnFinding" (
     "scanId"           BIGINT NOT NULL REFERENCES "VulnScan" ("id") ON DELETE CASCADE,
