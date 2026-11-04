@@ -30,6 +30,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"kuso/server/internal/linescan"
 )
 
 // Caps. maxTailLinesPerPod bounds the historical tail kube returns
@@ -519,6 +521,7 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
 	read := 0
 	for scanner.Scan() {
 		read++
