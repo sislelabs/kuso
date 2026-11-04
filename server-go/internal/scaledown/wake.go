@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,13 +48,28 @@ func Wake(ctx context.Context, kc *kube.Client, logger *slog.Logger, ns, name st
 		logger.Warn("scaledown: persist wake on env", "ns", ns, "env", name, "err", uerr)
 	}
 
-	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, want))
+	// Only raise a Deployment that is actually at 0. The "test" op makes
+	// the scale-up conditional server-side: an awake env (a request that
+	// arrived while endpoints were briefly unready) must never be patched
+	// down to the pre-sleep count, which is 1 when the annotation is
+	// absent. A JSON patch rather than GET+patch because the activator's
+	// RBAC only grants deployments patch.
+	patch := []byte(fmt.Sprintf(
+		`[{"op":"test","path":"/spec/replicas","value":0},{"op":"replace","path":"/spec/replicas","value":%d}]`, want))
 	_, err := kc.Clientset.AppsV1().Deployments(ns).Patch(
-		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+		ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{})
+	if err != nil && !apierrors.IsNotFound(err) && !replicasTestFailed(err) {
 		return fmt.Errorf("scale deployment: %w", err)
 	}
 	return nil
+}
+
+// replicasTestFailed reports whether a Wake patch was refused because the
+// Deployment is not at 0 replicas (already awake). The apiserver maps a
+// failed JSON-patch test to 422; the fake client passes the jsonpatch error
+// through verbatim.
+func replicasTestFailed(err error) bool {
+	return apierrors.IsInvalid(err) || strings.Contains(err.Error(), "testing value")
 }
 
 // preSleepReplicas reads the count scaledown stashed before sleeping the

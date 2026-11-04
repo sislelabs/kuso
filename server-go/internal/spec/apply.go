@@ -357,6 +357,16 @@ func toKubeSecurityContext(s *SecuritySpec) *kube.KusoSecurityContext {
 	return out
 }
 
+// securityContextPatch is the declarative-reset form for updates: an
+// omitted block sends an explicit empty context (PatchService clears the
+// field) instead of nil, which PatchService reads as "leave alone".
+func securityContextPatch(s *SecuritySpec) *kube.KusoSecurityContext {
+	if s == nil {
+		return &kube.KusoSecurityContext{}
+	}
+	return toKubeSecurityContext(s)
+}
+
 // servicePatchReq maps a ServiceSpec to the partial update request.
 // This is the declarative reset: every field is set unconditionally
 // (a pointer to the value, even when zero) so an omitted YAML field
@@ -512,7 +522,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Release:           release,
 		BuildArgs:         &buildArgs,
 		PublicEnv:         &publicEnv,
-		SecurityContext:   toKubeSecurityContext(s.SecurityContext),
+		SecurityContext:   securityContextPatch(s.SecurityContext),
 		WatchPaths:        &watchPaths,
 	}
 }

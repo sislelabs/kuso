@@ -67,33 +67,10 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 	}
 	envCRName := envCRNameFor(project, service, envName)
 
-	// Pre-flight: same host can't be on another env in the same
-	// project (or any namespace really, but k8s Ingress admission
-	// catches cross-NS). Catching it here gives a nicer error than
-	// the operator's "Ingress conflict: another Ingress claims X".
-	existing, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		labelProject: project,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list envs for conflict check: %w", err)
-	}
-	for i := range existing {
-		if existing[i].Name == envCRName {
-			continue
-		}
-		if strings.EqualFold(existing[i].Spec.Host, host) {
-			return nil, fmt.Errorf("%w: %q is the primary host of env %q", ErrConflict, host, existing[i].Name)
-		}
-		for _, h := range existing[i].Spec.AdditionalHosts {
-			if strings.EqualFold(h, host) {
-				return nil, fmt.Errorf("%w: %q already on env %q", ErrConflict, host, existing[i].Name)
-			}
-		}
-		for _, w := range existing[i].Spec.WildcardDomains {
-			if strings.EqualFold(w.Host, host) {
-				return nil, fmt.Errorf("%w: %q already on env %q", ErrConflict, host, existing[i].Name)
-			}
-		}
+	// Pre-flight: the host can't be on another env anywhere in the
+	// cluster (neither kube nor Traefik rejects duplicate Ingress hosts).
+	if err := s.checkHostsFree(ctx, envCRName, host); err != nil {
+		return nil, err
 	}
 
 	var before []string
@@ -219,29 +196,28 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 		clean = append(clean, h)
 	}
 
-	// Cross-env conflict scan — every new host must NOT be claimed by
-	// any other env in this project (either as primary host or
-	// additional host).
-	existing, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		labelProject: project,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list envs for conflict check: %w", err)
+	// Cross-env conflict scan over hosts this env doesn't already serve:
+	// a host it already holds is grandfathered, so an unrelated edit
+	// can't fail on a duplicate that predates the cluster-wide check.
+	// A missing env falls through to the update below, which reports it.
+	held := map[string]bool{}
+	cur, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRName)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("get env: %w", err)
 	}
-	for _, h := range clean {
-		for i := range existing {
-			if existing[i].Name == envCRName {
-				continue
-			}
-			if strings.EqualFold(existing[i].Spec.Host, h) {
-				return nil, fmt.Errorf("%w: %q is the primary host of env %q", ErrConflict, h, existing[i].Name)
-			}
-			for _, eh := range existing[i].Spec.AdditionalHosts {
-				if strings.EqualFold(eh, h) {
-					return nil, fmt.Errorf("%w: %q already on env %q", ErrConflict, h, existing[i].Name)
-				}
-			}
+	if cur != nil {
+		for _, h := range envHostsOf(cur) {
+			held[strings.ToLower(h)] = true
 		}
+	}
+	var added []string
+	for _, h := range clean {
+		if !held[h] {
+			added = append(added, h)
+		}
+	}
+	if err := s.checkHostsFree(ctx, envCRName, added...); err != nil {
+		return nil, err
 	}
 
 	var before []string

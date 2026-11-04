@@ -1059,7 +1059,15 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcRequestLimits *kube.KusoRequestLimits
 	var svcHealthcheck *kube.KusoHealthcheck
 	var svcPublicEnv []string
-	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
+	// Fail closed: building the preview from zero values would publish an
+	// internal service, skip its release hook and mount every addon, and
+	// the update path below would overwrite a correct preview with that.
+	// Leave the env untouched; the next push retries.
+	svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN)
+	if err != nil {
+		return fmt.Errorf("get service %s for PR #%d preview: %w", serviceFQN, pr.Number, err)
+	}
+	if svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
 		}
@@ -1385,6 +1393,16 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			return fmt.Errorf("update preview env: %w", err)
 		}
 	} else {
+		// Only a new preview claims its host; an existing one keeps it.
+		all, err := d.Kube.ListKusoEnvironments(ctx, "")
+		if err != nil {
+			return fmt.Errorf("list envs for preview host check: %w", err)
+		}
+		if holder := previewHostHolder(all, env.Spec.Host, env.Name); holder != "" {
+			cerr := fmt.Errorf("preview host %q is already served by %s", env.Spec.Host, holder)
+			d.notifyPreviewRefused(proj.Name, short, pr.Number, cerr)
+			return cerr
+		}
 		if _, err := d.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 			return fmt.Errorf("create preview env: %w", err)
 		}
@@ -1461,6 +1479,26 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 
 // notifyPreviewRefused reports a preview that was not deployed so the
 // failure is visible outside the server log.
+// previewHostHolder names what already serves host (another env anywhere
+// in the cluster, or the kuso control plane), or "" when it is free. Two
+// Ingresses on one host make Traefik route by tie-break.
+func previewHostHolder(envs []kube.KusoEnvironment, host, self string) string {
+	if strings.EqualFold(host, config.DefaultBaseDomain()) {
+		return "the kuso control plane"
+	}
+	for i := range envs {
+		if envs[i].Name == self {
+			continue
+		}
+		if strings.EqualFold(envs[i].Spec.Host, host) || slices.ContainsFunc(envs[i].Spec.AdditionalHosts, func(h string) bool {
+			return strings.EqualFold(h, host)
+		}) {
+			return "env " + envs[i].Name
+		}
+	}
+	return ""
+}
+
 func (d *Dispatcher) notifyPreviewRefused(project, service string, prNumber int, cause error) {
 	if d.Notifier == nil {
 		return

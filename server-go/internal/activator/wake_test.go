@@ -82,3 +82,38 @@ func TestDoWake_StampsActivityBeforeScalingUp(t *testing.T) {
 		t.Fatalf("replicas after wake = %d, want 2 (pre-sleep count)", got)
 	}
 }
+
+// LIFE-01: a request that lands while an AWAKE env's endpoints are briefly
+// unready takes the wake path. Wake must only ever scale up; it used to
+// patch replicas to the pre-sleep count (1 when unset), collapsing a
+// 4-replica env to 1.
+func TestDoWake_NeverScalesAwakeDeploymentDown(t *testing.T) {
+	const ns, name = "kuso", "app-web-production"
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
+	env := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+		"kind":       "KusoEnvironment",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec":       map[string]any{"replicaCount": int64(4)},
+	}}
+	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
+		t.Fatalf("seed env: %v", err)
+	}
+	four := int32(4)
+	cs := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &four},
+	})
+	a := New(&kube.Client{Clientset: cs, Dynamic: dyn}, slog.Default())
+	if err := a.doWake(context.Background(), ns, name); err != nil {
+		t.Fatalf("doWake: %v", err)
+	}
+	dep, err := cs.AppsV1().Deployments(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got := *dep.Spec.Replicas; got != 4 {
+		t.Fatalf("replicas after wake of an awake env = %d, want 4 (untouched)", got)
+	}
+}

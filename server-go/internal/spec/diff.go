@@ -351,10 +351,10 @@ func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.Patc
 		add("publicEnv", from, to, false)
 	}
 
-	// SecurityContext: nil in the request means "leave alone", so only
-	// a declared block can differ.
+	// SecurityContext: an empty context is the reset for an omitted
+	// block and equals an absent live one.
 	if req.SecurityContext != nil {
-		from, to = renderJSON(ls.SecurityContext), renderJSON(req.SecurityContext)
+		from, to = renderJSON(normSecurityContext(ls.SecurityContext)), renderJSON(normSecurityContext(req.SecurityContext))
 		if from == to {
 			req.SecurityContext = nil
 		} else {
@@ -792,6 +792,13 @@ func renderJSON(v any) string {
 		return fmt.Sprint(v)
 	}
 	return string(b)
+}
+
+func normSecurityContext(s *kube.KusoSecurityContext) *kube.KusoSecurityContext {
+	if s.IsDefault() {
+		return nil
+	}
+	return s
 }
 
 func normStatic(s *kube.KusoStaticSpec) *kube.KusoStaticSpec {

@@ -422,6 +422,11 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		if err := s.checkReleaseNameFree(ctx, ns, cloneSvc, cloneSvc+"-production"); err != nil {
 			return nil, err
 		}
+		if services[i].Spec.Runtime != "worker" {
+			if err := s.checkHostsFree(ctx, "", buildEnvHost(proj.Spec.BaseDomain, project, short, req.Name)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Track what we created so we can roll back on partial failure.

@@ -91,6 +91,29 @@ func TestRetryTransport_RetriesDialRaceUntilSuccess(t *testing.T) {
 	}
 }
 
+// LIFE-08: an app refusing connections forever must not pin a goroutine
+// for as long as the client stays connected; retries stop at the budget.
+func TestRetryTransport_StopsAtBudget(t *testing.T) {
+	t.Parallel()
+	rt := &retryTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp 10.0.0.1:80: connect: connection refused")
+	}), wait: time.Millisecond, budget: 30 * time.Millisecond}
+	req, _ := http.NewRequest("GET", "http://x/", nil)
+	done := make(chan error, 1)
+	go func() {
+		_, err := rt.RoundTrip(req)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want an error once the retry budget is spent")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RoundTrip still retrying long after its budget")
+	}
+}
+
 func TestRetriableDialErr(t *testing.T) {
 	t.Parallel()
 	retri := []string{

@@ -324,7 +324,7 @@ func (w *Watcher) routedViaActivator(ctx context.Context, ns, envName string) bo
 			continue
 		}
 		for _, p := range r.HTTP.Paths {
-			if p.Backend.Service != nil && activatorBackend(p.Backend.Service.Name) {
+			if p.Backend.Service != nil && activatorBackend(p.Backend.Service.Name, envName) {
 				return true
 			}
 		}

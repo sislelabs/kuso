@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"kuso/server/internal/addons"
@@ -494,32 +495,41 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	var errs []error
 	for i := range envs {
 		env := &envs[i]
-		// defaultHost takes the SHORT service name (the env auto-host is
-		// "<short>.<base>"), but env.Spec.Service is the FQN
-		// "<project>-<short>". Strip the prefix — otherwise `expected`
-		// becomes "<project>-<short>.<base>" which never matches the
-		// stored "<short>.<base>", the guard below always treats the env
-		// as user-customised, and a base-domain change silently never
-		// rewrites any env host.
+		// The generators take the SHORT service name, but
+		// env.Spec.Service is the FQN "<project>-<short>". Strip the
+		// prefix, or `expected` never matches and every env reads as
+		// user-customised.
 		short := shortServiceName(project, env.Spec.Service)
-		expected := defaultHost(short, project, oldBase)
-		if env.Spec.Host != expected {
+		// webHostForEnv covers production, custom-env and env-group
+		// clone shapes. Previews return "": the PR dispatcher rewrites
+		// their host on the next sync.
+		expected := webHostForEnv(env, project, short, oldBase)
+		if expected == "" || env.Spec.Host != expected {
 			// User-customised host — leave it.
+			continue
+		}
+		newHost := webHostForEnv(env, project, short, newBase)
+		if newHost == env.Spec.Host {
+			continue
+		}
+		if err := s.checkHostsFree(ctx, env.Name, newHost); err != nil {
+			errs = append(errs, fmt.Errorf("env %s keeps %s: %w", env.Name, env.Spec.Host, err))
 			continue
 		}
 		// RMW retry so a status-patch race doesn't lose the new
 		// host while the helm-operator status-patches in parallel.
 		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
-			live.Spec.Host = defaultHost(short, project, newBase)
+			live.Spec.Host = newHost
 			live.Spec.TLSHosts = computeTLSHosts(live.Spec.Host, live.Spec.AdditionalHosts)
 			return nil
 		}); uerr != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, uerr)
+			errs = append(errs, fmt.Errorf("update env %s: %w", env.Name, uerr))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // propagateDefaultBranch restamps env.Spec.Branch on every owned env
@@ -654,6 +664,45 @@ func rescopeServiceRefLiterals(in []kube.KusoEnvVar, ns, envScope string) []kube
 	}
 	return out
 }
+
+// warnMissingServiceRefTargets logs every rescoped in-cluster service URL
+// whose target Service doesn't exist yet. The rescope is deliberate (a
+// staging env must not call the production sibling, and the usual flow
+// adds the sibling's env next), but until then those calls fail with
+// NXDOMAIN while the env's own pods look healthy.
+func (s *Service) warnMissingServiceRefTargets(ctx context.Context, ns, project, self string, vars []kube.KusoEnvVar) {
+	suffix := "." + ns + ".svc.cluster.local"
+	var targets []string
+	for _, e := range vars {
+		if e.ValueFrom != nil {
+			continue
+		}
+		for _, m := range serviceRefHostRE.FindAllStringSubmatch(e.Value, -1) {
+			if strings.HasSuffix(m[0], suffix) && m[1] != self && !slices.Contains(targets, m[1]) {
+				targets = append(targets, m[1])
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, t := range targets {
+		if !slices.ContainsFunc(envs, func(e kube.KusoEnvironment) bool { return e.Name == t }) {
+			missing = append(missing, t)
+		}
+	}
+	if len(missing) > 0 {
+		slog.WarnContext(ctx, "new env references sibling services with no env in its scope yet; calls to them fail until those envs exist",
+			"project", project, "env", self, "missing", missing)
+	}
+}
+
+var serviceRefHostRE = regexp.MustCompile(`([a-z0-9][a-z0-9-]*)\.[a-z0-9-]+\.svc\.cluster\.local`)
 
 // ensureEnvClones adds the conn secret of every addon clone minted for
 // envScope and drops the project-level source each clone replaces. The clone

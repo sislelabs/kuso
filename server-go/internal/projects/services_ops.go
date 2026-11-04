@@ -433,6 +433,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err := s.checkDomainsFree(ctx, project, req.Name, nil, req.Domains); err != nil {
 		return nil, err
 	}
+	if req.Runtime != "worker" {
+		if err := s.checkHostsFree(ctx, "", defaultHost(req.Name, project, proj.Spec.BaseDomain)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Create-time env vars go through the SAME pipeline as SetEnv —
 	// name validation, ${{ … }} rewrite, unsupported-valueFrom
@@ -1028,7 +1033,10 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if req.Branch == "" {
 		return nil, fmt.Errorf("%w: branch required", ErrInvalid)
 	}
-	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") {
+	// "activator" / "*-activator": the env's own Service would share the
+	// shape of the chart's per-env activator ExternalName mirror.
+	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") ||
+		req.Name == "activator" || strings.HasSuffix(req.Name, "-activator") {
 		return nil, fmt.Errorf("%w: name %q is reserved", ErrInvalid, req.Name)
 	}
 	if !envNameRE.MatchString(req.Name) {
@@ -1060,20 +1068,16 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		return nil, err
 	}
 	host := strings.ToLower(strings.TrimSpace(req.HostOverride))
-	if host != "" {
-		if !validHostname(host) {
-			return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
-		}
-		envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
-		if err != nil {
-			return nil, fmt.Errorf("list envs for conflict check: %w", err)
-		}
-		if err := hostConflict(envs, host, ""); err != nil {
-			return nil, err
-		}
+	if host != "" && !validHostname(host) {
+		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 	}
 	if host == "" {
 		host = customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
+	}
+	if svc.Spec.Runtime != "worker" {
+		if err := s.checkHostsFree(ctx, "", host); err != nil {
+			return nil, err
+		}
 	}
 	// Workers have no HTTP surface — strip any computed/override host
 	// so we don't ship a dangling KusoEnvironment.spec.host (would
@@ -1195,6 +1199,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// staging env's API_URL targets <svc>-staging instead. (production
 	// is a no-op in rescopeServiceRefLiterals.)
 	scopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, req.Name)
+	s.warnMissingServiceRefTargets(ctx, ns, project, envCRName, scopedSvcEnvVars)
 	// Re-scope explicit addon secretKeyRef env-vars (e.g. DATABASE_URL ->
 	// <project>-db-conn) onto this env's clone conns. An explicit env entry
 	// wins over envFromSecrets on key collision, so without this a staging
@@ -1644,13 +1649,19 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 	if err != nil {
 		return err
 	}
-	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		labelProject: project,
-		labelService: service,
-	})
+	// Live LIST, not the informer cache: an env created seconds ago (a
+	// fresh preview) or a cold cache would be skipped here, and ownerRef
+	// GC would then remove its CR without reclaiming PVCs, clone addons or
+	// TLS Secrets. Same contract as DeleteEnvGroup.
+	envList, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{
+			labelProject: project,
+			labelService: service,
+		})})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	envs := envList.Items
 	// Route each env through DeleteEnvironment so per-env secrets, clone
 	// PVCs, volume PVCs and cert-manager TLS secrets are reclaimed — not
 	// just the env CR. Best-effort per env: keep tearing down the rest
@@ -1662,8 +1673,8 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 		// the short form. Force: deleting the whole service must also remove
 		// its production env (the standalone production-delete guard doesn't
 		// apply here).
-		if derr := s.deleteEnvironmentForce(ctx, project, envs[i].Name); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
-			firstErr = fmt.Errorf("delete env %s: %w", envs[i].Name, derr)
+		if derr := s.deleteEnvironmentForce(ctx, project, envs[i].GetName()); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
+			firstErr = fmt.Errorf("delete env %s: %w", envs[i].GetName(), derr)
 		}
 	}
 	// Reclaim the service-level managed Secret (<project>-<service>-secrets).
@@ -3059,6 +3070,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		securityContextChanged := false
 		if req.SecurityContext != nil {
 			svc.Spec.SecurityContext = req.SecurityContext
+			// An empty context is the explicit reset (kuso apply with
+			// the block omitted): store nil, the chart default.
+			if req.SecurityContext.IsDefault() {
+				svc.Spec.SecurityContext = nil
+			}
 			securityContextChanged = true
 		}
 		imageChanged := false

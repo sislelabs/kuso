@@ -90,9 +90,15 @@ func isProductionEnv(svc *kube.KusoService, env *kube.KusoEnvironment) bool {
 
 // activatorBackend reports whether an Ingress backend Service name is the
 // activator: kuso-activator itself (kuso namespace) or the chart's
-// per-env ExternalName mirror "<env>-activator" (other namespaces).
-func activatorBackend(name string) bool {
-	return name == activatorDeployment || strings.HasSuffix(name, "-activator")
+// per-env ExternalName mirror for THIS env (other namespaces). Matching any
+// "-activator" suffix let a custom env named "activator", whose own
+// Service is <p>-<svc>-activator, pass as activator-routed.
+func activatorBackend(name, envName string) bool {
+	// Mirrors kusoenvironment.activatorService: fullname | trunc 53 | trimSuffix "-".
+	if len(envName) > 53 {
+		envName = envName[:53]
+	}
+	return name == activatorDeployment || name == strings.TrimSuffix(envName, "-")+"-activator"
 }
 
 // IsProductionEnv exposes the production classification to other loops

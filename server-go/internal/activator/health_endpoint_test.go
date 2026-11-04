@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -79,6 +80,54 @@ func TestEndpointReadyUsesEndpointSlices(t *testing.T) {
 		if got != want {
 			t.Errorf("endpointReady(%s) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// LIFE-03: every request to a sleep-routed env takes wakeAndWait's fast
+// path. It used to LIST EndpointSlices per request, so apiserver load scaled
+// with app traffic and an apiserver blip 503'd (or woke) healthy envs.
+func TestWakeAndWait_FastPathCachesReadiness(t *testing.T) {
+	ready := true
+	cs := fake.NewSimpleClientset(&discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: "web-abc", Namespace: "ns", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   []discoveryv1.Endpoint{{Addresses: []string{"10.0.0.1"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}}},
+	})
+	lists, failLists := 0, false
+	cs.PrependReactor("list", "endpointslices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		lists++
+		if failLists {
+			return true, nil, apierrors.NewTooManyRequests("throttled", 1)
+		}
+		return false, nil, nil
+	})
+	patches := 0
+	cs.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return true, nil, nil
+	})
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	a := New(&kube.Client{Clientset: cs}, slog.Default())
+	a.nowFn = func() time.Time { return now }
+
+	for i := 0; i < 5; i++ {
+		if err := a.wakeAndWait(context.Background(), "ns", "web"); err != nil {
+			t.Fatalf("wakeAndWait: %v", err)
+		}
+	}
+	if lists != 1 {
+		t.Fatalf("EndpointSlice LISTs for 5 requests = %d, want 1 (cached)", lists)
+	}
+
+	// Past the TTL with the apiserver throttling: a recently-ready env is
+	// still served, not treated as asleep.
+	now = now.Add(10 * time.Second)
+	failLists = true
+	if err := a.wakeAndWait(context.Background(), "ns", "web"); err != nil {
+		t.Fatalf("wakeAndWait during apiserver errors: %v", err)
+	}
+	if patches != 0 {
+		t.Fatalf("apiserver error on a recently-ready env triggered %d wake patches", patches)
 	}
 }
 

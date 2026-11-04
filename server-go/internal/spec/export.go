@@ -214,6 +214,14 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	if len(cr.Spec.PublicEnv) > 0 {
 		s.PublicEnv = cr.Spec.PublicEnv
 	}
+	// Exported because apply now resets an omitted block: an export ->
+	// apply round-trip must not strip a service's capabilities.
+	if sc := cr.Spec.SecurityContext; sc != nil {
+		s.SecurityContext = &SecuritySpec{AllowPrivilegeEscalation: sc.AllowPrivilegeEscalation}
+		if sc.Capabilities != nil {
+			s.SecurityContext.Capabilities = &CapabilitiesSpec{Add: sc.Capabilities.Add}
+		}
+	}
 	s.Env = exportEnv(project, cr.Spec.EnvVars)
 	return s
 }
