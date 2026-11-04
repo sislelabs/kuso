@@ -62,6 +62,7 @@ import { Check, Copy, ExternalLink, X, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
+import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { hostScheme } from "@/lib/host-scheme";
 
@@ -310,6 +311,7 @@ export function ServiceOverlay({
   // panel rolling its own button placement.
   const dirtyMap = useRef<Record<string, boolean>>({});
   const [panels, setPanels] = useState<Record<string, PanelEntry>>({});
+  useUnsavedEdits("service-overlay", Object.values(panels).some((p) => p.dirty));
   const dirtyAPI = useMemo<OverlayDirtyAPI>(
     () => ({
       setPanel: (key, entry) => {

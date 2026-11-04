@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { FileCode, Play, Rocket, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import {
   applyConfig,
   getProjectSpec,
@@ -90,6 +91,7 @@ export function ConfigTab({ project }: { project: string }) {
   };
 
   const dirty = text !== live;
+  useUnsavedEdits("project-config", dirty);
 
   return (
     <section className="space-y-4">

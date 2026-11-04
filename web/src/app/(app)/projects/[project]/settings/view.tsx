@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
+import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -80,6 +81,7 @@ export function ProjectSettingsView() {
   // carries live env status, so it refetches (and would re-seed every
   // field) on focus and after unrelated mutations.
   const [dirty, setDirty] = useState(false);
+  useUnsavedEdits("project-settings", dirty);
   const [confirmDomain, setConfirmDomain] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   const [purgeData, setPurgeData] = useState(false);
