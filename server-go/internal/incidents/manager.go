@@ -148,6 +148,15 @@ func targetKeyFor(e notify.Event) string {
 		// node.unreachable carries the node name in a field, not Service.
 		svc = nodeNameFromEvent(e)
 	}
+	// Cluster-scoped alerts (node pressure, cert expiry) carry no
+	// project/service; key them on the node or the rule instead.
+	if e.Type == notify.EventAlertFired && e.Project == "" && svc == "" {
+		if n := e.Extra["node"]; n != "" {
+			svc = "node:" + n
+		} else if id := e.Extra["rule_id"]; id != "" {
+			svc = "rule:" + id
+		}
+	}
 	return string(e.Type) + "|" + e.Project + "|" + svc
 }
 
