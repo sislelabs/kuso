@@ -1225,6 +1225,9 @@ export function ProjectCanvas({
               const { deleteAddon } = await import("@/features/projects/api");
               await deleteAddon(project, short);
             }
+            // Prefix match: describe, services, addons, envs. Without it
+            // the node came back from cache on the next canvas rebuild.
+            void qc.invalidateQueries({ queryKey: ["projects", project] });
             toast.success(
               kind === "service"
                 ? `Service ${short} deleted`
