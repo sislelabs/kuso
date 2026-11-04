@@ -66,10 +66,9 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 	// exists, the lookup succeeds, and the route's requireProjectAccess
 	// only verified access to project-a. The env CR's spec carries the
 	// authoritative project + service it was created for.
-	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
-		return nil, ErrNotFound
-	}
-	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+	// Strict form (as logs.Tail): a `!= ""` guard let an env CR with an
+	// empty spec.project/service pass for any project.
+	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
 		return nil, ErrNotFound
 	}
 
