@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -835,8 +836,9 @@ func main() {
 			}
 		}
 
+		var singletonsTenure leaseTenure
 		startSingletons := func(workCtx context.Context) {
-			leaderActive.Store(true)
+			gen := singletonsTenure.begin(func() { leaderActive.Store(true) })
 			// Liveness registry for THIS lease's ticking loops (runs-poller,
 			// errorscan, health, instancepg). Each is registered next to its
 			// own start guard below with the SAME "register only when it will
@@ -858,12 +860,14 @@ func main() {
 			//     scope; left as-is.
 			go func() {
 				<-workCtx.Done()
-				serverstate.UnregisterLoop(
-					serverstate.LoopRunsPoller,
-					serverstate.LoopErrorScan,
-					serverstate.LoopHealth,
-					serverstate.LoopInstancePG,
-				)
+				singletonsTenure.end(gen, func() {
+					serverstate.UnregisterLoop(
+						serverstate.LoopRunsPoller,
+						serverstate.LoopErrorScan,
+						serverstate.LoopHealth,
+						serverstate.LoopInstancePG,
+					)
+				})
 			}()
 			// Updater poll loop: leader-only. Every replica used to run
 			// it, so an N-replica deploy made N GitHub calls per tick
@@ -921,8 +925,10 @@ func main() {
 			}
 			go func() {
 				<-workCtx.Done()
-				leaderActive.Store(false)
-				serverstate.SetLeading(false)
+				singletonsTenure.end(gen, func() {
+					leaderActive.Store(false)
+					serverstate.SetLeading(false)
+				})
 			}()
 			if pollerEnabled {
 				buildPoller := &builds.Poller{
@@ -1358,6 +1364,7 @@ func main() {
 	// because they need kubeClient, which is initialised in a sibling
 	// branch above.
 	if kubeClient != nil {
+		var clusterTenure leaseTenure
 		startKubeSingletons := func(workCtx context.Context) {
 			// Liveness heartbeat registry. Each singleton loop below stamps
 			// a beat once per iteration (serverstate.LoopHeartbeat inside the
@@ -1382,23 +1389,26 @@ func main() {
 			// registry. LoopScaledown is listed unconditionally —
 			// UnregisterLoop ignores names that were never registered (the
 			// KUSO_SCALEDOWN_DISABLED case), so it is safe either way.
+			gen := clusterTenure.begin(nil)
 			go func() {
 				<-workCtx.Done()
-				serverstate.UnregisterLoop(
-					serverstate.LoopNodeMetrics,
-					serverstate.LoopProjectMetrics,
-					serverstate.LoopNodeWatch,
-					serverstate.LoopScaledown,
-					serverstate.LoopImageRelease,
-					serverstate.LoopPkgUpdates,
-					serverstate.LoopCronWatch,
-					serverstate.LoopLogship,
-					serverstate.LoopAlerts,
-					serverstate.LoopBackupHealth,
-					serverstate.LoopIncidents,
-					serverstate.LoopAutoRemediate,
-					serverstate.LoopUptime,
-				)
+				clusterTenure.end(gen, func() {
+					serverstate.UnregisterLoop(
+						serverstate.LoopNodeMetrics,
+						serverstate.LoopProjectMetrics,
+						serverstate.LoopNodeWatch,
+						serverstate.LoopScaledown,
+						serverstate.LoopImageRelease,
+						serverstate.LoopPkgUpdates,
+						serverstate.LoopCronWatch,
+						serverstate.LoopLogship,
+						serverstate.LoopAlerts,
+						serverstate.LoopBackupHealth,
+						serverstate.LoopIncidents,
+						serverstate.LoopAutoRemediate,
+						serverstate.LoopUptime,
+					)
+				})
 			}()
 
 			serverstate.RegisterLoop(serverstate.LoopNodeMetrics, nodemetrics.SampleInterval)
@@ -1628,6 +1638,34 @@ func main() {
 	// connections close fast.
 	time.Sleep(shutdownSettle)
 	logger.Info("shutdown complete")
+}
+
+// leaseTenure numbers leader-lease tenures. A tenure's cleanup runs in a
+// goroutine woken by its workCtx; after a renew failure the elector can
+// reacquire before that goroutine runs, and an unguarded cleanup would
+// then switch off the NEW tenure (leaderActive=false, loops unregistered)
+// until the next flap. end only acts if no newer tenure has begun.
+type leaseTenure struct {
+	mu  sync.Mutex
+	gen uint64
+}
+
+func (t *leaseTenure) begin(start func()) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.gen++
+	if start != nil {
+		start()
+	}
+	return t.gen
+}
+
+func (t *leaseTenure) end(gen uint64, cleanup func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.gen == gen {
+		cleanup()
+	}
 }
 
 // Shutdown budget. preStop (deploy/server-go.yaml) + these must stay
