@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 )
 
@@ -460,19 +461,48 @@ func (s *Service) checkDomainsFree(ctx context.Context, project, service string,
 	if len(added) == 0 {
 		return nil
 	}
-	ns, err := s.namespaceFor(ctx, project)
-	if err != nil {
-		return err
+	return s.checkHostsFree(ctx, envCRNameFor(project, service, "production"), added...)
+}
+
+// checkHostsFree refuses hosts that skipEnv is about to newly claim when
+// they are the control-plane host or already served by any env in the
+// cluster. Projects share Traefik, and neither kube nor Traefik rejects
+// two Ingresses with the same host, so a project-scoped check let one
+// project take over another's live host. Callers pass only hosts new to
+// the env, so a host an env already holds is never re-litigated.
+func (s *Service) checkHostsFree(ctx context.Context, skipEnv string, hosts ...string) error {
+	var check []string
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if err := reservedHost(h); err != nil {
+			return err
+		}
+		check = append(check, h)
 	}
-	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if len(check) == 0 {
+		return nil
+	}
+	envs, err := s.Kube.ListKusoEnvironments(ctx, "")
 	if err != nil {
 		return fmt.Errorf("list envs for conflict check: %w", err)
 	}
-	prod := envCRNameFor(project, service, "production")
-	for _, h := range added {
-		if err := hostConflict(envs, h, prod); err != nil {
+	for _, h := range check {
+		if err := hostConflict(envs, h, skipEnv); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// reservedHost refuses the instance's own dashboard/API host (KUSO_DOMAIN):
+// a second Ingress on it would race the kuso-server Ingress for the
+// control plane.
+func reservedHost(host string) error {
+	if strings.EqualFold(host, config.DefaultBaseDomain()) {
+		return fmt.Errorf("%w: %q is the kuso control-plane host and can't be assigned to a service", ErrConflict, host)
 	}
 	return nil
 }

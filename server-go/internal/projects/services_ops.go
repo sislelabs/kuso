@@ -433,6 +433,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err := s.checkDomainsFree(ctx, project, req.Name, nil, req.Domains); err != nil {
 		return nil, err
 	}
+	if req.Runtime != "worker" {
+		if err := s.checkHostsFree(ctx, "", defaultHost(req.Name, project, proj.Spec.BaseDomain)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Create-time env vars go through the SAME pipeline as SetEnv —
 	// name validation, ${{ … }} rewrite, unsupported-valueFrom
@@ -1060,20 +1065,16 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		return nil, err
 	}
 	host := strings.ToLower(strings.TrimSpace(req.HostOverride))
-	if host != "" {
-		if !validHostname(host) {
-			return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
-		}
-		envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
-		if err != nil {
-			return nil, fmt.Errorf("list envs for conflict check: %w", err)
-		}
-		if err := hostConflict(envs, host, ""); err != nil {
-			return nil, err
-		}
+	if host != "" && !validHostname(host) {
+		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 	}
 	if host == "" {
 		host = customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
+	}
+	if svc.Spec.Runtime != "worker" {
+		if err := s.checkHostsFree(ctx, "", host); err != nil {
+			return nil, err
+		}
 	}
 	// Workers have no HTTP surface — strip any computed/override host
 	// so we don't ship a dangling KusoEnvironment.spec.host (would

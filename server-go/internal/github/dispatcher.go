@@ -1347,6 +1347,16 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			return fmt.Errorf("update preview env: %w", err)
 		}
 	} else {
+		// Only a new preview claims its host; an existing one keeps it.
+		all, err := d.Kube.ListKusoEnvironments(ctx, "")
+		if err != nil {
+			return fmt.Errorf("list envs for preview host check: %w", err)
+		}
+		if holder := previewHostHolder(all, env.Spec.Host, env.Name); holder != "" {
+			cerr := fmt.Errorf("preview host %q is already served by %s", env.Spec.Host, holder)
+			d.notifyPreviewRefused(proj.Name, short, pr.Number, cerr)
+			return cerr
+		}
 		if _, err := d.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 			return fmt.Errorf("create preview env: %w", err)
 		}
@@ -1413,6 +1423,26 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 
 // notifyPreviewRefused reports a preview that was not deployed so the
 // failure is visible outside the server log.
+// previewHostHolder names what already serves host (another env anywhere
+// in the cluster, or the kuso control plane), or "" when it is free. Two
+// Ingresses on one host make Traefik route by tie-break.
+func previewHostHolder(envs []kube.KusoEnvironment, host, self string) string {
+	if strings.EqualFold(host, config.DefaultBaseDomain()) {
+		return "the kuso control plane"
+	}
+	for i := range envs {
+		if envs[i].Name == self {
+			continue
+		}
+		if strings.EqualFold(envs[i].Spec.Host, host) || slices.ContainsFunc(envs[i].Spec.AdditionalHosts, func(h string) bool {
+			return strings.EqualFold(h, host)
+		}) {
+			return "env " + envs[i].Name
+		}
+	}
+	return ""
+}
+
 func (d *Dispatcher) notifyPreviewRefused(project, service string, prNumber int, cause error) {
 	if d.Notifier == nil {
 		return
