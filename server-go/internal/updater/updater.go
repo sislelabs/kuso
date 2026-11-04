@@ -822,6 +822,11 @@ func (s *Service) activeUpdateJob(ctx context.Context) (string, error) {
 		if !strings.HasPrefix(j.Name, "kuso-update-") || j.Status.Succeeded > 0 || j.Status.Failed > 0 {
 			continue
 		}
+		// Past the deadline it is wedged, not running (and Jobs created
+		// before ActiveDeadlineSeconds was set never time out at all).
+		if ct := j.CreationTimestamp.Time; !ct.IsZero() && time.Since(ct) > updateJobDeadline+5*time.Minute {
+			continue
+		}
 		done := false
 		for _, c := range j.Status.Conditions {
 			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
@@ -866,7 +871,56 @@ func (s *Service) Status(ctx context.Context) (UpdateStatus, bool) {
 	if err := json.Unmarshal([]byte(raw), &st); err != nil {
 		return UpdateStatus{}, false
 	}
+	if !terminalPhase(st.Phase) {
+		if name, failed := s.latestUpdateJobFailed(ctx); failed {
+			st.Message = fmt.Sprintf("updater job %s failed while %q (%s) — see its pod logs", name, st.Phase, st.Message)
+			st.Phase = "failed"
+		}
+	}
 	return st, true
+}
+
+func terminalPhase(p string) bool {
+	switch p {
+	case "done", "failed", "rolled-back", "rollback-failed":
+		return true
+	}
+	return false
+}
+
+// latestUpdateJobFailed reports whether the most recent updater Job has
+// failed. The entrypoint can exit without writing a terminal phase (a
+// command failing under set -e, OOM, ActiveDeadlineSeconds), which used
+// to leave the UI showing the update in progress forever.
+func (s *Service) latestUpdateJobFailed(ctx context.Context) (string, bool) {
+	jobs, err := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=kuso-server",
+	})
+	if err != nil {
+		return "", false
+	}
+	var latest *batchv1.Job
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if !strings.HasPrefix(j.Name, "kuso-update-") {
+			continue
+		}
+		if latest == nil || j.CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = j
+		}
+	}
+	if latest == nil {
+		return "", false
+	}
+	if latest.Status.Failed > 0 {
+		return latest.Name, true
+	}
+	for _, c := range latest.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return latest.Name, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) writeStatus(ctx context.Context, st UpdateStatus) error {
