@@ -6,7 +6,7 @@ import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { X, Database, HardDrive, Settings, Info, ExternalLink } from "lucide-react";
+import { X, Database, HardDrive, Settings, Info, ExternalLink, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
@@ -17,6 +17,7 @@ import { OverviewTab } from "./overlay/OverviewTab";
 import { BackupsTab } from "./overlay/BackupsTab";
 import { SQLTab } from "./overlay/SQLTab";
 import { SettingsTab } from "./overlay/SettingsTab";
+import { VulnerabilitiesTab } from "./overlay/VulnerabilitiesTab";
 
 // AddonOverlayDirtyContext mirrors the per-panel dirty registry on
 // ServiceOverlay. Each form section inside a tab (Configuration,
@@ -77,11 +78,12 @@ export function useAddonOverlayDirty(
   }, [api, panelKey, dirty, hasSave, hasDiscard, opts?.saving, opts?.saveError]);
 }
 
-type Tab = "overview" | "backups" | "sql" | "settings";
+type Tab = "overview" | "backups" | "sql" | "vulnerabilities" | "settings";
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "overview", label: "Overview", icon: Info },
   { id: "backups",  label: "Backups",  icon: HardDrive },
   { id: "sql",      label: "SQL",      icon: Database },
+  { id: "vulnerabilities", label: "Vulnerabilities", icon: ShieldAlert },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -156,8 +158,9 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
 
   useEffect(() => {
     if (!addon) return;
-    const valid = TABS.some((t) => t.id === defaultTab);
-    setTab(valid ? (defaultTab as Tab) : "overview");
+    const requested = defaultTab === "vulns" ? "vulnerabilities" : defaultTab;
+    const valid = TABS.some((t) => t.id === requested);
+    setTab(valid ? (requested as Tab) : "overview");
     setPanels({});
   }, [addon, defaultTab]);
 
@@ -315,6 +318,8 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                   <BackupsTab project={project} addon={addon!} />
                 ) : tab === "sql" ? (
                   <SQLTab project={project} addon={addon!} />
+                ) : tab === "vulnerabilities" ? (
+                  <VulnerabilitiesTab key={addon} project={project} addon={addon!} />
                 ) : (
                   <SettingsTab project={project} addon={addon!} cr={data} onClose={guardedClose} />
                 )}
