@@ -411,27 +411,35 @@ func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
 func buildDataMigrationScript(it coolify.Item) string {
 	d := it.Database
 	kind := coolify.AddonKindFromCoolify(d.DatabaseType)
-	src := d.InternalDBURL
+	// external_db_url is reachable from the operator's machine;
+	// internal_db_url is a docker-internal hostname that only resolves
+	// on the Coolify host, so it's the fallback, not the default.
+	src, srcField := d.ExternalDBURL, "external_db_url"
 	if src == "" {
-		src = "<paste source URL — internal_db_url was empty>"
+		src, srcField = d.InternalDBURL, "internal_db_url (docker-internal — run this on the Coolify host or swap in a reachable URL)"
 	}
+	if src == "" {
+		src, srcField = "<paste source URL — Coolify returned none>", "none"
+	}
+	// The URL carries the source password: single-quote it so bash runs
+	// no $(…)/backtick substitution on it, and keep it out of comments
+	// where a newline in it would end the comment.
 	header := fmt.Sprintf(`#!/usr/bin/env bash
-# Data migration for Coolify database %q (%s).
+# Data migration for Coolify database %s (%s).
 #
 # Coolify side is read-only — this script DUMPS from Coolify and
 # loads into the matching kuso addon. Run only when the kuso addon
 # is fully provisioned (kuso get addons %s -o json | jq …).
 #
-# Source URL (Coolify internal_db_url):
-#   %s
+# Source URL: SRC below, from Coolify %s.
 #
 # Destination URL: read from the kuso addon's connection secret —
 #   kuso get addons <project> -o json
 set -euo pipefail
-SRC=%q
+SRC=%s
 DST="${DST:-}"            # set to the kuso addon URL before running
 if [[ -z "$DST" ]]; then echo "set DST=<kuso addon connection URL>" >&2; exit 1; fi
-`, d.Name, kind, coolify.SlugifyName(it.ProjectName), src, src)
+`, coolify.SlugifyName(d.Name), kind, coolify.SlugifyName(it.ProjectName), srcField, shellQuote(src))
 
 	switch kind {
 	case "postgres":
