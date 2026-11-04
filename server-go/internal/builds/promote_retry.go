@@ -25,6 +25,12 @@ const promoteRetryMaxAge = 6 * time.Hour
 // not a failure, so it never counts toward promoteRetryMaxAge.
 var errReleaseStillRunning = errors.New("release hook still running")
 
+// annNotDeployed marks a succeeded build whose image reached none of its
+// envs: a newer build had already promoted, or no env tracks its branch.
+const annNotDeployed = "kuso.sislelabs.com/not-deployed"
+
+const notDeployedMessage = "built, not deployed: a newer build is already live or no environment tracks this branch"
+
 // promoteRetryExhausted reports whether a failed promote of b should end
 // the build instead of retrying. A missing or unparseable job-succeeded
 // stamp never expires (older CRs, or the stamp patch failed).

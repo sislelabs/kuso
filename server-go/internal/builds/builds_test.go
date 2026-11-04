@@ -952,6 +952,35 @@ func TestPoller_PromoteFailurePastMaxAgeEndsBuild(t *testing.T) {
 	}
 }
 
+// BUILD-10: a build whose promotion was skipped everywhere (a newer build
+// already won the env) must not report "Deployed".
+func TestPoller_SucceededButNotPromotedSaysSo(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old", Namespace: "kuso",
+			Annotations: map[string]string{annTriggeredAt: "2026-11-04T10:00:00Z"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "old",
+			Image: &kube.KusoImage{Repository: "registry/alpha/web", Tag: "old"}},
+	}
+	env := seedProductionEnv("alpha", "web")
+	env.obj.SetAnnotations(map[string]string{annPromotedAt: "2026-11-04T10:05:00Z"})
+	s := fakeService(t, seedBuild(build), env)
+	p := &Poller{Svc: s, Interval: time.Hour}
+	if err := p.markSucceeded(context.Background(), "kuso", build); err != nil {
+		t.Fatalf("markSucceeded: %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-old")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "succeeded" {
+		t.Fatalf("phase = %q, want succeeded", ph)
+	}
+	if _, _, desc := desiredCommitStatus(got); desc == "Deployed" {
+		t.Errorf("commit status says Deployed for a build no env took")
+	}
+}
+
 // BUILD-08: markRunning works off a stale snapshot. A Cancel that landed
 // after the snapshot must not be flipped back to "running".
 func TestPoller_MarkRunningDoesNotResurrectCancelled(t *testing.T) {
