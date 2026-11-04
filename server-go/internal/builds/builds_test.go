@@ -1736,6 +1736,39 @@ func TestPromotedAtIsNewer_SameSecondRollbackWins(t *testing.T) {
 	}
 }
 
+// BUILD-09: two builds of one service created in the same second share a
+// whole-second creationTimestamp. The older must neither run first because
+// its name sorts lower, nor tie on the promote guard and overwrite the
+// newer one's promotion.
+func TestBuildTrigger_SubSecondOrdering(t *testing.T) {
+	t.Parallel()
+	sec := metav1.NewTime(time.Date(2026, 11, 4, 10, 0, 5, 0, time.UTC))
+	mk := func(name, at string) *kube.KusoBuild {
+		return &kube.KusoBuild{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: sec,
+			Annotations: map[string]string{annTriggeredAt: at}}}
+	}
+	older := mk("alpha-web-zzz", "2026-11-04T10:00:05.100Z")
+	newer := mk("alpha-web-aaa", "2026-11-04T10:00:05.900Z")
+	if !promotedAtIsNewer(buildTriggerTimestamp(newer), buildTriggerTimestamp(older)) {
+		t.Error("the newer build's promotion must make the older one skip")
+	}
+	if !queuedBefore(older, newer) || queuedBefore(newer, older) {
+		t.Error("queue must dispatch the earlier-triggered build first")
+	}
+
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: "abcdef0123456789abcdef0123456789abcdef01"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, got.Annotations[annTriggeredAt]); err != nil {
+		t.Errorf("Create did not stamp a parseable trigger time: %q", got.Annotations[annTriggeredAt])
+	}
+}
+
 // TestPromoteEnvImageCAS_SameSecondRollbackNotClobbered is the end-to-end
 // version of the fix: an env carrying a fractional-second rollback stamp
 // must not be overwritten by an in-flight build whose trigger is in the

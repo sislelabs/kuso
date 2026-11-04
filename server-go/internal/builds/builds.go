@@ -157,6 +157,10 @@ const (
 	annTriggerSource = "kuso.sislelabs.com/build-triggered-by"
 	annTriggerUser   = "kuso.sislelabs.com/build-triggered-by-user"
 	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
+	// annTriggeredAt is the sub-second creation time of a build.
+	// creationTimestamp has 1s resolution, so two builds of one service
+	// created in the same second tie on it.
+	annTriggeredAt = "kuso.sislelabs.com/build-triggered-at"
 	// annRefFromBranch marks a build whose ref was resolved from the
 	// branch HEAD at trigger time (no explicit ref). Such builds used to
 	// carry synthetic refs and keep that behaviour where the ref shape
@@ -1204,6 +1208,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		annos[annRefFromBranch] = "true"
 	}
 	annos[annImageTag] = ImageTag(tagRef)
+	annos[annTriggeredAt] = time.Now().UTC().Format(time.RFC3339Nano)
 	previewTarget := req.PreviewEnv
 	if previewTarget == "" && targetEnv != nil && targetEnv.Spec.Kind == "preview" {
 		previewTarget = targetEnv.Name // a manual redeploy of a preview env
@@ -2173,12 +2178,7 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 			}
 			// Oldest first.
 			sort.SliceStable(q.list, func(i, j int) bool {
-				ti := q.list[i].CreationTimestamp
-				tj := q.list[j].CreationTimestamp
-				if ti.Equal(&tj) {
-					return q.list[i].Name < q.list[j].Name
-				}
-				return ti.Before(&tj)
+				return queuedBefore(q.list[i], q.list[j])
 			})
 			next := q.list[0]
 			project := q.project
@@ -3240,10 +3240,30 @@ const (
 // pod within a single apiserver, which is good enough — we only need
 // to order builds for the same service against each other.
 func buildTriggerTimestamp(b *kube.KusoBuild) string {
+	if at := b.Annotations[annTriggeredAt]; at != "" {
+		if _, err := time.Parse(time.RFC3339Nano, at); err == nil {
+			return at
+		}
+	}
 	if !b.CreationTimestamp.IsZero() {
 		return b.CreationTimestamp.UTC().Format(time.RFC3339Nano)
 	}
 	return ""
+}
+
+// queuedBefore orders queued builds oldest first: by trigger time when
+// both carry one, else creationTimestamp, ties broken on name.
+func queuedBefore(a, b *kube.KusoBuild) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a.Annotations[annTriggeredAt])
+	tb, errB := time.Parse(time.RFC3339Nano, b.Annotations[annTriggeredAt])
+	if errA == nil && errB == nil && !ta.Equal(tb) {
+		return ta.Before(tb)
+	}
+	ca, cb := a.CreationTimestamp, b.CreationTimestamp
+	if ca.Equal(&cb) {
+		return a.Name < b.Name
+	}
+	return ca.Before(&cb)
 }
 
 // promotedAtIsNewer reports whether the env's recorded promoted-at (prev)
