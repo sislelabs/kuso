@@ -96,12 +96,14 @@ func (s *Service) fetchOperatorVersion(ctx context.Context) string {
 			if !strings.HasPrefix(c.Name, "manager") {
 				continue
 			}
-			// Image is "ghcr.io/.../kuso-operator:vX.Y.Z" — split on
-			// the last colon for the tag.
-			if i := strings.LastIndex(c.Image, ":"); i > 0 && i < len(c.Image)-1 {
-				return c.Image[i+1:]
+			// Image is "ghcr.io/.../kuso-operator:vX.Y.Z", optionally
+			// digest-pinned ("…:vX.Y.Z@sha256:…") — drop the digest,
+			// then split on the last colon for the tag.
+			img, _, _ := strings.Cut(c.Image, "@")
+			if i := strings.LastIndex(img, ":"); i > 0 && i < len(img)-1 {
+				return img[i+1:]
 			}
-			return c.Image
+			return img
 		}
 	}
 	return ""
