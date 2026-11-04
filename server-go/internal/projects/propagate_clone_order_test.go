@@ -35,7 +35,7 @@ func TestPropagate_SubscribingProjectAddonKeepsEnvCloneLast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"db", "psdb"}); err != nil {
+	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"db", "psdb"}, nil); err != nil {
 		t.Fatalf("SetSubscribedAddons: %v", err)
 	}
 

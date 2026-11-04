@@ -60,6 +60,8 @@ export async function setSubscribedAddons(
   project: string,
   service: string,
   addons: string[],
+  // The list this edit was computed from; the server 409s if it changed.
+  expected?: string[],
 ): Promise<void> {
-  await api(subscribedPath(project, service), { method: "PUT", body: { addons } });
+  await api(subscribedPath(project, service), { method: "PUT", body: expected ? { addons, expected } : { addons } });
 }

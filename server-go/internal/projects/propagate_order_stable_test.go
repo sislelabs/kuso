@@ -35,7 +35,7 @@ func TestPropagate_UnchangedSubscriptionKeepsEnvFromOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"cache", "psdb", "queue", "storage"}); err != nil {
+	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"cache", "psdb", "queue", "storage"}, nil); err != nil {
 		t.Fatalf("SetSubscribedAddons: %v", err)
 	}
 

@@ -11,7 +11,7 @@ import { Check, ChevronRight, Eye, EyeOff, Link2, Lock, Search, Trash2 } from "l
 import { useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
 import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { setSharedSecret } from "@/features/project-secrets/api";
-import { applySubscriptionDelta } from "@/features/addons/subscriptionDelta";
+import { applySubscriptionDelta, putSubscriptionRebased } from "@/features/addons/subscriptionDelta";
 import { useProject, useAddons } from "@/features/projects";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
@@ -140,13 +140,13 @@ export function EnvVarsEditor({
       // The PUT replaces the whole list. Apply only this tab's delta to a
       // fresh read so a key another user subscribed meanwhile isn't dropped.
       const base = sharedSub.data?.subscribed ?? [];
-      const fresh = await api<SubscribableShape>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
-      );
-      const keys = applySubscriptionDelta(fresh.subscribed ?? [], base, wanted);
-      await api<unknown>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
-        { method: "PUT", body: { keys } },
+      const path = `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`;
+      await putSubscriptionRebased(
+        async () => (await api<SubscribableShape>(path)).subscribed ?? [],
+        (fresh) => applySubscriptionDelta(fresh, base, wanted),
+        async (keys, expected) => {
+          await api<unknown>(path, { method: "PUT", body: { keys, expected } });
+        },
       );
       await qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "shared-env-keys"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });

@@ -38,10 +38,12 @@ func (h *ProjectsHandler) GetSharedEnvKeys(w http.ResponseWriter, r *http.Reques
 // Body: { "keys": ["DATABASE_URL", "JWT_SECRET", ...] }
 // Replaces the subscription list outright. Pass [] (non-nil empty)
 // to subscribe to nothing; the dashboard's "Add all" / "Clear all"
-// buttons fan out to this same endpoint.
+// buttons fan out to this same endpoint. Optional "expected" is the
+// list the client read; a mismatch with the live list is a 409.
 func (h *ProjectsHandler) SetSharedEnvKeys(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Keys []string `json:"keys"`
+		Keys     []string `json:"keys"`
+		Expected []string `json:"expected"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -61,7 +63,7 @@ func (h *ProjectsHandler) SetSharedEnvKeys(w http.ResponseWriter, r *http.Reques
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	updated, err := h.Svc.SetSharedEnvKeys(ctx, project, chi.URLParam(r, "service"), body.Keys)
+	updated, err := h.Svc.SetSharedEnvKeys(ctx, project, chi.URLParam(r, "service"), body.Keys, body.Expected)
 	if err != nil {
 		h.fail(w, "set sharedEnvKeys", err)
 		return

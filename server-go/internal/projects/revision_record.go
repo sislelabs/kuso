@@ -268,13 +268,13 @@ func (s *Service) RevertServiceSnapshot(ctx context.Context, project, service st
 		if snap.SubscribedAddons == nil {
 			return fmt.Errorf("%w: snapshot has no subscribedAddons", ErrInvalid)
 		}
-		_, err := s.SetSubscribedAddons(ctx, project, service, *snap.SubscribedAddons)
+		_, err := s.SetSubscribedAddons(ctx, project, service, *snap.SubscribedAddons, nil)
 		return err
 	case revOpSharedEnvKeys:
 		if snap.SharedEnvKeys == nil {
 			return fmt.Errorf("%w: snapshot has no sharedEnvKeys", ErrInvalid)
 		}
-		_, err := s.SetSharedEnvKeys(ctx, project, service, *snap.SharedEnvKeys)
+		_, err := s.SetSharedEnvKeys(ctx, project, service, *snap.SharedEnvKeys, nil)
 		return err
 	case revOpDomains:
 		if snap.Domains == nil {

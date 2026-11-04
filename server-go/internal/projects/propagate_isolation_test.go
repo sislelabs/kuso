@@ -49,7 +49,7 @@ func TestSetSubscribedAddons_IsolatedEnvsDoNotGainProductionConns(t *testing.T) 
 		return []string{"tickero-analytics-conn", "tickero-db-conn", "tickero-psdb-conn", "tickero-storage-conn",
 			"tickero-db-pr-52-conn", "tickero-db-staging-conn"}, nil
 	}
-	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"db", "psdb", "analytics", "storage"}); err != nil {
+	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "api", []string{"db", "psdb", "analytics", "storage"}, nil); err != nil {
 		t.Fatalf("SetSubscribedAddons: %v", err)
 	}
 	get := func(name string) []string {

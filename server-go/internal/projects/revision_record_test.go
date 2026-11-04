@@ -142,7 +142,7 @@ func TestMutationsRecordOneRevision(t *testing.T) {
 			name: "SetSubscribedAddons",
 			spec: kube.KusoServiceSpec{SubscribedAddons: []string{"old"}},
 			run: func(ctx context.Context, s *Service) error {
-				_, err := s.SetSubscribedAddons(ctx, "alpha", "web", []string{"pg"})
+				_, err := s.SetSubscribedAddons(ctx, "alpha", "web", []string{"pg"}, nil)
 				return err
 			},
 			kind: "service", resource: "web", summary: "addon subscribe pg; addon unsubscribe old",
@@ -151,7 +151,7 @@ func TestMutationsRecordOneRevision(t *testing.T) {
 			name: "SetSharedEnvKeys",
 			spec: kube.KusoServiceSpec{SharedEnvKeys: []string{"OLD_KEY"}},
 			run: func(ctx context.Context, s *Service) error {
-				_, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"STRIPE_KEY", "JWT_SECRET"})
+				_, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"STRIPE_KEY", "JWT_SECRET"}, nil)
 				return err
 			},
 			kind: "service", resource: "web", summary: "env share JWT_SECRET, STRIPE_KEY; env unshare OLD_KEY",
@@ -505,11 +505,11 @@ func TestRevertSharedEnvKeysSnapshot(t *testing.T) {
 	s := revisionFixture(t, kube.KusoServiceSpec{})
 	got := captureRevisions(s)
 	ctx := aliceCtx()
-	if _, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"A", "B"}); err != nil {
+	if _, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"A", "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	snap := (*got)[len(*got)-1].snapshot
-	if _, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"C"}); err != nil {
+	if _, err := s.SetSharedEnvKeys(ctx, "alpha", "web", []string{"C"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RevertServiceSnapshot(ctx, "alpha", "web", snap); err != nil {

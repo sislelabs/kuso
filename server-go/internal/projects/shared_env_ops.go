@@ -150,8 +150,10 @@ func (s *Service) listSecretKeys(ctx context.Context, ns, name string) ([]string
 }
 
 // SetSharedEnvKeys replaces the subscription list outright. Pass []
-// (or nil — coerced to [] internally) to subscribe to nothing.
-func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string, keys []string) (*kube.KusoService, error) {
+// (or nil — coerced to [] internally) to subscribe to nothing. A non-nil
+// expected is a precondition with the same meaning as in
+// SetSubscribedAddons (unset counts as every shared key).
+func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string, keys, expected []string) (*kube.KusoService, error) {
 	if keys == nil {
 		keys = []string{}
 	}
@@ -180,12 +182,31 @@ func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string,
 	if err != nil {
 		return nil, err
 	}
+	var allKeys []string
+	if expected != nil {
+		list, err := s.ListSubscribableSharedKeys(ctx, project, service)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range list.Sources {
+			allKeys = append(allKeys, g.Keys...)
+		}
+	}
 	// RMW under optimistic concurrency (WithRetry) — the in-process
 	// service lock doesn't span replicas, so fetch-mutate-update so a
 	// concurrent spec edit on another pod isn't clobbered.
 	var before []string
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		before = svc.Spec.SharedEnvKeys
+		if expected != nil {
+			current := svc.Spec.SharedEnvKeys
+			if current == nil {
+				current = allKeys
+			}
+			if !sameNameSet(current, expected) {
+				return fmt.Errorf("%w: shared env keys changed since they were read (now %v) — reload and retry", ErrConflict, current)
+			}
+		}
 		svc.Spec.SharedEnvKeys = clean
 		return nil
 	})

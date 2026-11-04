@@ -346,8 +346,11 @@ func (s *Service) ListSubscribableAddons(ctx context.Context, project, service s
 }
 
 // SetSubscribedAddons replaces the subscription list outright and
-// re-propagates envFromSecrets to every env of the service.
-func (s *Service) SetSubscribedAddons(ctx context.Context, project, service string, addons []string) (*kube.KusoService, error) {
+// re-propagates envFromSecrets to every env of the service. A non-nil
+// expected is a precondition: the list the caller read (as GET reports it,
+// so unset counts as every addon). If the live list differs, nothing is
+// written and ErrConflict is returned. nil skips the check.
+func (s *Service) SetSubscribedAddons(ctx context.Context, project, service string, addons, expected []string) (*kube.KusoService, error) {
 	if addons == nil {
 		addons = []string{}
 	}
@@ -372,6 +375,14 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	if err != nil {
 		return nil, err
 	}
+	var available []string
+	if expected != nil {
+		list, err := s.ListSubscribableAddons(ctx, project, service)
+		if err != nil {
+			return nil, err
+		}
+		available = list.Available
+	}
 	// RMW via WithRetry: the in-process lockService above serializes
 	// writers within one replica, but NOT across replicas. Fetch-mutate-
 	// update under optimistic concurrency so a concurrent spec edit on
@@ -380,6 +391,15 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	var before []string
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		before = svc.Spec.SubscribedAddons
+		if expected != nil {
+			current := svc.Spec.SubscribedAddons
+			if current == nil {
+				current = available
+			}
+			if !sameNameSet(current, expected) {
+				return fmt.Errorf("%w: subscribed addons changed since they were read (now %v) — reload and retry", ErrConflict, current)
+			}
+		}
 		svc.Spec.SubscribedAddons = clean
 		return nil
 	})
@@ -396,4 +416,20 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 		return updated, nil
 	}
 	return updated, nil
+}
+
+// sameNameSet compares two name lists as sets, ignoring order, duplicates,
+// surrounding whitespace and empty entries.
+func sameNameSet(a, b []string) bool {
+	norm := func(in []string) []string {
+		out := make([]string, 0, len(in))
+		for _, v := range in {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return slices.Equal(norm(a), norm(b))
 }

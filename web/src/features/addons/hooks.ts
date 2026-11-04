@@ -3,6 +3,7 @@
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { getSubscribedAddons, setSubscribedAddons, type SubscribedAddons } from "./api";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
+import { putSubscriptionRebased } from "./subscriptionDelta";
 
 export const subscribedAddonsQueryKey = (project: string, service: string) =>
   ["projects", project, "services", service, "subscribed-addons"] as const;
@@ -28,11 +29,11 @@ export function useToggleAddonSubscription(project: string) {
       // The PUT replaces the whole list, so toggle against a fresh read
       // rather than this tab's cache (`current`), which may predate another
       // user's change and would silently drop it.
-      const fresh = await getSubscribedAddons(project, vars.service);
-      const next = vars.on
-        ? Array.from(new Set([...fresh.subscribed, vars.addon]))
-        : fresh.subscribed.filter((a) => a !== vars.addon);
-      await setSubscribedAddons(project, vars.service, next);
+      await putSubscriptionRebased(
+        async () => (await getSubscribedAddons(project, vars.service)).subscribed,
+        (fresh) => (vars.on ? Array.from(new Set([...fresh, vars.addon])) : fresh.filter((a) => a !== vars.addon)),
+        (next, expected) => setSubscribedAddons(project, vars.service, next, expected),
+      );
     },
     onSettled: () => {
       // Subscribing rewrites the env's envFromSecrets, which drives the

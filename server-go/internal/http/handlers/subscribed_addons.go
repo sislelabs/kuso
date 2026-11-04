@@ -26,10 +26,13 @@ func (h *ProjectsHandler) GetSubscribedAddons(w http.ResponseWriter, r *http.Req
 }
 
 // PUT /api/projects/{project}/services/{service}/subscribed-addons
-// Body: { "addons": ["pg", "cache", ...] }
+// Body: { "addons": ["pg", "cache", ...], "expected": [...] }
+// expected is optional: the list the client read. When present and the live
+// list differs, nothing is written and the response is 409.
 func (h *ProjectsHandler) SetSubscribedAddons(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Addons []string `json:"addons"`
+		Addons   []string `json:"addons"`
+		Expected []string `json:"expected"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -44,7 +47,7 @@ func (h *ProjectsHandler) SetSubscribedAddons(w http.ResponseWriter, r *http.Req
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	updated, err := h.Svc.SetSubscribedAddons(ctx, project, chi.URLParam(r, "service"), body.Addons)
+	updated, err := h.Svc.SetSubscribedAddons(ctx, project, chi.URLParam(r, "service"), body.Addons, body.Expected)
 	if err != nil {
 		h.fail(w, "set subscribed addons", err)
 		return

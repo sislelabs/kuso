@@ -71,10 +71,10 @@ func TestServiceWrites_RejectCrossProjectQualifiedName(t *testing.T) {
 	if err := s.DeleteService(ctx, "foo", "foo-bar-web"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("DeleteService: want ErrNotFound, got %v", err)
 	}
-	if _, err := s.SetSharedEnvKeys(ctx, "foo", "foo-bar-web", []string{"KEY"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.SetSharedEnvKeys(ctx, "foo", "foo-bar-web", []string{"KEY"}, nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("SetSharedEnvKeys: want ErrNotFound, got %v", err)
 	}
-	if _, err := s.SetSubscribedAddons(ctx, "foo", "foo-bar-web", []string{"pg"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.SetSubscribedAddons(ctx, "foo", "foo-bar-web", []string{"pg"}, nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("SetSubscribedAddons: want ErrNotFound, got %v", err)
 	}
 
