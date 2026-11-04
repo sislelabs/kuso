@@ -49,6 +49,7 @@ import (
 	"kuso/server/internal/logs"
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
+	"kuso/server/internal/nodejoin"
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
@@ -393,6 +394,8 @@ func main() {
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
 		kubeClient = kc
+		// SSH host-key pins for node join must outlive this pod.
+		nodejoin.SetKnownHostStore(&nodejoin.SecretKnownHosts{Client: kc.Clientset, Namespace: *namespace})
 		// Runtime gauges for /metrics: DB pool in-use/idle/open and
 		// build queue depth + running pods. Pool stats are free
 		// (sql.DB.Stats); build stats come from a cluster-wide list
