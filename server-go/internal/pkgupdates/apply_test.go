@@ -444,6 +444,44 @@ func TestReconcileFailsStalledApply(t *testing.T) {
 	}
 }
 
+// LOOP-02: a script that ended in failed (or done without a reboot) left
+// our up-front cordon behind. The finalize tick must lift it but keep the
+// script's phase + reason — never rewrite it to settling/done.
+func TestReconcileRebootsKeepsTerminalPhase(t *testing.T) {
+	t.Parallel()
+	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	for _, phase := range []string{"failed", "done"} {
+		t.Run(phase, func(t *testing.T) {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "worker",
+					Annotations: map[string]string{
+						CordonAnnotation:     "true",
+						ApplyStateAnnotation: `{"phase":"` + phase + `","at":"` + old + `","log":"apt upgrade failed: held"}`,
+					},
+				},
+				Spec: corev1.NodeSpec{Unschedulable: true},
+				Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+					{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+				}},
+			}
+			cs := kubefake.NewSimpleClientset(node)
+			w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+			for i := 0; i < 3; i++ {
+				w.reconcileReboots(context.Background(), slogDiscard())
+			}
+			n, _ := cs.CoreV1().Nodes().Get(context.Background(), "worker", metav1.GetOptions{})
+			if n.Spec.Unschedulable || n.Annotations[CordonAnnotation] != "" {
+				t.Error("our cordon should be lifted once the apply ended")
+			}
+			st := parseApplyState(n.Annotations[ApplyStateAnnotation])
+			if st.Phase != phase || st.Log != "apt upgrade failed: held" {
+				t.Errorf("apply-state rewritten to %+v, want phase %q with the original log", st, phase)
+			}
+		})
+	}
+}
+
 // The drain must never evict the apply pod itself: it runs on the node
 // being drained, and evicting it killed the apply before the reboot.
 func TestDrainPodsFilterSkipsSelf(t *testing.T) {

@@ -309,6 +309,19 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		if !nodeReady(n) {
 			continue // still down / not back yet
 		}
+		// The script already wrote a terminal result (failed, or done
+		// without needing a reboot) and only our up-front cordon is left.
+		// Lift it, but keep the phase + reason: this node did not reboot.
+		if ours && (st.Phase == "failed" || st.Phase == "done") {
+			patch := fmt.Sprintf(
+				`{"spec":{"unschedulable":false},"metadata":{"annotations":{%q:null}}}`,
+				CordonAnnotation)
+			if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
+				ctx, n.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+				logger.Warn("pkgupdates: uncordon after finished apply", "node", n.Name, "err", err)
+			}
+			continue
+		}
 		// Back up. Uncordon iff our marker is set.
 		if n.Annotations[CordonAnnotation] == "true" {
 			patch := fmt.Sprintf(
