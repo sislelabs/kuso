@@ -44,6 +44,8 @@ var addonKeyTable = map[string]addonKeys{
 	"clickhouse": {url: "CLICKHOUSE_URL", urlAliases: []string{"CLICKHOUSE_NATIVE_URL"},
 		host: "CLICKHOUSE_HOST", user: "CLICKHOUSE_USER", password: "CLICKHOUSE_PASSWORD", db: "CLICKHOUSE_DATABASE"},
 	"redpanda": {url: "REDPANDA_URL", host: "KAFKA_HOST", port: "KAFKA_PORT", hostPort: "KAFKA_BROKERS"},
+	"rabbitmq": {url: "AMQP_URL", urlAliases: []string{"RABBITMQ_URL"},
+		host: "RABBITMQ_HOST", port: "RABBITMQ_PORT", user: "RABBITMQ_USER", password: "RABBITMQ_PASSWORD"},
 }
 
 func (k addonKeys) forRole(role string) string {
@@ -78,6 +80,7 @@ var credEnv = map[string]map[string]string{
 	"mongodb":    {"MONGO_INITDB_ROOT_USERNAME": roleUser, "MONGO_INITDB_ROOT_PASSWORD": rolePassword, "MONGO_INITDB_DATABASE": roleDB},
 	"mysql":      {"MYSQL_USER": roleUser, "MYSQL_PASSWORD": rolePassword, "MYSQL_DATABASE": roleDB},
 	"clickhouse": {"CLICKHOUSE_USER": roleUser, "CLICKHOUSE_PASSWORD": rolePassword, "CLICKHOUSE_DB": roleDB},
+	"rabbitmq":   {"RABBITMQ_DEFAULT_USER": roleUser, "RABBITMQ_DEFAULT_PASS": rolePassword},
 }
 
 // datastoreCreds extracts role→literal from a datastore service's env.

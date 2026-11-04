@@ -7,10 +7,9 @@ import (
 // datastoreImages maps a normalized image base name (the repository
 // without registry host or tag) to the kuso addon kind it should
 // become. Only kinds the kusoaddon helm chart ACTUALLY implements are
-// listed — postgres, redis, clickhouse. Other datastores (mysql,
-// mariadb, mongodb, valkey, kafka, rabbitmq) are reserved-but-not-
-// implemented in the chart (they'd render a "pending" ConfigMap, not a
-// working addon), so we deliberately DON'T classify them as addons —
+// listed. Other datastores (mariadb, kafka, memcached) are reserved-but-
+// not-implemented in the chart (they'd render a "pending" ConfigMap, not
+// a working addon), so we deliberately DON'T classify them as addons —
 // they fall through to a flagged service instead (see maybeDatastore).
 var datastoreImages = map[string]string{
 	"postgres":                     "postgres",
@@ -23,14 +22,22 @@ var datastoreImages = map[string]string{
 	"clickhouse":                   "clickhouse",
 	"redpandadata/redpanda":        "redpanda",
 	"vectorized/redpanda":          "redpanda",
+	"mysql":                        "mysql",
+	"bitnami/mysql":                "mysql",
+	"mongo":                        "mongodb",
+	"mongodb":                      "mongodb",
+	"bitnami/mongodb":              "mongodb",
+	"valkey/valkey":                "valkey",
+	"bitnami/valkey":               "valkey",
+	"rabbitmq":                     "rabbitmq",
+	"bitnami/rabbitmq":             "rabbitmq",
 }
 
 // reservedDatastores are kinds that look like datastores but the kuso
 // addon chart doesn't implement yet. We detect them only to flag
 // them, never to create a (broken) addon.
 var reservedDatastores = map[string]bool{
-	"mysql": true, "mariadb": true, "mongodb": true,
-	"valkey": true, "kafka": true, "rabbitmq": true, "memcached": true,
+	"mariadb": true, "kafka": true, "memcached": true,
 }
 
 // maybeReservedDatastore returns the reserved kind name when an image
@@ -38,16 +45,8 @@ var reservedDatastores = map[string]bool{
 func maybeReservedDatastore(image string) string {
 	repo, _ := imageParts(image)
 	switch baseImageName(repo) {
-	case "mysql", "bitnami/mysql":
-		return "mysql"
 	case "mariadb", "bitnami/mariadb":
 		return "mariadb"
-	case "mongo", "mongodb", "bitnami/mongodb":
-		return "mongodb"
-	case "valkey/valkey", "bitnami/valkey":
-		return "valkey"
-	case "rabbitmq", "bitnami/rabbitmq":
-		return "rabbitmq"
 	case "confluentinc/cp-kafka", "bitnami/kafka", "apache/kafka":
 		return "kafka"
 	case "memcached":

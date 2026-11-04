@@ -49,6 +49,41 @@ func TestParseUploaded_RefusesServerFileReferences(t *testing.T) {
 	}
 }
 
+func TestConvert_ChartBackedDatastoresBecomeAddons(t *testing.T) {
+	doc, _ := convertString(t, `
+services:
+  api:
+    image: myorg/api:1.0
+    environment:
+      AMQP_URL: amqp://guest:guest@mq:5672
+      MYSQL_URL: mysql://u:p@my:3306/app
+  my:
+    image: mysql:8.0
+  mo:
+    image: mongo:7
+  va:
+    image: valkey/valkey:8
+  mq:
+    image: rabbitmq:3-management
+`)
+	for name, kind := range map[string]string{"my": "mysql", "mo": "mongodb", "va": "valkey", "mq": "rabbitmq"} {
+		a := findAddon(doc, name)
+		if a == nil || a.Kind != kind {
+			t.Errorf("%s: want %s addon, got %+v", name, kind, a)
+		}
+	}
+	api := findService(doc, "api")
+	if api == nil {
+		t.Fatal("api service missing")
+	}
+	if got := api.Env["AMQP_URL"]; got != "${{ mq.AMQP_URL }}" {
+		t.Errorf("AMQP_URL = %q, want ${{ mq.AMQP_URL }}", got)
+	}
+	if got := api.Env["MYSQL_URL"]; got != "${{ my.MYSQL_URL }}" {
+		t.Errorf("MYSQL_URL = %q, want ${{ my.MYSQL_URL }}", got)
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}
