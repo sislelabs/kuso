@@ -3129,18 +3129,34 @@ func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) 
 	if buildPhase(b) == "running" {
 		return nil
 	}
+	// b may be a stale informer snapshot: a Cancel (or any terminal stamp)
+	// that landed since must not be overwritten back to "running", or the
+	// build reads running forever while the poller skips it as done.
+	cur, err := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name)
+	if err != nil {
+		return fmt.Errorf("re-read build before running: %w", err)
+	}
+	if cur.Spec.Done || cur.Labels[LabelBuildState] == "done" || buildPhase(cur) == "running" {
+		return nil
+	}
 	// Stamp started-at the first time we see the kaniko Job pod active.
 	// Without this the build-summary endpoint has no startedAt for the
 	// running build, the deployments panel can't compute a live duration,
 	// and the row shows just "12s ago" with no elapsed timer. Set it
 	// once on the queued→running transition; markSucceeded/markFailed
 	// don't touch it so finished builds keep their started-at intact.
+	// The resourceVersion precondition closes the window between the
+	// re-read and the patch; a conflict means something else wrote the
+	// CR, and the next tick re-evaluates from fresh state.
 	patch := []byte(fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"running",%q:%q}}}`,
-		annPhase, annStartedAt, time.Now().UTC().Format(time.RFC3339),
+		`{"metadata":{"resourceVersion":%q,"annotations":{%q:"running",%q:%q}}}`,
+		cur.ResourceVersion, annPhase, annStartedAt, time.Now().UTC().Format(time.RFC3339),
 	))
-	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+	_, err = p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	if apierrors.IsConflict(err) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("patch build running: %w", err)
 	}

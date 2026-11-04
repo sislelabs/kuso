@@ -952,6 +952,35 @@ func TestPoller_PromoteFailurePastMaxAgeEndsBuild(t *testing.T) {
 	}
 }
 
+// BUILD-08: markRunning works off a stale snapshot. A Cancel that landed
+// after the snapshot must not be flipped back to "running".
+func TestPoller_MarkRunningDoesNotResurrectCancelled(t *testing.T) {
+	t.Parallel()
+	live := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-ccc", Namespace: "kuso",
+			Annotations: map[string]string{annPhase: "cancelled"},
+			Labels:      map[string]string{LabelBuildState: "done"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "ccc", Done: true},
+	}
+	s := fakeService(t, seedBuild(live))
+	stale := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-ccc", Namespace: "kuso",
+			Annotations: map[string]string{annPhase: "pending"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "ccc"},
+	}
+	p := &Poller{Svc: s, Interval: time.Hour}
+	if err := p.markRunning(context.Background(), "kuso", stale); err != nil {
+		t.Fatalf("markRunning: %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-ccc")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "cancelled" {
+		t.Errorf("phase = %q, want cancelled", ph)
+	}
+}
+
 func TestPoller_MarksFailed(t *testing.T) {
 	t.Parallel()
 	build := &kube.KusoBuild{
