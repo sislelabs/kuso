@@ -606,6 +606,9 @@ func restoreScriptForKind(kind string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("addon kind %q is not restorable", kind)
 	}
+	if m, ok := p.(backup.ManualRestorer); ok && m.ManualRestore() {
+		return "", fmt.Errorf("addon kind %q backups must be restored manually; automated restore is not supported", kind)
+	}
 	return p.RestoreScript(), nil
 }
 

@@ -118,6 +118,7 @@ type redisProducer struct{}
 func (redisProducer) Kind() string        { return "redis" }
 func (redisProducer) PayloadKind() string { return "redis_rdb" }
 func (redisProducer) ArtifactExt() string { return "rdb.gz" }
+func (redisProducer) ManualRestore() bool { return true }
 
 // Redis restore is not wired into the UI restore path today (the current
 // Restore handler is postgres-only). Provide the script for completeness

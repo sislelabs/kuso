@@ -30,6 +30,11 @@ func TestRestoreScriptForKind(t *testing.T) {
 	if _, err := restoreScriptForKind("nats"); err == nil {
 		t.Error("nats should be rejected as not restorable")
 	}
+	// DATA-12: redis backups exist but restore is manual; the API must not
+	// mint a Job that always exits 1.
+	if _, err := restoreScriptForKind("redis"); err == nil {
+		t.Error("redis has no automated restore and must be rejected")
+	}
 }
 
 // TestInPlaceRestoreNeedsConfirm pins the P1 fix: the confirm gate compares
