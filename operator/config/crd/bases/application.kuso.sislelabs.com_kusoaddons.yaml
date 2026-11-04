@@ -220,6 +220,9 @@ spec:
                     time into <release>-conn instead of generating
                     a random one. Leave unset to let the chart
                     generate a random 24-char password.
+                    Honoured only for kind postgres (incl. HA and the
+                    pooler); every other kind ignores it and generates
+                    a random password.
                   properties:
                     name:
                       type: string

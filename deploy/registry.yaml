@@ -38,7 +38,7 @@ spec:
     spec:
       containers:
         - name: registry
-          image: registry:2
+          image: registry:2.8.3
           ports:
             - name: registry
               containerPort: 5000
@@ -157,7 +157,7 @@ spec:
                   kubectl -n kuso wait --for=delete pod -l app.kubernetes.io/name=kuso-registry --timeout=120s || true
           containers:
             - name: gc
-              image: registry:2
+              image: registry:2.8.3
               command: [/bin/sh, -ec]
               args:
                 - |

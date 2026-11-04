@@ -3,11 +3,20 @@ package updater
 import (
 	"context"
 	"os"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// updateJobDeadline bounds an updater Job. Without it a pod stuck in
+// ImagePullBackOff (or a hung download) never counts as failed and
+// blocks every later StartUpdate. Sized above the entrypoint's worst
+// case: bounded downloads plus server/activator/operator rolls and
+// their reverts.
+const updateJobDeadline = 45 * time.Minute
 
 // batchv1Job is the small bag of fields applyJob needs. Avoids
 // passing the full corev1/batchv1 types into updater.go and keeps
@@ -32,6 +41,8 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 	bf := int32(0)
 	one := int32(1)
 	ttl := int32(86400)
+	deadline := int64(updateJobDeadline.Seconds())
+	noEscalation := false
 	env := make([]corev1.EnvVar, 0, len(j.Env))
 	for k, v := range j.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
@@ -47,6 +58,7 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &bf,
+			ActiveDeadlineSeconds:   &deadline,
 			Completions:             &one,
 			Parallelism:             &one,
 			TTLSecondsAfterFinished: &ttl,
@@ -64,6 +76,23 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 						Image:           j.Image,
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Env:             env,
+						// Stays root: the image has no non-root user, and a
+						// spec the image can't run under would brick
+						// self-update with no in-band recovery.
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: &noEscalation,
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("50m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceMemory: resource.MustParse("512Mi"),
+							},
+						},
 					}},
 				},
 			},

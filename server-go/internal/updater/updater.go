@@ -364,6 +364,7 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
+	defaultComponentImages(&m)
 	// Fully decoded + signature-checked (or explicitly accepted under
 	// require=false). Safe to cache the ETag now so the next poll can
 	// short-circuit on 304.
@@ -490,19 +491,21 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
-	// Defensive: a malformed/partial manifest that omits a component image
-	// must not blank the corresponding Deployment image on roll. Fall back
-	// to the version-tagged default (same shape as the synthesized-manifest
-	// path above). This closes the empty-image hole; it does NOT correct a
-	// wrong-but-present tag — that's release-time's job (the ghcr pagination
-	// fix in hack/release.sh). Belt-and-braces against a future bad release.
+	defaultComponentImages(&m)
+	return &m, nil
+}
+
+// defaultComponentImages fills a missing server/operator image with the
+// version-tagged default (same shape as the synthesized-manifest path).
+// A malformed/partial manifest must not blank a Deployment image on roll.
+// It does NOT correct a wrong-but-present tag — that's release-time's job.
+func defaultComponentImages(m *Manifest) {
 	if m.Components.Server.Image == "" {
 		m.Components.Server.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-server-go:%s", m.Version)
 	}
 	if m.Components.Operator.Image == "" {
 		m.Components.Operator.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-operator:%s", m.Version)
 	}
-	return &m, nil
 }
 
 // canAutoUpgrade returns whether the user can hit "Update" without
@@ -767,22 +770,33 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	if updaterImg == "" {
 		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
 	}
+	env := map[string]string{
+		"KUSO_TARGET_VERSION":   m.Version,
+		"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
+		"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
+		"KUSO_CRDS_URL":         m.CRDs.URL,
+		"KUSO_CRDS_SHA256":      m.CRDs.SHA256,
+		"KUSO_MANIFESTS_URL":    m.Manifests.URL,
+		"KUSO_MANIFESTS_SHA256": m.Manifests.SHA256,
+		"KUSO_NAMESPACE":        s.Namespace,
+		"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
+	}
+	// Downgrade: the older release's CRDs lack the newer spec fields, and
+	// the apiserver would prune them from every stored CR on its next
+	// write — unrecoverable by upgrading again. The installed (newer) CRDs
+	// are a superset the older server tolerates, so keep them. The older
+	// updater image applies CRDs unconditionally, so run this server's own
+	// updater, which honours KUSO_SKIP_CRDS.
+	if compareTags(m.Version, s.Current) < 0 {
+		env["KUSO_SKIP_CRDS"] = "1"
+		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + s.Current
+	}
 	jobName := fmt.Sprintf("kuso-update-%d", time.Now().Unix())
 	job := &batchv1Job{
 		Name:      jobName,
 		Namespace: s.Namespace,
 		Image:     updaterImg,
-		Env: map[string]string{
-			"KUSO_TARGET_VERSION":   m.Version,
-			"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
-			"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
-			"KUSO_CRDS_URL":         m.CRDs.URL,
-			"KUSO_CRDS_SHA256":      m.CRDs.SHA256,
-			"KUSO_MANIFESTS_URL":    m.Manifests.URL,
-			"KUSO_MANIFESTS_SHA256": m.Manifests.SHA256,
-			"KUSO_NAMESPACE":        s.Namespace,
-			"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
-		},
+		Env:       env,
 	}
 	if err := s.applyJob(ctx, job); err != nil {
 		_ = s.writeStatus(ctx, UpdateStatus{Phase: "failed", Message: err.Error(), Updated: time.Now().UTC()})
@@ -806,6 +820,11 @@ func (s *Service) activeUpdateJob(ctx context.Context) (string, error) {
 	}
 	for _, j := range jobs.Items {
 		if !strings.HasPrefix(j.Name, "kuso-update-") || j.Status.Succeeded > 0 || j.Status.Failed > 0 {
+			continue
+		}
+		// Past the deadline it is wedged, not running (and Jobs created
+		// before ActiveDeadlineSeconds was set never time out at all).
+		if ct := j.CreationTimestamp.Time; !ct.IsZero() && time.Since(ct) > updateJobDeadline+5*time.Minute {
 			continue
 		}
 		done := false
@@ -852,7 +871,56 @@ func (s *Service) Status(ctx context.Context) (UpdateStatus, bool) {
 	if err := json.Unmarshal([]byte(raw), &st); err != nil {
 		return UpdateStatus{}, false
 	}
+	if !terminalPhase(st.Phase) {
+		if name, failed := s.latestUpdateJobFailed(ctx); failed {
+			st.Message = fmt.Sprintf("updater job %s failed while %q (%s) — see its pod logs", name, st.Phase, st.Message)
+			st.Phase = "failed"
+		}
+	}
 	return st, true
+}
+
+func terminalPhase(p string) bool {
+	switch p {
+	case "done", "failed", "rolled-back", "rollback-failed":
+		return true
+	}
+	return false
+}
+
+// latestUpdateJobFailed reports whether the most recent updater Job has
+// failed. The entrypoint can exit without writing a terminal phase (a
+// command failing under set -e, OOM, ActiveDeadlineSeconds), which used
+// to leave the UI showing the update in progress forever.
+func (s *Service) latestUpdateJobFailed(ctx context.Context) (string, bool) {
+	jobs, err := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=kuso-server",
+	})
+	if err != nil {
+		return "", false
+	}
+	var latest *batchv1.Job
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if !strings.HasPrefix(j.Name, "kuso-update-") {
+			continue
+		}
+		if latest == nil || j.CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = j
+		}
+	}
+	if latest == nil {
+		return "", false
+	}
+	if latest.Status.Failed > 0 {
+		return latest.Name, true
+	}
+	for _, c := range latest.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return latest.Name, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) writeStatus(ctx context.Context, st UpdateStatus) error {

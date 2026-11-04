@@ -28,7 +28,12 @@
 #     into the first rule). The home `kuso` namespace is exempt because
 #     kuso-server labels it itself at boot on pre-label installs. Project
 #     adoption already requires the label to be present beforehand
-#     (internal/projects/namespace_guard.go).
+#     (internal/projects/namespace_guard.go). Nor may an update add the
+#     namespace-created-by-kuso annotation, which gates deletion.
+#   - Namespace deletes only of namespaces kuso created (managed-by=kuso
+#     label AND the namespace-created-by-kuso annotation), never `kuso`
+#     itself. The RBAC grant is cluster-wide; the server's own check is
+#     the same, but this one holds under an RCE.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -43,7 +48,7 @@ spec:
         resources: [roles, rolebindings, clusterrolebindings]
       - apiGroups: [""]
         apiVersions: ["*"]
-        operations: [UPDATE]
+        operations: [UPDATE, DELETE]
         resources: [namespaces]
   matchConditions:
     - name: is-kuso-server
@@ -51,6 +56,8 @@ spec:
   variables:
     - name: managedLabel
       expression: "'app.kubernetes.io/managed-by'"
+    - name: createdByKuso
+      expression: "'kuso.sislelabs.com/namespace-created-by-kuso'"
   validations:
     - expression: >-
         !(request.resource.resource in ['roles', 'rolebindings']) ||
@@ -68,7 +75,28 @@ spec:
       message: kuso-server-managed-ns is namespace-scoped by design; kuso-server may not bind it cluster-wide
       reason: Forbidden
     - expression: >-
-        request.resource.resource != 'namespaces' ||
+        request.resource.resource != 'namespaces' || request.operation != 'DELETE' ||
+        (oldObject.metadata.name != 'kuso' &&
+         has(oldObject.metadata.labels) &&
+         variables.managedLabel in oldObject.metadata.labels &&
+         oldObject.metadata.labels[variables.managedLabel] == 'kuso' &&
+         has(oldObject.metadata.annotations) &&
+         variables.createdByKuso in oldObject.metadata.annotations &&
+         oldObject.metadata.annotations[variables.createdByKuso] == 'true')
+      messageExpression: >-
+        'kuso-server may only delete namespaces it created (' + oldObject.metadata.name + ' is not)'
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation != 'UPDATE' ||
+        !(has(object.metadata.annotations) &&
+          variables.createdByKuso in object.metadata.annotations) ||
+        (has(oldObject.metadata.annotations) &&
+         variables.createdByKuso in oldObject.metadata.annotations &&
+         oldObject.metadata.annotations[variables.createdByKuso] == object.metadata.annotations[variables.createdByKuso])
+      message: kuso-server may not add or change the namespace-created-by-kuso annotation on an existing namespace
+      reason: Forbidden
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation == 'DELETE' ||
         object.metadata.name == 'kuso' ||
         !(has(object.metadata.labels) &&
           variables.managedLabel in object.metadata.labels &&

@@ -32,7 +32,14 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # Keep in step with ESCALATION_EXCLUDED in hack/release.sh (bundle builder).
-BUNDLE_EXCLUDED = {("ClusterRole", "kuso-operator"), ("ClusterRoleBinding", "kuso-operator")}
+BUNDLE_EXCLUDED = {
+    ("ClusterRole", "kuso-operator"), ("ClusterRoleBinding", "kuso-operator"),
+    ("ClusterRole", "kuso-activator"), ("ClusterRoleBinding", "kuso-activator"),
+    ("ClusterRole", "kuso-server"), ("ClusterRole", "kuso-server-managed-ns"),
+    ("ClusterRole", "kuso-pkg-probe"), ("ClusterRoleBinding", "kuso-pkg-probe"),
+    ("ClusterRole", "kuso-incident-agent"), ("ClusterRoleBinding", "kuso-incident-agent"),
+    ("Role", "kuso-registry-gc"), ("RoleBinding", "kuso-registry-gc"),
+}
 
 POD_FIXTURES = [
     ("kusoenvironment", "p-web-production", {

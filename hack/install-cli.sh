@@ -8,8 +8,11 @@
 #      (sislelabs/kuso releases). Binaries are named
 #      kuso-${OS}-${ARCH} — produced by hack/release.sh on every
 #      tagged version.
-#   2. Fall back to `go install kuso/cmd@latest` if Go is on PATH.
-#      Reliable because it's just a Go module — same bits, slower.
+#      The binary is checked against the release's SHA256SUMS when
+#      that asset exists (releases before it only get a warning).
+#   2. Fall back to building the same tag from source if git + Go are
+#      on PATH (the CLI module path is `kuso`, so `go install` from
+#      GitHub can't resolve it).
 #   3. Print a manual-build hint if neither works.
 #
 # Drops the binary into ~/.local/bin/kuso (or /usr/local/bin when run
@@ -80,10 +83,40 @@ if [ -n "${VERSION:-}" ]; then
   URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 fi
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# verify_checksum <file>: dies on a mismatch; warns when the release has
+# no SHA256SUMS (published before it existed) or no hashing tool exists.
+verify_checksum() {
+  SUMS="$(mktemp)"
+  if ! curl -fsSL -o "$SUMS" "https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS" 2>/dev/null; then
+    rm -f "$SUMS"
+    warn "release ${VERSION} has no SHA256SUMS — installing without a checksum check"
+    return 0
+  fi
+  want="$(awk -v a="$ASSET" '$2 == a || $2 == "*"a {print $1}' "$SUMS" | head -n1)"
+  rm -f "$SUMS"
+  [ -n "$want" ] || die "SHA256SUMS for ${VERSION} has no entry for ${ASSET} — refusing to install"
+  got="$(sha256_file "$1")"
+  if [ -z "$got" ]; then
+    warn "no sha256sum/shasum on PATH — installing without a checksum check"
+    return 0
+  fi
+  [ "$got" = "$want" ] || die "checksum mismatch for ${ASSET}: got ${got}, SHA256SUMS says ${want} — refusing to install"
+  log "checksum verified (${got})"
+}
+
 if [ -n "$URL" ]; then
   log "trying ${URL}"
   TMP="$(mktemp)"
   if curl -fsSL -o "$TMP" "$URL" 2>/dev/null && [ -s "$TMP" ]; then
+    verify_checksum "$TMP" || { rm -f "$TMP"; exit 1; }
     chmod +x "$TMP"
     mv "$TMP" "$DEST"
     log "installed kuso ${VERSION} to ${DEST}"
@@ -95,26 +128,23 @@ if [ -n "$URL" ]; then
   fi
 fi
 
-# --- step 2: go install fallback ------------------------------------
+# --- step 2: build-from-source fallback -----------------------------
 
 if [ -z "$URL" ]; then
-  if command -v go >/dev/null 2>&1; then
-    log "no prebuilt binary — falling back to 'go install kuso/cmd@latest'"
-    GOBIN="$(dirname "$DEST")"
-    export GOBIN
-    if go install "github.com/${REPO}/cli/cmd@latest" 2>/dev/null; then
-      # `go install` writes the binary as the package's *directory* name
-      # (`cmd`) — rename to `kuso`. Quietly tolerate the "already there"
-      # case (re-run install, target exists with the same name).
-      if [ -f "${GOBIN}/cmd${EXT}" ] && [ "${GOBIN}/cmd${EXT}" != "${DEST}" ]; then
-        mv -f "${GOBIN}/cmd${EXT}" "${DEST}"
-      fi
-      log "installed kuso (go install) to ${DEST}"
+  if command -v go >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+    REF="${VERSION:-main}"
+    log "no prebuilt binary — building ${REF} from source"
+    SRC="$(mktemp -d)"
+    if git clone --quiet --depth 1 --branch "$REF" "https://github.com/${REPO}.git" "$SRC" \
+        && (cd "$SRC/cli" && go build -ldflags "-X kuso/cmd/kusoCli/version.ldflagsVersion=${REF}" -o "$DEST" ./cmd); then
+      rm -rf "$SRC"
+      log "installed kuso ${REF} (built from source) to ${DEST}"
     else
-      die "go install failed. Try: git clone https://github.com/${REPO} && cd kuso/cli && go build -o ${DEST} ./cmd"
+      rm -rf "$SRC"
+      die "source build failed. Try: git clone https://github.com/${REPO} && cd kuso/cli && go build -o ${DEST} ./cmd"
     fi
   else
-    die "no Go toolchain and no prebuilt binary. Install Go (https://go.dev/dl/) or download a release manually."
+    die "no prebuilt binary, and no git + Go toolchain to build from source. Install Go (https://go.dev/dl/) or download a release manually."
   fi
 fi
 

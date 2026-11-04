@@ -5,15 +5,21 @@
 # JSON status to the ConfigMap so the UI can render progress without
 # tailing pod logs.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 NS="${KUSO_NAMESPACE:-kuso}"
 CM="${KUSO_STATUS_CONFIGMAP:-kuso-update-status}"
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Bounded downloads: a stalled connection must fail the step, not hang
+# the Job until its deadline.
+CURL_OPTS=(-fsSL --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5)
+
+CURRENT_PHASE="starting"
 write_status() {
   local phase="$1"
+  CURRENT_PHASE="$phase"
   local message="${2:-}"
   local started="${STARTED_AT:-$(now)}"
   local payload
@@ -55,30 +61,50 @@ verify_sha256() {
   echo "==> ${label} sha256 verified (${got})"
 }
 
+# Any unguarded command failing under set -e used to exit with the
+# ConfigMap still on an in-progress phase, so the UI showed the update
+# running forever. Explicit failure paths write their own status and
+# `exit 1`, which does not fire ERR.
+on_err() {
+  trap - ERR
+  write_status "failed" "updater aborted at line $1 during ${CURRENT_PHASE} — see the kuso-update Job logs" || true
+}
+trap 'on_err $LINENO' ERR
+
 STARTED_AT="$(now)"
-write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
-TMP_CRDS=$(mktemp)
-curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
-verify_sha256 "$TMP_CRDS" "${KUSO_CRDS_SHA256:-}" "crds.yaml"
+# KUSO_SKIP_CRDS=1 is set by the server on a downgrade: the older
+# release's CRDs would drop newer spec fields and the apiserver would
+# prune them from every stored CR. The installed CRDs are a superset the
+# older server tolerates, so they stay.
+if [ "${KUSO_SKIP_CRDS:-}" = "1" ]; then
+  write_status "applying-crds" "downgrade to ${KUSO_TARGET_VERSION} — keeping the installed (newer) CRDs"
+  echo "==> downgrade: skipping CRD apply so newer spec fields are not pruned"
+else
+  write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
-# Server-side dry-run BEFORE the real apply. This validates the CRD
-# objects themselves (a structurally invalid schema, an illegal type
-# change the apiserver refuses) and aborts with a clear status instead
-# of a half-applied bundle.
-#
-# It does NOT re-validate stored CRs against the new schema. A tightened
-# pattern/maxLength, a new CEL rule or required field, or a dropped
-# x-kubernetes-preserve-unknown-fields all pass this dry-run and then
-# break (or silently prune) existing CRs on their next write. Those are
-# caught at ship time by hack/crd-guard.py, not here.
-if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
-  echo "==> CRD server-side dry-run FAILED — refusing to apply:"
-  echo "$dryrun_out" | sed 's/^/    /'
-  write_status "failed" "CRD validation (dry-run) failed — not applied: $(echo "$dryrun_out" | tr '\n' ' ' | cut -c1-300)"
-  exit 1
+  TMP_CRDS=$(mktemp)
+  curl "${CURL_OPTS[@]}" "$KUSO_CRDS_URL" -o "$TMP_CRDS"
+  verify_sha256 "$TMP_CRDS" "${KUSO_CRDS_SHA256:-}" "crds.yaml"
+
+  # Server-side dry-run BEFORE the real apply. This validates the CRD
+  # objects themselves (a structurally invalid schema, an illegal type
+  # change the apiserver refuses) and aborts with a clear status instead
+  # of a half-applied bundle.
+  #
+  # It does NOT re-validate stored CRs against the new schema. A tightened
+  # pattern/maxLength, a new CEL rule or required field, or a dropped
+  # x-kubernetes-preserve-unknown-fields all pass this dry-run and then
+  # break (or silently prune) existing CRs on their next write. Those are
+  # caught at ship time by hack/crd-guard.py, not here.
+  if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
+    echo "==> CRD server-side dry-run FAILED — refusing to apply:"
+    echo "$dryrun_out" | sed 's/^/    /'
+    write_status "failed" "CRD validation (dry-run) failed — not applied: $(echo "$dryrun_out" | tr '\n' ' ' | cut -c1-300)"
+    exit 1
+  fi
+  kubectl apply -f "$TMP_CRDS" >/dev/null
 fi
-kubectl apply -f "$TMP_CRDS" >/dev/null
 
 # Apply the release's non-workload platform manifests (RBAC,
 # ServiceAccounts, PriorityClasses, NetworkPolicies, PDBs) before
@@ -100,7 +126,7 @@ MANIFESTS_WARNING=""
 if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
   write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
   TMP_MANIFESTS=$(mktemp)
-  if curl -fsSL "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"; then
+  if curl "${CURL_OPTS[@]}" "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"; then
     # A mismatch is fatal even though the apply itself is best-effort:
     # CRDs are already applied at this point, but no RBAC from an
     # unverified bundle and no image roll happens.
@@ -164,8 +190,26 @@ fi
 # predate the activator, so a missing deployment must not fail the Job.
 if kubectl get -n "$NS" deploy/kuso-activator >/dev/null 2>&1; then
   write_status "rolling-activator" "${KUSO_SERVER_IMAGE}"
+  # Same snapshot-and-revert as the server: the activator runs the image
+  # with a stricter securityContext, so it can fail where the server didn't.
+  PRIOR_ACTIVATOR_IMAGE=$(kubectl get -n "$NS" deploy/kuso-activator \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="activator")].image}' 2>/dev/null || true)
   kubectl set image -n "$NS" deploy/kuso-activator "activator=${KUSO_SERVER_IMAGE}" >/dev/null
-  kubectl rollout status -n "$NS" deploy/kuso-activator --timeout=180s
+  if ! kubectl rollout status -n "$NS" deploy/kuso-activator --timeout=180s; then
+    echo "==> kuso-activator rollout to ${KUSO_SERVER_IMAGE} did NOT become ready"
+    if [ -n "$PRIOR_ACTIVATOR_IMAGE" ] && [ "$PRIOR_ACTIVATOR_IMAGE" != "${KUSO_SERVER_IMAGE}" ]; then
+      echo "==> reverting kuso-activator to ${PRIOR_ACTIVATOR_IMAGE}"
+      kubectl set image -n "$NS" deploy/kuso-activator "activator=${PRIOR_ACTIVATOR_IMAGE}" >/dev/null || true
+      if kubectl rollout status -n "$NS" deploy/kuso-activator --timeout=180s; then
+        write_status "failed" "activator failed on ${KUSO_SERVER_IMAGE}; activator reverted to ${PRIOR_ACTIVATOR_IMAGE}. Server is already on ${KUSO_TARGET_VERSION}; operator not rolled"
+      else
+        write_status "failed" "activator failed on ${KUSO_SERVER_IMAGE} AND revert to ${PRIOR_ACTIVATOR_IMAGE} did not stabilise — manual intervention required. Server is on ${KUSO_TARGET_VERSION}"
+      fi
+    else
+      write_status "failed" "activator failed on ${KUSO_SERVER_IMAGE} and there is no different prior image to revert to — manual intervention required"
+    fi
+    exit 1
+  fi
 else
   write_status "rolling-activator" "no kuso-activator deployment — skipping (pre-activator install)"
   echo "==> no kuso-activator deployment found; skipping activator roll"

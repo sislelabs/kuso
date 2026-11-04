@@ -1,4 +1,7 @@
-{{- if (.Values.quota).enabled }}
+{{- /* Only into a project's own namespace: a legacy project (empty
+       spec.namespace) renders into the release ns, kuso, where the quota
+       and LimitRange defaults would cap kuso-server, postgres and buildkitd. */}}
+{{- if and (.Values.quota).enabled .Values.namespace (ne .Values.namespace .Release.Namespace) }}
 # Per-project ResourceQuota. Caps the total CPU, memory, pod count, and
 # PVC count any one tenant can consume. Without this, a runaway
 # autoscaling rule or a fork bomb in one project starves the rest of

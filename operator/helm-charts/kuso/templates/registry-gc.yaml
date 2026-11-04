@@ -144,7 +144,7 @@ spec:
                   mountPath: /shared
           containers:
             - name: gc
-              image: registry:2
+              image: registry:2.8.3
               command:
                 - sh
                 - /scripts/run-gc.sh

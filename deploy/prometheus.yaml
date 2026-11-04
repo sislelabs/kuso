@@ -144,7 +144,10 @@ spec:
             - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time=7d
             - --web.listen-address=:9090
-            - --web.enable-lifecycle  # POST /-/reload to hot-reload config
+            # No --web.enable-lifecycle: nothing calls /-/reload (install.sh
+            # restarts the pod), and it also exposes an unauthenticated
+            # POST /-/quit to anything that can reach :9090 — including
+            # Dockerfile RUN steps in the buildkitd pod.
           ports:
             - { containerPort: 9090, name: http }
           resources:
@@ -170,8 +173,7 @@ spec:
             secretName: kuso-prometheus-scrape
             # Optional so a fresh install where install.sh hasn't yet
             # created the Secret doesn't crash-loop the pod. After
-            # install completes, prometheus reloads via /-/reload or
-            # the next pod restart picks it up.
+            # install completes, the next pod restart picks it up.
             optional: true
             # Explicit items clamp: only the `token` key shows up in
             # the mount, even if the Secret grows new keys later

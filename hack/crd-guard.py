@@ -27,18 +27,41 @@ def _bounds(o, n, path, problems):
     for key in ("exclusiveMaximum", "exclusiveMinimum"):
         if n.get(key) is True and o.get(key) is not True:
             problems.append(f"{path}: {key} added")
-    # A changed regex/format can't be proven wider, so any change counts.
+    # A changed regex/format can't be proven wider in general, so any
+    # change counts — except appending a top-level alternative to the old
+    # regex ("OLD|NEW"), which can only accept more.
     for key in ("pattern", "format"):
         if key in n and n.get(key) != o.get(key):
+            if key == "pattern" and _pattern_widened(o.get(key), n[key]):
+                continue
             problems.append(f"{path}: {key} added/changed {o.get(key)!r} -> {n[key]!r}")
     if o.get("nullable") is True and n.get("nullable") is not True:
         problems.append(f"{path}: nullable removed")
 
 
+def _pattern_widened(old, new):
+    """True when new is old plus a top-level alternative: "OLD|...".
+
+    A trailing unescaped backslash in old would escape the "|", so that
+    case is not treated as a widening.
+    """
+    if not isinstance(old, str) or not isinstance(new, str):
+        return False
+    trailing = len(old) - len(old.rstrip("\\"))
+    return trailing % 2 == 0 and new.startswith(old + "|")
+
+
+def _cel_weakened(old_rules, rule):
+    """True when rule is "<expr> || (<an old rule>)" — it admits a superset."""
+    if not isinstance(rule, str):
+        return False
+    return any(isinstance(o, str) and rule.endswith(" || (" + o + ")") for o in old_rules)
+
+
 def _cel(o, n, path, problems):
     old_rules = {r.get("rule") for r in (o.get("x-kubernetes-validations") or []) if isinstance(r, dict)}
     for r in n.get("x-kubernetes-validations") or []:
-        if isinstance(r, dict) and r.get("rule") not in old_rules:
+        if isinstance(r, dict) and r.get("rule") not in old_rules and not _cel_weakened(old_rules, r.get("rule")):
             problems.append(f"{path}: new x-kubernetes-validations rule {r.get('rule')!r}")
 
 
@@ -52,6 +75,21 @@ def walk(o, n, path, problems):
     ot, nt = o.get("type"), n.get("type")
     if ot and nt and ot != nt:
         problems.append(f"{path}: type changed {ot} -> {nt}")
+    elif nt and not ot and o:
+        problems.append(f"{path}: type {nt} added to a previously untyped node")
+    if o.get("x-kubernetes-int-or-string") is True and n.get("x-kubernetes-int-or-string") is not True:
+        problems.append(f"{path}: x-kubernetes-int-or-string removed")
+    # A set/map list rejects duplicates / items missing the keys that an
+    # atomic (default) list stored happily.
+    olt, nlt = o.get("x-kubernetes-list-type"), n.get("x-kubernetes-list-type")
+    if nlt in ("set", "map") and nlt != olt:
+        problems.append(f"{path}: x-kubernetes-list-type {olt or 'unset'!r} -> {nlt!r}")
+    if n.get("x-kubernetes-list-map-keys") and n.get("x-kubernetes-list-map-keys") != o.get("x-kubernetes-list-map-keys"):
+        problems.append(f"{path}: x-kubernetes-list-map-keys added/changed")
+    # Combinators can't be proven wider, so any addition or change counts.
+    for key in ("oneOf", "anyOf", "allOf", "not"):
+        if key in n and n.get(key) != o.get(key):
+            problems.append(f"{path}: {key} added/changed")
     oe, ne = o.get("enum"), n.get("enum")
     if isinstance(ne, list):
         if isinstance(oe, list):
@@ -92,8 +130,16 @@ def walk(o, n, path, problems):
     if isinstance(oa, dict):
         if isinstance(na, dict):
             walk(oa, na, path + ".*", problems)
-        else:
+        elif na is False:
+            problems.append(f"{path}.*: additionalProperties disallowed")
+        elif na is None:
             problems.append(f"{path}.*: additionalProperties schema removed")
+    elif na is False and oa is not False:
+        problems.append(f"{path}.*: additionalProperties disallowed")
+    elif isinstance(na, dict) and o:
+        # Absent/true before: map values (or unknown keys) of any shape
+        # were accepted; a value schema now constrains them.
+        problems.append(f"{path}.*: additionalProperties schema added")
 
 
 def _versions(doc):

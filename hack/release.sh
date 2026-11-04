@@ -920,12 +920,31 @@ KNOWN_NS = {"kuso", "kuso-operator-system"}
 # kuso-activator's ClusterRole grants cluster-wide deployments patch
 # (narrowed by the ValidatingAdmissionPolicy in
 # deploy/kuso-admission-policy.yaml), which kuso-server only holds per
-# managed namespace — same escalation refusal.
+# managed namespace — same escalation refusal. The helper roles below
+# grant pods/eviction (pkg-probe), pods/log watch + events.k8s.io
+# (incident-agent), deployments/scale (registry-gc) and the managed-ns
+# secret/exec/SA writes kuso-server deliberately lacks cluster-wide, so
+# any change to them can only come back Forbidden.
+#
+# kuso-server's own ClusterRole is excluded too: additions to it are
+# refused as escalation, and the only edits that WOULD apply are
+# narrowings — applied mid-upgrade, before a matching managed-ns grant
+# that can't apply, they would strip the updater's own permissions.
+# hack/release-impact.py lists every changed excluded role in the
+# release notes as a manual cluster-admin apply.
 ESCALATION_EXCLUDED = {
     ("ClusterRole", "kuso-operator"),
     ("ClusterRoleBinding", "kuso-operator"),
     ("ClusterRole", "kuso-activator"),
     ("ClusterRoleBinding", "kuso-activator"),
+    ("ClusterRole", "kuso-server"),
+    ("ClusterRole", "kuso-server-managed-ns"),
+    ("ClusterRole", "kuso-pkg-probe"),
+    ("ClusterRoleBinding", "kuso-pkg-probe"),
+    ("ClusterRole", "kuso-incident-agent"),
+    ("ClusterRoleBinding", "kuso-incident-agent"),
+    ("Role", "kuso-registry-gc"),
+    ("RoleBinding", "kuso-registry-gc"),
 }
 
 out, skipped, excluded = [], [], []
@@ -976,6 +995,32 @@ MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/upgrade-manifests.yaml")"
 [[ "$CRDS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/crds.yaml (got '${CRDS_SHA256}')"
 [[ "$MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/upgrade-manifests.yaml (got '${MANIFESTS_SHA256}')"
 
+# Image references in release.json carry the registry digest, so the
+# Ed25519 signature covers the image bytes too. Tags are mutable: a
+# re-push of :${VERSION} (a re-run ship, a leaked ghcr token) would
+# otherwise give clusters different binaries under one signed version.
+# Resolved from the registry AFTER every push, which also covers the
+# reused-operator and KUSO_RELEASE_SKIP_BUILD paths.
+image_digest() {
+  docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null
+}
+pin_image() {
+  local ref="$1" digest
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "$ref"
+    return
+  fi
+  digest="$(image_digest "$ref")"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "could not resolve the registry digest of ${ref} (got '${digest}') — refusing to publish a tag-only release.json"
+  echo "${ref}@${digest}"
+}
+SERVER_IMAGE_REF="$(pin_image "${KUSO_RELEASE_IMAGE}:${VERSION}")"
+OPERATOR_IMAGE_REF="$(pin_image "${OPERATOR_IMAGE}:${OPERATOR_VERSION}")"
+UPDATER_IMAGE_REF="$(pin_image "${UPDATER_IMAGE:-ghcr.io/sislelabs/kuso-updater}:${VERSION}")"
+log "release.json images: ${SERVER_IMAGE_REF}, ${OPERATOR_IMAGE_REF}, ${UPDATER_IMAGE_REF}"
+
 # release.json: stable wire shape consumed by internal/updater.Manifest.
 # Keep "additive" as the default migration kind; the moment we ship
 # something destructive, this script grows a CRD-diff step.
@@ -1018,20 +1063,36 @@ else
   fi
 fi
 
+# A release that skipped the CRD guard must not auto-apply anywhere: the
+# manual migration it relies on was applied to the maintainer's cluster
+# only. Force breaking (blocks the "Update" button), record a destructive
+# migration, and require the previous release as the starting point.
+# Deliberately not overridable by KUSO_RELEASE_BREAKING=0.
+MIN_SERVER="v0.4.0"
+MIGRATIONS_JSON="[]"
+if [[ "$ALLOW_BREAKING_CRDS" == "1" ]]; then
+  BREAKING=true
+  MIGRATIONS_JSON='[{ "id": "crd-guard-override-'"${VERSION}"'", "kind": "*", "kind_of_change": "destructive" }]'
+  if [[ -n "$CRD_GUARD_PREV_TAG" ]]; then
+    MIN_SERVER="$CRD_GUARD_PREV_TAG"
+  fi
+  warn "--allow-breaking-crds: release.json marked breaking, destructive CRD migration, minServer=${MIN_SERVER}"
+fi
+
 cat > "$DIST_DIR/release.json" <<EOF
 {
   "version": "${VERSION}",
   "publishedAt": "${PUBLISHED_AT}",
   "components": {
-    "server":   { "image": "${KUSO_RELEASE_IMAGE}:${VERSION}" },
-    "operator": { "image": "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" },
-    "updater":  { "image": "${UPDATER_IMAGE:-ghcr.io/sislelabs/kuso-updater}:${VERSION}" }
+    "server":   { "image": "${SERVER_IMAGE_REF}" },
+    "operator": { "image": "${OPERATOR_IMAGE_REF}" },
+    "updater":  { "image": "${UPDATER_IMAGE_REF}" }
   },
   "crds": {
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/crds.yaml",
     "sha256": "${CRDS_SHA256}",
-    "minServer": "v0.4.0",
-    "migrations": []
+    "minServer": "${MIN_SERVER}",
+    "migrations": ${MIGRATIONS_JSON}
   },
   "manifests": {
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/upgrade-manifests.yaml",
@@ -1062,10 +1123,19 @@ log "wrote ${DIST_DIR}/release.json (breaking=${BREAKING})"
 KUSO_KEYS_DIR="${KUSO_KEYS_DIR:-${HOME}/.kuso/release-keys}"
 KUSO_RELEASE_PRIVATE_KEY="${KUSO_RELEASE_PRIVATE_KEY:-${KUSO_KEYS_DIR}/release.pem}"
 
+# The public key every shipped server verifies against. When it is set,
+# the private key must match it: a freshly generated (or wrong) key
+# signs a release that every instance rejects while the ship "succeeds".
+EMBEDDED_RELEASE_PUB="$(tr -d '[:space:]' < server-go/internal/updater/releasekey.pub 2>/dev/null || true)"
+
 if [[ "${KUSO_RELEASE_UNSIGNED:-0}" == "1" ]]; then
   warn "KUSO_RELEASE_UNSIGNED=1 set — shipping release.json without a signature"
   warn "Installs with KUSO_REQUIRE_SIGNATURES=true (the default) will REFUSE to auto-update from this release"
 else
+  if [[ ! -f "$KUSO_RELEASE_PRIVATE_KEY" && -n "$EMBEDDED_RELEASE_PUB" ]]; then
+    fail "release signing key not found at ${KUSO_RELEASE_PRIVATE_KEY}, but server-go/internal/updater/releasekey.pub is set.
+       A new key would sign a release every install rejects. Point KUSO_RELEASE_PRIVATE_KEY at the real key."
+  fi
   if [[ ! -f "$KUSO_RELEASE_PRIVATE_KEY" ]]; then
     log "no release keypair at ${KUSO_RELEASE_PRIVATE_KEY} — generating one"
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -1102,6 +1172,14 @@ the install will fail to auto-update until you wire the key.
 NEXT
   fi
 
+  if [[ -n "$EMBEDDED_RELEASE_PUB" && -f "$KUSO_RELEASE_PRIVATE_KEY" ]]; then
+    KEY_PUB_B64=$(openssl pkey -in "$KUSO_RELEASE_PRIVATE_KEY" -pubout -outform DER 2>/dev/null \
+      | tail -c 32 | openssl base64 -A)
+    if [[ "$KEY_PUB_B64" != "$EMBEDDED_RELEASE_PUB" ]]; then
+      fail "release signing key ${KUSO_RELEASE_PRIVATE_KEY} (public ${KEY_PUB_B64:-<unreadable>}) does not match server-go/internal/updater/releasekey.pub (${EMBEDDED_RELEASE_PUB})"
+    fi
+  fi
+
   log "signing release.json with ${KUSO_RELEASE_PRIVATE_KEY}"
   if [[ "$DRY_RUN" == "1" ]]; then
     dry "openssl pkeyutl -sign -inkey \"$KUSO_RELEASE_PRIVATE_KEY\" -rawin -in \"$DIST_DIR/release.json\" | base64 > \"$DIST_DIR/release.json.sig\""
@@ -1114,6 +1192,19 @@ NEXT
       printf '\n' >> "$DIST_DIR/release.json.sig"
     fi
     log "wrote ${DIST_DIR}/release.json.sig ($(wc -c < "$DIST_DIR/release.json.sig") bytes)"
+    # Round-trip: verify the uploaded form of the signature the way the
+    # updater will, before anything is published.
+    SIG_RAW="$(mktemp)"
+    SIG_PUB="$(mktemp)"
+    tr -d '[:space:]' < "$DIST_DIR/release.json.sig" | openssl base64 -d -A > "$SIG_RAW"
+    openssl pkey -in "$KUSO_RELEASE_PRIVATE_KEY" -pubout -out "$SIG_PUB" 2>/dev/null
+    if ! openssl pkeyutl -verify -pubin -inkey "$SIG_PUB" -rawin \
+        -in "$DIST_DIR/release.json" -sigfile "$SIG_RAW" >/dev/null 2>&1; then
+      rm -f "$SIG_RAW" "$SIG_PUB"
+      fail "release.json.sig does not verify against ${KUSO_RELEASE_PRIVATE_KEY}'s public key"
+    fi
+    rm -f "$SIG_RAW" "$SIG_PUB"
+    log "release.json.sig verified"
   fi
 fi
 
@@ -1162,6 +1253,14 @@ if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
       fail "CLI build failed for: ${fail_targets[*]}"
     fi
     ls -lh "$DIST_DIR"/kuso-* | awk '{print "    " $5 "  " $9}'
+    # install-cli.sh verifies the downloaded binary against this.
+    (
+      cd "$DIST_DIR"
+      for f in kuso-*; do
+        printf '%s  %s\n' "$(sha256_of "$f")" "$f"
+      done
+    ) > "$DIST_DIR/SHA256SUMS"
+    log "wrote ${DIST_DIR}/SHA256SUMS"
   fi
 else
   warn "go not on PATH (or KUSO_RELEASE_CLI=0) — skipping CLI binaries; install-cli.sh will fall back to source"
@@ -1264,6 +1363,9 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
       # Upload the signature too when present.
       if [[ -f "$DIST_DIR/release.json.sig" ]]; then
         ALL_ASSETS+=( "$DIST_DIR/release.json.sig" )
+      fi
+      if [[ ${#CLI_ASSETS[@]} -gt 0 && -f "$DIST_DIR/SHA256SUMS" ]]; then
+        ALL_ASSETS+=( "$DIST_DIR/SHA256SUMS" )
       fi
       for asset in "${ALL_ASSETS[@]}"; do
         ok=0
