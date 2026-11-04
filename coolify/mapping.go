@@ -73,17 +73,26 @@ func SlugifyName(s string) string {
 // per call ordering: the first occurrence wins the unsuffixed slug.
 func AssignKusoSlugs(coolifyNames []string) map[string]string {
 	out := map[string]string{}
-	used := map[string]int{}
+	taken := map[string]bool{}
 	for _, name := range coolifyNames {
-		base := SlugifyName(name)
-		used[base]++
-		slug := base
-		if used[base] > 1 {
-			slug = fmt.Sprintf("%s-%d", base, used[base])
+		if _, done := out[name]; done {
+			continue
 		}
-		out[name] = slug
+		out[name] = UniqueSlug(SlugifyName(name), taken)
 	}
 	return out
+}
+
+// UniqueSlug returns base, or base-2, base-3, … — the first one not in
+// taken — and marks it taken. Keyed on names actually handed out, not on
+// the base, so a literal "acme-2" can't collide with a suffixed "acme".
+func UniqueSlug(base string, taken map[string]bool) string {
+	slug := base
+	for n := 2; taken[slug]; n++ {
+		slug = fmt.Sprintf("%s-%d", base, n)
+	}
+	taken[slug] = true
+	return slug
 }
 
 // ServiceSlugFromApp derives a short, deterministic kuso service name
