@@ -329,16 +329,20 @@ export const ENV_MASK_SENTINEL = "••••••••";
 // in the service name itself for a scope boundary.
 export function literalToRef(value: string, project: string, knownScopes: string[] = []): string {
   if (!value) return value;
-  const urlMatch = value.match(
-    /^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local(?::\d+)?$/
-  );
-  if (urlMatch) {
+  // Only reverse what the server's own expansion produces: no explicit
+  // port (URL refs always elide :80) and a "<project>-<svc>-<scope>"
+  // label. Anything else (an explicit :9090, another project's or
+  // namespace's service) is a real literal; turning it into a ref lost
+  // the port/target on the next save.
+  const looksResolved = (label: string) =>
+    label.startsWith(project + "-") &&
+    shortServiceFromLabel(label, project, knownScopes) !== stripProjectPrefix(label, project);
+  const urlMatch = value.match(/^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/);
+  if (urlMatch && looksResolved(urlMatch[1])) {
     return `\${{ ${shortServiceFromLabel(urlMatch[1], project, knownScopes)}.URL }}`;
   }
-  const hostMatch = value.match(
-    /^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/
-  );
-  if (hostMatch) {
+  const hostMatch = value.match(/^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/);
+  if (hostMatch && looksResolved(hostMatch[1])) {
     return `\${{ ${shortServiceFromLabel(hostMatch[1], project, knownScopes)}.HOST }}`;
   }
   return value;
