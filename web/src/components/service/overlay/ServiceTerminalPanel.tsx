@@ -56,15 +56,20 @@ export function ServiceTerminalPanel({
     if (!host) return;
 
     setStatus("connecting");
+    // xterm paints on canvas and needs concrete colours, so resolve the
+    // theme tokens here.
+    const css = getComputedStyle(document.documentElement);
+    const consoleBg = css.getPropertyValue("--console-bg").trim() || "black";
+    const consoleFg = css.getPropertyValue("--console-fg").trim() || "white";
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
       fontFamily:
         "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
       theme: {
-        background: "#0b0e14",
-        foreground: "#c9d1d9",
-        cursor: "#c9d1d9",
+        background: consoleBg,
+        foreground: consoleFg,
+        cursor: consoleFg,
       },
     });
     const fit = new FitAddon();
@@ -214,7 +219,7 @@ export function ServiceTerminalPanel({
       </div>
       <div
         ref={hostRef}
-        className="h-[420px] w-full overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[#0b0e14] p-2"
+        className="h-[420px] w-full overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--console-bg)] p-2"
       />
       <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
         Interactive shell in the service&apos;s pod. Requires the admin role

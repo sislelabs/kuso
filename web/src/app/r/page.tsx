@@ -102,14 +102,14 @@ export default function ReviewerPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
         Loading…
       </div>
     );
   }
   if (!token || error || !view) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
         <div className="max-w-md text-center">
           <h1 className="mb-2 text-xl font-semibold text-neutral-200">Link not found</h1>
           <p className="text-sm">
@@ -126,7 +126,7 @@ export default function ReviewerPage() {
   const seedRunning = view.seedPhase === "running" || view.seedPhase === "pending";
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-neutral-200">
+    <div className="min-h-screen bg-[var(--console-bg)] text-neutral-200">
       <div className="mx-auto max-w-3xl px-6 py-12">
         {/* Header */}
         <div className="mb-8 border-b border-neutral-800 pb-6">

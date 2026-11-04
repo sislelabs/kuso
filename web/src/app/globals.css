@@ -59,6 +59,11 @@
  * pasted onto a sterile gray UI.
  */
 :root {
+  /* Console surfaces (log stream, shell, public reviewer page) stay dark
+     in both themes; their text colours assume it. */
+  --console-bg: #0b0b0e;
+  --console-bg-hover: #1a1a20;
+  --console-fg: #c9d1d9;
   --bg-primary: #FBFBF7;
   --bg-secondary: #F4F3EC;
   --bg-tertiary: #ECEAE0;
