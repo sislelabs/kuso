@@ -219,7 +219,7 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 	open, openErr := m.DB.OpenIncidentForTarget(ctx, key)
 	openExists := openErr == nil
 	lastClosed, lastOK, _ := m.DB.LastClosedAtForTarget(ctx, key)
-	openCount, countErr := m.DB.CountOpenIncidents(ctx)
+	openCount, countErr := m.DB.CountActiveIncidents(ctx)
 	if countErr != nil && !openExists {
 		log.Warn("incident: event dropped (cannot count open incidents)", "err", countErr)
 		return

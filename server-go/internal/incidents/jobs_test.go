@@ -78,6 +78,10 @@ func TestBuildJob(t *testing.T) {
 			if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 86400 {
 				t.Errorf("TTLSecondsAfterFinished = %v, want 86400", job.Spec.TTLSecondsAfterFinished)
 			}
+			// A hung agent must not hold its slot forever (LOOP-05).
+			if d := job.Spec.ActiveDeadlineSeconds; d == nil || *d != int64(investigateTimeout.Seconds()) {
+				t.Errorf("ActiveDeadlineSeconds = %v, want %d", d, int64(investigateTimeout.Seconds()))
+			}
 
 			pod := job.Spec.Template.Spec
 			if pod.RestartPolicy != corev1.RestartPolicyNever {
