@@ -1452,6 +1452,75 @@ func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonSh
 		_, _ = s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
 			Patch(ctx, svcU.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
 	}
+	// The env CRs carry a mirror of the subscription that the env refresh
+	// filters on. Left stale, re-adding the same name re-mounted the new
+	// addon on every env whose service had since stopped subscribing.
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		return
+	}
+	for i := range envs {
+		if !slices.ContainsFunc(envs[i].Spec.SubscribedAddons, func(sub string) bool {
+			return sub == addonShort || sub == project+"-"+addonShort
+		}) {
+			continue
+		}
+		_, _ = s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envs[i].Name, func(live *kube.KusoEnvironment) error {
+			if live.Spec.SubscribedAddons == nil {
+				return nil
+			}
+			live.Spec.SubscribedAddons = slices.DeleteFunc(slices.Clone(live.Spec.SubscribedAddons), func(sub string) bool {
+				return sub == addonShort || sub == project+"-"+addonShort
+			})
+			return nil
+		})
+	}
+}
+
+// serviceSubscriptions returns each project service's non-nil
+// spec.subscribedAddons keyed by service CR name. The service is the source
+// of truth; env CRs only mirror it. A list failure returns nil so the
+// refresh falls back to the env mirrors, as before.
+func (s *Service) serviceSubscriptions(ctx context.Context, ns, project string) (out map[string][]string) {
+	// Same fake-dynamic-client guard as unsubscribeFromAddon: tests that
+	// don't register the KusoServiceList kind panic on List.
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+		}
+	}()
+	svcs, err := s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		slog.Default().Warn("addon refresh: list services failed; using env subscription mirrors", "project", project, "err", err)
+		return nil
+	}
+	out = make(map[string][]string, len(svcs))
+	for i := range svcs {
+		if svcs[i].Spec.SubscribedAddons != nil {
+			out[svcs[i].Name] = svcs[i].Spec.SubscribedAddons
+		}
+	}
+	return out
+}
+
+// effectiveSubscription narrows an env's mirrored subscription to what its
+// service subscribes to. It can only narrow: a nil service list (legacy
+// mount-all) keeps the env mirror, so a stale mirror never widens mounts.
+func effectiveSubscription(envSubs, svcSubs []string, project string) []string {
+	if svcSubs == nil {
+		return envSubs
+	}
+	if envSubs == nil {
+		return svcSubs
+	}
+	short := func(n string) string { return ShortName(project, n) }
+	out := make([]string, 0, len(envSubs))
+	for _, sub := range envSubs {
+		if slices.ContainsFunc(svcSubs, func(x string) bool { return short(x) == short(sub) }) {
+			out = append(out, sub)
+		}
+	}
+	return out
 }
 
 // mustJSON serializes a string slice to JSON for inclusion in a
@@ -1596,6 +1665,7 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	for _, conn := range extraConnSecrets {
 		addAddonConn(conn)
 	}
+	svcSubs := s.serviceSubscriptions(ctx, ns, project)
 	var errs []error
 	for i := range envs {
 		env := &envs[i]
@@ -1606,6 +1676,11 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 		// write landed between our List and Patch.
 		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
 			perEnv := slices.Clone(baseSecrets)
+			svcName := live.Spec.Service
+			if svcName == "" && live.Labels[kube.LabelService] != "" {
+				svcName = project + "-" + live.Labels[kube.LabelService]
+			}
+			subs := effectiveSubscription(live.Spec.SubscribedAddons, svcSubs[svcName], project)
 			// Carry forward this env's OWN env-scoped addon conns.
 			//
 			// baseSecrets is project-scoped by construction (see
@@ -1662,12 +1737,12 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					// A clone is mounted only where its SOURCE is subscribed.
 					// When the source can't be resolved, never ADD it — only
 					// keep it if the env already mounts it.
-					if live.Spec.SubscribedAddons != nil {
+					if subs != nil {
 						if src == "" {
 							if !slices.Contains(live.Spec.EnvFromSecrets, conn) {
 								continue
 							}
-						} else if !subscribesToConn(live.Spec.SubscribedAddons, project, src) {
+						} else if !subscribesToConn(subs, project, src) {
 							continue
 						}
 					}
@@ -1684,8 +1759,8 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			}
 			// Apply the per-service addon subscription filter when the
 			// env CR carries one. nil = legacy mount-all.
-			if live.Spec.SubscribedAddons != nil {
-				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
+			if subs != nil {
+				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, subs, project)
 			}
 			perEnv = DropExcludedAddonConns(perEnv, live.Annotations)
 			preview := IsPreviewEnv(live)
