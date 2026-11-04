@@ -30,7 +30,7 @@ After a build's Job succeeds and before promotion (same slot as the existing pro
 2. While the scan is pending/running the build stays non-terminal with a hold message `scanning image for vulnerabilities…` (re-checked every poller tick, like the existing hold).
 3. Verdict, using the **effective mode** for the service:
    - `off` — no scan at all for this service (nightly included).
-   - `report` — scan, never block.
+   - `report` — scan, never block; the deploy never waits for the scan.
    - `enforce` — block if the image has ≥ 1 **fixable critical** finding that is not ignored.
 4. **Blocked**: the build becomes terminal `failed` with message `blocked: N fixable critical vulnerabilities (CVE-…, CVE-…) — see kuso vulns show …` and a classification `vuln-blocked`. The previous image keeps serving (same contract as a failed release hook). Emits `security.deploy_blocked`. To unblock: fix and rebuild, ignore the CVE(s) and rebuild/`kuso build trigger`, or set the service policy to `report`.
 5. **Fail-open**: if the scan fails or is still not done 15 minutes after the gate first asked for it, promotion proceeds and `security.scan_failed` is emitted with `promoted unscanned`. A broken scanner must never freeze deploys.
@@ -56,7 +56,7 @@ Per service (or per addon), per vulnerability ID, with a mandatory reason and op
 
 ### Notifications
 
-New event types (group `security`):
+New event types (listed under the `other` group in notification settings):
 
 | Type | Severity | When |
 |---|---|---|

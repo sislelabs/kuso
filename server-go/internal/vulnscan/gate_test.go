@@ -160,3 +160,22 @@ func (rw rewriteHost) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Host = rw.to
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+func TestGate_ReportModeNeverHoldsPromotion(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	if err := d.SetVulnPolicy(ctx, "shop", "web", ModeReport); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
+	v, err := g.Check(ctx, gateReq(time.Now()))
+	if err != nil || v.Decision != builds.VulnPass {
+		t.Fatalf("report mode with no scan = %+v %v, want an immediate pass", v, err)
+	}
+	if n, _ := d.CountActiveVulnScans(ctx, []string{dA}); n != 1 {
+		t.Fatalf("report mode must still queue a scan, got %d active", n)
+	}
+	if v, _ := g.Check(ctx, gateReq(time.Now())); v.Decision != builds.VulnPass {
+		t.Fatalf("report mode with a scan in flight = %+v, want pass", v)
+	}
+}
