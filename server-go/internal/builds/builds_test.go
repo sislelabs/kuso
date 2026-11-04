@@ -177,6 +177,35 @@ func TestCreate_FullSHARef(t *testing.T) {
 	}
 }
 
+// BUILD-06: a project (≤40) + service (≤32) FQN can pass 63 chars. The CR
+// label is clamped, but the active-build selectors used the raw FQN, which
+// is an invalid selector: Create read the List error as "service busy" and
+// queued every build forever, and List never found the service's builds.
+func TestCreate_LongServiceFQNIsNotQueuedForever(t *testing.T) {
+	t.Parallel()
+	project := strings.Repeat("p", 40)
+	service := strings.Repeat("s", 32)
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject(project, "main", "https://github.com/example/alpha", 0),
+		seedService(project, service),
+	)
+	got, err := s.Create(context.Background(), project, service, CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ph := buildPhase(got); ph == "queued" {
+		t.Errorf("first build of an idle long-FQN service was queued")
+	}
+	list, err := s.List(context.Background(), project, service)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("List found %d builds, want 1", len(list))
+	}
+}
+
 // TestCreate_WorkerRuntimeBuildsAsDockerfile covers the worker-build
 // 500 bug: a runtime=worker service that builds its own repo must map
 // to a valid KusoBuild.spec.strategy. "worker" is a runtime, not a

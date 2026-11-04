@@ -526,7 +526,7 @@ func (s *Service) findActiveForServiceLive(ctx context.Context, ns, project, fqn
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
 		LabelSelector: kube.LabelSelector(map[string]string{
 			kube.LabelProject: project,
-			kube.LabelService: fqn,
+			kube.LabelService: clampLabelValue(fqn),
 		}),
 	})
 	if err != nil {
@@ -715,7 +715,7 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 func (s *Service) List(ctx context.Context, project, service string) ([]kube.KusoBuild, error) {
 	pairs := map[string]string{kube.LabelProject: project}
 	if service != "" {
-		pairs[kube.LabelService] = project + "-" + service
+		pairs[kube.LabelService] = clampLabelValue(project + "-" + service)
 	}
 	out, err := s.Kube.ListKusoBuildsByLabels(ctx, s.nsFor(ctx, project), pairs)
 	if err != nil {

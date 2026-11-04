@@ -3,6 +3,7 @@ package buildcontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -120,6 +122,18 @@ func TestKusoBuildLabelsAlwaysSetsInstance(t *testing.T) {
 	}
 	if labels["kuso.sislelabs.com/project"] != "alpha" {
 		t.Errorf("project label = %q", labels["kuso.sislelabs.com/project"])
+	}
+}
+
+// BUILD-13: the Job/pod service label must equal the build CR's, or
+// anything correlating pods to builds by label misses long-FQN services.
+func TestKusoBuildLabelsServiceMatchesCRLabel(t *testing.T) {
+	b := &kube.KusoBuild{}
+	b.Spec.Project = strings.Repeat("p", 40)
+	b.Spec.Service = b.Spec.Project + "-" + strings.Repeat("s", 32)
+	got := kusoBuildLabels(b, "x")["kuso.sislelabs.com/service"]
+	if want := builds.ServiceLabelValue(b.Spec.Service); got != want {
+		t.Errorf("Job service label = %q, CR label = %q", got, want)
 	}
 }
 

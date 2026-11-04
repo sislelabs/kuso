@@ -1894,7 +1894,7 @@ func (s *Service) GetDetectedEnv(ctx context.Context, project, service string) (
 	}
 	raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,
-		kube.LabelService: fqService,
+		kube.LabelService: builds.ServiceLabelValue(fqService),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list builds for detected env: %w", err)

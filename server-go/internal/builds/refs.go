@@ -53,6 +53,11 @@ func buildCRName(project, service, ref string) string {
 // a truncation.
 const maxLabelValue = 63
 
+// ServiceLabelValue is the kuso.sislelabs.com/service label value for a
+// build of service FQN fqn: on the KusoBuild CR, its Job and pod, and in
+// every selector that finds them. Stamping and selecting must agree.
+func ServiceLabelValue(fqn string) string { return clampLabelValue(fqn) }
+
 // clampLabelValue truncates to kube's 63-byte limit, appending an 8-hex
 // digest of the original so two long values that share a prefix don't
 // collide after truncation.
