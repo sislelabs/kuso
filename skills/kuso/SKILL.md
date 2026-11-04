@@ -449,8 +449,8 @@ Caveats:
 ## Marketplace — one-click self-hosted apps
 
 ```bash
-kuso marketplace list                     # catalog: gitea, metabase, n8n, plausible,
-kuso marketplace info uptime-kuma         #   umami, uptime-kuma, vaultwarden, ...
+kuso marketplace list                     # catalog: gitea, metabase, n8n, obsidian-livesync,
+kuso marketplace info uptime-kuma         #   plausible, umami, uptime-kuma, vaultwarden
 kuso marketplace deploy uptime-kuma --project tools --set domain=status.example.com
 kuso marketplace deploy n8n --dry-run     # render without applying
 ```
@@ -465,6 +465,14 @@ kuso project service set tools uptime-kuma \
 ```
 
 Capabilities pass a server-side allowlist (escape-equivalent caps like `SYS_ADMIN` are rejected).
+
+**`obsidian-livesync`** is CouchDB set up for the Obsidian Self-hosted LiveSync plugin; there's no init script to run.
+
+- Password: `kuso shell <project> couchdb`, then `echo $COUCHDB_PASSWORD` (`secret list` never shows values). The username is the `admin_user` prompt, `admin` by default.
+- First device: configure CouchDB by hand in the plugin (URL `https://<host>`, username, password, a database name) and set an end-to-end encryption passphrase. The plugin creates the database.
+- Other devices: on the first one, run "Copy settings as a new Setup URI" and paste it on each new device.
+- Changing `COUCHDB_PASSWORD` later, including `kuso apply --rotate-secrets`, does nothing: the admin is stored in the `local.d` volume on first start and the entrypoint never overwrites it. Change it through CouchDB's `_config` API instead.
+- `kuso addon-backup` doesn't cover service volumes, so the vault isn't backed up by kuso.
 
 ## Env vars & secrets — the complete model
 
@@ -1312,7 +1320,7 @@ get addons <p>                addons + their conn-secret names
 environment add <p> <s> <n> --branch <b>   long-lived env tracking a branch
 addon-backup download|list|restore|schedule    addon data backups
 cron list/get/add/add-http/add-command/sync/edit/edit-service/delete[-project]
-marketplace list/info/deploy  one-click apps (gitea, n8n, uptime-kuma, ...)
+marketplace list/info/deploy  one-click apps (gitea, n8n, obsidian-livesync, uptime-kuma, ...)
 import compose <file>         convert docker-compose (dry-run by default)
 project create --repo --domain
 project addon add --kind [--tls require] [--pooler]

@@ -297,7 +297,7 @@ reaches Ready without waiting on a datastore.
 
 1. **Catalog lists.** `kuso marketplace list` → prints ≥8 apps
    (uptime-kuma, umami, n8n, vaultwarden, gitea, metabase, plausible,
-   listmonk). `kuso marketplace info uptime-kuma` → shows its one
+   obsidian-livesync). `kuso marketplace info uptime-kuma` → shows its one
    required `host` (domain) prompt.
 
 2. **Dry-run render writes nothing.**

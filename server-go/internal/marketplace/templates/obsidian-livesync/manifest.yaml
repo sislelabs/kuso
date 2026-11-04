@@ -1,0 +1,25 @@
+name: obsidian-livesync
+title: Obsidian LiveSync
+description: >-
+  CouchDB pre-configured for the Obsidian Self-hosted LiveSync plugin.
+  Read the admin password with `kuso shell <project> couchdb` then
+  `echo $COUCHDB_PASSWORD`. Configure the plugin on your first device
+  by hand (URL, username, password, database name and an end-to-end
+  encryption passphrase); the plugin creates the database. Add more
+  devices with "Copy settings as a new Setup URI". Changing
+  COUCHDB_PASSWORD after the first start has no effect, and
+  `kuso addon-backup` does not back up the vault volumes.
+category: data
+website: https://github.com/vrtmrz/obsidian-livesync
+appVersion: "3.5.3"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname CouchDB will be served on. Obsidian mobile needs HTTPS, so it must be publicly resolvable.
+  - key: admin_user
+    title: Admin username
+    kind: string
+    default: admin
+    help: CouchDB admin user the plugin logs in as.
