@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.20] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(env): propagation restores an environment's own addon clones ([355a439](https://github.com/sislelabs/kuso/commit/355a439bbcbf584de4c535aacb65ef71ec6ad555))
+
 ## [0.25.19] — 2026-09-02
 
 ### 🐛 Bug Fixes
