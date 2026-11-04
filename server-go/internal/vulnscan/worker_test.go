@@ -267,3 +267,67 @@ func TestImageRefHelpers(t *testing.T) {
 		}
 	}
 }
+
+func startedScan(t *testing.T, now time.Time) (*Worker, *memStore) {
+	t.Helper()
+	store := &memStore{scans: []db.VulnScan{{ID: 9, Status: db.VulnStatusQueued, Reason: db.VulnReasonGate, ImageRef: "ghcr.io/x/y:1"}}}
+	w := &Worker{Kube: fake.NewClientset(), Namespace: "kuso", Store: store, Now: func() time.Time { return now }}
+	if err := w.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store.set(9, func(s *db.VulnScan) { s.StartedAt = now })
+	return w, store
+}
+
+func addScanPod(t *testing.T, w *Worker, conds ...corev1.PodCondition) {
+	t.Helper()
+	p := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kuso-vulnscan-9-abc", Namespace: "kuso", Labels: map[string]string{"job-name": "kuso-vulnscan-9"}},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending, Conditions: conds},
+	}
+	if _, err := w.Kube.CoreV1().Pods("kuso").Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorker_UnschedulableScanPodFailsFast(t *testing.T) {
+	now := time.Now()
+	w, store := startedScan(t, now)
+	addScanPod(t, w, corev1.PodCondition{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+		Message: "0/3 nodes are available: 3 Insufficient memory.", LastTransitionTime: metav1.NewTime(now)})
+	w.Now = func() time.Time { return now.Add(time.Minute) }
+	_ = w.Step(context.Background())
+	if _, failed := store.failed[9]; failed {
+		t.Fatal("unschedulable for 1 minute is still within grace")
+	}
+	w.Now = func() time.Time { return now.Add(3 * time.Minute) }
+	_ = w.Step(context.Background())
+	if msg := store.failed[9]; !strings.Contains(msg, "unschedulable") || !strings.Contains(msg, "Insufficient memory") {
+		t.Fatalf("failed = %q", msg)
+	}
+}
+
+func TestWorker_PendingCacheVolumeFailsFast(t *testing.T) {
+	now := time.Now()
+	w, store := startedScan(t, now)
+	addScanPod(t, w)
+	ctx := context.Background()
+	pvc, err := w.Kube.CoreV1().PersistentVolumeClaims("kuso").Get(ctx, CachePVC, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvc.Status.Phase = corev1.ClaimPending
+	if _, err := w.Kube.CoreV1().PersistentVolumeClaims("kuso").UpdateStatus(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	w.Now = func() time.Time { return now.Add(time.Minute) }
+	_ = w.Step(ctx)
+	if _, failed := store.failed[9]; failed {
+		t.Fatal("a pending volume for 1 minute is still within grace")
+	}
+	w.Now = func() time.Time { return now.Add(3 * time.Minute) }
+	_ = w.Step(ctx)
+	if msg := store.failed[9]; !strings.Contains(msg, CachePVC) || !strings.Contains(msg, "Pending") {
+		t.Fatalf("failed = %q", msg)
+	}
+}

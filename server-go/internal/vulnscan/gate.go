@@ -19,6 +19,12 @@ const (
 	// failed scan was requested by this gate (createdAt is DB time,
 	// Since is server time).
 	failSkew = time.Minute
+
+	// The circuit breaker opens when the last breakerRun finished scans
+	// all failed within breakerWindow: the scanner itself is broken, so
+	// builds promote at once instead of each waiting out vulnGateMaxWait.
+	breakerRun    = 3
+	breakerWindow = 2 * time.Hour
 )
 
 // DigestResolver maps an image reference to its manifest digest; "" with
@@ -39,6 +45,8 @@ type Gate struct {
 	settings   db.VulnScanSettings
 	settingsAt time.Time
 	digests    map[string]string // image ref → digest; build tags are immutable
+	// breakerAlerted: the open breaker already alerted this outage.
+	breakerAlerted bool
 }
 
 var _ builds.VulnGate = (*Gate)(nil)
@@ -91,6 +99,45 @@ func (g *Gate) digest(ctx context.Context, ref string) (string, error) {
 	return d, nil
 }
 
+// breaker reports whether the scanner circuit breaker is open, as a
+// fail-open verdict (alerting only on the first one per outage).
+func (g *Gate) breaker(ctx context.Context) (*builds.VulnGateVerdict, error) {
+	recent, err := g.DB.RecentFinishedVulnScans(ctx, breakerRun)
+	if err != nil {
+		return nil, err
+	}
+	open := len(recent) == breakerRun
+	for _, sc := range recent {
+		if sc.Status != db.VulnStatusFailed || g.now().Sub(sc.FinishedAt) > breakerWindow {
+			open = false
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !open {
+		g.breakerAlerted = false
+		return nil, nil
+	}
+	v := &builds.VulnGateVerdict{
+		Decision: builds.VulnFailOpen,
+		Message: fmt.Sprintf("vulnerability scanner unavailable: the last %d scans failed within %s (latest: %s)",
+			breakerRun, breakerWindow, recent[0].Error),
+		SuppressAlert: g.breakerAlerted,
+	}
+	g.breakerAlerted = true
+	return v, nil
+}
+
+// failOpen is v, unless the breaker is open: then the breaker's verdict
+// (alerting once per outage instead of once per build).
+func (g *Gate) failOpen(ctx context.Context, v builds.VulnGateVerdict) (builds.VulnGateVerdict, error) {
+	b, err := g.breaker(ctx)
+	if err != nil || b == nil {
+		return v, err
+	}
+	return *b, nil
+}
+
 // Check implements builds.VulnGate.
 func (g *Gate) Check(ctx context.Context, req builds.VulnGateRequest) (builds.VulnGateVerdict, error) {
 	pass := builds.VulnGateVerdict{Decision: builds.VulnPass}
@@ -129,9 +176,9 @@ func (g *Gate) Check(ctx context.Context, req builds.VulnGateRequest) (builds.Vu
 		if mode == ModeReport {
 			return pass, nil
 		}
-		return builds.VulnGateVerdict{Decision: builds.VulnPending}, nil
+		return g.failOpen(ctx, builds.VulnGateVerdict{Decision: builds.VulnPending})
 	case scan != nil && scan.Status == db.VulnStatusFailed && !scan.CreatedAt.Before(req.Since.Add(-failSkew)):
-		return builds.VulnGateVerdict{Decision: builds.VulnFailOpen, Message: "scan failed: " + scan.Error}, nil
+		return g.failOpen(ctx, builds.VulnGateVerdict{Decision: builds.VulnFailOpen, Message: "scan failed: " + scan.Error})
 	}
 	if _, _, err := g.DB.EnqueueVulnScan(ctx, db.VulnScanRequest{Digest: digest, ImageRef: ref, Reason: db.VulnReasonGate}); err != nil {
 		return pass, err
@@ -140,7 +187,9 @@ func (g *Gate) Check(ctx context.Context, req builds.VulnGateRequest) (builds.Vu
 	if mode == ModeReport {
 		return pass, nil
 	}
-	return builds.VulnGateVerdict{Decision: builds.VulnPending}, nil
+	// Still queued while the breaker is open, so a recovered scanner
+	// produces the success that closes it.
+	return g.failOpen(ctx, builds.VulnGateVerdict{Decision: builds.VulnPending})
 }
 
 func (g *Gate) verdict(ctx context.Context, mode string, req builds.VulnGateRequest, scan db.VulnScan) (builds.VulnGateVerdict, error) {

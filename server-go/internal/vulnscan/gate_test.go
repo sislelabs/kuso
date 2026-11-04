@@ -2,6 +2,7 @@ package vulnscan
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -177,5 +178,63 @@ func TestGate_ReportModeNeverHoldsPromotion(t *testing.T) {
 	}
 	if v, _ := g.Check(ctx, gateReq(time.Now())); v.Decision != builds.VulnPass {
 		t.Fatalf("report mode with a scan in flight = %+v, want pass", v)
+	}
+}
+
+func TestGate_BreakerFailsOpenFastOncePerOutage(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
+	failN := func(n int) {
+		for i := 0; i < n; i++ {
+			id, _, err := d.EnqueueVulnScan(ctx, db.VulnScanRequest{ImageRef: fmt.Sprintf("other/%d:%d", i, time.Now().UnixNano()), Reason: db.VulnReasonNightly})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = d.FailVulnScan(ctx, id, "trivy db download failed")
+		}
+	}
+	failN(2)
+	if v, _ := g.Check(ctx, gateReq(time.Now())); v.Decision != builds.VulnPending {
+		t.Fatalf("two failures don't trip the breaker: %+v", v)
+	}
+	sc, _ := d.ClaimNextVulnScan(ctx)
+	_ = d.FailVulnScan(ctx, sc.ID, "trivy db download failed") // the gate's own scan: third failure
+
+	g2 := &Gate{DB: d, Digests: staticDigests{gateImage: dA, gateImage + "x": dB}}
+	v, err := g2.Check(ctx, builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage + "x", Since: time.Now()})
+	if err != nil || v.Decision != builds.VulnFailOpen || v.SuppressAlert || !strings.Contains(v.Message, "last 3") {
+		t.Fatalf("open breaker must fail open at once and alert: %+v %v", v, err)
+	}
+	if n, _ := d.CountActiveVulnScans(ctx, []string{dB}); n != 1 {
+		t.Fatal("an open breaker still queues the scan, so a recovered scanner closes it")
+	}
+	v, _ = g2.Check(ctx, builds.VulnGateRequest{Project: "shop", Service: "api", Image: gateImage + "x", Since: time.Now()})
+	if v.Decision != builds.VulnFailOpen || !v.SuppressAlert {
+		t.Fatalf("second build in the same outage stays quiet: %+v", v)
+	}
+
+	// Recovery closes it; the next outage alerts again.
+	sc, _ = d.ClaimNextVulnScan(ctx)
+	if err := d.CompleteVulnScan(ctx, sc.ID, db.VulnScanResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := g2.Check(ctx, builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage + "w", Since: time.Now()}); v.Decision != builds.VulnPending {
+		t.Fatalf("closed breaker waits for the scan: %+v", v)
+	}
+	sc, _ = d.ClaimNextVulnScan(ctx)
+	_ = d.FailVulnScan(ctx, sc.ID, "x")
+	failN(2)
+	v, _ = g2.Check(ctx, builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage + "y", Since: time.Now()})
+	if v.Decision != builds.VulnFailOpen || v.SuppressAlert {
+		t.Fatalf("a new outage alerts again: %+v", v)
+	}
+
+	// Failures older than the window don't count.
+	if _, err := d.ExecContext(ctx, `UPDATE "VulnScan" SET "finishedAt" = now() - interval '3 hours'`); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := g2.Check(ctx, builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage + "z", Since: time.Now()}); v.Decision != builds.VulnPending {
+		t.Fatalf("stale failures must not trip the breaker: %+v", v)
 	}
 }

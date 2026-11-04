@@ -34,6 +34,8 @@ After a build's Job succeeds and before promotion (same slot as the existing pro
    - `enforce` — block if the image has ≥ 1 **fixable critical** finding that is not ignored.
 4. **Blocked**: the build becomes terminal `failed` with message `blocked: N fixable critical vulnerabilities (CVE-…, CVE-…) — see kuso vulns show …` and a classification `vuln-blocked`. The previous image keeps serving (same contract as a failed release hook). Emits `security.deploy_blocked`. To unblock: fix and rebuild, ignore the CVE(s) and rebuild/`kuso build trigger`, or set the service policy to `report`.
 5. **Fail-open**: if the scan fails or is still not done 15 minutes after the gate first asked for it, promotion proceeds and `security.scan_failed` is emitted with `promoted unscanned`. A broken scanner must never freeze deploys.
+   - **Circuit breaker**: when the last 3 finished scans (any reason) all failed within the last 2h, the scanner is treated as broken and every gated build fails open **immediately** instead of waiting 15 minutes. The scan is still queued, so the first success closes the breaker. `security.scan_failed` fires once per breaker-open period (per server process), not per build.
+   - A scan pod that stays unschedulable (`PodScheduled=False`, reason `Unschedulable`) for more than 2 minutes, or sits Pending while the `kuso-trivy-cache` PVC is still Pending, fails at once with that reason instead of running out the 12-minute backstop.
 6. Effective mode = service policy if not `inherit`, else instance `vulnscan.mode`. Instance default: **`enforce`**. Instance `off` disables the whole feature (no gate, no nightly).
 
 ### Nightly sweep

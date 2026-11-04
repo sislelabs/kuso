@@ -56,6 +56,9 @@ type VulnGateVerdict struct {
 	Message string
 	// Scanned: a scan backed a pass (false when the gate is off).
 	Scanned bool
+	// SuppressAlert: a fail-open the gate already alerted on (the
+	// scanner circuit breaker alerts once per outage, not per build).
+	SuppressAlert bool
 }
 
 const (
@@ -109,7 +112,9 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 	case VulnFailOpen:
 		p.patchBuildAnnotations(ctx, ns, b, map[string]string{annVulnGate: "failed-open"})
 		p.logger().Warn("vulnerability gate failed open; promoting unscanned", "build", b.Name, "reason", v.Message)
-		p.emitVulnScanFailed(b, short, v.Message)
+		if !v.SuppressAlert {
+			p.emitVulnScanFailed(b, short, v.Message)
+		}
 		return false, nil
 	default:
 		if v.Scanned {

@@ -298,6 +298,18 @@ func (d *DB) PreviousFinishedVulnScan(ctx context.Context, digest string, before
 	return &scans[0], nil
 }
 
+// RecentFinishedVulnScans returns the n most recently finished scans,
+// newest first.
+func (d *DB) RecentFinishedVulnScans(ctx context.Context, n int) ([]VulnScan, error) {
+	scans, err := d.queryVulnScans(ctx, `
+		SELECT `+vulnScanCols+` FROM "VulnScan" WHERE "status" IN ('succeeded','failed')
+		ORDER BY "finishedAt" DESC, "id" DESC LIMIT $1`, n)
+	if err != nil {
+		return nil, fmt.Errorf("recent vuln scans: %w", err)
+	}
+	return scans, nil
+}
+
 // ListRunningVulnScans returns scans the worker has claimed.
 func (d *DB) ListRunningVulnScans(ctx context.Context) ([]VulnScan, error) {
 	scans, err := d.queryVulnScans(ctx, `SELECT `+vulnScanCols+` FROM "VulnScan" WHERE "status" = 'running' ORDER BY "id"`)

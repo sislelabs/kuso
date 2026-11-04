@@ -172,3 +172,14 @@ func TestVulnGate_NilGatePromotes(t *testing.T) {
 		t.Fatalf("no gate: phase=%q tag=%q", buildPhase(got), tag)
 	}
 }
+
+func TestVulnGate_QuietFailOpenPromotesWithoutAlert(t *testing.T) {
+	gate := &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnFailOpen, Message: "scanner down", SuppressAlert: true}}
+	got, tag, em := runGate(t, gate, nil)
+	if buildPhase(got) != "succeeded" || tag != "v1" || got.Annotations[annVulnGate] != "failed-open" {
+		t.Fatalf("quiet fail-open still promotes: phase=%q tag=%q ann=%v", buildPhase(got), tag, got.Annotations)
+	}
+	if slices.Contains(em.types(), eventScanFailed) {
+		t.Errorf("the breaker already alerted for this outage: %v", em.types())
+	}
+}

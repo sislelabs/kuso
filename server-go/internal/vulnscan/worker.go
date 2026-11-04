@@ -28,6 +28,10 @@ const (
 	// scanMaxRuntime backstops the Job's activeDeadlineSeconds (pod
 	// pending on an unschedulable PVC never starts that clock).
 	scanMaxRuntime = 12 * time.Minute
+	// pendingGrace: a scan pod that can't be scheduled (or whose cache
+	// volume never binds) for this long fails now rather than holding
+	// the queue — and gated builds — until scanMaxRuntime.
+	pendingGrace = 2 * time.Minute
 	// maxLogBytes bounds the pod-log read; the framed report is a few
 	// hundred KB even for large images.
 	maxLogBytes = 32 << 20
@@ -197,11 +201,45 @@ func (w *Worker) advance(ctx context.Context, s db.VulnScan) {
 		}
 		w.fail(ctx, s, msg)
 	default:
+		if msg := w.stuckPending(ctx, s); msg != "" {
+			w.deleteJob(ctx, s.JobName)
+			w.fail(ctx, s, msg)
+			return
+		}
 		if w.now().Sub(s.StartedAt) > scanMaxRuntime {
 			w.deleteJob(ctx, s.JobName)
 			w.fail(ctx, s, "scan timed out (job never finished)")
 		}
 	}
+}
+
+// stuckPending explains why a scan pod has sat Pending past
+// pendingGrace (unschedulable, or the cache PVC unbound), else "".
+func (w *Worker) stuckPending(ctx context.Context, s db.VulnScan) string {
+	now := w.now()
+	if now.Sub(s.StartedAt) <= pendingGrace {
+		return ""
+	}
+	pods, err := w.Kube.CoreV1().Pods(w.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + s.JobName})
+	if err != nil {
+		return ""
+	}
+	for _, p := range pods.Items {
+		if p.Status.Phase != corev1.PodPending {
+			continue
+		}
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable &&
+				now.Sub(c.LastTransitionTime.Time) > pendingGrace {
+				return "scan pod unschedulable: " + clip(c.Message, 500)
+			}
+		}
+		pvc, err := w.Kube.CoreV1().PersistentVolumeClaims(w.Namespace).Get(ctx, CachePVC, metav1.GetOptions{})
+		if err == nil && pvc.Status.Phase == corev1.ClaimPending {
+			return fmt.Sprintf("trivy cache volume %s/%s is still Pending (no storage class or provisioner?)", w.Namespace, CachePVC)
+		}
+	}
+	return ""
 }
 
 func (w *Worker) finish(ctx context.Context, s db.VulnScan) {
