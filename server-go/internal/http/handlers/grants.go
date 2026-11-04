@@ -327,7 +327,7 @@ func (h *GrantsHandler) RemoveGrant(w http.ResponseWriter, r *http.Request) {
 	if groupID != "" && !requireGrantOverGroup(w, r, h.DB, groupID) {
 		return
 	}
-	if err := h.DB.RemoveProjectGrant(ctx, grantID); err != nil {
+	if err := h.DB.RemoveProjectGrant(ctx, project, grantID); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "grant not found")
 			return

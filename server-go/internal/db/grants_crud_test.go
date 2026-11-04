@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -174,12 +175,31 @@ func TestProjectGrant_Remove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := d.RemoveProjectGrant(ctx, id); err != nil {
+	if err := d.RemoveProjectGrant(ctx, "p1", id); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	ten, _ := d.ListUserTenancy(ctx, "u1")
 	if projectRoleOn(ten, "p1") != "" {
 		t.Error("project should be invisible after grant removal")
+	}
+}
+
+// TestProjectGrant_RemoveScopedToProject: a grant id from another project
+// must not be deletable through a different project's URL.
+func TestProjectGrant_RemoveScopedToProject(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	seedUser(t, d, "u1")
+	id, err := d.AddProjectGrant(ctx, "p1", "u1", "", ProjectRoleEditor)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := d.RemoveProjectGrant(ctx, "p2", id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("remove via other project: err = %v, want ErrNotFound", err)
+	}
+	ten, _ := d.ListUserTenancy(ctx, "u1")
+	if projectRoleOn(ten, "p1") != ProjectRoleEditor {
+		t.Error("p1 grant must survive a removal attempted through p2")
 	}
 }
 
