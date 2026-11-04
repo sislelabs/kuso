@@ -1394,7 +1394,10 @@ function AddNodeModal({
                 <label className="font-mono text-[10px] text-[var(--text-tertiary)]">Port</label>
                 <Input
                   value={port}
-                  onChange={(e) => setPort(e.target.value)}
+                  onChange={(e) => {
+                    setPort(e.target.value);
+                    setValidation(null);
+                  }}
                   className="h-8 text-[13px]"
                 />
               </div>
@@ -1404,7 +1407,10 @@ function AddNodeModal({
                 <label className="font-mono text-[10px] text-[var(--text-tertiary)]">SSH user</label>
                 <Input
                   value={user}
-                  onChange={(e) => setUser(e.target.value)}
+                  onChange={(e) => {
+                    setUser(e.target.value);
+                    setValidation(null);
+                  }}
                   className="h-8 text-[13px]"
                 />
               </div>
@@ -1530,21 +1536,38 @@ function BootstrapBody({
     () => (minted ? pending.data?.tokens.some((t) => t.jtiPrefix === minted.jtiPrefix) : false),
     [minted, pending.data],
   );
+  // The shared pending cache still holds the pre-mint list right after a
+  // mint, so "absent" only means redeemed once we've seen the token
+  // listed. onJoined is read through a ref (callers pass an inline arrow)
+  // and the toast fires once per token.
+  const seenPendingRef = useRef<string | null>(null);
+  const handledRef = useRef<string | null>(null);
+  const onJoinedRef = useRef(onJoined);
   useEffect(() => {
-    if (minted && pending.isSuccess && !stillPending) {
-      // Dropping out of the pending list also happens on expiry or a
-      // revoke from the pending-tokens card, not only on redemption.
-      if (new Date(minted.expiresAt).getTime() <= Date.now()) {
-        toast.warning("Bootstrap token expired before a node used it — generate a new command");
-        setMinted(null);
-        return;
-      }
-      toast.success("Token redeemed — the node should appear in the list shortly");
-      onJoined();
-      // Don't auto-close; the operator may want to verify the install
-      // log scrolled successfully on the VM. They click Done.
+    onJoinedRef.current = onJoined;
+  });
+  useEffect(() => {
+    if (!minted || !pending.isSuccess) return;
+    if (stillPending) {
+      seenPendingRef.current = minted.jtiPrefix;
+      return;
     }
-  }, [minted, pending.isSuccess, stillPending, onJoined]);
+    if (handledRef.current === minted.jtiPrefix) return;
+    // Dropping out of the pending list also happens on expiry or a
+    // revoke from the pending-tokens card, not only on redemption.
+    if (new Date(minted.expiresAt).getTime() <= Date.now()) {
+      handledRef.current = minted.jtiPrefix;
+      toast.warning("Bootstrap token expired before a node used it — generate a new command");
+      setMinted(null);
+      return;
+    }
+    if (seenPendingRef.current !== minted.jtiPrefix) return;
+    handledRef.current = minted.jtiPrefix;
+    toast.success("Token redeemed — the node should appear in the list shortly");
+    onJoinedRef.current();
+    // Don't auto-close; the operator may want to verify the install
+    // log scrolled successfully on the VM. They click Done.
+  }, [minted, pending.isSuccess, stillPending]);
 
   const mint = useMutation({
     mutationFn: () => {
