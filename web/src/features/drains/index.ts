@@ -6,8 +6,10 @@ export {
   drainToEditForm,
   listDrains,
   parseHeaderLines,
+  redactUrlCredentials,
   testDrain,
   updateDrain,
+  urlHasCredentials,
 } from "./api";
 export type {
   Drain,

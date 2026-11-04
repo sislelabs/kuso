@@ -12,6 +12,7 @@ import {
   rowDiffLabel,
   rowsShallowEqual,
   rowsToDotenv,
+  rowUnchanged,
   shortServiceFromLabel,
   stripProjectPrefix,
   toRow,
@@ -152,7 +153,7 @@ describe("round-trip losslessness", () => {
   it("resolved service URL literal reverses to ${{ svc.URL }}", () => {
     const row = displayRow({
       name: "API_URL",
-      value: "http://proj-api-production.kuso.svc.cluster.local:3000",
+      value: "http://proj-api-production.kuso.svc.cluster.local",
     });
     expect(row.value).toBe("${{ api.URL }}");
     expect(saveShape(row)).toEqual({ name: "API_URL", value: "${{ api.URL }}" });
@@ -181,7 +182,7 @@ describe("round-trip losslessness", () => {
         name: "DB",
         valueFrom: { secretKeyRef: { name: "proj-postgres-conn", key: "URL" } },
       },
-      { name: "API", value: "http://proj-api-production.kuso.svc.cluster.local:3000" },
+      { name: "API", value: "http://proj-api-production.kuso.svc.cluster.local" },
       { name: "OPAQUE", valueFrom: { secretKeyRef: { name: "vendor-secret", key: "K" } } },
       { name: "EMPTY", value: "" },
     ];
@@ -210,7 +211,7 @@ describe("round-trip losslessness", () => {
 describe("literalToRef", () => {
   it("strips a known non-production scope", () => {
     expect(
-      literalToRef("http://proj-api-staging.kuso.svc.cluster.local:8080", PROJECT, SCOPES)
+      literalToRef("http://proj-api-staging.kuso.svc.cluster.local", PROJECT, SCOPES)
     ).toBe("${{ api.URL }}");
   });
 
@@ -222,7 +223,7 @@ describe("literalToRef", () => {
 
   it("defaults to stripping -production when no scope list is available", () => {
     expect(
-      literalToRef("http://proj-api-production.kuso.svc.cluster.local:3000", PROJECT)
+      literalToRef("http://proj-api-production.kuso.svc.cluster.local", PROJECT)
     ).toBe("${{ api.URL }}");
   });
 
@@ -255,6 +256,16 @@ describe("literalToRef", () => {
 
   it("leaves the empty string alone", () => {
     expect(literalToRef("", PROJECT, SCOPES)).toBe("");
+  });
+
+  it("keeps literals the server would never have produced", () => {
+    for (const v of [
+      "http://proj-api-production.kuso.svc.cluster.local:9090",
+      "foo.infra.svc.cluster.local",
+      "http://other-api-production.kuso.svc.cluster.local",
+    ]) {
+      expect(literalToRef(v, PROJECT, SCOPES)).toBe(v);
+    }
   });
 });
 
@@ -566,6 +577,34 @@ describe("toRow addon ref reveal", () => {
     );
     expect(r.value).toBe("${{ db.DATABASE_URL }}");
     expect(r.resolved).toBe("postgres://real");
+  });
+});
+
+describe("rowUnchanged", () => {
+  const row = (name: string, value: string, extra: Partial<Row> = {}): Row => ({
+    id: name,
+    name,
+    value,
+    fromSecret: false,
+    visible: false,
+    secretBacked: false,
+    ...extra,
+  });
+  const baseline = new Map<string, Row>([
+    ["PLAIN", row("PLAIN", "1")],
+    ["REF", row("REF", "${{ api.URL }}")],
+    ["OPAQUE", row("OPAQUE", "", { fromSecret: true })],
+  ]);
+
+  it("skips untouched literals and refs", () => {
+    expect(rowUnchanged(row("PLAIN", "1"), baseline)).toBe(true);
+    expect(rowUnchanged(row("REF", "${{ api.URL }}"), baseline)).toBe(true);
+  });
+
+  it("writes edited, new and opaque-replacing rows", () => {
+    expect(rowUnchanged(row("PLAIN", "2"), baseline)).toBe(false);
+    expect(rowUnchanged(row("NEW", "1"), baseline)).toBe(false);
+    expect(rowUnchanged(row("OPAQUE", ""), baseline)).toBe(false);
   });
 });
 

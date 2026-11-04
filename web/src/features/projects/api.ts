@@ -458,10 +458,12 @@ export async function runSQL(
   limit?: number,
   database?: string
 ): Promise<SQLQueryResponse> {
-  return api<SQLQueryResponse>(
+  const res = await api<SQLQueryResponse>(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/query${dbQS(database)}`,
     { method: "POST", body: { query, limit } }
   );
+  // Statements like SET return no columns, which Go encodes as null.
+  return { ...res, columns: res.columns ?? [], rows: res.rows ?? [] };
 }
 
 // --- Structured data browser/editor ---------------------------------

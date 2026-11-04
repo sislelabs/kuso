@@ -39,7 +39,9 @@ export default function ReviewerPage() {
   // shows the "link not found" state instead of trying to fetch.
   useEffect(() => {
     const t = window.location.hash.replace(/^#/, "");
-    setToken(t);
+    // Opaque tokens only: anything else (e.g. "../projects/x") would turn
+    // the fetches below into calls to other /api paths.
+    setToken(/^[A-Za-z0-9_-]+$/.test(t) ? t : "");
   }, []);
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export default function ReviewerPage() {
   async function fetchReview() {
     if (!token) return;
     try {
-      const res = await fetch(`/api/reviews/${token}`);
+      const res = await fetch(`/api/reviews/${encodeURIComponent(token)}`, { credentials: "omit" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setView(normalizeReviewerView(await res.json()));
       setError(null);
@@ -78,8 +80,10 @@ export default function ReviewerPage() {
   async function submit(decision: "approved" | "changes_requested" | "denied") {
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/reviews/${token}/decision`, {
+      const res = await fetch(`/api/reviews/${encodeURIComponent(token)}/decision`, {
         method: "POST",
+        // The token is the credential; never ride the operator's session.
+        credentials: "omit",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           decision,
@@ -98,14 +102,14 @@ export default function ReviewerPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
         Loading…
       </div>
     );
   }
   if (!token || error || !view) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
         <div className="max-w-md text-center">
           <h1 className="mb-2 text-xl font-semibold text-neutral-200">Link not found</h1>
           <p className="text-sm">
@@ -122,7 +126,7 @@ export default function ReviewerPage() {
   const seedRunning = view.seedPhase === "running" || view.seedPhase === "pending";
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-neutral-200">
+    <div className="min-h-screen bg-[var(--console-bg)] text-neutral-200">
       <div className="mx-auto max-w-3xl px-6 py-12">
         {/* Header */}
         <div className="mb-8 border-b border-neutral-800 pb-6">

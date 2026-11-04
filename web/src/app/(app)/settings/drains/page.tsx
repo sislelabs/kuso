@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { useCan, Perms } from "@/features/auth";
 import {
   parseHeaderLines,
+  redactUrlCredentials,
   useCreateDrain,
   useDeleteDrain,
   useDrains,
@@ -154,7 +155,7 @@ export default function DrainsPage() {
                       )}
                     </div>
                     <p className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
-                      {d.project ? `project ${d.project}` : "all projects"} · {d.url}
+                      {d.project ? `project ${d.project}` : "all projects"} · {redactUrlCredentials(d.url)}
                       {d.headers && Object.keys(d.headers).length > 0 && ` · headers: ${Object.keys(d.headers).join(", ")}`}
                       {d.secret && " · signed"}
                     </p>

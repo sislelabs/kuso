@@ -8,6 +8,7 @@ import {
   DRAIN_MASK,
   buildDrainUpdate,
   drainToEditForm,
+  urlHasCredentials,
   useUpdateDrain,
   type Drain,
   type DrainEditForm as DrainEditFormState,
@@ -72,6 +73,8 @@ export function DrainEditForm({
           <label htmlFor={id("url")} className={labelCls}>url</label>
           <Input
             id={id("url")}
+            // Stored URL carries a token in its userinfo: keep it hidden.
+            type={urlHasCredentials(drain.url) ? "password" : "text"}
             value={f.url}
             onChange={(e) => set("url", e.target.value)}
             className="h-8 font-mono text-[12px]"

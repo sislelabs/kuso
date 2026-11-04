@@ -11,6 +11,7 @@ import {
   drainToEditForm,
   listDrains,
   parseHeaderLines,
+  redactUrlCredentials,
   testDrain,
   updateDrain,
   type Drain,
@@ -106,6 +107,20 @@ describe("drain edit", () => {
   it("leaves the secret empty when none was stored", () => {
     const r = buildDrainUpdate({ ...stored, secret: "" }, drainToEditForm({ ...stored, secret: "" }));
     expect(r.ok && r.body.secret).toBe("");
+  });
+
+  it("rejects a masked value moved to a new header name", () => {
+    const f = { ...drainToEditForm(stored), headersText: `X-Api-Key: ${DRAIN_MASK}` };
+    const r = buildDrainUpdate(stored, f);
+    expect(r.ok).toBe(false);
+  });
+
+  it("redacts URL credentials for display", () => {
+    expect(redactUrlCredentials("https://123:glc_tok@logs.grafana.net/loki")).toBe(
+      `https://123:${DRAIN_MASK}@logs.grafana.net/loki`,
+    );
+    expect(redactUrlCredentials("https://tok@h/x")).toBe(`https://${DRAIN_MASK}@h/x`);
+    expect(redactUrlCredentials("https://h/x?a=b@c")).toBe("https://h/x?a=b@c");
   });
 
   it("PUTs to the drain id", async () => {

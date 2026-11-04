@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,6 +37,17 @@ export function ProjectDetailView() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const projectName = params.project ?? "";
   const search = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // Closing an overlay drops the deep-link params; otherwise the effect
+  // below re-opens it on the next unrelated URL change (e.g. env switch).
+  const clearDeepLink = () => {
+    const next = new URLSearchParams(search?.toString() ?? "");
+    const before = next.toString();
+    for (const k of ["service", "addon", "tab", "kind", "highlight"]) next.delete(k);
+    const qs = next.toString();
+    if (qs !== before) router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   // Overlay state — in-component, NOT in the URL. The panel is a
   // transient inspector, not a route.
@@ -96,7 +107,10 @@ export function ProjectDetailView() {
       setFailureKind(kind);
     }
     if (addon) {
-      setSelectedAddon(stripPrefix(addon));
+      // The addon overlay and its tabs address the addon by its full CR
+      // name (<project>-<addon>), so normalise the other way here.
+      const p = projectName + "-";
+      setSelectedAddon(addon.startsWith(p) ? addon : p + addon);
       setSelectedAddonTab(tab);
     }
     // Re-run on URL change so the cmd-K palette can navigate from
@@ -397,6 +411,7 @@ export function ProjectDetailView() {
           setSelectedService(null);
           setSelectedServiceTab(undefined);
           setFailureKind(undefined);
+          clearDeepLink();
         }}
       />
 
@@ -407,6 +422,7 @@ export function ProjectDetailView() {
         onClose={() => {
           setSelectedAddon(null);
           setSelectedAddonTab(undefined);
+          clearDeepLink();
         }}
       />
     </>

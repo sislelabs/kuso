@@ -306,25 +306,28 @@ function ConfirmRestore({
               <option value="">{sourceAddon} (overwrite)</option>
               {siblings.map((s) => (
                 <option key={s} value={s}>
-                  {s} ({sourceAddon} untouched)
+                  {s} (overwrite)
                 </option>
               ))}
             </select>
-            {inPlace ? (
-              <p className="text-[var(--error)]">Existing tables in {sourceAddon} are overwritten.</p>
-            ) : (
-              <p className="text-[var(--text-tertiary)]">{target} must be an existing postgres addon.</p>
+            <p className="text-[var(--error)]">Existing tables in {target || sourceAddon} are overwritten.</p>
+            {!inPlace && (
+              <p className="text-[var(--text-tertiary)]">
+                {sourceAddon} is left untouched. {target} must be an existing postgres addon.
+              </p>
             )}
           </div>
         )
       }
       confirmLabel={`Restore into ${target || sourceAddon}`}
-      // The server re-checks the typed name for the in-place path.
-      typeToConfirm={inPlace ? sourceAddon : undefined}
-      destructive={inPlace}
+      // Both paths drop and recreate the target's tables (the dumps are
+      // --clean), so both need the target typed. The server only re-checks
+      // the typed name for the in-place path today.
+      typeToConfirm={target || sourceAddon}
+      destructive
       pending={pending}
       onConfirm={() => {
-        if (item) onConfirm(item.key, target || undefined, inPlace ? sourceAddon : undefined);
+        if (item) onConfirm(item.key, target || undefined, target || sourceAddon);
       }}
       onCancel={onCancel}
     />

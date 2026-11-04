@@ -92,6 +92,13 @@ export function buildDrainUpdate(
 ): { ok: true; body: DrainUpdateBody } | { ok: false; error: string } {
   const parsed = parseHeaderLines(f.headersText);
   if (!parsed.ok) return { ok: false, error: `Header ${parsed.error}` };
+  // The server keeps a masked value only under the name it was stored
+  // with, so a renamed masked header would be silently dropped.
+  for (const [k, v] of Object.entries(parsed.headers)) {
+    if (v === DRAIN_MASK && !(d.headers && k in d.headers)) {
+      return { ok: false, error: `Header "${k}" — re-enter its value; a masked value can't move to a new name` };
+    }
+  }
   let secret = "";
   if (f.secret) secret = f.secret;
   else if (!f.clearSecret && d.secret) secret = DRAIN_MASK;
@@ -119,6 +126,21 @@ export async function deleteDrain(id: string): Promise<void> {
 
 export async function testDrain(id: string): Promise<DrainTestResult> {
   return api<DrainTestResult>(`/api/drains/${encodeURIComponent(id)}/test`, { method: "POST" });
+}
+
+// redactUrlCredentials hides the password in a URL's userinfo
+// (https://user:token@host) for display. Loki/Grafana Cloud drains carry
+// their token there.
+export function redactUrlCredentials(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s]+)@/i, (_m, scheme: string, userinfo: string) => {
+    const i = userinfo.indexOf(":");
+    // A bare userinfo with no colon is usually a token, so mask it too.
+    return `${scheme}${i >= 0 ? `${userinfo.slice(0, i)}:` : ""}${DRAIN_MASK}@`;
+  });
+}
+
+export function urlHasCredentials(url: string): boolean {
+  return redactUrlCredentials(url) !== url;
 }
 
 export type ParsedHeaders = { ok: true; headers: Record<string, string> } | { ok: false; error: string };

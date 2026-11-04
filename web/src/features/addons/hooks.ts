@@ -25,9 +25,13 @@ export function useToggleAddonSubscription(project: string) {
     // Callers pass a per-call onError; skip the global toast so failures toast once.
     meta: { skipGlobalErrorToast: true },
     mutationFn: async (vars: { service: string; addon: string; on: boolean; current: SubscribedAddons }) => {
+      // The PUT replaces the whole list, so toggle against a fresh read
+      // rather than this tab's cache (`current`), which may predate another
+      // user's change and would silently drop it.
+      const fresh = await getSubscribedAddons(project, vars.service);
       const next = vars.on
-        ? Array.from(new Set([...vars.current.subscribed, vars.addon]))
-        : vars.current.subscribed.filter((a) => a !== vars.addon);
+        ? Array.from(new Set([...fresh.subscribed, vars.addon]))
+        : fresh.subscribed.filter((a) => a !== vars.addon);
       await setSubscribedAddons(project, vars.service, next);
     },
     onSettled: () => {

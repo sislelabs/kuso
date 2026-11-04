@@ -422,12 +422,22 @@ export function AddServiceView() {
           ...(port ? { port: parseInt(port, 10) } : {}),
         };
       } else {
+        const repoURL = picked!.byUrl?.url ?? `https://github.com/${picked!.repo.fullName}`;
+        // A non-empty branch pins the service. On the project's own repo
+        // and branch, leave it empty so the service follows later changes
+        // to the project's default branch (as CLI-created services do).
+        const projectRepo = projectQuery.data?.project?.spec?.defaultRepo;
+        const normRepo = (u: string) => u.replace(/\.git$/, "").replace(/\/+$/, "").toLowerCase();
+        const followsProject =
+          !!projectRepo?.url &&
+          normRepo(projectRepo.url) === normRepo(repoURL) &&
+          (projectRepo.defaultBranch || "main") === picked!.repo.defaultBranch;
         body = {
           name: slug,
           displayName: name.trim(),
           repo: {
-            url: picked!.byUrl?.url ?? `https://github.com/${picked!.repo.fullName}`,
-            defaultBranch: picked!.repo.defaultBranch,
+            url: repoURL,
+            ...(followsProject ? {} : { defaultBranch: picked!.repo.defaultBranch }),
             ...(path.trim() ? { path: path.trim() } : {}),
             ...(picked!.byUrl?.token ? { token: picked!.byUrl.token } : {}),
           },

@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { FileCode, Play, Rocket, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import {
   applyConfig,
   getProjectSpec,
@@ -22,6 +24,7 @@ export function ConfigTab({ project }: { project: string }) {
   // text is the editable buffer. live is the last-fetched server copy —
   // tracked so "Reset to live" and the dirty indicator have something
   // to compare against.
+  const qc = useQueryClient();
   const [text, setText] = useState("");
   const [live, setLive] = useState("");
   const [loading, setLoading] = useState(true);
@@ -73,6 +76,9 @@ export function ConfigTab({ project }: { project: string }) {
     try {
       const res = await applyConfig(project, text, false);
       setResult(res);
+      // Even a partial apply changed the project: refresh everything that
+      // reads it (the General form re-seeds from this when clean).
+      void qc.invalidateQueries({ queryKey: ["projects", project] });
       const errs = res.errors ?? [];
       if (errs.length > 0) {
         toast.error(`Applied with ${errs.length} error${errs.length > 1 ? "s" : ""}`);
@@ -90,6 +96,7 @@ export function ConfigTab({ project }: { project: string }) {
   };
 
   const dirty = text !== live;
+  useUnsavedEdits("project-config", dirty);
 
   return (
     <section className="space-y-4">

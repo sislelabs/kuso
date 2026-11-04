@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyConfig } from "./api";
+import { applyConfig, runSQL } from "./api";
 
 function serve(body: unknown) {
   vi.stubGlobal(
@@ -38,5 +38,14 @@ describe("applyConfig", () => {
     expect(res.plan.addonsToUpdate).toEqual([]);
     expect(res.plan.servicesToDelete).toEqual([]);
     expect(res.errors).toBeUndefined();
+  });
+});
+
+describe("runSQL", () => {
+  it("turns null columns/rows (e.g. from SET) into empty arrays", async () => {
+    serve({ columns: null, rows: null, truncated: false, elapsed: "1ms" });
+    const res = await runSQL("p", "p-db", "SET x = 1");
+    expect(res.columns).toEqual([]);
+    expect(res.rows).toEqual([]);
   });
 });

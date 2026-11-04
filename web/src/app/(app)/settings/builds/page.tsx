@@ -103,6 +103,9 @@ function cpuM(v: string): number {
 
 export default function BuildSettingsPage() {
   const [loaded, setLoaded] = useState(false);
+  // A failed load leaves placeholder defaults in the form; saving them
+  // would overwrite the real settings, so Save stays off until a reload.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [s, setS] = useState<BuildSettingsResponse>({
     maxConcurrent: 1,
     memoryLimit: "2Gi",
@@ -121,6 +124,7 @@ export default function BuildSettingsPage() {
       })
       .catch((e) => {
         toast.error(e instanceof Error ? e.message : "Failed to load settings");
+        setLoadFailed(true);
         setLoaded(true);
       });
   }, []);
@@ -273,7 +277,11 @@ export default function BuildSettingsPage() {
           Quantity strings: <span className="font-mono">"2Gi" · "1500m" · "1G" · "500Mi"</span>.
           Validated server-side.
         </p>
-        <Button onClick={save} disabled={saving}>
+        <Button
+          onClick={save}
+          disabled={saving || loadFailed}
+          title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
+        >
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>

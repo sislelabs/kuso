@@ -42,6 +42,9 @@ export default function ClusterConfigPage() {
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [rawJson, setRawJson] = useState("");
   const [rawError, setRawError] = useState<string | null>(null);
+  // The raw spec can hold registry credentials and the OAuth client
+  // secret, so it stays collapsed until asked for.
+  const [showRaw, setShowRaw] = useState(false);
 
   useEffect(() => {
     if (settings.data) {
@@ -163,12 +166,19 @@ export default function ClusterConfigPage() {
       <RunpacksSection canEdit={canEdit} />
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <header className="border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <h2 className="text-sm font-semibold tracking-tight">Raw spec</h2>
-          <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            Direct edit of the entire Kuso CR spec. Validates JSON before save.
-          </p>
+        <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight">Raw spec</h2>
+            <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+              Direct edit of the entire Kuso CR spec. Validates JSON before save. May contain secrets.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setShowRaw((v) => !v)} aria-expanded={showRaw}>
+            {showRaw ? "Hide" : "Show"}
+          </Button>
         </header>
+        {showRaw && (
+        <>
         <div className="p-3">
           <textarea
             value={rawJson}
@@ -196,6 +206,8 @@ export default function ClusterConfigPage() {
             {save.isPending ? "Saving…" : "Save raw"}
           </Button>
         </footer>
+        </>
+        )}
       </section>
     </div>
   );

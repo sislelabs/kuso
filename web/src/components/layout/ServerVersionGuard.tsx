@@ -8,6 +8,7 @@ import {
   getPinnedServerVersion,
 } from "@/lib/api-client";
 import { toast } from "sonner";
+import { editingInProgress, hasUnsavedEdits } from "@/lib/unsaved-edits";
 
 // ServerVersionGuard reloads the SPA when the server version changes.
 //
@@ -26,7 +27,8 @@ import { toast } from "sonner";
 //     guaranteeing a save-in-flight isn't interrupted.
 //   - Falls back to a 30s timer so a user who's parked on one page
 //     for a long time eventually picks up the new bundle without
-//     having to navigate.
+//     having to navigate. The timer holds off while any form reports
+//     unsaved edits (lib/unsaved-edits) or a text field has focus.
 export function ServerVersionGuard() {
   const pathname = usePathname();
   const initialPath = useRef(pathname);
@@ -42,7 +44,9 @@ export function ServerVersionGuard() {
         description: pinned
           ? `Server is on a newer version than this tab (was ${pinned}). Reload to pick up new features.`
           : "Server has a newer version. Reload to pick up new features.",
-        duration: 30_000,
+        // Stays up: with unsaved edits the auto-reload below holds off
+        // and this button is the only way forward.
+        duration: Infinity,
         action: {
           label: "Reload",
           onClick: () => window.location.reload(),
@@ -53,11 +57,17 @@ export function ServerVersionGuard() {
       // 30s and never fired for a tab parked open across a server roll)
       // so a tab left on the dashboard eventually catches up without
       // user action. The route-change effect below usually wins first.
-      idleTimer = window.setTimeout(() => {
-        if (getServerVersionMismatch()) {
-          window.location.reload();
+      // Never while a form holds unsaved edits or a field has focus:
+      // check again later and leave the toast's Reload button to the user.
+      const tryReload = () => {
+        if (!getServerVersionMismatch()) return;
+        if (hasUnsavedEdits() || editingInProgress()) {
+          idleTimer = window.setTimeout(tryReload, 30_000);
+          return;
         }
-      }, 30_000);
+        window.location.reload();
+      };
+      idleTimer = window.setTimeout(tryReload, 30_000);
     };
     if (getServerVersionMismatch()) arm();
     const off = onServerVersionMismatch(arm);

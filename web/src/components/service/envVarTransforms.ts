@@ -329,16 +329,20 @@ export const ENV_MASK_SENTINEL = "••••••••";
 // in the service name itself for a scope boundary.
 export function literalToRef(value: string, project: string, knownScopes: string[] = []): string {
   if (!value) return value;
-  const urlMatch = value.match(
-    /^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local(?::\d+)?$/
-  );
-  if (urlMatch) {
+  // Only reverse what the server's own expansion produces: no explicit
+  // port (URL refs always elide :80) and a "<project>-<svc>-<scope>"
+  // label. Anything else (an explicit :9090, another project's or
+  // namespace's service) is a real literal; turning it into a ref lost
+  // the port/target on the next save.
+  const looksResolved = (label: string) =>
+    label.startsWith(project + "-") &&
+    shortServiceFromLabel(label, project, knownScopes) !== stripProjectPrefix(label, project);
+  const urlMatch = value.match(/^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/);
+  if (urlMatch && looksResolved(urlMatch[1])) {
     return `\${{ ${shortServiceFromLabel(urlMatch[1], project, knownScopes)}.URL }}`;
   }
-  const hostMatch = value.match(
-    /^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/
-  );
-  if (hostMatch) {
+  const hostMatch = value.match(/^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/);
+  if (hostMatch && looksResolved(hostMatch[1])) {
     return `\${{ ${shortServiceFromLabel(hostMatch[1], project, knownScopes)}.HOST }}`;
   }
   return value;
@@ -505,4 +509,14 @@ export function envApplyFailureMessage(applied: string[], failed: string, reason
   const head = failed ? `Failed to save ${failed}: ${reason}` : `Failed to save env vars: ${reason}`;
   if (applied.length === 0) return `${head}. Nothing was changed.`;
   return `${head}. Already applied: ${applied.join(", ")}. Save again to retry the rest.`;
+}
+
+// rowUnchanged reports whether a row's write would be a no-op: the
+// server-known row of the same name already holds this exact value.
+// Re-sending such rows rewrote every var on every save, which re-ran
+// server storage selection (moving legacy CR literals into the managed
+// Secret), re-resolved refs and recorded a revision per key.
+export function rowUnchanged(r: Row, baselineByName: ReadonlyMap<string, Row>): boolean {
+  const b = baselineByName.get(r.name.trim());
+  return !!b && !b.fromSecret && b.value === r.value;
 }

@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useInstallURL, useGithubRepos, type GithubRepoRef } from "@/features/github";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { useCreateProject } from "@/features/projects";
+import { useCreateProject, useProjects } from "@/features/projects";
+import { projectSlugFromRepo } from "@/features/projects/names";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
@@ -270,6 +271,7 @@ function Step2PickRepo({
   onPickInstall: (id: number | null) => void;
   onPicked: (project: string) => void;
 }) {
+  const existingProjects = useProjects();
   // One entry per installation, labelled by the owner of its first repo.
   const installations = Array.from(
     new Map(repos.map((r) => [r.installationId, r.fullName.split("/")[0]])),
@@ -317,12 +319,10 @@ function Step2PickRepo({
   const onPick = async (repo: GithubRepoRef) => {
     setBusyRepo(repo.fullName);
     try {
-      // Project slug: lowercased repo name, dashes only.
-      const slug = (repo.fullName.split("/")[1] ?? repo.fullName)
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 63);
+      // Project slug from the repo name, adjusted to what the server
+      // accepts and clear of existing project names.
+      const taken = new Set((existingProjects.data ?? []).map((p) => p.metadata.name));
+      const slug = projectSlugFromRepo(repo.fullName.split("/")[1] ?? repo.fullName, taken);
       // GithubRepoRef doesn't carry the full HTTPS URL; we synthesise it
       // from fullName since GitHub installations always live on
       // github.com (kuso doesn't yet support GHE Server).
