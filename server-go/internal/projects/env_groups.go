@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
+	addonspkg "kuso/server/internal/addons"
 	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 )
@@ -397,6 +398,17 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			return nil, err
 		} else if len(pvcs) > 0 {
 			return nil, fmt.Errorf("%w: data from a previous addon %s still exists (%s) — pick another env name or delete that data first", ErrConflict, cloneCR, strings.Join(pvcs, ", "))
+		}
+		// The rest of Add's preflight: a kept CNPG cluster, and for an
+		// instance-shared clone a surviving conn Secret or database that
+		// ProvisionInstanceAddon would silently re-adopt.
+		if s.PreflightEnvAddonClone != nil {
+			if err := s.PreflightEnvAddonClone(ctx, project, short+"-"+req.Name, a.Spec.UseInstanceAddon); err != nil {
+				if errors.Is(err, addonspkg.ErrConflict) {
+					return nil, fmt.Errorf("%w: %w", ErrConflict, err)
+				}
+				return nil, err
+			}
 		}
 	}
 	for i := range services {

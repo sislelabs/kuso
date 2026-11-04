@@ -704,6 +704,47 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	return nil
 }
 
+// PreflightEnvClone runs the checks Add applies before an env-group clone's CR
+// is written directly (env groups bypass Add). It refuses when data from an
+// earlier addon of the same name survived: a native clone would mount the
+// retained PVC (with the conn Secret's old password), and an instance clone
+// would re-adopt the old database through its surviving conn Secret or
+// ownership stamp. instanceName is the clone's spec.useInstanceAddon.
+func (s *Service) PreflightEnvClone(ctx context.Context, project, addonShort, instanceName string) error {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, addonShort)
+	if err := s.checkReleaseName(ctx, ns, fqn, true); err != nil {
+		return err
+	}
+	pvcs, err := s.retainedPVCsForAddon(ctx, ns, fqn)
+	if err != nil {
+		return fmt.Errorf("check for retained data: %w", err)
+	}
+	if len(pvcs) > 0 {
+		return fmt.Errorf("%w: data from a previous %s still exists (%s) — purge it or pick another env name", ErrConflict, fqn, strings.Join(pvcs, ", "))
+	}
+	if instanceName == "" {
+		return nil
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecretName(fqn), metav1.GetOptions{}); err == nil {
+		return fmt.Errorf("%w: conn secret %s from a previous %s still exists — it points at that addon's database", ErrConflict, connSecretName(fqn), fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("check conn secret: %w", err)
+	}
+	adminDSN, err := s.instanceAdminDSN(ctx, instanceName)
+	if err != nil {
+		return err
+	}
+	exists, err := instanceDBExists(ctx, adminDSN, pgIdentifier(project, addonShort))
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("%w: database %s from a previous %s still exists on the shared instance server", ErrConflict, pgIdentifier(project, addonShort), fqn)
+	}
+	return nil
+}
+
 // CleanupInstanceAddon rolls back the durable side effects
 // ProvisionInstanceAddon creates for an instance-shared addon
 // (spec.useInstanceAddon): the per-project database + login role on the

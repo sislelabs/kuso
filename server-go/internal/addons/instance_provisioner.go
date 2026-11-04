@@ -502,6 +502,21 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 	return nil
 }
 
+// instanceDBExists reports whether the shared server already has a database
+// named ident.
+func instanceDBExists(ctx context.Context, adminDSN, ident string) (bool, error) {
+	db, err := sql.Open("postgres", adminDSN)
+	if err != nil {
+		return false, fmt.Errorf("open admin: %w", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_database WHERE datname = $1`, ident).Scan(&n); err != nil {
+		return false, fmt.Errorf("check pg_database: %w", err)
+	}
+	return n > 0, nil
+}
+
 // randPassword returns 24 random hex chars (96 bits of entropy).
 func randPassword() (string, error) {
 	b := make([]byte, 12)
