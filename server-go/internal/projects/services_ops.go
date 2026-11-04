@@ -1646,13 +1646,19 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 	if err != nil {
 		return err
 	}
-	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		labelProject: project,
-		labelService: service,
-	})
+	// Live LIST, not the informer cache: an env created seconds ago (a
+	// fresh preview) or a cold cache would be skipped here, and ownerRef
+	// GC would then remove its CR without reclaiming PVCs, clone addons or
+	// TLS Secrets. Same contract as DeleteEnvGroup.
+	envList, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{
+			labelProject: project,
+			labelService: service,
+		})})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	envs := envList.Items
 	// Route each env through DeleteEnvironment so per-env secrets, clone
 	// PVCs, volume PVCs and cert-manager TLS secrets are reclaimed — not
 	// just the env CR. Best-effort per env: keep tearing down the rest
@@ -1664,8 +1670,8 @@ func (s *Service) deleteService(ctx context.Context, project, service string, dr
 		// the short form. Force: deleting the whole service must also remove
 		// its production env (the standalone production-delete guard doesn't
 		// apply here).
-		if derr := s.deleteEnvironmentForce(ctx, project, envs[i].Name); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
-			firstErr = fmt.Errorf("delete env %s: %w", envs[i].Name, derr)
+		if derr := s.deleteEnvironmentForce(ctx, project, envs[i].GetName()); derr != nil && !apierrors.IsNotFound(derr) && firstErr == nil {
+			firstErr = fmt.Errorf("delete env %s: %w", envs[i].GetName(), derr)
 		}
 	}
 	// Reclaim the service-level managed Secret (<project>-<service>-secrets).
