@@ -145,7 +145,7 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = "/"
 	}
 
-	proxy := newAddonWebUIProxy(target)
+	proxy := newAddonWebUIProxy(target, prefix)
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		h.Logger.Warn("addon webui proxy error",
 			"project", project, "addon", addon, "target", target.Host, "err", perr)
@@ -159,14 +159,53 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 
 // newAddonWebUIProxy builds the reverse proxy to an addon console with
 // the caller's kuso credentials stripped from every outbound request.
-func newAddonWebUIProxy(target *url.URL) *httputil.ReverseProxy {
+// prefix is the kuso-side path the console is mounted under.
+func newAddonWebUIProxy(target *url.URL, prefix string) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	director := proxy.Director
 	proxy.Director = func(out *http.Request) {
 		director(out)
 		stripKusoCredentials(out.Header)
 	}
+	proxy.ModifyResponse = func(res *http.Response) error {
+		confineConsoleResponse(res, prefix)
+		return nil
+	}
 	return proxy
+}
+
+// webUIContentSandbox runs a document in an opaque origin with no scripts,
+// so attacker-influenced HTML can't call /api with the viewer's session.
+const webUIContentSandbox = "sandbox allow-popups allow-popups-to-escape-sandbox allow-downloads"
+
+// confineConsoleResponse limits what an addon console can do to the kuso
+// origin it is served from. Its cookies are pinned under prefix with no
+// Domain, and kuso.* names are dropped so it can't overwrite the session.
+// Documents that carry data rather than the console's own app shell
+// (mailpit's /view/<id>.html mail bodies, message parts under /api/) are
+// sandboxed. The shell itself isn't: the consoles need scripts and
+// same-origin storage to work at all.
+func confineConsoleResponse(res *http.Response, prefix string) {
+	if raw := res.Header.Values("Set-Cookie"); len(raw) > 0 {
+		res.Header.Del("Set-Cookie")
+		for _, line := range raw {
+			c, err := http.ParseSetCookie(line)
+			if err != nil || strings.HasPrefix(c.Name, "kuso.") {
+				continue
+			}
+			c.Domain = ""
+			c.Path = prefix + "/" + strings.TrimPrefix(c.Path, "/")
+			res.Header.Add("Set-Cookie", c.String())
+		}
+	}
+	if res.Request == nil {
+		return
+	}
+	p := res.Request.URL.Path
+	last := p[strings.LastIndex(p, "/")+1:]
+	if strings.HasPrefix(p, "/api/") || (strings.HasPrefix(p, "/view/") && strings.Contains(last, ".")) {
+		res.Header.Set("Content-Security-Policy", webUIContentSandbox)
+	}
 }
 
 // addonWebUIMinRole is Viewer for safe methods and Editor otherwise.
