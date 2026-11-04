@@ -102,3 +102,22 @@ func VulnScanFailed(o VulnOwner, imageRef, msg string) Event {
 		Fields:      []EventField{{Name: "Image", Value: "`" + imageRef + "`"}},
 	}
 }
+
+// VulnBaselineComplete summarises the first-ever sweep, whose findings
+// are recorded as known instead of alerted owner by owner.
+func VulnBaselineComplete(images, withFixableCritical int) Event {
+	sev := "info"
+	if withFixableCritical > 0 {
+		sev = "warn"
+	}
+	msg := fmt.Sprintf("Baseline vulnerability scan complete: %d images, %d with fixable criticals — see Settings → Vulnerability scanning",
+		images, withFixableCritical)
+	return Event{
+		Type:        EventVulnsFound,
+		Title:       "Baseline vulnerability scan complete",
+		Description: msg,
+		Body:        msg,
+		URL:         "/settings/vulnerabilities",
+		Severity:    sev,
+	}
+}

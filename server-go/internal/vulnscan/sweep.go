@@ -2,9 +2,11 @@ package vulnscan
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"kuso/server/internal/db"
@@ -29,6 +31,13 @@ const (
 	tickBudget     = 5 * time.Minute
 
 	lastSweepKey = "vulnscan.lastSweepAt"
+	// baselineKey marks the first-ever sweep, whose results are a
+	// baseline (one summary event, nothing per owner) rather than news.
+	// "pending" while that sweep is queueing, then the highest scan id
+	// it covers, then "done" once those scans have finished.
+	baselineKey     = "vulnscan.baseline"
+	baselinePending = "pending"
+	baselineDone    = "done"
 )
 
 // Disabled is the KUSO_VULNSCAN_DISABLED kill switch. main.go gates
@@ -145,6 +154,19 @@ func (s *Sweeper) Sweep(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	now := s.now()
+	last, err := s.lastSweep(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// The first sweep ever (or a retry of one that died before recording
+	// itself) baselines. Marked before anything is queued so a scan that
+	// fails right away is already covered.
+	first := last.IsZero()
+	if first {
+		if err := s.DB.SetSetting(ctx, baselineKey, baselinePending, "vulnscan"); err != nil {
+			return 0, err
+		}
+	}
 	inv, err := Inventory(ctx, s.Cluster)
 	if err != nil {
 		return 0, err
@@ -173,19 +195,26 @@ func (s *Sweeper) Sweep(ctx context.Context) (int, error) {
 	}
 	sort.Strings(digests)
 	queued := 0
+	var maxID int64
 	for _, d := range digests {
 		if sc, ok := latest[d]; ok && now.Sub(sc.FinishedAt) < ReuseWindow {
 			continue
 		}
 		im := want[d]
-		_, created, err := s.DB.EnqueueVulnScan(ctx, db.VulnScanRequest{
+		id, created, err := s.DB.EnqueueVulnScan(ctx, db.VulnScanRequest{
 			Digest: d, ImageRef: im.ImageRef, Reason: db.VulnReasonNightly, PullSecret: im.PullSecret,
 		})
 		if err != nil {
 			return queued, err
 		}
+		maxID = max(maxID, id)
 		if created {
 			queued++
+		}
+	}
+	if first {
+		if err := s.DB.SetSetting(ctx, baselineKey, strconv.FormatInt(maxID, 10), "vulnscan"); err != nil {
+			return queued, err
 		}
 	}
 	if err := s.DB.SetSetting(ctx, lastSweepKey, now.UTC().Format(time.RFC3339), "vulnscan"); err != nil {
@@ -245,12 +274,52 @@ func notifyOwner(im db.VulnImage) notify.VulnOwner {
 		Namespace: im.Namespace, Workload: im.Workload}
 }
 
+// baseline reads the first-sweep marker: active while the first sweep
+// is queueing or its scans run; through is the highest scan id it
+// covers (0 while still queueing: every scan is covered).
+func (s *Sweeper) baseline(ctx context.Context) (active bool, through int64, err error) {
+	raw, err := s.DB.GetSetting(ctx, baselineKey)
+	if err != nil {
+		return false, 0, err
+	}
+	switch raw {
+	case "", baselineDone:
+		return false, 0, nil
+	case baselinePending:
+		return true, 0, nil
+	}
+	n, perr := strconv.ParseInt(raw, 10, 64)
+	if perr != nil {
+		return false, 0, nil // garbled: alert normally rather than go silent forever
+	}
+	return true, n, nil
+}
+
 // AlertNew emits one vulnerabilities_found per owner whose latest
 // successful scans hold fixable critical/high findings not yet notified
 // for it. Owners with a scan still queued/running wait, so a sweep's
-// results arrive as one alert, not one per image.
+// results arrive as one alert, not one per image. While the first-ever
+// sweep runs nothing alerts; when it's done finishBaseline records every
+// finding as notified and sends one summary.
 func (s *Sweeper) AlertNew(ctx context.Context, st db.VulnScanSettings) error {
-	if s.Notify == nil || st.Mode == ModeOff || st.NotifyMinSeverity == "none" {
+	if st.Mode == ModeOff {
+		return nil
+	}
+	active, through, err := s.baseline(ctx)
+	if err != nil {
+		return err
+	}
+	if active {
+		if through == 0 {
+			return nil // first sweep still queueing (or died doing so)
+		}
+		n, err := s.DB.CountActiveVulnScansThrough(ctx, through)
+		if err != nil || n > 0 {
+			return err
+		}
+		return s.finishBaseline(ctx, st)
+	}
+	if s.Notify == nil || st.NotifyMinSeverity == "none" {
 		return nil
 	}
 	now := s.now()
@@ -351,6 +420,81 @@ func (s *Sweeper) AlertNew(ctx context.Context, st db.VulnScanSettings) error {
 	return nil
 }
 
+// finishBaseline marks every current alert candidate of every enabled
+// owner notified, emits one summary, and ends the baseline.
+func (s *Sweeper) finishBaseline(ctx context.Context, st db.VulnScanSettings) error {
+	now := s.now()
+	inv, err := s.DB.ListVulnImages(ctx, db.VulnImageFilter{SeenSince: now.Add(-GoneAfter)})
+	if err != nil {
+		return err
+	}
+	policies, err := s.DB.ListVulnPolicies(ctx)
+	if err != nil {
+		return err
+	}
+	byOwner := map[string][]string{}
+	imgOf := map[string]db.VulnImage{}
+	var all []string
+	for _, im := range inv {
+		if !ownerEnabled(st, policies, im) {
+			continue
+		}
+		k := OwnerKey(im)
+		byOwner[k] = append(byOwner[k], im.Digest)
+		imgOf[k] = im
+		all = append(all, im.Digest)
+	}
+	latest, err := s.DB.LatestSucceededVulnScans(ctx, all)
+	if err != nil {
+		return err
+	}
+	findingsByScan := map[int64][]db.VulnFinding{}
+	for k, digests := range byOwner {
+		var findings []db.VulnFinding
+		for _, d := range digests {
+			sc, ok := latest[d]
+			if !ok {
+				continue
+			}
+			fs, cached := findingsByScan[sc.ID]
+			if !cached {
+				if fs, err = s.DB.ListVulnFindings(ctx, sc.ID); err != nil {
+					return err
+				}
+				findingsByScan[sc.ID] = fs
+			}
+			findings = append(findings, fs...)
+		}
+		scope, project, name := IgnoreScope(imgOf[k])
+		ignores, err := s.DB.ListVulnIgnores(ctx, scope, project, name)
+		if err != nil {
+			return err
+		}
+		// "high" covers everything any notifyMinSeverity would alert on,
+		// so lowering the threshold later doesn't replay the backlog.
+		if err := s.DB.MarkVulnsNotified(ctx, k, AlertCandidates(findings, ignores, "high", now)); err != nil {
+			return err
+		}
+	}
+	withCrit := 0
+	for _, sc := range latest {
+		if sc.Counts.FixableCritical > 0 {
+			withCrit++
+		}
+	}
+	if s.Notify != nil && st.NotifyMinSeverity != "none" && len(latest) > 0 {
+		if err := s.Notify.EmitDurable(notify.VulnBaselineComplete(len(latest), withCrit)); err != nil {
+			s.log().Warn("vulnscan: emit baseline summary", "err", err)
+		}
+	}
+	if err := s.DB.SetSetting(ctx, baselineKey, baselineDone, "vulnscan"); err != nil {
+		return fmt.Errorf("record baseline done: %w", err)
+	}
+	s.alertedThrough = now
+	s.log().Info("vulnscan: baseline scan complete", "images", len(latest), "withFixableCritical", withCrit)
+	return nil
+}
+
 // alertItems lists ids (criticals first) with one finding's details each.
 func alertItems(findings []db.VulnFinding, ids []string) []notify.VulnItem {
 	want := map[string]bool{}
@@ -377,6 +521,12 @@ func alertItems(findings []db.VulnFinding, ids []string) []notify.VulnItem {
 func (s *Sweeper) OnScanFailed(ctx context.Context, scan db.VulnScan, msg string) {
 	if s.Notify == nil || scan.Reason == db.VulnReasonGate {
 		return
+	}
+	if scan.Reason == db.VulnReasonNightly {
+		if active, through, err := s.baseline(ctx); err == nil && active && (through == 0 || scan.ID <= through) {
+			s.log().Info("vulnscan: baseline scan failed (not alerted)", "scan", scan.ID, "image", scan.ImageRef, "err", msg)
+			return
+		}
 	}
 	owner := db.VulnImage{OwnerKind: db.VulnOwnerPlatform, Workload: scan.ImageRef}
 	if scan.Digest != "" {

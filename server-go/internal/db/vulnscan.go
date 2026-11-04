@@ -321,6 +321,16 @@ func (d *DB) CountActiveVulnScans(ctx context.Context, digests []string) (int, e
 	return n, nil
 }
 
+// CountActiveVulnScansThrough counts queued + running scans with id <= through.
+func (d *DB) CountActiveVulnScansThrough(ctx context.Context, through int64) (int, error) {
+	var n int
+	if err := d.QueryRowContext(ctx, `
+		SELECT count(*) FROM "VulnScan" WHERE "status" IN ('queued','running') AND "id" <= $1`, through).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count active vuln scans: %w", err)
+	}
+	return n, nil
+}
+
 // ClaimNextVulnScan moves the next queued scan to running and returns
 // it, or nil when the queue is empty or a scan is already running
 // (global concurrency is one). Gate scans go first: a build is waiting.

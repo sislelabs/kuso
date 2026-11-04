@@ -342,3 +342,145 @@ func TestPruneVulnInventory_DropsGoneImagesAndTheirNotified(t *testing.T) {
 		t.Error("a fresh notified record is kept")
 	}
 }
+
+// drainQueue finishes every queued scan: failing those whose digest is
+// in fail (reporting them like the worker does), completing the rest
+// with fs.
+func drainQueue(t *testing.T, s *Sweeper, fail map[string]bool, fs []db.VulnFinding) {
+	t.Helper()
+	ctx := context.Background()
+	for {
+		sc, err := s.DB.ClaimNextVulnScan(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sc == nil {
+			return
+		}
+		if fail[sc.Digest] {
+			_ = s.DB.FailVulnScan(ctx, sc.ID, "pull failed")
+			got, _ := s.DB.GetVulnScan(ctx, sc.ID)
+			s.OnScanFailed(ctx, got, "pull failed")
+			continue
+		}
+		if err := s.DB.CompleteVulnScan(ctx, sc.ID, db.VulnScanResult{Findings: fs}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+var critFinding = []db.VulnFinding{{VulnID: "CVE-OLD", PkgName: "openssl", Severity: "CRITICAL", FixedVersion: "3"}}
+
+func TestFirstSweep_BaselinesSilently(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	em := &captureEmitter{}
+	s := &Sweeper{DB: d, Cluster: sweepCluster(), Notify: em}
+	st := db.DefaultVulnScanSettings()
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AlertNew(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	drainQueue(t, s, map[string]bool{dB: true}, critFinding)
+	if len(em.events) != 0 {
+		t.Fatalf("first-sweep scan failures must not page: %+v", em.events)
+	}
+	if err := s.AlertNew(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if len(em.events) != 1 || !strings.Contains(em.events[0].Title, "Baseline") ||
+		!strings.Contains(em.events[0].Description, "2 images") || !strings.Contains(em.events[0].Description, "2 with fixable criticals") {
+		t.Fatalf("want exactly one baseline summary, got %+v", em.events)
+	}
+	if err := s.AlertNew(ctx, st); err != nil || len(em.events) != 1 {
+		t.Fatalf("baseline summary is one-shot: %+v %v", em.events, err)
+	}
+
+	// The next night is business as usual: only new CVEs alert, per owner,
+	// and a nightly failure pages.
+	em.events = nil
+	s.Now = func() time.Time { return time.Now().Add(21 * time.Hour) }
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	drainQueue(t, s, map[string]bool{dB: true}, append([]db.VulnFinding{{VulnID: "CVE-NEW", PkgName: "curl", Severity: "HIGH", FixedVersion: "8"}}, critFinding...))
+	if len(em.events) != 0 {
+		t.Fatalf("dB failed last night too: a repeat failure stays quiet: %+v", em.events)
+	}
+	if err := s.AlertNew(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range em.events {
+		if e.Type != notify.EventVulnsFound || !strings.Contains(e.Description, "CVE-NEW") || strings.Contains(e.Description, "CVE-OLD") {
+			t.Errorf("post-baseline alert = %+v", e)
+		}
+	}
+	if len(em.events) != 3 { // web, shop-db addon, kuso-server platform
+		t.Errorf("post-baseline alerts = %d, want one per owner (3)", len(em.events))
+	}
+}
+
+func TestFirstSweep_BaselineSurvivesRestart(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	st := db.DefaultVulnScanSettings()
+	em := &captureEmitter{}
+	if _, err := (&Sweeper{DB: d, Cluster: sweepCluster(), Notify: em}).Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// New process: one scan finishes, the rest are still queued.
+	s := &Sweeper{DB: d, Cluster: sweepCluster(), Notify: em}
+	sc, _ := d.ClaimNextVulnScan(ctx)
+	if err := d.CompleteVulnScan(ctx, sc.ID, db.VulnScanResult{Findings: critFinding}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AlertNew(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	drainQueue(t, s, map[string]bool{dC: true}, critFinding)
+	if len(em.events) != 0 {
+		t.Fatalf("scans queued by the first sweep stay silent across a restart: %+v", em.events)
+	}
+	if err := s.AlertNew(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if len(em.events) != 1 || !strings.Contains(em.events[0].Title, "Baseline") {
+		t.Fatalf("want one baseline summary, got %+v", em.events)
+	}
+}
+
+func TestFirstSweep_CrashBeforeRecordingStaysBaseline(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	em := &captureEmitter{}
+	s := &Sweeper{DB: d, Cluster: sweepCluster(), Notify: em}
+	// A first sweep that died after queueing but before recording itself.
+	if err := d.SetSetting(ctx, baselineKey, baselinePending, "t"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.EnqueueVulnScan(ctx, db.VulnScanRequest{Digest: dA, ImageRef: "r/web@" + dA, Reason: db.VulnReasonNightly}); err != nil {
+		t.Fatal(err)
+	}
+	drainQueue(t, s, map[string]bool{dA: true}, nil)
+	if err := s.AlertNew(ctx, db.DefaultVulnScanSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if len(em.events) != 0 {
+		t.Fatalf("an unfinished first sweep stays silent: %+v", em.events)
+	}
+	if last, _ := s.lastSweep(ctx); !last.IsZero() {
+		t.Fatal("precondition: no sweep recorded")
+	}
+	if _, err := s.Sweep(ctx); err != nil { // the retried first sweep
+		t.Fatal(err)
+	}
+	drainQueue(t, s, nil, critFinding)
+	if err := s.AlertNew(ctx, db.DefaultVulnScanSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if len(em.events) != 1 || !strings.Contains(em.events[0].Title, "Baseline") {
+		t.Fatalf("want one baseline summary, got %+v", em.events)
+	}
+}
