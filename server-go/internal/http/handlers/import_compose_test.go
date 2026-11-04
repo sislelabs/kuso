@@ -121,3 +121,19 @@ func TestImportCompose_DefaultProjectName(t *testing.T) {
 		t.Errorf("project = %q, want default 'imported'", resp.Project)
 	}
 }
+
+// CLI-11/12: values that depend on the importer's environment are reported
+// so the web preview can gate an apply the way the CLI does.
+func TestImportCompose_ReportsUnresolvedVars(t *testing.T) {
+	h := newComposeHandler()
+	rec := postCompose(t, h, ComposeRequest{
+		Project: "demo",
+		Compose: "services:\n  api:\n    image: nginx\n    environment:\n      TOKEN: ${API_TOKEN}\n",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"unresolvedVars":["api: `) {
+		t.Fatalf("unresolvedVars missing from %s", rec.Body.String())
+	}
+}

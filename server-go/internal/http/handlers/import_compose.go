@@ -48,6 +48,9 @@ type ComposeResponse struct {
 	// UnresolvedEnvFiles: env_file paths whose values were never read;
 	// services would deploy without them (the CLI refuses --apply).
 	UnresolvedEnvFiles []string `json:"unresolvedEnvFiles,omitempty"`
+	// UnresolvedVars: "<service>: <what>" values that depend on the
+	// importer's environment (${VAR} without default, bare `- KEY`).
+	UnresolvedVars []string `json:"unresolvedVars,omitempty"`
 }
 
 // Preview converts the compose file. POST /api/import/compose.
@@ -99,5 +102,6 @@ func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		Notes:              rep.Notes,
 		Flagged:            rep.HasFlags(),
 		UnresolvedEnvFiles: rep.UnresolvedEnvFiles,
+		UnresolvedVars:     rep.UnresolvedVars,
 	})
 }
