@@ -144,11 +144,13 @@ function InvitesSection() {
     queryFn: () => api<InviteRow[]>("/api/invites"),
   });
   const [showNew, setShowNew] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<InviteRow | null>(null);
 
   const revoke = useMutation({
     mutationFn: (id: string) => api(`/api/invites/${encodeURIComponent(id)}`, { method: "DELETE" }),
     onSuccess: () => {
       toast.success("Invite revoked");
+      setPendingRevoke(null);
       qc.invalidateQueries({ queryKey: ["admin", "invites"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
@@ -185,13 +187,25 @@ function InvitesSection() {
         <ul className="space-y-2">
           {items.map((inv) => (
             <li key={inv.id}>
-              <InviteRowItem inv={inv} onRevoke={() => revoke.mutate(inv.id)} />
+              <InviteRowItem inv={inv} onRevoke={() => setPendingRevoke(inv)} />
             </li>
           ))}
         </ul>
       )}
 
       {showNew && <CreateInviteDialog onClose={() => setShowNew(false)} />}
+      <ConfirmDialog
+        open={pendingRevoke !== null}
+        title="Revoke this invite?"
+        body={<p>The link stops working immediately. This cannot be undone; mint a new invite if you need one.</p>}
+        confirmLabel="Revoke invite"
+        destructive
+        pending={revoke.isPending}
+        onConfirm={() => {
+          if (pendingRevoke) revoke.mutate(pendingRevoke.id);
+        }}
+        onCancel={() => setPendingRevoke(null)}
+      />
     </section>
   );
 }
@@ -617,7 +631,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
       </div>
       <footer className="mt-4 flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>Cancel</Button>
-        <Button size="sm" onClick={() => create.mutate()} disabled={create.isPending || !username || !password || password.length < 8}>
+        <Button size="sm" onClick={() => create.mutate()} disabled={create.isPending || !username || !email.trim() || !password || password.length < 8}>
           {create.isPending ? "Creating…" : "Create"}
         </Button>
       </footer>
