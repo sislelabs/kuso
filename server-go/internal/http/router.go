@@ -56,6 +56,7 @@ import (
 	"kuso/server/internal/updater"
 	"kuso/server/internal/uptime"
 	"kuso/server/internal/version"
+	"kuso/server/internal/vulnscan"
 	"kuso/server/internal/web"
 
 	"github.com/go-chi/chi/v5"
@@ -93,6 +94,9 @@ type Deps struct {
 	// IncidentCfgInvalidate drops the incident Manager's config cache after a
 	// settings PUT so the toggle hot-reloads. Optional.
 	IncidentCfgInvalidate func()
+	// VulnGateInvalidate drops the vulnerability gate's cached settings
+	// after an admin PUT. Optional.
+	VulnGateInvalidate func()
 	// Spec drives POST /api/projects/{p}/apply (config-as-code).
 	// Optional: nil → endpoint returns 503.
 	Spec *spec.Reconciler
@@ -559,6 +563,18 @@ func mountAuthenticatedRoutes(
 			invitesH.Mount(r)
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
+			}
+			if d.Kube != nil && d.Projects != nil && d.Addons != nil {
+				sweeper := &vulnscan.Sweeper{DB: d.DB, Cluster: vulnscan.KubeCluster{Kube: d.Kube}, Logger: d.Logger}
+				(&httphandlers.VulnsHandler{
+					DB:               d.DB,
+					Services:         d.Projects,
+					Addons:           d.Addons,
+					Live:             vulnscan.Live{Kube: d.Kube, DB: d.DB, Digests: vulnscan.RegistryDigests{}},
+					Sweep:            sweeper.Sweep,
+					OnSettingsChange: d.VulnGateInvalidate,
+					Logger:           d.Logger,
+				}).Mount(r)
 			}
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
 			if d.Projects != nil {

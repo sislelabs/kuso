@@ -1300,10 +1300,16 @@ func main() {
 		logger.Info("incident-response agent wired (enable/configure via /settings/incident-agent)")
 	}
 
+	vulnGateInvalidate := func() {
+		if vulnGate != nil {
+			vulnGate.InvalidateSettings()
+		}
+	}
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:                    database,
 		Incidents:             incidentMgr,
 		IncidentCfgInvalidate: incidentCfgProvider.Invalidate,
+		VulnGateInvalidate:    vulnGateInvalidate,
 		LogDB:                 logDB,
 		Issuer:                issuer,
 		Projects:              projSvc,
