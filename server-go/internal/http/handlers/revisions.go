@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
@@ -26,6 +28,31 @@ import (
 // need the projects service at all — only the DB. Keeping them out
 // of projects.go makes the projects file shorter and the revision
 // surface obviously self-contained.
+
+// revisionSlack absorbs clock skew between kuso-server (revision
+// timestamps) and the apiserver (CR creationTimestamp, whole seconds).
+const revisionSlack = time.Minute
+
+// revisionVisible hides history recorded before the live project CR was
+// created from everyone but instance admins. History outlives a deleted
+// project, and whoever re-creates the name becomes its admin; without
+// this they'd read (and revert to) the previous owner's snapshots.
+func (h *ProjectsHandler) revisionVisible(ctx context.Context, rev *db.Revision) (bool, error) {
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return true, nil
+	}
+	if h.Svc == nil {
+		return true, nil
+	}
+	p, err := h.Svc.Get(ctx, rev.Project)
+	if errors.Is(err, projects.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !rev.CreatedAt.Before(p.CreationTimestamp.Add(-revisionSlack)), nil
+}
 
 // ListRevisions returns the most recent revisions for one CR.
 // Optional ?limit=N caps the result; default 50, hard cap 200.
@@ -61,6 +88,18 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	visible := out[:0]
+	for i := range out {
+		ok, verr := h.revisionVisible(ctx, &out[i])
+		if verr != nil {
+			h.fail(w, "list revisions", verr)
+			return
+		}
+		if ok {
+			visible = append(visible, out[i])
+		}
+	}
+	out = visible
 	for i := range out {
 		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
 	}
@@ -124,6 +163,13 @@ func (h *ProjectsHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 	// patched JSON of the resource, often containing env-var values
 	// and other project-private state.
 	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleViewer) {
+		return
+	}
+	if ok, verr := h.revisionVisible(ctx, rev); verr != nil {
+		h.fail(w, "get revision", verr)
+		return
+	} else if !ok {
+		http.NotFound(w, r)
 		return
 	}
 	redactRevisionSnapshotIfNeeded(ctx, h.DB, rev.Project, rev)
@@ -263,6 +309,13 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 	// on the revision's project; 404 (not 403) so probing for revision
 	// IDs doesn't leak existence.
 	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleEditor) {
+		return
+	}
+	if ok, verr := h.revisionVisible(ctx, rev); verr != nil {
+		h.fail(w, "revert revision", verr)
+		return
+	} else if !ok {
+		http.NotFound(w, r)
 		return
 	}
 	kind, err := h.replayRevision(ctx, rev)

@@ -596,7 +596,25 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	out, err := h.Svc.Create(ctx, apiv1CreateToDomain(wire))
+	req := apiv1CreateToDomain(wire)
+	// Re-creating a deleted project's name re-attaches whatever its
+	// non-purge delete kept (addon volumes + credentials), and the
+	// creator becomes project admin of it. Only an instance admin may
+	// adopt that data.
+	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		retained, rerr := h.Svc.RetainedData(ctx, req)
+		if rerr != nil {
+			h.fail(w, "create project", rerr)
+			return
+		}
+		if len(retained) > 0 {
+			writeErr(w, http.StatusConflict, fmt.Sprintf(
+				"project name %q still holds data from a deleted project (%s); ask an instance admin to re-create it, or pick another name",
+				req.Name, strings.Join(retained, ", ")))
+			return
+		}
+	}
+	out, err := h.Svc.Create(ctx, req)
 	if err != nil {
 		h.fail(w, "create project", err)
 		return
