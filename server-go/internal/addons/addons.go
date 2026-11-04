@@ -609,7 +609,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			return nil, err
 		}
 		var dsn, pw string
-		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, "")
+		// Re-assert the password of an existing conn Secret instead of
+		// minting one: an Add that loses the create race to an identical
+		// one would otherwise rotate the winner's role under its running
+		// pods. A re-add over a retained Secret keeps its password too.
+		keepPW := string(s.connSecretData(ctx, ns, connSecretName(fqn))["POSTGRES_PASSWORD"])
+		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, keepPW)
 		if err != nil {
 			return nil, fmt.Errorf("provision instance addon db: %w", err)
 		}
@@ -1238,8 +1243,12 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	keepConn := false
 	if cr.Spec.UseInstanceAddon != "" && (shouldDropInstanceDB(cr.Labels) || opts.PurgeData) {
 		adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon)
+		var dbAddon string
 		if derr == nil {
-			derr = s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn))
+			dbAddon, derr = s.resolveInstanceAddonName(ctx, ns, cr, project)
+		}
+		if derr == nil {
+			derr = s.dropInstanceAddonDB(ctx, adminDSN, project, dbAddon)
 		}
 		if derr != nil {
 			// Non-fatal: the CR delete still proceeds so the preview
