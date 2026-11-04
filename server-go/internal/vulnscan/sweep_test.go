@@ -289,3 +289,56 @@ func TestOnScanFailed_FirstFailureInARowOnly(t *testing.T) {
 		t.Fatal("a failure right after a (gate) failure is the same outage")
 	}
 }
+
+func TestPruneVulnInventory_DropsGoneImagesAndTheirNotified(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	live := []db.VulnImage{
+		{Digest: dA, ImageRef: "r@" + dA, OwnerKind: db.VulnOwnerService, Project: "shop", Service: "web", Env: "production", Namespace: "kuso", Workload: "w"},
+		{Digest: dB, ImageRef: "r@" + dB, OwnerKind: db.VulnOwnerAddon, Project: "shop", Addon: "db", Namespace: "kuso", Workload: "shop-db"},
+		{Digest: dC, ImageRef: "r@" + dC, OwnerKind: db.VulnOwnerPlatform, Namespace: "kuso", Workload: "kuso-server"},
+	}
+	gone := db.VulnImage{Digest: dA, ImageRef: "r@" + dA, OwnerKind: db.VulnOwnerService, Project: "old", Service: "api", Env: "production", Namespace: "kuso", Workload: "o"}
+	if err := d.UpsertVulnImages(ctx, live, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpsertVulnImages(ctx, []db.VulnImage{gone}, now.Add(-31*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, im := range append(live, gone) {
+		if err := d.MarkVulnsNotified(ctx, OwnerKey(im), []string{"CVE-1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Exec(`UPDATE "VulnNotified" SET "notifiedAt" = now() - interval '40 days'`); err != nil {
+		t.Fatal(err)
+	}
+	// Notified recently for an owner with no inventory (yet): kept.
+	if err := d.MarkVulnsNotified(ctx, "service:new/x", []string{"CVE-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	imgs, notified, err := d.PruneVulnInventory(ctx, now, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imgs != 1 || notified != 1 {
+		t.Fatalf("pruned images=%d notified=%d, want 1 and 1", imgs, notified)
+	}
+	all, _ := d.ListVulnImages(ctx, db.VulnImageFilter{})
+	if len(all) != 3 {
+		t.Errorf("inventory = %d rows, want the 3 live ones", len(all))
+	}
+	for _, im := range live {
+		if ids, _ := d.UnnotifiedVulnIDs(ctx, OwnerKey(im), []string{"CVE-1"}); len(ids) != 0 {
+			t.Errorf("live owner %s lost its notified record", OwnerKey(im))
+		}
+	}
+	if ids, _ := d.UnnotifiedVulnIDs(ctx, OwnerKey(gone), []string{"CVE-1"}); len(ids) != 1 {
+		t.Error("a gone owner's notified record must be pruned")
+	}
+	if ids, _ := d.UnnotifiedVulnIDs(ctx, "service:new/x", []string{"CVE-2"}); len(ids) != 0 {
+		t.Error("a fresh notified record is kept")
+	}
+}

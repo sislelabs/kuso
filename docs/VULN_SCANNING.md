@@ -48,7 +48,7 @@ Leader-gated loop on the cluster-singletons lease, ticking every 10 minutes (reg
 3. Queues a scan for each digest whose last successful scan is older than 20h (skip if service effective mode is `off` / addons disabled / platform disabled).
 4. After scans complete, computes **new** findings per owner (service, addon, platform) — a (owner, vulnId) pair not previously notified — and emits one `security.vulnerabilities_found` event per owner listing the new **fixable critical+high** findings (top 10 + count). Notified pairs are recorded so the same CVE never re-alerts for the same owner.
 
-Retention: keep the last 5 succeeded and the last 5 failed scans per digest (ranked separately, so failures never prune the last good result); delete scans (and findings) of digests not in the inventory for 30 days; expired ignores are kept for audit but no longer apply.
+Retention: keep the last 5 succeeded and the last 5 failed scans per digest (ranked separately, so failures never prune the last good result); delete scans (and findings) of digests not in the inventory for 30 days; delete inventory rows unseen for 30 days and notified (owner, CVE) records whose owner has been gone that long; expired ignores are kept for audit but no longer apply.
 
 ### Ignores
 

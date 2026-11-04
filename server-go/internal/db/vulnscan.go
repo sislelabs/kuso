@@ -685,6 +685,30 @@ func (d *DB) PruneVulnScans(ctx context.Context, now time.Time, keepPerDigest in
 	return n, nil
 }
 
+// PruneVulnInventory drops inventory rows unseen for goneAfter, and
+// VulnNotified pairs older than that whose owner no inventory row has
+// seen since. The owner-key expression mirrors vulnscan.OwnerKey.
+func (d *DB) PruneVulnInventory(ctx context.Context, now time.Time, goneAfter time.Duration) (images, notified int64, err error) {
+	cutoff := now.Add(-goneAfter).UTC()
+	r, err := d.ExecContext(ctx, `DELETE FROM "VulnImage" WHERE "lastSeenAt" < $1`, cutoff)
+	if err != nil {
+		return 0, 0, fmt.Errorf("prune vuln images: %w", err)
+	}
+	images, _ = r.RowsAffected()
+	r, err = d.ExecContext(ctx, `
+		DELETE FROM "VulnNotified" n
+		WHERE n."notifiedAt" < $1 AND NOT EXISTS (
+			SELECT 1 FROM "VulnImage" i WHERE i."lastSeenAt" >= $1 AND n."ownerKey" = CASE i."ownerKind"
+				WHEN 'service' THEN 'service:' || i."project" || '/' || i."service"
+				WHEN 'addon' THEN 'addon:' || i."project" || '/' || i."addon"
+				ELSE 'platform:' || i."namespace" || '/' || i."workload" END)`, cutoff)
+	if err != nil {
+		return images, 0, fmt.Errorf("prune vuln notified: %w", err)
+	}
+	notified, _ = r.RowsAffected()
+	return images, notified, nil
+}
+
 // VulnScanSettings is the instance-wide config (Setting keys vulnscan.*).
 // The JSON shape is the HTTP contract.
 type VulnScanSettings struct {

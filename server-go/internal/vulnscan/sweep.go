@@ -196,6 +196,11 @@ func (s *Sweeper) Sweep(ctx context.Context) (int, error) {
 	} else if n > 0 {
 		s.log().Info("vulnscan: pruned old scans", "deleted", n)
 	}
+	if imgs, notified, err := s.DB.PruneVulnInventory(ctx, now, pruneGoneAfter); err != nil {
+		s.log().Warn("vulnscan: prune inventory", "err", err)
+	} else if imgs+notified > 0 {
+		s.log().Info("vulnscan: pruned gone inventory", "images", imgs, "notified", notified)
+	}
 	return queued, nil
 }
 
@@ -211,7 +216,8 @@ func ownerEnabled(st db.VulnScanSettings, policies map[string]string, im db.Vuln
 	return false
 }
 
-// OwnerKey identifies an owner in VulnNotified.
+// OwnerKey identifies an owner in VulnNotified. db.PruneVulnInventory
+// rebuilds it in SQL; keep the two in step.
 func OwnerKey(im db.VulnImage) string {
 	switch im.OwnerKind {
 	case db.VulnOwnerService:
