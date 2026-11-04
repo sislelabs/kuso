@@ -79,14 +79,13 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch, create, patch, delete]
+  # configmaps: read cluster-wide; every write (updater status CM,
+  # incident settings) is in the home ns, so the write verbs live on
+  # kuso-server-managed-ns. Cluster-wide writes would let an RCE rewrite
+  # kube-system/coredns.
   - apiGroups: [""]
     resources: [configmaps]
-    # patch + delete were missing on releases through v0.11.1: the
-    # in-cluster updater Job (kubectl apply on the kuso-update-status
-    # ConfigMap) fails with Forbidden until both are granted, and the
-    # progress-status writes during an in-place upgrade hard-fail with
-    # 403. delete is granted so the updater can GC its old status CMs.
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch]
   # Secrets: read-only at cluster scope so the shared informer can
   # see addon conn Secrets across every project namespace. Writes
   # (create/update/patch/delete) live on the namespace-scoped Role
@@ -195,9 +194,12 @@ rules:
   # exactly one kuso-server pod runs them at a time. Without these
   # verbs the leader-election helper falls back to "always run" and
   # multi-replica deploys double-promote builds + double-fire alerts.
+  # Writes are on kuso-server-managed-ns: the locks live in the home
+  # ns, and cluster-wide lease writes could forge kube-node-lease
+  # heartbeats (mass NotReady → nodewatch auto-cordon).
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch]
   - apiGroups: [networking.k8s.io]
     resources: [ingresses]
     verbs: [get, list, watch]
@@ -216,9 +218,25 @@ rules:
   # patch are the minimum for `kubectl apply` against an existing
   # CRD; list/watch let the updater see what's already installed
   # before deciding what to add.
+  # update/patch are limited to kuso's own CRDs (create can't be
+  # name-scoped). A NEW kuso CRD must be added to this list by hand
+  # (cluster-admin apply) before the release after the one that creates
+  # it, or that release's CRD apply comes back Forbidden.
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
-    verbs: [get, list, watch, create, update, patch]
+    verbs: [get, list, watch, create]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [update, patch]
+    resourceNames:
+      - kusoaddons.application.kuso.sislelabs.com
+      - kusobuilds.application.kuso.sislelabs.com
+      - kusocrons.application.kuso.sislelabs.com
+      - kusoenvironments.application.kuso.sislelabs.com
+      - kusoes.application.kuso.sislelabs.com
+      - kusoprojects.application.kuso.sislelabs.com
+      - kusoruns.application.kuso.sislelabs.com
+      - kusoservices.application.kuso.sislelabs.com
   # Metrics for the per-node sparkline + alert engine.
   - apiGroups: [metrics.k8s.io]
     resources: [nodes, pods]
@@ -433,6 +451,15 @@ rules:
   # in a managed namespace.
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
+    verbs: [create, update, patch, delete]
+  # Home-ns writes moved off the cluster role: the updater's
+  # kuso-update-status ConfigMap (kubectl apply needs patch; delete GCs
+  # old ones), incident settings, and the leader-election Leases.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, update, patch, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
     verbs: [create, update, patch, delete]
 ---
 # Bootstrap binding for the home `kuso` namespace. New project
