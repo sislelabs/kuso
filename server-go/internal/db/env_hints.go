@@ -74,6 +74,17 @@ LIMIT 50`, project, service)
 	return out, rows.Err()
 }
 
+// PruneEnvHints drops hints not seen since before. lastLine is raw log
+// text, so it shouldn't outlive the log retention window.
+func (d *DB) PruneEnvHints(ctx context.Context, before time.Time) (int64, error) {
+	res, err := d.ExecContext(ctx, `DELETE FROM "EnvHint" WHERE "lastSeen" < $1`, before.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("db: prune env hints: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // DeleteEnvHint removes a single hint — called when the user adds the
 // var (so the badge clears immediately) or dismisses it explicitly.
 func (d *DB) DeleteEnvHint(ctx context.Context, project, service, name string) error {

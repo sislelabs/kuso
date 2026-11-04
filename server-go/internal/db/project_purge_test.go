@@ -16,6 +16,7 @@ func TestPurgeProjectState(t *testing.T) {
 			`INSERT INTO "LogLine" ("ts","pod","project","line") VALUES (now(), 'pod', $1, 'l')`,
 			`INSERT INTO "ErrorEvent" ("project","service","fingerprint","message","ts") VALUES ($1, 's', 'f', 'm', now())`,
 			`INSERT INTO "UptimeState" ("namespace","env","project","service") VALUES ('kuso', $1 || '-env', $1, 's')`,
+			`INSERT INTO "EnvHint" ("project","service","name","lastSeen") VALUES ($1, 's', 'FOO', now())`,
 		} {
 			if _, err := d.ExecContext(ctx, q, p); err != nil {
 				t.Fatalf("seed %s: %v", p, err)
@@ -27,7 +28,7 @@ func TestPurgeProjectState(t *testing.T) {
 	if err := d.PurgeProjectState(ctx, "purge-doomed"); err != nil {
 		t.Fatalf("PurgeProjectState: %v", err)
 	}
-	for _, table := range []string{"AlertRule", "LogLine", "ErrorEvent", "UptimeState"} {
+	for _, table := range []string{"AlertRule", "LogLine", "ErrorEvent", "UptimeState", "EnvHint"} {
 		var doomed, kept int
 		if err := d.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE "project"='purge-doomed'), count(*) FILTER (WHERE "project"='purge-keep') FROM "`+table+`"`).Scan(&doomed, &kept); err != nil {
 			t.Fatalf("count %s: %v", table, err)

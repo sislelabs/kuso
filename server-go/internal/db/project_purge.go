@@ -8,12 +8,12 @@ import (
 
 // PurgeProjectState deletes the project-scoped rows that would otherwise
 // re-attach to a new project created under the same name: alert rules,
-// runtime logs, error events and uptime state. Build history has its own
+// runtime logs, error events, uptime state and env-var hints. Build history has its own
 // deleters (DeleteBuildRecordsForProject / DeleteBuildLogsForProject).
 // Every table is attempted; failures are joined.
 func (d *DB) PurgeProjectState(ctx context.Context, project string) error {
 	var errs []error
-	for _, table := range []string{"AlertRule", "LogLine", "ErrorEvent", "UptimeState"} {
+	for _, table := range []string{"AlertRule", "LogLine", "ErrorEvent", "UptimeState", "EnvHint"} {
 		if _, err := d.ExecContext(ctx, `DELETE FROM "`+table+`" WHERE "project"=$1`, project); err != nil {
 			errs = append(errs, fmt.Errorf("purge %s: %w", table, err))
 		}

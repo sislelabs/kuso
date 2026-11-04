@@ -1777,6 +1777,7 @@ func runRegistryOrphanSweep(ctx context.Context, kc *kube.Client, logger *slog.L
 func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, buildSvc *builds.Service, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
+	deadLetterDays := envInt("KUSO_NOTIFY_DEADLETTER_RETENTION_DAYS", 30)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
 	// Deliberately generous: BuildRecord backs the Deployments tab, so
 	// this is history a human reads, not machine chatter. 90 days plus a
@@ -1797,12 +1798,25 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 		}
 		// Outbox prune: drop successfully-delivered rows older than the
 		// same window. Dead-letter rows (attempts >= cap, no deliveredAt)
-		// stay forever so operators can audit what was lost — non-zero
-		// dead-letter count is itself the alert.
+		// are kept deadLetterDays so operators can audit what was lost —
+		// non-zero dead-letter count is itself the alert.
 		if n, err := database.PruneOutboxDelivered(c, now.AddDate(0, 0, -notifyDays)); err != nil {
 			logger.Warn("daily-cleanup outbox", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup outbox pruned", "rows", n, "days", notifyDays)
+		}
+		// Dead letters get a longer audit window, but not forever: each
+		// row is a full event payload.
+		if n, err := database.PruneOutboxDeadLetters(c, now.AddDate(0, 0, -deadLetterDays)); err != nil {
+			logger.Warn("daily-cleanup outbox dead letters", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup outbox dead letters pruned", "rows", n, "days", deadLetterDays)
+		}
+		// Env-var hints carry a raw log line; keep them no longer than logs.
+		if n, err := database.PruneEnvHints(c, now.AddDate(0, 0, -logDays)); err != nil {
+			logger.Warn("daily-cleanup env-hints", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup env-hints pruned", "rows", n, "days", logDays)
 		}
 		// OAuth states past their TTL are dead weight; drop them
 		// daily. The window is fixed at 24h (way past any realistic
