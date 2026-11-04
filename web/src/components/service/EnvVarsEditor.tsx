@@ -27,6 +27,7 @@ import {
   rid,
   rowDiffLabel,
   rowsShallowEqual,
+  rowUnchanged,
   toRow,
   type Row,
 } from "@/components/service/envVarTransforms";
@@ -316,10 +317,10 @@ export function EnvVarsEditor({
     // row (whose real plaintext may have been revealed into `value`) from
     // one the user actually edited. Re-writing an unrevealed/unchanged
     // managed secret is pointless and would re-store revealed plaintext.
-    const baselineValue = new Map<string, string>();
+    const baselineByName = new Map<string, Row>();
     for (const b of baselineFromRows.current) {
       const n = b.name.trim();
-      if (n) baselineValue.set(n, b.value);
+      if (n) baselineByName.set(n, b);
     }
     const seen = new Set<string>();
     // Names present in the CURRENT rows — lets the rename guard below tell
@@ -374,18 +375,14 @@ export function EnvVarsEditor({
         }
         continue;
       }
-      // Secret-backed value the user didn't change (a reveal populates
-      // `value` with the current plaintext, so an unedited revealed row
-      // matches its baseline): skip so we don't churn the Secret or
-      // re-store revealed plaintext. Everything else is a real
-      // create/change → a per-key {value, auto:true} upsert (server decides
-      // storage AND clears any stale prior form of the same name).
-      if (r.managed && r.value === baselineValue.get(name)) continue;
-      // Same for an untouched ADDON row: its value came from the addon's
-      // conn Secret, so writing it back would mint a pointless override
-      // that then shadows the addon forever (and goes stale the moment the
-      // addon rotates its credentials). Only an actual edit overrides.
-      if (r.addon && r.value === baselineValue.get(name)) continue;
+      // Any row whose value matches the server-known row of the same name
+      // is a no-op: skip it. That covers untouched literals and refs, an
+      // unedited revealed managed secret (no churn, no re-storing revealed
+      // plaintext) and an untouched ADDON row (writing it back would mint
+      // an override that shadows the addon and goes stale on rotation).
+      // Everything else is a real create/change → a per-key
+      // {value, auto:true} upsert.
+      if (rowUnchanged(r, baselineByName)) continue;
       valueWrites.push({ name, value: r.value });
     }
     // Every removed row goes through an explicit per-key DELETE — the

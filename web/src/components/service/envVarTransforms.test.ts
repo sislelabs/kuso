@@ -12,6 +12,7 @@ import {
   rowDiffLabel,
   rowsShallowEqual,
   rowsToDotenv,
+  rowUnchanged,
   shortServiceFromLabel,
   stripProjectPrefix,
   toRow,
@@ -566,6 +567,34 @@ describe("toRow addon ref reveal", () => {
     );
     expect(r.value).toBe("${{ db.DATABASE_URL }}");
     expect(r.resolved).toBe("postgres://real");
+  });
+});
+
+describe("rowUnchanged", () => {
+  const row = (name: string, value: string, extra: Partial<Row> = {}): Row => ({
+    id: name,
+    name,
+    value,
+    fromSecret: false,
+    visible: false,
+    secretBacked: false,
+    ...extra,
+  });
+  const baseline = new Map<string, Row>([
+    ["PLAIN", row("PLAIN", "1")],
+    ["REF", row("REF", "${{ api.URL }}")],
+    ["OPAQUE", row("OPAQUE", "", { fromSecret: true })],
+  ]);
+
+  it("skips untouched literals and refs", () => {
+    expect(rowUnchanged(row("PLAIN", "1"), baseline)).toBe(true);
+    expect(rowUnchanged(row("REF", "${{ api.URL }}"), baseline)).toBe(true);
+  });
+
+  it("writes edited, new and opaque-replacing rows", () => {
+    expect(rowUnchanged(row("PLAIN", "2"), baseline)).toBe(false);
+    expect(rowUnchanged(row("NEW", "1"), baseline)).toBe(false);
+    expect(rowUnchanged(row("OPAQUE", ""), baseline)).toBe(false);
   });
 });
 

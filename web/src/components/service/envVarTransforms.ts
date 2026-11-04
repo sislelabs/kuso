@@ -506,3 +506,13 @@ export function envApplyFailureMessage(applied: string[], failed: string, reason
   if (applied.length === 0) return `${head}. Nothing was changed.`;
   return `${head}. Already applied: ${applied.join(", ")}. Save again to retry the rest.`;
 }
+
+// rowUnchanged reports whether a row's write would be a no-op: the
+// server-known row of the same name already holds this exact value.
+// Re-sending such rows rewrote every var on every save, which re-ran
+// server storage selection (moving legacy CR literals into the managed
+// Secret), re-resolved refs and recorded a revision per key.
+export function rowUnchanged(r: Row, baselineByName: ReadonlyMap<string, Row>): boolean {
+  const b = baselineByName.get(r.name.trim());
+  return !!b && !b.fromSecret && b.value === r.value;
+}
