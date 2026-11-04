@@ -187,6 +187,40 @@ volumes:
 	}
 }
 
+func TestConvert_UDPAndHostIPPortsFlagged(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  dns:
+    image: myorg/dns:1
+    ports:
+      - "127.0.0.1:9000:9000/udp"
+  mixed:
+    image: myorg/app:1
+    ports:
+      - "5353:5353/udp"
+      - "8080:3000"
+  local:
+    image: myorg/admin:1
+    ports:
+      - "127.0.0.1:8081:80"
+`)
+	if s := findService(doc, "dns"); s == nil || s.Port != 0 {
+		t.Errorf("a UDP-only service must not get an HTTP port, got %+v", s)
+	}
+	if !hasFlag(rep, "dns", "UDP") {
+		t.Error("dns: UDP port must be flagged")
+	}
+	if s := findService(doc, "mixed"); s == nil || s.Port != 3000 {
+		t.Errorf("mixed: want the TCP port 3000, got %+v", s)
+	}
+	if !hasFlag(rep, "mixed", "UDP") {
+		t.Error("mixed: dropped UDP port must be flagged")
+	}
+	if !hasFlag(rep, "local", "127.0.0.1") {
+		t.Error("local: host-IP-only binding becoming public must be flagged")
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}

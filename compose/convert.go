@@ -312,15 +312,30 @@ func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []D
 	if len(svc.Ports) == 0 {
 		return 0, nil
 	}
-	first := svc.Ports[0]
+	// kuso exposes one HTTP port, so UDP ports can't be carried at all.
+	var tcp []types.ServicePortConfig
+	for _, p := range svc.Ports {
+		if strings.EqualFold(p.Protocol, "udp") {
+			rep.flag(svc.Name, "UDP port %s/udp NOT imported — kuso exposes HTTP(S) only; UDP traffic will not reach this service", portString(p))
+			continue
+		}
+		tcp = append(tcp, p)
+	}
+	if len(tcp) == 0 {
+		return 0, nil
+	}
+	first := tcp[0]
 	port := int32(first.Target)
 	domains := []Domain{}
 	if first.Published != "" || first.Target != 0 {
 		rep.service(svc.Name, "ports %q → port=%d + public domain (auto `%s.<project>.<kuso-domain>`)", portString(first), port, slug)
 	}
-	if len(svc.Ports) > 1 {
-		extra := make([]string, 0, len(svc.Ports)-1)
-		for _, p := range svc.Ports[1:] {
+	if first.HostIP != "" {
+		rep.flag(svc.Name, "port %s was bound to host IP %s only in compose, but kuso publishes the service on a PUBLIC domain — the local-only restriction is dropped; put auth in front or remove the domain", portString(first), first.HostIP)
+	}
+	if len(tcp) > 1 {
+		extra := make([]string, 0, len(tcp)-1)
+		for _, p := range tcp[1:] {
 			extra = append(extra, portString(p))
 		}
 		rep.skip(svc.Name, "extra ports %s not imported — kuso exposes one port per service", strings.Join(extra, ", "))
