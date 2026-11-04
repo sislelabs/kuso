@@ -1438,6 +1438,9 @@ func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit i
 	if err != nil {
 		return SQLQueryResponse{}, http.StatusBadGateway, fmt.Errorf("columns: %w", err)
 	}
+	if cols == nil {
+		cols = []string{} // SET etc. have no columns; clients expect [] not null
+	}
 	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit), Nulls: make([][]bool, 0, limit)}
 	for rows.Next() {
 		if len(out.Rows) >= limit {

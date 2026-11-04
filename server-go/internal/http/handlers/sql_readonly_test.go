@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +70,30 @@ func TestRunReadOnlyPGQuery_RejectsMultiStatement(t *testing.T) {
 	}
 	if len(out.Rows) != 1 || out.Rows[0][0] != "1" || !out.Nulls[0][2] {
 		t.Fatalf("plain SELECT result = %+v", out)
+	}
+}
+
+// WEB-17: a statement with no result columns (SET …) made lib/pq return nil
+// columns, which marshalled as "columns": null and crashed the SQL tab.
+func TestRunReadOnlyPGQuery_NoColumnsIsEmptyArray(t *testing.T) {
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set")
+	}
+	conn, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	out, _, err := runReadOnlyPGQuery(context.Background(), conn, "SET LOCAL work_mem = '8MB'", 10)
+	if err != nil {
+		t.Fatalf("SET: %v", err)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"columns":[]`) {
+		t.Fatalf("want columns as [], got %s", b)
 	}
 }
