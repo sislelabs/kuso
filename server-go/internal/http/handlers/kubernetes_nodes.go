@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -220,6 +222,9 @@ func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape
 	// cache as the block above, and best-effort — a node that doesn't
 	// answer keeps the static fallback in nodeshape.
 	for name, u := range out {
+		if nodeProxyForbidden.Load() {
+			break
+		}
 		fs, err := nodeFilesystem(ctx, rest, name)
 		if err != nil {
 			continue
@@ -233,6 +238,12 @@ func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape
 
 type nodeFS struct{ capacity, available int64 }
 
+// nodeProxyForbidden latches once the apiserver refuses nodes/proxy.
+// kuso-server is not granted it on purpose (deploy/prometheus.yaml), so
+// the refusal is permanent for the process; without the latch every
+// uncached request made one doomed call per node.
+var nodeProxyForbidden atomic.Bool
+
 // nodeFilesystem reads one node's real root-filesystem usage from the
 // kubelet Summary API, proxied through the apiserver.
 func nodeFilesystem(ctx context.Context, rest restclient.Interface, node string) (nodeFS, error) {
@@ -242,6 +253,9 @@ func nodeFilesystem(ctx context.Context, rest restclient.Interface, node string)
 		AbsPath(fmt.Sprintf("/api/v1/nodes/%s/proxy/stats/summary", node)).
 		DoRaw(fctx)
 	if err != nil {
+		if bytes.Contains(body, []byte(`"reason":"Forbidden"`)) {
+			nodeProxyForbidden.Store(true)
+		}
 		return nodeFS{}, err
 	}
 	var resp struct {
