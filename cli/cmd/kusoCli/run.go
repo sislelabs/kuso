@@ -94,7 +94,10 @@ var runCmd = &cobra.Command{
 // pending, 2s while running) keeps cost down on long migrations
 // while staying snappy on quick ones.
 func streamRunUntilDone(project, service, runName string) error {
-	var follow runLogFollower
+	var cur runLogCursor
+	fetch := func(since string, n int) ([]runLogLine, error) {
+		return fetchRunPage(project, service, runName, since, n)
+	}
 	for {
 		resp, err := api.GetRun(project, runName)
 		if err := checkRespErr(resp, err); err != nil {
@@ -109,25 +112,15 @@ func streamRunUntilDone(project, service, runName string) error {
 			return fmt.Errorf("decode run: %w", err)
 		}
 		phase := data.Metadata.Annotations["kuso.sislelabs.com/run-phase"]
-		// Try to pull logs every iteration once the pod might exist
-		// (running or terminal) and print the lines that are new since
-		// the last fetch. The endpoint only serves a bounded tail, so the
-		// terminal fetch takes the server's max window to recover as much
-		// of the end of the output as possible.
+		// Pull logs every iteration once the pod might exist (running or
+		// terminal) and print the lines that are new since the last poll.
 		if phase == "running" || phase == "succeeded" || phase == "failed" || phase == "cancelled" {
-			window := 500
-			if phase != "running" {
-				window = 2000
+			fresh, gap, _ := cur.poll(fetch, phase != "running")
+			if gap {
+				fmt.Fprintf(os.Stderr, "--- log output skipped: more lines arrived than one fetch returns; read the full log with `kuso logs %s %s --env run:%s --lines 2000` ---\n", project, service, runName)
 			}
-			lines, err := fetchRunLines(project, service, runName, window)
-			if err == nil {
-				fresh, gap := follow.next(lines)
-				if gap {
-					fmt.Fprintf(os.Stderr, "--- log output skipped: more lines arrived than one fetch returns; read the full log with `kuso logs %s %s --env run:%s --lines 2000` ---\n", project, service, runName)
-				}
-				for _, ln := range fresh {
-					fmt.Println(ln)
-				}
+			for _, ln := range fresh {
+				fmt.Println(ln)
 			}
 		}
 		switch phase {
@@ -178,29 +171,113 @@ func (f *runLogFollower) next(cur []string) (fresh []string, gap bool) {
 	return cur, true
 }
 
-// fetchRunLines pulls the run pod's log tail via the existing
-// /logs endpoint with env=run:<runName>. Reuses the server's
-// tailRunPods machinery so we don't open a parallel code path.
-func fetchRunLines(project, service, runName string, lines int) ([]string, error) {
+// runLogLine is one line of GET …/logs?env=run:<name>. Servers that
+// support sinceTime paging set TS.
+type runLogLine struct {
+	Line string `json:"line"`
+	TS   string `json:"ts"`
+}
+
+const (
+	runLogPage  = 1000
+	runLogEpoch = "1970-01-01T00:00:00Z"
+)
+
+// runLogCursor pages a run's log forward with sinceTime: since is the
+// timestamp of the last printed line and atSince how many printed lines
+// carry exactly that timestamp (the server returns lines AT since again).
+// Against a server without sinceTime (lines carry no ts) it falls back to
+// diffing bounded tails with runLogFollower.
+type runLogCursor struct {
+	since   string
+	atSince int
+	legacy  bool
+	follow  runLogFollower
+}
+
+// poll returns the lines new since the previous poll; gap reports output
+// lost in legacy mode. fetch(since, n) GETs the run log; since == "" means
+// no sinceTime param.
+func (c *runLogCursor) poll(fetch func(since string, n int) ([]runLogLine, error), terminal bool) ([]string, bool, error) {
+	if c.legacy {
+		n := 500
+		if terminal {
+			n = 2000
+		}
+		page, err := fetch("", n)
+		if err != nil {
+			return nil, false, err
+		}
+		fresh, gap := c.follow.next(runLogTexts(page))
+		return fresh, gap, nil
+	}
+	var out []string
+	for {
+		since := c.since
+		if since == "" {
+			since = runLogEpoch
+		}
+		page, err := fetch(since, runLogPage)
+		if err != nil {
+			return out, false, err
+		}
+		if slices.ContainsFunc(page, func(l runLogLine) bool { return l.TS == "" }) {
+			c.legacy = true
+			fresh, gap := c.follow.next(runLogTexts(page))
+			return append(out, fresh...), gap, nil
+		}
+		skip := 0
+		for skip < len(page) && skip < c.atSince && page[skip].TS == c.since {
+			skip++
+		}
+		out = append(out, runLogTexts(page[skip:])...)
+		if len(page) > 0 {
+			last := page[len(page)-1].TS
+			trail := 0
+			for i := len(page) - 1; i >= 0 && page[i].TS == last; i-- {
+				trail++
+			}
+			if last == c.since && trail == len(page) {
+				c.atSince = max(c.atSince, trail)
+			} else {
+				c.since, c.atSince = last, trail
+			}
+		}
+		// A short page is the end; a full page that added nothing means
+		// more than a page of lines share one timestamp, so stop.
+		if len(page) < runLogPage || skip == len(page) {
+			return out, false, nil
+		}
+	}
+}
+
+func runLogTexts(in []runLogLine) []string {
+	out := make([]string, len(in))
+	for i, l := range in {
+		out[i] = l.Line
+	}
+	return out
+}
+
+// fetchRunPage pulls run-pod log lines via the /logs endpoint with
+// env=run:<runName>, from sinceTime onwards when since is set.
+func fetchRunPage(project, service, runName, since string, lines int) ([]runLogLine, error) {
 	path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
 		url.PathEscape(project), url.PathEscape(service), url.QueryEscape("run:"+runName), lines)
+	if since != "" {
+		path += "&sinceTime=" + url.QueryEscape(since)
+	}
 	resp, err := api.RawGet(path)
 	if err := checkRespErr(resp, err); err != nil {
 		return nil, fmt.Errorf("get logs: %w", err)
 	}
 	var data struct {
-		Lines []struct {
-			Line string `json:"line"`
-		} `json:"lines"`
+		Lines []runLogLine `json:"lines"`
 	}
 	if err := json.Unmarshal(resp.Body(), &data); err != nil {
 		return nil, err
 	}
-	out := make([]string, len(data.Lines))
-	for i, l := range data.Lines {
-		out[i] = l.Line
-	}
-	return out, nil
+	return data.Lines, nil
 }
 
 // parseRunEnvFlags turns []string{"K=V", "X=Y"} into the typed

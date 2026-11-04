@@ -31,8 +31,8 @@ func TestLogPaths_EscapeProjectAndService(t *testing.T) {
 	if _, err := runRoot(t, "logs", evil, "x"); err != nil {
 		t.Fatalf("logs: %v", err)
 	}
-	if _, err := fetchRunLines(evil, "x", "r1", 10); err != nil {
-		t.Fatalf("fetchRunLines: %v", err)
+	if _, err := fetchRunPage(evil, "x", "r1", runLogEpoch, 10); err != nil {
+		t.Fatalf("fetchRunPage: %v", err)
 	}
 
 	wantSeg := "/api/projects/shop%2Fservices%2Fapi%2Flogs%3Fenv=staging%23/services/x/"

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -81,6 +82,9 @@ var (
 type Line struct {
 	Pod  string `json:"pod"`
 	Line string `json:"line"`
+	// TS is kubelet's RFC3339Nano timestamp, set on run:<name> lines so a
+	// follower can page with sinceTime.
+	TS string `json:"ts,omitempty"`
 
 	// ts is kubelet's timestamp for the line, used to merge pods in time
 	// order. Zero when it couldn't be parsed.
@@ -91,6 +95,13 @@ type Line struct {
 // time order. env="" defaults to "production". env may be either the short name
 // ("production", "preview-pr-7") or the fully-qualified env CR name.
 func (s *Service) Tail(ctx context.Context, project, service, env string, lines int) ([]Line, string, error) {
+	return s.TailSince(ctx, project, service, env, lines, time.Time{})
+}
+
+// TailSince is Tail with an optional cursor for env=run:<name>: when since
+// is non-zero it returns the OLDEST lines lines at or after since instead of
+// the newest ones. Other envs ignore since (the handler rejects it).
+func (s *Service) TailSince(ctx context.Context, project, service, env string, lines int, since time.Time) ([]Line, string, error) {
 	if lines <= 0 {
 		lines = 200
 	}
@@ -155,7 +166,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		if !s.runBelongsToProject(ctx, ns, runName, project) {
 			return nil, env, ErrNotFound
 		}
-		out, err := s.tailRunPods(ctx, ns, runName, lines)
+		out, err := s.tailRunPods(ctx, ns, runName, lines, since)
 		if err == nil {
 			return out, env, nil
 		}
@@ -378,7 +389,7 @@ func (s *Service) tailBuildPods(ctx context.Context, ns, buildName string, lines
 // Job's TTL has elapsed and kube garbage-collected the pod. The
 // caller's UI shows "log output no longer available" rather than a
 // confusing error.
-func (s *Service) tailRunPods(ctx context.Context, ns, runName string, lines int) ([]Line, error) {
+func (s *Service) tailRunPods(ctx context.Context, ns, runName string, lines int, since time.Time) ([]Line, error) {
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: kube.LabelSelector(map[string]string{"kuso.sislelabs.com/run": runName}),
 	})
@@ -396,29 +407,62 @@ func (s *Service) tailRunPods(ctx context.Context, ns, runName string, lines int
 		// `containers: [{name: run, …}]`), so we just GetLogs without
 		// a Container override. If the user's command wrote to stderr
 		// only, kubelet aggregates both streams into the same pipe.
-		req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
-			TailLines: &tail,
-		})
-		stream, err := req.Stream(ctx)
+		opts := &corev1.PodLogOptions{Timestamps: true}
+		max := 0
+		if since.IsZero() {
+			opts.TailLines = &tail
+		} else {
+			// SinceTime is second-granular on the wire; scanRunLines
+			// drops the earlier part of that second.
+			st := metav1.NewTime(since.Truncate(time.Second))
+			opts.SinceTime = &st
+			max = lines
+		}
+		stream, err := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, opts).Stream(ctx)
 		if err != nil {
 			continue
 		}
-		scanner := bufio.NewScanner(stream)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
-			out = append(out, Line{Pod: pod.Name, Line: line})
-		}
+		out = append(out, scanRunLines(stream, pod.Name, since, max)...)
 		stream.Close()
+	}
+	if !since.IsZero() {
+		out = mergeByTime(out)
+		if len(out) > lines {
+			out = out[:lines]
+		}
+		return out, nil
 	}
 	if len(out) > lines {
 		out = out[len(out)-lines:]
 	}
 	return out, nil
+}
+
+// scanRunLines reads timestamped kubelet log lines, keeping those at or
+// after since (zero = all) and stopping after max kept lines (<=0 = no cap).
+func scanRunLines(r io.Reader, pod string, since time.Time, max int) []Line {
+	var out []Line
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
+	for scanner.Scan() {
+		ts, line := splitTimestamp(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if !since.IsZero() && !ts.IsZero() && ts.Before(since) {
+			continue
+		}
+		l := Line{Pod: pod, Line: line, ts: ts}
+		if !ts.IsZero() {
+			l.TS = ts.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, l)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
 }
 
 // archivedTextToLines converts a saved build-log blob (one big string,

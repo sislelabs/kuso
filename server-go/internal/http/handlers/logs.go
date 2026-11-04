@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,7 +34,8 @@ func logsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // Tail is GET /api/projects/{project}/services/{service}/logs
 //
 // Query params: env=<name> (default production), lines=<N> (default 200,
-// max 2000).
+// max 2000), sinceTime=<RFC3339Nano> (env=run:<name> only: return the oldest
+// N lines at or after it instead of the newest N; each line carries "ts").
 func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	env := q.Get("env")
@@ -46,12 +48,25 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = n
 	}
+	var since time.Time
+	if raw := q.Get("sinceTime"); raw != "" {
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "sinceTime must be RFC3339")
+			return
+		}
+		if !strings.HasPrefix(env, "run:") {
+			writeErr(w, http.StatusBadRequest, "sinceTime is only supported for env=run:<name>")
+			return
+		}
+		since = t
+	}
 	ctx, cancel := logsCtx(r)
 	defer cancel()
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, envName, err := h.Svc.Tail(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env, lines)
+	out, envName, err := h.Svc.TailSince(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env, lines, since)
 	if err != nil {
 		switch {
 		case errors.Is(err, logs.ErrNotFound):
