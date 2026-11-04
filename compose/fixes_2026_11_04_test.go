@@ -153,6 +153,40 @@ services:
 	}
 }
 
+func TestConvert_VolumeSlugCollisionsAndSharedVolumes(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  web:
+    image: myorg/web:1
+    volumes:
+      - data_a:/a
+      - data-a:/b
+      - uploads:/srv/uploads
+  worker:
+    image: myorg/worker:1
+    volumes:
+      - uploads:/srv/uploads
+volumes:
+  data_a: {}
+  data-a: {}
+  uploads: {}
+`)
+	web := findService(doc, "web")
+	if web == nil || len(web.Volumes) != 3 {
+		t.Fatalf("web volumes = %+v", web)
+	}
+	names := map[string]bool{}
+	for _, v := range web.Volumes {
+		if names[v.Name] {
+			t.Errorf("duplicate volume name %q in one service: %+v", v.Name, web.Volumes)
+		}
+		names[v.Name] = true
+	}
+	if !hasFlag(rep, "", "uploads") {
+		t.Errorf("a named volume shared by web and worker must be flagged; notes: %+v", rep.Notes)
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}

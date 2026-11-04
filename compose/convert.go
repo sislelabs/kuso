@@ -128,8 +128,38 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 		}
 		doc.Services = append(doc.Services, convertService(svc, slug, addonByCompose, rep))
 	}
+	flagSharedVolumes(proj, names, addonByCompose, rep)
 
 	return doc, rep
+}
+
+// flagSharedVolumes reports named volumes mounted by more than one app
+// service. kuso volumes are per-environment PVCs, so each service gets
+// its own empty copy — files one writes are never seen by the other.
+func flagSharedVolumes(proj *types.Project, names []string, addons map[string]addonRef, rep *Report) {
+	users := map[string][]string{}
+	var order []string
+	for _, name := range names {
+		if _, isAddon := addons[name]; isAddon {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, v := range proj.Services[name].Volumes {
+			if v.Type != "volume" || v.Source == "" || seen[v.Source] {
+				continue
+			}
+			seen[v.Source] = true
+			if len(users[v.Source]) == 0 {
+				order = append(order, v.Source)
+			}
+			users[v.Source] = append(users[v.Source], name)
+		}
+	}
+	for _, vol := range order {
+		if len(users[vol]) > 1 {
+			rep.flag("", "named volume %q is shared by %s, but kuso volumes are per-service — each gets its own EMPTY volume and they will NOT see each other's files; move shared files to object storage (s3 addon) or merge the services", vol, strings.Join(users[vol], ", "))
+		}
+	}
 }
 
 // addonKind classifies a compose service as a managed addon. A service
@@ -382,14 +412,15 @@ func convertBuildArgs(svc types.ServiceConfig, rep *Report) map[string]string {
 
 func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {
 	var out []Volume
+	taken := map[string]bool{}
 	for _, v := range svc.Volumes {
 		switch v.Type {
 		case "volume":
-			name := slugify(v.Source)
 			if v.Source == "" {
 				rep.skip(svc.Name, "anonymous volume at %q not imported — name it in compose to get a kuso volume", v.Target)
 				continue
 			}
+			name := uniqueSlug(slugify(v.Source), taken)
 			out = append(out, Volume{Name: name, MountPath: v.Target, SizeGi: defaultVolumeSizeGi})
 			rep.service(svc.Name, "volume %q → kuso volume `%s` at %s (%dGi default)", v.Source, name, v.Target, defaultVolumeSizeGi)
 			// kuso volumes have no read-only mode — mounting :ro in
