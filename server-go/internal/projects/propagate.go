@@ -314,6 +314,20 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
 				}
 				prunedFrom = addons.DropExcludedAddonConns(prunedFrom, env.Annotations)
+				// A preview, or a named env with its own clones, must not pick
+				// up a production conn it has no clone of (DATA-03/04).
+				if preview := addons.IsPreviewEnv(env); preview || envScope != "production" {
+					all, lerr := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+					if lerr != nil {
+						return fmt.Errorf("list addons for env %s: %w", envName, lerr)
+					}
+					var withheld []string
+					prunedFrom, withheld = addons.WithholdProductionConns(prunedFrom, env.Spec.EnvFromSecrets, all, envScope, preview)
+					if len(withheld) > 0 {
+						slog.WarnContext(ctx, "propagate: production addon conns withheld from an isolated env (no clone for it)",
+							"project", project, "env", envName, "withheld", withheld)
+					}
+				}
 				// Env-scoped clones last — the env's own database must win the
 				// last-source-wins race against a project-level addon of the same
 				// kind. See kube.CloneConnsLast.

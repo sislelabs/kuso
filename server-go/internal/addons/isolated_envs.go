@@ -2,6 +2,7 @@ package addons
 
 import (
 	"slices"
+	"strings"
 
 	"kuso/server/internal/kube"
 )
@@ -85,5 +86,6 @@ func WithholdProductionConns(next, prev []string, all []kube.KusoAddon, envScope
 
 // IsPreviewEnv reports whether an env CR is a PR preview.
 func IsPreviewEnv(env *kube.KusoEnvironment) bool {
-	return env.Spec.Kind == "preview" || env.Spec.PullRequest != nil
+	return env.Spec.Kind == "preview" || env.Spec.PullRequest != nil ||
+		strings.HasPrefix(env.Labels[kube.LabelEnv], "preview-pr-")
 }
