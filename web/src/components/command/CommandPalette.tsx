@@ -48,7 +48,8 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 function currentProjectFromPath(pathname: string | null): string {
   if (!pathname) return "";
   const m = pathname.match(/^\/projects\/([^/?]+)/);
-  return m ? decodeURIComponent(m[1]) : "";
+  // /projects/new is the create page, not a project called "new".
+  return m && m[1] !== "new" ? decodeURIComponent(m[1]) : "";
 }
 
 export function CommandPalette() {

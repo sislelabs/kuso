@@ -79,6 +79,8 @@ const STATIC_SEGMENTS = new Set([
 	"settings",
 	"logs",
 	"invite",
+	// /projects/new (and /projects/<p>/services/new) are pages, not names.
+	"new",
 ]);
 
 function parsePathname(pathname: string | null, keys: string[]): Record<string, string> {
