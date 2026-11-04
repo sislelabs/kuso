@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -84,24 +83,22 @@ audit logs — treat the output like a credential. To restore:
 		if out == "" {
 			out = fmt.Sprintf("kuso-backup-%s.sql.gz", time.Now().UTC().Format("20060102T150405Z"))
 		}
-		resp, err := api.RawGet("/api/admin/backup")
+		resp, err := api.Download("/api/admin/backup")
 		if err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
 		if resp.StatusCode() == 404 {
+			resp.RawBody().Close()
 			return fmt.Errorf("backup endpoint not available on this server (404)")
 		}
-		if resp.StatusCode() >= 300 {
-			return checkRespErr(resp, nil)
+		if err := downloadRespErr(resp, nil); err != nil {
+			return err
 		}
-		var trailer http.Header
-		if resp.RawResponse != nil {
-			trailer = resp.RawResponse.Trailer
-		}
+		defer resp.RawBody().Close()
 		// force=true keeps this command's overwrite behaviour; the
 		// verification is what's new — a failed server-side pg_dump
 		// must not leave a success-looking file behind.
-		n, err := writeVerifiedBackup(out, resp.Body(), trailer, true)
+		n, err := writeVerifiedBackup(out, resp.RawBody(), responseTrailer(resp), true)
 		if err != nil {
 			return err
 		}

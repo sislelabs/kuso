@@ -36,7 +36,7 @@ type KusoClient struct {
 // resty.Request kept the last SetBody/SetHeader and re-sent it on the
 // next body-less POST/PUT/DELETE in the same process.
 type request struct {
-	rc              *resty.Client
+	rc, dl          *resty.Client
 	token, host, ua string
 	// Body / headers are pending state for the next verb call only.
 	Body    any
@@ -138,7 +138,20 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 			timeout = d
 		}
 	}
-	rc := resty.New().SetBaseURL(k.baseURL).SetTimeout(timeout)
+	rc := k.newResty(timeout)
+	// Downloads (backup dumps) can legitimately run far past the
+	// per-request timeout, so they get their own client without one.
+	k.client = &request{rc: rc, dl: k.newResty(0), token: bearerToken, host: k.host, ua: ua}
+	k.bearerToken = bearerToken
+}
+
+// newResty builds a resty client for the configured instance; timeout 0
+// means no overall request timeout.
+func (k *KusoClient) newResty(timeout time.Duration) *resty.Client {
+	rc := resty.New().SetBaseURL(k.baseURL)
+	if timeout > 0 {
+		rc.SetTimeout(timeout)
+	}
 	// Central not-configured gate. Execute() always constructs the
 	// client — even with no saved instance — so a fresh install used to
 	// surface resty's raw `Get "/api/projects": unsupported protocol
@@ -162,8 +175,7 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 	if v := strings.TrimSpace(os.Getenv("KUSO_INSECURE")); v == "1" || strings.EqualFold(v, "true") {
 		rc = rc.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
 	}
-	k.client = &request{rc: rc, token: bearerToken, host: k.host, ua: ua}
-	k.bearerToken = bearerToken
+	return rc
 }
 
 // BaseURL returns the configured kuso API root. The logs --follow
@@ -198,6 +210,23 @@ func (k *KusoClient) Login(username, password string) (*resty.Response, error) {
 }
 
 // ---------- Generic ----------
+
+// Download GETs path without the per-request timeout and leaves the body
+// unread: the caller streams resp.RawBody() and must close it. For
+// multi-GB backup dumps that must not be buffered in memory.
+func (k *KusoClient) Download(path string) (*resty.Response, error) {
+	if err := k.ensureReady(); err != nil {
+		return nil, err
+	}
+	req := k.client.dl.R().
+		SetDoNotParseResponse(true).
+		SetAuthScheme("Bearer").
+		SetAuthToken(k.client.token).
+		SetHeader("Host", k.client.host).
+		SetHeader("Accept", "application/json").
+		SetHeader("User-Agent", k.client.ua)
+	return req.Get(path)
+}
 
 // RawGet hits an arbitrary path under the configured base URL. Used
 // by the few endpoints that don't have a typed wrapper yet (system
