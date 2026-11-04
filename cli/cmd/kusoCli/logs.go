@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -37,6 +38,19 @@ func wsDialer(subprotocols []string) *websocket.Dialer {
 		d.TLSClientConfig = tc
 	}
 	return &d
+}
+
+// wsHeader returns the request headers for a WebSocket dial: the REST
+// client's Host header when it differs from the dialed URL's host (the
+// localhost dev rewrite dials localhost:<port> but routes on the
+// kuso.localhost vhost), so WS and REST reach the same server.
+func wsHeader() http.Header {
+	h := http.Header{}
+	host := api.HostHeader()
+	if u, err := url.Parse(api.BaseURL()); err == nil && host != "" && host != u.Host {
+		h.Set("Host", host)
+	}
+	return h
 }
 
 // `kuso logs <project> <service>` — print recent log lines from the
@@ -188,7 +202,7 @@ func streamLogs(project, service, env string, tail int) error {
 	// after the literal kuso.bearer name. Browsers split the
 	// list themselves; here we hand it to gorilla as []string.
 	dialer := wsDialer([]string{"kuso.bearer", tok})
-	conn, _, err := dialer.Dial(u.String(), nil)
+	conn, _, err := dialer.Dial(u.String(), wsHeader())
 	if err != nil {
 		return fmt.Errorf("ws connect: %w", err)
 	}

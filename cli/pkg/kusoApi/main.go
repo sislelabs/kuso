@@ -183,6 +183,10 @@ func (k *KusoClient) newResty(timeout time.Duration) *resty.Client {
 // the rest of the CLI is using.
 func (k *KusoClient) BaseURL() string { return k.baseURL }
 
+// HostHeader is the Host header REST calls send (differs from BaseURL's
+// host under the localhost dev rewrite).
+func (k *KusoClient) HostHeader() string { return k.host }
+
 // BearerToken exposes the JWT so the WebSocket dialer can pass it as
 // a Sec-WebSocket-Protocol value (browsers can't set Authorization on
 // WS upgrades; we follow the same convention).
