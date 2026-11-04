@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -241,14 +243,25 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	// Draining our own node would kill this request mid-way and leave the
+	// node cordoned but not deleted.
+	if self, _ := os.Hostname(); self != "" {
+		ns := h.Namespace
+		if ns == "" {
+			ns = "kuso"
+		}
+		if p, err := h.Kube.Clientset.CoreV1().Pods(ns).Get(ctx, self, metav1.GetOptions{}); err == nil && p.Spec.NodeName == name {
+			writeErr(w, http.StatusConflict, fmt.Sprintf(
+				"kuso-server (%s) is running on %s and can't drain its own node; cordon %s and restart kuso-server so it moves, then retry", self, name, name))
+			return
+		}
+	}
 	// Cordon first so kube stops scheduling new pods onto the node.
 	if err := cordonNode(ctx, h.Kube, name, true); err != nil {
 		h.Logger.Warn("cordon", "node", name, "err", err)
 	}
-	// Drain: evict every non-DaemonSet pod. We don't replicate
-	// kubectl-drain's full logic (PDB respect, etc.) — simple eviction
-	// loop is enough for a 2-3 node home cluster. Force=true skips
-	// pods that won't evict gracefully.
+	// Drain: evict every non-DaemonSet pod (PDBs respected) and wait for
+	// them to go. Force=true deletes them with no grace period instead.
 	if err := drainNode(ctx, h.Kube, name, body.Force); err != nil && !body.Force {
 		writeErr(w, http.StatusBadGateway, "drain failed: "+err.Error())
 		return
@@ -468,21 +481,31 @@ func cordonNode(ctx context.Context, k *kube.Client, name string, on bool) error
 	return err
 }
 
-// drainNode evicts all non-DaemonSet, non-mirror pods from the node.
-// Returns the first eviction error unless force=true (then we log and
-// continue). Simple sequential loop — fine for a small node.
-func drainNode(ctx context.Context, k *kube.Client, name string, force bool) error {
+// Drain budgets. Vars so tests can shrink them. Both sit well inside
+// RemoveNode's 2-minute request context.
+var (
+	// evictRetryFor bounds how long one PDB-blocked eviction is retried.
+	evictRetryFor = 30 * time.Second
+	// drainGoneWait bounds the wait for evicted pods to terminate before
+	// the Node object is deleted.
+	drainGoneWait = 60 * time.Second
+)
+
+// drainablePods lists the pods on node that a drain must move: not
+// DaemonSet-managed (they come right back) and not mirror pods (static
+// manifests the kubelet owns).
+func drainablePods(ctx context.Context, k *kube.Client, name string) ([]corev1.Pod, error) {
 	pods, err := k.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: "spec.nodeName=" + name,
 	})
 	if err != nil {
-		return fmt.Errorf("list pods on node: %w", err)
+		return nil, err
 	}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		// Skip DaemonSet-managed pods (they'll come right back) and
-		// mirror pods (static manifests on the host — kubelet owns
-		// them, control plane can't evict).
+	var out []corev1.Pod
+	for _, p := range pods.Items {
+		if p.Spec.NodeName != name {
+			continue
+		}
 		isDaemon := false
 		for _, owner := range p.OwnerReferences {
 			if owner.Kind == "DaemonSet" {
@@ -496,19 +519,84 @@ func drainNode(ctx context.Context, k *kube.Client, name string, force bool) err
 		if _, ok := p.Annotations["kubernetes.io/config.mirror"]; ok {
 			continue
 		}
-		// Use Delete with a 0 grace period when force; otherwise rely
-		// on the pod's terminationGracePeriodSeconds so workloads can
-		// shut down cleanly.
-		opts := metav1.DeleteOptions{}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// drainNode moves every drainable pod off the node and waits for them
+// to terminate. Without force it uses the Eviction API, so
+// PodDisruptionBudgets hold: a blocked eviction is retried for
+// evictRetryFor, then the drain fails with a clear error instead of
+// deleting the protected pod. If kuso-server lacks the pods/eviction
+// grant it falls back to a graceful delete (the pre-eviction behaviour).
+// With force it deletes with a zero grace period and ignores errors.
+func drainNode(ctx context.Context, k *kube.Client, name string, force bool) error {
+	pods, err := drainablePods(ctx, k, name)
+	if err != nil {
+		return fmt.Errorf("list pods on node: %w", err)
+	}
+	for i := range pods {
+		p := &pods[i]
 		if force {
 			zero := int64(0)
-			opts.GracePeriodSeconds = &zero
+			_ = k.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+			continue
 		}
-		if err := k.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, opts); err != nil && !force {
-			return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, err)
+		if err := evictPod(ctx, k, p); err != nil {
+			return err
 		}
 	}
-	return nil
+	if force {
+		return nil
+	}
+	deadline := time.Now().Add(drainGoneWait)
+	for {
+		left, err := drainablePods(ctx, k, name)
+		if err == nil && len(left) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			if err != nil {
+				return fmt.Errorf("drain: could not confirm pods left %s: %w", name, err)
+			}
+			return fmt.Errorf("drain: %d pod(s) still terminating on %s after %s (e.g. %s/%s); retry once they're gone",
+				len(left), name, drainGoneWait, left[0].Namespace, left[0].Name)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// evictPod evicts one pod, retrying while a PodDisruptionBudget refuses.
+func evictPod(ctx context.Context, k *kube.Client, p *corev1.Pod) error {
+	ev := &policyv1.Eviction{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
+	deadline := time.Now().Add(evictRetryFor)
+	for {
+		err := k.Clientset.PolicyV1().Evictions(p.Namespace).Evict(ctx, ev)
+		switch {
+		case err == nil, apierrors.IsNotFound(err):
+			return nil
+		case apierrors.IsForbidden(err):
+			slog.Warn("drain: no pods/eviction grant; deleting pod without PodDisruptionBudget checks — re-apply the kuso-server ClusterRole",
+				"pod", p.Namespace+"/"+p.Name)
+			if derr := k.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, derr)
+			}
+			return nil
+		case apierrors.IsTooManyRequests(err):
+			if time.Now().After(deadline) || ctx.Err() != nil {
+				return fmt.Errorf("evict %s/%s: blocked by its pod disruption budget for %s; scale the workload up or retry with force: %w",
+					p.Namespace, p.Name, evictRetryFor, err)
+			}
+		default:
+			return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // PinnedVolume is a PVC whose PersistentVolume is node-local storage on
