@@ -23,10 +23,12 @@ package compose
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
+	"gopkg.in/yaml.v3"
 )
 
 // Parse loads and resolves a docker-compose file from raw bytes.
@@ -39,6 +41,49 @@ import (
 // preserved verbatim so the user can see and fill them in on the kuso
 // side rather than having them silently blanked.
 func Parse(ctx context.Context, raw []byte, workingDir string) (*types.Project, error) {
+	return parse(ctx, raw, workingDir, false)
+}
+
+// ParseUploaded parses a compose file received over the network (the
+// server's /api/import/compose). Unlike Parse it must never touch the
+// local filesystem: `include:` and `extends: {file: …}` are refused
+// outright, and the loader runs against an empty temp dir so nothing
+// relative resolves to a real file either.
+func ParseUploaded(ctx context.Context, raw []byte) (*types.Project, error) {
+	if err := rejectFileReferences(raw); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "kuso-compose-")
+	if err != nil {
+		return nil, fmt.Errorf("parse compose: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	return parse(ctx, raw, dir, true)
+}
+
+// rejectFileReferences refuses the compose keys that make the loader
+// read other files. Decoding through yaml.v3 resolves anchors and merge
+// keys, so an aliased `extends` mapping is caught too.
+func rejectFileReferences(raw []byte) error {
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("parse compose: %w", err)
+	}
+	if _, ok := doc["include"]; ok {
+		return fmt.Errorf("parse compose: `include:` is not supported for uploaded compose files — inline the included services")
+	}
+	services, _ := doc["services"].(map[string]any)
+	for name, s := range services {
+		svc, _ := s.(map[string]any)
+		ext, _ := svc["extends"].(map[string]any)
+		if _, ok := ext["file"]; ok {
+			return fmt.Errorf("parse compose: service %q: `extends.file` is not supported for uploaded compose files — inline the base service", name)
+		}
+	}
+	return nil
+}
+
+func parse(ctx context.Context, raw []byte, workingDir string, skipInclude bool) (*types.Project, error) {
 	if workingDir == "" {
 		workingDir = "."
 	}
@@ -58,6 +103,7 @@ func Parse(ctx context.Context, raw []byte, workingDir string) (*types.Project, 
 		o.SkipNormalization = false
 		o.ResolvePaths = false
 		o.SkipConsistencyCheck = true
+		o.SkipInclude = skipInclude
 		// Don't read env_file contents off disk: an import shouldn't
 		// fail just because a referenced .env isn't present next to the
 		// compose file (and we don't inline those values anyway — we

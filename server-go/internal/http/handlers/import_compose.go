@@ -74,7 +74,7 @@ func (h *ImportComposeHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	proj, err := compose.Parse(ctx, []byte(req.Compose), "")
+	proj, err := compose.ParseUploaded(ctx, []byte(req.Compose))
 	if err != nil {
 		// A parse failure is the user's malformed compose file, not a
 		// server fault — surface the reason at 400.
