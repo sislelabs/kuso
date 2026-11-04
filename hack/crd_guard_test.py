@@ -32,6 +32,9 @@ BASE = {
                         "name": {"type": "string", "maxLength": 63},
                         "count": {"type": "integer", "minimum": 0},
                         "tags": {"type": "array", "items": {"type": "string"}},
+                        "free": {"x-kubernetes-preserve-unknown-fields": True},
+                        "port": {"x-kubernetes-int-or-string": True},
+                        "labels": {"type": "object", "x-kubernetes-preserve-unknown-fields": True},
                     },
                 }},
             }},
@@ -125,6 +128,39 @@ class CRDGuardTest(unittest.TestCase):
 
     def test_type_changed(self):
         self.assertBreaking(lambda d: spec(d)["properties"]["count"].update(type="string"), "type changed")
+
+    def test_type_added_to_untyped_node(self):
+        self.assertBreaking(lambda d: spec(d)["properties"]["free"].update(type="string"), "previously untyped")
+
+    def test_int_or_string_removed(self):
+        def mutate(d):
+            spec(d)["properties"]["port"] = {"type": "integer"}
+        self.assertBreaking(mutate, "x-kubernetes-int-or-string removed")
+
+    def test_additional_properties_added(self):
+        self.assertBreaking(
+            lambda d: spec(d)["properties"]["labels"].update(additionalProperties={"type": "string"}),
+            "additionalProperties schema added")
+
+    def test_additional_properties_narrowed(self):
+        new = copy.deepcopy(BASE)
+        spec(new)["properties"]["labels"].update(additionalProperties={"type": "string"})
+        newer = copy.deepcopy(new)
+        spec(newer)["properties"]["labels"]["additionalProperties"]["maxLength"] = 3
+        rc, err = run_guard(new, newer)
+        self.assertEqual(rc, 1)
+        self.assertIn("maxLength tightened", err)
+
+    def test_list_type_set_added(self):
+        self.assertBreaking(lambda d: spec(d)["properties"]["tags"].update({"x-kubernetes-list-type": "set"}),
+                            "x-kubernetes-list-type")
+
+    def test_list_type_atomic_is_additive(self):
+        self.assertAdditive(lambda d: spec(d)["properties"]["tags"].update({"x-kubernetes-list-type": "atomic"}))
+
+    def test_one_of_added(self):
+        self.assertBreaking(
+            lambda d: spec(d).update(oneOf=[{"required": ["name"]}, {"required": ["count"]}]), "oneOf")
 
 
 if __name__ == "__main__":

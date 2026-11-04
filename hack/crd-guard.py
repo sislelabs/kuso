@@ -52,6 +52,21 @@ def walk(o, n, path, problems):
     ot, nt = o.get("type"), n.get("type")
     if ot and nt and ot != nt:
         problems.append(f"{path}: type changed {ot} -> {nt}")
+    elif nt and not ot and o:
+        problems.append(f"{path}: type {nt} added to a previously untyped node")
+    if o.get("x-kubernetes-int-or-string") is True and n.get("x-kubernetes-int-or-string") is not True:
+        problems.append(f"{path}: x-kubernetes-int-or-string removed")
+    # A set/map list rejects duplicates / items missing the keys that an
+    # atomic (default) list stored happily.
+    olt, nlt = o.get("x-kubernetes-list-type"), n.get("x-kubernetes-list-type")
+    if nlt in ("set", "map") and nlt != olt:
+        problems.append(f"{path}: x-kubernetes-list-type {olt or 'unset'!r} -> {nlt!r}")
+    if n.get("x-kubernetes-list-map-keys") and n.get("x-kubernetes-list-map-keys") != o.get("x-kubernetes-list-map-keys"):
+        problems.append(f"{path}: x-kubernetes-list-map-keys added/changed")
+    # Combinators can't be proven wider, so any addition or change counts.
+    for key in ("oneOf", "anyOf", "allOf", "not"):
+        if key in n and n.get(key) != o.get(key):
+            problems.append(f"{path}: {key} added/changed")
     oe, ne = o.get("enum"), n.get("enum")
     if isinstance(ne, list):
         if isinstance(oe, list):
@@ -92,8 +107,16 @@ def walk(o, n, path, problems):
     if isinstance(oa, dict):
         if isinstance(na, dict):
             walk(oa, na, path + ".*", problems)
-        else:
+        elif na is False:
+            problems.append(f"{path}.*: additionalProperties disallowed")
+        elif na is None:
             problems.append(f"{path}.*: additionalProperties schema removed")
+    elif na is False and oa is not False:
+        problems.append(f"{path}.*: additionalProperties disallowed")
+    elif isinstance(na, dict) and o:
+        # Absent/true before: map values (or unknown keys) of any shape
+        # were accepted; a value schema now constrains them.
+        problems.append(f"{path}.*: additionalProperties schema added")
 
 
 def _versions(doc):
