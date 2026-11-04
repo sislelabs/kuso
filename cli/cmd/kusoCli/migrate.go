@@ -56,6 +56,9 @@ var migrateCoolifyCmd = &cobra.Command{
 		if migrateApply && api == nil {
 			return fmt.Errorf("--apply needs a kuso login (run `kuso login` first)")
 		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(migrateCoolifyURL)), "http://") {
+			fmt.Fprintln(os.Stderr, "⚠ --coolify-url is plain http:// — the Coolify API token (root-scoped) is sent in cleartext. Use https:// or an SSH tunnel unless this network is trusted.")
+		}
 		c := coolify.New(migrateCoolifyURL, migrateCoolifyToken)
 		fmt.Fprintln(os.Stderr, "→ snapshotting Coolify (read-only)…")
 		inv, err := coolify.Snapshot(cmd.Context(), c)
