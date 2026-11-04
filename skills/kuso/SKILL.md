@@ -93,6 +93,7 @@ auth/permission layers, so they see the same truth:
 - **The `kuso-mcp` server** — a focused tool set: `list_projects`,
   `describe_project`, `status`, `logs`, `plan`/`apply`, `build`,
   `build_status`, `list_builds`, `rollback`, `sql_tables`, `sql_query`,
+  `get_vulnerabilities`,
   `get_env`, `set_env`, `set_secret`, `run`, `manage_addon`,
   `subscribe_addon`, `add_service`, `bootstrap_project`, `update_project`.
   `set_env` stores values the way `kuso env set` does, and a new addon
@@ -846,6 +847,54 @@ kuso uptime set-path <project> <service> /health   # kuso.yml: services[].uptime
   sleeping service.
 - A crash-looping service is reported by `pod.crashed`, not by `uptime.down`.
 - `KUSO_UPTIME_DISABLED=true` on kuso-server switches the checks off for the instance.
+
+## Vulnerability scanning
+
+kuso scans images for known CVEs with Trivy. Service images get a scan after every
+successful build and again nightly; addon and platform images are scanned nightly. New
+fixable critical/high findings send a `security.vulnerabilities_found` notification.
+
+**The deploy gate.** The instance default mode is `enforce`. A freshly built image with a
+fixable CRITICAL finding that is not ignored never goes live: the build ends `failed` with
+`blocked: N fixable critical vulnerabilities (CVE-…)` and failure class `vuln-blocked`, and
+the previous image keeps serving. While the scan runs, the build shows the hold
+`scanning image for vulnerabilities…`. If the scanner breaks or takes over 15 minutes, the
+build is promoted unscanned and `security.scan_failed` fires, so a broken scanner never
+blocks deploys.
+
+To unblock a `vuln-blocked` build, pick one:
+1. Fix it: bump the base image or package to the `FIXED` version, push, and the rebuild
+   goes through the gate again.
+2. Accept it: `kuso vulns ignore add <p> <svc> <CVE> --reason "…" [--expires 30d]`, then
+   `kuso build trigger <p> <svc>`.
+3. Stop blocking this service: `kuso vulns policy <p> <svc> report` (scans and alerts,
+   never blocks). `off` skips scanning the service entirely; `inherit` goes back to the
+   instance mode.
+
+```bash
+kuso vulns list <project>                             # every service/addon image: status, C/H/M/L, fixable C/H
+kuso vulns show <p> <svc> [--env staging] [--severity CRITICAL,HIGH] [--fixable] [--hide-ignored]
+kuso vulns show <p> --addon <addon>
+kuso vulns scan <p> <svc> [--env E] --wait            # rescan the live image; non-zero exit if the scan failed
+kuso vulns scan <p> --addon <addon> --wait
+kuso vulns policy <p> <svc> [inherit|enforce|report|off]   # no mode = print current + effective
+kuso vulns ignore add <p> <svc> <VULN-ID> --reason "…" [--expires 30d]   # or <p> --addon <a> <VULN-ID>; max 365d
+kuso vulns ignore list <p> <svc>                      # or <p> --addon <a>
+kuso vulns ignore rm <p> <svc> <id> --yes             # the finding counts toward the gate again
+# admin
+kuso vulns platform [--digest sha256:…]               # kuso's own images
+kuso vulns scan-all                                   # run the nightly sweep now
+kuso vulns settings get
+kuso vulns settings set [--mode enforce|report|off] [--scan-addons=false] [--scan-platform=false] \
+  [--nightly-hour 3] [--notify-min-severity critical|high|none]
+```
+
+- Counts exclude ignored findings. `show` lists ignored findings marked with their ignore ID.
+- A scan with `status: failed` (image pull error, DB download error) does not mean the image
+  is clean. Read the error in `show`.
+- Instance mode `off` turns the whole feature off: no gate, no nightly scans.
+- Every command except `ignore rm` takes `-o json` (raw API JSON). From MCP, `get_vulnerabilities` gives the same
+  read-only view as `show`.
 
 ## Preview (PR) environments
 
