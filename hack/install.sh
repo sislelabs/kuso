@@ -44,7 +44,7 @@
 #   KUSO_ADMIN_PASSWORD         override the auto-generated admin password
 #   KUSO_SKIP_K3S=1             assume k3s + traefik already installed
 #   KUSO_K3S_VERSION            pin the k3s release (e.g. v1.35.4+k3s1);
-#                               default: the k3s stable channel
+#                               default: v1.36.5+k3s1 (bump deliberately)
 #   KUSO_INSECURE_SECRETS=1     reuse the well-known dev secrets (kind/dev only)
 #   KUSO_SKIP_DNS_CHECK=1       skip the pre-flight DNS resolve
 #   KUSO_LE_ENV=staging|prod    which Let's Encrypt environment to use
@@ -126,7 +126,7 @@ Flags / env:
   --github-wizard (KUSO_GITHUB_WIZARD=1) interactive GitHub App setup
   KUSO_ADMIN_PASSWORD                    override the generated admin password
   KUSO_SKIP_K3S=1                        assume k3s + traefik already installed
-  KUSO_K3S_VERSION                       pin the k3s release (default: stable channel)
+  KUSO_K3S_VERSION                       pin the k3s release (default: v1.36.5+k3s1)
   KUSO_TCP_PROXY_PORTS                   traefik entrypoint pool for addon
                                          public-TCP endpoints (default
                                          30000-30019; 0 disables)
@@ -297,7 +297,9 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   fi
   # Node joins pin their agent to the server's version (nodejoin), so this
   # choice carries to every node added later.
-  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
+  # Pinned, not "stable channel": a fresh install months from now must
+  # get the k3s minor this release was tested against. Bump deliberately.
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-v1.36.5+k3s1}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
 else
   log "k3s already present; skipping install"
 fi
@@ -490,7 +492,12 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
   log "installing traefik${TCP_POOL_LO:+ (with public-TCP entrypoints tcp-${TCP_POOL_LO}..tcp-${TCP_POOL_HI})}"
   helm repo add traefik https://traefik.github.io/charts >/dev/null 2>&1 || true
   helm repo update >/dev/null
+  # Pinned chart: past majors changed the shape/defaults of the
+  # ports.*.expose, podDisruptionBudget and allowExternalNameServices
+  # values below; losing ExternalName support breaks every slept or
+  # stopped service (activator routing). Bump deliberately.
   helm upgrade --install traefik traefik/traefik \
+    --version "${KUSO_TRAEFIK_CHART_VERSION:-42.3.0}" \
     -n traefik --create-namespace \
     --set ports.web.expose.default=true \
     --set ports.websecure.expose.default=true \
