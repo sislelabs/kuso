@@ -142,6 +142,11 @@ rules:
   - apiGroups: [""]
     resources: [nodes/status]
     verbs: [get, list, watch]
+  # pods/eviction: node remove drains through the Eviction API so PDBs
+  # are honoured; it falls back to a plain delete when this is missing.
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
   # pods/log: cluster-wide so the dashboard's log streamer can tail
   # any project pod. Read-only — log reads can't mutate cluster state.
   # pods/exec is intentionally NOT here; it lives on the namespace-
