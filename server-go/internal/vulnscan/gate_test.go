@@ -238,3 +238,25 @@ func TestGate_BreakerFailsOpenFastOncePerOutage(t *testing.T) {
 		t.Fatalf("stale failures must not trip the breaker: %+v", v)
 	}
 }
+
+func TestGate_ExternalImageScansWithPushCredentials(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
+	ext := builds.VulnGateRequest{Project: "shop", Service: "web", Image: "ghcr.io/acme/web:main-1", Since: time.Now(), PullSecret: "kuso/registry-creds"}
+	if v, err := g.Check(ctx, ext); err != nil || v.Decision != builds.VulnPending {
+		t.Fatalf("check = %+v %v", v, err)
+	}
+	sc, _ := d.LatestVulnScanForImage(ctx, "", "ghcr.io/acme/web:main-1")
+	if sc == nil || sc.PullSecret != "kuso/registry-creds" {
+		t.Fatalf("external gate scan = %+v, want the push credentials", sc)
+	}
+	in := gateReq(time.Now())
+	in.PullSecret = "kuso/registry-creds"
+	if _, err := g.Check(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := d.LatestVulnScanForImage(ctx, dA, ""); sc == nil || sc.PullSecret != "" {
+		t.Fatalf("in-cluster registry scan = %+v, want no credentials", sc)
+	}
+}

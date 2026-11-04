@@ -180,7 +180,13 @@ func (g *Gate) Check(ctx context.Context, req builds.VulnGateRequest) (builds.Vu
 	case scan != nil && scan.Status == db.VulnStatusFailed && !scan.CreatedAt.Before(req.Since.Add(-failSkew)):
 		return g.failOpen(ctx, builds.VulnGateVerdict{Decision: builds.VulnFailOpen, Message: "scan failed: " + scan.Error})
 	}
-	if _, _, err := g.DB.EnqueueVulnScan(ctx, db.VulnScanRequest{Digest: digest, ImageRef: ref, Reason: db.VulnReasonGate}); err != nil {
+	// An external registry (build.registryAuthSecret) needs the build's
+	// push credentials; the worker passes on only that host's entry.
+	pullSecret := ""
+	if ImageHost(req.Image) != builds.RegistryHost {
+		pullSecret = req.PullSecret
+	}
+	if _, _, err := g.DB.EnqueueVulnScan(ctx, db.VulnScanRequest{Digest: digest, ImageRef: ref, Reason: db.VulnReasonGate, PullSecret: pullSecret}); err != nil {
 		return pass, err
 	}
 	// Report mode records the scan but never makes a deploy wait for it.

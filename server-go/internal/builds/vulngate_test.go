@@ -278,3 +278,18 @@ func TestVulnGate_RunsBeforeSiblingHold(t *testing.T) {
 		t.Fatalf("gate calls=%d hold=%q, want the scan hold first", len(gate.calls), got.Annotations[annPromoteHold])
 	}
 }
+
+func TestVulnGate_PassesTheBuildsPushCredentials(t *testing.T) {
+	gate := &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnPending}}
+	build := vulnGatedBuild(nil)
+	build.Spec.Image.Repository = "ghcr.io/acme/web"
+	build.Spec.Auth = &kube.KusoBuildAuth{SecretName: "registry-creds", Registry: "ghcr.io"}
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	p := &Poller{Svc: s, Interval: time.Hour, VulnGate: gate}
+	if _, err := p.runVulnGate(context.Background(), "kuso", build); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls[0].PullSecret; got != "kuso/registry-creds" {
+		t.Fatalf("pull secret = %q, want the build's push secret in its namespace", got)
+	}
+}

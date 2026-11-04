@@ -37,6 +37,9 @@ type VulnGateRequest struct {
 	// Since is when the gate first asked about this build; a scan that
 	// failed before it is stale and gets retried rather than trusted.
 	Since time.Time
+	// PullSecret is "<namespace>/<name>" of the dockerconfigjson Secret
+	// the build pushed with (external registry), or "".
+	PullSecret string
 }
 
 // VulnDecision is the gate's answer.
@@ -96,11 +99,17 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 		since = t
 	}
 	short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
+	pullSecret := ""
+	if b.Spec.Auth != nil && b.Spec.Auth.SecretName != "" {
+		// The build Job mounts this Secret from its own namespace.
+		pullSecret = ns + "/" + b.Spec.Auth.SecretName
+	}
 	v, cerr := p.VulnGate.Check(ctx, VulnGateRequest{
-		Project: b.Spec.Project,
-		Service: short,
-		Image:   b.Spec.Image.Repository + ":" + b.Spec.Image.Tag,
-		Since:   since,
+		Project:    b.Spec.Project,
+		Service:    short,
+		Image:      b.Spec.Image.Repository + ":" + b.Spec.Image.Tag,
+		Since:      since,
+		PullSecret: pullSecret,
 	})
 	if cerr != nil {
 		v = VulnGateVerdict{Decision: VulnFailOpen, Message: "vulnerability gate error: " + cerr.Error()}
