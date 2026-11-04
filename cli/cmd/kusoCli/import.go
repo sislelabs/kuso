@@ -28,6 +28,8 @@ var (
 	importDryRun           bool
 	importAllowEmptyAddons bool
 	importAllowMissingEnv  bool
+
+	importAllowUnresolvedEnv bool
 )
 
 var importCmd = &cobra.Command{
@@ -52,7 +54,9 @@ resources on the connected kuso instance.
 datastore conversions create EMPTY managed addons (source volumes,
 data, users and init scripts are NOT migrated — override with
 --allow-empty-addons), and env_file values are never imported
-(override with --allow-missing-env-files).`,
+(override with --allow-missing-env-files), nor are ${VAR} references
+without a default or bare "- KEY" pass-through env (override with
+--allow-unresolved-env).`,
 	Example: `  # dry-run: print the generated kuso.yaml + report
   kuso import compose docker-compose.yml
 
@@ -102,7 +106,7 @@ data, users and init scripts are NOT migrated — override with
 		}
 
 		if dest != "" {
-			if err := os.WriteFile(dest, yamlOut, 0o644); err != nil {
+			if err := os.WriteFile(dest, yamlOut, 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", dest, err)
 			}
 			fmt.Fprintf(os.Stderr, "→ wrote %s\n", dest)
@@ -164,6 +168,9 @@ func composeApplyGates(doc *compose.Doc, rep *compose.Report) error {
 	if len(rep.UnresolvedEnvFiles) > 0 && !importAllowMissingEnv {
 		return fmt.Errorf("refusing --apply: env_file value(s) were not imported (%s) — services would deploy without that configuration. Copy the values into kuso env vars, then re-run with --allow-missing-env-files", strings.Join(rep.UnresolvedEnvFiles, ", "))
 	}
+	if len(rep.UnresolvedVars) > 0 && !importAllowUnresolvedEnv {
+		return fmt.Errorf("refusing --apply: value(s) depend on the compose host's environment and would deploy as literal ${VAR} text or empty (%s). Set them in kuso, then re-run with --allow-unresolved-env", strings.Join(rep.UnresolvedVars, "; "))
+	}
 	return nil
 }
 
@@ -194,6 +201,7 @@ func init() {
 	importComposeCmd.Flags().BoolVar(&importDryRun, "server-dry-run", false, "with --apply, ask the server for the plan without writing")
 	importComposeCmd.Flags().BoolVar(&importAllowEmptyAddons, "allow-empty-addons", false, "with --apply, permit datastore conversions — the managed addons start EMPTY; source volumes/data are NOT migrated")
 	importComposeCmd.Flags().BoolVar(&importAllowMissingEnv, "allow-missing-env-files", false, "with --apply, permit services whose env_file values were not imported")
+	importComposeCmd.Flags().BoolVar(&importAllowUnresolvedEnv, "allow-unresolved-env", false, "with --apply, permit values that reference ${VAR} with no default or bare \"- KEY\" pass-through env")
 	importCmd.AddCommand(importComposeCmd)
 	rootCmd.AddCommand(importCmd)
 }

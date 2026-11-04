@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
@@ -134,8 +136,10 @@ var (
 var addonBackupDownloadCmd = &cobra.Command{
 	Use:   "download <project> <addon>",
 	Short: "Download an on-demand dump of the addon to a local file",
-	Long: `Streams a fresh dump of the addon straight to disk — no S3 config
-required. Works even when scheduled backups aren't set up.
+	Long: `Streams a fresh dump of the addon to disk — no S3 config
+required. Works even when scheduled backups aren't set up. The dump is
+written to a temp file next to the destination, verified, then moved
+into place; it is not subject to the CLI's KUSO_CLI_TIMEOUT.
 
   postgres → gzipped pg_dump SQL (.sql.gz)
   s3       → gzipped tar of every object in the bucket (.tar.gz)
@@ -156,9 +160,10 @@ credential. Editor role required.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.DownloadAddonBackup(args[0], args[1])
-		if err := checkRespErr(resp, err); err != nil {
+		if err := downloadRespErr(resp, err); err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
+		defer resp.RawBody().Close()
 		// --file is user-chosen and used verbatim (incl. any path they
 		// typed). The server-derived Content-Disposition name is NOT
 		// trusted: a hostile/spoofing server could send
@@ -175,11 +180,7 @@ credential. Editor role required.`,
 			}
 			out = name
 		}
-		var trailer http.Header
-		if resp.RawResponse != nil {
-			trailer = resp.RawResponse.Trailer
-		}
-		n, err := writeVerifiedBackup(out, resp.Body(), trailer, addonBackupDownloadForce)
+		n, err := writeVerifiedBackup(out, resp.RawBody(), responseTrailer(resp), addonBackupDownloadForce)
 		if err != nil {
 			return err
 		}
@@ -200,10 +201,14 @@ const backupStatusTrailer = "X-Kuso-Backup-Status"
 // payload is a failure too — pg_dump never emits zero bytes, and that is
 // exactly what pre-fix servers shipped when the dump died.
 func verifyBackupDownload(body []byte, trailer http.Header) error {
+	return verifyBackupStream(bytes.NewReader(body), trailer)
+}
+
+func verifyBackupStream(body io.Reader, trailer http.Header) error {
 	if st := trailer.Get(backupStatusTrailer); st != "" && st != "ok" {
 		return fmt.Errorf("server reported the dump failed (%s: %s) — check the server log", backupStatusTrailer, st)
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
+	zr, err := gzip.NewReader(body)
 	if err != nil {
 		return fmt.Errorf("download is not a gzip archive: %w", err)
 	}
@@ -217,31 +222,90 @@ func verifyBackupDownload(body []byte, trailer http.Header) error {
 	return nil
 }
 
-// writeVerifiedBackup verifies body and only then writes it to out, so a
-// failed dump never leaves a success-looking file behind. Without force,
-// an existing file is never overwritten — a backup dump is exactly the
-// kind of thing you don't want to clobber by accident.
-func writeVerifiedBackup(out string, body []byte, trailer http.Header, force bool) (int, error) {
-	if err := verifyBackupDownload(body, trailer); err != nil {
-		return 0, err
-	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	if !force {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	}
-	f, err := os.OpenFile(out, flags, 0o600)
+// downloadRespErr is checkRespErr for a Download response, whose body
+// was left unread: on a non-2xx it reads (a bounded slice of) the error
+// body itself and closes it.
+func downloadRespErr(resp *resty.Response, err error) error {
 	if err != nil {
-		if os.IsExist(err) {
-			return 0, fmt.Errorf("%s already exists; re-run with --force to overwrite", out)
+		return err
+	}
+	if resp == nil || resp.RawResponse == nil {
+		return fmt.Errorf("nil response")
+	}
+	if resp.StatusCode() >= 300 {
+		defer resp.RawBody().Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.RawBody(), 64<<10))
+		return errors.New(apiErrorMessage(resp.StatusCode(), string(body)))
+	}
+	return nil
+}
+
+// responseTrailer returns a getter for the response trailer, which is
+// only populated once the body has been read to EOF.
+func responseTrailer(resp *resty.Response) func() http.Header {
+	return func() http.Header {
+		if resp.RawResponse == nil {
+			return nil
 		}
+		return resp.RawResponse.Trailer
+	}
+}
+
+// writeVerifiedBackup streams body to a temp file next to out, verifies
+// it, and only then moves it into place, so a failed dump never leaves a
+// success-looking file behind and a large dump is never held in memory.
+// Without force, an existing file is never overwritten — a backup dump
+// is exactly the kind of thing you don't want to clobber by accident.
+// trailer may be nil; it is called after the body has been fully read.
+func writeVerifiedBackup(out string, body io.Reader, trailer func() http.Header, force bool) (int64, error) {
+	existsErr := fmt.Errorf("%s already exists; re-run with --force to overwrite", out)
+	if !force {
+		// Checked up front too so a multi-GB download isn't wasted.
+		if _, err := os.Lstat(out); err == nil {
+			return 0, existsErr
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(out), ".kuso-download-*")
+	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", out, err)
 	}
-	n, err := f.Write(body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once renamed
+	n, err := io.Copy(tmp, body)
 	if err != nil {
-		_ = os.Remove(out)
+		_ = tmp.Close()
+		return 0, fmt.Errorf("download: %w", err)
+	}
+	var tr http.Header
+	if trailer != nil {
+		tr = trailer()
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		_ = tmp.Close()
+		return 0, fmt.Errorf("write %s: %w", out, err)
+	}
+	if err := verifyBackupStream(tmp, tr); err != nil {
+		_ = tmp.Close()
+		return 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		return 0, fmt.Errorf("write %s: %w", out, err)
+	}
+	if !force {
+		// Link fails atomically if out appeared meanwhile; fall back to
+		// check-then-rename on filesystems without hard links.
+		err := os.Link(tmpName, out)
+		if err == nil {
+			return n, nil
+		}
+		if os.IsExist(err) {
+			return 0, existsErr
+		}
+		if _, err := os.Lstat(out); err == nil {
+			return 0, existsErr
+		}
+	}
+	if err := os.Rename(tmpName, out); err != nil {
 		return 0, fmt.Errorf("write %s: %w", out, err)
 	}
 	return n, nil

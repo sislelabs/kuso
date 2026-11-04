@@ -15,7 +15,9 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,7 +94,7 @@ var runCmd = &cobra.Command{
 // pending, 2s while running) keeps cost down on long migrations
 // while staying snappy on quick ones.
 func streamRunUntilDone(project, service, runName string) error {
-	var lastLineCount int
+	var follow runLogFollower
 	for {
 		resp, err := api.GetRun(project, runName)
 		if err := checkRespErr(resp, err); err != nil {
@@ -108,16 +110,24 @@ func streamRunUntilDone(project, service, runName string) error {
 		}
 		phase := data.Metadata.Annotations["kuso.sislelabs.com/run-phase"]
 		// Try to pull logs every iteration once the pod might exist
-		// (running or terminal). New lines since last fetch are
-		// printed. We fetch a bounded tail (500 lines) — anything
-		// past that on a long run is best-read via `kuso logs`.
+		// (running or terminal) and print the lines that are new since
+		// the last fetch. The endpoint only serves a bounded tail, so the
+		// terminal fetch takes the server's max window to recover as much
+		// of the end of the output as possible.
 		if phase == "running" || phase == "succeeded" || phase == "failed" || phase == "cancelled" {
-			lines, err := fetchRunLines(project, service, runName, 500)
-			if err == nil && len(lines) > lastLineCount {
-				for _, ln := range lines[lastLineCount:] {
+			window := 500
+			if phase != "running" {
+				window = 2000
+			}
+			lines, err := fetchRunLines(project, service, runName, window)
+			if err == nil {
+				fresh, gap := follow.next(lines)
+				if gap {
+					fmt.Fprintf(os.Stderr, "--- log output skipped: more lines arrived than one fetch returns; read the full log with `kuso logs %s %s --env run:%s --lines 2000` ---\n", project, service, runName)
+				}
+				for _, ln := range fresh {
 					fmt.Println(ln)
 				}
-				lastLineCount = len(lines)
 			}
 		}
 		switch phase {
@@ -139,12 +149,41 @@ func streamRunUntilDone(project, service, runName string) error {
 	}
 }
 
+// runLogFollower turns successive bounded log tails into the lines that
+// are new since the previous tail. The logs endpoint has no cursor, so
+// it aligns the longest suffix of the previous window with a prefix of
+// the new one. Indexing by a running line count (the old approach)
+// stopped printing for good once the output outgrew the window.
+type runLogFollower struct {
+	prev []string
+}
+
+// next returns the new lines in cur. gap is true when cur shares no
+// overlap with the previous window, i.e. more output arrived between
+// fetches than one window holds (cur is then returned whole).
+func (f *runLogFollower) next(cur []string) (fresh []string, gap bool) {
+	prev := f.prev
+	f.prev = cur
+	if len(prev) == 0 {
+		return cur, false
+	}
+	for k := min(len(prev), len(cur)); k > 0; k-- {
+		if slices.Equal(prev[len(prev)-k:], cur[:k]) {
+			return cur[k:], false
+		}
+	}
+	if len(cur) == 0 {
+		return nil, false
+	}
+	return cur, true
+}
+
 // fetchRunLines pulls the run pod's log tail via the existing
 // /logs endpoint with env=run:<runName>. Reuses the server's
 // tailRunPods machinery so we don't open a parallel code path.
 func fetchRunLines(project, service, runName string, lines int) ([]string, error) {
 	path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
-		project, service, "run%3A"+runName, lines)
+		url.PathEscape(project), url.PathEscape(service), url.QueryEscape("run:"+runName), lines)
 	resp, err := api.RawGet(path)
 	if err := checkRespErr(resp, err); err != nil {
 		return nil, fmt.Errorf("get logs: %w", err)

@@ -195,7 +195,7 @@ func buildPortForwardURL(project, addon string) (string, error) {
 // multiplexes underneath and keeps the bridge simple.
 func proxyOneConnection(ctx context.Context, local net.Conn, wsURL, tok string) error {
 	dialer := wsDialer([]string{"kuso.bearer", tok})
-	ws, _, err := dialer.DialContext(ctx, wsURL, nil)
+	ws, _, err := dialer.DialContext(ctx, wsURL, wsHeader())
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}

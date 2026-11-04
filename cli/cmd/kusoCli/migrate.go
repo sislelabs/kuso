@@ -2,9 +2,12 @@ package kusoCli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -56,6 +59,9 @@ var migrateCoolifyCmd = &cobra.Command{
 		if migrateApply && api == nil {
 			return fmt.Errorf("--apply needs a kuso login (run `kuso login` first)")
 		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(migrateCoolifyURL)), "http://") {
+			fmt.Fprintln(os.Stderr, "⚠ --coolify-url is plain http:// — the Coolify API token (root-scoped) is sent in cleartext. Use https:// or an SSH tunnel unless this network is trusted.")
+		}
 		c := coolify.New(migrateCoolifyURL, migrateCoolifyToken)
 		fmt.Fprintln(os.Stderr, "→ snapshotting Coolify (read-only)…")
 		inv, err := coolify.Snapshot(cmd.Context(), c)
@@ -85,7 +91,7 @@ var migrateCoolifyCmd = &cobra.Command{
 				return fmt.Errorf("mkdir out-dir: %w", err)
 			}
 			rp := filepath.Join(migrateOutDir, "REPORT.md")
-			if err := os.WriteFile(rp, []byte(report), 0o644); err != nil {
+			if err := os.WriteFile(rp, []byte(report), 0o600); err != nil {
 				return fmt.Errorf("write report: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "→ wrote %s\n", rp)
@@ -125,10 +131,8 @@ func renderMigrationReport(inv *coolify.Inventory, items []coolify.Item) string 
 		countAction(items, "migrate"), countAction(items, "skip"), countAction(items, "flag"))
 
 	fmt.Fprintf(&b, "## Plan by Coolify project\n\n")
-	// Collision-aware slug assignment: two Coolify projects that
-	// slugify to the same kuso name each get their own bucket; the
-	// second one becomes `<slug>-2` and so on. Same logic the apply
-	// path uses, lifted out so report and apply agree.
+	// Slugs come from migrationProjectSlugs, the same function apply
+	// uses, so the report names exactly the projects apply creates.
 	byCoolifyName := map[string][]coolify.Item{}
 	order := []string{}
 	for _, it := range items {
@@ -141,11 +145,10 @@ func renderMigrationReport(inv *coolify.Inventory, items []coolify.Item) string 
 		}
 		byCoolifyName[key] = append(byCoolifyName[key], it)
 	}
-	slugFor := coolify.AssignKusoSlugs(order)
+	slugFor := migrationProjectSlugs(items)
 	for _, name := range order {
-		kusoSlug := slugFor[name]
 		header := name
-		if kusoSlug != "" && kusoSlug != "(unmapped)" {
+		if kusoSlug, ok := slugFor[name]; ok {
 			header = fmt.Sprintf("%s · kuso project `%s`", name, kusoSlug)
 		}
 		fmt.Fprintf(&b, "### %s\n\n", header)
@@ -153,6 +156,10 @@ func renderMigrationReport(inv *coolify.Inventory, items []coolify.Item) string 
 		for _, it := range byCoolifyName[name] {
 			tag := actionEmoji(it.Verdict.Action)
 			detail := it.Verdict.Reason
+			if it.ProjectName == "" && it.Verdict.Action == "migrate" {
+				tag = "✗"
+				detail = "no Coolify project/environment resolved — will FAIL on --apply · " + detail
+			}
 			if it.App != nil {
 				detail = fmt.Sprintf("%s · `%s` branch=%s", detail, it.App.GitRepository, it.App.GitBranch)
 			} else if it.Database != nil {
@@ -204,6 +211,23 @@ type migrationStats struct {
 	failed  int
 }
 
+// migrationProjectSlugs assigns kuso project slugs to the Coolify
+// projects apply will actually create — those with at least one migrate
+// item — in first-seen order. The report and apply both call this so
+// the promised names can't drift from the created ones.
+func migrationProjectSlugs(items []coolify.Item) map[string]string {
+	var names []string
+	seen := map[string]bool{}
+	for _, it := range items {
+		if it.Verdict.Action != "migrate" || it.ProjectName == "" || seen[it.ProjectName] {
+			continue
+		}
+		seen[it.ProjectName] = true
+		names = append(names, it.ProjectName)
+	}
+	return coolify.AssignKusoSlugs(names)
+}
+
 func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item) migrationStats {
 	var stats migrationStats
 	// Group by Coolify project NAME first (not slug) so two distinct
@@ -216,6 +240,11 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			continue
 		}
 		if it.ProjectName == "" {
+			// The inventory couldn't resolve this item's project (GetProject
+			// failed or its environment is gone). It was meant to migrate and
+			// won't, so it's a failure — not a silent skip with exit 0.
+			fmt.Fprintf(os.Stderr, "  ✗ %s %s: no Coolify project resolved — not migrated\n", coolify.ItemKind(it), it.Name)
+			stats.failed++
 			continue
 		}
 		if _, ok := byCoolifyName[it.ProjectName]; !ok {
@@ -223,7 +252,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 		byCoolifyName[it.ProjectName] = append(byCoolifyName[it.ProjectName], it)
 	}
-	slugFor := coolify.AssignKusoSlugs(coolifyOrder)
+	slugFor := migrationProjectSlugs(items)
 	order := make([]string, 0, len(coolifyOrder))
 	byProject := map[string][]coolify.Item{}
 	for _, name := range coolifyOrder {
@@ -275,15 +304,12 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 
 		// Apps → services + envs.
+		svcSlugFor := assignServiceSlugs(byProject[projectSlug])
 		for _, it := range byProject[projectSlug] {
 			if it.App == nil {
 				continue
 			}
-			// Coolify app names are usually the full repo slug + branch
-			// + uuid suffix (e.g. "biznesguys/foo:main-abc123def"). The
-			// useful part for a kuso service name is the repo basename
-			// — short, predictable, kube-DNS-safe after slugify.
-			svcSlug := coolify.ServiceSlugFromApp(it.App)
+			svcSlug := svcSlugFor[it.App]
 			svcReq := kusoApi.CreateServiceRequest{
 				Name:    svcSlug,
 				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
@@ -305,8 +331,15 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				continue
 			}
 			if sr.StatusCode() == 409 {
-				// Conflict = already exists. Fine on a re-run, but it is
-				// NOT a newly created resource — count it separately.
+				// Conflict = already exists. Fine on a re-run of the same
+				// app, but a service built from another repo/path is someone
+				// else's: writing this app's env into it would silently
+				// repoint it (e.g. prod picking up staging's DATABASE_URL).
+				if err := checkExistingServiceRepo(projectSlug, svcSlug, svcReq.Repo); err != nil {
+					fmt.Fprintf(os.Stderr, "      ✗ service %s: %v — not writing env\n", svcSlug, err)
+					stats.failed++
+					continue
+				}
 				stats.skipped++
 				fmt.Fprintf(os.Stderr, "      · service %s exists (ok)\n", svcSlug)
 			} else {
@@ -366,6 +399,64 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 	return stats
 }
 
+// assignServiceSlugs gives every app in one kuso project its own service
+// name. ServiceSlugFromApp only looks at the repo basename, so a monorepo's
+// apps, or a prod and a staging app from one repo, all derive the same
+// slug; later ones get -2, -3, …. Apps are numbered in Coolify UUID order
+// so a re-run maps each app back onto the same service.
+func assignServiceSlugs(items []coolify.Item) map[*coolify.Application]string {
+	var apps []*coolify.Application
+	for _, it := range items {
+		if it.App != nil {
+			apps = append(apps, it.App)
+		}
+	}
+	sort.SliceStable(apps, func(i, j int) bool { return apps[i].UUID < apps[j].UUID })
+	out := make(map[*coolify.Application]string, len(apps))
+	taken := map[string]bool{}
+	for _, a := range apps {
+		out[a] = coolify.UniqueSlug(coolify.ServiceSlugFromApp(a), taken)
+	}
+	return out
+}
+
+// checkExistingServiceRepo confirms a service that already exists (409 on
+// create) was built from the same repo URL + path this app wants. Anything
+// else — a different repo, a different path, or a spec we can't read — is
+// an error, so the caller never writes env into an unrelated service.
+func checkExistingServiceRepo(project, service string, want *kusoApi.ServiceRepoSpec) error {
+	resp, err := api.GetService(project, service)
+	if err := checkRespErr(resp, err); err != nil {
+		return fmt.Errorf("exists, and its repo can't be read to confirm it's this app: %w", err)
+	}
+	var got struct {
+		Spec struct {
+			Repo struct {
+				URL  string `json:"url"`
+				Path string `json:"path"`
+			} `json:"repo"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(resp.Body(), &got); err != nil {
+		return fmt.Errorf("exists, and its spec can't be decoded: %w", err)
+	}
+	if repoKey(got.Spec.Repo.URL) != repoKey(want.URL) || strings.Trim(got.Spec.Repo.Path, "/") != strings.Trim(want.Path, "/") {
+		return fmt.Errorf("already exists for a different repo (%s path=%q, this app is %s path=%q)",
+			got.Spec.Repo.URL, got.Spec.Repo.Path, want.URL, want.Path)
+	}
+	return nil
+}
+
+// repoKey reduces a repo URL to host+path for comparison, ignoring scheme,
+// credentials (the server redacts them), case of the host and ".git".
+func repoKey(s string) string {
+	s = strings.TrimSuffix(strings.TrimSpace(s), ".git")
+	if u, err := url.Parse(s); err == nil && u.Host != "" {
+		return strings.ToLower(u.Host) + strings.TrimSuffix(u.Path, "/")
+	}
+	return s
+}
+
 // importCoolifyEnvVars writes each var through the same per-key
 // {value, auto:true} path `kuso env set` uses, so the server routes
 // credentials into the managed <service>-secrets Secret instead of
@@ -411,27 +502,35 @@ func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
 func buildDataMigrationScript(it coolify.Item) string {
 	d := it.Database
 	kind := coolify.AddonKindFromCoolify(d.DatabaseType)
-	src := d.InternalDBURL
+	// external_db_url is reachable from the operator's machine;
+	// internal_db_url is a docker-internal hostname that only resolves
+	// on the Coolify host, so it's the fallback, not the default.
+	src, srcField := d.ExternalDBURL, "external_db_url"
 	if src == "" {
-		src = "<paste source URL — internal_db_url was empty>"
+		src, srcField = d.InternalDBURL, "internal_db_url (docker-internal — run this on the Coolify host or swap in a reachable URL)"
 	}
+	if src == "" {
+		src, srcField = "<paste source URL — Coolify returned none>", "none"
+	}
+	// The URL carries the source password: single-quote it so bash runs
+	// no $(…)/backtick substitution on it, and keep it out of comments
+	// where a newline in it would end the comment.
 	header := fmt.Sprintf(`#!/usr/bin/env bash
-# Data migration for Coolify database %q (%s).
+# Data migration for Coolify database %s (%s).
 #
 # Coolify side is read-only — this script DUMPS from Coolify and
 # loads into the matching kuso addon. Run only when the kuso addon
 # is fully provisioned (kuso get addons %s -o json | jq …).
 #
-# Source URL (Coolify internal_db_url):
-#   %s
+# Source URL: SRC below, from Coolify %s.
 #
 # Destination URL: read from the kuso addon's connection secret —
 #   kuso get addons <project> -o json
 set -euo pipefail
-SRC=%q
+SRC=%s
 DST="${DST:-}"            # set to the kuso addon URL before running
 if [[ -z "$DST" ]]; then echo "set DST=<kuso addon connection URL>" >&2; exit 1; fi
-`, d.Name, kind, coolify.SlugifyName(it.ProjectName), src, src)
+`, coolify.SlugifyName(d.Name), kind, coolify.SlugifyName(it.ProjectName), srcField, shellQuote(src))
 
 	switch kind {
 	case "postgres":

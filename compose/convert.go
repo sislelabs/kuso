@@ -107,29 +107,83 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 	sort.Strings(names)
 
+	// Parse skips interpolation; resolve what the file itself can
+	// (defaults, $$) before anything classifies on those values.
+	services := make(map[string]types.ServiceConfig, len(names))
+	for _, name := range names {
+		services[name] = resolveService(proj.Services[name], rep)
+	}
+
 	// First pass: classify each compose service as addon or app, and
 	// record the addon set so depends_on rewriting can reference it.
 	slugFor := dedupeSlugs(names)
 	addonByCompose := map[string]addonRef{} // compose service name → addon slug+kind
 	for _, name := range names {
-		svc := proj.Services[name]
-		if kind, _ := classifyDatastore(svc.Image); kind != "" {
+		svc := services[name]
+		if kind, _ := addonKind(svc); kind != "" {
 			addonByCompose[name] = addonRef{slug: slugFor[name], kind: kind, composeName: name,
 				creds: datastoreCreds(kind, svc.Environment)}
 		}
 	}
 
 	for _, name := range names {
-		svc := proj.Services[name]
+		svc := services[name]
 		slug := slugFor[name]
-		if kind, version := classifyDatastore(svc.Image); kind != "" {
+		if kind, version := addonKind(svc); kind != "" {
 			doc.Addons = append(doc.Addons, convertAddon(svc, slug, kind, version, rep))
 			continue
 		}
 		doc.Services = append(doc.Services, convertService(svc, slug, addonByCompose, rep))
 	}
+	flagSharedVolumes(proj, names, addonByCompose, rep)
 
 	return doc, rep
+}
+
+// flagSharedVolumes reports named volumes mounted by more than one app
+// service. kuso volumes are per-environment PVCs, so each service gets
+// its own empty copy — files one writes are never seen by the other.
+func flagSharedVolumes(proj *types.Project, names []string, addons map[string]addonRef, rep *Report) {
+	users := map[string][]string{}
+	var order []string
+	for _, name := range names {
+		if _, isAddon := addons[name]; isAddon {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, v := range proj.Services[name].Volumes {
+			if v.Type != "volume" || v.Source == "" || seen[v.Source] {
+				continue
+			}
+			seen[v.Source] = true
+			if len(users[v.Source]) == 0 {
+				order = append(order, v.Source)
+			}
+			users[v.Source] = append(users[v.Source], name)
+		}
+	}
+	for _, vol := range order {
+		if len(users[vol]) > 1 {
+			rep.flag("", "named volume %q is shared by %s, but kuso volumes are per-service — each gets its own EMPTY volume and they will NOT see each other's files; move shared files to object storage (s3 addon) or merge the services", vol, strings.Join(users[vol], ", "))
+		}
+	}
+}
+
+// addonKind classifies a compose service as a managed addon. A service
+// that builds its own image stays a service even when its image name is
+// a datastore: the managed addon would run the stock image and silently
+// drop the custom build.
+func addonKind(svc types.ServiceConfig) (kind, version string) {
+	if svc.Build != nil {
+		return "", ""
+	}
+	return classifyDatastore(svc.Image)
+}
+
+// datastoreVariants are datastore images that add something the stock
+// managed addon doesn't ship.
+var datastoreVariants = map[string]string{
+	"postgis/postgis": "the postgis extension",
 }
 
 // Marshal renders the Doc as kuso.yaml bytes.
@@ -157,6 +211,13 @@ func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Repo
 	if len(svc.EnvFiles) > 0 {
 		rep.flag(svc.Name, "datastore env_file(s) NOT read — any users/passwords/db names in them are NOT carried over; kuso mints its own credentials in the addon's conn-secret")
 	}
+	if len(svc.Command) > 0 || len(svc.Entrypoint) > 0 {
+		rep.flag(svc.Name, "command/entrypoint %q NOT imported — the managed addon runs the stock %s server with kuso's settings; flags such as passwords, persistence or connection limits are dropped", strings.Join(append(append([]string{}, svc.Entrypoint...), svc.Command...), " "), kind)
+	}
+	repo, _ := imageParts(svc.Image)
+	if what, ok := datastoreVariants[baseImageName(repo)]; ok {
+		rep.flag(svc.Name, "image %q includes %s, but the managed %s addon runs the stock image — anything relying on it (e.g. CREATE EXTENSION postgis) will fail", svc.Image, what, kind)
+	}
 	verNote := version
 	if verNote == "" {
 		verNote = "(chart default)"
@@ -174,6 +235,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 	case svc.Build != nil:
 		out.Runtime = "dockerfile"
 		rep.service(svc.Name, "build context %q → runtime=dockerfile; set `repo:` to the service's git URL before deploying", svc.Build.Context)
+		if kind, _ := classifyDatastore(svc.Image); kind != "" {
+			rep.flag(svc.Name, "image %q is a %s datastore but the service has its own build — kept as a service (NOT a managed %s addon) so the custom build isn't lost; it gets no conn-secret or backups", svc.Image, kind, kind)
+		}
 		rep.flag(svc.Name, "no repo set — kuso builds from a git repo; fill in `repo:` for service `%s`", slug)
 		if p := repoSubPath(svc.Build.Context); p != "" {
 			out.Path = p
@@ -232,10 +296,19 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		rep.service(svc.Name, "deploy.replicas=%d → scale.min/max=%d", n, n)
 	}
 
-	// command override.
-	if len(svc.Command) > 0 {
+	// kuso's `command` renders as the k8s container command, which
+	// replaces the image ENTRYPOINT — there is no args (CMD) field. So
+	// compose entrypoint+command maps faithfully as one argv, and an
+	// entrypoint alone matches compose (it also resets the image CMD).
+	// A command alone, though, would replace the entrypoint instead of
+	// the CMD; that breaks wrapper-entrypoint images, so flag it.
+	switch {
+	case len(svc.Entrypoint) > 0:
+		out.Command = append(append([]string{}, svc.Entrypoint...), svc.Command...)
+		rep.service(svc.Name, "entrypoint + command → command %q", strings.Join(out.Command, " "))
+	case len(svc.Command) > 0:
 		out.Command = []string(svc.Command)
-		rep.service(svc.Name, "command → command override")
+		rep.flag(svc.Name, "command %q will REPLACE the image ENTRYPOINT on kuso (kuso has no CMD/args override) — images with a wrapper entrypoint (minio, traefik, nginx/postgres docker-entrypoint.sh) will fail to start; prepend the image's entrypoint to `command:` or set `entrypoint:` in compose", strings.Join(svc.Command, " "))
 	}
 
 	noteUnmapped(svc, rep)
@@ -246,15 +319,30 @@ func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []D
 	if len(svc.Ports) == 0 {
 		return 0, nil
 	}
-	first := svc.Ports[0]
+	// kuso exposes one HTTP port, so UDP ports can't be carried at all.
+	var tcp []types.ServicePortConfig
+	for _, p := range svc.Ports {
+		if strings.EqualFold(p.Protocol, "udp") {
+			rep.flag(svc.Name, "UDP port %s/udp NOT imported — kuso exposes HTTP(S) only; UDP traffic will not reach this service", portString(p))
+			continue
+		}
+		tcp = append(tcp, p)
+	}
+	if len(tcp) == 0 {
+		return 0, nil
+	}
+	first := tcp[0]
 	port := int32(first.Target)
 	domains := []Domain{}
 	if first.Published != "" || first.Target != 0 {
 		rep.service(svc.Name, "ports %q → port=%d + public domain (auto `%s.<project>.<kuso-domain>`)", portString(first), port, slug)
 	}
-	if len(svc.Ports) > 1 {
-		extra := make([]string, 0, len(svc.Ports)-1)
-		for _, p := range svc.Ports[1:] {
+	if first.HostIP != "" {
+		rep.flag(svc.Name, "port %s was bound to host IP %s only in compose, but kuso publishes the service on a PUBLIC domain — the local-only restriction is dropped; put auth in front or remove the domain", portString(first), first.HostIP)
+	}
+	if len(tcp) > 1 {
+		extra := make([]string, 0, len(tcp)-1)
+		for _, p := range tcp[1:] {
 			extra = append(extra, portString(p))
 		}
 		rep.skip(svc.Name, "extra ports %s not imported — kuso exposes one port per service", strings.Join(extra, ", "))
@@ -282,10 +370,16 @@ func convertEnv(svc types.ServiceConfig, addons map[string]addonRef, rep *Report
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		val := ""
-		if vp := svc.Environment[k]; vp != nil {
-			val = *vp
+		vp := svc.Environment[k]
+		if vp == nil {
+			// `- KEY` passes the value through from the compose host's
+			// shell; the import can't see it.
+			env[k] = ""
+			rep.flag(svc.Name, "env %s has no value in compose (host-env pass-through) — it imports as EMPTY; set the real value in kuso", k)
+			rep.unresolvedVar(svc.Name, "env "+k+" (no value)")
+			continue
 		}
+		val := *vp
 		ch := chooseAddonEnv(k, val, ordered)
 		switch {
 		case ch.ref != "" && ch.flag:
@@ -346,14 +440,15 @@ func convertBuildArgs(svc types.ServiceConfig, rep *Report) map[string]string {
 
 func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {
 	var out []Volume
+	taken := map[string]bool{}
 	for _, v := range svc.Volumes {
 		switch v.Type {
 		case "volume":
-			name := slugify(v.Source)
 			if v.Source == "" {
 				rep.skip(svc.Name, "anonymous volume at %q not imported — name it in compose to get a kuso volume", v.Target)
 				continue
 			}
+			name := uniqueSlug(slugify(v.Source), taken)
 			out = append(out, Volume{Name: name, MountPath: v.Target, SizeGi: defaultVolumeSizeGi})
 			rep.service(svc.Name, "volume %q → kuso volume `%s` at %s (%dGi default)", v.Source, name, v.Target, defaultVolumeSizeGi)
 			// kuso volumes have no read-only mode — mounting :ro in
@@ -397,9 +492,6 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	}
 	if len(svc.CapAdd) > 0 {
 		rep.skip(svc.Name, "cap_add %s not imported", strings.Join(svc.CapAdd, ", "))
-	}
-	if len(svc.Entrypoint) > 0 {
-		rep.skip(svc.Name, "entrypoint not imported — set it in your Dockerfile or use command")
 	}
 	if svc.WorkingDir != "" {
 		rep.skip(svc.Name, "working_dir=%q not imported — set WORKDIR in the Dockerfile", svc.WorkingDir)

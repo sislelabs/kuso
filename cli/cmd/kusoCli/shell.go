@@ -107,7 +107,7 @@ func runWSShell(project, service string) error {
 	if err != nil {
 		return err
 	}
-	conn, resp, err := wsDialer([]string{"kuso.bearer", tok}).Dial(target, nil)
+	conn, resp, err := wsDialer([]string{"kuso.bearer", tok}).Dial(target, wsHeader())
 	if err != nil {
 		// The server answers pre-upgrade failures (403 no admin role,
 		// 503 no running pods) with a JSON error body; show it.

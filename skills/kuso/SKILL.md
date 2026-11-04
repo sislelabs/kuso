@@ -96,8 +96,11 @@ auth/permission layers, so they see the same truth:
   `get_env`, `set_env`, `set_secret`, `run`, `manage_addon`,
   `subscribe_addon`, `add_service`, `bootstrap_project`, `update_project`.
   `set_env` stores values the way `kuso env set` does, and a new addon
-  usually reaches a service only after `subscribe_addon`. Every mutating tool requires
-  `confirm=true`, and `--read-only` refuses all of them — worth running
+  usually reaches a service only after `subscribe_addon`. Mutating tools require
+  `confirm=true`, with one exception: `apply` needs it only when the YAML
+  sets `prune: true` (deletes). Creates and updates go through without
+  it, so run `plan` first. `manage_addon` delete also needs `confirmName`
+  equal to the addon name. `--read-only` refuses every mutating tool — worth running
   when you only mean to investigate. Auth: `KUSO_URL`/`KUSO_TOKEN` env
   vars win when set; otherwise `kuso-mcp` reuses the CLI's
   `~/.kuso/credentials.yaml` + `currentInstance`, so a logged-in `kuso`
@@ -440,6 +443,8 @@ Caveats:
 - Only **implemented** addon kinds map; images with no managed addon equivalent stay as flagged image services.
 - `build:` services land with a blank `repo:` — set the git repo before they'll build (the report flags this).
 - It does NOT migrate data — move addon data separately (`kuso addon-backup`, or pg_dump/restore).
+- `--apply` refuses risky conversions until you acknowledge them: `--allow-empty-addons` (new addons start empty), `--allow-missing-env-files` (env_file values aren't read), `--allow-unresolved-env` (`${VAR}` with no default, or a bare `- KEY`).
+- kuso has no CMD/args override, so a compose `command:` without `entrypoint:` replaces the image ENTRYPOINT (the report flags it).
 
 ## Marketplace — one-click self-hosted apps
 

@@ -62,18 +62,20 @@ func TestClassifyDatastore(t *testing.T) {
 		{"docker.io/library/postgres:15", "postgres", "15"},
 		{"redis:7", "redis", "7"},
 		{"clickhouse/clickhouse-server:24", "clickhouse", "24"},
-		// redpanda: registry host stripped, v-prefixed tag → no numeric major.
-		{"docker.redpanda.com/redpandadata/redpanda:v24.1.1", "redpanda", ""},
+		// redpanda: registry host stripped; the chart takes the full
+		// v-prefixed tag, so it's kept verbatim rather than dropped.
+		{"docker.redpanda.com/redpandadata/redpanda:v24.1.1", "redpanda", "v24.1.1"},
 		{"redis:latest", "redis", ""},
 		{"nginx:1.27", "", ""},
 		{"myorg/api:1.0", "", ""},
+		// Kinds the kusoaddon chart implements become addons.
+		{"mysql:8.0.36", "mysql", "8"},
+		{"mongo:7", "mongodb", "7"},
+		{"valkey/valkey:8", "valkey", "8"},
+		{"rabbitmq:3-management", "rabbitmq", "3"},
 		// Reserved-but-unimplemented datastores must NOT classify as
 		// addons — kuso has no managed addon for them yet.
-		{"mysql:8.0.36", "", ""},
 		{"mariadb:11", "", ""},
-		{"mongo:7", "", ""},
-		{"valkey/valkey:8", "", ""},
-		{"rabbitmq:3-management", "", ""},
 		{"bitnami/kafka:3.7", "", ""},
 	}
 	for _, c := range cases {
@@ -156,23 +158,23 @@ volumes:
 }
 
 func TestConvert_ReservedDatastoreStaysFlaggedService(t *testing.T) {
-	// mysql has no managed kuso addon yet — it must become a plain
+	// mariadb has no managed kuso addon — it must become a plain
 	// image service AND be flagged, never a broken addon.
 	doc, rep := convertString(t, `
 services:
   db:
-    image: mysql:8.0
+    image: mariadb:11
 `)
 	if findAddon(doc, "db") != nil {
-		t.Error("mysql must NOT become an addon (no managed addon kind)")
+		t.Error("mariadb must NOT become an addon (no managed addon kind)")
 	}
 	svc := findService(doc, "db")
 	if svc == nil || svc.Runtime != "image" {
-		t.Fatalf("mysql should be a runtime=image service, got %+v", svc)
+		t.Fatalf("mariadb should be a runtime=image service, got %+v", svc)
 	}
 	flagged := false
 	for _, n := range rep.Notes {
-		if n.Action == ActionFlag && strings.Contains(n.Detail, "mysql") {
+		if n.Action == ActionFlag && strings.Contains(n.Detail, "mariadb") {
 			flagged = true
 		}
 	}

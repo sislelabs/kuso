@@ -70,7 +70,7 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `bootstrap_project` | create a project (mutating; `confirm: true`) |
 | `update_project`    | patch project fields (mutating) |
 | `add_service`       | add a service (mutating; `confirm: true`) |
-| `manage_addon`      | add / delete addons (mutating; `confirm: true`) |
+| `manage_addon`      | add / delete addons (mutating; `confirm: true`; delete also needs `confirmName` equal to the addon name) |
 | `subscribe_addon`   | mount or unmount an addon's connection Secret on a service; services with a subscription list only get a new addon once subscribed (mutating; `confirm: true`) |
 | `get_env`           | a service's env vars, including addon `valueFrom` refs (read-only) |
 | `set_env`           | upsert / remove individual env vars, same storage rules as `kuso env set`; unnamed keys are untouched (mutating; `confirm: true`) |
@@ -79,7 +79,7 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `build_status`      | build state for a service, incl. promotion hold / not-promoted reason |
 | `run`               | one-shot Job in a service's context (mutating) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
-| `apply`             | reconcile kuso.yaml (mutating; `confirm: true`) |
+| `apply`             | reconcile kuso.yaml (mutating; `confirm: true` only when the YAML sets `prune: true` — creates/updates apply without it, so `plan` first) |
 | `list_builds`       | recent builds for a service, newest first (read-only) |
 | `rollback`          | re-point an env at a previous build's image (mutating; `confirm: true`) |
 | `sql_tables`        | list an addon database's tables (read-only) |

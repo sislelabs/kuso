@@ -103,6 +103,7 @@ func registerCommandGroups(root *cobra.Command) {
 
 		// First-run and session.
 		"login":   groupSetup,
+		"logout":  groupSetup,
 		"init":    groupSetup,
 		"github":  groupSetup,
 		"import":  groupSetup,

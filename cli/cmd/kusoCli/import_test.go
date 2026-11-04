@@ -71,6 +71,19 @@ func TestComposeApplyGates(t *testing.T) {
 	}
 }
 
+func TestComposeApplyGates_UnresolvedVars(t *testing.T) {
+	t.Cleanup(func() { importAllowUnresolvedEnv = false })
+	rep := &compose.Report{UnresolvedVars: []string{"api: env STRIPE_KEY (no value)"}}
+	err := composeApplyGates(&compose.Doc{}, rep)
+	if err == nil || !strings.Contains(err.Error(), "STRIPE_KEY") || !strings.Contains(err.Error(), "--allow-unresolved-env") {
+		t.Fatalf("unresolved env should refuse --apply naming the key and override, got: %v", err)
+	}
+	importAllowUnresolvedEnv = true
+	if err := composeApplyGates(&compose.Doc{}, rep); err != nil {
+		t.Errorf("--allow-unresolved-env should pass, got: %v", err)
+	}
+}
+
 func TestImportFileFlagWithDeprecatedOut(t *testing.T) {
 	t.Cleanup(func() {
 		importFile, importOut = "", ""

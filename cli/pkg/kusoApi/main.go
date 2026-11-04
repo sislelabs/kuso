@@ -22,17 +22,69 @@ import (
 //go:embed VERSION
 var embeddedVersion string
 
-// KusoClient holds the resty request the CLI reuses across calls. The
-// resty.Request (rather than Client) is set up once with auth + base
-// URL so every method is just `client.Method(path)`. Shared state on
-// SetBody / SetHeader is fine because the CLI is single-shot —
-// commands run, exit; no long-lived connection pool to leak between.
+// KusoClient wraps the resty client the CLI reuses across calls so every
+// method is just `client.Method(path)`.
 type KusoClient struct {
 	baseURL     string
 	bearerToken string
 	host        string
-	client      *resty.Request
+	client      *request
 }
+
+// request keeps the `k.client.SetBody(x); k.client.Post(p)` call shape
+// while building a fresh *resty.Request per HTTP call. A single shared
+// resty.Request kept the last SetBody/SetHeader and re-sent it on the
+// next body-less POST/PUT/DELETE in the same process.
+type request struct {
+	rc, dl          *resty.Client
+	token, host, ua string
+	// Body / headers are pending state for the next verb call only.
+	Body    any
+	headers map[string]string
+}
+
+func (r *request) base() *resty.Request {
+	return r.rc.R().
+		SetAuthScheme("Bearer").
+		SetAuthToken(r.token).
+		SetHeader("Host", r.host).
+		SetHeader("Accept", "application/json").
+		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", r.ua)
+}
+
+func (r *request) SetBody(body any) *request {
+	r.Body = body
+	return r
+}
+
+func (r *request) SetHeader(key, value string) *request {
+	if r.headers == nil {
+		r.headers = map[string]string{}
+	}
+	r.headers[key] = value
+	return r
+}
+
+// take returns a fresh request carrying the pending body/headers and
+// clears them so they apply to exactly one call.
+func (r *request) take() *resty.Request {
+	req := r.base()
+	if r.Body != nil {
+		req.SetBody(r.Body)
+	}
+	for k, v := range r.headers {
+		req.SetHeader(k, v)
+	}
+	r.Body, r.headers = nil, nil
+	return req
+}
+
+func (r *request) Get(url string) (*resty.Response, error)    { return r.take().Get(url) }
+func (r *request) Post(url string) (*resty.Response, error)   { return r.take().Post(url) }
+func (r *request) Put(url string) (*resty.Response, error)    { return r.take().Put(url) }
+func (r *request) Patch(url string) (*resty.Response, error)  { return r.take().Patch(url) }
+func (r *request) Delete(url string) (*resty.Response, error) { return r.take().Delete(url) }
 
 // Sentinel errors callers check via errors.Is.
 var (
@@ -41,12 +93,12 @@ var (
 )
 
 // Init wires up the client with a base URL + bearer token and returns
-// the underlying resty.Request so legacy callers can chain on it.
+// a fresh pre-authenticated resty.Request so legacy callers can chain on it.
 // Most code should pass through one of the typed methods (GetProjects,
 // CreateBuild, …) instead of touching the request directly.
 func (k *KusoClient) Init(baseURL, bearerToken string) *resty.Request {
 	k.SetApiUrl(baseURL, bearerToken)
-	return k.client
+	return k.client.base()
 }
 
 // SetApiUrl reconfigures the client for a new instance. Called by
@@ -63,7 +115,7 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 		// fail with a clearer error than parse-stage panic.
 		k.baseURL = apiURL
 		k.host = apiURL
-	} else if strings.Contains(parsed.Host, "localhost") {
+	} else if h := strings.ToLower(parsed.Hostname()); h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		k.baseURL = parsed.Scheme + "://localhost"
 		if parsed.Port() != "" {
 			k.baseURL += ":" + parsed.Port()
@@ -86,7 +138,20 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 			timeout = d
 		}
 	}
-	rc := resty.New().SetBaseURL(k.baseURL).SetTimeout(timeout)
+	rc := k.newResty(timeout)
+	// Downloads (backup dumps) can legitimately run far past the
+	// per-request timeout, so they get their own client without one.
+	k.client = &request{rc: rc, dl: k.newResty(0), token: bearerToken, host: k.host, ua: ua}
+	k.bearerToken = bearerToken
+}
+
+// newResty builds a resty client for the configured instance; timeout 0
+// means no overall request timeout.
+func (k *KusoClient) newResty(timeout time.Duration) *resty.Client {
+	rc := resty.New().SetBaseURL(k.baseURL)
+	if timeout > 0 {
+		rc.SetTimeout(timeout)
+	}
 	// Central not-configured gate. Execute() always constructs the
 	// client — even with no saved instance — so a fresh install used to
 	// surface resty's raw `Get "/api/projects": unsupported protocol
@@ -110,20 +175,17 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 	if v := strings.TrimSpace(os.Getenv("KUSO_INSECURE")); v == "1" || strings.EqualFold(v, "true") {
 		rc = rc.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
 	}
-	k.client = rc.R().
-		SetAuthScheme("Bearer").
-		SetAuthToken(bearerToken).
-		SetHeader("Host", k.host).
-		SetHeader("Accept", "application/json").
-		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", ua)
-	k.bearerToken = bearerToken
+	return rc
 }
 
 // BaseURL returns the configured kuso API root. The logs --follow
 // path needs this to derive a ws:// URL from the same instance config
 // the rest of the CLI is using.
 func (k *KusoClient) BaseURL() string { return k.baseURL }
+
+// HostHeader is the Host header REST calls send (differs from BaseURL's
+// host under the localhost dev rewrite).
+func (k *KusoClient) HostHeader() string { return k.host }
 
 // BearerToken exposes the JWT so the WebSocket dialer can pass it as
 // a Sec-WebSocket-Protocol value (browsers can't set Authorization on
@@ -152,6 +214,23 @@ func (k *KusoClient) Login(username, password string) (*resty.Response, error) {
 }
 
 // ---------- Generic ----------
+
+// Download GETs path without the per-request timeout and leaves the body
+// unread: the caller streams resp.RawBody() and must close it. For
+// multi-GB backup dumps that must not be buffered in memory.
+func (k *KusoClient) Download(path string) (*resty.Response, error) {
+	if err := k.ensureReady(); err != nil {
+		return nil, err
+	}
+	req := k.client.dl.R().
+		SetDoNotParseResponse(true).
+		SetAuthScheme("Bearer").
+		SetAuthToken(k.client.token).
+		SetHeader("Host", k.client.host).
+		SetHeader("Accept", "application/json").
+		SetHeader("User-Agent", k.client.ua)
+	return req.Get(path)
+}
 
 // RawGet hits an arbitrary path under the configured base URL. Used
 // by the few endpoints that don't have a typed wrapper yet (system

@@ -63,8 +63,9 @@ var remoteDeleteCmd = &cobra.Command{
 	Aliases: []string{"rm", "del"},
 	Args:    cobra.MaximumNArgs(1),
 	Short:   "Remove an instance from the local config",
-	Long: `Remove a saved instance entry from the local ~/.kuso config. If it is
-the active instance, no instance is selected afterwards — commands fail
+	Long: `Remove a saved instance entry and its stored token from the local
+~/.kuso config. If it is the active instance, no instance is selected
+afterwards — commands fail
 until you 'kuso remote select' another or re-add this one with
 'kuso remote add' + 'kuso login'.
 
@@ -175,9 +176,9 @@ func selectRemote(name string) error {
 	return nil
 }
 
-// deleteRemote removes an instance from kuso.yaml. We DON'T touch the
-// credentials file — the user may want to re-add the same instance
-// later, and re-typing a JWT is annoying.
+// deleteRemote removes an instance from kuso.yaml and its token from
+// credentials.yaml — a token left behind is still picked up by the
+// hostname fallback in resolveToken whenever KUSO_URL points there.
 func deleteRemote(name string) error {
 	if _, ok := instanceList[name]; !ok {
 		return fmt.Errorf("instance %q not found", name)
@@ -196,6 +197,9 @@ func deleteRemote(name string) error {
 	}
 	if err := saveInstances(); err != nil {
 		return fmt.Errorf("save config: %w", err)
+	}
+	if _, err := deleteToken(name); err != nil {
+		return fmt.Errorf("instance removed, but its token is still in ~/.kuso/credentials.yaml: %w", err)
 	}
 	fmt.Println("Deleted instance:", name)
 	return nil

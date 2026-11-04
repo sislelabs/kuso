@@ -51,7 +51,7 @@ config-as-code on push.`,
 		if exportSpecOutFile == "" || exportSpecOutFile == "-" {
 			fmt.Print(string(body))
 		} else {
-			if err := os.WriteFile(exportSpecOutFile, body, 0o644); err != nil {
+			if err := os.WriteFile(exportSpecOutFile, body, 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", exportSpecOutFile, err)
 			}
 			fmt.Fprintf(os.Stderr, "wrote %d bytes to %s\n", len(body), exportSpecOutFile)

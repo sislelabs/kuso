@@ -152,7 +152,8 @@ func TestParseFirstPort(t *testing.T) {
 		{"3000", 3000},
 		{"3000,8080", 3000},
 		{"3000:3000", 3000},
-		{"3000:80", 3000},
+		{"3000:80", 80},
+		{"8080:3000", 3000}, // host:container → the container (listening) port
 		{"abc,3000", 3000},
 		{"0", 0},
 		{"99999", 0}, // > 65535 rejected

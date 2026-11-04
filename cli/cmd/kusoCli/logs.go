@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -37,6 +38,19 @@ func wsDialer(subprotocols []string) *websocket.Dialer {
 		d.TLSClientConfig = tc
 	}
 	return &d
+}
+
+// wsHeader returns the request headers for a WebSocket dial: the REST
+// client's Host header when it differs from the dialed URL's host (the
+// localhost dev rewrite dials localhost:<port> but routes on the
+// kuso.localhost vhost), so WS and REST reach the same server.
+func wsHeader() http.Header {
+	h := http.Header{}
+	host := api.HostHeader()
+	if u, err := url.Parse(api.BaseURL()); err == nil && host != "" && host != u.Host {
+		h.Set("Host", host)
+	}
+	return h
 }
 
 // `kuso logs <project> <service>` — print recent log lines from the
@@ -100,7 +114,7 @@ log lines until ^C — same surface as the web UI's Logs tab.`,
 		}
 		// Non-follow path: hit the REST endpoint, dump, exit.
 		path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
-			args[0], args[1], url.QueryEscape(envSelector), logsLines)
+			url.PathEscape(args[0]), url.PathEscape(args[1]), url.QueryEscape(envSelector), logsLines)
 		resp, err := api.RawGet(path)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -170,9 +184,14 @@ func streamLogs(project, service, env string, tail int) error {
 	case "http":
 		u.Scheme = "ws"
 	}
-	u.Path = strings.TrimRight(u.Path, "/") +
-		fmt.Sprintf("/ws/projects/%s/services/%s/logs",
-			url.PathEscape(project), url.PathEscape(service))
+	// Path holds the decoded form and RawPath the escaped one; putting
+	// escaped segments into Path alone double-encodes them (%2F → %252F).
+	basePath := strings.TrimRight(u.EscapedPath(), "/")
+	u.RawPath = basePath + fmt.Sprintf("/ws/projects/%s/services/%s/logs",
+		url.PathEscape(project), url.PathEscape(service))
+	if u.Path, err = url.PathUnescape(u.RawPath); err != nil {
+		return fmt.Errorf("build ws url: %w", err)
+	}
 	q := u.Query()
 	q.Set("env", env)
 	q.Set("tail", fmt.Sprintf("%d", tail))
@@ -183,7 +202,7 @@ func streamLogs(project, service, env string, tail int) error {
 	// after the literal kuso.bearer name. Browsers split the
 	// list themselves; here we hand it to gorilla as []string.
 	dialer := wsDialer([]string{"kuso.bearer", tok})
-	conn, _, err := dialer.Dial(u.String(), nil)
+	conn, _, err := dialer.Dial(u.String(), wsHeader())
 	if err != nil {
 		return fmt.Errorf("ws connect: %w", err)
 	}

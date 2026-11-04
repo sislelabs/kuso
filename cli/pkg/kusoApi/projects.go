@@ -135,10 +135,6 @@ func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*rest
 // when the caller passes nil. Empty []byte{} would also work but nil
 // is what most callers reach for first.
 func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*resty.Response, error) {
-	// Content-Type is set on the SHARED *resty.Request, so restore the
-	// JSON default afterwards — otherwise this call's content-type
-	// bleeds into unrelated later requests in the same process.
-	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetHeader("Content-Type", contentType)
 	if body == nil {
 		k.client.Body = nil
@@ -150,9 +146,8 @@ func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*res
 
 // RawPut mirrors RawPost for the handful of admin settings endpoints
 // that take a JSON body on PUT (backup-settings, settings/build,
-// settings/session). Same shared-request content-type discipline.
+// settings/session).
 func (k *KusoClient) RawPut(path string, body []byte, contentType string) (*resty.Response, error) {
-	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetHeader("Content-Type", contentType)
 	if body == nil {
 		k.client.Body = nil
@@ -550,10 +545,6 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun, rotateSecret
 	if len(q) > 0 {
 		url += "?" + strings.Join(q, "&")
 	}
-	// Restore the JSON default after this call — the Content-Type is
-	// set on the shared request and would otherwise leak into later
-	// unrelated calls.
-	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetBody(yamlBody)
 	k.client.SetHeader("Content-Type", "application/yaml")
 	return k.client.Post(url)
@@ -617,10 +608,6 @@ func (k *KusoClient) ExportProject(project string) (*resty.Response, error) {
 // is one of "error" (default), "rename", "overwrite" — see the
 // server's ExportHandler.Import for semantics.
 func (k *KusoClient) ImportProject(tarball []byte, policy string) (*resty.Response, error) {
-	// Restore the JSON default after this call — the Content-Type is
-	// set on the shared request and would otherwise leak into later
-	// unrelated calls.
-	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetBody(tarball)
 	k.client.SetHeader("Content-Type", "application/gzip")
 	path := "/api/projects/import"

@@ -41,6 +41,15 @@ type Report struct {
 	// CLI refuses --apply while this is non-empty unless the user
 	// passes --allow-missing-env-files.
 	UnresolvedEnvFiles []string `json:"unresolvedEnvFiles,omitempty"`
+	// UnresolvedVars lists values that still depend on the importer's
+	// environment ("<service>: <what>"): ${VAR} with no default, or a
+	// bare `- KEY` pass-through. They'd deploy as literal "${VAR}" or "",
+	// so the CLI refuses --apply unless --allow-unresolved-env.
+	UnresolvedVars []string `json:"unresolvedVars,omitempty"`
+}
+
+func (r *Report) unresolvedVar(svc, what string) {
+	r.UnresolvedVars = append(r.UnresolvedVars, svc+": "+what)
 }
 
 // unresolvedEnvFile records an env_file whose values were not read,
