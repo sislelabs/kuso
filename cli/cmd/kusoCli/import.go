@@ -201,7 +201,7 @@ func init() {
 	importComposeCmd.Flags().BoolVar(&importDryRun, "server-dry-run", false, "with --apply, ask the server for the plan without writing")
 	importComposeCmd.Flags().BoolVar(&importAllowEmptyAddons, "allow-empty-addons", false, "with --apply, permit datastore conversions — the managed addons start EMPTY; source volumes/data are NOT migrated")
 	importComposeCmd.Flags().BoolVar(&importAllowMissingEnv, "allow-missing-env-files", false, "with --apply, permit services whose env_file values were not imported")
-	importComposeCmd.Flags().BoolVar(&importAllowUnresolvedEnv, "allow-unresolved-env", false, "with --apply, permit values that reference ${VAR} with no default or bare `- KEY` pass-through env")
+	importComposeCmd.Flags().BoolVar(&importAllowUnresolvedEnv, "allow-unresolved-env", false, "with --apply, permit values that reference ${VAR} with no default or bare \"- KEY\" pass-through env")
 	importCmd.AddCommand(importComposeCmd)
 	rootCmd.AddCommand(importCmd)
 }
