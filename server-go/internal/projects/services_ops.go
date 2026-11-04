@@ -3070,6 +3070,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		securityContextChanged := false
 		if req.SecurityContext != nil {
 			svc.Spec.SecurityContext = req.SecurityContext
+			// An empty context is the explicit reset (kuso apply with
+			// the block omitted): store nil, the chart default.
+			if req.SecurityContext.IsDefault() {
+				svc.Spec.SecurityContext = nil
+			}
 			securityContextChanged = true
 		}
 		imageChanged := false

@@ -583,6 +583,14 @@ type KusoSecurityContext struct {
 	AllowPrivilegeEscalation *bool             `json:"allowPrivilegeEscalation,omitempty"`
 }
 
+// IsDefault reports whether c relaxes nothing (nil, no added capabilities,
+// no escalation) and so renders the same as the hardened default.
+func (c *KusoSecurityContext) IsDefault() bool {
+	return c == nil ||
+		((c.AllowPrivilegeEscalation == nil || !*c.AllowPrivilegeEscalation) &&
+			(c.Capabilities == nil || len(c.Capabilities.Add) == 0))
+}
+
 // allowedAddCapabilities is the server-side allowlist of Linux
 // capabilities a user may add via spec.securityContext. It is a small,
 // deliberately safe set — the capabilities a normal service entrypoint
