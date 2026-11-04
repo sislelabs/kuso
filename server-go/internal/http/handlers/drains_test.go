@@ -160,6 +160,23 @@ func TestDrainsUpdateKeepsMaskedCredentials(t *testing.T) {
 	}
 }
 
+// WEB-18: a masked value only means "keep what's stored" under the name it
+// was stored with; under a new name there is nothing to keep, so a rename
+// must be refused rather than silently deleting the header.
+func TestDrainsUpdateRejectsMaskUnderNewHeaderName(t *testing.T) {
+	h, st, _ := newDrainsHandler()
+	r := drainRouter(h, auth.PermSettingsAdmin)
+	doDrain(t, r, "POST", "/api/drains", `{"type":"http","url":"https://hook.example.com","headers":{"Authorization":"Bearer real"}}`)
+	rr := doDrain(t, r, "PUT", "/api/drains/d1",
+		`{"type":"http","url":"https://hook.example.com","headers":{"X-Api-Key":"`+drainMask+`"}}`)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "X-Api-Key") {
+		t.Fatalf("renamed masked header = %d %s, want 400 naming the header", rr.Code, rr.Body.String())
+	}
+	if d := st.m["d1"]; d.Headers["Authorization"] != "Bearer real" {
+		t.Fatalf("stored header lost: %+v", d.Headers)
+	}
+}
+
 // LOOP-23: "keep the stored value" must not follow a drain to a new host,
 // or a masked PUT ships the Loki/Grafana token to whoever set the URL.
 func TestDrainsUpdateRejectsMaskOnHostChange(t *testing.T) {

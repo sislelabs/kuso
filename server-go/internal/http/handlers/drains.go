@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -178,7 +179,8 @@ func (h *DrainsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		if v == envMaskSentinel {
 			prev, ok := existing.Headers[k]
 			if !ok {
-				continue
+				writeErr(w, http.StatusBadRequest, "header "+strconv.Quote(k)+" has a masked value but no stored value under that name — re-enter it")
+				return
 			}
 			v = prev
 		}
