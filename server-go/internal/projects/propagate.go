@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"kuso/server/internal/addons"
@@ -649,6 +650,45 @@ func rescopeServiceRefLiterals(in []kube.KusoEnvVar, ns, envScope string) []kube
 	}
 	return out
 }
+
+// warnMissingServiceRefTargets logs every rescoped in-cluster service URL
+// whose target Service doesn't exist yet. The rescope is deliberate (a
+// staging env must not call the production sibling, and the usual flow
+// adds the sibling's env next), but until then those calls fail with
+// NXDOMAIN while the env's own pods look healthy.
+func (s *Service) warnMissingServiceRefTargets(ctx context.Context, ns, project, self string, vars []kube.KusoEnvVar) {
+	suffix := "." + ns + ".svc.cluster.local"
+	var targets []string
+	for _, e := range vars {
+		if e.ValueFrom != nil {
+			continue
+		}
+		for _, m := range serviceRefHostRE.FindAllStringSubmatch(e.Value, -1) {
+			if strings.HasSuffix(m[0], suffix) && m[1] != self && !slices.Contains(targets, m[1]) {
+				targets = append(targets, m[1])
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, t := range targets {
+		if !slices.ContainsFunc(envs, func(e kube.KusoEnvironment) bool { return e.Name == t }) {
+			missing = append(missing, t)
+		}
+	}
+	if len(missing) > 0 {
+		slog.WarnContext(ctx, "new env references sibling services with no env in its scope yet; calls to them fail until those envs exist",
+			"project", project, "env", self, "missing", missing)
+	}
+}
+
+var serviceRefHostRE = regexp.MustCompile(`([a-z0-9][a-z0-9-]*)\.[a-z0-9-]+\.svc\.cluster\.local`)
 
 // ensureEnvClones adds the conn secret of every addon clone minted for
 // envScope and drops the project-level source each clone replaces. The clone
