@@ -357,6 +357,9 @@ type manageAddonArgs struct {
 	Size    string `json:"size,omitempty" jsonschema:"small|medium|large (default: small)"`
 	HA      bool   `json:"ha,omitempty"`
 	Confirm bool   `json:"confirm" jsonschema:"must be true to actually mutate"`
+	// ConfirmName is forwarded as the server's ?confirm= data-loss
+	// guard; it must come from the caller, never be copied from Name.
+	ConfirmName string `json:"confirmName,omitempty" jsonschema:"required for delete: the addon name typed out again, exactly as the user named it — acknowledges that the addon's data is destroyed"`
 }
 
 type manageAddonResult struct {
@@ -419,9 +422,12 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 	case "delete":
 		// The server's typed-confirmation guard: DELETE requires
 		// ?confirm=<addon-name> to acknowledge the data loss (the
-		// PVC goes with the addon). The MCP-level confirm=true flag
-		// above is the agent's acknowledgement; echo the name here.
-		q := url.Values{"confirm": {args.Name}}
+		// PVC goes with the addon). Pass the caller's confirmName
+		// through so a mismatch fails, rather than echoing args.Name.
+		if args.ConfirmName != args.Name {
+			return manageAddonResult{}, fmt.Errorf("delete destroys addon %q and its data: pass confirmName equal to the addon name to acknowledge (got %q)", args.Name, args.ConfirmName)
+		}
+		q := url.Values{"confirm": {args.ConfirmName}}
 		path := apiPath("api", "projects", args.Project, "addons", args.Name) + "?" + q.Encode()
 		if err := client.DeleteJSON(ctx, path); err != nil {
 			return manageAddonResult{}, fmt.Errorf("delete addon: %w", err)
@@ -438,7 +444,7 @@ func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 		Description: "Add or delete an addon on a project. Adding creates the addon and its connection Secret (DATABASE_URL etc.), but services only get that Secret if they are subscribed to the addon, and existing services usually aren't. After adding, call subscribe_addon for every service that needs the connection. " +
 			"Supported kinds: " + strings.Join(allowedAddonKindList, ", ") + ". " +
 			"Other kinds are reserved (no workload would be deployed) and are refused. " +
-			"REQUIRES confirm=true. Refused in --read-only mode.",
+			"REQUIRES confirm=true. delete DESTROYS the addon's data and additionally requires confirmName equal to the addon name — only delete an addon the user explicitly named. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args manageAddonArgs) (*mcp.CallToolResult, manageAddonResult, error) {
 		out, err := runManageAddon(ctx, client, args)
 		if err != nil {
