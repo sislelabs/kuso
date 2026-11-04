@@ -277,6 +277,52 @@ func TestPromotionGate_BranchScoping(t *testing.T) {
 	}
 }
 
+// BUILD-03: a PR from a branch a persistent env tracks (staging → main)
+// gives its preview builds the SAME branch as the staging push builds.
+// Branch alone can't separate them, so preview builds must only group
+// with preview builds of the same PR.
+func TestPromotionGate_PreviewOnTrackedBranch(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	repo := "https://github.com/acme/mono"
+	pr := func(b kube.KusoBuild, n string) kube.KusoBuild {
+		b.Annotations[AnnPreviewEnv] = b.Spec.Service + "-pr-" + n
+		b.Annotations[AnnPreviewPR] = n
+		return b
+	}
+	stg := func(b kube.KusoBuild) kube.KusoBuild { return withBranch(b, "staging") }
+
+	api := stg(gb("api-stg", "scuba-api", shaA, repo, "running", t0, nil))
+	webPreviewFail := stg(pr(gb("web-pr", "scuba-web", shaA, repo, "failed", t0, nil), "7"))
+	if got := promotionHoldVerdict(&api, []kube.KusoBuild{api, webPreviewFail}); got != "" {
+		t.Errorf("failed preview build must not hold the staging wave, got %q", got)
+	}
+
+	webFail := stg(gb("web-stg", "scuba-web", shaA, repo, "failed", t0, nil))
+	webPreviewGreen := stg(pr(gb("web-pr2", "scuba-web", shaB, repo, "succeeded", t0.Add(5*time.Minute), nil), "7"))
+	if got := promotionHoldVerdict(&api, []kube.KusoBuild{api, webFail, webPreviewGreen}); !strings.Contains(got, "sibling build failed") {
+		t.Errorf("green preview build must not forgive a failed staging sibling, got %q", got)
+	}
+
+	newerPreview := stg(pr(gb("api-pr", "scuba-api", shaB, repo, "running", t0.Add(time.Minute), nil), "7"))
+	if got := newerBuildOf(&api, []kube.KusoBuild{api, newerPreview}); got != "" {
+		t.Errorf("preview build must not supersede a held staging build, got %q", got)
+	}
+	heldPreview := stg(pr(gb("api-pr0", "scuba-api", shaA, repo, "running", t0, nil), "7"))
+	newerPush := stg(gb("api-stg2", "scuba-api", shaB, repo, "queued", t0.Add(time.Minute), nil))
+	if got := newerBuildOf(&heldPreview, []kube.KusoBuild{heldPreview, newerPush}); got != "" {
+		t.Errorf("push build must not supersede a held preview build, got %q", got)
+	}
+	otherPR := stg(pr(gb("web-pr8", "scuba-web", shaA, repo, "failed", t0, nil), "8"))
+	samePR := stg(pr(gb("web-pr7", "scuba-web", shaA, repo, "failed", t0, nil), "7"))
+	if got := promotionHoldVerdict(&heldPreview, []kube.KusoBuild{heldPreview, otherPR}); got != "" {
+		t.Errorf("another PR's preview build must not hold this preview, got %q", got)
+	}
+	if got := promotionHoldVerdict(&heldPreview, []kube.KusoBuild{heldPreview, samePR}); !strings.Contains(got, "sibling build failed") {
+		t.Errorf("same-PR preview siblings still promote atomically, got %q", got)
+	}
+}
+
 // The hold's time bound. A permanently-dead sibling (BackoffLimitExceeded,
 // never retried) used to strand a GREEN build forever: the only escapes
 // were a human retrying the sibling or pushing again. These pin the
