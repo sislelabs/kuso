@@ -1033,7 +1033,10 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if req.Branch == "" {
 		return nil, fmt.Errorf("%w: branch required", ErrInvalid)
 	}
-	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") {
+	// "activator" / "*-activator": the env's own Service would share the
+	// shape of the chart's per-env activator ExternalName mirror.
+	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") ||
+		req.Name == "activator" || strings.HasSuffix(req.Name, "-activator") {
 		return nil, fmt.Errorf("%w: name %q is reserved", ErrInvalid, req.Name)
 	}
 	if !envNameRE.MatchString(req.Name) {

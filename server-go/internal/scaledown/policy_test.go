@@ -1,6 +1,7 @@
 package scaledown
 
 import (
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -191,9 +192,17 @@ func TestActivatorRouted(t *testing.T) {
 		{"per-env ExternalName mirror", "alpha-web-staging-activator", true},
 		{"app's own service", "alpha-web-staging", false},
 		{"no backend", "", false},
+		// LIFE-13: a custom env named "activator" has its own Service
+		// alpha-web-activator; that must not read as activator-routed.
+		{"env named activator, own service", "alpha-web-activator", false},
+		{"another env's mirror", "alpha-api-staging-activator", false},
 	}
 	for _, c := range cases {
-		if got := activatorBackend(c.backend); got != c.want {
+		env := "alpha-web-staging"
+		if strings.HasPrefix(c.name, "env named activator") {
+			env = "alpha-web-activator"
+		}
+		if got := activatorBackend(c.backend, env); got != c.want {
 			t.Errorf("%s: activatorBackend(%q) = %v, want %v", c.name, c.backend, got, c.want)
 		}
 	}

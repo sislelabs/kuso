@@ -108,6 +108,20 @@ func TestHostClaims_GeneratedHostConflict(t *testing.T) {
 	}
 }
 
+// LIFE-13: env "activator" collides with the activator ExternalName shape.
+func TestAddEnvironment_ActivatorNameReserved(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "api", kube.KusoServiceSpec{Project: "alpha"}),
+	)
+	for _, name := range []string{"activator", "qa-activator"} {
+		if _, err := s.AddEnvironment(context.Background(), "alpha", "api", CreateEnvRequest{Name: name, Branch: "dev", ShareAddons: true}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("AddEnvironment(%q) err = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 // LIFE-05: a baseDomain change moved only production hosts; custom envs
 // and env-group clones kept serving the old domain. User-set hosts stay.
 func TestUpdate_BaseDomainMovesEveryGeneratedHost(t *testing.T) {
