@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -141,10 +142,38 @@ func saveToken(instanceName, token string) error {
 		}
 		credentialsConfig.SetConfigFile(path)
 	}
+	return writeCredentials(path, credentialsConfig.AllSettings())
+}
+
+// deleteToken removes an instance's stored token. Viper has no Unset,
+// so the remaining settings are rewritten and re-read into a fresh
+// viper. Reports whether a token was present.
+func deleteToken(instanceName string) (bool, error) {
+	path := credentialsConfig.ConfigFileUsed()
+	settings := credentialsConfig.AllSettings()
+	key := strings.ToLower(instanceName) // viper lower-cases keys
+	if _, ok := settings[key]; !ok || path == "" {
+		return false, nil
+	}
+	delete(settings, key)
+	if err := writeCredentials(path, settings); err != nil {
+		return false, err
+	}
+	fresh := viper.NewWithOptions(viper.KeyDelimiter("\x00"))
+	fresh.SetConfigFile(path)
+	fresh.SetConfigType("yaml")
+	if err := fresh.ReadInConfig(); err != nil {
+		return true, fmt.Errorf("reload credentials: %w", err)
+	}
+	credentialsConfig = fresh
+	return true, nil
+}
+
+func writeCredentials(path string, settings map[string]any) error {
 	// Marshal viper's view to YAML by hand so we can write to a
 	// `.tmp` extension without viper's WriteConfigAs choking on
 	// the unknown config type. Atomic rename + 0600 perms.
-	body, err := yaml.Marshal(credentialsConfig.AllSettings())
+	body, err := yaml.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
