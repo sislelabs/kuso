@@ -1,12 +1,21 @@
 package vulnscan
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 func TestPrimaryImage_FirstContainerOfALivePod(t *testing.T) {
@@ -40,6 +49,55 @@ func TestLatestPerOwner_DropsReplacedDigests(t *testing.T) {
 	for _, im := range got {
 		if im.Env == "production" && im.Digest == dB {
 			t.Errorf("replaced production digest kept: %+v", im)
+		}
+	}
+}
+
+func TestProjectImages_ListsOnlyTheProjectsPods(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	envObj := func(ns, name, project, service string) *unstructured.Unstructured {
+		e := kube.KusoEnvironment{
+			TypeMeta: metav1.TypeMeta{APIVersion: kube.GVREnvironments.GroupVersion().String(), Kind: "KusoEnvironment"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name,
+				Labels: map[string]string{kube.LabelProject: project, kube.LabelEnv: "production"}},
+			Spec: kube.KusoEnvironmentSpec{Project: project, Service: service},
+		}
+		m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &unstructured.Unstructured{Object: m}
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"},
+		envObj("shop-ns", "shop-web-production", "shop", "shop-web"), envObj("kuso", "acme-api-production", "acme", "acme-api"))
+	envPod := func(ns, instance, project, digest string) *corev1.Pod {
+		p := pod(ns, instance+"-x", map[string]string{"app.kubernetes.io/name": "kusoenvironment", "app.kubernetes.io/instance": instance,
+			kube.LabelProject: project}, ctrl("ReplicaSet", instance), "r/"+instance+":1", "r/"+instance+"@"+digest)
+		return &p
+	}
+	addon := pod("shop-ns", "shop-db-0", map[string]string{labelAddon: "shop-db", kube.LabelProject: "shop"}, ctrl("StatefulSet", "shop-db"), "postgres:16", "postgres@"+dB)
+	platform := pod("kuso", "kuso-server-1", map[string]string{"app": "kuso-server"}, ctrl("ReplicaSet", "kuso-server"), "ghcr.io/x/kuso:1", "ghcr.io/x/kuso@"+dC)
+	cs := fake.NewClientset(envPod("shop-ns", "shop-web-production", "shop", dA), envPod("kuso", "acme-api-production", "acme", dC), &addon, &platform)
+
+	l := Live{Kube: &kube.Client{Clientset: cs, Dynamic: dyn}, DB: d}
+	got, err := l.ProjectImages(ctx, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("images = %+v, want shop's service (custom namespace) + addon", got)
+	}
+	for _, im := range got {
+		if im.Project != "shop" || im.Namespace != "shop-ns" {
+			t.Errorf("foreign image: %+v", im)
+		}
+	}
+	for _, a := range cs.Actions() {
+		if l, ok := a.(k8stesting.ListAction); ok && a.GetResource().Resource == "pods" &&
+			l.GetListRestrictions().Labels.String() != kube.LabelProject+"=shop" {
+			t.Errorf("pods listed with selector %q, want only the project's pods", l.GetListRestrictions().Labels)
 		}
 	}
 }

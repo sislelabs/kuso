@@ -153,7 +153,7 @@ func (l Live) AddonImage(ctx context.Context, project string, a *kube.KusoAddon)
 // live classification, plus the last sighting of owners with no pods
 // right now.
 func (l Live) ProjectImages(ctx context.Context, project string) ([]db.VulnImage, error) {
-	inv, err := Inventory(ctx, KubeCluster{Kube: l.Kube})
+	inv, err := Inventory(ctx, projectCluster{Kube: l.Kube, Project: project})
 	if err != nil {
 		return nil, err
 	}
@@ -179,4 +179,36 @@ func (l Live) ProjectImages(ctx context.Context, project string) ([]db.VulnImage
 		}
 	}
 	return LatestPerOwner(out), nil
+}
+
+// projectCluster is one project's slice of the cluster, by the project
+// label every env and addon pod (and env CR) carries. Cluster-wide, so a
+// project in a custom namespace is found the same way.
+type projectCluster struct {
+	Kube    *kube.Client
+	Project string
+}
+
+func (c projectCluster) Pods(ctx context.Context) ([]corev1.Pod, error) {
+	sel := labels.SelectorFromSet(labels.Set{kube.LabelProject: c.Project})
+	if cached, ok := c.Kube.Cache.ListPodsByLabel(sel); ok {
+		out := make([]corev1.Pod, 0, len(cached))
+		for _, p := range cached {
+			out = append(out, *p)
+		}
+		return out, nil
+	}
+	list, err := c.Kube.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+	if err != nil {
+		return nil, fmt.Errorf("list pods: %w", err)
+	}
+	return list.Items, nil
+}
+
+func (c projectCluster) Environments(ctx context.Context) ([]kube.KusoEnvironment, error) {
+	envs, err := c.Kube.ListKusoEnvironmentsByLabels(ctx, "", map[string]string{kube.LabelProject: c.Project})
+	if err != nil {
+		return nil, fmt.Errorf("list environments: %w", err)
+	}
+	return envs, nil
 }
