@@ -1838,7 +1838,9 @@ func (p *Poller) archiveRecord(ctx context.Context, b *kube.KusoBuild, phase str
 		TriggeredByUser: get(annTriggerUser),
 		ErrorMessage:    get(annMessage),
 	}
-	if b.Spec.Image != nil {
+	// A dry run pushes nothing; a tag here would hold a slot in the image
+	// retention window once the CR is gone.
+	if b.Spec.Image != nil && !b.Spec.DryRun {
 		rec.ImageTag = b.Spec.Image.Tag
 	}
 	// Terminal-phase records must never archive with an empty
