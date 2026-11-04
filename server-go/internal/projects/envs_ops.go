@@ -264,8 +264,9 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// already gone — fall back to parsing the env name. Both paths feed
 	// into the same downstream cleanup.
 	var (
-		serviceFQN string
-		envKind    string
+		serviceFQN    string
+		envKind       string
+		envScopeLabel string
 	)
 	// GetOwnedEnv, not GetEnvironment: GetEnvironment folds "owned by
 	// another project" into ErrNotFound, and the not-found branch below
@@ -293,6 +294,7 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		}
 		serviceFQN = e.Spec.Service
 		envKind = e.Spec.Kind
+		envScopeLabel = e.Labels[kube.LabelEnv]
 	case apierrors.IsNotFound(gerr):
 		// CR is gone. Two very different situations reach here:
 		//
@@ -504,6 +506,11 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 		envShort := strings.TrimPrefix(env, serviceFQN+"-")
 		if envShort == env {
 			envShort = env
+		}
+		// An env-group clone (<p>-<svc>-<group>-production) mounts the
+		// secret scoped by its env label, not by its name suffix.
+		if envShort == "production" && envScopeLabel != "" && envScopeLabel != "production" {
+			envShort = envScopeLabel
 		}
 		if cerr := s.SecretsCleanupForEnv(ctx, project, svcShort, envShort); cerr != nil {
 			// Deliberately tolerated (not collected): per the contract above,
