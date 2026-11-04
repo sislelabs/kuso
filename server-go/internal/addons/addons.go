@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +43,9 @@ type Service struct {
 	// changes and revert them. Same hook shape as projects.Service.
 	// Optional: nil → no history recorded (CLI / tests).
 	RecordRevision func(ctx context.Context, project, kind, name, summary string, snapshot []byte)
+
+	// refreshMu serialises env refreshes per project (project -> *sync.Mutex).
+	refreshMu sync.Map
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -272,6 +276,26 @@ func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, e
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	return out, nil
+}
+
+// listLive lists the project's addons straight from the apiserver,
+// bypassing the informer cache.
+func (s *Service) listLive(ctx context.Context, project string) ([]kube.KusoAddon, error) {
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	out := make([]kube.KusoAddon, 0, len(raw.Items))
+	for i := range raw.Items {
+		var a kube.KusoAddon
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &a); err != nil {
+			return nil, fmt.Errorf("decode addon %s: %w", raw.Items[i].GetName(), err)
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }
@@ -1569,17 +1593,25 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 // re-injected into every env, leaving pods with an env-var ref to a
 // soon-to-vanish secret (CreateContainerConfigError on the next restart).
 func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
-	addons, err := s.listProjectScoped(ctx, project)
+	// Serialise refreshes per project and read the addon set live, not from
+	// the informer cache: each refresh rewrites envFromSecrets wholesale, so
+	// two concurrent adds that each saw a stale list (missing the other's
+	// addon) dropped each other's conn from every env.
+	mu, _ := s.refreshMu.LoadOrStore(project, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	// The unfiltered list: addons below strips env-scoped clones (they must
+	// not mount project-wide), but each env still needs to find the clone
+	// minted FOR IT. Matched by env label further down.
+	addonList, err := s.listLive(ctx, project)
 	if err != nil {
 		return err
 	}
-	// The unfiltered list too: listProjectScoped deliberately strips
-	// env-scoped clones (they must not mount project-wide), but each env
-	// still needs to find the clone minted FOR IT. Matched by env label
-	// further down.
-	addonList, err := s.List(ctx, project)
-	if err != nil {
-		return err
+	addons := make([]kube.KusoAddon, 0, len(addonList))
+	for _, a := range addonList {
+		if a.Labels[kube.LabelEnv] == "" {
+			addons = append(addons, a)
+		}
 	}
 	// Build baseSecrets, de-duplicated: addon conn secrets, then the
 	// project/instance-shared secrets, then any explicitly-passed
