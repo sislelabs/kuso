@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
 
@@ -49,6 +51,9 @@ var (
 // AddonKind returns the addon's kind, ownership-checked to the project.
 func (a *snapshotAdapter) AddonKind(ctx context.Context, project, addon string) (string, error) {
 	cr, err := a.addons.GetOwned(ctx, project, addon)
+	if errors.Is(err, addons.ErrNotFound) {
+		return "", fmt.Errorf("%w: %w", builds.ErrNotAnAddon, err)
+	}
 	if err != nil {
 		return "", err
 	}

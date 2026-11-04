@@ -2,7 +2,9 @@ package builds
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"kuso/server/internal/kube"
@@ -19,6 +21,25 @@ func addonNamesFromEnvFromSecrets(env *kube.KusoEnvironment) []string {
 	}
 	return out
 }
+
+// addonNamesFromSecretKeyRefs extracts addon names from env vars that read a
+// "<addon>-conn" secret by key — the ${{ addon.KEY }} reference form, which
+// never appears in EnvFromSecrets.
+func addonNamesFromSecretKeyRefs(env *kube.KusoEnvironment) []string {
+	var out []string
+	for _, v := range env.Spec.EnvVars {
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := ref["name"].(string)
+		if addon, ok := strings.CutSuffix(name, "-conn"); ok && addon != "" {
+			out = append(out, addon)
+		}
+	}
+	return out
+}
+
+// ErrNotAnAddon is returned (wrapped) by an AddonKindLister when the name
+// isn't an addon of the project, e.g. a user Secret that ends in "-conn".
+var ErrNotAnAddon = errors.New("not an addon")
 
 // AddonKindLister reports an addon's kind. Wired to the addons service in
 // main.go; kept as a narrow interface so the snapshotter stays testable
@@ -46,9 +67,20 @@ type PredeploySnapshotter struct {
 func (s *PredeploySnapshotter) Snapshot(ctx context.Context, ns string, env *kube.KusoEnvironment) ([]string, error) {
 	project := env.Spec.Project
 	var keys []string
-	for _, addon := range addonNamesFromEnvFromSecrets(env) {
+	mounted := addonNamesFromEnvFromSecrets(env)
+	seen := map[string]bool{}
+	for _, addon := range append(mounted, addonNamesFromSecretKeyRefs(env)...) {
+		if seen[addon] {
+			continue
+		}
+		seen[addon] = true
 		kind, err := s.Kinds.AddonKind(ctx, project, addon)
 		if err != nil {
+			// A by-key ref to a user Secret that merely ends in "-conn" is not
+			// a database to snapshot; anything else fails the gate.
+			if errors.Is(err, ErrNotAnAddon) && !slices.Contains(mounted, addon) {
+				continue
+			}
 			return nil, fmt.Errorf("resolve addon %q kind: %w", addon, err)
 		}
 		if kind != "postgres" {
