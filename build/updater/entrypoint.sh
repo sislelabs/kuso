@@ -56,29 +56,39 @@ verify_sha256() {
 }
 
 STARTED_AT="$(now)"
-write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
-TMP_CRDS=$(mktemp)
-curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
-verify_sha256 "$TMP_CRDS" "${KUSO_CRDS_SHA256:-}" "crds.yaml"
+# KUSO_SKIP_CRDS=1 is set by the server on a downgrade: the older
+# release's CRDs would drop newer spec fields and the apiserver would
+# prune them from every stored CR. The installed CRDs are a superset the
+# older server tolerates, so they stay.
+if [ "${KUSO_SKIP_CRDS:-}" = "1" ]; then
+  write_status "applying-crds" "downgrade to ${KUSO_TARGET_VERSION} — keeping the installed (newer) CRDs"
+  echo "==> downgrade: skipping CRD apply so newer spec fields are not pruned"
+else
+  write_status "applying-crds" "downloading ${KUSO_CRDS_URL}"
 
-# Server-side dry-run BEFORE the real apply. This validates the CRD
-# objects themselves (a structurally invalid schema, an illegal type
-# change the apiserver refuses) and aborts with a clear status instead
-# of a half-applied bundle.
-#
-# It does NOT re-validate stored CRs against the new schema. A tightened
-# pattern/maxLength, a new CEL rule or required field, or a dropped
-# x-kubernetes-preserve-unknown-fields all pass this dry-run and then
-# break (or silently prune) existing CRs on their next write. Those are
-# caught at ship time by hack/crd-guard.py, not here.
-if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
-  echo "==> CRD server-side dry-run FAILED — refusing to apply:"
-  echo "$dryrun_out" | sed 's/^/    /'
-  write_status "failed" "CRD validation (dry-run) failed — not applied: $(echo "$dryrun_out" | tr '\n' ' ' | cut -c1-300)"
-  exit 1
+  TMP_CRDS=$(mktemp)
+  curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
+  verify_sha256 "$TMP_CRDS" "${KUSO_CRDS_SHA256:-}" "crds.yaml"
+
+  # Server-side dry-run BEFORE the real apply. This validates the CRD
+  # objects themselves (a structurally invalid schema, an illegal type
+  # change the apiserver refuses) and aborts with a clear status instead
+  # of a half-applied bundle.
+  #
+  # It does NOT re-validate stored CRs against the new schema. A tightened
+  # pattern/maxLength, a new CEL rule or required field, or a dropped
+  # x-kubernetes-preserve-unknown-fields all pass this dry-run and then
+  # break (or silently prune) existing CRs on their next write. Those are
+  # caught at ship time by hack/crd-guard.py, not here.
+  if ! dryrun_out=$(kubectl apply --dry-run=server -f "$TMP_CRDS" 2>&1); then
+    echo "==> CRD server-side dry-run FAILED — refusing to apply:"
+    echo "$dryrun_out" | sed 's/^/    /'
+    write_status "failed" "CRD validation (dry-run) failed — not applied: $(echo "$dryrun_out" | tr '\n' ' ' | cut -c1-300)"
+    exit 1
+  fi
+  kubectl apply -f "$TMP_CRDS" >/dev/null
 fi
-kubectl apply -f "$TMP_CRDS" >/dev/null
 
 # Apply the release's non-workload platform manifests (RBAC,
 # ServiceAccounts, PriorityClasses, NetworkPolicies, PDBs) before

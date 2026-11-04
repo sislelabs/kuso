@@ -770,22 +770,33 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	if updaterImg == "" {
 		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
 	}
+	env := map[string]string{
+		"KUSO_TARGET_VERSION":   m.Version,
+		"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
+		"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
+		"KUSO_CRDS_URL":         m.CRDs.URL,
+		"KUSO_CRDS_SHA256":      m.CRDs.SHA256,
+		"KUSO_MANIFESTS_URL":    m.Manifests.URL,
+		"KUSO_MANIFESTS_SHA256": m.Manifests.SHA256,
+		"KUSO_NAMESPACE":        s.Namespace,
+		"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
+	}
+	// Downgrade: the older release's CRDs lack the newer spec fields, and
+	// the apiserver would prune them from every stored CR on its next
+	// write — unrecoverable by upgrading again. The installed (newer) CRDs
+	// are a superset the older server tolerates, so keep them. The older
+	// updater image applies CRDs unconditionally, so run this server's own
+	// updater, which honours KUSO_SKIP_CRDS.
+	if compareTags(m.Version, s.Current) < 0 {
+		env["KUSO_SKIP_CRDS"] = "1"
+		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + s.Current
+	}
 	jobName := fmt.Sprintf("kuso-update-%d", time.Now().Unix())
 	job := &batchv1Job{
 		Name:      jobName,
 		Namespace: s.Namespace,
 		Image:     updaterImg,
-		Env: map[string]string{
-			"KUSO_TARGET_VERSION":   m.Version,
-			"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
-			"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
-			"KUSO_CRDS_URL":         m.CRDs.URL,
-			"KUSO_CRDS_SHA256":      m.CRDs.SHA256,
-			"KUSO_MANIFESTS_URL":    m.Manifests.URL,
-			"KUSO_MANIFESTS_SHA256": m.Manifests.SHA256,
-			"KUSO_NAMESPACE":        s.Namespace,
-			"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
-		},
+		Env:       env,
 	}
 	if err := s.applyJob(ctx, job); err != nil {
 		_ = s.writeStatus(ctx, UpdateStatus{Phase: "failed", Message: err.Error(), Updated: time.Now().UTC()})

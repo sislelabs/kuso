@@ -1,0 +1,99 @@
+package updater
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"testing"
+
+	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"kuso/server/internal/kube"
+)
+
+// pinnedService returns a Service whose GH client serves a signed-off
+// (KUSO_REQUIRE_SIGNATURES=false) release.json for tag.
+func pinnedService(t *testing.T, current, tag string) (*Service, *fake.Clientset) {
+	t.Helper()
+	t.Setenv("KUSO_REQUIRE_SIGNATURES", "false")
+	const manifestURL = "https://example.test/release.json"
+	manifest := `{"version":"` + tag + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + tag + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + tag + `"}},"crds":{"url":"https://example.test/crds.yaml"}}`
+	ghRelease := `{"tag_name":"` + tag + `","assets":[{"name":"release.json","browser_download_url":"` + manifestURL + `"}]}`
+	cs := fake.NewSimpleClientset()
+	return &Service{
+		Kube:      &kube.Client{Clientset: cs},
+		Namespace: "kuso",
+		Repo:      "sislelabs/kuso",
+		Current:   current,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(r.URL.Host, "api.github.com"):
+				return jsonResp(200, ghRelease), nil
+			case r.URL.String() == manifestURL:
+				return jsonResp(200, manifest), nil
+			default:
+				return jsonResp(404, `{}`), nil
+			}
+		})},
+	}, cs
+}
+
+func createdJob(t *testing.T, cs *fake.Clientset, name string) *batchv1.Job {
+	t.Helper()
+	j, err := cs.BatchV1().Jobs("kuso").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get job %s: %v", name, err)
+	}
+	return j
+}
+
+func jobEnv(j *batchv1.Job) map[string]string {
+	out := map[string]string{}
+	for _, e := range j.Spec.Template.Spec.Containers[0].Env {
+		out[e.Name] = e.Value
+	}
+	return out
+}
+
+// A pinned downgrade must not apply the older release's CRDs: they drop
+// the newer spec fields and the apiserver prunes them from every stored
+// CR. The older updater image doesn't know to skip, so the Job has to run
+// this server's own updater image.
+func TestStartUpdate_DowngradeSkipsCRDs(t *testing.T) {
+	s, cs := pinnedService(t, "v0.32.4", "v0.31.0")
+	name, err := s.StartUpdate(context.Background(), "v0.31.0")
+	if err != nil {
+		t.Fatalf("StartUpdate: %v", err)
+	}
+	j := createdJob(t, cs, name)
+	env := jobEnv(j)
+	if env["KUSO_SKIP_CRDS"] != "1" {
+		t.Errorf("KUSO_SKIP_CRDS = %q, want 1 on a downgrade", env["KUSO_SKIP_CRDS"])
+	}
+	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.32.4" {
+		t.Errorf("updater image = %q, want the running version's updater", got)
+	}
+	if env["KUSO_SERVER_IMAGE"] != "ghcr.io/sislelabs/kuso-server-go:v0.31.0" {
+		t.Errorf("server image = %q", env["KUSO_SERVER_IMAGE"])
+	}
+}
+
+func TestStartUpdate_UpgradeAppliesCRDs(t *testing.T) {
+	s, cs := pinnedService(t, "v0.32.4", "v0.33.0")
+	name, err := s.StartUpdate(context.Background(), "v0.33.0")
+	if err != nil {
+		t.Fatalf("StartUpdate: %v", err)
+	}
+	j := createdJob(t, cs, name)
+	if v, ok := jobEnv(j)["KUSO_SKIP_CRDS"]; ok {
+		t.Errorf("KUSO_SKIP_CRDS = %q on an upgrade, want unset", v)
+	}
+	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.33.0" {
+		t.Errorf("updater image = %q", got)
+	}
+}
