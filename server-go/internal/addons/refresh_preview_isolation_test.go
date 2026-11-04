@@ -77,7 +77,7 @@ func TestRefreshEnvSecrets_PreviewWithholdsUnclonedProductionConns(t *testing.T)
 		seedProj("tickero"),
 		isolationAddon("db", "postgres", nil, false),
 		isolationAddon("db-pr-52", "postgres", map[string]string{kube.LabelEnv: "preview-pr-52"}, false),
-		isolationAddon("psdb", "postgres", nil, true),     // external — never cloned
+		isolationAddon("psdb", "postgres", nil, true),       // external — never cloned
 		isolationAddon("analytics", "postgres", nil, false), // added after the PR opened
 		isolationAddon("events", "nats", nil, false),
 		isolationAddon("storage", "s3", nil, false),
