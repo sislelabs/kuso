@@ -221,6 +221,65 @@ services:
 	}
 }
 
+func TestInterpolate(t *testing.T) {
+	cases := []struct {
+		in, want, unresolved string
+	}{
+		{"plain", "plain", ""},
+		{"${FOO:-bar}", "bar", ""},
+		{"${FOO-bar}", "bar", ""},
+		{"a$$b", "a$b", ""},
+		{"x${A:-${B:-c}}y", "xcy", ""},
+		{"${A:+on}", "", ""},
+		{"${FOO}", "${FOO}", "FOO"},
+		{"$FOO/x", "$FOO/x", "FOO"},
+		{"${FOO:?required}", "${FOO:?required}", "FOO"},
+		{"postgres:${PG_VERSION:-16}-alpine", "postgres:16-alpine", ""},
+		{"cost $5", "cost $5", ""},
+	}
+	for _, c := range cases {
+		got, u := interpolate(c.in)
+		if got != c.want || strings.Join(u, ",") != c.unresolved {
+			t.Errorf("interpolate(%q) = (%q, %v), want (%q, %q)", c.in, got, u, c.want, c.unresolved)
+		}
+	}
+}
+
+func TestConvert_InterpolationAndPassThroughEnv(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  api:
+    image: myorg/api:1.0
+    environment:
+      - DEF=${FOO:-bar}
+      - ESC=a$$b
+      - NEEDS=${SECRET_TOKEN}
+      - STRIPE_KEY
+  db:
+    image: postgres:${PG_VERSION:-16}-alpine
+`)
+	api := findService(doc, "api")
+	if api == nil {
+		t.Fatal("api missing")
+	}
+	if api.Env["DEF"] != "bar" || api.Env["ESC"] != "a$b" {
+		t.Errorf("defaults/escapes not resolved: %v", api.Env)
+	}
+	if a := findAddon(doc, "db"); a == nil || a.Kind != "postgres" || a.Version != "16" {
+		t.Errorf("interpolated datastore image should classify as postgres 16, got %+v", a)
+	}
+	if !hasFlag(rep, "api", "STRIPE_KEY") || !hasFlag(rep, "api", "SECRET_TOKEN") {
+		t.Errorf("pass-through and unresolved env must be flagged: %+v", rep.Notes)
+	}
+	joined := strings.Join(rep.UnresolvedVars, "|")
+	if !strings.Contains(joined, "STRIPE_KEY") || !strings.Contains(joined, "SECRET_TOKEN") {
+		t.Errorf("UnresolvedVars = %v, want STRIPE_KEY and SECRET_TOKEN (the --apply gate reads it)", rep.UnresolvedVars)
+	}
+	if strings.Contains(joined, "DEF") || strings.Contains(joined, "ESC") {
+		t.Errorf("resolved values must not be gated: %v", rep.UnresolvedVars)
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}

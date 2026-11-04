@@ -107,12 +107,19 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 	sort.Strings(names)
 
+	// Parse skips interpolation; resolve what the file itself can
+	// (defaults, $$) before anything classifies on those values.
+	services := make(map[string]types.ServiceConfig, len(names))
+	for _, name := range names {
+		services[name] = resolveService(proj.Services[name], rep)
+	}
+
 	// First pass: classify each compose service as addon or app, and
 	// record the addon set so depends_on rewriting can reference it.
 	slugFor := dedupeSlugs(names)
 	addonByCompose := map[string]addonRef{} // compose service name → addon slug+kind
 	for _, name := range names {
-		svc := proj.Services[name]
+		svc := services[name]
 		if kind, _ := addonKind(svc); kind != "" {
 			addonByCompose[name] = addonRef{slug: slugFor[name], kind: kind, composeName: name,
 				creds: datastoreCreds(kind, svc.Environment)}
@@ -120,7 +127,7 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 
 	for _, name := range names {
-		svc := proj.Services[name]
+		svc := services[name]
 		slug := slugFor[name]
 		if kind, version := addonKind(svc); kind != "" {
 			doc.Addons = append(doc.Addons, convertAddon(svc, slug, kind, version, rep))
@@ -363,10 +370,16 @@ func convertEnv(svc types.ServiceConfig, addons map[string]addonRef, rep *Report
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		val := ""
-		if vp := svc.Environment[k]; vp != nil {
-			val = *vp
+		vp := svc.Environment[k]
+		if vp == nil {
+			// `- KEY` passes the value through from the compose host's
+			// shell; the import can't see it.
+			env[k] = ""
+			rep.flag(svc.Name, "env %s has no value in compose (host-env pass-through) — it imports as EMPTY; set the real value in kuso", k)
+			rep.unresolvedVar(svc.Name, "env "+k+" (no value)")
+			continue
 		}
+		val := *vp
 		ch := chooseAddonEnv(k, val, ordered)
 		switch {
 		case ch.ref != "" && ch.flag:
