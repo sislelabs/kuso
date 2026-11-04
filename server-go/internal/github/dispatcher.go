@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
@@ -1031,6 +1032,15 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		pgCloneMap = cloneByOrigin
 		envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	}
+	// Production conns the preview has no clone of (external DBs, mongodb,
+	// brokers, …) are withheld, not shared: the preview app runs PR code,
+	// including boot-time migrators, against whatever it mounts. Fail closed
+	// when the addon set can't be read.
+	unclonedProd, err := d.unclonedProductionConns(ctx, ns, proj.Name, pgCloneMap)
+	if err != nil {
+		d.notifyPreviewRefused(proj.Name, short, pr.Number, err)
+		return fmt.Errorf("preview addon isolation for PR #%d: %w", pr.Number, err)
+	}
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(proj.Name)...)
 	port := int32(8080)
 	var svcRuntime string
@@ -1141,6 +1151,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// the pod as the secretKeyRefs inherited from the base env, exactly as
 	// production, so the scrub removes the blanket mounts in that case.
 	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+	var withheldConns []string
+	envFromSecrets = slices.DeleteFunc(envFromSecrets, func(n string) bool {
+		if unclonedProd[n] {
+			withheldConns = append(withheldConns, n)
+			return true
+		}
+		return false
+	})
 	// Merge in previewEnvVars: by name, preview overrides win over
 	// the baseEnv copy. Empty list = no overrides (most common).
 	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
@@ -1165,6 +1183,16 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// Secret (e.g. DATABASE_READ_URL → tickero-db-conn) to the per-PR
 	// clone, so a preview reads from its OWN database, not prod.
 	mergedEnvVars = swapPGCloneSecretRefsInEnvVars(mergedEnvVars, pgCloneMap)
+	var withheldVars []string
+	mergedEnvVars = slices.DeleteFunc(slices.Clone(mergedEnvVars), func(v kube.KusoEnvVar) bool {
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := ref["name"].(string)
+		if unclonedProd[name] {
+			withheldVars = append(withheldVars, v.Name+"->"+name)
+			return true
+		}
+		return false
+	})
 	// A preview env-var still pointing at a project addon-conn AFTER the
 	// swap means the pod will read the PRODUCTION datastore. That is a
 	// data-integrity risk, not a cosmetic one: previews run seed and
@@ -1336,7 +1364,8 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// before a mount fix (or before a new addon clone) would otherwise
 		// keep mounting production conns on every resync.
 		scrub := func(in []string) []string {
-			return scrubPreviewEnvFrom(in, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+			out := scrubPreviewEnvFrom(in, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+			return slices.DeleteFunc(out, func(n string) bool { return unclonedProd[n] })
 		}
 		envFromSecrets = scrub(existing.Spec.EnvFromSecrets)
 		env.Spec.EnvFromSecrets = envFromSecrets
@@ -1416,6 +1445,16 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			d.Logger.Warn("preview seed job", "env", envName, "err", err)
 		}
 	}
+	// Tell the user once: when the preview is first created, or when an
+	// existing preview still mounted one of these (the first push after
+	// this policy shipped). Every push re-applies it silently otherwise.
+	if len(withheldConns) > 0 || len(withheldVars) > 0 {
+		d.Logger.Warn("preview: production addon conns withheld (no per-PR clone)",
+			"project", proj.Name, "service", short, "pr", pr.Number, "conns", withheldConns, "vars", withheldVars)
+		if existing == nil || slices.ContainsFunc(existing.Spec.EnvFromSecrets, func(n string) bool { return unclonedProd[n] }) {
+			d.notifyPreviewWithheld(proj.Name, short, pr.Number, append(withheldConns, withheldVars...))
+		}
+	}
 	d.Logger.Info("PR preview env ready", "env", envName, "pr", pr.Number)
 	return nil
 }
@@ -1434,6 +1473,45 @@ func (d *Dispatcher) notifyPreviewRefused(project, service string, prNumber int,
 		Service:  service,
 		Severity: "error",
 	})
+}
+
+// notifyPreviewWithheld reports a preview that was deployed without some of
+// production's addon conns because no per-PR clone of them exists.
+func (d *Dispatcher) notifyPreviewWithheld(project, service string, prNumber int, withheld []string) {
+	if d.Notifier == nil {
+		return
+	}
+	d.Notifier.Emit(builds.EventEnvelope{
+		Type:  "build.failed",
+		Title: fmt.Sprintf("Preview for PR #%d deployed without production addons: %s/%s", prNumber, project, service),
+		Body: fmt.Sprintf("These production addon connections were not mounted because previews only get per-PR clones "+
+			"(postgres/redis) or shared s3/mailpit: %s. The preview may fail where it needs them.", strings.Join(withheld, ", ")),
+		Project:  project,
+		Service:  service,
+		Severity: "warn",
+	})
+}
+
+// unclonedProductionConns returns the project-level addon conns that must
+// not reach a preview: every addon kind not shared with previews by design,
+// minus the ones the per-PR clone map redirects.
+func (d *Dispatcher) unclonedProductionConns(ctx context.Context, ns, project string, cloneByOrigin map[string]string) (map[string]bool, error) {
+	all, err := d.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	out := map[string]bool{}
+	for i := range all {
+		a := &all[i]
+		if a.Labels[kube.LabelEnv] != "" || addons.SharedWithPreviews(a) {
+			continue
+		}
+		conn := addons.ConnSecretName(a.Name)
+		if _, cloned := cloneByOrigin[conn]; !cloned {
+			out[conn] = true
+		}
+	}
+	return out, nil
 }
 
 // previewBuildImage returns the image tag the preview build will

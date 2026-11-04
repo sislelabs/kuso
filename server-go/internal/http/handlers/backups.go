@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -296,6 +297,52 @@ func listNewestBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucke
 	return items, total, nil
 }
 
+// instanceTenantBackupLoc is where an instance-shared tenant's database is
+// backed up: the instance addon's CronJob dumps every database on the shared
+// server as <prefix><ts>.db-<db>.sql.gz.
+type instanceTenantBackupLoc struct {
+	bucket string // the instance addon's bucket override, "" = instance-wide
+	prefix string
+	db     string
+}
+
+// owns reports whether key is one of this tenant's per-database dumps.
+func (l *instanceTenantBackupLoc) owns(key string) bool {
+	rest, ok := strings.CutPrefix(key, l.prefix)
+	if !ok || strings.Contains(rest, "/") {
+		return false
+	}
+	m := siblingDumpRe.FindStringSubmatch(rest)
+	return m != nil && m[1] == l.db
+}
+
+// instanceTenantBackups resolves an instance-shared tenant's backup location.
+// nil, nil = the instance server has no kuso backing addon (external server),
+// so nothing is backed up. The tenant database comes from the tenant's own
+// conn Secret, so a tenant can only ever see its own dumps.
+func (h *BackupsHandler) instanceTenantBackups(ctx context.Context, ns string, cr *kube.KusoAddon) (*instanceTenantBackupLoc, error) {
+	backing, err := h.Kube.GetKusoAddon(ctx, h.Namespace, "kuso-instance-"+cr.Spec.UseInstanceAddon)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get instance addon: %w", err)
+	}
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, addons.ConnSecretName(cr.Name), metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("read tenant conn secret: %w", err)
+	}
+	dbName := string(sec.Data["POSTGRES_DB"])
+	if !validDBName.MatchString(dbName) {
+		return nil, fmt.Errorf("tenant conn secret has no valid POSTGRES_DB")
+	}
+	proj := backing.Spec.Project
+	if proj == "" {
+		proj = backing.Labels[kube.LabelProject]
+	}
+	return &instanceTenantBackupLoc{bucket: backing.BackupBucket(""), prefix: proj + "/" + backing.Name + "/", db: dbName}, nil
+}
+
 func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
@@ -315,7 +362,7 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// The FQN below is derived from the verified CR's name, never the raw
 	// caller input. Data-revealing paths (Download/Restore/SQL) already do
 	// this; List must too so the file's invariant holds on every path.
-	cr, _, err := h.ownedAddon(ctx, project, addon)
+	cr, ns, err := h.ownedAddon(ctx, project, addon)
 	if err != nil {
 		writeAddonErr(w, err)
 		return
@@ -324,6 +371,41 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	cli, bucket, err := h.s3Client(ctx)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	// An instance-shared tenant has no dumps of its own: its database is
+	// dumped by the instance addon, under that addon's prefix.
+	if cr.Spec.UseInstanceAddon != "" {
+		loc, err := h.instanceTenantBackups(ctx, ns, cr)
+		if err != nil {
+			h.Logger.Error("backup: resolve instance tenant backups", "err", err)
+			writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
+			return
+		}
+		items := []BackupObject{}
+		total := 0
+		if loc != nil {
+			if loc.bucket != "" {
+				bucket = loc.bucket
+			}
+			all, _, err := listNewestBackups(ctx, cli, bucket, loc.prefix, math.MaxInt)
+			if err != nil {
+				h.Logger.Error("backup: list", "err", err)
+				writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
+				return
+			}
+			for _, it := range all {
+				if loc.owns(it.Key) {
+					items = append(items, it)
+				}
+			}
+			total = len(items)
+			if len(items) > backupListLimit {
+				items = items[:backupListLimit]
+			}
+		}
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		writeJSON(w, http.StatusOK, items)
 		return
 	}
 	// Honour a per-addon bucket override — the CronJob writes there, so
@@ -395,7 +477,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// fine, across projects is not. The explicit empty-project check
 	// keeps the gate sound if a future refactor makes the URL param
 	// optional (HasPrefix("foo", "/") is true for any leading slash).
-	if project == "" || !strings.HasPrefix(req.Key, project+"/") {
+	// An instance-shared tenant's dumps live under the instance addon's
+	// prefix; those keys are verified against the tenant's own database
+	// once the source addon is resolved below.
+	maybeInstanceKey := strings.HasPrefix(req.Key, "kuso-instance/")
+	if project == "" || (!strings.HasPrefix(req.Key, project+"/") && !maybeInstanceKey) {
 		writeErr(w, http.StatusBadRequest, "key must live under this project's prefix")
 		return
 	}
@@ -427,6 +513,22 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeAddonErr(w, err)
 		return
+	}
+	var tenantLoc *instanceTenantBackupLoc
+	if !strings.HasPrefix(req.Key, project+"/") {
+		// Only the source tenant's own per-database dump is accepted from
+		// outside the project prefix.
+		if srcCR.Spec.UseInstanceAddon != "" {
+			if tenantLoc, err = h.instanceTenantBackups(ctx, ns, srcCR); err != nil {
+				h.Logger.Error("backup: resolve instance tenant backups", "err", err)
+				writeErr(w, http.StatusBadGateway, "resolve instance backups: "+err.Error())
+				return
+			}
+		}
+		if tenantLoc == nil || !tenantLoc.owns(req.Key) {
+			writeErr(w, http.StatusBadRequest, "key must live under this project's prefix")
+			return
+		}
 	}
 	destCR := srcCR
 	if req.Into != "" {
@@ -504,13 +606,29 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// Bucket from the SOURCE addon — the artifact being restored lives
 	// where its own CronJob wrote it, which may not be the destination's
 	// bucket when restoring into a sibling.
-	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env(srcCR.BackupBucket(""))...)
+	srcBucket := srcCR.BackupBucket("")
+	if tenantLoc != nil {
+		srcBucket = tenantLoc.bucket
+	}
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3Env(srcBucket)...)
 	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
 	// `--clean` dump of THAT logical database. Fed to the conn Secret's
 	// POSTGRES_DB it would drop and replace the primary DB's tables.
 	siblingDB, err := siblingDumpDB(destCR.Spec.Kind, req.Key)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// An instance tenant's dump IS its database: restore it into the
+	// destination's own POSTGRES_DB as the tenant role, never by name onto
+	// another database of the shared server.
+	if tenantLoc != nil {
+		siblingDB = ""
+	}
+	if siblingDB != "" && isExternalAddon(destCR) {
+		// The external restore goes through the conn's DSN, which names the
+		// primary database; a per-database dump would overwrite it.
+		writeErr(w, http.StatusBadRequest, "per-database dumps cannot be restored into an external addon")
 		return
 	}
 	if siblingDB != "" {
@@ -606,6 +724,9 @@ func restoreScriptForKind(kind string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("addon kind %q is not restorable", kind)
 	}
+	if m, ok := p.(backup.ManualRestorer); ok && m.ManualRestore() {
+		return "", fmt.Errorf("addon kind %q backups must be restored manually; automated restore is not supported", kind)
+	}
 	return p.RestoreScript(), nil
 }
 
@@ -613,7 +734,17 @@ func restoreScriptForKind(kind string) (string, error) {
 // for a given kind, sourced from the addon's <release>-conn Secret.
 // postgres keeps the exact POSTGRES_* set it always had; mongodb needs
 // only the MONGO_URL connection URI.
-func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
+func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
+	if kind == "postgres" && external {
+		// An external conn is mirrored from the user's Secret and may carry
+		// only a DSN; the script restores through it, like the scheduled
+		// backup dumps through DATABASE_URL.
+		return []corev1.EnvVar{
+			{Name: "EXTERNAL_RESTORE", Value: "1"},
+			envFromSecretOptional("RESTORE_DIRECT_URL", releaseName+"-conn", "DIRECT_URL"),
+			envFromSecretOptional("RESTORE_DATABASE_URL", releaseName+"-conn", "DATABASE_URL"),
+		}
+	}
 	if kind == "mongodb" {
 		return []corev1.EnvVar{
 			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
@@ -1409,6 +1540,12 @@ func stringifyCell(v any) string {
 func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell string, env []corev1.EnvVar) *batchv1.Job {
 	one := int32(1)
 	zero := int32(0)
+	// BackoffLimit never fires for a pod that can't start (a missing conn
+	// key is CreateContainerConfigError forever), so bound the Job's life:
+	// it ends Failed instead of Pending with the API having reported 201.
+	// Generous, so a large restore isn't cut off; --single-transaction
+	// rolls a killed restore back rather than leaving it half-applied.
+	deadline := int64(6 * 60 * 60)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// The project's execution namespace: the <release>-conn
@@ -1427,9 +1564,10 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &zero,
-			Completions:  &one,
-			Parallelism:  &one,
+			BackoffLimit:          &zero,
+			ActiveDeadlineSeconds: &deadline,
+			Completions:           &one,
+			Parallelism:           &one,
 			Template: corev1.PodTemplateSpec{
 				// Same pair the chart's backup CronJob pod carries: the
 				// project label puts the pod inside the project netpols so

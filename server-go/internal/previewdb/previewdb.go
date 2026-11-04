@@ -239,7 +239,18 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		// Create the clone if it doesn't exist. An existing clone is reused
 		// as-is and only re-seeded on an explicit Resync.
 		created := false
-		if existing, _ := c.Kube.GetKusoAddon(ctx, ns, cloneFQN); existing == nil {
+		existing, _ := c.Kube.GetKusoAddon(ctx, ns, cloneFQN)
+		// Only adopt a CR that was minted as THIS env's clone. A project
+		// addon that merely sits at the clone's name (db-staging,
+		// events-pr-2) would otherwise be mounted as the env's database and
+		// have the PR's migrations run against it. Refusing keeps the
+		// dispatcher's fail-closed path.
+		if existing != nil && (existing.Labels[kube.LabelEnv] != envScope ||
+			(opts.PreviewPR != "" && existing.Labels["kuso.sislelabs.com/preview-pr"] != opts.PreviewPR)) {
+			return nil, nil, fmt.Errorf("%w: addon %s exists but is not the %s clone of %s; rename it to let the env get its own copy",
+				addons.ErrConflict, cloneFQN, envScope, shortSrc)
+		}
+		if existing == nil {
 			created = true
 			if _, err := c.Addons.Add(ctx, project, addons.CreateAddonRequest{
 				Name:    cloneShort,
@@ -868,7 +879,9 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 						// helm-template happened to seed default
 						// tables.
 						Args: []string{`
-set -e
+# pipefail: without it the pipeline below takes psql's status, so a dump
+# cut off mid-stream left a partially seeded clone marked as seeded.
+set -eo pipefail
 # Wait for BOTH the source and the freshly-created clone Postgres to
 # actually accept connections before dumping. A per-PR clone is a brand-
 # new StatefulSet — its pod can be "ready" (the SS reports a ready

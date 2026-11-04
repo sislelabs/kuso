@@ -10,3 +10,10 @@ type Producer interface {
 	ArtifactExt() string // artifact key suffix, e.g. "archive.gz"
 	RestoreScript() string
 }
+
+// ManualRestorer is implemented by producers whose artifacts are backed up
+// but must be restored by hand; the restore API refuses them instead of
+// starting a Job whose script can only exit 1.
+type ManualRestorer interface {
+	ManualRestore() bool
+}

@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +43,9 @@ type Service struct {
 	// changes and revert them. Same hook shape as projects.Service.
 	// Optional: nil → no history recorded (CLI / tests).
 	RecordRevision func(ctx context.Context, project, kind, name, summary string, snapshot []byte)
+
+	// refreshMu serialises env refreshes per project (project -> *sync.Mutex).
+	refreshMu sync.Map
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -272,6 +276,26 @@ func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, e
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	return out, nil
+}
+
+// listLive lists the project's addons straight from the apiserver,
+// bypassing the informer cache.
+func (s *Service) listLive(ctx context.Context, project string) ([]kube.KusoAddon, error) {
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list addons: %w", err)
+	}
+	out := make([]kube.KusoAddon, 0, len(raw.Items))
+	for i := range raw.Items {
+		var a kube.KusoAddon
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &a); err != nil {
+			return nil, fmt.Errorf("decode addon %s: %w", raw.Items[i].GetName(), err)
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }
@@ -585,7 +609,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			return nil, err
 		}
 		var dsn, pw string
-		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, "")
+		// Re-assert the password of an existing conn Secret instead of
+		// minting one: an Add that loses the create race to an identical
+		// one would otherwise rotate the winner's role under its running
+		// pods. A re-add over a retained Secret keeps its password too.
+		keepPW := string(s.connSecretData(ctx, ns, connSecretName(fqn))["POSTGRES_PASSWORD"])
+		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, keepPW)
 		if err != nil {
 			return nil, fmt.Errorf("provision instance addon db: %w", err)
 		}
@@ -671,6 +700,47 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	}
 	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
 		return fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
+	}
+	return nil
+}
+
+// PreflightEnvClone runs the checks Add applies before an env-group clone's CR
+// is written directly (env groups bypass Add). It refuses when data from an
+// earlier addon of the same name survived: a native clone would mount the
+// retained PVC (with the conn Secret's old password), and an instance clone
+// would re-adopt the old database through its surviving conn Secret or
+// ownership stamp. instanceName is the clone's spec.useInstanceAddon.
+func (s *Service) PreflightEnvClone(ctx context.Context, project, addonShort, instanceName string) error {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, addonShort)
+	if err := s.checkReleaseName(ctx, ns, fqn, true); err != nil {
+		return err
+	}
+	pvcs, err := s.retainedPVCsForAddon(ctx, ns, fqn)
+	if err != nil {
+		return fmt.Errorf("check for retained data: %w", err)
+	}
+	if len(pvcs) > 0 {
+		return fmt.Errorf("%w: data from a previous %s still exists (%s) — purge it or pick another env name", ErrConflict, fqn, strings.Join(pvcs, ", "))
+	}
+	if instanceName == "" {
+		return nil
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecretName(fqn), metav1.GetOptions{}); err == nil {
+		return fmt.Errorf("%w: conn secret %s from a previous %s still exists — it points at that addon's database", ErrConflict, connSecretName(fqn), fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("check conn secret: %w", err)
+	}
+	adminDSN, err := s.instanceAdminDSN(ctx, instanceName)
+	if err != nil {
+		return err
+	}
+	exists, err := instanceDBExists(ctx, adminDSN, pgIdentifier(project, addonShort))
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("%w: database %s from a previous %s still exists on the shared instance server", ErrConflict, pgIdentifier(project, addonShort), fqn)
 	}
 	return nil
 }
@@ -1214,8 +1284,12 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	keepConn := false
 	if cr.Spec.UseInstanceAddon != "" && (shouldDropInstanceDB(cr.Labels) || opts.PurgeData) {
 		adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon)
+		var dbAddon string
 		if derr == nil {
-			derr = s.dropInstanceAddonDB(ctx, adminDSN, project, ShortName(project, fqn))
+			dbAddon, derr = s.resolveInstanceAddonName(ctx, ns, cr, project)
+		}
+		if derr == nil {
+			derr = s.dropInstanceAddonDB(ctx, adminDSN, project, dbAddon)
 		}
 		if derr != nil {
 			// Non-fatal: the CR delete still proceeds so the preview
@@ -1452,6 +1526,75 @@ func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonSh
 		_, _ = s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
 			Patch(ctx, svcU.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
 	}
+	// The env CRs carry a mirror of the subscription that the env refresh
+	// filters on. Left stale, re-adding the same name re-mounted the new
+	// addon on every env whose service had since stopped subscribing.
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		return
+	}
+	for i := range envs {
+		if !slices.ContainsFunc(envs[i].Spec.SubscribedAddons, func(sub string) bool {
+			return sub == addonShort || sub == project+"-"+addonShort
+		}) {
+			continue
+		}
+		_, _ = s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envs[i].Name, func(live *kube.KusoEnvironment) error {
+			if live.Spec.SubscribedAddons == nil {
+				return nil
+			}
+			live.Spec.SubscribedAddons = slices.DeleteFunc(slices.Clone(live.Spec.SubscribedAddons), func(sub string) bool {
+				return sub == addonShort || sub == project+"-"+addonShort
+			})
+			return nil
+		})
+	}
+}
+
+// serviceSubscriptions returns each project service's non-nil
+// spec.subscribedAddons keyed by service CR name. The service is the source
+// of truth; env CRs only mirror it. A list failure returns nil so the
+// refresh falls back to the env mirrors, as before.
+func (s *Service) serviceSubscriptions(ctx context.Context, ns, project string) (out map[string][]string) {
+	// Same fake-dynamic-client guard as unsubscribeFromAddon: tests that
+	// don't register the KusoServiceList kind panic on List.
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+		}
+	}()
+	svcs, err := s.Kube.ListKusoServicesByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		slog.Default().Warn("addon refresh: list services failed; using env subscription mirrors", "project", project, "err", err)
+		return nil
+	}
+	out = make(map[string][]string, len(svcs))
+	for i := range svcs {
+		if svcs[i].Spec.SubscribedAddons != nil {
+			out[svcs[i].Name] = svcs[i].Spec.SubscribedAddons
+		}
+	}
+	return out
+}
+
+// effectiveSubscription narrows an env's mirrored subscription to what its
+// service subscribes to. It can only narrow: a nil service list (legacy
+// mount-all) keeps the env mirror, so a stale mirror never widens mounts.
+func effectiveSubscription(envSubs, svcSubs []string, project string) []string {
+	if svcSubs == nil {
+		return envSubs
+	}
+	if envSubs == nil {
+		return svcSubs
+	}
+	short := func(n string) string { return ShortName(project, n) }
+	out := make([]string, 0, len(envSubs))
+	for _, sub := range envSubs {
+		if slices.ContainsFunc(svcSubs, func(x string) bool { return short(x) == short(sub) }) {
+			out = append(out, sub)
+		}
+	}
+	return out
 }
 
 // mustJSON serializes a string slice to JSON for inclusion in a
@@ -1500,17 +1643,25 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 // re-injected into every env, leaving pods with an env-var ref to a
 // soon-to-vanish secret (CreateContainerConfigError on the next restart).
 func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
-	addons, err := s.listProjectScoped(ctx, project)
+	// Serialise refreshes per project and read the addon set live, not from
+	// the informer cache: each refresh rewrites envFromSecrets wholesale, so
+	// two concurrent adds that each saw a stale list (missing the other's
+	// addon) dropped each other's conn from every env.
+	mu, _ := s.refreshMu.LoadOrStore(project, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	// The unfiltered list: addons below strips env-scoped clones (they must
+	// not mount project-wide), but each env still needs to find the clone
+	// minted FOR IT. Matched by env label further down.
+	addonList, err := s.listLive(ctx, project)
 	if err != nil {
 		return err
 	}
-	// The unfiltered list too: listProjectScoped deliberately strips
-	// env-scoped clones (they must not mount project-wide), but each env
-	// still needs to find the clone minted FOR IT. Matched by env label
-	// further down.
-	addonList, err := s.List(ctx, project)
-	if err != nil {
-		return err
+	addons := make([]kube.KusoAddon, 0, len(addonList))
+	for _, a := range addonList {
+		if a.Labels[kube.LabelEnv] == "" {
+			addons = append(addons, a)
+		}
 	}
 	// Build baseSecrets, de-duplicated: addon conn secrets, then the
 	// project/instance-shared secrets, then any explicitly-passed
@@ -1596,6 +1747,7 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	for _, conn := range extraConnSecrets {
 		addAddonConn(conn)
 	}
+	svcSubs := s.serviceSubscriptions(ctx, ns, project)
 	var errs []error
 	for i := range envs {
 		env := &envs[i]
@@ -1606,6 +1758,11 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 		// write landed between our List and Patch.
 		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
 			perEnv := slices.Clone(baseSecrets)
+			svcName := live.Spec.Service
+			if svcName == "" && live.Labels[kube.LabelService] != "" {
+				svcName = project + "-" + live.Labels[kube.LabelService]
+			}
+			subs := effectiveSubscription(live.Spec.SubscribedAddons, svcSubs[svcName], project)
 			// Carry forward this env's OWN env-scoped addon conns.
 			//
 			// baseSecrets is project-scoped by construction (see
@@ -1662,12 +1819,12 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					// A clone is mounted only where its SOURCE is subscribed.
 					// When the source can't be resolved, never ADD it — only
 					// keep it if the env already mounts it.
-					if live.Spec.SubscribedAddons != nil {
+					if subs != nil {
 						if src == "" {
 							if !slices.Contains(live.Spec.EnvFromSecrets, conn) {
 								continue
 							}
-						} else if !subscribesToConn(live.Spec.SubscribedAddons, project, src) {
+						} else if !subscribesToConn(subs, project, src) {
 							continue
 						}
 					}
@@ -1684,10 +1841,17 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			}
 			// Apply the per-service addon subscription filter when the
 			// env CR carries one. nil = legacy mount-all.
-			if live.Spec.SubscribedAddons != nil {
-				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
+			if subs != nil {
+				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, subs, project)
 			}
 			perEnv = DropExcludedAddonConns(perEnv, live.Annotations)
+			preview := IsPreviewEnv(live)
+			var withheld []string
+			perEnv, withheld = WithholdProductionConns(perEnv, live.Spec.EnvFromSecrets, addonList, live.Labels[kube.LabelEnv], preview)
+			if len(withheld) > 0 {
+				slog.Default().Warn("addon refresh: production addon conns withheld from an isolated env (no clone for it)",
+					"project", project, "env", live.Name, "withheld", withheld)
+			}
 			// Respect the shared-secret subscription (mirrors projects.
 			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env
 			// gets its subscribed keys as per-key valueFrom entries, so
@@ -1710,7 +1874,13 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			// the service label degrades gracefully.
 			svc := live.Labels[kube.LabelService]
 			if svc != "" {
-				perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+				// Never on a preview: the service secret holds production's
+				// `kuso env set` values (live payment keys, admin tokens).
+				// Every other writer excludes previews; see the dispatcher's
+				// scrubPreviewEnvFrom.
+				if !preview {
+					perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+				}
 				if envName := live.Labels[kube.LabelEnv]; envName != "" {
 					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
 				}

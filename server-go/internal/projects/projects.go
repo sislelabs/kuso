@@ -89,6 +89,13 @@ type Service struct {
 	// package wired). Backed by addons.Service.ProvisionInstanceAddon.
 	ProvisionInstanceAddon func(ctx context.Context, project, addonShort, instanceName string) error
 
+	// PreflightEnvAddonClone runs addons.Add's pre-create checks for an
+	// env-group clone whose CR is written directly: it refuses when a
+	// previous addon of the same name left data behind (retained PVC, conn
+	// Secret or instance database). nil = skip (tests). Backed by
+	// addons.Service.PreflightEnvClone.
+	PreflightEnvAddonClone func(ctx context.Context, project, addonShort, instanceName string) error
+
 	// CleanupInstanceAddon rolls back what ProvisionInstanceAddon created for
 	// an instance-shared clone: the per-project DB + login role on the shared
 	// server and the <addon>-conn secret. Called on env-group create partial

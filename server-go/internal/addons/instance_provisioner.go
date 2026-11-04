@@ -226,6 +226,37 @@ func instanceDBOwnerTag(project, addonShort string) string {
 	return instanceDBOwnerPrefix + project + "/" + addonShort
 }
 
+// addonLabel records the name an addon was added with (CreateAddonRequest.Name).
+const addonLabel = "kuso.sislelabs.com/addon"
+
+// instanceAddonName returns the name an instance addon's database identifier
+// and ownership stamp were derived from. Add derives them from the request
+// name as given, which may be pre-qualified ("tickero-db" -> tickero_tickero_db)
+// while every later path saw only the CR name, whose ShortName ("db") derives
+// a different database. The add-time name is on the addon label.
+func instanceAddonName(a *kube.KusoAddon, project string) string {
+	if n := a.Labels[addonLabel]; n != "" && CRName(project, n) == a.Name {
+		return n
+	}
+	return ShortName(project, a.Name)
+}
+
+// resolveInstanceAddonName is instanceAddonName cross-checked against the
+// database the addon's conn Secret actually points at. When the Secret
+// names a database neither derivation produces, it refuses rather than
+// resync or drop a database the app isn't using.
+func (s *Service) resolveInstanceAddonName(ctx context.Context, ns string, a *kube.KusoAddon, project string) (string, error) {
+	name := instanceAddonName(a, project)
+	inUse := string(s.connSecretData(ctx, ns, connSecretName(a.Name))["POSTGRES_DB"])
+	if inUse == "" || inUse == pgIdentifier(project, name) {
+		return name, nil
+	}
+	if short := ShortName(project, a.Name); inUse == pgIdentifier(project, short) {
+		return short, nil
+	}
+	return "", fmt.Errorf("%w: conn secret of addon %s points at database %q, which kuso did not provision for it; refusing to touch the instance database", ErrConflict, a.Name, inUse)
+}
+
 // checkInstanceDBOwner decides whether an existing DB / role named ident
 // may be adopted by (project, addonShort). A kuso stamp on either object
 // is authoritative. Objects provisioned before stamps existed carry none;
@@ -259,8 +290,11 @@ func (s *Service) checkInstanceDBOwner(ctx context.Context, ident, project, addo
 		if p == "" {
 			p = a.Labels[kube.LabelProject]
 		}
-		short := ShortName(p, a.Name)
-		if (p != project || short != addonShort) && pgIdentifier(p, short) == ident {
+		if p == project && a.Name == CRName(project, addonShort) {
+			continue
+		}
+		short := instanceAddonName(a, p)
+		if pgIdentifier(p, short) == ident {
 			return fmt.Errorf("%w: instance database %s already belongs to %s/%s", ErrConflict, ident, p, short)
 		}
 	}
@@ -468,6 +502,21 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 	return nil
 }
 
+// instanceDBExists reports whether the shared server already has a database
+// named ident.
+func instanceDBExists(ctx context.Context, adminDSN, ident string) (bool, error) {
+	db, err := sql.Open("postgres", adminDSN)
+	if err != nil {
+		return false, fmt.Errorf("open admin: %w", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pg_database WHERE datname = $1`, ident).Scan(&n); err != nil {
+		return false, fmt.Errorf("check pg_database: %w", err)
+	}
+	return n > 0, nil
+}
+
 // randPassword returns 24 random hex chars (96 bits of entropy).
 func randPassword() (string, error) {
 	b := make([]byte, 12)
@@ -505,7 +554,10 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 	if err != nil {
 		return err
 	}
-	short := ShortName(project, fqn)
+	short, err := s.resolveInstanceAddonName(ctx, ns, addon, project)
+	if err != nil {
+		return err
+	}
 	before := s.connSecretData(ctx, ns, connSecretName(fqn))
 	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short, string(before["POSTGRES_PASSWORD"]))
 	if err != nil {

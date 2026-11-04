@@ -696,6 +696,7 @@ func main() {
 		// <addon>-conn secret — without it the cloned service crashloops on a
 		// missing DATABASE_URL secretKeyRef (CreateContainerConfigError).
 		projSvc.ProvisionInstanceAddon = addonSvc.ProvisionInstanceAddon
+		projSvc.PreflightEnvAddonClone = addonSvc.PreflightEnvClone
 		// Teardown mirror: on env-group create partial failure, roll back the
 		// per-project DB/role + conn secret a successful ProvisionInstanceAddon
 		// left behind, so a mid-clone abort doesn't leak them on the shared server.

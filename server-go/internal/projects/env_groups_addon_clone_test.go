@@ -3,12 +3,14 @@ package projects
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
 
@@ -82,6 +84,29 @@ func TestCreateEnvGroup_RefusesRetainedCloneData(t *testing.T) {
 	_, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+}
+
+// DATA-10: the instance-shared leftovers (conn Secret, database) are only
+// visible to the addons preflight; a refusal there must stop the create
+// before any clone is written.
+func TestCreateEnvGroup_RunsAddonPreflightBeforeCreating(t *testing.T) {
+	t.Parallel()
+	s := envGroupAddonFixture(t, kube.KusoAddonSpec{Kind: "postgres", UseInstanceAddon: "pg"})
+	var gotShort, gotInstance string
+	s.PreflightEnvAddonClone = func(_ context.Context, _, short, instance string) error {
+		gotShort, gotInstance = short, instance
+		return fmt.Errorf("%w: database from a previous clone still exists", addons.ErrConflict)
+	}
+	_, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+	if gotShort != "db-staging" || gotInstance != "pg" {
+		t.Fatalf("preflight called with %q/%q", gotShort, gotInstance)
+	}
+	if a, _ := s.Kube.GetKusoAddon(context.Background(), "kuso", "acme-db-staging"); a != nil {
+		t.Fatal("clone was created despite the refusal")
 	}
 }
 
