@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
@@ -102,9 +102,25 @@ export function ProjectSettingsView() {
 
   const spec = project.data?.project?.spec;
   const specKey = JSON.stringify(spec ?? null);
+  // The values the form was last seeded with. save() only sends fields
+  // the user changed from these, so a stale (dirty-pinned) form can't
+  // revert something a config-as-code apply set in the meantime.
+  const seeded = useRef<Record<string, string | boolean>>({});
   useEffect(() => {
     if (spec && !dirty) {
       const s = spec;
+      seeded.current = {
+        description: s.description ?? "",
+        baseDomain: s.baseDomain ?? "",
+        previewsEnabled: !!s.previews?.enabled,
+        previewsTtl: String(s.previews?.ttlDays ?? 7),
+        previewsDomain: s.previews?.baseDomain ?? "",
+        alwaysOn: !!s.alwaysOn,
+        limitMaxConcurrent: String(s.requestLimits?.maxConcurrent || ""),
+        limitRate: String(s.requestLimits?.ratePerSecond || ""),
+        limitBurst: String(s.requestLimits?.burst || ""),
+        uptimeEnabled: s.uptime?.disabled !== true,
+      };
       setDescription(s.description ?? "");
       setBaseDomain(s.baseDomain ?? "");
       setRepoURL(s.defaultRepo?.url ?? "");
@@ -163,12 +179,15 @@ export function ProjectSettingsView() {
       installationId !== storedInstallation ? { github: { installationId } } : {};
     const previewsBaseDomain =
       previewsDomain.trim() !== (spec?.previews?.baseDomain ?? "") ? { baseDomain: previewsDomain.trim() } : {};
+    const was = seeded.current;
+    const changed = (k: string, v: string | boolean) => was[k] !== v;
     try {
       await update.mutateAsync({
         ...github,
-        // "" clears; the server treats an omitted/null key as "leave alone".
-        description: description.trim(),
-        baseDomain: baseDomain.trim(),
+        // "" clears; the server treats an omitted/null key as "leave alone",
+        // so untouched fields are omitted.
+        ...(changed("description", description) ? { description: description.trim() } : {}),
+        ...(changed("baseDomain", baseDomain) ? { baseDomain: baseDomain.trim() } : {}),
         // Default repo: services with no spec.repo inherit this. An
         // emptied field clears it; the server ignores an empty defaultRepo.
         ...(repoURL.trim()
@@ -176,10 +195,24 @@ export function ProjectSettingsView() {
           : storedRepoURL
             ? { clearDefaultRepo: true }
             : {}),
-        previews: { enabled: previewsEnabled, ttlDays: clampPreviewTtl(previewsTtl), ...previewsBaseDomain },
-        alwaysOn,
-        uptime: { disabled: !uptimeEnabled },
-        requestLimits,
+        ...(changed("previewsEnabled", previewsEnabled) ||
+        changed("previewsTtl", previewsTtl) ||
+        changed("previewsDomain", previewsDomain)
+          ? {
+              previews: {
+                enabled: previewsEnabled,
+                ttlDays: clampPreviewTtl(previewsTtl),
+                ...previewsBaseDomain,
+              },
+            }
+          : {}),
+        ...(changed("alwaysOn", alwaysOn) ? { alwaysOn } : {}),
+        ...(changed("uptimeEnabled", uptimeEnabled) ? { uptime: { disabled: !uptimeEnabled } } : {}),
+        ...(changed("limitMaxConcurrent", limitMaxConcurrent) ||
+        changed("limitRate", limitRate) ||
+        changed("limitBurst", limitBurst)
+          ? { requestLimits }
+          : {}),
       });
       await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
       setDirty(false);
