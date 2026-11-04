@@ -157,6 +157,9 @@ func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Repo
 	if len(svc.EnvFiles) > 0 {
 		rep.flag(svc.Name, "datastore env_file(s) NOT read — any users/passwords/db names in them are NOT carried over; kuso mints its own credentials in the addon's conn-secret")
 	}
+	if len(svc.Entrypoint) > 0 {
+		rep.skip(svc.Name, "entrypoint not imported — the managed addon runs the stock image")
+	}
 	verNote := version
 	if verNote == "" {
 		verNote = "(chart default)"
@@ -232,10 +235,19 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		rep.service(svc.Name, "deploy.replicas=%d → scale.min/max=%d", n, n)
 	}
 
-	// command override.
-	if len(svc.Command) > 0 {
+	// kuso's `command` renders as the k8s container command, which
+	// replaces the image ENTRYPOINT — there is no args (CMD) field. So
+	// compose entrypoint+command maps faithfully as one argv, and an
+	// entrypoint alone matches compose (it also resets the image CMD).
+	// A command alone, though, would replace the entrypoint instead of
+	// the CMD; that breaks wrapper-entrypoint images, so flag it.
+	switch {
+	case len(svc.Entrypoint) > 0:
+		out.Command = append(append([]string{}, svc.Entrypoint...), svc.Command...)
+		rep.service(svc.Name, "entrypoint + command → command %q", strings.Join(out.Command, " "))
+	case len(svc.Command) > 0:
 		out.Command = []string(svc.Command)
-		rep.service(svc.Name, "command → command override")
+		rep.flag(svc.Name, "command %q will REPLACE the image ENTRYPOINT on kuso (kuso has no CMD/args override) — images with a wrapper entrypoint (minio, traefik, nginx/postgres docker-entrypoint.sh) will fail to start; prepend the image's entrypoint to `command:` or set `entrypoint:` in compose", strings.Join(svc.Command, " "))
 	}
 
 	noteUnmapped(svc, rep)
@@ -397,9 +409,6 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	}
 	if len(svc.CapAdd) > 0 {
 		rep.skip(svc.Name, "cap_add %s not imported", strings.Join(svc.CapAdd, ", "))
-	}
-	if len(svc.Entrypoint) > 0 {
-		rep.skip(svc.Name, "entrypoint not imported — set it in your Dockerfile or use command")
 	}
 	if svc.WorkingDir != "" {
 		rep.skip(svc.Name, "working_dir=%q not imported — set WORKDIR in the Dockerfile", svc.WorkingDir)

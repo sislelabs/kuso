@@ -84,6 +84,43 @@ services:
 	}
 }
 
+func TestConvert_CommandAndEntrypointSemantics(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  minio:
+    image: minio/minio
+    command: server /data
+  wrapped:
+    image: myorg/tool:1
+    entrypoint: ["/bin/tini", "--"]
+    command: ["run", "--fast"]
+  ep:
+    image: myorg/tool:1
+    entrypoint: /app/start.sh
+`)
+	minio := findService(doc, "minio")
+	if minio == nil || strings.Join(minio.Command, " ") != "server /data" {
+		t.Fatalf("minio command = %+v", minio)
+	}
+	if !hasFlag(rep, "minio", "ENTRYPOINT") {
+		t.Errorf("command without entrypoint must be flagged as replacing the image ENTRYPOINT; notes: %+v", rep.Notes)
+	}
+	w := findService(doc, "wrapped")
+	if w == nil || strings.Join(w.Command, " ") != "/bin/tini -- run --fast" {
+		t.Errorf("entrypoint+command should render entrypoint then command, got %+v", w)
+	}
+	if hasFlag(rep, "wrapped", "ENTRYPOINT") {
+		t.Error("entrypoint+command is a faithful mapping, must not be flagged")
+	}
+	ep := findService(doc, "ep")
+	if ep == nil || strings.Join(ep.Command, " ") != "/app/start.sh" {
+		t.Errorf("entrypoint-only should map to command, got %+v", ep)
+	}
+	if hasNote(rep, "ep", "entrypoint not imported") {
+		t.Error("entrypoint is imported now; the skip note must go")
+	}
+}
+
 func TestDedupeSlugs_NeverHandsOutSameNameTwice(t *testing.T) {
 	got := dedupeSlugs([]string{"Worker", "worker", "worker-2"})
 	seen := map[string]string{}

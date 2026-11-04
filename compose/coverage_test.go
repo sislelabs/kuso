@@ -45,7 +45,7 @@ func TestServiceConfigFieldCoverage(t *testing.T) {
 		"Devices":         "reported (skip) in noteUnmapped",
 		"DNS":             "reported (skip) in noteUnmapped",
 		"Dockerfile":      "consumed via Build.Dockerfile path (see convertService)",
-		"Entrypoint":      "reported (skip) in noteUnmapped",
+		"Entrypoint":      "consumed → prepended to command",
 		"Environment":     "consumed → env map",
 		"EnvFiles":        "reported (flag + UnresolvedEnvFiles)",
 		"Expose":          "reported (skip) in noteUnmapped",
