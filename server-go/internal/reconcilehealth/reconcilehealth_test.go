@@ -56,11 +56,26 @@ func TestClassifyAddon_ImmutableVCT(t *testing.T) {
 	if iss.Action != ActionOrphanRecreate {
 		t.Errorf("Action = %q, want orphan_recreate_sts", iss.Action)
 	}
-	if !iss.Safe {
-		t.Error("orphan-recreate must be marked Safe (data-preserving)")
+	// LOOP-13: this message is the same for a selector/serviceName change,
+	// where the recreated StatefulSet would not adopt the orphaned pod, so
+	// it is offered to the operator but never run unattended.
+	if iss.Safe {
+		t.Error("generic immutable-field error must not be Safe for unattended orphan-recreate")
 	}
 	if iss.RunbookCmd == "" {
 		t.Error("expected a RunbookCmd")
+	}
+
+	explicit := `cannot patch "db" with kind StatefulSet: StatefulSet.apps "db" is invalid: spec.volumeClaimTemplates: Forbidden: field is immutable`
+	iss, ok = ClassifyAddon(addon("db", "p", "postgres", cond("ReleaseFailed", "True", explicit)))
+	if !ok || iss.Kind != KindImmutableVCT || !iss.Safe {
+		t.Errorf("explicit volumeClaimTemplates error: kind=%q safe=%v, want immutable_vct + Safe", iss.Kind, iss.Safe)
+	}
+
+	other := `cannot patch "db" with kind StatefulSet: StatefulSet.apps "db" is invalid: spec.template.spec.containers[0].securityContext: Forbidden: disallowed by cluster policy`
+	iss, _ = ClassifyAddon(addon("db", "p", "postgres", cond("ReleaseFailed", "True", other)))
+	if iss.Action == ActionOrphanRecreate {
+		t.Error("an unrelated invalid+forbidden StatefulSet error must not map to orphan-recreate")
 	}
 }
 

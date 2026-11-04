@@ -352,7 +352,7 @@ func ClassifyAddon(a *kube.KusoAddon) (Issue, bool) {
 		iss.Kind = KindImmutableVCT
 		iss.Summary = "Addon StatefulSet can't be upgraded (immutable volumeClaimTemplates). Its data PVC is safe, but spec changes are blocked."
 		iss.Action = ActionOrphanRecreate
-		iss.Safe = true
+		iss.Safe = isExplicitVCTError(rfMsg)
 		iss.Fix = "Recreate the StatefulSet keeping its pods + data (delete --cascade=orphan; the operator recreates it clean)."
 		iss.RunbookCmd = fmt.Sprintf("kubectl delete sts %s -n %s --cascade=orphan && kubectl annotate kusoaddon %s -n %s kuso.sislelabs.com/force-reconcile=$(date +%%s) --overwrite", a.Name, a.Namespace, a.Name, a.Namespace)
 		return iss, true
@@ -525,8 +525,16 @@ func ClassifyProject(p *kube.KusoProject) (Issue, bool) {
 func isImmutableVCTError(msg string) bool {
 	m := strings.ToLower(msg)
 	return strings.Contains(m, "updates to statefulset spec for fields other than") ||
-		(strings.Contains(m, "statefulset") && strings.Contains(m, "forbidden") && strings.Contains(m, "volumeclaimtemplates")) ||
-		(strings.Contains(m, "statefulset") && strings.Contains(m, "invalid") && strings.Contains(m, "forbidden"))
+		isExplicitVCTError(m)
+}
+
+// isExplicitVCTError reports whether the error names volumeClaimTemplates.
+// The generic "fields other than" message is identical for a selector or
+// serviceName change, where the recreated StatefulSet would not adopt the
+// orphaned pod — only an explicit VCT error is safe to fix unattended.
+func isExplicitVCTError(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "statefulset") && strings.Contains(m, "forbidden") && strings.Contains(m, "volumeclaimtemplates")
 }
 
 // isServiceNotFoundRollback matches the helm rollback failure where a
