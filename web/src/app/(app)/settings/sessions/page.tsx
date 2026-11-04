@@ -41,6 +41,9 @@ function humanize(seconds: number): string {
 
 export default function SessionSettingsPage() {
   const [loaded, setLoaded] = useState(false);
+  // A failed load leaves placeholder defaults in the form; saving them
+  // would overwrite the real settings, so Save stays off until a reload.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [s, setS] = useState<SessionSettings>({
     ttlSeconds: 30 * DAY,
     neverExpire: false,
@@ -55,6 +58,7 @@ export default function SessionSettingsPage() {
       })
       .catch((e) => {
         toast.error(e instanceof Error ? e.message : "Failed to load settings");
+        setLoadFailed(true);
         setLoaded(true);
       });
   }, []);
@@ -183,7 +187,11 @@ export default function SessionSettingsPage() {
           Default is 30 days. Lower it for shared/secure environments; raise it
           (or turn expiry off) to stop frequent logouts.
         </p>
-        <Button onClick={save} disabled={saving}>
+        <Button
+          onClick={save}
+          disabled={saving || loadFailed}
+          title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
+        >
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>
