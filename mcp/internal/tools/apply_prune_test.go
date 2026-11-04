@@ -19,6 +19,15 @@ func TestYAMLSetsPruneTrue(t *testing.T) {
 		// A nested key that happens to be named prune must NOT trip the
 		// gate — only the document-level scalar counts.
 		{"nested prune ignored", "project: shop\nservices:\n  - name: web\n    prune: true\n", false},
+		// Spellings the server's yaml.v3 decode reads as prune=true.
+		{"quoted key", `"prune": true`, true},
+		{"flow mapping", "{project: shop, prune: true}", true},
+		{"json", `{"project":"shop","prune":true}`, true},
+		{"explicit tag", "prune: !!bool true\n", true},
+		{"value on next line", "prune:\n  true\n", true},
+		{"anchored", "x: &t true\nprune: *t\n", true},
+		// Unparseable input fails closed.
+		{"malformed", "prune: [\n", true},
 	}
 	for _, c := range cases {
 		if got := yamlSetsPruneTrue(c.yaml); got != c.want {

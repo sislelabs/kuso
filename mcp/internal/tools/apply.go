@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 
 	"github.com/sislelabs/kuso/mcp/internal/kusoclient"
 )
@@ -29,32 +30,19 @@ type applyArgs struct {
 }
 
 // yamlSetsPruneTrue reports whether the kuso.yml sets the top-level
-// `prune: true`. prune is a document-level scalar (spec.File.Prune,
-// yaml:"prune"), so we only honour it at column 0 — a `prune:` nested
-// under some block is a different (hypothetical) key and must not trip
-// the confirm gate. Comments (`#…`) and quoting variants of true are
-// handled; anything ambiguous falls through as "not pruning" and the
-// server's own prune gate still applies.
+// `prune: true`, decoding it the way the server does (yaml.v3, first
+// document, into spec.File's `prune` bool) so flow mappings, JSON,
+// quoted keys, tags and anchors can't slip past a text heuristic. The
+// server has no prune confirmation of its own, so anything that doesn't
+// decode cleanly fails closed and needs confirm too.
 func yamlSetsPruneTrue(y string) bool {
-	for _, raw := range strings.Split(y, "\n") {
-		// Top-level keys start in column 0 (no leading whitespace).
-		if len(raw) == 0 || raw[0] == ' ' || raw[0] == '\t' || raw[0] == '#' {
-			continue
-		}
-		line := raw
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
-		key, val, ok := strings.Cut(line, ":")
-		if !ok || strings.TrimSpace(key) != "prune" {
-			continue
-		}
-		switch strings.ToLower(strings.Trim(strings.TrimSpace(val), `"'`)) {
-		case "true", "yes", "on":
-			return true
-		}
+	var f struct {
+		Prune bool `yaml:"prune"`
 	}
-	return false
+	if err := yaml.Unmarshal([]byte(y), &f); err != nil {
+		return true
+	}
+	return f.Prune
 }
 
 // applyResult mirrors spec.ApplyResult: the executed plan + per-step
@@ -89,7 +77,7 @@ func registerApply(server *mcp.Server, client *kusoclient.Client) {
 		// update_project, manage_addon delete). Run plan first to see what
 		// would be removed.
 		if yamlSetsPruneTrue(args.YAML) && !args.Confirm {
-			return nil, applyResult{}, errors.New("this YAML sets prune: true, which DELETES live resources absent from the YAML — retry with confirm=true (run plan first to see the blast radius)")
+			return nil, applyResult{}, errors.New("this YAML sets prune: true (or couldn't be parsed to rule it out); prune DELETES live resources absent from the YAML — retry with confirm=true (run plan first to see the blast radius)")
 		}
 		var out applyResult
 		path := apiPath("api", "projects", args.Project, "apply")
