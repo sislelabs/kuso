@@ -12,3 +12,18 @@ export function pullRequestUrl(repoUrl: string | undefined, n: number | undefine
   if (!m) return undefined;
   return `https://github.com/${m[1]}/${m[2]}/pull/${n}`;
 }
+
+/**
+ * Returns `url` only when it is an https://github.com/ link, else undefined.
+ * For URLs supplied by an agent run (incident PRs), which a prompt
+ * injection could point anywhere.
+ */
+export function githubHttpsUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname === "github.com" && !u.username && !u.password ? u.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}

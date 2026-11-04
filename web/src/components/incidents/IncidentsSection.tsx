@@ -18,6 +18,7 @@ import {
   type Incident,
 } from "@/features/incidents";
 import { relativeTime } from "@/lib/format";
+import { githubHttpsUrl } from "@/lib/pull-request-url";
 import { cn } from "@/lib/utils";
 
 // "" = every state; "open" is filtered client-side because the server
@@ -216,12 +217,12 @@ function IncidentDetail({ id }: { id: string }) {
             <dd className="text-[var(--text-secondary)]">{new Date(inc.closedAt).toLocaleString()}</dd>
           </>
         )}
-        {inc.prUrl && (
+        {githubHttpsUrl(inc.prUrl) && (
           <>
             <dt className="text-[var(--text-tertiary)]">pull request</dt>
             <dd>
               <a
-                href={inc.prUrl}
+                href={githubHttpsUrl(inc.prUrl)}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-[var(--accent)] hover:underline"
