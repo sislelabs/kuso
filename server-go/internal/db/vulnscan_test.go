@@ -19,6 +19,12 @@ func TestVulnScanQueue_DedupesClaimsOneAtATimeGateFirst(t *testing.T) {
 	if err != nil || created || again != nightly {
 		t.Fatalf("second enqueue of an in-flight digest must reuse it: id=%d created=%v err=%v", again, created, err)
 	}
+	if s, _ := d.GetVulnScan(ctx, nightly); s.Reason != VulnReasonGate {
+		t.Fatalf("a gate request for a queued nightly scan must promote it to gate priority: %q", s.Reason)
+	}
+	if _, err := d.ExecContext(ctx, `UPDATE "VulnScan" SET "reason"='nightly' WHERE "id"=$1`, nightly); err != nil {
+		t.Fatal(err)
+	}
 	gate, _, err := d.EnqueueVulnScan(ctx, VulnScanRequest{Digest: "sha256:b", ImageRef: "r/b:tag", Reason: VulnReasonGate})
 	if err != nil {
 		t.Fatal(err)

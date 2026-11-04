@@ -73,6 +73,7 @@ import (
 	"kuso/server/internal/updater"
 	"kuso/server/internal/uptime"
 	"kuso/server/internal/version"
+	"kuso/server/internal/vulnscan"
 )
 
 // goSafe starts fn in a goroutine with a panic guard.
@@ -350,6 +351,14 @@ func main() {
 	// at boot since version is a build-time constant.
 	notify.SetVersion(version.Version())
 	goSafe(logger, "notify", func() { notifyDisp.Run(ctx) })
+
+	// Vulnerability promotion gate (docs/VULN_SCANNING.md). It only
+	// reads and enqueues; the cluster-singletons leader runs the scans.
+	// nil under the KUSO_VULNSCAN_DISABLED kill switch.
+	var vulnGate *vulnscan.Gate
+	if !vulnscan.Disabled() {
+		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate")}
+	}
 	// Outbox worker pool — drains the NotificationOutbox table with
 	// exponential backoff. The dispatcher's Emit path enqueues one
 	// row per matching channel; workers compete via FOR UPDATE SKIP
@@ -967,6 +976,11 @@ func main() {
 					// GitHub commit statuses; inert until ghBridge.set.
 					CommitStatuses: ghBridge,
 				}
+				// Only a non-nil gate goes into the interface: a nil
+				// *Gate there would read as "gate present" and panic.
+				if vulnGate != nil {
+					buildPoller.VulnGate = vulnGate
+				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
@@ -1408,6 +1422,7 @@ func main() {
 						serverstate.LoopIncidents,
 						serverstate.LoopAutoRemediate,
 						serverstate.LoopUptime,
+						serverstate.LoopVulnScan,
 					)
 				})
 			}()
@@ -1438,6 +1453,28 @@ func main() {
 					Logger:    logger.With("component", "uptime"),
 				}
 				goSafe(logger, "uptime", func() { uptimeWatcher.Run(workCtx) })
+			}
+			// Vulnerability scanning: the queue worker (scan Jobs, one at
+			// a time) and the nightly sweep. Only the sweep beats every
+			// tick, so only it is registered for liveness; the worker's
+			// state is all in Postgres and a new leader resumes it.
+			if !vulnscan.Disabled() {
+				serverstate.RegisterLoop(serverstate.LoopVulnScan, vulnscan.SweepInterval)
+				vulnSweeper := &vulnscan.Sweeper{
+					DB:      database,
+					Cluster: vulnscan.KubeCluster{Kube: kubeClient},
+					Notify:  notifyDisp,
+					Logger:  logger.With("component", "vulnscan"),
+				}
+				vulnWorker := &vulnscan.Worker{
+					Kube:      kubeClient.Clientset,
+					Namespace: *namespace,
+					Store:     database,
+					OnFailed:  vulnSweeper.OnScanFailed,
+					Logger:    logger.With("component", "vulnscan-worker"),
+				}
+				goSafe(logger, "vulnscan-sweep", func() { vulnSweeper.Run(workCtx) })
+				goSafe(logger, "vulnscan-worker", func() { vulnWorker.Run(workCtx) })
 			}
 			// Scale-to-zero scale-down half: sleeps idle sleep-enabled
 			// services (Deployment → 0 replicas) after sleep.afterMinutes

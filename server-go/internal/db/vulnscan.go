@@ -201,6 +201,15 @@ func (d *DB) EnqueueVulnScan(ctx context.Context, req VulnScanRequest) (id int64
 		ORDER BY "id" LIMIT 1`, req.Digest, req.ImageRef).Scan(&id)
 	switch {
 	case err == nil:
+		if req.Reason == VulnReasonGate {
+			// A build is now waiting on this scan: jump the nightly queue.
+			if _, err := tx.ExecContext(ctx, `UPDATE "VulnScan" SET "reason" = 'gate' WHERE "id" = $1 AND "status" = 'queued'`, id); err != nil {
+				return 0, false, fmt.Errorf("enqueue vuln scan promote: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return 0, false, fmt.Errorf("enqueue vuln scan commit: %w", err)
+			}
+		}
 		return id, false, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return 0, false, fmt.Errorf("enqueue vuln scan lookup: %w", err)
