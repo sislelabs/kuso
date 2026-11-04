@@ -1074,7 +1074,11 @@ func renderBuildkitContainer(b *kube.KusoBuild, strategy string, res corev1.Reso
 		}
 	}
 	image := fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag)
-	cache := fmt.Sprintf("%s:buildcache", b.Spec.Image.Repository)
+	cacheRepo := b.Spec.Image.Repository
+	if b.Spec.Registry != nil && strings.TrimSpace(b.Spec.Registry.CacheRepo) != "" {
+		cacheRepo = strings.TrimSpace(b.Spec.Registry.CacheRepo)
+	}
+	cache := fmt.Sprintf("%s:buildcache", cacheRepo)
 
 	// DRY_RUN=1 flips buildkit to a parse + compile mode that doesn't
 	// push to the registry and doesn't update the cache. The build
@@ -1087,6 +1091,7 @@ DF=$DOCKERFILE
 IMAGE=$IMAGE_REF
 CACHE=$CACHE_REF
 BUILDKIT_HOST=$BUILDKIT_ADDR
+INSECURE=${REGISTRY_INSECURE:-true}
 
 # Runtime-only / kuso-managed keys never passed to the build (NODE_ENV=
 # production makes the install skip devDeps). Mirrors builds.reservedBuildEnvKeys.
@@ -1183,8 +1188,8 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     --local dockerfile="$CTX" \
     --opt filename="$DF" \
     "$@" \
-    --output type=image,name="$IMAGE",push=false,registry.insecure=true \
-    --import-cache type=registry,ref="$CACHE",registry.insecure=true \
+    --output type=image,name="$IMAGE",push=false,registry.insecure=$INSECURE \
+    --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
     --progress plain
 fi
 
@@ -1196,9 +1201,9 @@ exec buildctl \
   --local dockerfile="$CTX" \
   --opt filename="$DF" \
   "$@" \
-  --output type=image,name="$IMAGE",push=true,registry.insecure=true \
-  --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
-  --import-cache type=registry,ref="$CACHE",registry.insecure=true \
+  --output type=image,name="$IMAGE",push=true,registry.insecure=$INSECURE \
+  --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE \
+  --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
   --progress plain
 `
 
@@ -1212,6 +1217,7 @@ exec buildctl \
 		{Name: "DOCKERFILE", Value: dockerfile},
 		{Name: "IMAGE_REF", Value: image},
 		{Name: "CACHE_REF", Value: cache},
+		{Name: "REGISTRY_INSECURE", Value: registryInsecure(b)},
 		{Name: "BUILDKIT_ADDR", Value: defaultBuildkitHost},
 		{Name: "DRY_RUN", Value: dryRun},
 	}
@@ -1315,4 +1321,23 @@ exec buildctl \
 // the boundary; neither layer is meant to stand alone.
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
+}
+
+// inClusterRegistryHost is the plain-HTTP kuso-registry every build
+// pushes to by default (builds.RegistryHost; trusted as http in
+// deploy/buildkitd.yaml's buildkitd.toml).
+const inClusterRegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
+
+// registryInsecure is the buildkit registry.insecure value for the push
+// and cache legs. spec.registry.allowInsecure=false (external registries)
+// turns TLS verification on; CRs without spec.registry and pushes to the
+// in-cluster registry keep the plain-HTTP transport they always used.
+func registryInsecure(b *kube.KusoBuild) string {
+	if b.Spec.Registry == nil || b.Spec.Registry.AllowInsecure {
+		return "true"
+	}
+	if b.Spec.Image != nil && strings.HasPrefix(b.Spec.Image.Repository, inClusterRegistryHost+"/") {
+		return "true"
+	}
+	return "false"
 }
