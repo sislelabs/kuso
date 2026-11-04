@@ -15,7 +15,11 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
+	"sort"
+	"strings"
 
 	"github.com/sislelabs/kuso/coolify"
 
@@ -54,6 +58,7 @@ type ProjectsAPI interface {
 	Create(ctx context.Context, req projects.CreateProjectRequest) (*kube.KusoProject, error)
 	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
 	SetEnv(ctx context.Context, project, service string, envVars []projects.EnvVar) error
+	GetService(ctx context.Context, project, service string) (*kube.KusoService, error)
 }
 
 // AddonsAPI is the minimal addons.Service surface the importer uses.
@@ -177,11 +182,12 @@ func (s *Service) importOneProject(ctx context.Context, c CoolifyClient, project
 		return
 	}
 
+	slugs := assignServiceSlugs(items)
 	for _, it := range items {
 		if it.App == nil {
 			continue
 		}
-		s.importApp(ctx, c, projectSlug, it, out)
+		s.importApp(ctx, c, projectSlug, slugs[it.App], it, out)
 	}
 	for _, it := range items {
 		if it.Database == nil {
@@ -232,8 +238,7 @@ func (s *Service) createProject(ctx context.Context, slug, repoURL, branch strin
 
 // importApp creates the KusoService + writes its env vars. Per-row
 // errors are appended to out and don't fail the larger import.
-func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug string, it coolify.Item, out *Result) {
-	svcSlug := coolify.ServiceSlugFromApp(it.App)
+func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug, svcSlug string, it coolify.Item, out *Result) {
 	svcReq := projects.CreateServiceRequest{
 		Name:    svcSlug,
 		Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
@@ -248,8 +253,13 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug st
 			out.Errors = append(out.Errors, Detail{Kind: "service", Name: projectSlug + "/" + svcSlug, Reason: err.Error()})
 			return
 		}
-		// Service already exists — fall through to env-var sync so
-		// a re-run picks up new vars on existing services.
+		// Service already exists. Only a re-run of this same app may
+		// sync env into it; SetEnv replaces the whole list, so writing
+		// into an unrelated service would wipe its variables.
+		if err := s.checkExistingServiceRepo(ctx, projectSlug, svcSlug, svcReq.Repo); err != nil {
+			out.Errors = append(out.Errors, Detail{Kind: "service", Name: projectSlug + "/" + svcSlug, Reason: err.Error()})
+			return
+		}
 	} else {
 		out.ServicesCreated++
 	}
@@ -277,6 +287,53 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug st
 		return
 	}
 	out.EnvVarsCreated += len(envVars)
+}
+
+// assignServiceSlugs gives every app in one project a distinct service
+// slug. Apps are ordered by UUID so a re-run assigns the same slugs.
+// Mirrors assignServiceSlugs in cli/cmd/kusoCli/migrate.go.
+func assignServiceSlugs(items []coolify.Item) map[*coolify.Application]string {
+	var apps []*coolify.Application
+	for _, it := range items {
+		if it.App != nil {
+			apps = append(apps, it.App)
+		}
+	}
+	sort.SliceStable(apps, func(i, j int) bool { return apps[i].UUID < apps[j].UUID })
+	out := make(map[*coolify.Application]string, len(apps))
+	taken := map[string]bool{}
+	for _, a := range apps {
+		out[a] = coolify.UniqueSlug(coolify.ServiceSlugFromApp(a), taken)
+	}
+	return out
+}
+
+// checkExistingServiceRepo confirms a service that already exists was built
+// from the same repo URL + path this app wants. Mirrors the CLI's check.
+func (s *Service) checkExistingServiceRepo(ctx context.Context, project, service string, want *projects.CreateServiceRepo) error {
+	svc, err := s.Projects.GetService(ctx, project, service)
+	if err != nil {
+		return fmt.Errorf("exists, and its repo can't be read to confirm it's this app: %w", err)
+	}
+	var gotURL, gotPath string
+	if svc.Spec.Repo != nil {
+		gotURL, gotPath = svc.Spec.Repo.URL, svc.Spec.Repo.Path
+	}
+	if repoKey(gotURL) != repoKey(want.URL) || strings.Trim(gotPath, "/") != strings.Trim(want.Path, "/") {
+		return fmt.Errorf("already exists for a different repo (%s path=%q, this app is %s path=%q)",
+			kube.StripRepoURLCredentials(gotURL), gotPath, want.URL, want.Path)
+	}
+	return nil
+}
+
+// repoKey reduces a repo URL to host+path for comparison, ignoring scheme,
+// credentials, host case and ".git".
+func repoKey(raw string) string {
+	raw = strings.TrimSuffix(strings.TrimSpace(raw), ".git")
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return strings.ToLower(u.Host) + strings.TrimSuffix(u.Path, "/")
+	}
+	return raw
 }
 
 // importDatabase creates the KusoAddon for a Coolify standalone DB.

@@ -39,6 +39,17 @@ type fakeProjects struct {
 	addSvcErr map[string]error
 	// Per-(project,service) SetEnv error map.
 	setEnvErr map[string]error
+	// Existing services by "project/service", returned by GetService.
+	existing map[string]*kube.KusoService
+}
+
+func (f *fakeProjects) GetService(ctx context.Context, project, service string) (*kube.KusoService, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if svc, ok := f.existing[project+"/"+service]; ok {
+		return svc, nil
+	}
+	return nil, projects.ErrNotFound
 }
 
 func (f *fakeProjects) Create(ctx context.Context, req projects.CreateProjectRequest) (*kube.KusoProject, error) {
@@ -403,5 +414,46 @@ func TestImportCoolify_UnconfiguredService(t *testing.T) {
 	result := s.ImportCoolify(context.Background(), &fakeCoolify{}, &coolify.Inventory{}, pickedSet())
 	if len(result.Errors) != 1 {
 		t.Errorf("expected 1 misconfig error, got %+v", result.Errors)
+	}
+}
+
+// CLI-01 (server path): two apps in one project whose repos share a basename
+// must get distinct service slugs, and a 409 against a service built from a
+// different repo must not have its env overwritten.
+func TestImportCoolify_DistinctSlugsAndForeignServiceNotOverwritten(t *testing.T) {
+	existingSvc := &kube.KusoService{}
+	existingSvc.Spec.Repo = &kube.KusoRepoRef{URL: "https://github.com/someone-else/web", Path: ""}
+	fp := &fakeProjects{
+		addSvcErr: map[string]error{"shop/web": projects.ErrConflict},
+		existing:  map[string]*kube.KusoService{"shop/web": existingSvc},
+	}
+	fc := &fakeCoolify{envs: map[string][]coolify.EnvVar{
+		"u-1": {{Key: "A", Value: "1"}},
+		"u-2": {{Key: "B", Value: "2"}},
+	}}
+	s := &Service{Projects: fp, Addons: &fakeAddons{}}
+	inv := &coolify.Inventory{Items: []coolify.Item{
+		itemApp("u-2", "web two", "Shop", "https://github.com/acme/web", "main", "dockerfile", "3000"),
+		itemApp("u-1", "web one", "Shop", "https://github.com/other/web", "main", "dockerfile", "3000"),
+	}}
+	result := s.ImportCoolify(context.Background(), fc, inv, pickedSet("u-1", "u-2"))
+
+	var names []string
+	for _, c := range fp.createdSvc {
+		names = append(names, c.req.Name)
+	}
+	if strings.Join(names, ",") != "web-2,web" {
+		t.Fatalf("service slugs = %v, want [web-2 web] (assigned by UUID order)", names)
+	}
+	for _, e := range fp.envSet {
+		if e.service == "web" {
+			t.Fatalf("env written into an existing service from another repo: %+v", e)
+		}
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0].Reason, "different repo") {
+		t.Fatalf("want one different-repo error row, got %+v", result.Errors)
+	}
+	if result.EnvVarsCreated != 1 {
+		t.Fatalf("envVarsCreated = %d, want 1 (only web-2)", result.EnvVarsCreated)
 	}
 }
