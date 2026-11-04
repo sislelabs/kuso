@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/serverstate"
@@ -308,9 +309,18 @@ func truncateForMessage(line string) string {
 	line = strings.TrimSpace(line)
 	const max = 250
 	if len(line) > max {
-		return line[:max] + "…"
+		return cutAtRune(line, max) + "…"
 	}
 	return line
+}
+
+// cutAtRune returns s cut to at most max bytes without splitting a
+// multi-byte rune: Postgres rejects invalid UTF-8 in TEXT.
+func cutAtRune(s string, max int) string {
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // truncateForRaw is generous for the sample line shown in the UI
@@ -319,7 +329,7 @@ func truncateForMessage(line string) string {
 func truncateForRaw(line string) string {
 	const max = 4096
 	if len(line) > max {
-		return line[:max] + "…"
+		return cutAtRune(line, max) + "…"
 	}
 	return line
 }

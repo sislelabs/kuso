@@ -162,12 +162,12 @@ func TestTruncateProducesValidUTF8(t *testing.T) {
 
 	// "é" is 2 bytes; 200 of them straddles the 250-byte message cap
 	// and the 4096-byte raw cap at a non-boundary offset.
-	msg := truncateForMessage(strings.Repeat("é", 200))
+	msg := truncateForMessage("x" + strings.Repeat("é", 200))
 	if !utf8.ValidString(msg) {
 		t.Errorf("truncateForMessage produced invalid UTF-8 (byte-sliced mid-rune)")
 	}
 
-	raw := truncateForRaw(strings.Repeat("é", 4000))
+	raw := truncateForRaw("x" + strings.Repeat("é", 4000))
 	if !utf8.ValidString(raw) {
 		t.Errorf("truncateForRaw produced invalid UTF-8 (byte-sliced mid-rune)")
 	}

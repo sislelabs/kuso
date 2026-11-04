@@ -722,7 +722,7 @@ func truncateLine(s string) string {
 	if len(s) <= maxLineHint {
 		return s
 	}
-	return s[:maxLineHint] + "…"
+	return strings.ToValidUTF8(s[:maxLineHint], "") + "…"
 }
 
 // briefLine is truncateLine but tighter, for embedding inside a
@@ -735,5 +735,5 @@ func briefLine(s string) string {
 	if len(s) <= maxBriefLine {
 		return s
 	}
-	return s[:maxBriefLine] + "…"
+	return strings.ToValidUTF8(s[:maxBriefLine], "") + "…"
 }
