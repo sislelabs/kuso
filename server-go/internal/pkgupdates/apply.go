@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -31,6 +32,8 @@ const ApplyStateAnnotation = "kuso.sislelabs.com/pkg-apply-state"
 // rejoin reconcile only uncordons nodes we cordoned (never one an
 // operator or nodewatch cordoned for another reason).
 const CordonAnnotation = "kuso.sislelabs.com/cordoned-by-pkgupdates"
+
+var rebootApplyMu sync.Mutex
 
 // applyJobName is deterministic per node so the concurrency lock is just
 // "does this Job already exist". Node names are RFC-1123 already.
@@ -67,6 +70,10 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 	// refuse — the operator applies nodes one at a time. A non-reboot apply
 	// (allowReboot=false) doesn't evict or reboot, so it isn't gated.
 	if allowReboot {
+		// The HTTP handler builds a Watcher per request, so serialize at
+		// package level; the post-cordon re-check below covers replicas.
+		rebootApplyMu.Lock()
+		defer rebootApplyMu.Unlock()
 		if busy, err := w.anotherNodeRebooting(ctx, node); err != nil {
 			return fmt.Errorf("check other-node apply: %w", err)
 		} else if busy != "" {
@@ -104,6 +111,18 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 		if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
 			ctx, node, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("cordon before apply: %w", err)
+		}
+		// The first check was list-then-patch; another apply may have
+		// stamped itself in between. Both sides now see each other's
+		// running+cordon, so at worst both back out — never both reboot.
+		busy, err := w.anotherNodeRebooting(ctx, node)
+		if err != nil || busy != "" {
+			reason := fmt.Sprintf("backed out before patching: node %s started applying host updates at the same time", busy)
+			if err != nil {
+				reason = "backed out before patching: could not re-check other nodes: " + err.Error()
+			}
+			w.failApply(ctx, node, reason)
+			return fmt.Errorf("%w: %s", ErrAlreadyRunning, reason)
 		}
 	}
 

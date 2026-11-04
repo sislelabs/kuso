@@ -31,7 +31,8 @@ TOKEN=$(cat "$SA/token")
 command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null 2>&1 || true
 # jq is used to parse the pod list for the drain (awk over flattened JSON
 # is too fragile — "name"/"kind" appear in many nested places). Installed
-# best-effort; if it's missing we skip the drain rather than mis-evict.
+# best-effort; if it's missing a multi-node reboot fails instead of
+# rebooting undrained.
 command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null 2>&1 || true
 
 # json_escape for embedding strings into JSON.
@@ -69,56 +70,78 @@ ready_node_count() {
   fi
 }
 
-# drain_node — evict every non-DaemonSet, non-mirror pod scheduled on
-# this node via the Eviction API, so workloads reschedule onto other
-# Ready nodes BEFORE the host reboots. Best-effort + bounded: an eviction
-# blocked by a PodDisruptionBudget is retried for a while, then we proceed
-# to the reboot regardless (the reboot is the operation; we never wedge an
-# apply forever on a stubborn PDB). The node is already cordoned by the
-# caller, so nothing reschedules back onto it mid-drain.
+# drain_pod_list — drainable pods currently on this node, "ns/name" per
+# line, into $1. Skips DaemonSet-owned and mirror/static pods (owner
+# kind=Node) and terminal pods. Never lists ourselves: this Job pod runs
+# on the node being drained, and evicting it kills the apply before the
+# reboot (BackoffLimit 0). Non-zero when the list can't be read.
+drain_pod_list() {
+  pods_json=$(api_get "/api/v1/pods?fieldSelector=spec.nodeName=$NODE" 2>/dev/null) || return 1
+  printf '%s' "$pods_json" | jq -r --arg self "${POD_NAMESPACE}/${POD_NAME}" '` + drainPodsFilter + `' > /tmp/drain_raw 2>/dev/null || return 1
+  sort -u /tmp/drain_raw > "$1"
+}
+
+# drain_node — evict every drainable pod on this node via the Eviction
+# API, so workloads reschedule onto other Ready nodes BEFORE the host
+# reboots, then wait for the evicted pods to be gone. An eviction blocked
+# by a PodDisruptionBudget is retried for up to 120s PER POD, then we
+# move on (never wedge an apply forever on a stubborn PDB). The node is
+# already cordoned by the caller, so nothing reschedules back onto it.
+#
+# Returns non-zero when the drain can't be done safely (no jq, pod list
+# unreadable); the caller then fails the apply instead of rebooting a
+# multi-node worker undrained.
 drain_node() {
-  # jq is required to parse the pod list safely. If it didn't install
-  # (offline node, apk mirror down), skip the drain rather than risk a
-  # bad parse evicting the wrong pods — the reboot still proceeds.
   if ! command -v jq >/dev/null 2>&1; then
-    echo "pkg-apply: drain: jq unavailable — skipping drain (reboot proceeds)"
-    return 0
+    echo "pkg-apply: drain: jq unavailable"
+    return 1
   fi
-
-  # Pods on THIS node, all namespaces, via fieldSelector.
-  pods_json=$(api_get "/api/v1/pods?fieldSelector=spec.nodeName=$NODE" 2>/dev/null) || {
-    echo "pkg-apply: drain: could not list pods; skipping drain"; return 0; }
-
-  # Select drainable pods with jq: skip DaemonSet-owned pods (tolerated/
-  # replaced per-node, not drainable) and mirror/static pods (owner
-  # kind=Node), and skip already-terminal pods. Emit "namespace/name".
-  # Never evict ourselves: this Job pod runs on the node being drained,
-  # and evicting it kills the apply before the reboot (BackoffLimit 0).
-  printf '%s' "$pods_json" | jq -r --arg self "${POD_NAMESPACE}/${POD_NAME}" '` + drainPodsFilter + `' 2>/dev/null | sort -u > /tmp/drain_pods || true
+  drain_pod_list /tmp/drain_pods || { echo "pkg-apply: drain: could not list pods on $NODE"; return 1; }
 
   count=$(wc -l < /tmp/drain_pods 2>/dev/null | tr -d ' ')
   echo "pkg-apply: drain: $count pod(s) to evict from $NODE"
   [ "${count:-0}" -eq 0 ] && return 0
 
-  # Evict each pod. The Eviction API respects PodDisruptionBudgets.
-  deadline=$(( $(date +%s) + 120 ))
+  : > /tmp/evicted
   while read -r nsname; do
     [ -z "$nsname" ] && continue
     ns=${nsname%%/*}; pod=${nsname#*/}
     body="{\"apiVersion\":\"policy/v1\",\"kind\":\"Eviction\",\"metadata\":{\"name\":\"$pod\",\"namespace\":\"$ns\"},\"deleteOptions\":{\"gracePeriodSeconds\":30}}"
-    # Retry a blocked eviction (429 from a PDB) until the deadline.
+    deadline=$(( $(date +%s) + 120 ))
+    # Retry a blocked eviction (429 from a PDB) until this pod's deadline.
+    # 404 means the pod is already gone.
     while : ; do
-      if curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $TOKEN" \
+      code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$SA/ca.crt" -H "Authorization: Bearer $TOKEN" \
            -H "Content-Type: application/json" -X POST \
-           "$APISERVER/api/v1/namespaces/$ns/pods/$pod/eviction" --data "$body" >/dev/null 2>&1; then
-        echo "pkg-apply: drain: evicted $ns/$pod"; break
-      fi
+           "$APISERVER/api/v1/namespaces/$ns/pods/$pod/eviction" --data "$body" 2>/dev/null)
+      case "$code" in
+        200|201) echo "pkg-apply: drain: evicted $ns/$pod"; echo "$nsname" >> /tmp/evicted; break ;;
+        404) echo "pkg-apply: drain: $ns/$pod already gone"; break ;;
+      esac
       if [ "$(date +%s)" -ge "$deadline" ]; then
-        echo "pkg-apply: drain: gave up on $ns/$pod (PDB/blocked); proceeding"; break
+        echo "pkg-apply: drain: gave up on $ns/$pod (HTTP $code, PDB/blocked); proceeding"; break
       fi
       sleep 5
     done
   done < /tmp/drain_pods
+
+  # Evicted pods still run their grace period. Rebooting under them
+  # kills them uncleanly, so wait (bounded) until they've left the node.
+  [ -s /tmp/evicted ] || return 0
+  wait_deadline=$(( $(date +%s) + 120 ))
+  while : ; do
+    left=-1
+    if drain_pod_list /tmp/drain_now; then
+      left=$(grep -Fxc -f /tmp/evicted /tmp/drain_now || true)
+    fi
+    if [ "$left" = "0" ]; then
+      echo "pkg-apply: drain: evicted pods have left $NODE"; break
+    fi
+    if [ "$(date +%s)" -ge "$wait_deadline" ]; then
+      echo "pkg-apply: drain: evicted pods still terminating after 120s ($left left); proceeding"; break
+    fi
+    sleep 5
+  done
   return 0
 }
 
@@ -166,7 +189,7 @@ READY=$(ready_node_count) || fail "could not count Ready nodes (GET /api/v1/node
 echo "pkg-apply: ready node count = $READY"
 if [ "${READY:-0}" -gt 1 ]; then
   set_state draining "draining $NODE before reboot ($READY ready nodes)"
-  drain_node
+  drain_node || fail "patched, but could not drain $NODE safely (see Job log); not rebooting — reboot it by hand after draining"
 else
   echo "pkg-apply: single ready node — skipping drain (nowhere to reschedule)"
 fi

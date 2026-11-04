@@ -2,6 +2,7 @@ package pkgupdates
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -441,6 +443,41 @@ func TestReconcileFailsStalledApply(t *testing.T) {
 				t.Errorf("anotherNodeRebooting = %q, %v; want unblocked", busy, err)
 			}
 		})
+	}
+}
+
+// LOOP-10: two reboot-applies racing on different nodes (another replica,
+// or a CLI loop) both passed the list-then-cordon check. The cordon is
+// now re-checked after stamping, and the loser backs out cleanly.
+func TestApplyBacksOutWhenAnotherNodeStartedConcurrently(t *testing.T) {
+	t.Parallel()
+	upd := map[string]string{Annotation: `{"count":3,"pkgMgr":"apt"}`}
+	a := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "a", Annotations: upd}}
+	b := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "b", Annotations: map[string]string{Annotation: upd[Annotation]}}}
+	cs := kubefake.NewSimpleClientset(a, b)
+	// The instant node a is cordoned, node b's apply (elsewhere) has
+	// stamped itself running: the window the old check could not see.
+	cs.PrependReactor("patch", "nodes", func(act k8stesting.Action) (bool, runtime.Object, error) {
+		p := act.(k8stesting.PatchAction)
+		if p.GetName() == "a" && strings.Contains(string(p.GetPatch()), `"unschedulable":true`) {
+			obj, _ := cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("nodes"), "", "b")
+			bn := obj.(*corev1.Node).DeepCopy()
+			bn.Annotations[ApplyStateAnnotation] = `{"phase":"running","at":"","log":""}`
+			_ = cs.Tracker().Update(corev1.SchemeGroupVersion.WithResource("nodes"), bn, "")
+		}
+		return false, nil, nil
+	})
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+	err := w.Apply(context.Background(), "a", true)
+	if !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("Apply = %v, want ErrAlreadyRunning", err)
+	}
+	n, _ := cs.CoreV1().Nodes().Get(context.Background(), "a", metav1.GetOptions{})
+	if n.Spec.Unschedulable || n.Annotations[CordonAnnotation] != "" {
+		t.Error("node a must be uncordoned after backing out")
+	}
+	if _, err := cs.BatchV1().Jobs("kuso").Get(context.Background(), applyJobName("a"), metav1.GetOptions{}); err == nil {
+		t.Error("no apply Job may be created after backing out")
 	}
 }
 
