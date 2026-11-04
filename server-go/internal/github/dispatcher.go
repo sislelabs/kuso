@@ -327,6 +327,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		return nil
 	}
 	changes := parsePushChanges(body)
+	var failed []error
 	for _, proj := range projects {
 		// Repo matching is now PER-SERVICE (multi-repo projects): a
 		// service's effective repo is its spec.repo.url, falling back to
@@ -337,6 +338,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		svcItems, err := d.listProjectServices(ctx, proj.Name)
 		if err != nil {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
+			failed = append(failed, fmt.Errorf("list services of %s: %w", proj.Name, err))
 			continue
 		}
 		// Skip the whole project unless at least one of its services
@@ -492,11 +494,18 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 						"project", proj.Name, "service", short, "ref", req.Ref)
 				} else {
 					d.Logger.Warn("build trigger", "project", proj.Name, "service", short, "err", err)
+					// Invalid/not-found are permanent (a fromService
+					// worker, a deleted service); anything else may pass
+					// on a redelivery, so the delivery must not be
+					// recorded as handled.
+					if !errors.Is(err, builds.ErrInvalid) && !errors.Is(err, builds.ErrNotFound) {
+						failed = append(failed, fmt.Errorf("build %s/%s: %w", proj.Name, short, err))
+					}
 				}
 			}
 		}
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
