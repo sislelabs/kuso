@@ -81,6 +81,8 @@ const (
 	eventBuildSucceeded   = "build.succeeded"
 	eventBuildFailed      = "build.failed"
 	eventDeployRolledBack = "deploy.rolledback"
+	eventDeployBlocked    = "security.deploy_blocked"
+	eventScanFailed       = "security.scan_failed"
 )
 
 // EventEmitter is the (notify.Dispatcher.Emit) signature the poller

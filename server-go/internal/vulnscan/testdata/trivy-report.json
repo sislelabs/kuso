@@ -1,0 +1,848 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.1"
+  },
+  "ReportID": "017b7d41-e09f-7000-80ea-000000000001",
+  "CreatedAt": "2021-08-25T12:20:30.000000005Z",
+  "ArtifactID": "sha256:39549bf49d696f172a6513103cdc8f53717024ad1fbce62d680a8e7ddde1a612",
+  "ArtifactName": "kuso-registry.kuso.svc.cluster.local:5000/shop/web:main-abc123",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "Size": 5843968,
+    "OS": {
+      "Family": "alpine",
+      "Name": "3.10.2",
+      "EOSL": true
+    },
+    "ImageID": "sha256:961769676411f082461f9ef46626dd7a2d1e2b2a38e6a44364bcbecf51e66dd4",
+    "DiffIDs": [
+      "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+    ],
+    "RepoTags": [
+      "kuso-registry.kuso.svc.cluster.local:5000/shop/web:main-abc123"
+    ],
+    "Reference": "kuso-registry.kuso.svc.cluster.local:5000/shop/web:main-abc123",
+    "ImageConfig": {
+      "architecture": "amd64",
+      "container": "0a80155a31551fcc1a36fccbbda79fcd3f0b1c7d270653d00310e6e2217c57e6",
+      "created": "2019-08-20T20:19:55.211423266Z",
+      "docker_version": "18.06.1-ce",
+      "history": [
+        {
+          "created": "2019-08-20T20:19:55.062606894Z",
+          "created_by": "/bin/sh -c #(nop) ADD file:fe64057fbb83dccb960efabbf1cd8777920ef279a7fa8dbca0a8801c651bdf7c in / "
+        },
+        {
+          "created": "2019-08-20T20:19:55.211423266Z",
+          "created_by": "/bin/sh -c #(nop)  CMD [\"/bin/sh\"]",
+          "empty_layer": true
+        }
+      ],
+      "os": "linux",
+      "rootfs": {
+        "type": "layers",
+        "diff_ids": [
+          "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+        ]
+      },
+      "config": {
+        "Cmd": [
+          "/bin/sh"
+        ],
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ],
+        "Image": "sha256:06f4121dff4d0123ce11bd2e44f48da9ba9ddcd23ae376ea1f363f63ea0849b5",
+        "ArgsEscaped": true
+      }
+    },
+    "Layers": [
+      {
+        "Size": 5843968,
+        "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+        "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+      }
+    ],
+    "RepoDigests": [
+      "kuso-registry.kuso.svc.cluster.local:5000/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    ]
+  },
+  "Results": [
+    {
+      "Target": "kuso-registry.kuso.svc.cluster.local:5000/shop/web:main-abc123 (alpine 3.10.2)",
+      "Class": "os-pkgs",
+      "Type": "alpine",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2019-1549",
+          "PkgID": "libcrypto1.1@1.1.1c-r0",
+          "PkgName": "libcrypto1.1",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libcrypto1.1@1.1.1c-r0?arch=x86_64&distro=3.10.2",
+            "UID": "c3465bd7087640a7"
+          },
+          "InstalledVersion": "1.1.1c-r0",
+          "FixedVersion": "1.1.1d-r0",
+          "Status": "fixed",
+          "Layer": {
+            "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+            "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+          },
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1549",
+          "DataSource": {
+            "ID": "alpine",
+            "Name": "Alpine Secdb",
+            "URL": "https://secdb.alpinelinux.org/"
+          },
+          "Fingerprint": "sha256:6843bc8bcd09d2629416906fb83f17f31dde9a2702183571f9d447c3185814ca",
+          "Title": "openssl: information disclosure in fork()",
+          "Description": "OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-330"
+          ],
+          "VendorSeverity": {
+            "amazon": 2,
+            "nvd": 2,
+            "oracle-oval": 2,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2019-1549",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1549",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be",
+            "https://linux.oracle.com/cve/CVE-2019-1549.html",
+            "https://linux.oracle.com/errata/ELSA-2020-1840.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/GY6SNRJP2S7Y42GIIDO3HXPNMDYN2U3A/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ZN4VVQJ3JDCHGIHV4Y2YTXBYQZ6PWQ7E/",
+            "https://seclists.org/bugtraq/2019/Oct/1",
+            "https://security.netapp.com/advisory/ntap-20190919-0002/",
+            "https://support.f5.com/csp/article/K44070243",
+            "https://support.f5.com/csp/article/K44070243?utm_source=f5support&amp;utm_medium=RSS",
+            "https://ubuntu.com/security/notices/USN-4376-1",
+            "https://usn.ubuntu.com/4376-1/",
+            "https://www.debian.org/security/2019/dsa-4539",
+            "https://www.openssl.org/news/secadv/20190910.txt",
+            "https://www.oracle.com/security-alerts/cpuapr2020.html",
+            "https://www.oracle.com/security-alerts/cpujan2020.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.oracle.com/security-alerts/cpuoct2020.html",
+            "https://www.oracle.com/technetwork/security-advisory/cpuoct2019-5072832.html"
+          ],
+          "PublishedDate": "2019-09-10T17:15:00Z",
+          "LastModifiedDate": "2020-10-20T22:15:00Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2019-1551",
+          "PkgID": "libcrypto1.1@1.1.1c-r0",
+          "PkgName": "libcrypto1.1",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libcrypto1.1@1.1.1c-r0?arch=x86_64&distro=3.10.2",
+            "UID": "c3465bd7087640a7"
+          },
+          "InstalledVersion": "1.1.1c-r0",
+          "FixedVersion": "1.1.1d-r2",
+          "Status": "fixed",
+          "Layer": {
+            "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+            "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+          },
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1551",
+          "DataSource": {
+            "ID": "alpine",
+            "Name": "Alpine Secdb",
+            "URL": "https://secdb.alpinelinux.org/"
+          },
+          "Fingerprint": "sha256:692932c929e26ea1116ebcaf2ca427771924d31272883401dedb3381d825063a",
+          "Title": "openssl: Integer overflow in RSAZ modular exponentiation on x86_64",
+          "Description": "There is an overflow bug in the x64_64 Montgomery squaring procedure used in exponentiation with 512-bit moduli. No EC algorithms are affected. Analysis suggests that attacks against 2-prime RSA1024, 3-prime RSA1536, and DSA1024 as a result of this defect would be very difficult to perform and are not believed likely. Attacks against DH512 are considered just feasible. However, for an attack the target would have to re-use the DH512 private key, which is not recommended anyway. Also applications directly using the low level API BN_mod_exp may be affected if they use BN_FLG_CONSTTIME. Fixed in OpenSSL 1.1.1e (Affected 1.1.1-1.1.1d). Fixed in OpenSSL 1.0.2u (Affected 1.0.2-1.0.2t).",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-200"
+          ],
+          "VendorSeverity": {
+            "amazon": 1,
+            "nvd": 2,
+            "oracle-oval": 1,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "http://lists.opensuse.org/opensuse-security-announce/2020-01/msg00030.html",
+            "http://packetstormsecurity.com/files/155754/Slackware-Security-Advisory-openssl-Updates.html",
+            "https://access.redhat.com/security/cve/CVE-2019-1551",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1551",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=419102400a2811582a7a3d4a4e317d72e5ce0a8f",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=f1c5eea8a817075d31e43f5876993c6710238c98",
+            "https://github.com/openssl/openssl/pull/10575",
+            "https://linux.oracle.com/cve/CVE-2019-1551.html",
+            "https://linux.oracle.com/errata/ELSA-2020-4514.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/DDHOAATPWJCXRNFMJ2SASDBBNU5RJONY/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/EXDDAOWSAIEFQNBHWYE6PPYFV4QXGMCD/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/XVEP3LAK4JSPRXFO4QF4GG2IVXADV3SO/",
+            "https://seclists.org/bugtraq/2019/Dec/39",
+            "https://seclists.org/bugtraq/2019/Dec/46",
+            "https://security.gentoo.org/glsa/202004-10",
+            "https://security.netapp.com/advisory/ntap-20191210-0001/",
+            "https://ubuntu.com/security/notices/USN-4376-1",
+            "https://ubuntu.com/security/notices/USN-4504-1",
+            "https://usn.ubuntu.com/4376-1/",
+            "https://usn.ubuntu.com/4504-1/",
+            "https://www.debian.org/security/2019/dsa-4594",
+            "https://www.debian.org/security/2021/dsa-4855",
+            "https://www.openssl.org/news/secadv/20191206.txt",
+            "https://www.oracle.com/security-alerts/cpuApr2021.html",
+            "https://www.oracle.com/security-alerts/cpujan2021.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.tenable.com/security/tns-2019-09",
+            "https://www.tenable.com/security/tns-2020-03",
+            "https://www.tenable.com/security/tns-2020-11",
+            "https://www.tenable.com/security/tns-2021-10"
+          ],
+          "PublishedDate": "2019-12-06T18:15:00Z",
+          "LastModifiedDate": "2021-07-21T11:39:00Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2019-1549",
+          "PkgID": "libssl1.1@1.1.1c-r0",
+          "PkgName": "libssl1.1",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libssl1.1@1.1.1c-r0?arch=x86_64&distro=3.10.2",
+            "UID": "5743e53dcec3d29c"
+          },
+          "InstalledVersion": "1.1.1c-r0",
+          "FixedVersion": "1.1.1d-r0",
+          "Status": "fixed",
+          "Layer": {
+            "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+            "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+          },
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1549",
+          "DataSource": {
+            "ID": "alpine",
+            "Name": "Alpine Secdb",
+            "URL": "https://secdb.alpinelinux.org/"
+          },
+          "Fingerprint": "sha256:70c608adcc518d4c4bd9a183e0181da83ba22ba8b0d3a462573a72c8e6ad7362",
+          "Title": "openssl: information disclosure in fork()",
+          "Description": "OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-330"
+          ],
+          "VendorSeverity": {
+            "amazon": 2,
+            "nvd": 2,
+            "oracle-oval": 2,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2019-1549",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1549",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be",
+            "https://linux.oracle.com/cve/CVE-2019-1549.html",
+            "https://linux.oracle.com/errata/ELSA-2020-1840.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/GY6SNRJP2S7Y42GIIDO3HXPNMDYN2U3A/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ZN4VVQJ3JDCHGIHV4Y2YTXBYQZ6PWQ7E/",
+            "https://seclists.org/bugtraq/2019/Oct/1",
+            "https://security.netapp.com/advisory/ntap-20190919-0002/",
+            "https://support.f5.com/csp/article/K44070243",
+            "https://support.f5.com/csp/article/K44070243?utm_source=f5support&amp;utm_medium=RSS",
+            "https://ubuntu.com/security/notices/USN-4376-1",
+            "https://usn.ubuntu.com/4376-1/",
+            "https://www.debian.org/security/2019/dsa-4539",
+            "https://www.openssl.org/news/secadv/20190910.txt",
+            "https://www.oracle.com/security-alerts/cpuapr2020.html",
+            "https://www.oracle.com/security-alerts/cpujan2020.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.oracle.com/security-alerts/cpuoct2020.html",
+            "https://www.oracle.com/technetwork/security-advisory/cpuoct2019-5072832.html"
+          ],
+          "PublishedDate": "2019-09-10T17:15:00Z",
+          "LastModifiedDate": "2020-10-20T22:15:00Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2019-1551",
+          "PkgID": "libssl1.1@1.1.1c-r0",
+          "PkgName": "libssl1.1",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libssl1.1@1.1.1c-r0?arch=x86_64&distro=3.10.2",
+            "UID": "5743e53dcec3d29c"
+          },
+          "InstalledVersion": "1.1.1c-r0",
+          "FixedVersion": "1.1.1d-r2",
+          "Status": "fixed",
+          "Layer": {
+            "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+            "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+          },
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1551",
+          "DataSource": {
+            "ID": "alpine",
+            "Name": "Alpine Secdb",
+            "URL": "https://secdb.alpinelinux.org/"
+          },
+          "Fingerprint": "sha256:7327b4ce6851d27db6528dfec9b6ea312143eb7e77e1f7ada4f567a64e567663",
+          "Title": "openssl: Integer overflow in RSAZ modular exponentiation on x86_64",
+          "Description": "There is an overflow bug in the x64_64 Montgomery squaring procedure used in exponentiation with 512-bit moduli. No EC algorithms are affected. Analysis suggests that attacks against 2-prime RSA1024, 3-prime RSA1536, and DSA1024 as a result of this defect would be very difficult to perform and are not believed likely. Attacks against DH512 are considered just feasible. However, for an attack the target would have to re-use the DH512 private key, which is not recommended anyway. Also applications directly using the low level API BN_mod_exp may be affected if they use BN_FLG_CONSTTIME. Fixed in OpenSSL 1.1.1e (Affected 1.1.1-1.1.1d). Fixed in OpenSSL 1.0.2u (Affected 1.0.2-1.0.2t).",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-200"
+          ],
+          "VendorSeverity": {
+            "amazon": 1,
+            "nvd": 2,
+            "oracle-oval": 1,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "http://lists.opensuse.org/opensuse-security-announce/2020-01/msg00030.html",
+            "http://packetstormsecurity.com/files/155754/Slackware-Security-Advisory-openssl-Updates.html",
+            "https://access.redhat.com/security/cve/CVE-2019-1551",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1551",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=419102400a2811582a7a3d4a4e317d72e5ce0a8f",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=f1c5eea8a817075d31e43f5876993c6710238c98",
+            "https://github.com/openssl/openssl/pull/10575",
+            "https://linux.oracle.com/cve/CVE-2019-1551.html",
+            "https://linux.oracle.com/errata/ELSA-2020-4514.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/DDHOAATPWJCXRNFMJ2SASDBBNU5RJONY/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/EXDDAOWSAIEFQNBHWYE6PPYFV4QXGMCD/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/XVEP3LAK4JSPRXFO4QF4GG2IVXADV3SO/",
+            "https://seclists.org/bugtraq/2019/Dec/39",
+            "https://seclists.org/bugtraq/2019/Dec/46",
+            "https://security.gentoo.org/glsa/202004-10",
+            "https://security.netapp.com/advisory/ntap-20191210-0001/",
+            "https://ubuntu.com/security/notices/USN-4376-1",
+            "https://ubuntu.com/security/notices/USN-4504-1",
+            "https://usn.ubuntu.com/4376-1/",
+            "https://usn.ubuntu.com/4504-1/",
+            "https://www.debian.org/security/2019/dsa-4594",
+            "https://www.debian.org/security/2021/dsa-4855",
+            "https://www.openssl.org/news/secadv/20191206.txt",
+            "https://www.oracle.com/security-alerts/cpuApr2021.html",
+            "https://www.oracle.com/security-alerts/cpujan2021.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.tenable.com/security/tns-2019-09",
+            "https://www.tenable.com/security/tns-2020-03",
+            "https://www.tenable.com/security/tns-2020-11",
+            "https://www.tenable.com/security/tns-2021-10"
+          ],
+          "PublishedDate": "2019-12-06T18:15:00Z",
+          "LastModifiedDate": "2021-07-21T11:39:00Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-0001",
+          "PkgID": "libssl1.1@1.1.1c-r0",
+          "PkgName": "libssl1.1",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libssl1.1@1.1.1c-r0?arch=x86_64&distro=3.10.2",
+            "UID": "5743e53dcec3d29c"
+          },
+          "InstalledVersion": "1.1.1c-r0",
+          "Status": "affected",
+          "Layer": {
+            "Digest": "sha256:9d48c3bd43c520dc2784e868a780e976b207cbf493eaff8c6596eb871cbd9609",
+            "DiffID": "sha256:03901b4a2ea88eeaad62dbe59b072b28b6efa00491962b8741081c5df50c65e0"
+          },
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1549",
+          "DataSource": {
+            "ID": "alpine",
+            "Name": "Alpine Secdb",
+            "URL": "https://secdb.alpinelinux.org/"
+          },
+          "Fingerprint": "sha256:70c608adcc518d4c4bd9a183e0181da83ba22ba8b0d3a462573a72c8e6ad7362",
+          "Title": "openssl: information disclosure in fork()",
+          "Description": "OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-330"
+          ],
+          "VendorSeverity": {
+            "amazon": 2,
+            "nvd": 2,
+            "oracle-oval": 2,
+            "photon": 2,
+            "redhat": 1,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2019-1549",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1549",
+            "https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be",
+            "https://linux.oracle.com/cve/CVE-2019-1549.html",
+            "https://linux.oracle.com/errata/ELSA-2020-1840.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/GY6SNRJP2S7Y42GIIDO3HXPNMDYN2U3A/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ZN4VVQJ3JDCHGIHV4Y2YTXBYQZ6PWQ7E/",
+            "https://seclists.org/bugtraq/2019/Oct/1",
+            "https://security.netapp.com/advisory/ntap-20190919-0002/",
+            "https://support.f5.com/csp/article/K44070243",
+            "https://support.f5.com/csp/article/K44070243?utm_source=f5support&amp;utm_medium=RSS",
+            "https://ubuntu.com/security/notices/USN-4376-1",
+            "https://usn.ubuntu.com/4376-1/",
+            "https://www.debian.org/security/2019/dsa-4539",
+            "https://www.openssl.org/news/secadv/20190910.txt",
+            "https://www.oracle.com/security-alerts/cpuapr2020.html",
+            "https://www.oracle.com/security-alerts/cpujan2020.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.oracle.com/security-alerts/cpuoct2020.html",
+            "https://www.oracle.com/technetwork/security-advisory/cpuoct2019-5072832.html"
+          ],
+          "PublishedDate": "2019-09-10T17:15:00Z",
+          "LastModifiedDate": "2020-10-20T22:15:00Z"
+        }
+      ]
+    },
+    {
+      "Target": "app/package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Packages": [
+        {
+          "ID": "asap@2.0.6",
+          "Name": "asap",
+          "Identifier": {
+            "PURL": "pkg:npm/asap@2.0.6",
+            "UID": "a9ed9c990b55c97e"
+          },
+          "Version": "2.0.6",
+          "Locations": [
+            {
+              "StartLine": 6,
+              "EndLine": 10
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "jquery@3.3.9",
+          "Name": "jquery",
+          "Identifier": {
+            "PURL": "pkg:npm/jquery@3.3.9",
+            "UID": "5624abe72853740"
+          },
+          "Version": "3.3.9",
+          "Licenses": [
+            "MIT"
+          ],
+          "Locations": [
+            {
+              "StartLine": 11,
+              "EndLine": 15
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "js-tokens@4.0.0",
+          "Name": "js-tokens",
+          "Identifier": {
+            "PURL": "pkg:npm/js-tokens@4.0.0",
+            "UID": "64fc20ee370178b3"
+          },
+          "Version": "4.0.0",
+          "Locations": [
+            {
+              "StartLine": 16,
+              "EndLine": 20
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "loose-envify@1.4.0",
+          "Name": "loose-envify",
+          "Identifier": {
+            "PURL": "pkg:npm/loose-envify@1.4.0",
+            "UID": "880231ec08096120"
+          },
+          "Version": "1.4.0",
+          "DependsOn": [
+            "js-tokens@4.0.0"
+          ],
+          "Locations": [
+            {
+              "StartLine": 21,
+              "EndLine": 28
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "object-assign@4.1.1",
+          "Name": "object-assign",
+          "Identifier": {
+            "PURL": "pkg:npm/object-assign@4.1.1",
+            "UID": "48119107a22d86bc"
+          },
+          "Version": "4.1.1",
+          "Locations": [
+            {
+              "StartLine": 29,
+              "EndLine": 33
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "promise@8.0.3",
+          "Name": "promise",
+          "Identifier": {
+            "PURL": "pkg:npm/promise@8.0.3",
+            "UID": "755f2bbb480f470d"
+          },
+          "Version": "8.0.3",
+          "Licenses": [
+            "MIT"
+          ],
+          "DependsOn": [
+            "asap@2.0.6"
+          ],
+          "Locations": [
+            {
+              "StartLine": 34,
+              "EndLine": 41
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "prop-types@15.7.2",
+          "Name": "prop-types",
+          "Identifier": {
+            "PURL": "pkg:npm/prop-types@15.7.2",
+            "UID": "2826a59f397d6438"
+          },
+          "Version": "15.7.2",
+          "DependsOn": [
+            "loose-envify@1.4.0",
+            "object-assign@4.1.1",
+            "react-is@16.8.6"
+          ],
+          "Locations": [
+            {
+              "StartLine": 42,
+              "EndLine": 51
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "react@16.8.6",
+          "Name": "react",
+          "Identifier": {
+            "PURL": "pkg:npm/react@16.8.6",
+            "UID": "82d9f16b21d9e2c2"
+          },
+          "Version": "16.8.6",
+          "Licenses": [
+            "MIT"
+          ],
+          "DependsOn": [
+            "loose-envify@1.4.0",
+            "object-assign@4.1.1",
+            "prop-types@15.7.2",
+            "scheduler@0.13.6"
+          ],
+          "Locations": [
+            {
+              "StartLine": 52,
+              "EndLine": 62
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "react-is@16.8.6",
+          "Name": "react-is",
+          "Identifier": {
+            "PURL": "pkg:npm/react-is@16.8.6",
+            "UID": "847264915e79444a"
+          },
+          "Version": "16.8.6",
+          "Licenses": [
+            "MIT"
+          ],
+          "Locations": [
+            {
+              "StartLine": 63,
+              "EndLine": 67
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "redux@4.0.1",
+          "Name": "redux",
+          "Identifier": {
+            "PURL": "pkg:npm/redux@4.0.1",
+            "UID": "c38443b568b7d5b9"
+          },
+          "Version": "4.0.1",
+          "Licenses": [
+            "MIT"
+          ],
+          "DependsOn": [
+            "loose-envify@1.4.0",
+            "symbol-observable@1.2.0"
+          ],
+          "Locations": [
+            {
+              "StartLine": 68,
+              "EndLine": 76
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "scheduler@0.13.6",
+          "Name": "scheduler",
+          "Identifier": {
+            "PURL": "pkg:npm/scheduler@0.13.6",
+            "UID": "92cfb6b69c6b19ce"
+          },
+          "Version": "0.13.6",
+          "DependsOn": [
+            "loose-envify@1.4.0",
+            "object-assign@4.1.1"
+          ],
+          "Locations": [
+            {
+              "StartLine": 77,
+              "EndLine": 85
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "symbol-observable@1.2.0",
+          "Name": "symbol-observable",
+          "Identifier": {
+            "PURL": "pkg:npm/symbol-observable@1.2.0",
+            "UID": "2d38df676788a02f"
+          },
+          "Version": "1.2.0",
+          "Locations": [
+            {
+              "StartLine": 86,
+              "EndLine": 90
+            }
+          ],
+          "AnalyzedBy": "npm"
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2019-11358",
+          "PkgID": "jquery@3.3.9",
+          "PkgName": "jquery",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/jquery@3.3.9",
+            "UID": "5624abe72853740"
+          },
+          "InstalledVersion": "3.3.9",
+          "FixedVersion": "3.4.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-11358",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory Npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:3952ef90d8606b4067901c413142af693504f820972f5b017a6fdb627ba56af0",
+          "Title": "jquery: Prototype pollution in object's prototype leading to denial of service, remote code execution, or property injection",
+          "Description": "jQuery before 3.4.0, as used in Drupal, Backdrop CMS, and other products, mishandles jQuery.extend(true, {}, ...) because of Object.prototype pollution. If an unsanitized source object contained an enumerable __proto__ property, it could extend the native Object.prototype.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-79"
+          ],
+          "VendorSeverity": {
+            "alma": 2,
+            "amazon": 2,
+            "arch-linux": 2,
+            "ghsa": 2,
+            "nodejs-security-wg": 2,
+            "nvd": 2,
+            "oracle-oval": 2,
+            "redhat": 2,
+            "ruby-advisory-db": 2,
+            "ubuntu": 1
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:N/I:P/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+              "V2Score": 4.3,
+              "V3Score": 6.1
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+              "V3Score": 5.6
+            }
+          },
+          "References": [
+            "http://lists.opensuse.org/opensuse-security-announce/2019-08/msg00006.html",
+            "http://lists.opensuse.org/opensuse-security-announce/2019-08/msg00025.html",
+            "http://packetstormsecurity.com/files/152787/dotCMS-5.1.1-Vulnerable-Dependencies.html",
+            "http://packetstormsecurity.com/files/153237/RetireJS-CORS-Issue-Script-Execution.html",
+            "http://packetstormsecurity.com/files/156743/OctoberCMS-Insecure-Dependencies.html",
+            "http://seclists.org/fulldisclosure/2019/May/10",
+            "http://seclists.org/fulldisclosure/2019/May/11",
+            "http://seclists.org/fulldisclosure/2019/May/13",
+            "http://www.openwall.com/lists/oss-security/2019/06/03/2",
+            "http://www.securityfocus.com/bid/108023",
+            "https://access.redhat.com/errata/RHBA-2019:1570",
+            "https://access.redhat.com/errata/RHSA-2019:1456",
+            "https://access.redhat.com/errata/RHSA-2019:2587",
+            "https://access.redhat.com/errata/RHSA-2019:3023",
+            "https://access.redhat.com/errata/RHSA-2019:3024",
+            "https://access.redhat.com/security/cve/CVE-2019-11358",
+            "https://backdropcms.org/security/backdrop-sa-core-2019-009",
+            "https://blog.jquery.com/2019/04/10/jquery-3-4-0-released/",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-11358",
+            "https://github.com/DanielRuf/snyk-js-jquery-174006?files=1",
+            "https://github.com/advisories/GHSA-6c3j-c64m-qhgq",
+            "https://github.com/jquery/jquery/commit/753d591aea698e57d6db58c9f722cd0808619b1b",
+            "https://github.com/jquery/jquery/pull/4333",
+            "https://github.com/rails/jquery-rails/blob/master/CHANGELOG.md#434",
+            "https://hackerone.com/reports/454365",
+            "https://kb.pulsesecure.net/articles/Pulse_Security_Advisories/SA44601",
+            "https://linux.oracle.com/cve/CVE-2019-11358.html",
+            "https://linux.oracle.com/errata/ELSA-2020-4847.html",
+            "https://lists.apache.org/thread.html/08720ef215ee7ab3386c05a1a90a7d1c852bf0706f176a7816bf65fc@%3Ccommits.airflow.apache.org%3E",
+            "https://lists.apache.org/thread.html/519eb0fd45642dcecd9ff74cb3e71c20a4753f7d82e2f07864b5108f@%3Cdev.drill.apache.org%3E",
+            "https://lists.apache.org/thread.html/5928aa293e39d248266472210c50f176cac1535220f2486e6a7fa844@%3Ccommits.airflow.apache.org%3E",
+            "https://lists.apache.org/thread.html/6097cdbd6f0a337bedd9bb5cc441b2d525ff002a96531de367e4259f@%3Ccommits.airflow.apache.org%3E",
+            "https://lists.apache.org/thread.html/88fb0362fd40e5b605ea8149f63241537b8b6fb5bfa315391fc5cbb7@%3Ccommits.airflow.apache.org%3E",
+            "https://lists.apache.org/thread.html/b0656d359c7d40ec9f39c8cc61bca66802ef9a2a12ee199f5b0c1442@%3Cdev.drill.apache.org%3E",
+            "https://lists.apache.org/thread.html/b736d0784cf02f5a30fbb4c5902762a15ad6d47e17e2c5a17b7d6205@%3Ccommits.airflow.apache.org%3E",
+            "https://lists.apache.org/thread.html/ba79cf1658741e9f146e4c59b50aee56656ea95d841d358d006c18b6@%3Ccommits.roller.apache.org%3E",
+            "https://lists.apache.org/thread.html/bcce5a9c532b386c68dab2f6b3ce8b0cc9b950ec551766e76391caa3@%3Ccommits.nifi.apache.org%3E",
+            "https://lists.apache.org/thread.html/f9bc3e55f4e28d1dcd1a69aae6d53e609a758e34d2869b4d798e13cc@%3Cissues.drill.apache.org%3E",
+            "https://lists.apache.org/thread.html/r2041a75d3fc09dec55adfd95d598b38d22715303f65c997c054844c9@%3Cissues.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/r2baacab6e0acb5a2092eb46ae04fd6c3e8277b4fd79b1ffb7f3254fa@%3Cissues.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/r38f0d1aa3c923c22977fe7376508f030f22e22c1379fbb155bf29766@%3Cdev.syncope.apache.org%3E",
+            "https://lists.apache.org/thread.html/r41b5bfe009c845f67d4f68948cc9419ac2d62e287804aafd72892b08@%3Cissues.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/r7aac081cbddb6baa24b75e74abf0929bf309b176755a53e3ed810355@%3Cdev.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/r7d64895cc4dff84d0becfc572b20c0e4bf9bfa7b10c6f5f73e783734@%3Cdev.storm.apache.org%3E",
+            "https://lists.apache.org/thread.html/r7e8ebccb7c022e41295f6fdb7b971209b83702339f872ddd8cf8bf73@%3Cissues.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/rac25da84ecdcd36f6de5ad0d255f4e967209bbbebddb285e231da37d@%3Cissues.flink.apache.org%3E",
+            "https://lists.apache.org/thread.html/rca37935d661f4689cb4119f1b3b224413b22be161b678e6e6ce0c69b@%3Ccommits.nifi.apache.org%3E",
+            "https://lists.debian.org/debian-lts-announce/2019/05/msg00006.html",
+            "https://lists.debian.org/debian-lts-announce/2019/05/msg00029.html",
+            "https://lists.debian.org/debian-lts-announce/2020/02/msg00024.html",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/4UOAZIFCSZ3ENEFOR5IXX6NFAD3HV7FA/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/5IABSKTYZ5JUGL735UKGXL5YPRYOPUYI/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/KYH3OAGR2RTCHRA5NOKX2TES7SNQMWGO/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/QV3PKZC3PQCO3273HAT76PAQZFBEO4KP/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/RLXRX23725JL366CNZGJZ7AQQB7LHQ6F/",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/WZW27UCJ5CYFL4KFFFMYMIBNMIU2ALG5/",
+            "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
+            "https://seclists.org/bugtraq/2019/Apr/32",
+            "https://seclists.org/bugtraq/2019/Jun/12",
+            "https://seclists.org/bugtraq/2019/May/18",
+            "https://security.netapp.com/advisory/ntap-20190919-0001/",
+            "https://snyk.io/vuln/SNYK-JS-JQUERY-174006",
+            "https://www.debian.org/security/2019/dsa-4434",
+            "https://www.debian.org/security/2019/dsa-4460",
+            "https://www.drupal.org/sa-core-2019-006",
+            "https://www.oracle.com//security-alerts/cpujul2021.html",
+            "https://www.oracle.com/security-alerts/cpuApr2021.html",
+            "https://www.oracle.com/security-alerts/cpuapr2020.html",
+            "https://www.oracle.com/security-alerts/cpujan2020.html",
+            "https://www.oracle.com/security-alerts/cpujan2021.html",
+            "https://www.oracle.com/security-alerts/cpujul2020.html",
+            "https://www.oracle.com/security-alerts/cpuoct2020.html",
+            "https://www.oracle.com/security-alerts/cpuoct2021.html",
+            "https://www.oracle.com/technetwork/security-advisory/cpujul2019-5072835.html",
+            "https://www.oracle.com/technetwork/security-advisory/cpuoct2019-5072832.html",
+            "https://www.privacy-wise.com/mitigating-cve-2019-11358-in-old-versions-of-jquery/",
+            "https://www.synology.com/security/advisory/Synology_SA_19_19",
+            "https://www.tenable.com/security/tns-2019-08",
+            "https://www.tenable.com/security/tns-2020-02"
+          ],
+          "PublishedDate": "2019-04-20T00:29:00Z",
+          "LastModifiedDate": "2021-10-20T11:15:00Z"
+        }
+      ]
+    },
+    {
+      "Target": "Python",
+      "Class": "lang-pkgs",
+      "Type": "python-pkg"
+    }
+  ]
+}

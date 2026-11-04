@@ -96,6 +96,12 @@ const (
 	// EventUpdateAvailable fires once per new kuso release the updater
 	// poll sees. Nothing installs until an admin presses Update.
 	EventUpdateAvailable EventType = "update.available"
+	// Vulnerability scanning (internal/vulnscan, docs/VULN_SCANNING.md).
+	// deploy_blocked is emitted by the build poller through
+	// builds.EventEnvelope, so its string is duplicated there.
+	EventVulnsFound    EventType = "security.vulnerabilities_found"
+	EventDeployBlocked EventType = "security.deploy_blocked"
+	EventScanFailed    EventType = "security.scan_failed"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -150,6 +156,11 @@ var EventCatalogue = []EventTypeInfo{
 	{EventNodeUpdatesApplied, "Host updates applied", "nodes", ""},
 	{EventBackupOK, "Backup succeeded", "backups", ""},
 	{EventBackupFailed, "Backup failed", "backups", "@here"},
+	// Group "other", not a new "security" group: the web settings page
+	// renders a fixed group list and would hide unknown groups.
+	{EventVulnsFound, "New vulnerabilities found", "other", ""},
+	{EventDeployBlocked, "Deploy blocked by vulnerabilities", "other", "@here"},
+	{EventScanFailed, "Vulnerability scan failed", "other", ""},
 	{EventUpdateAvailable, "kuso update available", "other", ""},
 }
 

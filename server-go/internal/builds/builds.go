@@ -1648,6 +1648,10 @@ type Poller struct {
 	ImageDeleter ImageDeleter
 	ImageRecords ImageRecordLister
 
+	// VulnGate scans a built image before promotion (vulngate.go).
+	// Optional: nil → promote without scanning.
+	VulnGate VulnGate
+
 	// CommitStatuses posts GitHub commit statuses as builds transition
 	// (commit_status.go). Optional: nil → no statuses.
 	CommitStatuses CommitStatusReporter
@@ -2856,8 +2860,15 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			p.notePromotionHold(ctx, ns, b, hold)
 			return nil // stays active; re-checked next tick
 		}
-		p.clearPromotionHold(ctx, ns, b)
 	}
+	// Vulnerability gate (vulngate.go): runs once the wave is green, and
+	// reuses the hold annotation while the scan is in flight — so the
+	// hold is cleared only after it, or a scanning build would flap
+	// between held and unheld every tick.
+	if stop, err := p.runVulnGate(ctx, ns, b); stop || err != nil {
+		return err
+	}
+	p.clearPromotionHold(ctx, ns, b)
 	notDeployed := false
 	if !b.Spec.DryRun {
 		matched, err := p.promoteImageCount(ctx, ns, b)

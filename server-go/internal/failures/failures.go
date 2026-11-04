@@ -70,6 +70,10 @@ const (
 	// kuso drops ALL Linux capabilities: it chowns a dir, switches user
 	// (setuid/setgroups via gosu/su-exec/setpriv) or binds a port < 1024.
 	KindMissingCapability Kind = "missing_capability"
+	// KindVulnBlocked is the vulnerability gate refusing to promote an
+	// image with fixable critical CVEs (internal/vulnscan). Hyphenated,
+	// unlike its siblings, because docs/VULN_SCANNING.md fixes the slug.
+	KindVulnBlocked Kind = "vuln-blocked"
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -85,6 +89,8 @@ const (
 	// build-time failures whose fix is a build config (Dockerfile path,
 	// build args, build memory) rather than runtime env.
 	TabBuild Tab = "build"
+	// TabVulnerabilities opens the service's vulnerability findings.
+	TabVulnerabilities Tab = "vulnerabilities"
 )
 
 // Remediation is the actionable "here's how to fix it" payload attached
