@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -436,6 +437,24 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
+	}
+	// The backup bucket is where production dumps get written with the
+	// instance's S3 credentials, so moving it is a secrets:read action.
+	// Re-sending the current value (whole-form saves) stays at Editor.
+	if wire.Backup != nil && wire.Backup.Bucket != nil {
+		cur, err := h.Svc.GetOwned(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
+		if err != nil {
+			h.fail(w, "update addon", err)
+			return
+		}
+		current := ""
+		if cur.Spec.Backup != nil {
+			current = cur.Spec.Backup.Bucket
+		}
+		if strings.TrimSpace(*wire.Backup.Bucket) != current && !callerCanReadSecrets(ctx, h.DB, chi.URLParam(r, "project")) {
+			writeErr(w, http.StatusForbidden, "changing an addon's backup bucket needs project admin")
+			return
+		}
 	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), apiv1UpdateAddonToDomain(wire))
 	if err != nil {
