@@ -364,6 +364,7 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
+	defaultComponentImages(&m)
 	// Fully decoded + signature-checked (or explicitly accepted under
 	// require=false). Safe to cache the ETag now so the next poll can
 	// short-circuit on 304.
@@ -490,19 +491,21 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
-	// Defensive: a malformed/partial manifest that omits a component image
-	// must not blank the corresponding Deployment image on roll. Fall back
-	// to the version-tagged default (same shape as the synthesized-manifest
-	// path above). This closes the empty-image hole; it does NOT correct a
-	// wrong-but-present tag — that's release-time's job (the ghcr pagination
-	// fix in hack/release.sh). Belt-and-braces against a future bad release.
+	defaultComponentImages(&m)
+	return &m, nil
+}
+
+// defaultComponentImages fills a missing server/operator image with the
+// version-tagged default (same shape as the synthesized-manifest path).
+// A malformed/partial manifest must not blank a Deployment image on roll.
+// It does NOT correct a wrong-but-present tag — that's release-time's job.
+func defaultComponentImages(m *Manifest) {
 	if m.Components.Server.Image == "" {
 		m.Components.Server.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-server-go:%s", m.Version)
 	}
 	if m.Components.Operator.Image == "" {
 		m.Components.Operator.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-operator:%s", m.Version)
 	}
-	return &m, nil
 }
 
 // canAutoUpgrade returns whether the user can hit "Update" without

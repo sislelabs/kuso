@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -170,5 +171,39 @@ func TestMinServerBlock(t *testing.T) {
 	// nil manifest must not panic and must not block.
 	if reason := (&Service{Current: "v1.0.0"}).minServerBlock(nil); reason != "" {
 		t.Errorf("nil manifest should not block, got %q", reason)
+	}
+}
+
+// fetchLatest must apply the same empty-component-image fallback as
+// fetchVersion; a blank server image becomes `kubectl set image server=`.
+func TestFetchLatest_FallsBackEmptyComponentImages(t *testing.T) {
+	t.Setenv("KUSO_REQUIRE_SIGNATURES", "false")
+	const manifestURL = "https://example.test/release.json"
+	manifest := `{"version":"v9.9.9","components":{"server":{"image":""}}}`
+	ghRelease := `{"tag_name":"v9.9.9","body":"notes","assets":[{"name":"release.json","browser_download_url":"` + manifestURL + `"}]}`
+	s := &Service{
+		Repo:    "sislelabs/kuso",
+		Current: "v9.9.8",
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(r.URL.Host, "api.github.com"):
+				return jsonResp(200, ghRelease), nil
+			case r.URL.String() == manifestURL:
+				return jsonResp(200, manifest), nil
+			default:
+				return jsonResp(404, `{}`), nil
+			}
+		})},
+	}
+	_, m, err := s.fetchLatest(context.Background())
+	if err != nil {
+		t.Fatalf("fetchLatest: %v", err)
+	}
+	if m.Components.Server.Image != "ghcr.io/sislelabs/kuso-server-go:v9.9.9" {
+		t.Errorf("server image = %q", m.Components.Server.Image)
+	}
+	if m.Components.Operator.Image != "ghcr.io/sislelabs/kuso-operator:v9.9.9" {
+		t.Errorf("operator image = %q", m.Components.Operator.Image)
 	}
 }
