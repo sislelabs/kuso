@@ -1009,8 +1009,21 @@ else
   if [[ -z "$K3S_NODE_TOKEN" ]]; then
     log "  WARNING: /var/lib/rancher/k3s/server/node-token not readable — skipping kuso-k3s-token Secret. Add Node flow will fall back to the hostPath mount on the control-plane node only."
   else
+    # Prefer handing joining nodes the agent token: the server token
+    # also unlocks the cluster CA keys. On a k3s started without
+    # --agent-token the two files hold the same value, so only store a
+    # distinct one.
+    K3S_AGENT_TOKEN=""
+    if [[ -r /var/lib/rancher/k3s/server/agent-token ]]; then
+      K3S_AGENT_TOKEN="$(tr -d '\n' < /var/lib/rancher/k3s/server/agent-token)"
+    fi
+    AGENT_TOKEN_ARGS=()
+    if [[ -n "$K3S_AGENT_TOKEN" && "$K3S_AGENT_TOKEN" != "$K3S_NODE_TOKEN" ]]; then
+      AGENT_TOKEN_ARGS=(--from-literal=KUSO_K3S_AGENT_TOKEN="$K3S_AGENT_TOKEN")
+    fi
     kubectl create secret generic kuso-k3s-token -n kuso --dry-run=client -o yaml \
       --from-literal=KUSO_K3S_TOKEN="$K3S_NODE_TOKEN" \
+      ${AGENT_TOKEN_ARGS[@]+"${AGENT_TOKEN_ARGS[@]}"} \
       | kubectl apply -f - >/dev/null
   fi
 fi

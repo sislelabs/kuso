@@ -21,9 +21,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -66,6 +68,8 @@ type JoinResult struct {
 // so tests can swap it.
 var TokenFile = "/etc/kuso/k3s-token"
 
+var serverTokenWarn sync.Once
+
 // ReadServerToken returns the k3s server token. Three sources, in
 // order of preference:
 //   1. KUSO_K3S_TOKEN env var (set when the install script copies the
@@ -76,7 +80,18 @@ var TokenFile = "/etc/kuso/k3s-token"
 //      works when the pod is on the control-plane node). Kept as a
 //      fallback so existing deploys keep working without a re-install.
 //   3. Friendly error pointing at the install script.
+//
+// KUSO_K3S_AGENT_TOKEN wins over all of these. The server token also
+// authorizes /v1-k3s/server-bootstrap (cluster CA keys) and joining as
+// a server, so a worker that holds it can take over the cluster; an
+// agent token (k3s --agent-token) can only join agents.
 func ReadServerToken() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("KUSO_K3S_AGENT_TOKEN")); v != "" {
+		return v, nil
+	}
+	serverTokenWarn.Do(func() {
+		slog.Warn("nodejoin: KUSO_K3S_AGENT_TOKEN not set; joining nodes receive the k3s SERVER token. Start k3s with --agent-token and add it to the kuso-k3s-token Secret.")
+	})
 	if v := strings.TrimSpace(os.Getenv("KUSO_K3S_TOKEN")); v != "" {
 		return v, nil
 	}
