@@ -62,19 +62,29 @@ func slugify(s string) string {
 // preserving order. The first name keeps its slug; a later name that
 // slugifies to the same string becomes "<slug>-2", "<slug>-3", … —
 // the same scheme the coolify importer uses so report and apply agree.
+// The suffix skips names already handed out, so a literal "worker-2"
+// can't collide with a suffixed "worker".
 func dedupeSlugs(names []string) map[string]string {
 	out := map[string]string{}
-	seen := map[string]int{}
+	taken := map[string]bool{}
 	for _, n := range names {
-		base := slugify(n)
-		seen[base]++
-		if seen[base] == 1 {
-			out[n] = base
+		if _, done := out[n]; done {
 			continue
 		}
-		out[n] = base + "-" + itoa(seen[base])
+		out[n] = uniqueSlug(slugify(n), taken)
 	}
 	return out
+}
+
+// uniqueSlug returns base, or base-2, base-3, … — the first not in
+// taken — and marks it taken.
+func uniqueSlug(base string, taken map[string]bool) string {
+	slug := base
+	for i := 2; taken[slug]; i++ {
+		slug = base + "-" + itoa(i)
+	}
+	taken[slug] = true
+	return slug
 }
 
 func itoa(i int) string {
