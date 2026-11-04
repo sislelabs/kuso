@@ -76,7 +76,7 @@
             "type": "string"
           },
           "passwordSecret": {
-            "description": "Reference an existing Secret containing the addon\npassword. The chart copies the value at install\ntime into \u003crelease\u003e-conn instead of generating\na random one. Leave unset to let the chart\ngenerate a random 24-char password.\n",
+            "description": "Reference an existing Secret containing the addon\npassword. The chart copies the value at install\ntime into \u003crelease\u003e-conn instead of generating\na random one. Leave unset to let the chart\ngenerate a random 24-char password.\nHonoured only for kind postgres (incl. HA and the\npooler); every other kind ignores it and generates\na random password.\n",
             "properties": {
               "key": {
                 "default": "password",

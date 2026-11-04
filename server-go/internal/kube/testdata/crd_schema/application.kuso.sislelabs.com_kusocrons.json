@@ -152,12 +152,12 @@
                     "type": "string"
                   },
                   "name": {
-                    "pattern": "^[a-z0-9][a-z0-9-]*-conn$",
+                    "pattern": "^[a-z0-9][a-z0-9-]*-conn$|^[a-z0-9][a-z0-9-]*-shared$|^kuso-instance-shared$",
                     "type": "string",
                     "x-kubernetes-validations": [
                       {
                         "message": "control-plane secrets (kuso-*) cannot be referenced from workload CRs",
-                        "rule": "!self.startsWith('kuso-')"
+                        "rule": "self == 'kuso-instance-shared' || (!self.startsWith('kuso-'))"
                       }
                     ]
                   }
