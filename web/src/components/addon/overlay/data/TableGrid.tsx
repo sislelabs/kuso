@@ -58,8 +58,12 @@ export function TableGrid({
     staleTime: 60_000,
   });
 
+  // With no sort chosen, order by the first primary-key column: an
+  // unordered SELECT can come back in a different order after an edit,
+  // and row identity here is positional.
+  const effectiveOrder = orderBy || (cols.data?.primaryKey?.[0] ?? "");
   const rows = useQuery({
-    queryKey: ["addons", project, addon, database ?? "", "sql", "rows", schema, table, page, orderBy, dir],
+    queryKey: ["addons", project, addon, database ?? "", "sql", "rows", schema, table, page, effectiveOrder, dir],
     queryFn: () =>
       getSQLRows(project, addon, {
         schema,
@@ -67,8 +71,8 @@ export function TableGrid({
         database,
         limit: PAGE,
         offset: page * PAGE,
-        orderBy: orderBy || undefined,
-        dir: orderBy ? dir : undefined,
+        orderBy: effectiveOrder || undefined,
+        dir: effectiveOrder ? dir : undefined,
       }),
     staleTime: 10_000,
     // Keep the previous page on screen while paging/sorting the SAME
@@ -135,6 +139,18 @@ export function TableGrid({
       toast.error(e instanceof Error ? e.message : "could not resolve primary key");
       return null;
     }
+  };
+
+  const rowKey = (rowIdx: number): string => {
+    const r = rows.data;
+    if (!r || pk.length === 0) return String(rowIdx);
+    const parts: (string | null)[] = [];
+    for (const col of pk) {
+      const ci = r.columns.indexOf(col);
+      if (ci < 0) return String(rowIdx);
+      parts.push(r.nulls[rowIdx][ci] ? null : r.rows[rowIdx][ci]);
+    }
+    return JSON.stringify(parts);
   };
 
   const toggleSort = (col: string) => {
@@ -220,7 +236,9 @@ export function TableGrid({
           <tbody>
             {data.rows.map((row, ri) => (
               <tr
-                key={ri}
+                // Keyed by primary key so an open cell editor stays with its
+                // row (and its draft) if a refetch reorders the page.
+                key={rowKey(ri)}
                 className="group border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--bg-tertiary)]/30"
               >
                 {editable && (
