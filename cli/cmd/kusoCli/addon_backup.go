@@ -69,38 +69,37 @@ var addonBackupRestoreInto string
 var addonBackupRestoreConfirm string
 
 // resolveRestoreConfirm computes the `confirm` value to send and
-// rejects an unconfirmed in-place (destructive) restore. In-place means
-// no --into, or --into naming the source addon itself; that path
-// overwrites live data, so the caller must have passed --confirm
-// <addon>. Restoring into a distinct sibling is non-destructive and
-// needs no confirmation.
+// rejects an unconfirmed restore. The dumps are --clean, so the
+// destination (the addon itself, or the --into sibling) is overwritten
+// either way and --confirm must echo the destination's name.
 func resolveRestoreConfirm(addon, into, confirmFlag string) (string, error) {
-	inPlace := into == "" || into == addon
-	if !inPlace {
-		return confirmFlag, nil
+	dest := addon
+	if into != "" {
+		dest = into
 	}
-	if confirmFlag != addon {
-		return "", fmt.Errorf("in-place restore overwrites %q's live data — re-run with --confirm %s (or --into <other-addon>)", addon, addon)
+	if confirmFlag != dest {
+		return "", fmt.Errorf("restore overwrites %q's live data — re-run with --confirm %s", dest, dest)
 	}
-	return addon, nil
+	return dest, nil
 }
 
 var addonBackupRestoreCmd = &cobra.Command{
 	Use:   "restore <project> <addon> <key>",
 	Short: "Restore an S3 backup. Default = in-place (DESTRUCTIVE)",
 	Long: `Restores the chosen backup into either the source addon (overwriting
-existing data) or a sibling addon (--into <name>) leaving the source
-untouched. The server creates a one-shot Job that runs gunzip | psql.
+existing data) or a sibling addon (--into <name>), whose existing tables
+are overwritten while the source stays untouched. --confirm must echo the
+destination name. The server creates a one-shot Job that runs gunzip | psql.
 
 The target addon must already exist + be the same engine as the source.`,
-	Example: `  kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz
-  kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz --into postgres-rehearse`,
+	Example: `  kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz --confirm postgres
+  kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz --into postgres-rehearse --confirm postgres-rehearse`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		// In-place restore is destructive; the server demands the
+		// Every restore overwrites its destination; the server demands the
 		// destination addon name echoed in `confirm`. Fail early with a
 		// clear message rather than letting the server 400.
 		confirm, err := resolveRestoreConfirm(args[1], addonBackupRestoreInto, addonBackupRestoreConfirm)
@@ -426,7 +425,7 @@ func init() {
 	addonBackupListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	addonBackupCmd.AddCommand(addonBackupRestoreCmd)
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
-	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the addon name to acknowledge a DESTRUCTIVE in-place restore")
+	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the destination addon name (the addon, or --into) to acknowledge the overwrite")
 	addonBackupCmd.AddCommand(addonBackupDownloadCmd)
 	// Long-only --file for the destination; -o/--output is retired here
 	// (it used to mean the FILE while meaning the FORMAT everywhere

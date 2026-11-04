@@ -550,24 +550,14 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
-	// Compare the RESOLVED CR names, not the raw request strings: `pg` and
-	// `myproj-pg` both resolve to the same CR, so a caller could pass
-	// into="myproj-pg" while the URL addon is "pg" and — under the old
-	// raw-string check (destAddon == addon) — dodge the confirm gate while
-	// still overwriting the source addon's live data in place. When the
-	// destination CR IS the source CR, the restore Job applies the dump onto
-	// the target's own database (all-or-nothing psql --single-transaction),
-	// overwriting live data with no undo — the same blast radius as an addon
-	// Delete. Demand the caller echo the destination addon name in `confirm`,
-	// mirroring AddonsHandler.Delete's ?confirm=<addon> gate. Restoring into a
-	// GENUINELY DISTINCT sibling addon leaves the source untouched, so it's
-	// exempt.
-	if inPlaceRestoreNeedsConfirm(srcCR.Name, destCR.Name, destAddon, req.Confirm) {
+	// Typed-confirmation guard. Every restore is destructive to its
+	// destination: the dumps are pg_dump --clean, so the target's tables are
+	// dropped and recreated whether it is the source addon (in place) or a
+	// sibling via `into`. The caller must echo the destination addon name in
+	// `confirm`, mirroring AddonsHandler.Delete's ?confirm=<addon> gate.
+	if restoreNeedsConfirm(destAddon, req.Confirm) {
 		writeErr(w,
-
-			http.StatusBadRequest, "in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")")
-
+			http.StatusBadRequest, fmt.Sprintf("restore overwrites %q's live data — set \"confirm\":%q to acknowledge", destAddon, destAddon))
 		return
 	}
 	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
@@ -698,18 +688,10 @@ func overrideEnv(env []corev1.EnvVar, v corev1.EnvVar) []corev1.EnvVar {
 	return append(env, v)
 }
 
-// inPlaceRestoreNeedsConfirm decides whether the destructive-in-place
-// confirmation gate applies. It compares the RESOLVED CR names (srcName /
-// destName) rather than the raw request strings, so short-name/FQN aliasing
-// (`pg` vs `myproj-pg`, both the same CR) can't be used to slip an in-place
-// overwrite past the gate. When the destination CR is the source CR the
-// restore overwrites live data in place and the caller must have echoed the
-// destination addon name in confirm; a genuinely distinct sibling destination
-// is exempt.
-func inPlaceRestoreNeedsConfirm(srcName, destName, destAddon, confirm string) bool {
-	if destName != srcName {
-		return false // distinct destination CR — non-destructive to source
-	}
+// restoreNeedsConfirm reports whether the typed confirmation is missing.
+// destAddon is the name the caller addressed (the URL addon, or `into`), so
+// short-name/FQN aliasing of the same CR still has to echo that exact name.
+func restoreNeedsConfirm(destAddon, confirm string) bool {
 	return confirm != destAddon
 }
 

@@ -11,8 +11,8 @@ type RestoreBackupRequest struct {
 	Key string `json:"key"`
 	// Into = sibling addon name. Empty = in-place (destructive).
 	Into string `json:"into,omitempty"`
-	// Confirm must echo the destination addon name for an in-place
-	// restore (server rejects otherwise). Ignored for --into siblings.
+	// Confirm must echo the destination addon name (the addon itself, or
+	// Into); the server rejects the restore otherwise.
 	Confirm string `json:"confirm,omitempty"`
 }
 

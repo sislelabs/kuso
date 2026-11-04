@@ -28,8 +28,9 @@ func TestResolveRestoreConfirm(t *testing.T) {
 		{"in-place confirmed ok", "postgres", "", "postgres", "postgres", false},
 		{"into-self unconfirmed rejected", "postgres", "postgres", "", "", true},
 		{"into-self confirmed ok", "postgres", "postgres", "postgres", "postgres", false},
-		{"into sibling no confirm needed", "postgres", "postgres-rehearse", "", "", false},
-		{"into sibling passes confirm through", "postgres", "postgres-rehearse", "x", "x", false},
+		{"into sibling unconfirmed rejected", "postgres", "postgres-rehearse", "", "", true},
+		{"into sibling confirming source rejected", "postgres", "postgres-rehearse", "postgres", "", true},
+		{"into sibling confirmed ok", "postgres", "postgres-rehearse", "postgres-rehearse", "postgres-rehearse", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

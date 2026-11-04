@@ -383,7 +383,7 @@ kuso addon-backup download <p> <addon> [--file dump.sql.gz] [--force]
 # Scheduled dumps to the cluster-wide S3 bucket:
 kuso addon-backup schedule <p> <addon> --schedule '0 3 * * *' --retention 14
 kuso addon-backup list <p> <addon>                 # stored dumps
-kuso addon-backup restore <p> <addon> <s3-key>     # --into <sibling> or in-place (DESTRUCTIVE, needs --confirm)
+kuso addon-backup restore <p> <addon> <s3-key>     # in-place or --into <sibling>; overwrites the target, needs --confirm <target>
 
 # The S3 bucket + health for all of the above (admin):
 kuso backup settings get / set --bucket ... --endpoint ... --access-key-id ...

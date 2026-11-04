@@ -321,8 +321,7 @@ function ConfirmRestore({
       }
       confirmLabel={`Restore into ${target || sourceAddon}`}
       // Both paths drop and recreate the target's tables (the dumps are
-      // --clean), so both need the target typed. The server only re-checks
-      // the typed name for the in-place path today.
+      // --clean), so both need the target typed; the server enforces it too.
       typeToConfirm={target || sourceAddon}
       destructive
       pending={pending}
