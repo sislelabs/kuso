@@ -70,9 +70,6 @@ const (
 	// doesn't re-ask or re-alert.
 	annVulnGate      = "kuso.sislelabs.com/vuln-gate"
 	annVulnGateSince = "kuso.sislelabs.com/vuln-gate-since"
-
-	eventDeployBlocked = "security.deploy_blocked"
-	eventScanFailed    = "security.scan_failed"
 )
 
 // runVulnGate returns stop=true when this tick must not promote: the
