@@ -1688,6 +1688,13 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
 			}
 			perEnv = DropExcludedAddonConns(perEnv, live.Annotations)
+			preview := IsPreviewEnv(live)
+			var withheld []string
+			perEnv, withheld = WithholdProductionConns(perEnv, live.Spec.EnvFromSecrets, addonList, live.Labels[kube.LabelEnv], preview)
+			if len(withheld) > 0 {
+				slog.Default().Warn("addon refresh: production addon conns withheld from an isolated env (no clone for it)",
+					"project", project, "env", live.Name, "withheld", withheld)
+			}
 			// Respect the shared-secret subscription (mirrors projects.
 			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env
 			// gets its subscribed keys as per-key valueFrom entries, so
@@ -1710,7 +1717,13 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			// the service label degrades gracefully.
 			svc := live.Labels[kube.LabelService]
 			if svc != "" {
-				perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+				// Never on a preview: the service secret holds production's
+				// `kuso env set` values (live payment keys, admin tokens).
+				// Every other writer excludes previews; see the dispatcher's
+				// scrubPreviewEnvFrom.
+				if !preview {
+					perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+				}
 				if envName := live.Labels[kube.LabelEnv]; envName != "" {
 					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
 				}

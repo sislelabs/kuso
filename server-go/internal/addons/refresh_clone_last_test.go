@@ -23,9 +23,15 @@ func TestRefreshEnvSecrets_NewProjectAddonKeepsOwnCloneLast(t *testing.T) {
 		for k, v := range labels {
 			l[k] = v
 		}
+		spec := kube.KusoAddonSpec{Project: "tickero", Kind: "postgres"}
+		// psdb is an external PlanetScale DB: never cloned, so it is shared
+		// with named envs (a new NATIVE postgres would be withheld instead).
+		if name == "psdb" {
+			spec.External = &kube.KusoAddonExternal{SecretName: "psdb-src"}
+		}
 		return typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
 			ObjectMeta: metav1.ObjectMeta{Name: "tickero-" + name, Namespace: "kuso", Labels: l},
-			Spec:       kube.KusoAddonSpec{Project: "tickero", Kind: "postgres"},
+			Spec:       spec,
 		})
 	}
 	s := fakeService(t,
