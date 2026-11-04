@@ -106,7 +106,7 @@ without a default or bare "- KEY" pass-through env (override with
 		}
 
 		if dest != "" {
-			if err := os.WriteFile(dest, yamlOut, 0o644); err != nil {
+			if err := os.WriteFile(dest, yamlOut, 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", dest, err)
 			}
 			fmt.Fprintf(os.Stderr, "→ wrote %s\n", dest)
