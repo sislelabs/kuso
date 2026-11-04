@@ -141,7 +141,7 @@ func (s *Service) ensureBuildCachePVC(ctx context.Context, ns, fqn string, svcCR
 			OwnerReferences: owners,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "kuso-server",
-				"kuso.sislelabs.com/service":   fqn,
+				"kuso.sislelabs.com/service":   clampLabelValue(fqn),
 				"kuso.sislelabs.com/role":      "build-cache",
 			},
 		},

@@ -1,10 +1,7 @@
-// Webhook delivery dedup. GitHub retries failed webhook deliveries
-// (15min, 1h, 6h, 24h) reusing the same X-GitHub-Delivery UUID. With
-// no server-side memory of seen ids, a flaky downstream (slow build
-// pod create, kube apiserver hiccup) gets re-played for hours and
-// triggers duplicate preview-env creates / build dispatches even
-// though kuso-side dedup catches most of it. Recording the delivery
-// id on first sight + 409-ing on replay closes the window.
+// Webhook delivery dedup. A redelivery reuses the X-GitHub-Delivery
+// UUID. The handler records a delivery only after its dispatch
+// succeeded, so a replay of a handled delivery is a no-op while a
+// redelivery of one that failed (or was lost on restart) runs again.
 //
 // Retention: ~24h. GitHub's last retry happens at the 24h mark; rows
 // older than that have no replay risk and we drop them in the daily
@@ -40,6 +37,22 @@ ON CONFLICT ("deliveryId") DO NOTHING`,
 	}
 	n, _ := res.RowsAffected()
 	return n == 0, nil
+}
+
+// GithubDeliveryHandled reports whether a delivery id was already
+// recorded, without recording it. The webhook handler records a delivery
+// (SeenGithubDelivery) only once its dispatch succeeded.
+func (d *DB) GithubDeliveryHandled(ctx context.Context, deliveryID string) (bool, error) {
+	if deliveryID == "" {
+		return false, nil
+	}
+	var n int
+	err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM "GithubWebhookDelivery" WHERE "deliveryId" = $1`, deliveryID).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("db: github delivery handled: %w", err)
+	}
+	return n > 0, nil
 }
 
 // PruneGithubDeliveries removes delivery rows older than `before`.

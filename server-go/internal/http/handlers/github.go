@@ -376,13 +376,14 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, "rate limit: delivery dropped, redeliver it from GitHub")
 		return
 	}
-	// Replay-protection. GitHub retries failed deliveries reusing
-	// the same UUID; recording it on first sight + 200-no-op on
-	// repeat keeps a single bad downstream from triggering N
-	// duplicate dispatches over 24h.
+	// Replay-protection: a redelivery reuses the UUID. Only deliveries
+	// whose dispatch succeeded are recorded (onSuccess below), so the
+	// "redeliver it from GitHub" advice works for one that failed or was
+	// lost to a restart. Builds dedup on (service, sha) and previews on
+	// PR number, so a redelivery racing its original is harmless.
 	if h.DB != nil && deliveryID != "" {
 		dedupCtx, dedupCancel := context.WithTimeout(r.Context(), 2*time.Second)
-		seen, err := h.DB.SeenGithubDelivery(dedupCtx, deliveryID, event, installID)
+		seen, err := h.DB.GithubDeliveryHandled(dedupCtx, deliveryID)
 		dedupCancel()
 		if err != nil {
 			// Dedup failure is non-fatal — we'd rather double-fire
@@ -438,7 +439,17 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	h.Dispatcher.DispatchAsync(parent, event, append([]byte(nil), body...), 5*time.Minute)
+	var onSuccess func()
+	if h.DB != nil && deliveryID != "" {
+		onSuccess = func() {
+			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer rcancel()
+			if _, err := h.DB.SeenGithubDelivery(rctx, deliveryID, event, installID); err != nil {
+				h.Logger.Warn("github delivery dedup record", "err", err, "delivery", deliveryID)
+			}
+		}
+	}
+	h.Dispatcher.DispatchAsync(parent, event, deliveryID, append([]byte(nil), body...), 5*time.Minute, onSuccess)
 	w.WriteHeader(http.StatusNoContent)
 }
 

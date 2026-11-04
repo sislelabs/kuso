@@ -6,7 +6,6 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -27,8 +26,10 @@ func (c *cancelDuringRelease) Run(ctx context.Context, _ string, _ *kube.KusoEnv
 	return releaserun.Result{Outcome: releaserun.OutcomeSucceeded, JobName: "rel-job"}, nil
 }
 
-// B-03: cancel during the release-hook phase must stop the release Job
-// and must not let the build's image be promoted afterwards.
+// B-03 / BUILD-07: cancel during the release-hook phase must not let the
+// build's image be promoted afterwards, and must not kill the running
+// migration (a half-applied non-transactional migration is worse than a
+// finished one behind the old image).
 func TestPoller_CancelDuringReleaseHookBlocksPromote(t *testing.T) {
 	t.Parallel()
 	build := &kube.KusoBuild{
@@ -61,7 +62,7 @@ func TestPoller_CancelDuringReleaseHookBlocksPromote(t *testing.T) {
 			"kuso.sislelabs.com/service":     "alpha-api",
 			"kuso.sislelabs.com/release-tag": "abc",
 		},
-	}}, metav1.CreateOptions{}); err != nil {
+	}, Status: batchv1.JobStatus{Active: 1}}, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed release job: %v", err)
 	}
 
@@ -71,8 +72,8 @@ func TestPoller_CancelDuringReleaseHookBlocksPromote(t *testing.T) {
 	}
 	drainPromotions(t, p)
 
-	if _, err := jobs.Get(ctx, relName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Errorf("release Job survived cancel (err=%v)", err)
+	if _, err := jobs.Get(ctx, relName, metav1.GetOptions{}); err != nil {
+		t.Errorf("cancel killed the running release Job (err=%v)", err)
 	}
 	got, err := s.Kube.GetKusoBuild(ctx, "kuso", "alpha-api-abc")
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -313,15 +314,35 @@ if [ -z "$KUSO_GIT_TOKEN" ]; then
 fi
 URL=%s
 BRANCH=%s
-git clone --depth 1 --branch "$BRANCH" \
-  "https://%s:${KUSO_GIT_TOKEN}@$(echo "$URL" | sed -E 's|^https?://||')" \
-  /workspace/src
+AUTH_URL="https://%s:${KUSO_GIT_TOKEN}@$(echo "$URL" | sed -E 's|^https?://||')"
 `, shellQuote(repoURL), shellQuote(branch), userinfo)
 	} else {
 		cloneCmd = fmt.Sprintf(`
-git clone --depth 1 --branch %s %s /workspace/src
+BRANCH=%s
+AUTH_URL=%s
 `, shellQuote(branch), shellQuote(repoURL))
 	}
+	// A preview build's PR head may live in a fork: its branch and SHA are
+	// absent from the base repo, which still serves them as
+	// refs/pull/<N>/head. Fall back to that ref when the branch clone or
+	// the SHA checkout fails.
+	pr := ""
+	if b != nil {
+		if n, err := strconv.Atoi(b.Annotations[builds.AnnPreviewPR]); err == nil && n > 0 {
+			pr = strconv.Itoa(n)
+		}
+	}
+	cloneCmd += `PR=` + pr + `
+if ! git clone --depth 1 --branch "$BRANCH" "$AUTH_URL" /workspace/src; then
+  [ -n "$PR" ] || exit 1
+  echo "branch $BRANCH not in this repo; fetching pull request #$PR head"
+  rm -rf /workspace/src
+  git init -q /workspace/src
+  git -C /workspace/src remote add origin "$AUTH_URL"
+  git -C /workspace/src fetch --depth 1 origin "refs/pull/$PR/head"
+  git -C /workspace/src checkout -q FETCH_HEAD
+fi
+`
 
 	script := `set -e
 cd /workspace
@@ -330,9 +351,13 @@ cd /workspace/src
 REF=` + shellQuote(ref) + `
 if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
   if ! git checkout "$REF" 2>/dev/null; then
-    echo "checkout $REF failed; deepening clone"
-    git fetch --unshallow
-    git checkout "$REF"
+    if [ -n "$PR" ] && git fetch --depth 1 origin "refs/pull/$PR/head" && git checkout "$REF" 2>/dev/null; then
+      :
+    else
+      echo "checkout $REF failed; deepening clone"
+      git fetch --unshallow
+      git checkout "$REF"
+    fi
   fi
 else
   echo "ref $REF is not a SHA; using branch HEAD"

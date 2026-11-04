@@ -41,9 +41,11 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	return s.cancelBuild(ctx, project, buildName, "cancelled by user")
 }
 
-// deleteReleaseJobs stops any release hook (migration) already running
-// against this build's image: a cancel during the promote phase must not
-// leave the migration applying to the env's database. Best-effort.
+// deleteReleaseJobs removes this build's release hook (migration) Jobs on
+// cancel, except ones with a pod running: killing a migration mid-flight
+// can leave a non-transactional schema change half-applied. A running
+// hook is left to finish; the cancelled phase already keeps the image
+// from being promoted. Best-effort.
 func (s *Service) deleteReleaseJobs(ctx context.Context, ns string, b *kube.KusoBuild) {
 	if b.Spec.Image == nil || b.Spec.Image.Tag == "" {
 		return
@@ -60,6 +62,11 @@ func (s *Service) deleteReleaseJobs(ctx context.Context, ns string, b *kube.Kuso
 	}
 	bg := metav1.DeletePropagationBackground
 	for _, j := range list.Items {
+		if j.Status.Active > 0 {
+			slog.Default().Info("builds: release hook running on cancel; letting it finish, image will not be promoted",
+				"job", j.Name, "build", b.Name)
+			continue
+		}
 		if derr := jobs.Delete(ctx, j.Name, metav1.DeleteOptions{PropagationPolicy: &bg}); derr != nil && !apierrors.IsNotFound(derr) {
 			slog.Default().Warn("builds: delete release job on cancel", "err", derr, "job", j.Name, "build", b.Name)
 		}

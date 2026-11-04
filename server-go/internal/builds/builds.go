@@ -157,6 +157,10 @@ const (
 	annTriggerSource = "kuso.sislelabs.com/build-triggered-by"
 	annTriggerUser   = "kuso.sislelabs.com/build-triggered-by-user"
 	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
+	// annTriggeredAt is the sub-second creation time of a build.
+	// creationTimestamp has 1s resolution, so two builds of one service
+	// created in the same second tie on it.
+	annTriggeredAt = "kuso.sislelabs.com/build-triggered-at"
 	// annRefFromBranch marks a build whose ref was resolved from the
 	// branch HEAD at trigger time (no explicit ref). Such builds used to
 	// carry synthetic refs and keep that behaviour where the ref shape
@@ -526,7 +530,7 @@ func (s *Service) findActiveForServiceLive(ctx context.Context, ns, project, fqn
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
 		LabelSelector: kube.LabelSelector(map[string]string{
 			kube.LabelProject: project,
-			kube.LabelService: fqn,
+			kube.LabelService: clampLabelValue(fqn),
 		}),
 	})
 	if err != nil {
@@ -715,7 +719,7 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 func (s *Service) List(ctx context.Context, project, service string) ([]kube.KusoBuild, error) {
 	pairs := map[string]string{kube.LabelProject: project}
 	if service != "" {
-		pairs[kube.LabelService] = project + "-" + service
+		pairs[kube.LabelService] = clampLabelValue(project + "-" + service)
 	}
 	out, err := s.Kube.ListKusoBuildsByLabels(ctx, s.nsFor(ctx, project), pairs)
 	if err != nil {
@@ -1204,6 +1208,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		annos[annRefFromBranch] = "true"
 	}
 	annos[annImageTag] = ImageTag(tagRef)
+	annos[annTriggeredAt] = time.Now().UTC().Format(time.RFC3339Nano)
 	previewTarget := req.PreviewEnv
 	if previewTarget == "" && targetEnv != nil && targetEnv.Spec.Kind == "preview" {
 		previewTarget = targetEnv.Name // a manual redeploy of a preview env
@@ -1833,7 +1838,9 @@ func (p *Poller) archiveRecord(ctx context.Context, b *kube.KusoBuild, phase str
 		TriggeredByUser: get(annTriggerUser),
 		ErrorMessage:    get(annMessage),
 	}
-	if b.Spec.Image != nil {
+	// A dry run pushes nothing; a tag here would hold a slot in the image
+	// retention window once the CR is gone.
+	if b.Spec.Image != nil && !b.Spec.DryRun {
 		rec.ImageTag = b.Spec.Image.Tag
 	}
 	// Terminal-phase records must never archive with an empty
@@ -2173,12 +2180,7 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 			}
 			// Oldest first.
 			sort.SliceStable(q.list, func(i, j int) bool {
-				ti := q.list[i].CreationTimestamp
-				tj := q.list[j].CreationTimestamp
-				if ti.Equal(&tj) {
-					return q.list[i].Name < q.list[j].Name
-				}
-				return ti.Before(&tj)
+				return queuedBefore(q.list[i], q.list[j])
 			})
 			next := q.list[0]
 			project := q.project
@@ -2856,8 +2858,13 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		}
 		p.clearPromotionHold(ctx, ns, b)
 	}
+	notDeployed := false
 	if !b.Spec.DryRun {
-		if err := p.promoteImage(ctx, ns, b); err != nil {
+		matched, err := p.promoteImageCount(ctx, ns, b)
+		if err != nil {
+			if promoteRetryExhausted(b, err, time.Now()) {
+				return p.stampPromoteAbandoned(ctx, ns, b, err)
+			}
 			p.logger().Error("build promote failed; leaving build non-terminal for retry",
 				"build", b.Name, "ns", ns, "err", err)
 			return fmt.Errorf("promote image (build stays retriable): %w", err)
@@ -2877,6 +2884,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 				return nil
 			}
 		}
+		notDeployed = matched == 0
 	}
 	// spec.done=true gates the kusobuild chart to render zero objects
 	// from this point forward. Without it, an operator restart's
@@ -2892,6 +2900,14 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	if b.Annotations[annRetryRelease] != "" {
 		msgPatch = fmt.Sprintf(`,%q:null`, annMessage)
 		delete(b.Annotations, annMessage)
+	}
+	if notDeployed {
+		msgPatch = fmt.Sprintf(`,%q:%q,%q:"true"`, annMessage, notDeployedMessage, annNotDeployed)
+		if b.Annotations == nil {
+			b.Annotations = map[string]string{}
+		}
+		b.Annotations[annMessage] = notDeployedMessage
+		b.Annotations[annNotDeployed] = "true"
 	}
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"succeeded",%q:%q%s},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
@@ -2933,6 +2949,9 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		label := serviceDisplayLabel(ctx, kc, ns, b.Spec.Service, short)
 		targets := lookupBuildTargets(ctx, kc, ns, homeNS, b)
 		title, desc, fields := buildRichCard(b, label, "succeeded", "", targets)
+		if notDeployed {
+			desc = notDeployedMessage
+		}
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSucceeded,
 			Title:       title,
@@ -3126,18 +3145,34 @@ func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) 
 	if buildPhase(b) == "running" {
 		return nil
 	}
+	// b may be a stale informer snapshot: a Cancel (or any terminal stamp)
+	// that landed since must not be overwritten back to "running", or the
+	// build reads running forever while the poller skips it as done.
+	cur, err := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name)
+	if err != nil {
+		return fmt.Errorf("re-read build before running: %w", err)
+	}
+	if cur.Spec.Done || cur.Labels[LabelBuildState] == "done" || buildPhase(cur) == "running" {
+		return nil
+	}
 	// Stamp started-at the first time we see the kaniko Job pod active.
 	// Without this the build-summary endpoint has no startedAt for the
 	// running build, the deployments panel can't compute a live duration,
 	// and the row shows just "12s ago" with no elapsed timer. Set it
 	// once on the queued→running transition; markSucceeded/markFailed
 	// don't touch it so finished builds keep their started-at intact.
+	// The resourceVersion precondition closes the window between the
+	// re-read and the patch; a conflict means something else wrote the
+	// CR, and the next tick re-evaluates from fresh state.
 	patch := []byte(fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"running",%q:%q}}}`,
-		annPhase, annStartedAt, time.Now().UTC().Format(time.RFC3339),
+		`{"metadata":{"resourceVersion":%q,"annotations":{%q:"running",%q:%q}}}`,
+		cur.ResourceVersion, annPhase, annStartedAt, time.Now().UTC().Format(time.RFC3339),
 	))
-	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+	_, err = p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	if apierrors.IsConflict(err) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("patch build running: %w", err)
 	}
@@ -3221,10 +3256,30 @@ const (
 // pod within a single apiserver, which is good enough — we only need
 // to order builds for the same service against each other.
 func buildTriggerTimestamp(b *kube.KusoBuild) string {
+	if at := b.Annotations[annTriggeredAt]; at != "" {
+		if _, err := time.Parse(time.RFC3339Nano, at); err == nil {
+			return at
+		}
+	}
 	if !b.CreationTimestamp.IsZero() {
 		return b.CreationTimestamp.UTC().Format(time.RFC3339Nano)
 	}
 	return ""
+}
+
+// queuedBefore orders queued builds oldest first: by trigger time when
+// both carry one, else creationTimestamp, ties broken on name.
+func queuedBefore(a, b *kube.KusoBuild) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a.Annotations[annTriggeredAt])
+	tb, errB := time.Parse(time.RFC3339Nano, b.Annotations[annTriggeredAt])
+	if errA == nil && errB == nil && !ta.Equal(tb) {
+		return ta.Before(tb)
+	}
+	ca, cb := a.CreationTimestamp, b.CreationTimestamp
+	if ca.Equal(&cb) {
+		return a.Name < b.Name
+	}
+	return ca.Before(&cb)
 }
 
 // promotedAtIsNewer reports whether the env's recorded promoted-at (prev)
@@ -3415,8 +3470,16 @@ func promotionBranchMatches(buildBranch, envBranch, defaultBranch string) bool {
 }
 
 func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	_, err := p.promoteImageCount(ctx, ns, b)
+	return err
+}
+
+// promoteImageCount is promoteImage reporting how many of the build's own
+// envs took the image (0 when a newer build already won every env, or no
+// env tracks the build's branch).
+func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoBuild) (int, error) {
 	if b.Spec.Image == nil {
-		return nil
+		return 0, nil
 	}
 	// List only envs that belong to this build's project + service.
 	// Without the selector, every promotion walks every env in the
@@ -3439,7 +3502,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return fmt.Errorf("list envs for promotion: %w", err)
+		return 0, fmt.Errorf("list envs for promotion: %w", err)
 	}
 	bTrigger := buildTriggerTimestamp(b)
 	// Resolve the project's default branch once (MED-6). An env with an
@@ -3449,7 +3512,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// only default-branch builds, not arbitrary feature/staging branches.
 	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
 	matched := 0
-	// promoteFailed records whether promoting to ANY matched env hit a
+	// promoteErr records whether promoting to ANY matched env hit a
 	// hard error (CAS exhausted, apiserver blip on the env Update). We
 	// do NOT abort the loop on the first such error — abandoning the
 	// remaining envs would leave e.g. production promoted but staging
@@ -3458,7 +3521,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// declines to mark the build terminal and the next poller tick
 	// retries the whole promotion (promoteEnvImageCAS is idempotent —
 	// already-promoted envs skip via the last-trigger-wins guard).
-	promoteFailed := false
+	var promoteErr error
 	// releaseBlocked records whether a release hook (migration) failed or
 	// errored for ANY of this build's source envs. When it did, the build's
 	// image is unverified (migrations didn't apply), so we must NOT promote
@@ -3541,7 +3604,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name); gerr == nil && buildPhase(cur) == "cancelled" {
 				p.logger().Info("build cancelled during release hook; not promoting",
 					"env", e.Name, "build", b.Name)
-				return nil
+				return matched, nil
 			}
 			if rerr != nil && ctx.Err() != nil {
 				// Our own budget ran out (a hook longer than
@@ -3549,7 +3612,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 				// still running, not broken. Leave the build
 				// non-terminal; the next tick polls the same Job. Marking
 				// it release-failed here paged a false "infra error".
-				return fmt.Errorf("release hook for %s still running when the promote budget ended: %w", e.Name, ctx.Err())
+				return matched, fmt.Errorf("%w: release hook for %s still running when the promote budget ended: %w", errReleaseStillRunning, e.Name, ctx.Err())
 			}
 			if rerr != nil {
 				// Infra error talking to kube — do NOT promote: the image
@@ -3591,7 +3654,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			// Don't abort — log and keep promoting the other envs so a
 			// transient error on one doesn't strand the rest on the old
 			// image. The end-of-func error keeps the build retriable.
-			promoteFailed = true
+			promoteErr = fmt.Errorf("env %s: %w", e.Name, err)
 			p.logger().Error("promote env failed; continuing with remaining envs",
 				"env", e.Name, "build", b.Name, "err", err)
 			continue
@@ -3628,7 +3691,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// yet; that's not a promotion failure to retry here (markReleaseFailed
 		// already handled the source env). Report success so the build is
 		// marked terminal — the release-failed annotation is the record.
-		return nil
+		return matched, nil
 	}
 	// Repoint crons that inherit this service's image. Same rationale as
 	// the fromService fan-out below: a consumer that carries a snapshot
@@ -3651,15 +3714,15 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		p.logger().Warn("promote to fromService consumers failed",
 			"service", b.Spec.Service, "err", err)
 	}
-	if promoteFailed {
+	if promoteErr != nil {
 		// At least one matched env failed to promote. Return an error so
 		// markSucceeded does NOT stamp the build terminal — the next
 		// poller tick re-enters checkBuild → markSucceeded → promoteImage
 		// and retries the failed env(s). Idempotent for the ones that
 		// already landed.
-		return fmt.Errorf("one or more envs failed to promote for build %s", b.Name)
+		return matched, fmt.Errorf("one or more envs failed to promote for build %s (last: %w)", b.Name, promoteErr)
 	}
-	return nil
+	return matched, nil
 }
 
 // promoteToFromServiceConsumers patches the image tag onto every env

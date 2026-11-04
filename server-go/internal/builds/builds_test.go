@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -173,6 +174,35 @@ func TestCreate_FullSHARef(t *testing.T) {
 	}
 	if got.Labels["kuso.sislelabs.com/build-ref"] != "abcdef012345" {
 		t.Errorf("build-ref label: %v", got.Labels)
+	}
+}
+
+// BUILD-06: a project (≤40) + service (≤32) FQN can pass 63 chars. The CR
+// label is clamped, but the active-build selectors used the raw FQN, which
+// is an invalid selector: Create read the List error as "service busy" and
+// queued every build forever, and List never found the service's builds.
+func TestCreate_LongServiceFQNIsNotQueuedForever(t *testing.T) {
+	t.Parallel()
+	project := strings.Repeat("p", 40)
+	service := strings.Repeat("s", 32)
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject(project, "main", "https://github.com/example/alpha", 0),
+		seedService(project, service),
+	)
+	got, err := s.Create(context.Background(), project, service, CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ph := buildPhase(got); ph == "queued" {
+		t.Errorf("first build of an idle long-FQN service was queued")
+	}
+	list, err := s.List(context.Background(), project, service)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("List found %d builds, want 1", len(list))
 	}
 }
 
@@ -877,6 +907,106 @@ func TestPoller_PromoteFailureLeavesBuildRetriable(t *testing.T) {
 	}
 	if envCR.Spec.Image != nil && envCR.Spec.Image.Tag == "zzz" {
 		t.Errorf("env promoted despite update failure: %+v", envCR.Spec.Image)
+	}
+}
+
+// BUILD-04: a promote error that persists (a 422 from one env, CAS never
+// winning) used to keep the build non-terminal forever, holding the
+// service's build slot so every later build queued silently. Past
+// promoteRetryMaxAge since its Job succeeded, the build must end failed.
+func TestPoller_PromoteFailurePastMaxAgeEndsBuild(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old", Namespace: "kuso", Annotations: map[string]string{
+			annJobSucceeded: time.Now().Add(-promoteRetryMaxAge - time.Minute).UTC().Format(time.RFC3339),
+		}},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha", Service: "alpha-web", Ref: "old",
+			Image: &kube.KusoImage{Repository: "registry/alpha/web", Tag: "old"},
+		},
+	}
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("update", "kusoenvironments",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("admission webhook denied the request")
+		})
+	// A long migration still running is progress, never a give-up reason.
+	if promoteRetryExhausted(build, fmt.Errorf("%w: x", errReleaseStillRunning), time.Now()) {
+		t.Error("a release hook still running must not exhaust promote retries")
+	}
+	p := &Poller{Svc: s, Interval: time.Hour}
+	_ = p.markSucceeded(context.Background(), "kuso", build)
+
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-old")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "failed" {
+		t.Errorf("phase = %q, want failed", ph)
+	}
+	if !got.Spec.Done || got.Labels[LabelBuildState] != "done" {
+		t.Errorf("build not terminal (done=%v, state=%q): it would keep the service's build slot", got.Spec.Done, got.Labels[LabelBuildState])
+	}
+	if !strings.Contains(got.Annotations[annMessage], "admission webhook denied") && !strings.Contains(got.Annotations[annMessage], "failed to promote") {
+		t.Errorf("message does not explain the promote failure: %q", got.Annotations[annMessage])
+	}
+}
+
+// BUILD-10: a build whose promotion was skipped everywhere (a newer build
+// already won the env) must not report "Deployed".
+func TestPoller_SucceededButNotPromotedSaysSo(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old", Namespace: "kuso",
+			Annotations: map[string]string{annTriggeredAt: "2026-11-04T10:00:00Z"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "old",
+			Image: &kube.KusoImage{Repository: "registry/alpha/web", Tag: "old"}},
+	}
+	env := seedProductionEnv("alpha", "web")
+	env.obj.SetAnnotations(map[string]string{annPromotedAt: "2026-11-04T10:05:00Z"})
+	s := fakeService(t, seedBuild(build), env)
+	p := &Poller{Svc: s, Interval: time.Hour}
+	if err := p.markSucceeded(context.Background(), "kuso", build); err != nil {
+		t.Fatalf("markSucceeded: %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-old")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "succeeded" {
+		t.Fatalf("phase = %q, want succeeded", ph)
+	}
+	if _, _, desc := desiredCommitStatus(got); desc == "Deployed" {
+		t.Errorf("commit status says Deployed for a build no env took")
+	}
+}
+
+// BUILD-08: markRunning works off a stale snapshot. A Cancel that landed
+// after the snapshot must not be flipped back to "running".
+func TestPoller_MarkRunningDoesNotResurrectCancelled(t *testing.T) {
+	t.Parallel()
+	live := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-ccc", Namespace: "kuso",
+			Annotations: map[string]string{annPhase: "cancelled"},
+			Labels:      map[string]string{LabelBuildState: "done"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "ccc", Done: true},
+	}
+	s := fakeService(t, seedBuild(live))
+	stale := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-ccc", Namespace: "kuso",
+			Annotations: map[string]string{annPhase: "pending"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "ccc"},
+	}
+	p := &Poller{Svc: s, Interval: time.Hour}
+	if err := p.markRunning(context.Background(), "kuso", stale); err != nil {
+		t.Fatalf("markRunning: %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-ccc")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "cancelled" {
+		t.Errorf("phase = %q, want cancelled", ph)
 	}
 }
 
@@ -1632,6 +1762,39 @@ func TestPromotedAtIsNewer_SameSecondRollbackWins(t *testing.T) {
 	}
 	if promotedAtIsNewer(rollbackAt, "") {
 		t.Errorf("empty bTrigger should not skip promote")
+	}
+}
+
+// BUILD-09: two builds of one service created in the same second share a
+// whole-second creationTimestamp. The older must neither run first because
+// its name sorts lower, nor tie on the promote guard and overwrite the
+// newer one's promotion.
+func TestBuildTrigger_SubSecondOrdering(t *testing.T) {
+	t.Parallel()
+	sec := metav1.NewTime(time.Date(2026, 11, 4, 10, 0, 5, 0, time.UTC))
+	mk := func(name, at string) *kube.KusoBuild {
+		return &kube.KusoBuild{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: sec,
+			Annotations: map[string]string{annTriggeredAt: at}}}
+	}
+	older := mk("alpha-web-zzz", "2026-11-04T10:00:05.100Z")
+	newer := mk("alpha-web-aaa", "2026-11-04T10:00:05.900Z")
+	if !promotedAtIsNewer(buildTriggerTimestamp(newer), buildTriggerTimestamp(older)) {
+		t.Error("the newer build's promotion must make the older one skip")
+	}
+	if !queuedBefore(older, newer) || queuedBefore(newer, older) {
+		t.Error("queue must dispatch the earlier-triggered build first")
+	}
+
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: "abcdef0123456789abcdef0123456789abcdef01"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, got.Annotations[annTriggeredAt]); err != nil {
+		t.Errorf("Create did not stamp a parseable trigger time: %q", got.Annotations[annTriggeredAt])
 	}
 }
 

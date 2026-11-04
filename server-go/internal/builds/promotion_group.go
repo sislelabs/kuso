@@ -136,7 +136,7 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 		if s.Name == b.Name || s.Spec.Service == b.Spec.Service || s.Spec.Project != b.Spec.Project {
 			continue
 		}
-		if s.Spec.Branch != b.Spec.Branch {
+		if !samePromotionScope(s, b) {
 			continue
 		}
 		if isBranchHeadBuild(s) {
@@ -206,6 +206,24 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 	return ""
 }
 
+// samePromotionScope reports whether two builds target the same envs:
+// the same branch, and either both non-preview or both previews of the
+// same PR. Branch alone can't tell them apart when a PR's head branch is
+// one a persistent env tracks (a staging -> main release PR).
+func samePromotionScope(a, b *kube.KusoBuild) bool {
+	return a.Spec.Branch == b.Spec.Branch && previewScope(a) == previewScope(b)
+}
+
+func previewScope(b *kube.KusoBuild) string {
+	if pr := b.Annotations[AnnPreviewPR]; pr != "" {
+		return "pr:" + pr
+	}
+	if env := b.Annotations[AnnPreviewEnv]; env != "" {
+		return "env:" + env
+	}
+	return ""
+}
+
 // newerBuildOf returns the name of the newest SAME-BRANCH build for
 // b's own service created after b, or "" when b is the newest. Any
 // state counts — queued, running, done: a successor's existence means
@@ -220,7 +238,7 @@ func newerBuildOf(b *kube.KusoBuild, all []kube.KusoBuild) string {
 	newestTS := b.CreationTimestamp
 	for i := range all {
 		s := &all[i]
-		if s.Name == b.Name || s.Spec.Service != b.Spec.Service || s.Spec.Branch != b.Spec.Branch {
+		if s.Name == b.Name || s.Spec.Service != b.Spec.Service || !samePromotionScope(s, b) {
 			continue
 		}
 		if s.CreationTimestamp.After(newestTS.Time) {

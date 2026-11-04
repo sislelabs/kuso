@@ -283,7 +283,7 @@ func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, bra
 	defer cancel()
 	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
-		kube.LabelService: fqn,
+		kube.LabelService: clampLabelValue(fqn),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list recent builds: %w", err)
@@ -332,7 +332,7 @@ func (s *Service) findActiveForService(ctx context.Context, ns, project, fqn str
 	defer cancel()
 	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
-		kube.LabelService: fqn,
+		kube.LabelService: clampLabelValue(fqn),
 	})
 	if err != nil {
 		return "", fmt.Errorf("list active builds: %w", err)
@@ -397,7 +397,7 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 	defer cancel()
 	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
-		kube.LabelService: fqn,
+		kube.LabelService: clampLabelValue(fqn),
 	})
 	if err != nil {
 		slog.Default().Warn("builds: list active for supersede", "err", err, "project", project, "service", fqn)

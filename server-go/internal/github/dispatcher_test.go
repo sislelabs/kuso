@@ -585,8 +585,9 @@ func TestDispatch_PROpened_RespectsSubscribedAddons(t *testing.T) {
 }
 
 // seedSucceededBuild seeds a terminal (done) succeeded KusoBuild with an
-// image, as left behind after a first PR open.
-func seedSucceededBuild(project, service, sha, repo, tag string) seed {
+// image, as left behind after a first PR open. previewEnv "" seeds an
+// unmarked (push) build.
+func seedSucceededBuild(project, service, sha, repo, tag, previewEnv string) seed {
 	b := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      project + "-" + service + "-" + sha[:12],
@@ -605,7 +606,66 @@ func seedSucceededBuild(project, service, sha, repo, tag string) seed {
 			Image: &kube.KusoImage{Repository: repo, Tag: tag},
 		},
 	}
+	if previewEnv != "" {
+		b.Annotations[builds.AnnPreviewEnv] = previewEnv
+	}
 	return typedSeed(kube.GVRBuilds, "KusoBuild", b)
+}
+
+// TestDispatch_PRPreview_IgnoresPushBuildOfSameSHA is the BUILD-01
+// regression: a PR whose head branch is tracked by a persistent env shares
+// its commit with that env's push build. The push build (unmarked) must
+// neither be stamped onto the preview (it baked the persistent env's
+// build-time vars) nor, while running, suppress the preview's own build
+// (it never promotes into a preview env).
+func TestDispatch_PRPreview_IgnoresPushBuildOfSameSHA(t *testing.T) {
+	t.Parallel()
+	const sha = "abcdef0123456789abcdef0123456789abcdef01"
+	pushBuild := func(done bool) seed {
+		s := seedSucceededBuild("alpha", "web", sha, "registry/alpha/web", sha[:12], "")
+		if !done {
+			unstructured.RemoveNestedField(s.obj.Object, "spec", "done")
+			unstructured.RemoveNestedField(s.obj.Object, "spec", "image")
+			unstructured.RemoveNestedField(s.obj.Object, "metadata", "annotations")
+		}
+		_ = unstructured.SetNestedField(s.obj.Object, "staging", "spec", "branch")
+		return s
+	}
+	for name, done := range map[string]bool{"succeeded": true, "in-flight": false} {
+		t.Run(name, func(t *testing.T) {
+			d := newDispatcher(t,
+				seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+				seedSvc("alpha", "web"),
+				pushBuild(done),
+			)
+			body := []byte(`{
+				"action": "opened",
+				"number": 42,
+				"pull_request": {"head": {"ref": "staging", "sha": "` + sha + `"}, "state": "open"},
+				"repository": {"full_name": "example/alpha"}
+			}`)
+			if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+			if err != nil {
+				t.Fatalf("get env: %v", err)
+			}
+			if env.Spec.Image != nil {
+				t.Errorf("push build's image stamped onto preview: %+v", env.Spec.Image)
+			}
+			bs, _ := d.Kube.ListKusoBuildsByLabels(context.Background(), "kuso", map[string]string{kube.LabelProject: "alpha"})
+			var preview int
+			for _, b := range bs {
+				if b.Annotations[builds.AnnPreviewEnv] == "alpha-web-pr-42" {
+					preview++
+				}
+			}
+			if preview != 1 {
+				t.Errorf("want 1 preview build alongside the push build, got %d (of %d)", preview, len(bs))
+			}
+		})
+	}
 }
 
 // TestDispatch_PRReopened_StampsExistingBuildImage is the regression test
@@ -618,7 +678,7 @@ func TestDispatch_PRReopened_StampsExistingBuildImage(t *testing.T) {
 	d := newDispatcher(t,
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
 		seedSvc("alpha", "web"),
-		seedSucceededBuild("alpha", "web", sha, "registry/alpha/web", sha[:12]),
+		seedSucceededBuild("alpha", "web", sha, "registry/alpha/web", sha[:12], "alpha-web-pr-42"),
 	)
 	body := []byte(`{
 		"action": "reopened",

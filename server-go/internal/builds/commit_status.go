@@ -100,6 +100,9 @@ func desiredCommitStatus(b *kube.KusoBuild) (key, state, desc string) {
 		if b.Spec.DryRun {
 			return "success", "success", "Build succeeded (dry run, not deployed)"
 		}
+		if a[annNotDeployed] == "true" {
+			return "success", "success", "Built, not deployed (a newer build is live)"
+		}
 		return "success", "success", "Deployed"
 	case "failed":
 		return "failure", "failure", statusDesc("Build failed", failureSummary(a, msg))

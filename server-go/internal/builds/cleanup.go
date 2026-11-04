@@ -219,6 +219,12 @@ func SweepImagesPastWindow(
 	}
 	for i := range list {
 		b := &list[i]
+		if b.Spec.DryRun {
+			// Pushed nothing: no slot in the window, and its archived
+			// row (which may carry a tag) must not take one either.
+			seen[b.Name] = true
+			continue
+		}
 		if b.Spec.Image == nil || buildPhase(b) != "succeeded" {
 			continue
 		}

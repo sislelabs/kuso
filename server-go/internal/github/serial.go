@@ -85,12 +85,21 @@ func dispatchKey(event string, body []byte) string {
 // each gets its own timeout, started when it begins running rather than
 // while it waits. Ordering is per process: a second server replica
 // receiving the same PR's deliveries is not coordinated with this one.
-func (d *Dispatcher) DispatchAsync(parent context.Context, event string, body []byte, timeout time.Duration) {
+//
+// onSuccess (may be nil) runs only after Dispatch returns nil; the webhook
+// handler records the delivery for dedup there, so a delivery that failed
+// or never ran (server restart with a queue) can still be redelivered.
+func (d *Dispatcher) DispatchAsync(parent context.Context, event, deliveryID string, body []byte, timeout time.Duration, onSuccess func()) {
 	run := func() {
 		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
 		if err := d.Dispatch(ctx, event, body); err != nil {
-			d.Logger.Error("github dispatch", "event", event, "err", err)
+			d.Logger.Error("github dispatch", "event", event, "delivery", deliveryID, "err", err)
+			d.notifyDispatchFailed(event, deliveryID, err)
+			return
+		}
+		if onSuccess != nil {
+			onSuccess()
 		}
 	}
 	key := dispatchKey(event, body)
@@ -99,6 +108,22 @@ func (d *Dispatcher) DispatchAsync(parent context.Context, event string, body []
 		return
 	}
 	d.serial.submit(key, run)
+}
+
+// notifyDispatchFailed reports a delivery whose dispatch failed. GitHub
+// already got a 204, so without this the lost deploy is visible only in
+// the server log.
+func (d *Dispatcher) notifyDispatchFailed(event, deliveryID string, err error) {
+	if d.Notifier == nil {
+		return
+	}
+	d.Notifier.Emit(builds.EventEnvelope{
+		Type:  "build.failed",
+		Title: "GitHub webhook delivery failed",
+		Body: fmt.Sprintf("kuso could not finish handling %s delivery %s: %v. "+
+			"Redeliver it from the GitHub App's Advanced → Recent Deliveries page, or push again.", event, deliveryID, err),
+		Severity: "error",
+	})
 }
 
 // droppedNotifyEvery caps dropped-delivery notifications per installation:
