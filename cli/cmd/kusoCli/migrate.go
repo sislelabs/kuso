@@ -85,7 +85,7 @@ var migrateCoolifyCmd = &cobra.Command{
 				return fmt.Errorf("mkdir out-dir: %w", err)
 			}
 			rp := filepath.Join(migrateOutDir, "REPORT.md")
-			if err := os.WriteFile(rp, []byte(report), 0o644); err != nil {
+			if err := os.WriteFile(rp, []byte(report), 0o600); err != nil {
 				return fmt.Errorf("write report: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "→ wrote %s\n", rp)
