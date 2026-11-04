@@ -27,18 +27,41 @@ def _bounds(o, n, path, problems):
     for key in ("exclusiveMaximum", "exclusiveMinimum"):
         if n.get(key) is True and o.get(key) is not True:
             problems.append(f"{path}: {key} added")
-    # A changed regex/format can't be proven wider, so any change counts.
+    # A changed regex/format can't be proven wider in general, so any
+    # change counts — except appending a top-level alternative to the old
+    # regex ("OLD|NEW"), which can only accept more.
     for key in ("pattern", "format"):
         if key in n and n.get(key) != o.get(key):
+            if key == "pattern" and _pattern_widened(o.get(key), n[key]):
+                continue
             problems.append(f"{path}: {key} added/changed {o.get(key)!r} -> {n[key]!r}")
     if o.get("nullable") is True and n.get("nullable") is not True:
         problems.append(f"{path}: nullable removed")
 
 
+def _pattern_widened(old, new):
+    """True when new is old plus a top-level alternative: "OLD|...".
+
+    A trailing unescaped backslash in old would escape the "|", so that
+    case is not treated as a widening.
+    """
+    if not isinstance(old, str) or not isinstance(new, str):
+        return False
+    trailing = len(old) - len(old.rstrip("\\"))
+    return trailing % 2 == 0 and new.startswith(old + "|")
+
+
+def _cel_weakened(old_rules, rule):
+    """True when rule is "<expr> || (<an old rule>)" — it admits a superset."""
+    if not isinstance(rule, str):
+        return False
+    return any(isinstance(o, str) and rule.endswith(" || (" + o + ")") for o in old_rules)
+
+
 def _cel(o, n, path, problems):
     old_rules = {r.get("rule") for r in (o.get("x-kubernetes-validations") or []) if isinstance(r, dict)}
     for r in n.get("x-kubernetes-validations") or []:
-        if isinstance(r, dict) and r.get("rule") not in old_rules:
+        if isinstance(r, dict) and r.get("rule") not in old_rules and not _cel_weakened(old_rules, r.get("rule")):
             problems.append(f"{path}: new x-kubernetes-validations rule {r.get('rule')!r}")
 
 

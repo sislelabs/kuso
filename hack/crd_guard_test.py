@@ -162,6 +162,48 @@ class CRDGuardTest(unittest.TestCase):
         self.assertBreaking(
             lambda d: spec(d).update(oneOf=[{"required": ["name"]}, {"required": ["count"]}]), "oneOf")
 
+    def test_pattern_alternative_appended_is_additive(self):
+        old = copy.deepcopy(BASE)
+        spec(old)["properties"]["name"]["pattern"] = "^[a-z]+-conn$"
+        new = copy.deepcopy(old)
+        spec(new)["properties"]["name"]["pattern"] = "^[a-z]+-conn$|^[a-z]+-shared$"
+        rc, err = run_guard(old, new)
+        self.assertEqual(rc, 0, err)
+
+    def test_pattern_rewritten_is_breaking(self):
+        old = copy.deepcopy(BASE)
+        spec(old)["properties"]["name"]["pattern"] = "^[a-z]+-conn$"
+        new = copy.deepcopy(old)
+        spec(new)["properties"]["name"]["pattern"] = "^[a-z]+-(conn|shared)$"
+        rc, err = run_guard(old, new)
+        self.assertEqual(rc, 1)
+        self.assertIn("pattern", err)
+
+    def test_pattern_after_escaping_backslash_is_breaking(self):
+        old = copy.deepcopy(BASE)
+        spec(old)["properties"]["name"]["pattern"] = "^a\\"
+        new = copy.deepcopy(old)
+        spec(new)["properties"]["name"]["pattern"] = "^a\\|b"
+        rc, _ = run_guard(old, new)
+        self.assertEqual(rc, 1)
+
+    def test_cel_rule_or_widened_is_additive(self):
+        old = copy.deepcopy(BASE)
+        spec(old)["x-kubernetes-validations"] = [{"rule": "!self.name.startsWith('kuso-')"}]
+        new = copy.deepcopy(old)
+        spec(new)["x-kubernetes-validations"] = [
+            {"rule": "self.name == 'kuso-x' || (!self.name.startsWith('kuso-'))"}]
+        rc, err = run_guard(old, new)
+        self.assertEqual(rc, 0, err)
+
+    def test_cel_rule_unparenthesised_or_is_breaking(self):
+        old = copy.deepcopy(BASE)
+        spec(old)["x-kubernetes-validations"] = [{"rule": "a ? b : c"}]
+        new = copy.deepcopy(old)
+        spec(new)["x-kubernetes-validations"] = [{"rule": "x || a ? b : c"}]
+        rc, err = run_guard(old, new)
+        self.assertEqual(rc, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

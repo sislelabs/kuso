@@ -226,11 +226,16 @@ spec:
                       description: Reference to a Secret whose value is the HMAC signing key.
                       required: [name, key]
                       properties:
+                        # Accepts what crons.validateOnFailureSecretRef
+                        # accepts: an addon conn secret, <project>-shared,
+                        # or kuso-instance-shared. Written as "OLD|NEW"
+                        # alternatives so hack/crd-guard.py can prove it
+                        # only widens.
                         name:
                           type: string
-                          pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                          pattern: "^[a-z0-9][a-z0-9-]*-conn$|^[a-z0-9][a-z0-9-]*-shared$|^kuso-instance-shared$"
                           x-kubernetes-validations:
-                            - rule: "!self.startsWith('kuso-')"
+                            - rule: "self == 'kuso-instance-shared' || (!self.startsWith('kuso-'))"
                               message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
                         key:
                           type: string
