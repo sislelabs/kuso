@@ -44,7 +44,15 @@ func RenderTemplate(m *Manifest, templateYAML []byte, project string, answers ma
 			return nil, nil, fmt.Errorf("%w: unknown answer %q", ErrRender, k)
 		}
 	}
+	filled := make(map[string]string, len(m.Prompts))
+	for k, v := range answers {
+		filled[k] = v
+	}
+	answers = filled
 	for _, p := range m.Prompts {
+		if answers[p.Key] == "" && p.Default != "" {
+			answers[p.Key] = p.Default
+		}
 		v, ok := answers[p.Key]
 		if (!ok || v == "") && p.Required {
 			return nil, nil, fmt.Errorf("%w: missing required answer %q", ErrRender, p.Key)

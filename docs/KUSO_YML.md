@@ -40,7 +40,7 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 | `platformApiEgress` | bool | Let pods call the kuso API over in-cluster DNS. |
 | `waitForCI` | bool | Hold push/preview builds until the commit's GitHub checks are green. |
 | `uptime` | object | Uptime check settings: `disabled` (bool) opts the service out, `path` (string) is the path the check requests. Leave the block out to keep whatever is set in the UI or CLI. |
-| `command` | list of strings | Overrides the image's CMD. |
+| `command` | list of strings | Replaces the image's ENTRYPOINT (it becomes the container `command`); the image's CMD is dropped too. To keep an entrypoint wrapper, put it first in the list. |
 | `domains` | list | `{host, tls, tlsSecret}`. `tlsSecret` is only for wildcard hosts (`*.example.com`) and is required there. |
 | `env` | map | See [Env values](#env-values). |
 | `scale` | `{min, max, targetCPU, scaleUpStabilizationSeconds, scaleUpPods, scaleUpPercent, scaleDownStabilizationSeconds}` | If you leave it out, it resets to min 1, max 5, targetCPU 70. `min: 0` means scale to zero. The last four set how fast the autoscaler moves; see [Autoscaling speed](#autoscaling-speed). |
