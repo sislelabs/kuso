@@ -123,6 +123,9 @@ func desiredCommitStatus(b *kube.KusoBuild) (key, state, desc string) {
 		}
 		return "pending:queued", "pending", "Queued"
 	}
+	if a[annPromoteHold] == VulnScanHoldMessage {
+		return "pending:scanning", "pending", "Built; scanning image for vulnerabilities"
+	}
 	if a[annPromoteHold] != "" {
 		return "pending:held", "pending", "Built; waiting for sibling builds before deploying"
 	}

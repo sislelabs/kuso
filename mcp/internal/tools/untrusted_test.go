@@ -67,6 +67,8 @@ func TestStructuredContent_FencesUntrustedFields(t *testing.T) {
 			return http.StatusOK, `{"env":"production","lines":[{"pod":"p1","line":"` + inject + `"}]}`
 		case strings.HasSuffix(r.URL.Path, "/sql/query"):
 			return http.StatusOK, `{"columns":["c"],"rows":[["` + inject + `"]]}`
+		case strings.HasSuffix(r.URL.Path, "/vulns"):
+			return http.StatusOK, `{"image":{"imageRef":"i","digest":"d","scan":{"id":1,"status":"succeeded","counts":{}}},"findings":[{"vulnId":"CVE-1","severity":"HIGH","pkgName":"p","title":"` + inject + `"}]}`
 		case strings.HasSuffix(r.URL.Path, "/builds"):
 			return http.StatusOK, `[{"id":"b1","status":"failed","commitMessage":"` + inject + `","errorMessage":"` + inject + `"}]`
 		}
@@ -80,6 +82,7 @@ func TestStructuredContent_FencesUntrustedFields(t *testing.T) {
 		{"logs", svc},
 		{"build_status", svc},
 		{"list_builds", svc},
+		{"get_vulnerabilities", svc},
 		{"sql_query", map[string]any{"project": "shop", "addon": "db", "query": "select 1"}},
 	} {
 		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})

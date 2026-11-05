@@ -29,6 +29,8 @@
 //   sql_tables         list an addon database's tables (read-only)
 //   sql_query          run one read-only SELECT against an addon
 //                      (read-only; server enforces a read-only tx)
+//   get_vulnerabilities latest CVE scan + findings for a service or
+//                      addon image (read-only)
 //
 // With apply + build + status + logs an agent can drive a deploy
 // end-to-end (init/author kuso.yml → apply → build → status → logs)
@@ -68,4 +70,5 @@ func Register(server *mcp.Server, cfg *config.Config) {
 	registerRun(server, client)
 	registerRollback(server, client)
 	registerDB(server, client)
+	registerVulns(server, client)
 }

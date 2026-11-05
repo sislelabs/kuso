@@ -30,7 +30,8 @@ export type FailureKind =
   | "clone_ref_missing"
   | "release_failed"
   | "missing_capability"
-  | "migration_lock";
+  | "migration_lock"
+  | "vuln-blocked";
 
 interface CopyPair {
   // headline reads as the bold first line ("Build crashed: missing env
@@ -102,6 +103,11 @@ const COPY: Record<FailureKind, CopyPair> = {
   clone_ref_missing: {
     headline: "The git ref no longer exists.",
     body: "The branch or commit was deleted or force-pushed away. Pick an existing branch and redeploy.",
+  },
+  "vuln-blocked": {
+    headline: "Blocked: the image has fixable critical vulnerabilities.",
+    body: "The previous version keeps running. Update the affected packages and push again, ignore the CVE with a reason, or set this service's policy to report.",
+    action: { label: "Open Vulnerabilities", tab: "vulnerabilities" },
   },
   release_failed: {
     headline: "Release hook failed; the new image was not promoted.",

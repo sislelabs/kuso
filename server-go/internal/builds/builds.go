@@ -1648,6 +1648,15 @@ type Poller struct {
 	ImageDeleter ImageDeleter
 	ImageRecords ImageRecordLister
 
+	// VulnGate scans a built image before promotion (vulngate.go).
+	// Optional: nil → promote without scanning.
+	VulnGate VulnGate
+	// vulnGateSeen: ns/build → when this process first gated it, the
+	// fallback clock when the since-annotation doesn't stick.
+	vulnGateMu   sync.Mutex
+	vulnGateSeen map[string]time.Time
+	vulnClock    func() time.Time // tests; nil = time.Now
+
 	// CommitStatuses posts GitHub commit statuses as builds transition
 	// (commit_status.go). Optional: nil → no statuses.
 	CommitStatuses CommitStatusReporter
@@ -2836,6 +2845,15 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// non-terminal with a hold annotation; the next tick re-checks.
 	// A held build superseded by a newer build of its own service is
 	// stamped terminal-not-promoted so its queue advances.
+	// Vulnerability gate (vulngate.go): runs BEFORE the same-repo hold
+	// so a build still waiting on its scan is never mistaken by its
+	// siblings for "green, waiting on the wave". While scanning it holds
+	// with VulnScanHoldMessage, which promotionHoldVerdict treats as not
+	// green; any other hold reason means the scan cleared. A vuln-blocked
+	// build is terminal failed and holds its wave like any failed sibling.
+	if stop, err := p.runVulnGate(ctx, ns, b); stop || err != nil {
+		return err
+	}
 	if !b.Spec.DryRun && shaRE.MatchString(b.Spec.Ref) {
 		all, lerr := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
 			kube.LabelProject: b.Spec.Project,
@@ -2856,8 +2874,8 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			p.notePromotionHold(ctx, ns, b, hold)
 			return nil // stays active; re-checked next tick
 		}
-		p.clearPromotionHold(ctx, ns, b)
 	}
+	p.clearPromotionHold(ctx, ns, b)
 	notDeployed := false
 	if !b.Spec.DryRun {
 		matched, err := p.promoteImageCount(ctx, ns, b)

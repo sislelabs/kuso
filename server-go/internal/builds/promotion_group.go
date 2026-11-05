@@ -36,6 +36,11 @@ package builds
 //     two-keystroke operator action, not a config knob.
 //   - A CANCELLED sibling build counts as "operator said skip it" and
 //     doesn't hold the wave.
+//
+// Vulnerability gate: it runs before this check, so a sibling held on
+// its scan (VulnScanHoldMessage) is not green, and a vuln-blocked
+// sibling is a failed sibling — the wave waits for a retry/cancel or
+// the promoteHoldMaxAge expiry, exactly as for a failed build.
 
 import (
 	"context"
@@ -186,7 +191,7 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 				case "failed", "release-failed":
 					return fmt.Sprintf("sibling build failed: %s (%s) — same-repo services promote atomically; retry it (or cancel it) to release this build", short, newest.Name)
 				default:
-					if newest.Annotations[annPromoteHold] != "" {
+					if heldGreen(newest) {
 						continue // retry green, itself awaiting the wave
 					}
 					return fmt.Sprintf("waiting for sibling build: %s (%s) — same-repo services promote atomically", short, newest.Name)
@@ -197,13 +202,21 @@ func promotionHoldVerdict(b *kube.KusoBuild, all []kube.KusoBuild) string {
 			// Non-terminal. A hold annotation means its Job is green
 			// and it's waiting on the wave too — counts as green, or
 			// two simultaneous finishers deadlock on each other.
-			if s.Annotations[annPromoteHold] != "" {
+			if heldGreen(s) {
 				continue
 			}
 			return fmt.Sprintf("waiting for sibling build: %s (%s) — same-repo services promote atomically", short, s.Name)
 		}
 	}
 	return ""
+}
+
+// heldGreen reports a non-terminal build whose Job succeeded and whose
+// own gates have cleared: it's only waiting on its wave. A build held
+// on its vulnerability scan is not green yet — it may still be blocked.
+func heldGreen(b *kube.KusoBuild) bool {
+	h := b.Annotations[annPromoteHold]
+	return h != "" && h != VulnScanHoldMessage
 }
 
 // samePromotionScope reports whether two builds target the same envs:

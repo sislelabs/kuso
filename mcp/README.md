@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** v0.1.0 — pre-release, but functional: 22 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, and config-as-code plan/apply.
+**Status:** v0.1.0 — pre-release, but functional: 23 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, image vulnerability findings, and config-as-code plan/apply.
 
 ## Run
 
@@ -84,6 +84,7 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `rollback`          | re-point an env at a previous build's image (mutating; `confirm: true`) |
 | `sql_tables`        | list an addon database's tables (read-only) |
 | `sql_query`         | one read-only SELECT against an addon (read-only) |
+| `get_vulnerabilities` | latest CVE scan + findings for a service or addon image (read-only) |
 
 `--read-only` disables every mutating tool.
 

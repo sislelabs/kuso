@@ -37,6 +37,7 @@ import { ServiceCronsPanel } from "./overlay/ServiceCronsPanel";
 import { ServiceRunsPanel } from "./overlay/ServiceRunsPanel";
 import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
+import { ServiceVulnerabilitiesPanel } from "./overlay/ServiceVulnerabilitiesPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 import dynamic from "next/dynamic";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -124,7 +125,17 @@ export function useOverlayDirty(
   }, [api, panelKey, dirty, hasSave, hasDiscard, opts?.saving, opts?.saveError]);
 }
 
-type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "shell" | "crons" | "runs" | "settings";
+type Tab =
+  | "deployments"
+  | "variables"
+  | "metrics"
+  | "logs"
+  | "errors"
+  | "vulnerabilities"
+  | "shell"
+  | "crons"
+  | "runs"
+  | "settings";
 // Settings is pinned to the right of the strip (rendered outside
 // the scrollable container) because it holds the destructive
 // actions — Delete service, change runtime, change port, change
@@ -142,6 +153,7 @@ const ALL_MAIN_TABS: { id: Tab; label: string; alwaysShow?: boolean }[] = [
   { id: "metrics", label: "Metrics", alwaysShow: true },
   { id: "logs", label: "Logs", alwaysShow: true },
   { id: "errors", label: "Errors", alwaysShow: true },
+  { id: "vulnerabilities", label: "Vulnerabilities", alwaysShow: true },
   { id: "shell", label: "Shell", alwaysShow: true },
   { id: "crons", label: "Crons" },
   { id: "runs", label: "Runs" },
@@ -153,7 +165,7 @@ const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Setting
 // tags build-time failures (build OOM, lockfile drift, missing
 // Dockerfile, …); the failed build row with its remediation lives on
 // Deployments, so that's where the banner has to render.
-const TAB_ALIASES: Record<string, Tab> = { build: "deployments" };
+const TAB_ALIASES: Record<string, Tab> = { build: "deployments", vulns: "vulnerabilities" };
 
 function resolveTab(slug: string | undefined): Tab | undefined {
   if (!slug) return undefined;
@@ -954,6 +966,16 @@ export function ServiceOverlay({
                           project={project}
                           service={service ?? ""}
                           onViewLogs={() => guardedSetTab("logs")}
+                        />
+                      </div>
+                    )}
+                    {tab === "vulnerabilities" && (
+                      <div className="p-5">
+                        <ServiceVulnerabilitiesPanel
+                          key={`${service ?? ""}/${env ? envGroupName(env) : envParam}`}
+                          project={project}
+                          service={service ?? ""}
+                          env={env ? envGroupName(env) : envParam}
                         />
                       </div>
                     )}
