@@ -57,7 +57,8 @@ var vulnsCmd = &cobra.Command{
 	Long: `Every image kuso runs is scanned for known CVEs with Trivy: service images
 after each build and nightly, addon and platform images nightly.
 
-In enforce mode (the instance default) a build whose image has a fixable
+In report mode (the instance default) findings are recorded and nothing is
+blocked. In enforce mode a build whose image has a fixable
 CRITICAL finding that is not ignored is blocked from promotion; the previous
 image keeps serving. To unblock: fix and rebuild, ignore the CVE with a reason
 (` + "`kuso vulns ignore add`" + `) and rebuild, or set the service policy to report.`,

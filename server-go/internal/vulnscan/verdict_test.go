@@ -17,7 +17,7 @@ func TestEffectiveMode(t *testing.T) {
 		{"report", "enforce", "enforce"},
 		{"off", "enforce", "off"}, // instance off disables the feature
 		{"report", "", "report"},
-		{"", "inherit", "enforce"}, // unset instance = default enforce
+		{"", "inherit", "report"}, // unset instance = default report
 	}
 	for _, c := range cases {
 		if got := EffectiveMode(c.instance, c.policy); got != c.want {

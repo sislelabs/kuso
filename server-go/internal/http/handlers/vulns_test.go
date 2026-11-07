@@ -110,7 +110,7 @@ func (r *vulnsRig) do(t *testing.T, claims *auth.Claims, method, path, body stri
 func TestVulns_PolicyRoundTripAndValidation(t *testing.T) {
 	rig := newVulnsRig(t, stubLive{})
 	rec, body := rig.do(t, adminClaims, http.MethodGet, "/api/projects/shop/services/web/vulns/policy", "")
-	if rec.Code != 200 || body["mode"] != "inherit" || body["effectiveMode"] != "enforce" {
+	if rec.Code != 200 || body["mode"] != "inherit" || body["effectiveMode"] != "report" {
 		t.Fatalf("default policy: %d %v", rec.Code, body)
 	}
 	if rec, _ := rig.do(t, adminClaims, http.MethodPut, "/api/projects/shop/services/web/vulns/policy", `{"mode":"block"}`); rec.Code != 400 {
@@ -225,7 +225,7 @@ func TestVulns_ServiceShowAndScan(t *testing.T) {
 	}
 
 	rec, body = rig.do(t, adminClaims, http.MethodGet, "/api/projects/shop/vulns", "")
-	if rec.Code != 200 || body["mode"] != "enforce" || len(body["images"].([]any)) != 1 {
+	if rec.Code != 200 || body["mode"] != "report" || len(body["images"].([]any)) != 1 {
 		t.Errorf("project list: %d %v", rec.Code, body)
 	}
 }
@@ -245,7 +245,7 @@ func TestVulns_AdminSettings(t *testing.T) {
 		t.Errorf("non-admin settings: %d", rec.Code)
 	}
 	rec, body := rig.do(t, adminClaims, http.MethodGet, "/api/admin/settings/vulnscan", "")
-	if rec.Code != 200 || body["mode"] != "enforce" || body["nightlyHourUTC"] != 3.0 || body["notifyMinSeverity"] != "high" {
+	if rec.Code != 200 || body["mode"] != "report" || body["nightlyHourUTC"] != 3.0 || body["notifyMinSeverity"] != "high" {
 		t.Fatalf("defaults: %v", body)
 	}
 	if rec, _ := rig.do(t, adminClaims, http.MethodPut, "/api/admin/settings/vulnscan", `{"mode":"report","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":24,"notifyMinSeverity":"high"}`); rec.Code != 400 {

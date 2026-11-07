@@ -743,7 +743,7 @@ type VulnScanSettings struct {
 
 // DefaultVulnScanSettings is a fresh install's config.
 func DefaultVulnScanSettings() VulnScanSettings {
-	return VulnScanSettings{Mode: "enforce", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high"}
+	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high"}
 }
 
 // GetVulnScanSettings reads vulnscan.* over the defaults.

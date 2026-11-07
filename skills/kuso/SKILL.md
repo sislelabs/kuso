@@ -862,7 +862,9 @@ kuso scans images for known CVEs with Trivy. Service images get a scan after eve
 successful build and again nightly; addon and platform images are scanned nightly. New
 fixable critical/high findings send a `security.vulnerabilities_found` notification.
 
-**The deploy gate.** The instance default mode is `enforce`. A freshly built image with a
+**The deploy gate.** The instance default mode is `report`: every image is scanned and
+reported, but nothing is held or blocked. In `enforce` mode (instance-wide or per service
+policy) a freshly built image with a
 fixable CRITICAL finding that is not ignored never goes live: the build ends `failed` with
 `blocked: N fixable critical vulnerabilities (CVE-…)` and failure class `vuln-blocked`, and
 the previous image keeps serving. While the scan runs, the build shows the hold

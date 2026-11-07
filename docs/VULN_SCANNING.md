@@ -37,7 +37,7 @@ After a build's Job succeeds and before promotion (in `builds.markSucceeded`, **
    - **Circuit breaker**: when the last 3 finished scans (any reason) all failed within the last 2h, the scanner is treated as broken and every gated build fails open **immediately** instead of waiting 15 minutes. The scan is still queued, so the first success closes the breaker. `security.scan_failed` fires once per breaker-open period (per server process), not per build.
    - A scan pod that stays unschedulable (`PodScheduled=False`, reason `Unschedulable`) for more than 2 minutes, or sits Pending while the `kuso-trivy-cache` PVC is still Pending, fails at once with that reason instead of running out the 12-minute backstop.
 6. **Monorepo siblings** (same-repo atomic promotion): the gate runs first, so a build waiting on its scan holds with `scanning image for vulnerabilities…` and its siblings treat it as **not green** — they wait. Only after its scan clears does a build join the sibling wait (any other hold reason). A vuln-blocked build is a failed sibling: the wave holds until it is retried green, cancelled, or the 2h hold expiry, same as any failed sibling build.
-7. Effective mode = service policy if not `inherit`, else instance `vulnscan.mode`. Instance default: **`enforce`**. Instance `off` disables the whole feature (no gate, no nightly).
+7. Effective mode = service policy if not `inherit`, else instance `vulnscan.mode`. Instance default: **`report`** (scan and report, never hold or block); switch the instance or a service to `enforce` to gate deploys. Instance `off` disables the whole feature (no gate, no nightly).
 
 ### Nightly sweep
 

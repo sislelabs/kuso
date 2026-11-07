@@ -25,8 +25,21 @@ func gateReq(since time.Time) builds.VulnGateRequest {
 	return builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage, Since: since}
 }
 
-func TestGate(t *testing.T) {
+// enforceDB is openDB with the instance in enforce mode; the shipped
+// default is report, which never holds or blocks a build.
+func enforceDB(t *testing.T) *db.DB {
+	t.Helper()
 	d := openDB(t)
+	st := db.DefaultVulnScanSettings()
+	st.Mode = ModeEnforce
+	if err := d.SetVulnScanSettings(context.Background(), st, "t"); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestGate(t *testing.T) {
+	d := enforceDB(t)
 	ctx := context.Background()
 	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
 	since := time.Now()
@@ -94,7 +107,7 @@ func TestGate(t *testing.T) {
 }
 
 func TestGate_FailedScan(t *testing.T) {
-	d := openDB(t)
+	d := enforceDB(t)
 	ctx := context.Background()
 	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
 
@@ -182,7 +195,7 @@ func TestGate_ReportModeNeverHoldsPromotion(t *testing.T) {
 }
 
 func TestGate_BreakerFailsOpenFastOncePerOutage(t *testing.T) {
-	d := openDB(t)
+	d := enforceDB(t)
 	ctx := context.Background()
 	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
 	failN := func(n int) {
@@ -240,7 +253,7 @@ func TestGate_BreakerFailsOpenFastOncePerOutage(t *testing.T) {
 }
 
 func TestGate_ExternalImageScansWithPushCredentials(t *testing.T) {
-	d := openDB(t)
+	d := enforceDB(t)
 	ctx := context.Background()
 	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}}
 	ext := builds.VulnGateRequest{Project: "shop", Service: "web", Image: "ghcr.io/acme/web:main-1", Since: time.Now(), PullSecret: "kuso/registry-creds"}
