@@ -19,6 +19,49 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.34.0] — 2026-11-07
+
+### Other
+- Default vulnerability scanning to report mode ([3e68e62](https://github.com/sislelabs/kuso/commit/3e68e62557a885217876e4b8b83e05de6bc12084))
+- Keep staging env-groups from reaching production ([5f8b48f](https://github.com/sislelabs/kuso/commit/5f8b48f0072422357fbc1a469bee74c57ca6eadc))
+- List only the project's pods for the project vulns endpoint ([78b815f](https://github.com/sislelabs/kuso/commit/78b815f462b75f51855db5c393e1c800f168fda1))
+- Scan externally pushed images with the build's push credentials ([35a1469](https://github.com/sislelabs/kuso/commit/35a146951c9367cbc5c99f1c2d45aa2ddf06fdea))
+- Run the vuln gate before the same-repo sibling hold ([ad04146](https://github.com/sislelabs/kuso/commit/ad0414645dd7f37920f2bdda5d206429711506ee))
+- Keep the vuln gate clock when the since annotation is lost ([77b6f6f](https://github.com/sislelabs/kuso/commit/77b6f6fa9b016fdec47b4b732b8d105eeb081b70))
+- Fail the vuln gate open fast when the scanner is broken ([bb23862](https://github.com/sislelabs/kuso/commit/bb238626d297ed9bfc7cbb45e7673e950f5a5dde))
+- Baseline the first vulnerability sweep instead of alerting per owner ([00e4f7a](https://github.com/sislelabs/kuso/commit/00e4f7a3c79745b385fe5784cbb8b5ff917a4ce3))
+- Prune gone vuln inventory and its notified records ([153032c](https://github.com/sislelabs/kuso/commit/153032c6cb21df142003cf89d1ba59c84b580204))
+- Keep the last succeeded vuln scan when pruning ([31570e1](https://github.com/sislelabs/kuso/commit/31570e1c7ae04ca0c2b582090d060bdd2cac4f89))
+- Enforce one running vuln scan with a partial unique index ([db60b2b](https://github.com/sislelabs/kuso/commit/db60b2bebc64b4db97716026e3d315fdc09e498a))
+- Promote immediately in report mode and explain vuln-blocked builds ([2dd8e20](https://github.com/sislelabs/kuso/commit/2dd8e20cc30ae50435308201ad0bc63e97b6351d))
+- Badge canvas nodes whose live image has fixable critical CVEs ([7f7a7f9](https://github.com/sislelabs/kuso/commit/7f7a7f95c1b7f7f0d5b9e0788275f57a95469f86))
+- Document vulnerability scanning in the kuso skill ([45845f1](https://github.com/sislelabs/kuso/commit/45845f1e294802738df8e8ea30d930bd29c9a407))
+- Fail a scan whose Job stays unreadable past the runtime cap ([f4cac04](https://github.com/sislelabs/kuso/commit/f4cac042ad576392bf6a3d0860ba121288d838cc))
+- Purge vulnerability policy, ignores and inventory with their project ([55a62fd](https://github.com/sislelabs/kuso/commit/55a62fdd66f6b9836ad37663158bc4b8cf0685c6))
+- Declare the security event types beside the other build events ([460bf3b](https://github.com/sislelabs/kuso/commit/460bf3b5c2c254c71dbbd9c163c6b553037771bd))
+- Gate build promotion on the vulnerability scan verdict ([0fef558](https://github.com/sislelabs/kuso/commit/0fef558bfb25586471241dabaa841aad9f4c435e))
+- Grant kuso-server pods/eviction for PDB-aware node drains (LOOP-14) ([b4f24f8](https://github.com/sislelabs/kuso/commit/b4f24f894caa19dfce26ad7fcbebca1e1a84a03b))
+
+### ✨ Features
+- Feat(marketplace): add obsidian-livesync template ([b3950b0](https://github.com/sislelabs/kuso/commit/b3950b0512b8e21fa2d693f7272fa762a71f82af))
+- Add admin Vulnerability scanning settings page ([9f0f68d](https://github.com/sislelabs/kuso/commit/9f0f68d9fdab33c36cef8c39927fb054aeb223bd))
+- Add Vulnerabilities tab to the service and addon overlays ([2f80c48](https://github.com/sislelabs/kuso/commit/2f80c48aa5a700cd0f998adad97d9669bd015067))
+- Add vulns feature module with contract types, hooks and filter logic ([3a9df3c](https://github.com/sislelabs/kuso/commit/3a9df3ca4cb2c862c43117e65f8d3b43f7f68b5a))
+- Add read-only get_vulnerabilities MCP tool ([b40cba3](https://github.com/sislelabs/kuso/commit/b40cba35cfd362371b328d2592eec80ec175c280))
+- Add kuso vulns command group ([626b945](https://github.com/sislelabs/kuso/commit/626b94518372feeebcca7f5a09462fd648913a58))
+- Add vulnerability-scanning API client to the CLI ([e13c3ce](https://github.com/sislelabs/kuso/commit/e13c3ce22d932820f9b45fd2164bc855731bc62d))
+- Add vulnerability HTTP API, admin settings and router wiring ([aa5ddc4](https://github.com/sislelabs/kuso/commit/aa5ddc49dcf0a0a166ad1136fc5f7492b57ac6ac))
+- Add vulnscan inventory, nightly sweep and security notifications ([20c09e6](https://github.com/sislelabs/kuso/commit/20c09e625f850c60ea8a56f31d0bd36472671d3b))
+- Add Trivy scan worker, report parsing and gate verdict logic ([d5de18f](https://github.com/sislelabs/kuso/commit/d5de18f7dcacf8b918f165c83f6cd01a0ba79170))
+- Add vulnscan migration and Postgres repository ([dcb5157](https://github.com/sislelabs/kuso/commit/dcb51578e2226e6c21e81285c0dde141be7fdfe5))
+- Add vulnerability scanning spec ([873f389](https://github.com/sislelabs/kuso/commit/873f3896d020f1eb33459c09b0a96d0bac7ee8e1))
+
+### 🐛 Bug Fixes
+- Fix(marketplace): render a prompt's default when it is left unanswered ([b178116](https://github.com/sislelabs/kuso/commit/b17811632490b5b482ef5e8b26313af37fe42a3f))
+
+### 📝 Docs
+- Docs(kuso-yml): command replaces the image ENTRYPOINT, not CMD ([40333ad](https://github.com/sislelabs/kuso/commit/40333ad1520d0a4aebadd8468b44e7fbaf595d6c))
+
 ## [0.33.0] — 2026-11-04
 
 ### Other
@@ -577,14 +620,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): pooler config changes roll the PgBouncer pod ([2e057b8](https://github.com/sislelabs/kuso/commit/2e057b8d566f4ae34d47ecb984e544d4ddcc9696))
-
-## [0.25.21] — 2026-09-02
-
-### ✨ Features
-- Feat(addon): pooler.poolSize caps PgBouncer's backend pool ([5134a9a](https://github.com/sislelabs/kuso/commit/5134a9a944d9ba797be178c217ee266a81b89cd9))
-
-### 🐛 Bug Fixes
-- Fix(cli): shared-secret unset reports the services it unsubscribed ([accedc0](https://github.com/sislelabs/kuso/commit/accedc06791a5ccadaa5c15edf3fd63a291cee1f))
 
 
 ---

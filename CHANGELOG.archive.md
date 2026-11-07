@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.21] — 2026-09-02
+
+### ✨ Features
+- Feat(addon): pooler.poolSize caps PgBouncer's backend pool ([5134a9a](https://github.com/sislelabs/kuso/commit/5134a9a944d9ba797be178c217ee266a81b89cd9))
+
+### 🐛 Bug Fixes
+- Fix(cli): shared-secret unset reports the services it unsubscribed ([accedc0](https://github.com/sislelabs/kuso/commit/accedc06791a5ccadaa5c15edf3fd63a291cee1f))
+
 ## [0.25.20] — 2026-09-02
 
 ### 🐛 Bug Fixes
