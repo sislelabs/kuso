@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.24] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backuphealth): read control-plane success from the CronJob, not GC'd Jobs ([26b2256](https://github.com/sislelabs/kuso/commit/26b2256f68612e58bcfbfa050cfdd94720c752ab))
+
 ## [0.25.23] — 2026-09-02
 
 ### 🐛 Bug Fixes

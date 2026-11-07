@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.35.0] — 2026-11-07
+
+### Other
+- Reuse the image of an identical sibling build instead of rebuilding ([d365c15](https://github.com/sislelabs/kuso/commit/d365c15e9d87e0e1c03891cd6c395f4f1b580987))
+
 ## [0.34.2] — 2026-11-07
 
 ### Other
@@ -614,11 +619,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
-
-## [0.25.24] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(backuphealth): read control-plane success from the CronJob, not GC'd Jobs ([26b2256](https://github.com/sislelabs/kuso/commit/26b2256f68612e58bcfbfa050cfdd94720c752ab))
 
 
 ---
