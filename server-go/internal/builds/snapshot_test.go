@@ -65,3 +65,30 @@ func TestSnapshotKeysAnnotation(t *testing.T) {
 		t.Fatal("nil keys -> empty annotation value")
 	}
 }
+
+type guardRunner struct {
+	fakeReleaseRunner
+	reason string
+	err    error
+}
+
+func (g *guardRunner) ProductionDataGuard(context.Context, string, *kube.KusoEnvironment) (string, error) {
+	return g.reason, g.err
+}
+
+func TestReleaseWillSkip(t *testing.T) {
+	ctx := context.Background()
+	e := &kube.KusoEnvironment{}
+	if !releaseWillSkip(ctx, &guardRunner{reason: "shares production db"}, "ns", e) {
+		t.Fatal("guard reason should skip the snapshot")
+	}
+	if releaseWillSkip(ctx, &guardRunner{}, "ns", e) {
+		t.Fatal("no reason should not skip")
+	}
+	if releaseWillSkip(ctx, &guardRunner{reason: "x", err: errors.New("list failed")}, "ns", e) {
+		t.Fatal("guard error should not skip")
+	}
+	if releaseWillSkip(ctx, &fakeReleaseRunner{}, "ns", e) {
+		t.Fatal("runner without guard should not skip")
+	}
+}

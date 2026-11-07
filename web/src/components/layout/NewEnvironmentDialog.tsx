@@ -17,6 +17,7 @@ import {
 import { Plus, Database, Share2, Sparkles, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { isProductionResource } from "@/lib/env-group";
 import { ServiceEnvironmentForm } from "./ServiceEnvironmentForm";
 
 interface Props {
@@ -49,7 +50,12 @@ type AddonPolicy = "fresh" | "shared";
 // On success: toast + tip banner ("review env vars in [Variables]").
 export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Props) {
   const proj = useProject(project);
-  const services = proj.data?.services ?? [];
+  // Only production/shared CRs: existing env-group clones are not
+  // mirrored again and must not inflate the counts or pickers.
+  const services = useMemo(
+    () => (proj.data?.services ?? []).filter((s) => isProductionResource(s.metadata.labels)),
+    [proj.data?.services],
+  );
   const addons = useAddons(project);
   const qc = useQueryClient();
 
@@ -68,6 +74,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     const list = addons.data ?? [];
     const out: { short: string; kind: string }[] = [];
     for (const a of list) {
+      if (!isProductionResource(a.metadata.labels)) continue;
       const fqn = a.metadata.name;
       const prefix = project + "-";
       const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;

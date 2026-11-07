@@ -377,7 +377,7 @@ func TestBuildServiceResolver_SelectsProdByEnvLabelNotSpecKind(t *testing.T) {
 		seedEnvDivergent("alpha", "web", "staging", "production", "alpha-web-staging", "web-staging.example.com"),
 	)
 
-	resolver, err := s.buildServiceResolver(context.Background(), "alpha", "kuso")
+	resolver, _, err := s.buildServiceResolver(context.Background(), "alpha", "kuso", "web")
 	if err != nil {
 		t.Fatalf("buildServiceResolver: %v", err)
 	}

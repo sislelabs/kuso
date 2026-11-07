@@ -48,7 +48,7 @@ import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { isProductionGroup } from "@/lib/env-group";
-import { buildTriggerMessage, useTriggerBuild } from "@/features/services";
+import { buildTriggerMessage } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
   ExternalLink,
@@ -565,6 +565,12 @@ export function ProjectCanvas({
   // those entry points ask first like the Deployments tab does.
   const [confirmRedeploy, setConfirmRedeploy] = useState<string | null>(null);
   const [redeploying, setRedeploying] = useState(false);
+  // Branch of the redeploy target's env in the selected group. Without it
+  // the server builds the project's default branch, so a staging-tab
+  // redeploy of a shared service would rebuild production.
+  const redeployBranch = confirmRedeploy
+    ? envs.find((e) => serviceShortName(project, e.spec.service) === confirmRedeploy)?.spec.branch
+    : undefined;
 
   // ?add=addon|cron opens the matching dialog (the ⌘K palette links
   // here). Strip the param afterwards so a reload doesn't reopen it.
@@ -592,7 +598,6 @@ export function ProjectCanvas({
     ref: true,
   });
 
-  const trigger = useTriggerBuild(project, "");
   const qc = useQueryClient();
 
   // Project-scoped write capabilities. The server enforces these
@@ -834,10 +839,9 @@ export function ProjectCanvas({
   ) => {
     e.preventDefault();
     const short = serviceShortName(data.project, data.service.metadata.name);
-    const env = envs.find(
-      (x) =>
-        x.spec.service === data.service.metadata.name && isProductionGroup(x)
-    );
+    // envs is already narrowed to the selected env-group, so the
+    // service's env here IS the one this tab is showing.
+    const env = envs.find((x) => x.spec.service === data.service.metadata.name);
     const url = env?.status?.url as string | undefined;
 
     const runtime = data.service.spec.runtime || "dockerfile";
@@ -1263,14 +1267,19 @@ export function ProjectCanvas({
 
       <ConfirmDialog
         open={!!confirmRedeploy}
-        title={`Redeploy ${confirmRedeploy ?? ""}?`}
+        title={`Redeploy ${confirmRedeploy ?? ""} (${selectedEnv})?`}
         destructive={false}
         confirmLabel="Redeploy"
         body={
           <>
-            This starts a new build of{" "}
-            <span className="font-mono text-[var(--text-primary)]">{confirmRedeploy}</span> and rolls
-            it out when the build succeeds.
+            This starts a new {selectedEnv} build of{" "}
+            <span className="font-mono text-[var(--text-primary)]">{confirmRedeploy}</span>
+            {redeployBranch ? (
+              <>
+                {" "}from <span className="font-mono text-[var(--text-primary)]">{redeployBranch}</span>
+              </>
+            ) : null}{" "}
+            and rolls it out when the build succeeds.
           </>
         }
         pending={redeploying}
@@ -1280,7 +1289,7 @@ export function ProjectCanvas({
           const short = confirmRedeploy;
           setRedeploying(true);
           try {
-            const res = await callTrigger(project, short, trigger);
+            const res = await callTrigger(project, short, redeployBranch ? { branch: redeployBranch } : {});
             toast.success(buildTriggerMessage(res, `Redeploy started for ${short}`, short));
             setConfirmRedeploy(null);
           } catch (err) {
@@ -1317,18 +1326,15 @@ export function ProjectCanvas({
   );
 }
 
-// callTrigger adapter: the trigger hook is bound to a placeholder
-// service name (""), so the canvas re-binds to the actual service
-// via the API directly. Keeps the canvas from spinning up N hooks
-// per node.
+// callTrigger hits the API directly rather than spinning up a
+// per-node mutation hook.
 async function callTrigger(
   project: string,
   service: string,
-  _hint: ReturnType<typeof useTriggerBuild>
+  body: { branch?: string }
 ) {
-  void _hint;
   const { triggerBuild } = await import("@/features/services/api");
-  return triggerBuild(project, service, {});
+  return triggerBuild(project, service, body);
 }
 
 // callStopStart adapter: like callTrigger, the canvas hits the stop/

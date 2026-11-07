@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { KusoEnvironment } from "@/types/projects";
-import { envGroupName, isProductionGroup, serviceEnvOptions, wakeEnvParam } from "./env-group";
+import {
+  cloneBaseName,
+  envGroupName,
+  groupReferenceNames,
+  isProductionGroup,
+  isProductionResource,
+  resourceGroup,
+  resourceInGroup,
+  serviceEnvOptions,
+  wakeEnvParam,
+} from "./env-group";
 
 function env(kind: string, label?: string): KusoEnvironment {
   return {
@@ -57,5 +67,37 @@ describe("serviceEnvOptions", () => {
       "p-api",
     );
     expect(opts.map((o) => o.value)).toEqual(["production", "staging"]);
+  });
+});
+
+describe("resource group membership", () => {
+  const staging = { "kuso.sislelabs.com/env": "staging" };
+
+  it("treats unlabelled CRs as production and shared", () => {
+    expect(resourceGroup(undefined)).toBe("production");
+    expect(resourceGroup(staging)).toBe("staging");
+    expect(isProductionResource({ "kuso.sislelabs.com/env": "production" })).toBe(true);
+    expect(isProductionResource(staging)).toBe(false);
+    expect(resourceInGroup(undefined, "staging")).toBe(true);
+    expect(resourceInGroup(staging, "production")).toBe(false);
+    expect(resourceInGroup(staging, "qa")).toBe(false);
+  });
+
+  it("strips the group suffix, including the short preview suffix", () => {
+    expect(cloneBaseName("api-staging", "staging")).toBe("api");
+    expect(cloneBaseName("db-pr-4", "preview-pr-4")).toBe("db");
+    expect(cloneBaseName("api", "production")).toBe("api");
+  });
+
+  it("offers base names in a clone group and hides clones in production", () => {
+    const items = [
+      { name: "api", labels: undefined },
+      { name: "worker", labels: undefined },
+      { name: "api-staging", labels: staging },
+      { name: "api-qa", labels: { "kuso.sislelabs.com/env": "qa" } },
+    ];
+    expect(groupReferenceNames(items, "production")).toEqual(["api", "worker"]);
+    expect(groupReferenceNames(items, "staging")).toEqual(["api", "worker"]);
+    expect(groupReferenceNames([items[2]], "staging")).toEqual(["api"]);
   });
 });

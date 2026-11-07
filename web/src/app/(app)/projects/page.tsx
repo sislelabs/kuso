@@ -25,7 +25,7 @@ import {
 } from "@/components/canvas/CanvasContextMenu";
 import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
 import { relativeTime, stripRepoCredentials } from "@/lib/format";
-import { isProductionGroup } from "@/lib/env-group";
+import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import { hostScheme } from "@/lib/host-scheme";
 
@@ -417,7 +417,15 @@ function ProjectsGrid({
           ? relativeTime(p.metadata.creationTimestamp)
           : null;
         const summary = summaryByName.get(name);
-        const services = summary?.services ?? [];
+        // Env-group clones (staging etc.) are separate KusoService CRs
+        // labelled with their group; the card is a production rollup, so
+        // counting them made "4/8 live" out of 4 healthy prod services.
+        // Project stop/start acts on EVERY service, clones included.
+        const allServices = summary?.services ?? [];
+        const services = allServices.filter((s) => {
+          const g = s.metadata.labels?.[ENV_GROUP_LABEL];
+          return !g || g === "production";
+        });
         const environments = summary?.environments ?? [];
         // Display domain, in priority order:
         //   1. project baseDomain (explicit),
@@ -561,7 +569,7 @@ function ProjectsGrid({
                     ]
                   : []),
                 { id: "sep1", kind: "separator" },
-                ...(canStopProjects && services.length > 0
+                ...(canStopProjects && allServices.length > 0
                   ? allStopped
                     ? [
                         {
@@ -581,7 +589,7 @@ function ProjectsGrid({
                           onSelect: () =>
                             setConfirmStop({
                               name,
-                              count: services.length,
+                              count: allServices.length,
                             }),
                         } as ContextMenuItem,
                       ]
@@ -717,7 +725,7 @@ function ProjectsGrid({
                         project" (one click). pointer-events-auto + z-30
                         so it acts on itself, not the card's overlay Link
                         — same escape pattern as the Star button. */}
-                    {canStopProjects && services.length > 0 && (
+                    {canStopProjects && allServices.length > 0 && (
                       <button
                         type="button"
                         aria-label={
@@ -737,7 +745,7 @@ function ProjectsGrid({
                           } else if (anyRunning) {
                             setConfirmStop({
                               name,
-                              count: services.length,
+                              count: allServices.length,
                             });
                           }
                         }}

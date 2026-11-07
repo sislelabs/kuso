@@ -9,6 +9,7 @@ import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/featu
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { stripRepoCredentials } from "@/lib/format";
+import { envGroupName } from "@/lib/env-group";
 import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket, Moon, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -226,15 +227,10 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       e.spec.service === service ||
       e.spec.service === `${project}-${service}`;
     const envName = env || "production";
-    return (
-      list.find(
-        (e) =>
-          matchesService(e) &&
-          (e.spec.kind === envName ||
-            (e.metadata.labels &&
-              e.metadata.labels["kuso.sislelabs.com/env"] === envName)),
-      ) ?? list.find(matchesService)
-    );
+    // Group identity is the env label (unlabelled legacy = spec.kind).
+    // No cross-group fallback: showing another group's env here would let
+    // a save write its hosts onto the wrong env.
+    return list.find((e) => matchesService(e) && envGroupName(e) === envName);
   }, [envsForActive.data, project, service, env]);
   // baseline = service spec (most fields) + env CR AdditionalHosts
   // (the domains list, which is per-env post-v0.16.19). The override
@@ -282,16 +278,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       e.spec.service === service ||
       e.spec.service === `${project}-${service}`;
     const envName = env || "production";
-    const forActiveEnv = list.find(
-      (e) =>
-        matchesService(e) &&
-        (e.spec.kind === envName ||
-          (e.metadata.labels &&
-            e.metadata.labels["kuso.sislelabs.com/env"] === envName)),
-    );
-    // Fallback to ANY env of this service so legacy projects with no
-    // kind label still get a host rendered.
-    return (forActiveEnv ?? list.find(matchesService))?.spec.host;
+    return list.find((e) => matchesService(e) && envGroupName(e) === envName)?.spec.host;
   }, [envs.data, project, service, env]);
   // Gate the floating save bar on services:write — viewers can scroll
   // through the panel but can't edit. Inputs are still editable to

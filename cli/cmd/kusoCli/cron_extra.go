@@ -135,6 +135,9 @@ var cronGetCmd = &cobra.Command{
 		if of := mapAt(spec, "onFailure"); len(of) > 0 {
 			row("on failure", of["webhookURL"])
 		}
+		status := mapAt(c, "status")
+		row("last scheduled", status["lastScheduleTime"])
+		row("last success", status["lastSuccessfulTime"])
 		return nil
 	},
 }

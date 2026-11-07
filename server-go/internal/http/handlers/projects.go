@@ -1439,7 +1439,8 @@ func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 	// were previously unreadable anywhere, so an override could pin a value
 	// on production that no view showed.
 	if envName := r.URL.Query().Get("env"); envName != "" {
-		out, err = h.Svc.GetEnvScoped(ctx, project, chi.URLParam(r, "service"), envName, reveal)
+		svc, envName := envGroupTarget(ctx, h.Kube, h.Namespace, project, chi.URLParam(r, "service"), envName)
+		out, err = h.Svc.GetEnvScoped(ctx, project, svc, envName, reveal)
 	} else if reveal {
 		out, err = h.Svc.GetEnvRevealed(ctx, project, chi.URLParam(r, "service"))
 	} else {
@@ -1593,7 +1594,8 @@ func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 	}
 	env := r.URL.Query().Get("env")
 	reason := r.URL.Query().Get("reason")
-	out, err := h.Svc.ListPods(ctx, project, service, env)
+	podSvc, podEnv := envGroupTarget(ctx, h.Kube, h.Namespace, project, service, env)
+	out, err := h.Svc.ListPods(ctx, project, podSvc, podEnv)
 	if err != nil {
 		h.fail(w, "list pods", err)
 		return

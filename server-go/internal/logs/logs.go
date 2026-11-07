@@ -173,27 +173,13 @@ func (s *Service) TailSince(ctx context.Context, project, service, env string, l
 		return []Line{}, env, nil
 	}
 
-	envName := env
-	if !strings.Contains(env, "-") {
-		envName = fqn + "-" + env
-	}
-
 	// Verify the env exists — saves the caller a confusing empty result
-	// when they typo a name. AND verify it actually belongs to the
-	// (project, service) the caller authorized against; without that
-	// check, ?env=other-project-svc-prod returns logs from a service
-	// the caller has no access to. The env CR's spec is authoritative.
-	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
+	// when they typo a name. The resolver also gates tenancy on the env
+	// CR's spec, and resolves an env-group ("staging") of a base service
+	// to the group's clone env.
+	envName, err := s.resolveEnvName(ctx, ns, project, fqn, env)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, envName, ErrNotFound
-		}
-		return nil, envName, fmt.Errorf("get env: %w", err)
-	}
-	// Tenancy gate. The previous `!= ""` shape let a zero-valued env
-	// (legacy CR / decode failure) bypass the check entirely.
-	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
-		return nil, envName, ErrNotFound
+		return nil, envName, err
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
@@ -535,4 +521,22 @@ func (s *Service) MissingTarget(ctx context.Context, project, service, env strin
 		env = "production"
 	}
 	return fmt.Sprintf("environment %s not found for service %s/%s", env, project, strings.TrimPrefix(service, project+"-"))
+}
+
+// resolveEnvName maps env to the env CR whose pods to read. On a miss it
+// returns the conventional "<fqn>-<env>" name alongside ErrNotFound so
+// error messages keep naming what was looked for.
+func (s *Service) resolveEnvName(ctx context.Context, ns, project, fqn, env string) (string, error) {
+	envCR, err := s.Kube.ResolveServiceEnv(ctx, ns, project, fqn, env)
+	if err == nil {
+		return envCR.Name, nil
+	}
+	guess := env
+	if !strings.Contains(env, "-") {
+		guess = fqn + "-" + env
+	}
+	if errors.Is(err, kube.ErrEnvNotFound) {
+		return guess, ErrNotFound
+	}
+	return guess, fmt.Errorf("get env: %w", err)
 }

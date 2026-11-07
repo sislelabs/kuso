@@ -121,6 +121,9 @@ type ServiceRef struct {
 	// silently leaked staging traffic to production — B4.1/B4.2 from
 	// the v0.17.0 audit).
 	EnvScope string
+	// Err, when set, refuses the ref: the name matched a service but it
+	// can't be resolved for this caller (e.g. no copy in its env group).
+	Err error
 }
 
 // ServiceRefResolver looks up service connection details by short
@@ -260,6 +263,9 @@ func RewriteEnvVarWithOpts(in EnvVar, svcResolver ServiceRefResolver, addonResol
 	// Service-ref path: synthetic key + name resolves to a service.
 	if IsServiceKey(ref.Key) && svcResolver != nil {
 		if sref, ok := svcResolver(ref.Name); ok {
+			if sref.Err != nil {
+				return EnvVar{}, fmt.Errorf("env var %q: %w", in.Name, sref.Err)
+			}
 			expanded := ExpandServiceKey(sref, ref.Key)
 			return EnvVar{Name: in.Name, Value: expanded}, nil
 		}

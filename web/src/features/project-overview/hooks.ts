@@ -3,10 +3,10 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { getProjectMetrics, searchProjectLogs, type ProjectLogSearchResponse } from "./api";
 
-export function useProjectMetrics(project: string) {
+export function useProjectMetrics(project: string, env = "production") {
   return useQuery({
-    queryKey: ["project-metrics", project],
-    queryFn: () => getProjectMetrics(project),
+    queryKey: ["project-metrics", project, env],
+    queryFn: () => getProjectMetrics(project, env),
     enabled: !!project,
     refetchInterval: 30_000,
   });

@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -61,6 +63,9 @@ type Result struct {
 	// LogTailLong is the same log with up to logTailLongLines lines, for
 	// the build detail view (LogTail stays short for notification cards).
 	LogTailLong string
+	// Skipped is set alongside OutcomeSucceeded when the hook was
+	// deliberately not run; Message says why. See ProductionDataGuard.
+	Skipped bool
 }
 
 // logTailLines is how many log lines a failed Result carries.
@@ -209,6 +214,15 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	if image == nil || image.Tag == "" {
 		return Result{}, fmt.Errorf("releaserun: image tag required")
 	}
+	reason, err := r.ProductionDataGuard(ctx, ns, env)
+	if err != nil {
+		return Result{}, err
+	}
+	if reason != "" {
+		slog.Warn("release hook skipped: env would migrate production data",
+			"project", env.Spec.Project, "env", env.Name, "tag", image.Tag, "reason", reason)
+		return Result{Outcome: OutcomeSucceeded, Skipped: true, Message: reason}, nil
+	}
 	jobName := JobName(env.Name, image.Repository, image.Tag)
 	timeout := env.Spec.Release.TimeoutSeconds
 	if timeout <= 0 {
@@ -250,6 +264,69 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	}
 
 	return r.poll(ctx, ns, jobName, time.Duration(timeout)*time.Second)
+}
+
+// nonMigratedAddonKinds are addon kinds a release hook doesn't migrate, so
+// sharing production's copy with a non-production env is not a reason to
+// skip the hook. Any other kind (and an unknown one) is treated as a
+// database.
+var nonMigratedAddonKinds = map[string]bool{
+	"s3": true, "mailpit": true, "redis": true, "valkey": true,
+	"nats": true, "rabbitmq": true, "redpanda": true, "meilisearch": true,
+}
+
+// ProductionDataGuard returns a non-empty reason when a non-production env
+// (an env group like staging, or a named env) reaches a PRODUCTION database
+// addon through envFromSecrets or a secretKeyRef. An env group with an addon
+// policy of "shared" mounts production's conn by design, and its release
+// Job inherits those mounts, so running the hook would migrate production
+// from staging's image. Production and unlabelled envs are never guarded.
+// A failed addon list is returned as an error: the hook must not run
+// against a database we couldn't rule out as production's.
+func (r *Runner) ProductionDataGuard(ctx context.Context, ns string, env *kube.KusoEnvironment) (string, error) {
+	group := env.Labels[kube.LabelEnv]
+	if group == "" || group == "production" {
+		return "", nil
+	}
+	if r.Kube == nil {
+		return "", nil
+	}
+	addons, err := r.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{kube.LabelProject: env.Spec.Project})
+	if err != nil {
+		return "", fmt.Errorf("releaserun: list addons for production-data guard: %w", err)
+	}
+	prodConn := map[string]string{}
+	for _, a := range addons {
+		if g := a.Labels[kube.LabelEnv]; g != "" && g != "production" {
+			continue
+		}
+		if nonMigratedAddonKinds[a.Spec.Kind] {
+			continue
+		}
+		prodConn[a.Name+"-conn"] = a.Name
+	}
+	var hits []string
+	seen := map[string]bool{}
+	add := func(secret string) {
+		if a, ok := prodConn[secret]; ok && !seen[a] {
+			seen[a] = true
+			hits = append(hits, a)
+		}
+	}
+	for _, sec := range env.Spec.EnvFromSecrets {
+		add(sec)
+	}
+	for _, v := range env.Spec.EnvVars {
+		if skr, ok := v.ValueFrom["secretKeyRef"].(map[string]any); ok {
+			name, _ := skr["name"].(string)
+			add(name)
+		}
+	}
+	if len(hits) == 0 {
+		return "", nil
+	}
+	sort.Strings(hits)
+	return fmt.Sprintf("release hook not run for %s env %q: it uses production addon(s) %s, so the migration would run against production's data; give this env its own copy of the addon to run migrations here", env.Name, group, strings.Join(hits, ", ")), nil
 }
 
 // JobName derives the per-(env, repository:tag) Job name. Exported so the

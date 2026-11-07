@@ -76,3 +76,61 @@ export function wakeEnvParam(e: KusoEnvironment | undefined, group: string): str
   if (e) return isProductionGroup(e) ? undefined : e.metadata.name;
   return group === "production" ? undefined : group;
 }
+
+type Labels = Record<string, string> | undefined;
+
+/**
+ * Env-group a KusoService / KusoAddon CR belongs to. Env-group clones
+ * carry the env label; an unlabelled CR is the production/shared one.
+ */
+export function resourceGroup(labels: Labels): string {
+  return labels?.[ENV_GROUP_LABEL] || "production";
+}
+
+/** True for production/shared CRs (no env label, or label "production"). */
+export function isProductionResource(labels: Labels): boolean {
+  return resourceGroup(labels) === "production";
+}
+
+/**
+ * Service/addon membership in an env-group (same rule as svcInGroup in
+ * the project view): unlabelled = shared, belongs to every group; a
+ * labelled clone belongs only to its own group.
+ */
+export function resourceInGroup(labels: Labels, group: string): boolean {
+  const v = labels?.[ENV_GROUP_LABEL];
+  return !v || v === group;
+}
+
+/**
+ * Base name of an env-group clone ("api-staging" → "api"). Preview
+ * clones use the short "-pr-N" suffix for group "preview-pr-N".
+ */
+export function cloneBaseName(name: string, group: string): string {
+  if (group === "production") return name;
+  const suffixes = [`-${group}`];
+  if (group.startsWith("preview-")) suffixes.push(`-${group.slice("preview-".length)}`);
+  for (const s of suffixes) {
+    if (name.endsWith(s) && name.length > s.length) return name.slice(0, -s.length);
+  }
+  return name;
+}
+
+/**
+ * Names a `${{ name.KEY }}` reference can target from a service in
+ * `group`. The server rescopes base names to the group's clone, so
+ * clones are offered by base name (deduped against the shared CR) and
+ * other groups' clones are dropped.
+ */
+export function groupReferenceNames(
+  items: { name: string; labels: Labels }[],
+  group: string,
+): string[] {
+  const out: string[] = [];
+  for (const it of items) {
+    if (!resourceInGroup(it.labels, group)) continue;
+    const name = it.labels?.[ENV_GROUP_LABEL] ? cloneBaseName(it.name, group) : it.name;
+    if (!out.includes(name)) out.push(name);
+  }
+  return out;
+}

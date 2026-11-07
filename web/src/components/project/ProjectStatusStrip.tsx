@@ -9,18 +9,19 @@ import { uptimeTitle } from "@/components/uptime/UptimeBadge";
 import { cn } from "@/lib/utils";
 import { ProjectLogsSheet } from "./ProjectLogsSheet";
 
-// ProjectStatusStrip sits above the canvas: production resource rollup
-// (`kuso project metrics`), uptime summary (`kuso uptime status`) and
+// ProjectStatusStrip sits above the canvas: the selected env-group's
+// resource rollup (`kuso project metrics`), uptime summary (`kuso uptime
+// status`, production-only — checks don't run against other groups) and
 // the entry point to project-wide log search.
 export function ProjectStatusStrip({ project, selectedEnv }: { project: string; selectedEnv: string }) {
-  const metrics = useProjectMetrics(project);
+  const metrics = useProjectMetrics(project, selectedEnv);
   const uptime = useProjectUptime(project);
   const [logsOpen, setLogsOpen] = useState(false);
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
-      <MetricsSummary metrics={metrics} />
-      <UptimeSummary uptime={uptime} />
+      <MetricsSummary metrics={metrics} env={selectedEnv} />
+      {selectedEnv === "production" && <UptimeSummary uptime={uptime} />}
       <Button
         type="button"
         variant="ghost"
@@ -31,7 +32,9 @@ export function ProjectStatusStrip({ project, selectedEnv }: { project: string; 
         <ScrollText className="h-3.5 w-3.5" />
         Search logs
       </Button>
+      {/* Keyed so the sheet's env filter (seeded once from defaultEnv) resets on env switch. */}
       <ProjectLogsSheet
+        key={selectedEnv}
         project={project}
         open={logsOpen}
         onOpenChange={setLogsOpen}
@@ -41,8 +44,8 @@ export function ProjectStatusStrip({ project, selectedEnv }: { project: string; 
   );
 }
 
-function MetricsSummary({ metrics }: { metrics: ReturnType<typeof useProjectMetrics> }) {
-  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">production: …</span>;
+function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjectMetrics>; env: string }) {
+  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">{env}: …</span>;
   if (metrics.isError) {
     return (
       <span className="text-[var(--error)]" title={metrics.error instanceof Error ? metrics.error.message : undefined}>
@@ -51,20 +54,20 @@ function MetricsSummary({ metrics }: { metrics: ReturnType<typeof useProjectMetr
     );
   }
   const m = metrics.data;
-  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">production: nothing deployed</span>;
+  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">{env}: nothing deployed</span>;
   if (m.pods === 0) {
     return (
       <span
         className="text-[var(--text-tertiary)]"
-        title="No pod metrics: production is scaled to zero/asleep, or metrics-server isn't reporting."
+        title={`No pod metrics: ${env} is scaled to zero/asleep, or metrics-server isn't reporting.`}
       >
-        production: no pod metrics
+        {env}: no pod metrics
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-3" title={`Summed across ${m.envs} production env${m.envs === 1 ? "" : "s"}`}>
-      <span className="text-[var(--text-tertiary)]">production</span>
+    <span className="inline-flex items-center gap-3" title={`Summed across ${m.envs} ${env} env${m.envs === 1 ? "" : "s"}`}>
+      <span className="text-[var(--text-tertiary)]">{env}</span>
       <span className="inline-flex items-center gap-1">
         <Cpu className="h-3 w-3 text-[var(--text-tertiary)]" />
         {formatMillicores(m.cpuMillicores)}

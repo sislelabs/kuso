@@ -11,8 +11,10 @@ export interface ProjectMetrics {
   envs: number;
 }
 
-export async function getProjectMetrics(project: string): Promise<ProjectMetrics> {
-  return api<ProjectMetrics>(`/api/projects/${encodeURIComponent(project)}/metrics`);
+export async function getProjectMetrics(project: string, env = "production"): Promise<ProjectMetrics> {
+  return api<ProjectMetrics>(
+    `/api/projects/${encodeURIComponent(project)}/metrics?env=${encodeURIComponent(env)}`,
+  );
 }
 
 // Mirrors db.LogLine. Project-wide search returns lines from every

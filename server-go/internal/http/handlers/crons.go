@@ -166,6 +166,7 @@ func (h *CronsHandler) ListForProject(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list crons", err)
 		return
 	}
+	out = withCronJobStatus(ctx, h.Svc.Kube, out)
 	writeJSON(w, http.StatusOK, maskCronsIfNeeded(ctx, h.DB, project, out))
 }
 
@@ -184,6 +185,7 @@ func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list crons", err)
 		return
 	}
+	out = withCronJobStatus(ctx, h.Svc.Kube, out)
 	writeJSON(w, http.StatusOK, maskCronsIfNeeded(ctx, h.DB, project, out))
 }
 
@@ -198,6 +200,9 @@ func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, "get cron", err)
 		return
+	}
+	if out != nil {
+		out = &withCronJobStatus(ctx, h.Svc.Kube, []kube.KusoCron{*out})[0]
 	}
 	writeJSON(w, http.StatusOK, maskCronIfNeeded(ctx, h.DB, project, out))
 }

@@ -8,6 +8,7 @@ import { useSubscribedAddonsForServices, useToggleAddonSubscription } from "@/fe
 import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { cn, serviceShortName } from "@/lib/utils";
+import { resourceGroup } from "@/lib/env-group";
 import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -70,7 +71,11 @@ export function OverviewTab({
         />
       </section>
 
-      <UsedBy project={project} addon={serviceShortName(project, addon)} />
+      <UsedBy
+        project={project}
+        addon={serviceShortName(project, addon)}
+        group={cr ? resourceGroup(cr.metadata.labels) : undefined}
+      />
 
       {/* External addons render no workload unless a pooler fronts them. */}
       {(!cr?.spec.external || cr.spec.pooler?.enabled) && (
@@ -108,9 +113,17 @@ export function OverviewTab({
 
 // UsedBy lists the project's services as chips; a filled chip means the
 // service gets this addon's connection env vars. Editors toggle in place.
-function UsedBy({ project, addon }: { project: string; addon: string }) {
+// Only services in the addon's own env-group are listed: connecting a
+// staging clone to the production DB (or vice versa) crosses groups.
+// `group` is undefined until the addon CR loads.
+function UsedBy({ project, addon, group }: { project: string; addon: string; group: string | undefined }) {
   const services = useServices(project);
-  const names = (services.data ?? []).map((s) => serviceShortName(project, s.metadata.name));
+  const names =
+    group === undefined
+      ? []
+      : (services.data ?? [])
+          .filter((s) => resourceGroup(s.metadata.labels) === group)
+          .map((s) => serviceShortName(project, s.metadata.name));
   const subs = useSubscribedAddonsForServices(project, names);
   const toggle = useToggleAddonSubscription(project);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
@@ -141,7 +154,7 @@ function UsedBy({ project, addon }: { project: string; addon: string }) {
         <span className="pt-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           used by
         </span>
-        {services.isPending ? (
+        {services.isPending || group === undefined ? (
           <LoadingState kind="inline" />
         ) : names.length === 0 ? (
           <span className="font-mono text-[11px] text-[var(--text-tertiary)]">no services yet</span>

@@ -118,7 +118,7 @@ func runServicePods(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("list pods: %w", err)
 	}
 	// Server returns projects.PodList: {namespace, pods:[{name, ready,
-	// phase, containers}]}. No node/age fields are exposed by the
+	// phase, containers, restarts}]}. No node/age fields are exposed by the
 	// endpoint, so the table shows what's actually there.
 	var out struct {
 		Namespace string           `json:"namespace"`
@@ -136,12 +136,13 @@ func runServicePods(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		t := tablewriter.NewWriter(os.Stdout)
-		t.SetHeader([]string{"POD", "PHASE", "READY", "CONTAINERS"})
+		t.SetHeader([]string{"POD", "PHASE", "READY", "RESTARTS", "CONTAINERS"})
 		for _, p := range out.Pods {
 			t.Append([]string{
 				asString(p["name"]),
 				asString(p["phase"]),
 				boolText(p["ready"]),
+				asString(p["restarts"]),
 				joinAny(p["containers"]),
 			})
 		}

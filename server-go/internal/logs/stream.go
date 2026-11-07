@@ -28,7 +28,6 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -268,24 +267,10 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		return env, err
 	}
 
-	envName := env
-	if !strings.Contains(env, "-") {
-		envName = fqn + "-" + env
-	}
-
-	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
+	// Tenancy is gated inside the resolver on the env CR's spec.
+	envName, err := s.resolveEnvName(ctx, ns, project, fqn, env)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return envName, ErrNotFound
-		}
-		return envName, fmt.Errorf("get env: %w", err)
-	}
-	// Tenancy check — env CR's spec is authoritative. Pre-v0.9.x the
-	// `!= ""` form let zero-valued specs (legacy CRs / decode errors)
-	// short-circuit the check and return logs from any env in the
-	// namespace. Reject missing or mismatched fields outright.
-	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
-		return envName, ErrNotFound
+		return envName, err
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{

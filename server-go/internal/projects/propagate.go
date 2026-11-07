@@ -263,12 +263,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if envScope == "" {
 					envScope = "production"
 				}
-				// Sibling kube Services are named after their env CR. An
-				// env-group clone's CR ends in -production (scope=<group>)
-				// and its spec already targets <sib>-<group>-production, so
-				// rescoping to -<group> would name a Service that doesn't exist.
+				// An env-group clone's literals already name its group's
+				// siblings (buildServiceResolver), so only a non-clone
+				// service's named envs need rescoping.
 				svcRefScope := envScope
-				if strings.HasSuffix(envName, "-production") {
+				if serviceGroup(svc) != "production" {
 					svcRefScope = "production"
 				}
 				rescopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, svcRefScope)
@@ -784,6 +783,51 @@ func (s *Service) envCloneConnByOrigin(ctx context.Context, ns, project, envScop
 		}
 	}
 	return out
+}
+
+// checkGroupAddonRefs refuses explicit secretKeyRefs (conns) to a production
+// addon an isolated env group has no copy of. Propagation only re-scopes refs
+// to addons the group cloned, so any other ref would read production data from
+// an env that otherwise uses its own. The exemptions mirror
+// addons.WithholdProductionConns: groups with no clones share production by
+// design, external and non-postgres/redis addons are always shared with named
+// envs, and a conn the env already mounts was shared on purpose at creation.
+func (s *Service) checkGroupAddonRefs(ctx context.Context, ns, project, group string, mounted, conns []string) error {
+	if group == "" || group == "production" || len(conns) == 0 {
+		return nil
+	}
+	all, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return fmt.Errorf("list addons: %w", err)
+	}
+	isolated := false
+	prodByConn := make(map[string]*kube.KusoAddon, len(all))
+	for i := range all {
+		if env := all[i].Labels[labelEnv]; env != "" {
+			isolated = isolated || env == group
+			continue
+		}
+		prodByConn[all[i].Name+"-conn"] = &all[i]
+	}
+	if !isolated {
+		return nil
+	}
+	cloned := s.envCloneConnByOrigin(ctx, ns, project, group)
+	for _, conn := range conns {
+		a, ok := prodByConn[conn]
+		if !ok || cloned[conn] != "" || slices.Contains(mounted, conn) {
+			continue
+		}
+		if a.Spec.External != nil && a.Spec.External.SecretName != "" {
+			continue
+		}
+		if a.Spec.Kind != "postgres" && a.Spec.Kind != "redis" {
+			continue
+		}
+		return fmt.Errorf("%w: addon %s is not provisioned for env group %s (it uses its own addons); %s would read production's %s",
+			ErrConflict, strings.TrimPrefix(a.Name, project+"-"), group, group, strings.TrimPrefix(a.Name, project+"-"))
+	}
+	return nil
 }
 
 // propagateEgressToCrons mirrors the service's privateEgress /

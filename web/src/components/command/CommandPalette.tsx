@@ -13,7 +13,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@/components/ui/command";
-import { useProjects, useServices, useAddons } from "@/features/projects";
+import { useProjects, useServices, useAddons, useEnvironments } from "@/features/projects";
 import { useSession, useSignOut } from "@/features/auth";
 import {
   LayoutGrid,
@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { buildTriggerMessage, triggerBuild } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
+import { ENV_GROUP_LABEL, envGroupName } from "@/lib/env-group";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
@@ -67,6 +68,7 @@ export function CommandPalette() {
   // a few times a day.
   const services = useServices(open && currentProject ? currentProject : "");
   const addons = useAddons(open && currentProject ? currentProject : "");
+  const envs = useEnvironments(open && currentProject ? currentProject : "");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -92,10 +94,32 @@ export function CommandPalette() {
   // them for everyone just leads to a load error.
   const isSettingsAdmin = perms.includes("settings:admin");
 
-  const serviceList = useMemo(() => services.data ?? [], [services.data]);
   const addonList = addons.data ?? [];
-  // A redeploy is a production build: confirm instead of firing on Enter.
-  const [pendingRedeploy, setPendingRedeploy] = useState<string | null>(null);
+  // An env-group clone is its own KusoService CR ("<project>-web-staging")
+  // labelled with its group. It opens in the overlay as ?service=web-staging
+  // &env=staging, and redeploys from its own env's branch. Shared services
+  // carry no label and resolve to production here.
+  const serviceList = useMemo(() => {
+    const envList = envs.data ?? [];
+    return (services.data ?? []).map((s) => {
+      const name = serviceShortName(currentProject, s.metadata.name);
+      const label = s.metadata.labels?.[ENV_GROUP_LABEL];
+      const group = label && label !== "production" ? label : "production";
+      const base = group !== "production" && name.endsWith(`-${group}`) ? name.slice(0, -(group.length + 1)) : name;
+      const env = envList.find((e) => e.spec.service === s.metadata.name && envGroupName(e) === group);
+      return {
+        svc: s,
+        name,
+        group,
+        display: group === "production" ? name : `${base} (${group})`,
+        query: group === "production" ? `service=${name}` : `service=${name}&env=${encodeURIComponent(group)}`,
+        branch: group === "production" ? undefined : env?.spec.branch,
+      };
+    });
+  }, [services.data, envs.data, currentProject]);
+  type PaletteService = (typeof serviceList)[number];
+  // A redeploy is a real build + rollout: confirm instead of firing on Enter.
+  const [pendingRedeploy, setPendingRedeploy] = useState<PaletteService | null>(null);
 
   // Per-service env-var index. cmdk's value-string matching means a
   // user typing "DATABASE_URL" lands on the right service row even
@@ -106,21 +130,20 @@ export function CommandPalette() {
   // "<project>-web"; the ?service= param and every /services/:s API
   // endpoint take "web").
   const envVarRows = useMemo(() => {
-    const rows: { service: string; key: string }[] = [];
-    for (const s of serviceList) {
-      const name = serviceShortName(currentProject, s.metadata.name);
-      for (const v of s.spec.envVars ?? []) {
-        if (v.name) rows.push({ service: name, key: v.name });
+    const rows: { service: string; display: string; query: string; key: string }[] = [];
+    for (const { svc, name, display, query } of serviceList) {
+      for (const v of svc.spec.envVars ?? []) {
+        if (v.name) rows.push({ service: name, display, query, key: v.name });
       }
     }
     return rows;
-  }, [serviceList, currentProject]);
+  }, [serviceList]);
 
-  const runBuild = async (svc: string) => {
+  const runBuild = async ({ name, display, branch }: PaletteService) => {
     setPendingRedeploy(null);
     try {
-      const res = await triggerBuild(currentProject, svc, {});
-      toast.success(buildTriggerMessage(res, `Redeploy started for ${svc}`, svc));
+      const res = await triggerBuild(currentProject, name, branch ? { branch } : {});
+      toast.success(buildTriggerMessage(res, `Redeploy started for ${display}`, name));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger build");
     }
@@ -130,8 +153,10 @@ export function CommandPalette() {
     <>
     <ConfirmDialog
       open={pendingRedeploy != null}
-      title={`Redeploy ${pendingRedeploy ?? ""}?`}
-      body="Starts a new production build from the tracked branch and rolls the service when it's green."
+      title={`Redeploy ${pendingRedeploy?.display ?? ""}?`}
+      body={`Starts a new ${pendingRedeploy?.group ?? "production"} build from ${
+        pendingRedeploy?.branch ? `branch ${pendingRedeploy.branch}` : "the tracked branch"
+      } and rolls the service when it's green.`}
       confirmLabel="Redeploy"
       destructive={false}
       onCancel={() => setPendingRedeploy(null)}
@@ -185,16 +210,15 @@ export function CommandPalette() {
                 ?service= param and the build API both take the SHORT
                 name ("web") — passing the FQN 404s. */}
             <CommandGroup heading={`Services in ${currentProject}`}>
-              {serviceList.map((s) => {
-                const name = serviceShortName(currentProject, s.metadata.name);
+              {serviceList.map(({ svc: s, name, display, query }) => {
                 return (
                   <CommandItem
                     key={s.metadata.uid ?? name}
-                    onSelect={() => go(`/projects/${currentProject}?service=${name}`)}
-                    value={`service ${name} ${s.spec.runtime ?? ""} ${s.spec.repo ?? ""}`}
+                    onSelect={() => go(`/projects/${currentProject}?${query}`)}
+                    value={`service ${display} ${name} ${s.spec.runtime ?? ""} ${s.spec.repo ?? ""}`}
                   >
                     <Server className="h-4 w-4 text-[var(--text-tertiary)]" />
-                    <span>{name}</span>
+                    <span>{display}</span>
                     <CommandShortcut>{s.spec.runtime ?? ""}</CommandShortcut>
                   </CommandItem>
                 );
@@ -210,33 +234,31 @@ export function CommandPalette() {
                 Settings, so they get no Redeploy row. */}
             <CommandGroup heading="Service actions">
               {serviceList
-                .filter((s) => s.spec.runtime !== "image")
-                .map((s) => {
-                  const name = serviceShortName(currentProject, s.metadata.name);
+                .filter((p) => p.svc.spec.runtime !== "image")
+                .map((p) => {
                   return (
                     <CommandItem
-                      key={`redeploy-${name}`}
+                      key={`redeploy-${p.name}`}
                       onSelect={() => {
                         setOpen(false);
-                        setPendingRedeploy(name);
+                        setPendingRedeploy(p);
                       }}
-                      value={`redeploy build trigger ${name}`}
+                      value={`redeploy build trigger ${p.display} ${p.name}`}
                     >
                       <Play className="h-4 w-4 text-[var(--text-tertiary)]" />
-                      <span>Redeploy {name}</span>
+                      <span>Redeploy {p.display}</span>
                     </CommandItem>
                   );
                 })}
-              {serviceList.map((s) => {
-                const name = serviceShortName(currentProject, s.metadata.name);
+              {serviceList.map(({ name, display, query }) => {
                 return (
                   <CommandItem
                     key={`logs-${name}`}
-                    onSelect={() => go(`/projects/${currentProject}?service=${name}&tab=logs`)}
-                    value={`logs tail ${name}`}
+                    onSelect={() => go(`/projects/${currentProject}?${query}&tab=logs`)}
+                    value={`logs tail ${display} ${name}`}
                   >
                     <ScrollText className="h-4 w-4 text-[var(--text-tertiary)]" />
-                    <span>Tail logs · {name}</span>
+                    <span>Tail logs · {display}</span>
                   </CommandItem>
                 );
               })}
@@ -249,15 +271,15 @@ export function CommandPalette() {
             {envVarRows.length > 0 && (
               <>
                 <CommandGroup heading="Env vars">
-                  {envVarRows.map(({ service, key }) => (
+                  {envVarRows.map(({ service, display, query, key }) => (
                     <CommandItem
                       key={`env-${service}-${key}`}
-                      onSelect={() => go(`/projects/${currentProject}?service=${service}&tab=variables`)}
-                      value={`env variable ${key} ${service}`}
+                      onSelect={() => go(`/projects/${currentProject}?${query}&tab=variables`)}
+                      value={`env variable ${key} ${display} ${service}`}
                     >
                       <Variable className="h-4 w-4 text-[var(--text-tertiary)]" />
                       <span className="font-mono">{key}</span>
-                      <CommandShortcut>{service}</CommandShortcut>
+                      <CommandShortcut>{display}</CommandShortcut>
                     </CommandItem>
                   ))}
                 </CommandGroup>

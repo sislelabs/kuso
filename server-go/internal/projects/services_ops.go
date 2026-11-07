@@ -2079,7 +2079,7 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 	// in-cluster DNS string. Closure over ns + the project's
 	// service list — fetched once per call so a 50-var update
 	// doesn't fan out 50 list calls.
-	svcResolver, err := s.buildServiceResolver(ctx, project, ns)
+	svcResolver, callerGroup, err := s.buildServiceResolver(ctx, project, ns, service)
 	if err != nil {
 		return nil, fmt.Errorf("resolve services: %w", err)
 	}
@@ -2142,6 +2142,30 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 		if verr := s.validateSecretRefNameIn(project, service, refName, ownedAddonConn); verr != nil {
 			if !opts.AllowPending || !s.pendingConnOwned(ctx, ns, project, refName) {
 				return nil, verr
+			}
+		}
+	}
+	if callerGroup != "production" {
+		var conns []string
+		for _, ev := range rewritten {
+			if name, _ := secretRefNameOf(ev.ValueFrom); name != "" {
+				conns = append(conns, name)
+			}
+		}
+		if len(conns) > 0 {
+			var mounted []string
+			callerFQN := serviceCRName(project, service)
+			envs, lerr := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project, labelEnv: callerGroup})
+			if lerr != nil {
+				return nil, fmt.Errorf("list %s envs: %w", callerGroup, lerr)
+			}
+			for i := range envs {
+				if envs[i].Spec.Service == callerFQN {
+					mounted = append(mounted, envs[i].Spec.EnvFromSecrets...)
+				}
+			}
+			if err := s.checkGroupAddonRefs(ctx, ns, project, callerGroup, mounted, conns); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -2222,50 +2246,82 @@ func (s *Service) buildAddonResolver(ctx context.Context, project string) AddonR
 	}
 }
 
-// buildServiceResolver lists the project's services + their production
-// envs up-front and returns a closure that maps short / FQ names to a
+// buildServiceResolver lists the project's services + their envs up-front and returns a closure that maps short / FQ names to a
 // ServiceRef. Used by SetEnv so service refs expand to literal values.
 //
 // PUBLIC_HOST resolution order, first non-empty wins:
 //  1. KusoService.spec.domains[0].host — user's own domain (deliberate
 //     choice trumps the auto-domain).
-//  2. KusoEnvironment.spec.host on the production env — auto-domain
-//     stamped at AddService time.
+//  2. KusoEnvironment.spec.host on the service's own env (production, or
+//     the group env for an env-group clone) — auto-domain stamped at
+//     AddService time.
 //  3. Empty — service has no ingress (worker, or no env yet). The
 //     rewriter emits an empty PUBLIC_URL in that case (see
 //     ExpandServiceKey) which is the right signal vs. falling back
 //     to in-cluster DNS that a browser can't reach.
 //
-// B4.2 limitation: PublicHost is resolved against the PRODUCTION env
-// only. A ${{ otherSvc.PUBLIC_URL }} in a staging env's envVars will
-// expand to production's public URL — the staging-host case isn't
-// handled here. The in-cluster DNS rescope handled by
-// rescopeServiceRefLiterals (propagate.go) covers the HOST/URL/
-// INTERNAL_URL forms across envs; PublicHost across envs requires
-// storing service refs as placeholder tokens (not literals) so the
-// per-env propagation can re-expand. That refactor is deferred —
-// in practice cross-env public-URL refs are rare (siblings use
-// in-cluster DNS).
-func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) (ServiceRefResolver, error) {
+// Env groups: caller is the service doing the referencing. When it is an
+// env-group clone (label env=G, G != production), a ref to a production
+// service resolves to that service's G clone (its own env + host), and to an
+// ErrConflict-carrying ref when the group has no copy of it — silently
+// resolving to production would point staging traffic at production. The
+// returned group is the caller's ("production" for non-clones).
+func (s *Service) buildServiceResolver(ctx context.Context, project, ns, caller string) (ServiceRefResolver, string, error) {
 	services, err := s.listServicesForProject(ctx, project)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	// Production envs carry the auto-domain Host + TLSEnabled flag. We
-	// scan once and key by service FQN so each service entry can pick
-	// up its production env in O(1). Best-effort: env list errors fall
-	// through to "no public host" rather than failing SetEnv outright.
-	prodEnvByService := make(map[string]*kube.KusoEnvironment, len(services))
+	callerFQN := serviceCRName(project, caller)
+	callerGroup := "production"
+	for i := range services {
+		if services[i].Name == callerFQN {
+			callerGroup = serviceGroup(&services[i])
+		}
+	}
+	// Each service's own env carries the auto-domain Host + TLSEnabled flag:
+	// the production env for a production service, the <G> env for a G clone.
+	// Select by the env-GROUP label, not spec.kind: spec.kind carries chart
+	// semantics (production=always-on) and is "production" on env-group
+	// clones too. Best-effort: env list errors fall through to "no public
+	// host" rather than failing SetEnv outright.
+	type svcGroup struct{ svc, group string }
+	envByServiceGroup := make(map[svcGroup]*kube.KusoEnvironment, len(services))
 	if envs, err := s.Kube.ListKusoEnvironments(ctx, ns); err == nil {
 		for i := range envs {
-			// Select by the env-GROUP label, not spec.kind. spec.kind
-			// carries chart semantics (production=always-on) and is set
-			// to "production" on env-group clones too, so a staging
-			// clone would otherwise overwrite the real prod entry.
-			if envs[i].Labels[kube.LabelEnv] != "production" {
+			envByServiceGroup[svcGroup{envs[i].Spec.Service, envs[i].Labels[kube.LabelEnv]}] = &envs[i]
+		}
+	}
+
+	refFor := func(svc *kube.KusoService) ServiceRef {
+		port := svc.Spec.Port
+		if port == 0 {
+			port = 8080
+		}
+		// Custom domain takes precedence over the auto-domain.
+		var publicHost string
+		var publicTLS bool
+		if len(svc.Spec.Domains) > 0 && svc.Spec.Domains[0].Host != "" {
+			publicHost = svc.Spec.Domains[0].Host
+			publicTLS = DomainServesTLS(svc.Spec.Domains[0])
+		} else if env := envByServiceGroup[svcGroup{svc.Name, serviceGroup(svc)}]; env != nil && env.Spec.Host != "" {
+			publicHost = env.Spec.Host
+			publicTLS = env.Spec.SchemeFor(env.Spec.Host) == "https"
+		}
+		return ServiceRef{FQN: svc.Name, Port: port, NS: ns, PublicHost: publicHost, PublicTLS: publicTLS}
+	}
+
+	// The caller group's clones, keyed by the production service they copy.
+	cloneBySource := map[string]*kube.KusoService{}
+	if callerGroup != "production" {
+		for i := range services {
+			if serviceGroup(&services[i]) != callerGroup {
 				continue
 			}
-			prodEnvByService[envs[i].Spec.Service] = &envs[i]
+			src := services[i].Annotations["kuso.sislelabs.com/env-group-source-service"]
+			if src == "" {
+				src = strings.TrimSuffix(services[i].Name, "-"+callerGroup)
+			}
+			cloneBySource[src] = &services[i]
 		}
 	}
 
@@ -2277,26 +2333,15 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 		if len(fqn) > len(prefix) && fqn[:len(prefix)] == prefix {
 			short = fqn[len(prefix):]
 		}
-		port := services[i].Spec.Port
-		if port == 0 {
-			port = 8080
-		}
-		// Custom domain takes precedence over the auto-domain.
-		var publicHost string
-		var publicTLS bool
-		if len(services[i].Spec.Domains) > 0 && services[i].Spec.Domains[0].Host != "" {
-			publicHost = services[i].Spec.Domains[0].Host
-			publicTLS = DomainServesTLS(services[i].Spec.Domains[0])
-		} else if env := prodEnvByService[fqn]; env != nil && env.Spec.Host != "" {
-			publicHost = env.Spec.Host
-			publicTLS = env.Spec.SchemeFor(env.Spec.Host) == "https"
-		}
-		ref := ServiceRef{
-			FQN:        fqn,
-			Port:       port,
-			NS:         ns,
-			PublicHost: publicHost,
-			PublicTLS:  publicTLS,
+		var ref ServiceRef
+		switch {
+		case callerGroup == "production" || serviceGroup(&services[i]) != "production":
+			// A ref naming a clone directly is a deliberate choice; keep it.
+			ref = refFor(&services[i])
+		case cloneBySource[fqn] != nil:
+			ref = refFor(cloneBySource[fqn])
+		default:
+			ref = ServiceRef{Err: fmt.Errorf("%w: service %s has no %s copy; %s would call production", ErrConflict, short, callerGroup, callerGroup)}
 		}
 		byName[short] = ref
 		byName[fqn] = ref
@@ -2306,7 +2351,17 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 			return r, true
 		}
 		return ServiceRef{}, false
-	}, nil
+	}, callerGroup, nil
+}
+
+// serviceGroup is the env group a KusoService belongs to, from its env label:
+// a group name for env-group clones, "production" otherwise. Never derived
+// from names or spec.kind.
+func serviceGroup(svc *kube.KusoService) string {
+	if g := svc.Labels[labelEnv]; g != "" {
+		return g
+	}
+	return "production"
 }
 
 // effectiveScaleMin computes the env's replicaCount from the service's

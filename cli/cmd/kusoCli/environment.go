@@ -164,13 +164,13 @@ var environmentListCmd = &cobra.Command{
 			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"NAME", "SERVICE", "KIND", "BRANCH", "HOST"})
+			t.SetHeader([]string{"NAME", "SERVICE", "GROUP", "BRANCH", "HOST"})
 			for _, e := range items {
 				spec := mapAt(e, "spec")
 				t.Append([]string{
 					resourceName(e),
 					stripPrefix(asString(spec["service"]), args[0]+"-"),
-					asString(spec["kind"]),
+					envGroupOf(e),
 					asString(spec["branch"]),
 					asString(spec["host"]),
 				})

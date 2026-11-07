@@ -3592,7 +3592,7 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 			// failure blocks the deploy — if we promised a safety net and
 			// couldn't take it, don't proceed into the migration.
 			var snapKeys []string
-			if shouldSnapshot(&e, p.Snapshotter) {
+			if shouldSnapshot(&e, p.Snapshotter) && !releaseWillSkip(ctx, p.ReleaseRunner, ns, &e) {
 				keys, serr := runPredeploySnapshot(ctx, ns, &e, p.Snapshotter)
 				if serr != nil {
 					releaseBlocked = true
@@ -3664,8 +3664,13 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 				p.markReleaseFailedWithSnapshot(ctx, ns, b, &e, res, snapKeys)
 				continue
 			}
-			p.logger().Info("release hook succeeded",
-				"env", e.Name, "build", b.Name, "job", res.JobName)
+			if res.Skipped {
+				p.logger().Warn("release hook skipped: env reaches production data",
+					"env", e.Name, "build", b.Name, "reason", res.Message)
+			} else {
+				p.logger().Info("release hook succeeded",
+					"env", e.Name, "build", b.Name, "job", res.JobName)
+			}
 		}
 		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
 		if err != nil {
@@ -3956,6 +3961,26 @@ type Snapshotter interface {
 // exists (the risk surface). No hook = no migration = nothing to guard.
 func shouldSnapshot(e *kube.KusoEnvironment, s Snapshotter) bool {
 	return e.Spec.SnapshotBeforeDeploy && s != nil && shouldRunRelease(e)
+}
+
+// productionDataGuard is implemented by releaserun.Runner. Checked as an
+// optional interface so test fakes of ReleaseRunner don't need it.
+type productionDataGuard interface {
+	ProductionDataGuard(ctx context.Context, ns string, env *kube.KusoEnvironment) (string, error)
+}
+
+// releaseWillSkip reports whether the release hook is going to be skipped
+// because a non-production env reaches production's database. The
+// pre-deploy snapshot would then dump production for a migration that
+// never runs. A guard error returns false: Run hits the same error and
+// fails the release, so the snapshot decision doesn't matter.
+func releaseWillSkip(ctx context.Context, r ReleaseRunner, ns string, e *kube.KusoEnvironment) bool {
+	g, ok := r.(productionDataGuard)
+	if !ok {
+		return false
+	}
+	reason, err := g.ProductionDataGuard(ctx, ns, e)
+	return err == nil && reason != ""
 }
 
 // runPredeploySnapshot invokes the snapshotter and returns the keys taken.

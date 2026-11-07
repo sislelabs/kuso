@@ -19,6 +19,8 @@ type PodSummary struct {
 	Ready      bool     `json:"ready"`
 	Phase      string   `json:"phase,omitempty"`
 	Containers []string `json:"containers,omitempty"`
+	// Restarts sums RestartCount across the pod's containers.
+	Restarts int32 `json:"restarts"`
 }
 
 // PodList is what the handler returns. Namespace is included so callers
@@ -82,6 +84,7 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		ready := false
+		var restarts int32
 		for _, c := range p.Status.ContainerStatuses {
 			// "ready" means at least one container is Ready. A pod with
 			// crashlooping sidecars but a healthy main container should
@@ -89,8 +92,8 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 			// for the shell in the first place.
 			if c.Ready {
 				ready = true
-				break
 			}
+			restarts += c.RestartCount
 		}
 		// Surfacing container names lets the CLI pass `-c <name>` for
 		// multi-container pods (sidecars, init helpers — reviewers want
@@ -104,6 +107,7 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 			Ready:      ready,
 			Phase:      string(p.Status.Phase),
 			Containers: containers,
+			Restarts:   restarts,
 		})
 	}
 	return out, nil

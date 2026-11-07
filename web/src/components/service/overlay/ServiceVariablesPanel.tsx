@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
 import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { useEnvironments } from "@/features/projects";
-import { isProductionGroup } from "@/lib/env-group";
+import { envGroupName, isProductionGroup } from "@/lib/env-group";
 
 export function ServiceVariablesPanel({
   project,
@@ -18,20 +18,20 @@ export function ServiceVariablesPanel({
   // service-wide list.
   env: string;
 }) {
-  // Pull the production env's host so the OAuth-app helper knows what
-  // to register as the callback URL with GitHub. Same lookup pattern
-  // as Settings → Networking (production env carries the rendered
-  // hostname; the KusoService spec doesn't).
+  // Host of the selected env-group's env, so the OAuth-app helper
+  // registers the callback URL of the env being edited (a staging
+  // clone needs the staging host, not production's). Falls back to the
+  // production env when the selected group has no env/host for this
+  // service. The KusoService spec doesn't carry the rendered hostname.
   const envs = useEnvironments(project);
   const host = useMemo(() => {
-    const list = envs.data ?? [];
-    const prod = list.find(
-      (e) =>
-        (e.spec.service === service || e.spec.service === `${project}-${service}`) &&
-        isProductionGroup(e),
+    const mine = (envs.data ?? []).filter(
+      (e) => e.spec.service === service || e.spec.service === `${project}-${service}`,
     );
-    return prod?.spec.host ?? "";
-  }, [envs.data, project, service]);
+    const selected = mine.find((e) => envGroupName(e) === env);
+    const prod = mine.find((e) => isProductionGroup(e));
+    return selected?.spec.host || prod?.spec.host || "";
+  }, [envs.data, project, service, env]);
 
   const [oauthOpen, setOauthOpen] = useState(false);
 

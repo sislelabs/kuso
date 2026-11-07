@@ -231,14 +231,17 @@ var getEnvsCmd = &cobra.Command{
 			// STATE is the server's unified per-env rollup (status.state:
 			// running/crashlooping/build_failed/...) — empty cell against
 			// pre-rollup servers.
-			t.SetHeader([]string{"NAME", "SERVICE", "KIND", "BRANCH", "HOST", "STATE"})
+			// GROUP, not spec.kind: an env-group clone's env is
+			// kind=production, so KIND said "production" for staging.
+			// spec.kind stays in -o json.
+			t.SetHeader([]string{"NAME", "SERVICE", "GROUP", "BRANCH", "HOST", "STATE"})
 			for _, e := range items {
 				spec := mapAt(e, "spec")
 				status := mapAt(e, "status")
 				t.Append([]string{
 					resourceName(e),
 					stripPrefix(asString(spec["service"]), args[0]+"-"),
-					asString(spec["kind"]),
+					envGroupOf(e),
 					asString(spec["branch"]),
 					asString(spec["host"]),
 					asString(status["state"]),
@@ -310,6 +313,17 @@ var getAddonsCmd = &cobra.Command{
 }
 
 // ---------------- helpers ----------------
+
+// envGroupOf is the env-group an env belongs to: its
+// kuso.sislelabs.com/env label, or spec.kind for unlabelled legacy CRs.
+func envGroupOf(e map[string]any) string {
+	if labels, ok := mapAt(e, "metadata")["labels"].(map[string]any); ok {
+		if g := asString(labels["kuso.sislelabs.com/env"]); g != "" {
+			return g
+		}
+	}
+	return asString(mapAt(e, "spec")["kind"])
+}
 
 func mapAt(m map[string]any, key string) map[string]any {
 	if v, ok := m[key].(map[string]any); ok {

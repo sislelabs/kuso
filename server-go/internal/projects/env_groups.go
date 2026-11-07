@@ -41,6 +41,7 @@ import (
 
 	addonspkg "kuso/server/internal/addons"
 	"kuso/server/internal/config"
+	"kuso/server/internal/crons"
 	"kuso/server/internal/kube"
 )
 
@@ -137,6 +138,8 @@ func (s *Service) ListEnvGroups(ctx context.Context, project string) ([]EnvGroup
 	if err != nil {
 		// Best-effort: if addon listing fails, return groups without
 		// the addon column. Better than 500 on the entire endpoint.
+		slog.Warn("list env groups: addon listing failed; returning groups without addons",
+			"project", project, "err", err)
 		addons = nil
 	}
 
@@ -336,9 +339,12 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	if len(services) == 0 {
 		return nil, fmt.Errorf("%w: project has no services to mirror; add a service first", ErrInvalid)
 	}
+	// A failed list must not read as "project has no addons": every addon
+	// would then be absent from the policy map and the clones would keep
+	// pointing at production's conns.
 	addons, err := s.Kube.ListKusoAddons(ctx, ns)
 	if err != nil {
-		addons = nil
+		return nil, fmt.Errorf("list addons: %w", err)
 	}
 	// Filter to only THIS project's production addons. Other
 	// projects' addons share the namespace (kuso namespace is the
@@ -429,8 +435,29 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 	}
 
+	// Service crons are cloned with their service; a failed list would
+	// silently create the group without them.
+	allCrons, err := s.Kube.ListKusoCrons(ctx, ns)
+	if err != nil {
+		return nil, fmt.Errorf("list crons: %w", err)
+	}
+	cronsBySvc := map[string][]kube.KusoCron{}
+	for i := range services {
+		short := strings.TrimPrefix(services[i].Name, project+"-")
+		for _, c := range serviceCronsFor(allCrons, project, services[i].Name) {
+			name := crons.CRName(project, short+"-"+req.Name, cronShortName(&c))
+			if err := kube.ValidateReleaseName(name); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+			}
+			if err := s.checkReleaseNameFree(ctx, ns, name); err != nil {
+				return nil, err
+			}
+			cronsBySvc[services[i].Name] = append(cronsBySvc[services[i].Name], c)
+		}
+	}
+
 	// Track what we created so we can roll back on partial failure.
-	var createdAddons, createdServices, createdEnvs, createdSecrets []string
+	var createdAddons, createdServices, createdEnvs, createdSecrets, createdCrons []string
 	// provisionedInstanceAddons records the SHORT name of every fresh
 	// instance-shared clone whose ProvisionInstanceAddon returned nil.
 	// Those provisioned a per-project DB + login role + <addon>-conn secret
@@ -453,6 +480,11 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			slog.Warn("env-group create rollback: delete failed; resource orphaned",
 				"project", project, "group", req.Name, "ns", ns, "kind", kind, "name", resName, "err", err)
 			errs = append(errs, fmt.Errorf("%s %s/%s: %w", kind, ns, resName, err))
+		}
+		for _, n := range createdCrons {
+			if err := s.Kube.DeleteKusoCron(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+				rbFail("KusoCron", n, err)
+			}
 		}
 		for _, n := range createdEnvs {
 			if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
@@ -919,6 +951,13 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			return nil, failCreate(fmt.Errorf("clone env for %s: %w", item.short, err))
 		}
 		createdEnvs = append(createdEnvs, envCRName)
+		for _, src := range cronsBySvc[item.fqn] {
+			c := cloneServiceCron(&src, project, newSvcShort, req.Name, createdClone, createdEnv, inheritImage)
+			if _, err := s.Kube.CreateKusoCron(ctx, ns, c); err != nil {
+				return nil, failCreate(fmt.Errorf("clone cron %s for %s: %w", src.Name, item.short, err))
+			}
+			createdCrons = append(createdCrons, c.Name)
+		}
 		// The inherited image was released against PRODUCTION's database;
 		// a fresh clone is empty, so its migrations still have to run.
 		if inheritImage != nil && item.svc.Spec.Release != nil && len(item.svc.Spec.Release.Command) > 0 &&
@@ -945,6 +984,75 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		RewrittenEnvVars: rewrittenKeys,
 		Warnings:         append([]string{}, hostWarnings...),
 	}, nil
+}
+
+// serviceCronsFor returns the kind=service crons attached to serviceFQN.
+// Spec.Service holds the FQN; the short form is accepted like
+// refreshServiceCrons does.
+func serviceCronsFor(all []kube.KusoCron, project, serviceFQN string) []kube.KusoCron {
+	short := strings.TrimPrefix(serviceFQN, project+"-")
+	var out []kube.KusoCron
+	for _, c := range all {
+		if c.Spec.Project != project || (c.Spec.Kind != "" && c.Spec.Kind != "service") {
+			continue
+		}
+		if c.Spec.Service != serviceFQN && c.Spec.Service != short {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// cronShortName recovers the user-facing cron name from the label crons.Add
+// stamps, falling back to stripping "<service-fqn>-" off the CR name.
+func cronShortName(c *kube.KusoCron) string {
+	if v := c.Labels["kuso.sislelabs.com/cron"]; v != "" {
+		return v
+	}
+	svc := c.Spec.Service
+	if !strings.HasPrefix(svc, c.Spec.Project+"-") {
+		svc = c.Spec.Project + "-" + svc
+	}
+	return strings.TrimPrefix(c.Name, svc+"-")
+}
+
+// cloneServiceCron copies a production service cron onto the group's clone
+// service, the same shape crons.Add would give a cron created on the clone:
+// image, secrets, env and placement come from the clone's env, not
+// production's, so the job runs against the group's addons.
+func cloneServiceCron(src *kube.KusoCron, project, cloneShort, group string, cloneSvc *kube.KusoService, cloneEnv *kube.KusoEnvironment, image *kube.KusoImage) *kube.KusoCron {
+	short := cronShortName(src)
+	cloneFQN := serviceCRName(project, cloneShort)
+	spec := src.Spec
+	spec.Project = project
+	spec.Service = cloneFQN
+	// A pinned cron keeps its pinned tag; a following one follows the clone.
+	if !spec.PinImage && image != nil {
+		cp := *image
+		spec.Image = &cp
+	}
+	spec.EnvFromSecrets = slices.Clone(cloneEnv.Spec.EnvFromSecrets)
+	spec.Env = crons.EnvForCron(cloneEnv.Spec.EnvVars)
+	spec.Placement = cloneEnv.Spec.Placement
+	spec.PrivateEgress = cloneSvc.Spec.PrivateEgress
+	spec.PlatformAPIEgress = cloneSvc.Spec.PlatformAPIEgress
+	return &kube.KusoCron{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: crons.CRName(project, cloneShort, short),
+			Labels: map[string]string{
+				labelProject:              project,
+				labelService:              cloneFQN,
+				"kuso.sislelabs.com/cron": short,
+				labelEnv:                  group,
+			},
+			Annotations: map[string]string{
+				"kuso.sislelabs.com/env-group-source-cron": src.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(cloneSvc)},
+		},
+		Spec: spec,
+	}
 }
 
 // retainedAddonPVCs lists live PVCs a deleted addon named fqn left behind
@@ -1123,7 +1231,34 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 		envCRName = envs[i].Name
 		break
 	}
-	return s.setEnvBranch(ctx, rev, ns, project, envCRName, branch)
+	if err := s.setEnvBranch(ctx, rev, ns, project, envCRName, branch); err != nil {
+		return err
+	}
+	return s.setCloneServiceBranch(ctx, ns, matchSvc, env, branch)
+}
+
+// setCloneServiceBranch moves a group clone's own spec.repo.defaultBranch
+// along with its env: the push dispatcher gates builds on the SERVICE's
+// default branch, so a clone left on production's branch was rebuilt on
+// every production push. Only services labelled with this group are clones;
+// a missing or shared (unlabelled) service is left alone.
+func (s *Service) setCloneServiceBranch(ctx context.Context, ns, svcName, group, branch string) error {
+	svc, err := s.Kube.GetKusoService(ctx, ns, svcName)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get clone service: %w", err)
+	}
+	if svc.Labels[labelEnv] != group || coalesce(svc.Spec.Repo).DefaultBranch == branch {
+		return nil
+	}
+	patch := fmt.Sprintf(`{"spec":{"repo":{"defaultBranch":%q}}}`, branch)
+	if _, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+		Patch(ctx, svcName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch clone service branch: %w", err)
+	}
+	return nil
 }
 
 // setEnvBranch patches one env CR's spec.branch and records the change.

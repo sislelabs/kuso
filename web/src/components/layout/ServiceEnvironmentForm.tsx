@@ -15,6 +15,7 @@ import {
 } from "@/features/projects";
 import { friendlyApiError } from "@/features/projects/names";
 import { cn, serviceShortName } from "@/lib/utils";
+import { isProductionResource } from "@/lib/env-group";
 
 const STATEFUL_KINDS = ["postgres", "redis", "s3"];
 
@@ -49,7 +50,7 @@ export function ServiceEnvironmentForm({
 
   // Stateful kinds the project actually has (clones carry an env label).
   const kinds = STATEFUL_KINDS.filter((k) =>
-    (addons.data ?? []).some((a) => a.spec?.kind === k && !a.metadata.labels?.["kuso.sislelabs.com/env"]),
+    (addons.data ?? []).some((a) => a.spec?.kind === k && isProductionResource(a.metadata.labels)),
   );
   const seedSources = (groups.data ?? []).filter((g) => g.kind !== "preview").map((g) => g.name);
   const defaultBranch =

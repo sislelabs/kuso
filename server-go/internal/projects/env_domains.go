@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
 
@@ -272,6 +273,7 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 	envCRName := envCRNameFor(project, service, envName)
 
 	next := kube.KusoEnvVar{Name: name}
+	callerGroup := "production"
 	if hasValue {
 		// Resolve ${{ addon.KEY }} / ${{ svc.URL }} refs at set time,
 		// exactly like the service-level SetEnv path does. Without this
@@ -282,10 +284,11 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		// the user's per-env override. Rewriting here makes a genuine
 		// override always a concrete value or a resolved secretKeyRef —
 		// the invariant that drop logic relies on.
-		svcResolver, rerr := s.buildServiceResolver(ctx, project, ns)
+		svcResolver, group, rerr := s.buildServiceResolver(ctx, project, ns, service)
 		if rerr != nil {
 			return nil, fmt.Errorf("resolve services: %w", rerr)
 		}
+		callerGroup = group
 		addonResolver := s.buildAddonResolver(ctx, project)
 		rewritten, rerr := RewriteEnvVar(EnvVar{Name: name, Value: req.Value}, svcResolver, addonResolver)
 		if rerr != nil {
@@ -318,8 +321,10 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 			if envScope == "" {
 				envScope = "production"
 			}
+			// An env-group clone's resolver already targeted its group's
+			// siblings; only a non-clone service's named env rescopes.
 			svcRefScope := envScope
-			if strings.HasSuffix(env.Name, "-production") {
+			if callerGroup != "production" {
 				svcRefScope = "production"
 			}
 			v = rescopeServiceRefLiterals([]kube.KusoEnvVar{v}, ns, svcRefScope)[0]
@@ -329,6 +334,11 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 					cloneMapLoaded = true
 				}
 				v = rescopeAddonConnRefsByOrigin([]kube.KusoEnvVar{v}, cloneByOrigin)[0]
+				if conn, _ := secretRefNameOf(v.ValueFrom); conn != "" && !addons.IsPreviewEnv(env) {
+					if err := s.checkGroupAddonRefs(ctx, ns, project, envScope, env.Spec.EnvFromSecrets, []string{conn}); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		// Record this name as a DELIBERATE per-env override so later

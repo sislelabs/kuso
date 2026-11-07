@@ -158,6 +158,12 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
+	// ?env=<group> scopes the rollup to one env-group (staging, preview-pr-N);
+	// default production keeps the dashboard card stable.
+	group := r.URL.Query().Get("env")
+	if group == "" {
+		group = "production"
+	}
 	out := projectMetricsResponse{Project: project}
 	if h.Kube == nil {
 		writeJSON(w, http.StatusOK, out)
@@ -179,10 +185,10 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 	}
 	prodEnvs := make(map[string]struct{}, len(envs))
 	for i := range envs {
-		// Scope the project card to the PRODUCTION env-GROUP via the env
-		// label. spec.kind="production" is also set on staging clones, so
-		// keying on it would inflate the prod card with clone metrics.
-		if envs[i].Labels[kube.LabelEnv] == "production" {
+		// Scope to the env-GROUP via the env label. spec.kind="production"
+		// is also set on staging clones, so keying on it would inflate the
+		// prod card with clone metrics.
+		if envs[i].Labels[kube.LabelEnv] == group {
 			prodEnvs[envs[i].Name] = struct{}{}
 		}
 	}

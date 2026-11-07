@@ -13,6 +13,7 @@ import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/f
 import { setSharedSecret } from "@/features/project-secrets/api";
 import { applySubscriptionDelta, putSubscriptionRebased } from "@/features/addons/subscriptionDelta";
 import { useProject, useAddons } from "@/features/projects";
+import { cloneBaseName, groupReferenceNames, resourceGroup } from "@/lib/env-group";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { api, ApiError } from "@/lib/api-client";
@@ -1188,20 +1189,27 @@ function ReferenceMenu({
 }) {
   const proj = useProject(project);
   const addons = useAddons(project);
-  // Service entries with stripped project prefix so the user sees the
-  // short name in the menu — same shape they typed when running
-  // `kuso project service add`.
-  const services = useMemo(() => {
-    const list = (proj.data as { services?: { metadata: { name: string } }[] } | undefined)?.services ?? [];
+  // Scope both lists to the edited service's env-group. Inside a group
+  // the server resolves base names to that group's clones, so clones
+  // are offered by base name and other groups' clones are hidden.
+  const { services, addonNames } = useMemo(() => {
     const prefix = project + "-";
-    return list
-      .map((s) => {
-        const fqn = s.metadata.name;
-        const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
-        return short;
-      })
-      .filter((s) => s !== excludeService);
-  }, [proj.data, project, excludeService]);
+    const short = (fqn: string) => (fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn);
+    const svcList = proj.data?.services ?? [];
+    const self = svcList.find((s) => short(s.metadata.name) === excludeService);
+    const group = resourceGroup(self?.metadata.labels);
+    const selfBase = cloneBaseName(excludeService, group);
+    return {
+      services: groupReferenceNames(
+        svcList.map((s) => ({ name: short(s.metadata.name), labels: s.metadata.labels })),
+        group,
+      ).filter((s) => s !== selfBase),
+      addonNames: groupReferenceNames(
+        (addons.data ?? []).map((a) => ({ name: short(a.metadata.name), labels: a.metadata.labels })),
+        group,
+      ),
+    };
+  }, [proj.data, addons.data, project, excludeService]);
 
   // Auto-close on outside click + Escape.
   useEffect(() => {
@@ -1234,22 +1242,12 @@ function ReferenceMenu({
         <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           Addons
         </p>
-        {(addons.data ?? []).length === 0 ? (
+        {addonNames.length === 0 ? (
           <p className="px-2 py-1.5 text-[11px] text-[var(--text-tertiary)]">No addons.</p>
         ) : (
-          (addons.data ?? []).map((a) => {
-            const fqn = a.metadata.name;
-            const prefix = project + "-";
-            const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
-            return (
-              <AddonRefRow
-                key={fqn}
-                project={project}
-                addonShort={short}
-                onPick={onPick}
-              />
-            );
-          })
+          addonNames.map((short) => (
+            <AddonRefRow key={short} project={project} addonShort={short} onPick={onPick} />
+          ))
         )}
       </div>
     </>
