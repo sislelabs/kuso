@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -51,11 +50,6 @@ type Sampler struct {
 	DB     *db.DB
 	Kube   *kube.Client
 	Logger *slog.Logger
-
-	// diskForbidden latches after the kubelet proxy answers 403: the
-	// grant is withheld on purpose, so retrying every tick only costs
-	// API calls and log lines.
-	diskForbidden atomic.Bool
 }
 
 // Run blocks until ctx is cancelled. Fires one sample immediately so
@@ -141,11 +135,7 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		}
 	}
 	usage := s.metricsServerUsage(ctx)
-	names := make([]string, 0, len(nodes))
-	for _, n := range nodes {
-		names = append(names, n.Name)
-	}
-	disks := s.diskStats(ctx, names)
+	disks := s.diskStats(ctx, nodes)
 	missing := 0
 	defer func() {
 		if missing > 0 {
@@ -165,15 +155,15 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 			continue
 		}
 		cpuUse, memUse := u.cpuMilli, u.memBytes
-		// Disk comes from the kubelet Summary API. Capacity minus
+		// Disk comes from the kubelet /stats/summary. Capacity minus
 		// Allocatable ephemeral-storage is a FIXED kubelet reservation,
 		// so using them as used-vs-free showed a constant ~5%; without
 		// a Summary answer the disk fields stay 0, which the disk alert
 		// and the history treat as "no data".
 		var diskCap, diskAvail int64
 		if fs, ok := disks[n.Name]; ok {
-			diskCap = fs.capacityBytes
-			diskAvail = fs.availableBytes
+			diskCap = fs.CapacityBytes
+			diskAvail = fs.AvailableBytes
 		}
 		row := db.NodeMetric{
 			Node: n.Name, Ts: now,

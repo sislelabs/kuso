@@ -1,22 +1,17 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	restclient "k8s.io/client-go/rest"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/nodeshape"
@@ -67,7 +62,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 	// Live CPU/memory from metrics-server. Failure is non-fatal —
 	// metrics-server is optional in some clusters; we just leave
 	// usage fields at 0 when it's unavailable.
-	usage := nodeMetrics(ctx, h.Kube)
+	usage := nodeMetrics(ctx, h.Kube, nodeList.Items)
 	out := nodeshape.BuildSummaries(nodeList.Items, podsByNode, usage)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -124,7 +119,7 @@ func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) 
 // reasoning (and same TTL) as the pod-metrics cache in
 // metrics_cache.go; metrics.k8s.io has no watch verb, so a short TTL is
 // the only option. Errors are not cached — the caller renders zeros.
-func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
+func nodeMetrics(ctx context.Context, kc *kube.Client, nodes []corev1.Node) map[string]nodeshape.Usage {
 	if kc == nil || kc.Clientset == nil {
 		return map[string]nodeshape.Usage{}
 	}
@@ -141,7 +136,7 @@ func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usag
 		if e.usage != nil && time.Since(e.fetched) < nodeMetricsTTL {
 			return e.usage, nil
 		}
-		u := fetchNodeMetrics(ctx, kc)
+		u := fetchNodeMetrics(ctx, kc, nodes)
 		nodeMetricsCache.mu.Lock()
 		nodeMetricsCache.entry = nodeMetricsEntry{usage: u, fetched: time.Now()}
 		nodeMetricsCache.mu.Unlock()
@@ -179,8 +174,34 @@ func ResetNodeMetricsCacheForTesting() {
 	nodeMetricsCache.mu.Unlock()
 }
 
-// fetchNodeMetrics is the uncached read against metrics.k8s.io.
-func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
+// fetchNodeMetrics is the uncached read: CPU/memory from
+// metrics.k8s.io, disk from each kubelet's /stats/summary. Each half is
+// best-effort on its own; disk must not vanish because metrics-server
+// is down. A node that doesn't answer keeps nodeshape's static fallback.
+//
+// Disk is not read off the node object: ephemeral-storage Capacity
+// minus Allocatable is a fixed kubelet reservation and renders a
+// constant ~5% however full the disk is.
+func fetchNodeMetrics(ctx context.Context, kc *kube.Client, nodes []corev1.Node) map[string]nodeshape.Usage {
+	out := fetchNodeCPUMem(ctx, kc)
+	if kc == nil {
+		return out
+	}
+	targets := make([]*corev1.Node, len(nodes))
+	for i := range nodes {
+		targets[i] = &nodes[i]
+	}
+	disks, _ := kc.NodeFilesystems(ctx, targets)
+	for name, fs := range disks {
+		u := out[name]
+		u.DiskCapacityBytes = fs.CapacityBytes
+		u.DiskAvailableBytes = fs.AvailableBytes
+		out[name] = u
+	}
+	return out
+}
+
+func fetchNodeCPUMem(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
 	out := map[string]nodeshape.Usage{}
 	if kc == nil || kc.Clientset == nil {
 		return out
@@ -215,73 +236,5 @@ func fetchNodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape
 			MemBytes: parseQuantity(it.Usage.Memory),
 		}
 	}
-	// Disk comes from each kubelet's Summary API, not from the node
-	// object: ephemeral-storage Capacity minus Allocatable is a fixed
-	// kubelet reservation, so it renders a constant ~5% no matter how
-	// full the disk really is. One request per node, behind the same
-	// cache as the block above, and best-effort — a node that doesn't
-	// answer keeps the static fallback in nodeshape.
-	for name, u := range out {
-		if nodeProxyForbidden.Load() {
-			break
-		}
-		fs, err := nodeFilesystem(ctx, rest, name)
-		if err != nil {
-			continue
-		}
-		u.DiskCapacityBytes = fs.capacity
-		u.DiskAvailableBytes = fs.available
-		out[name] = u
-	}
 	return out
-}
-
-type nodeFS struct{ capacity, available int64 }
-
-// nodeProxyForbidden latches once the apiserver refuses nodes/proxy.
-// kuso-server is not granted it on purpose (deploy/prometheus.yaml), so
-// the refusal is permanent for the process; without the latch every
-// uncached request made one doomed call per node.
-var nodeProxyForbidden atomic.Bool
-
-// nodeFilesystem reads one node's real root-filesystem usage from the
-// kubelet Summary API, proxied through the apiserver.
-func nodeFilesystem(ctx context.Context, rest restclient.Interface, node string) (nodeFS, error) {
-	fctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	body, err := rest.Get().
-		AbsPath(fmt.Sprintf("/api/v1/nodes/%s/proxy/stats/summary", node)).
-		DoRaw(fctx)
-	if err != nil {
-		if bytes.Contains(body, []byte(`"reason":"Forbidden"`)) {
-			nodeProxyForbidden.Store(true)
-		}
-		return nodeFS{}, err
-	}
-	var resp struct {
-		Node struct {
-			FS *struct {
-				CapacityBytes  *int64 `json:"capacityBytes"`
-				AvailableBytes *int64 `json:"availableBytes"`
-				UsedBytes      *int64 `json:"usedBytes"`
-			} `json:"fs"`
-		} `json:"node"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nodeFS{}, err
-	}
-	fs := resp.Node.FS
-	if fs == nil || fs.CapacityBytes == nil || *fs.CapacityBytes <= 0 {
-		return nodeFS{}, errors.New("summary has no node fs capacity")
-	}
-	out := nodeFS{capacity: *fs.CapacityBytes}
-	switch {
-	case fs.AvailableBytes != nil:
-		out.available = *fs.AvailableBytes
-	case fs.UsedBytes != nil:
-		out.available = out.capacity - *fs.UsedBytes
-	default:
-		return nodeFS{}, errors.New("summary has neither available nor used bytes")
-	}
-	return out, nil
 }
