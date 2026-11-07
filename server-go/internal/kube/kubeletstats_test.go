@@ -77,3 +77,39 @@ func TestParseSummaryFS_MissingFSIsAnError(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSummaryUsage_NodeTotalsAndPods(t *testing.T) {
+	body := `{"node":{"cpu":{"usageNanoCores":958262427},"memory":{"usageBytes":9180737536,"workingSetBytes":3885408256},
+	"fs":{"capacityBytes":322239832064,"usedBytes":240540450816},
+	"runtime":{"imageFs":{"capacityBytes":322239832064,"usedBytes":172454354944}}},
+	"pods":[{"podRef":{"name":"web-1","namespace":"kuso"},"cpu":{"usageNanoCores":714776},
+	"memory":{"workingSetBytes":13348864},"ephemeral-storage":{"usedBytes":24576},"volume":null},
+	{"podRef":{"name":"starting","namespace":"kuso"}}]}`
+	got, err := ParseSummaryUsage([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CPUNanoCores != 958262427 || got.MemWorkingSetBytes != 3885408256 || got.FSUsedBytes != 240540450816 ||
+		got.ImageFSUsedBytes != 172454354944 || !got.ImageFSShared {
+		t.Errorf("node totals = %+v", got)
+	}
+	if len(got.Pods) != 2 || got.Pods[0] != (PodUsage{Namespace: "kuso", Name: "web-1", CPUNanoCores: 714776, MemWorkingSetBytes: 13348864, EphemeralBytes: 24576}) {
+		t.Errorf("pods = %+v", got.Pods)
+	}
+	if got.Pods[1].Name != "starting" || got.Pods[1].CPUNanoCores != 0 {
+		t.Errorf("a pod with no stats yet should still parse: %+v", got.Pods[1])
+	}
+}
+
+func TestParseSummaryUsage_HostProcesses(t *testing.T) {
+	body := `{"node":{"fs":{"capacityBytes":10,"usedBytes":5},"systemContainers":[
+	{"name":"kubelet","cpu":{"usageNanoCores":636000000},"memory":{"workingSetBytes":1089}},
+	{"name":"pods","cpu":{"usageNanoCores":381000000},"memory":{"workingSetBytes":3141}}]}}`
+	got, err := ParseSummaryUsage([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Host) != 1 || got.Host[0] != (PodUsage{Name: "kubelet", CPUNanoCores: 636000000, MemWorkingSetBytes: 1089}) {
+		t.Errorf("host = %+v (the pods cgroup must not double-count)", got.Host)
+	}
+}

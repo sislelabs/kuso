@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -237,4 +239,63 @@ func fetchNodeCPUMem(ctx context.Context, kc *kube.Client) map[string]nodeshape.
 		}
 	}
 	return out
+}
+
+// NodeConsumers ranks what is using a node's CPU, RAM and disk right
+// now, grouped by kuso service/addon/cron/build or, for non-kuso pods,
+// by workload. Read from the node's kubelet /stats/summary on demand.
+//
+// local-path volumes report the whole root filesystem as their usage,
+// so per-volume disk use is unknowable from the kubelet; the volumes
+// pinned to the node come back with their allocated size instead and
+// their data lands in disk.unattributed.
+//
+// GET /api/kubernetes/nodes/{name}/consumers
+func (h *KubernetesHandler) NodeConsumers(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	name := chi.URLParam(r, "name")
+	ctx, cancel := kubeCtx(r)
+	defer cancel()
+	node, err := h.Kube.Clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		writeErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err != nil {
+		h.Logger.Error("node consumers: get node", "node", name, "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	sum, err := h.Kube.NodeUsage(ctx, node)
+	if errors.Is(err, kube.ErrKubeletForbidden) {
+		writeErr(w, http.StatusServiceUnavailable, "kuso-server is not allowed to read kubelet stats (needs nodes/stats get; apply deploy/server-go.yaml)")
+		return
+	}
+	if err != nil {
+		h.Logger.Warn("node consumers: kubelet summary", "node", name, "err", err)
+		writeErr(w, http.StatusBadGateway, "kubelet stats unavailable for this node")
+		return
+	}
+	podLookup := func(namespace, pod string) *corev1.Pod {
+		if p, ok := h.Kube.Cache.GetPod(namespace, pod); ok {
+			return p
+		}
+		return nil
+	}
+	pinned, err := h.listPinnedVolumes(ctx, name)
+	if err != nil {
+		h.Logger.Warn("node consumers: pinned volumes", "node", name, "err", err)
+		pinned = nil
+	}
+	if pinned == nil {
+		pinned = []PinnedVolume{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node":      name,
+		"at":        time.Now().UTC(),
+		"consumers": nodeshape.BuildConsumers(sum, podLookup),
+		"volumes":   pinned,
+	})
 }

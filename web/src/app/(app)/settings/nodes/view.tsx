@@ -1921,8 +1921,207 @@ function NodeHistoryModal({
           ) : (
             <Sparkline metric={metric} samples={samples} node={node} />
           )}
+          <TopConsumers node={node} metric={metric} />
         </div>
       </div>
+    </div>
+  );
+}
+
+interface Consumer {
+  kind: "service" | "addon" | "cron" | "build" | "platform" | "system" | "host";
+  project?: string;
+  name: string;
+  namespace: string;
+  pods: number;
+  value: number;
+}
+interface ResourceConsumers {
+  used: number;
+  consumers: Consumer[];
+  unattributed: number;
+}
+interface ConsumersResponse {
+  node: string;
+  at: string;
+  consumers: {
+    cpu: ResourceConsumers;
+    memory: ResourceConsumers;
+    disk: ResourceConsumers & { capacity: number; images: number };
+  };
+  volumes: PinnedVolume[];
+}
+
+const TOP_CONSUMERS = 8;
+
+const UNATTRIBUTED_LABEL: Record<NodeMetricKind, { label: string; hint: string }> = {
+  cpu: { label: "system", hint: "kernel and other host processes" },
+  mem: { label: "system", hint: "kernel and other host processes" },
+  disk: { label: "volumes, logs & OS", hint: "local-path volume data, system logs and the OS" },
+};
+
+// TopConsumers answers "what is using it" under the history chart: a
+// live snapshot from the node's kubelet, grouped by kuso service/addon
+// (or workload for non-kuso pods). Disk adds the image store and lists
+// the volumes pinned to the node — local-path volumes can't be sized
+// by the kubelet, so they are shown by allocated size, not usage.
+function TopConsumers({ node, metric }: { node: NodeSummary; metric: NodeMetricKind }) {
+  const q = useQuery({
+    queryKey: ["kubernetes", "nodes", node.name, "consumers"],
+    queryFn: () =>
+      api<ConsumersResponse>(`/api/kubernetes/nodes/${encodeURIComponent(node.name)}/consumers`),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+
+  const fmt = metric === "cpu" ? formatCPU : formatBytes;
+  let section: ResourceConsumers | undefined;
+  let capacity = 0;
+  if (q.data) {
+    const c = q.data.consumers;
+    if (metric === "cpu") {
+      section = c.cpu;
+      capacity = node.cpuCapacityMilli ?? 0;
+    } else if (metric === "mem") {
+      section = c.memory;
+      capacity = node.memCapacityBytes ?? 0;
+    } else {
+      section = c.disk;
+      capacity = c.disk.capacity;
+    }
+  }
+
+  return (
+    <section className="mt-4 border-t border-[var(--border-subtle)] pt-3">
+      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        Top consumers · now
+      </h3>
+      {q.isPending ? (
+        <Skeleton className="h-24 w-full" />
+      ) : q.isError ? (
+        <p className="font-mono text-[11px] text-[var(--error)]">
+          {q.error instanceof ApiError ? q.error.message : "Failed to load consumers"}
+        </p>
+      ) : section ? (
+        <ConsumerList
+          section={section}
+          capacity={capacity}
+          fmt={fmt}
+          metric={metric}
+          images={metric === "disk" ? q.data.consumers.disk.images : 0}
+        />
+      ) : null}
+      {metric === "disk" && q.data && q.data.volumes.length > 0 && (
+        <PinnedVolumes volumes={q.data.volumes} />
+      )}
+    </section>
+  );
+}
+
+function ConsumerList({
+  section,
+  capacity,
+  fmt,
+  metric,
+  images,
+}: {
+  section: ResourceConsumers;
+  capacity: number;
+  fmt: (n: number) => string;
+  metric: NodeMetricKind;
+  images: number;
+}) {
+  const top = section.consumers.slice(0, TOP_CONSUMERS);
+  const rest = section.consumers.slice(TOP_CONSUMERS);
+  const restValue = rest.reduce((sum, c) => sum + c.value, 0);
+  const other = UNATTRIBUTED_LABEL[metric];
+  const rows: { key: string; kind: string; label: string; detail?: string; value: number }[] = [];
+  if (images > 0) {
+    rows.push({ key: "images", kind: "images", label: "container images", value: images });
+  }
+  for (const c of top) {
+    rows.push({
+      key: `${c.kind}/${c.namespace}/${c.project ?? ""}/${c.name}`,
+      kind: c.kind,
+      label: c.project ? `${c.project} / ${c.name}` : c.name,
+      detail: consumerDetail(c),
+      value: c.value,
+    });
+  }
+  if (rest.length > 0) {
+    rows.push({ key: "rest", kind: "", label: `${rest.length} more`, value: restValue });
+  }
+  if (section.unattributed > 0) {
+    rows.push({ key: "other", kind: "", label: other.label, detail: other.hint, value: section.unattributed });
+  }
+  rows.sort((a, b) => b.value - a.value);
+
+  if (rows.length === 0) {
+    return <p className="font-mono text-[11px] text-[var(--text-tertiary)]">No usage reported yet.</p>;
+  }
+  const max = rows[0].value || 1;
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((r) => {
+        const pct = capacity > 0 ? Math.round((r.value / capacity) * 100) : null;
+        return (
+          <li key={r.key} className="font-mono text-[11px]">
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="flex min-w-0 items-baseline gap-2">
+                {r.kind && (
+                  <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1 text-[9px] uppercase tracking-wider text-[var(--text-tertiary)]">
+                    {r.kind}
+                  </span>
+                )}
+                <span className="truncate text-[var(--text-primary)]" title={r.label}>
+                  {r.label}
+                </span>
+                {r.detail && (
+                  <span className="hidden truncate text-[10px] text-[var(--text-tertiary)] sm:inline" title={r.detail}>
+                    {r.detail}
+                  </span>
+                )}
+              </div>
+              <span className="shrink-0 tabular-nums text-[var(--text-secondary)]">
+                {fmt(r.value)}
+                {pct !== null && <span className="ml-1 text-[var(--text-tertiary)]">({pct}%)</span>}
+              </span>
+            </div>
+            <div className="mt-0.5 h-0.5 w-full overflow-hidden rounded bg-[var(--bg-tertiary)]">
+              <div className="h-full bg-emerald-500/70" style={{ width: `${(r.value / max) * 100}%` }} />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function consumerDetail(c: Consumer): string | undefined {
+  if (c.kind === "host") return "node process, outside pods";
+  const pods = `${c.pods} pod${c.pods === 1 ? "" : "s"}`;
+  return c.project ? pods : `${c.namespace} · ${pods}`;
+}
+
+function PinnedVolumes({ volumes }: { volumes: PinnedVolume[] }) {
+  return (
+    <div className="mt-4">
+      <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        Volumes on this disk · allocated size
+      </h3>
+      <p className="mb-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+        local-path volumes can&apos;t be measured individually; their data is part of &quot;volumes, logs &amp; OS&quot; above.
+      </p>
+      <ul className="grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
+        {volumes.map((v) => (
+          <li key={`${v.namespace}/${v.pvc}`} className="flex justify-between gap-2 font-mono text-[11px]">
+            <span className="truncate text-[var(--text-secondary)]" title={`${v.namespace}/${v.pvc}`}>
+              {v.project && v.owner ? `${v.project} / ${v.owner}` : v.pvc}
+            </span>
+            <span className="shrink-0 text-[var(--text-tertiary)]">{v.size ?? "—"}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -4,7 +4,7 @@
 // implementations live in sibling files:
 //
 //   - kubernetes_cluster.go       — Events, StorageClasses, Domains
-//   - kubernetes_nodes.go         — Nodes (list), NodeHistory
+//   - kubernetes_nodes.go         — Nodes (list), NodeHistory, NodeConsumers
 //   - kubernetes_node_lifecycle.go — Join/Validate/Remove + label PUT
 //   - kubernetes_env_metrics.go   — EnvMetrics + EnvTimeseries
 //
@@ -60,6 +60,7 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// Backed by the SQLite NodeMetric table populated by the sampler
 	// goroutine — point-in-time data lives on the Nodes() endpoint.
 	rt.Get("/api/kubernetes/nodes/{name}/history", h.NodeHistory)
+	rt.Get("/api/kubernetes/nodes/{name}/consumers", h.NodeConsumers)
 	// Host package-update advisory per node (count, reboot-needed,
 	// sample). Backed by the pkg-probe DaemonSet's node annotations.
 	rt.Get("/api/kubernetes/nodes/updates", h.NodeUpdates)

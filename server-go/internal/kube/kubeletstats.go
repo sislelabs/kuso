@@ -70,16 +70,9 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 	if c == nil || c.Config == nil || len(nodes) == 0 {
 		return out, nil
 	}
-	st := c.kubeletStats()
-	st.mu.Lock()
-	parked := time.Now().Before(st.forbiddenUntil)
-	st.mu.Unlock()
-	if parked {
-		return out, []error{ErrKubeletForbidden}
-	}
-	st.once.Do(func() { st.client, st.clientErr = rest.HTTPClientFor(c.Config) })
-	if st.clientErr != nil {
-		return out, []error{fmt.Errorf("kubelet http client: %w", st.clientErr)}
+	st, err := c.kubeletStatsClient()
+	if err != nil {
+		return out, []error{err}
 	}
 
 	var (
@@ -91,7 +84,11 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 		wg.Add(1)
 		go func(n *corev1.Node) {
 			defer wg.Done()
-			fs, err := fetchNodeFS(ctx, st.client, n)
+			body, err := fetchSummary(ctx, st.client, n)
+			var fs NodeFS
+			if err == nil {
+				fs, err = ParseSummaryFS(body)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -104,16 +101,57 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 	wg.Wait()
 	for _, err := range errs {
 		if errors.Is(err, ErrKubeletForbidden) {
-			st.mu.Lock()
-			st.forbiddenUntil = time.Now().Add(kubeletStatsForbiddenBackoff)
-			st.mu.Unlock()
+			st.park()
 			break
 		}
 	}
 	return out, errs
 }
 
-func fetchNodeFS(ctx context.Context, client *http.Client, n *corev1.Node) (NodeFS, error) {
+// kubeletStatsClient returns the shared kubelet client, or
+// ErrKubeletForbidden while a 403 has the calls parked.
+func (c *Client) kubeletStatsClient() (*kubeletStats, error) {
+	st := c.kubeletStats()
+	st.mu.Lock()
+	parked := time.Now().Before(st.forbiddenUntil)
+	st.mu.Unlock()
+	if parked {
+		return nil, ErrKubeletForbidden
+	}
+	st.once.Do(func() { st.client, st.clientErr = rest.HTTPClientFor(c.Config) })
+	if st.clientErr != nil {
+		return nil, fmt.Errorf("kubelet http client: %w", st.clientErr)
+	}
+	return st, nil
+}
+
+func (st *kubeletStats) park() {
+	st.mu.Lock()
+	st.forbiddenUntil = time.Now().Add(kubeletStatsForbiddenBackoff)
+	st.mu.Unlock()
+}
+
+// NodeUsage reads one node's kubelet /stats/summary with its per-pod
+// breakdown. Shares NodeFilesystems' client and 403 backoff.
+func (c *Client) NodeUsage(ctx context.Context, n *corev1.Node) (NodeUsageSummary, error) {
+	if c == nil || c.Config == nil || n == nil {
+		return NodeUsageSummary{}, errors.New("kube client not configured")
+	}
+	st, err := c.kubeletStatsClient()
+	if err != nil {
+		return NodeUsageSummary{}, err
+	}
+	body, err := fetchSummary(ctx, st.client, n)
+	if errors.Is(err, ErrKubeletForbidden) {
+		st.park()
+	}
+	if err != nil {
+		return NodeUsageSummary{}, err
+	}
+	return ParseSummaryUsage(body)
+}
+
+func fetchSummary(ctx context.Context, client *http.Client, n *corev1.Node) ([]byte, error) {
 	addr := ""
 	for _, a := range n.Status.Addresses {
 		if a.Type == corev1.NodeInternalIP {
@@ -122,7 +160,7 @@ func fetchNodeFS(ctx context.Context, client *http.Client, n *corev1.Node) (Node
 		}
 	}
 	if addr == "" {
-		return NodeFS{}, errors.New("node has no InternalIP")
+		return nil, errors.New("node has no InternalIP")
 	}
 	port := int(n.Status.DaemonEndpoints.KubeletEndpoint.Port)
 	if port == 0 {
@@ -133,26 +171,26 @@ func fetchNodeFS(ctx context.Context, client *http.Client, n *corev1.Node) (Node
 	url := "https://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/stats/summary"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return NodeFS{}, err
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return NodeFS{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	// The node-level summary is a few KB; the cap only guards a
 	// misbehaving endpoint. Per-pod stats make it larger on busy nodes.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return NodeFS{}, err
+		return nil, err
 	}
 	switch {
 	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
-		return NodeFS{}, fmt.Errorf("%w: %d %.200s", ErrKubeletForbidden, resp.StatusCode, body)
+		return nil, fmt.Errorf("%w: %d %.200s", ErrKubeletForbidden, resp.StatusCode, body)
 	case resp.StatusCode != http.StatusOK:
-		return NodeFS{}, fmt.Errorf("kubelet %d: %.200s", resp.StatusCode, body)
+		return nil, fmt.Errorf("kubelet %d: %.200s", resp.StatusCode, body)
 	}
-	return ParseSummaryFS(body)
+	return body, nil
 }
 
 // ParseSummaryFS pulls node.fs out of a kubelet Summary API response.
@@ -183,6 +221,121 @@ func ParseSummaryFS(body []byte) (NodeFS, error) {
 		out.AvailableBytes = out.CapacityBytes - *fs.UsedBytes
 	default:
 		return NodeFS{}, errors.New("summary has neither available nor used bytes")
+	}
+	return out, nil
+}
+
+// PodUsage is one pod's live usage from the kubelet summary.
+// EphemeralBytes is the pod's share of the node disk: container
+// writable layers, logs and disk-backed emptyDirs.
+type PodUsage struct {
+	Namespace          string
+	Name               string
+	CPUNanoCores       uint64
+	MemWorkingSetBytes uint64
+	EphemeralBytes     uint64
+}
+
+// NodeUsageSummary is the node totals plus per-pod usage. Memory is
+// working set, the figure metrics-server reports, so the per-pod rows
+// add up against the node tile.
+type NodeUsageSummary struct {
+	CPUNanoCores       uint64
+	MemWorkingSetBytes uint64
+	FSCapacityBytes    uint64
+	FSUsedBytes        uint64
+	// ImageFS is the container image store; ImageFSShared reports
+	// whether it sits on the node root filesystem (it does on k3s).
+	ImageFSUsedBytes uint64
+	ImageFSShared    bool
+	Pods             []PodUsage
+	// Host is the node-level processes the kubelet tracks outside pods
+	// ("kubelet", "runtime"); on k3s "kubelet" is the whole k3s
+	// process, containerd included.
+	Host []PodUsage
+}
+
+// ParseSummaryUsage pulls node totals and per-pod usage out of a
+// kubelet Summary API response.
+func ParseSummaryUsage(body []byte) (NodeUsageSummary, error) {
+	type fsStats struct {
+		CapacityBytes uint64 `json:"capacityBytes"`
+		UsedBytes     uint64 `json:"usedBytes"`
+	}
+	type cpuStats struct {
+		UsageNanoCores uint64 `json:"usageNanoCores"`
+	}
+	type memStats struct {
+		WorkingSetBytes uint64 `json:"workingSetBytes"`
+	}
+	var resp struct {
+		Node struct {
+			CPU     *cpuStats `json:"cpu"`
+			Memory  *memStats `json:"memory"`
+			FS      *fsStats  `json:"fs"`
+			Runtime *struct {
+				ImageFS *fsStats `json:"imageFs"`
+			} `json:"runtime"`
+			SystemContainers []struct {
+				Name   string    `json:"name"`
+				CPU    *cpuStats `json:"cpu"`
+				Memory *memStats `json:"memory"`
+			} `json:"systemContainers"`
+		} `json:"node"`
+		Pods []struct {
+			PodRef struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"podRef"`
+			CPU       *cpuStats `json:"cpu"`
+			Memory    *memStats `json:"memory"`
+			Ephemeral *fsStats  `json:"ephemeral-storage"`
+		} `json:"pods"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return NodeUsageSummary{}, fmt.Errorf("decode summary: %w", err)
+	}
+	n := resp.Node
+	if n.FS == nil || n.FS.CapacityBytes == 0 {
+		return NodeUsageSummary{}, errors.New("summary has no node fs capacity")
+	}
+	out := NodeUsageSummary{FSCapacityBytes: n.FS.CapacityBytes, FSUsedBytes: n.FS.UsedBytes}
+	if n.CPU != nil {
+		out.CPUNanoCores = n.CPU.UsageNanoCores
+	}
+	if n.Memory != nil {
+		out.MemWorkingSetBytes = n.Memory.WorkingSetBytes
+	}
+	if n.Runtime != nil && n.Runtime.ImageFS != nil {
+		out.ImageFSUsedBytes = n.Runtime.ImageFS.UsedBytes
+		out.ImageFSShared = n.Runtime.ImageFS.CapacityBytes == n.FS.CapacityBytes
+	}
+	for _, c := range n.SystemContainers {
+		// "pods" is the pod cgroup total, already broken out per pod.
+		if c.Name != "kubelet" && c.Name != "runtime" {
+			continue
+		}
+		u := PodUsage{Name: c.Name}
+		if c.CPU != nil {
+			u.CPUNanoCores = c.CPU.UsageNanoCores
+		}
+		if c.Memory != nil {
+			u.MemWorkingSetBytes = c.Memory.WorkingSetBytes
+		}
+		out.Host = append(out.Host, u)
+	}
+	for _, p := range resp.Pods {
+		u := PodUsage{Namespace: p.PodRef.Namespace, Name: p.PodRef.Name}
+		if p.CPU != nil {
+			u.CPUNanoCores = p.CPU.UsageNanoCores
+		}
+		if p.Memory != nil {
+			u.MemWorkingSetBytes = p.Memory.WorkingSetBytes
+		}
+		if p.Ephemeral != nil {
+			u.EphemeralBytes = p.Ephemeral.UsedBytes
+		}
+		out.Pods = append(out.Pods, u)
 	}
 	return out, nil
 }
