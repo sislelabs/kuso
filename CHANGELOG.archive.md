@@ -2,6 +2,13 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.23] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): move control-plane backup to 23:00 UTC ([082cea2](https://github.com/sislelabs/kuso/commit/082cea2ca300a49d7ec7d1c1c3f17d4c03c8c1b3))
+- Fix(backuphealth): size the control-plane stale window for a daily cadence ([9fbd79f](https://github.com/sislelabs/kuso/commit/9fbd79fa3b87272c4641306e4e5705b5e4bc66f9))
+- Fix(backup): control-plane backup daily, re-key retention slots ([8f10b6a](https://github.com/sislelabs/kuso/commit/8f10b6a5cb4713c7083b34b673f86c8d7a89403d))
+
 ## [0.25.22] — 2026-09-02
 
 ### 🐛 Bug Fixes
