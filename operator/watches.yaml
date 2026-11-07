@@ -25,7 +25,11 @@
   version: v1alpha1
   kind: KusoProject
   chart: helm-charts/kusoproject
-  reconcilePeriod: 3m
+  # Spec edits reconcile through the watch; the resync only self-heals
+  # drift in the project's NetworkPolicies and quota. At 3m, 27 projects
+  # were ~half of all operator reconcile time and a third of apiserver
+  # requests came from the operator (measured 2026-11-07).
+  reconcilePeriod: 30m
   maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
@@ -36,15 +40,15 @@
   # resync means ~600 full helm renders every 3 minutes — reconcile lag
   # grows unboundedly somewhere past ~300 CRs. Spec edits still reconcile
   # immediately via the watch, so the periodic resync only self-heals
-  # drift; a 10m cadence is plenty and 8 workers clears a restart backlog
+  # drift; a 30m cadence is plenty and 8 workers clears a restart backlog
   # faster. Same rationale the KusoAddon 30m period already relies on.
-  reconcilePeriod: 10m
+  reconcilePeriod: 30m
   maxConcurrentReconciles: 8
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoEnvironment
   chart: helm-charts/kusoenvironment
-  reconcilePeriod: 10m
+  reconcilePeriod: 30m
   maxConcurrentReconciles: 8
   # Per-service ingress limits render only when the operator Deployment
   # carries KUSO_INGRESS_LIMITS=true, which goes with the traefik.io
@@ -93,7 +97,7 @@
   version: v1alpha1
   kind: KusoCron
   chart: helm-charts/kusocron
-  reconcilePeriod: 3m
+  reconcilePeriod: 10m
   maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
