@@ -1648,6 +1648,10 @@ type Poller struct {
 	ImageDeleter ImageDeleter
 	ImageRecords ImageRecordLister
 
+	// ImageCopier copies a sibling build's image for builds that reuse it
+	// (reuse.go). nil → every reusing build falls back to a real build.
+	ImageCopier ImageCopier
+
 	// VulnGate scans a built image before promotion (vulngate.go).
 	// Optional: nil → promote without scanning.
 	VulnGate VulnGate
@@ -2374,6 +2378,12 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 			if b.Annotations[annPromoteHold] != "" || b.Annotations[annJobSucceeded] != "" {
 				return p.markSucceededAsync(ctx, ns, b)
 			}
+			// A reusing build never gets a Job of its own while it waits
+			// on its source, so the stuck-timeout below doesn't apply;
+			// checkReuse bounds the wait itself.
+			if b.Annotations[AnnReuseFrom] != "" {
+				return p.checkReuse(ctx, ns, b)
+			}
 			// No Job for this build. Either it hasn't rendered yet (young
 			// CR — keep waiting for the operator) or it never will / was
 			// TTL-reaped after completing during a poller outage (old CR —
@@ -2537,6 +2547,10 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 			combined.WriteString(" ---\n")
 			combined.Write(data)
 		}
+	}
+	if combined.Len() == 0 && b.Annotations[AnnReuseFrom] != "" && b.Spec.Image != nil {
+		fmt.Fprintf(&combined, "kuso: no build ran for this service. The image %s:%s was copied from build %s, which built the same repo, path, commit and build config.\n",
+			b.Spec.Image.Repository, b.Spec.Image.Tag, b.Annotations[AnnReuseFrom])
 	}
 	logs := redactSecrets(combined.String(), p.Svc.secretValuesForBuild(lctx, ns, b))
 	// Extract detected-env BEFORE the tail truncation: the env-detect

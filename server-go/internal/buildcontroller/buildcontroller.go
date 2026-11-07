@@ -308,6 +308,11 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 		b.Annotations["kuso.sislelabs.com/build-job-succeeded"] != "" {
 		return
 	}
+	// A reusing build is the poller's: it copies a sibling's image and
+	// never gets a Job unless reuse falls back (which drops the annotation).
+	if b.Annotations[builds.AnnReuseFrom] != "" {
+		return
+	}
 	// Belt-and-braces validity check, mirroring the chart's top-level
 	// guard. A partially-written CR (missing image.repository or
 	// repo.url) can't produce a usable Job; skip silently — the
@@ -392,6 +397,13 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 
 	reconcileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if s.tryReuse(reconcileCtx, u, b) {
+		s.mu.Lock()
+		delete(s.running, key)
+		s.mu.Unlock()
+		s.clearRetry(key)
+		return
+	}
 	if err := s.ensureJob(reconcileCtx, u, b); err != nil {
 		// Drop from `running` so a retry (or the next informer
 		// event) can re-enter, then arm the backoff ladder. Note
@@ -416,6 +428,53 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 		s.Logger.Info("buildcontroller: ensured job",
 			"build", u.GetName(), "ns", u.GetNamespace(), "source", source)
 	}
+}
+
+// tryReuse marks b as reusing an identical sibling build's image instead
+// of creating a Job (see builds/reuse.go). Returns true when b must not get
+// a Job now: it was marked, or the mark lost a write race (the winning
+// write's update event re-reconciles). Any lookup problem returns false so
+// the build proceeds normally.
+func (s *Service) tryReuse(ctx context.Context, u *unstructured.Unstructured, b *kube.KusoBuild) bool {
+	if !builds.ReuseEnabled() || s.Kube == nil || s.Kube.Dynamic == nil {
+		return false
+	}
+	ns, name := u.GetNamespace(), u.GetName()
+	// A build that already has a Job (leader resync, a later informer
+	// event) keeps it; only a not-yet-rendered build may reuse.
+	if _, err := s.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		return false
+	}
+	list, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{kube.LabelProject: b.Spec.Project})
+	if err != nil {
+		if s.Logger != nil {
+			s.Logger.Warn("buildcontroller: reuse candidates", "build", name, "err", err)
+		}
+		return false
+	}
+	candidates := make([]*kube.KusoBuild, len(list))
+	for i := range list {
+		candidates[i] = &list[i]
+	}
+	src := builds.ReuseSource(b, candidates)
+	if src == nil {
+		return false
+	}
+	if _, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, name, types.MergePatchType, builds.ReuseMarkPatch(b, src), metav1.PatchOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return true
+		}
+		if s.Logger != nil {
+			s.Logger.Warn("buildcontroller: mark reuse; building normally", "build", name, "err", err)
+		}
+		return false
+	}
+	if s.Logger != nil {
+		s.Logger.Info("buildcontroller: build reuses sibling image — no Job",
+			"build", name, "ns", ns, "source", src.Name)
+	}
+	return true
 }
 
 // retryState is the per-CR backoff ledger. attempts counts scheduled

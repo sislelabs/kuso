@@ -973,6 +973,8 @@ func main() {
 					// external-registry clusters → sweep self-disables.
 					ImageDeleter: builds.NewInClusterImageDeleter(builds.RegistryHost),
 					ImageRecords: imageRecordsAdapter{database},
+					// Build reuse copies a sibling's image between repos.
+					ImageCopier: builds.NewInClusterImageCopier(builds.RegistryHost),
 					// GitHub commit statuses; inert until ghBridge.set.
 					CommitStatuses: ghBridge,
 				}

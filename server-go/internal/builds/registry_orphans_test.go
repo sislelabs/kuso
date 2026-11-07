@@ -2,6 +2,8 @@ package builds
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,10 +39,124 @@ type fakeRegistry struct {
 	tags    map[string]map[string]string // repo → tag → digest
 	created map[string]time.Time         // digest → image created
 	deleted []string                     // "repo@digest"
+
+	// Content-addressed store for CopyImage: real manifest bytes and blob
+	// presence per repo, keyed "repo@digest". mountStatus overrides the
+	// cross-repo mount answer (0 = 201 when the source has the blob).
+	manifests   map[string]fakeManifest
+	blobs       map[string]bool
+	mountStatus int
+}
+
+type fakeManifest struct {
+	body        []byte
+	contentType string
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{tags: map[string]map[string]string{}, created: map[string]time.Time{}}
+	return &fakeRegistry{
+		tags: map[string]map[string]string{}, created: map[string]time.Time{},
+		manifests: map[string]fakeManifest{}, blobs: map[string]bool{},
+	}
+}
+
+func fakeDigest(b []byte) string {
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// putImage stores a manifest (and the blobs it lists) under repo, tagging
+// it when tag is non-empty. Returns its digest.
+func (f *fakeRegistry) putImage(repo, tag, contentType string, body []byte, blobs ...string) string {
+	dg := fakeDigest(body)
+	f.manifests[repo+"@"+dg] = fakeManifest{body: body, contentType: contentType}
+	for _, b := range blobs {
+		f.blobs[repo+"@"+b] = true
+	}
+	if tag != "" {
+		if f.tags[repo] == nil {
+			f.tags[repo] = map[string]string{}
+		}
+		f.tags[repo][tag] = dg
+	}
+	return dg
+}
+
+// serveContent handles the CopyImage endpoints; false = not handled.
+func (f *fakeRegistry) serveContent(w http.ResponseWriter, r *http.Request, p string) bool {
+	switch {
+	case strings.HasSuffix(p, "/blobs/uploads/") && r.Method == http.MethodPost:
+		repo := strings.TrimSuffix(p, "/blobs/uploads/")
+		dg, from := r.URL.Query().Get("mount"), r.URL.Query().Get("from")
+		switch {
+		case f.mountStatus != 0:
+			w.WriteHeader(f.mountStatus)
+		case f.blobs[from+"@"+dg]:
+			f.blobs[repo+"@"+dg] = true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusAccepted)
+		}
+		return true
+	case strings.Contains(p, "/blobs/sha256:") && r.Method == http.MethodHead:
+		repo, dg, _ := strings.Cut(p, "/blobs/")
+		if f.blobs[repo+"@"+dg] {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+		return true
+	case strings.Contains(p, "/manifests/") && r.Method == http.MethodPut:
+		repo, ref, _ := strings.Cut(p, "/manifests/")
+		body, _ := io.ReadAll(r.Body)
+		dg := fakeDigest(body)
+		var refs manifestRefs
+		_ = json.Unmarshal(body, &refs)
+		missing := func(key string, ok bool) bool {
+			if !ok {
+				http.Error(w, "unknown "+key, http.StatusBadRequest)
+			}
+			return !ok
+		}
+		if refs.Config != nil && missing(refs.Config.Digest, f.blobs[repo+"@"+refs.Config.Digest]) {
+			return true
+		}
+		for _, l := range refs.Layers {
+			if missing(l.Digest, f.blobs[repo+"@"+l.Digest]) {
+				return true
+			}
+		}
+		for _, m := range refs.Manifests {
+			if _, ok := f.manifests[repo+"@"+m.Digest]; missing(m.Digest, ok) {
+				return true
+			}
+		}
+		f.manifests[repo+"@"+dg] = fakeManifest{body: body, contentType: r.Header.Get("Content-Type")}
+		if !strings.HasPrefix(ref, "sha256:") {
+			if f.tags[repo] == nil {
+				f.tags[repo] = map[string]string{}
+			}
+			f.tags[repo][ref] = dg
+		}
+		w.Header().Set("Docker-Content-Digest", dg)
+		w.WriteHeader(http.StatusCreated)
+		return true
+	case strings.Contains(p, "/manifests/") && r.Method == http.MethodGet:
+		repo, ref, _ := strings.Cut(p, "/manifests/")
+		dg := ref
+		if t, ok := f.tags[repo][ref]; ok {
+			dg = t
+		}
+		m, ok := f.manifests[repo+"@"+dg]
+		if !ok {
+			return false
+		}
+		w.Header().Set("Content-Type", m.contentType)
+		w.Header().Set("Docker-Content-Digest", dg)
+		_, _ = w.Write(m.body)
+		return true
+	}
+	return false
 }
 
 func (f *fakeRegistry) put(repo, tag, digest string, created time.Time) {
@@ -68,6 +184,9 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := strings.TrimPrefix(r.URL.Path, "/v2/")
+	if f.serveContent(w, r, p) {
+		return
+	}
 	switch {
 	case p == "_catalog":
 		var repos []string
