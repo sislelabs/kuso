@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.34.1] — 2026-11-07
+
+### Other
+- Lengthen the operator's periodic resync for projects, services, envs and crons ([c655b2f](https://github.com/sislelabs/kuso/commit/c655b2f50d300b03cb8d24fb7a93527ec9ac6ece))
+- Read node disk usage from the kubelet stats endpoint ([5844cb0](https://github.com/sislelabs/kuso/commit/5844cb0a67a90a1d4fcc49032f95e8c55c865816))
+
 ## [0.34.0] — 2026-11-07
 
 ### Other
@@ -615,11 +621,6 @@ messages on every release. The format is loosely based on
 - Fix(backup): move control-plane backup to 23:00 UTC ([082cea2](https://github.com/sislelabs/kuso/commit/082cea2ca300a49d7ec7d1c1c3f17d4c03c8c1b3))
 - Fix(backuphealth): size the control-plane stale window for a daily cadence ([9fbd79f](https://github.com/sislelabs/kuso/commit/9fbd79fa3b87272c4641306e4e5705b5e4bc66f9))
 - Fix(backup): control-plane backup daily, re-key retention slots ([8f10b6a](https://github.com/sislelabs/kuso/commit/8f10b6a5cb4713c7083b34b673f86c8d7a89403d))
-
-## [0.25.22] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): pooler config changes roll the PgBouncer pod ([2e057b8](https://github.com/sislelabs/kuso/commit/2e057b8d566f4ae34d47ecb984e544d4ddcc9696))
 
 
 ---

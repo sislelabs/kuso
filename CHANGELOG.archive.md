@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.22] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): pooler config changes roll the PgBouncer pod ([2e057b8](https://github.com/sislelabs/kuso/commit/2e057b8d566f4ae34d47ecb984e544d4ddcc9696))
+
 ## [0.25.21] — 2026-09-02
 
 ### ✨ Features
