@@ -19,6 +19,13 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.36.0] — 2026-11-08
+
+### Other
+- Keep addon images current: scan, pre-pull and roll newer builds of their tag ([7daec78](https://github.com/sislelabs/kuso/commit/7daec78f7a3aff990992bad9d8b9f06f415c9042))
+- Let a second sandbox run beside another and pin its traefik chart ([11a8d43](https://github.com/sislelabs/kuso/commit/11a8d4392facdb08f5e4d397f27bbf7f922505f7))
+- Delete orphaned registry repos by default ([f840349](https://github.com/sislelabs/kuso/commit/f8403496d45d20b268a996d9f7979d7aedde178d))
+
 ## [0.35.0] — 2026-11-07
 
 ### Other
@@ -614,11 +621,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
-
-## [0.25.25] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
 
 
 ---

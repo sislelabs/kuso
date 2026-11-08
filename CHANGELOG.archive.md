@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.25] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
+
 ## [0.25.24] — 2026-09-02
 
 ### 🐛 Bug Fixes

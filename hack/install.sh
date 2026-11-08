@@ -66,8 +66,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.34.1}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.35.0}"
+KUSO_VERSION="${KUSO_VERSION:-v0.36.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.36.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 # Public-TCP entrypoint pool for addons (docs/superpowers/specs/
