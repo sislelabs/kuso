@@ -110,7 +110,8 @@ type Deps struct {
 	// Optional: nil → the route isn't mounted.
 	UsageHistory *podusage.Store
 	// Updater drives /api/system/version + /update. Optional — when
-	// nil the handler returns a flat "no updates available" response.
+	// nil the version endpoint reports the running version with update
+	// checks off, and the update routes answer 503.
 	Updater *updater.Service
 	Logger  *slog.Logger
 	// BaseCtx is the server's lifecycle context. Background work
@@ -750,10 +751,10 @@ func mountAuthenticatedRoutes(
 			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Addons: d.Addons, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
 		}
-		if d.Updater != nil {
-			upH := &httphandlers.UpdaterHandler{Svc: d.Updater, Audit: d.Audit, Logger: d.Logger}
-			upH.Mount(r)
-		}
+		// Mounted even without an updater: GET /api/system/version still
+		// reports the running version, and the write routes answer 503.
+		upH := &httphandlers.UpdaterHandler{Svc: d.Updater, Audit: d.Audit, Logger: d.Logger}
+		upH.Mount(r)
 		if ghHandler != nil {
 			ghHandler.MountAuthed(r)
 		}

@@ -15,6 +15,7 @@ import (
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/updater"
+	"kuso/server/internal/version"
 )
 
 // UpdaterHandler exposes the self-update endpoints. Read endpoints
@@ -41,9 +42,14 @@ func (h *UpdaterHandler) Mount(r chi.Router) {
 // it gets.
 func (h *UpdaterHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 	if h.Svc == nil {
+		// Update checks are off (KUSO_UPDATER_DISABLED), but the running
+		// version is still known; the settings landing reads it from here.
 		writeJSON(w, http.StatusOK, map[string]any{
-			"current":     "",
-			"needsUpdate": false,
+			"current":        version.Version(),
+			"needsUpdate":    false,
+			"canAutoUpgrade": false,
+			"checksDisabled": true,
+			"blockedReason":  "Update checks are turned off on this server.",
 		})
 		return
 	}
