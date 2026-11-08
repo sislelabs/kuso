@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -134,17 +135,44 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	return nil
 }
 
+// attentionPredicate selects the events a person should act on:
+// failures and warnings, fired alerts, security findings and kuso
+// update notices. Successes (build succeeded, recovered, backup ok)
+// are activity, not attention. Keep in sync with web
+// lib/notification-attention.ts.
+const attentionPredicate = `("severity" IN ('warn','error') OR "type" = 'alert.fired' OR "type" = 'update.available' OR "type" LIKE 'security.%')`
+
+// IsAttentionEvent is attentionPredicate for an in-memory event.
+func IsAttentionEvent(eventType, severity string) bool {
+	return severity == "warn" || severity == "error" || eventType == "alert.fired" ||
+		eventType == "update.available" || strings.HasPrefix(eventType, "security.")
+}
+
 // ListNotificationEvents returns the newest `limit` events (clamped
 // to the table cap). When unreadOnly is true, only events with
 // readAt IS NULL are returned.
 func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly bool) ([]NotificationEvent, error) {
+	return d.listNotificationEvents(ctx, limit, unreadOnly, false)
+}
+
+// ListAttentionNotificationEvents is ListNotificationEvents narrowed to
+// attentionPredicate, so the bell's "Needs attention" view isn't
+// crowded out of its page by a burst of successes.
+func (d *DB) ListAttentionNotificationEvents(ctx context.Context, limit int) ([]NotificationEvent, error) {
+	return d.listNotificationEvents(ctx, limit, false, true)
+}
+
+func (d *DB) listNotificationEvents(ctx context.Context, limit int, unreadOnly, attentionOnly bool) ([]NotificationEvent, error) {
 	if limit <= 0 || limit > notificationEventCap {
 		limit = notificationEventCap
 	}
 	q := `SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt","classification"
-	      FROM "NotificationEvent"`
+	      FROM "NotificationEvent" WHERE TRUE`
 	if unreadOnly {
-		q += ` WHERE "readAt" IS NULL`
+		q += ` AND "readAt" IS NULL`
+	}
+	if attentionOnly {
+		q += ` AND ` + attentionPredicate
 	}
 	q += ` ORDER BY "id" DESC LIMIT $1`
 	rows, err := d.QueryContext(ctx, q, limit)
@@ -193,7 +221,7 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 // model doesn't exist yet (the column is a single global flag); a
 // non-admin feed is fire-and-forget so we don't show stale read
 // state from another user's clicks.
-func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, projects []string) ([]NotificationEvent, error) {
+func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, projects []string, attentionOnly bool) ([]NotificationEvent, error) {
 	if limit <= 0 || limit > notificationEventCap {
 		limit = notificationEventCap
 	}
@@ -223,10 +251,10 @@ func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, p
 	q := fmt.Sprintf(`
 		SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt","classification"
 		FROM "NotificationEvent"
-		WHERE "project" IN (%s)
+		WHERE "project" IN (%s)%s
 		ORDER BY "id" DESC
 		LIMIT $%d
-	`, joinComma(placeholders), len(projects)+1)
+	`, joinComma(placeholders), attentionClause(attentionOnly), len(projects)+1)
 	rows, err := d.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list scoped notification events: %w", err)
@@ -326,12 +354,12 @@ func (d *DB) notificationReadMark(ctx context.Context, userID string) (int64, ti
 
 // ListNotificationEventsForUser is ListNotificationEvents with readAt
 // (and the unread filter) taken from userID's own watermark.
-func (d *DB) ListNotificationEventsForUser(ctx context.Context, userID string, limit int, unreadOnly bool) ([]NotificationEvent, error) {
+func (d *DB) ListNotificationEventsForUser(ctx context.Context, userID string, limit int, unreadOnly, attentionOnly bool) ([]NotificationEvent, error) {
 	mark, at, err := d.notificationReadMark(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	all, err := d.ListNotificationEvents(ctx, limit, false)
+	all, err := d.listNotificationEvents(ctx, limit, false, attentionOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -350,17 +378,26 @@ func (d *DB) ListNotificationEventsForUser(ctx context.Context, userID string, l
 	return out, nil
 }
 
-// CountUnreadNotificationEventsForUser counts events above userID's mark.
-func (d *DB) CountUnreadNotificationEventsForUser(ctx context.Context, userID string) (int, error) {
+// CountUnreadNotificationEventsForUser counts events above userID's
+// mark; attentionOnly leaves successes out of the count.
+func (d *DB) CountUnreadNotificationEventsForUser(ctx context.Context, userID string, attentionOnly bool) (int, error) {
 	mark, _, err := d.notificationReadMark(ctx, userID)
 	if err != nil {
 		return 0, err
 	}
 	var n int
-	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "NotificationEvent" WHERE "id" > $1`, mark).Scan(&n); err != nil {
+	q := `SELECT COUNT(*) FROM "NotificationEvent" WHERE "id" > $1` + attentionClause(attentionOnly)
+	if err := d.QueryRowContext(ctx, q, mark).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count unread: %w", err)
 	}
 	return n, nil
+}
+
+func attentionClause(on bool) string {
+	if on {
+		return ` AND ` + attentionPredicate
+	}
+	return ""
 }
 
 // MarkNotificationEventsReadForUser moves userID's mark to the newest

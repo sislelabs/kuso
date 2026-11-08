@@ -218,8 +218,15 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 	// Admins see everything via this path too — they may want to
 	// embed the bell on a non-admin route, and there's no reason to
 	// hide events from them.
+	attention := r.URL.Query().Get("attention") == "true"
 	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
-		out, err := h.DB.ListNotificationEvents(ctx, limit, false)
+		list := func() ([]db.NotificationEvent, error) {
+			if attention {
+				return h.DB.ListAttentionNotificationEvents(ctx, limit)
+			}
+			return h.DB.ListNotificationEvents(ctx, limit, false)
+		}
+		out, err := list()
 		if err != nil {
 			h.fail(w, "my-feed", err)
 			return
@@ -237,7 +244,7 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []db.NotificationEvent{})
 		return
 	}
-	out, err := h.DB.ListNotificationEventsForProjects(ctx, limit, projects)
+	out, err := h.DB.ListNotificationEventsForProjects(ctx, limit, projects, attention)
 	if err != nil {
 		h.fail(w, "my-feed: list", err)
 		return
@@ -246,7 +253,8 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // Feed returns the most recent notification events. ?limit=N (clamp
-// to 200) and ?unread=true narrow the result.
+// to 200), ?unread=true and ?attention=true (failures, warnings,
+// alerts, security, updates; no successes) narrow the result.
 //
 // Admin-only by design. The feed surfaces instance-wide events
 // (deploy outcomes across every project, node health, backup
@@ -267,7 +275,8 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	unread := r.URL.Query().Get("unread") == "true"
-	out, err := h.DB.ListNotificationEventsForUser(ctx, actingUserID(r), limit, unread)
+	attention := r.URL.Query().Get("attention") == "true"
+	out, err := h.DB.ListNotificationEventsForUser(ctx, actingUserID(r), limit, unread, attention)
 	if err != nil {
 		h.fail(w, "feed", err)
 		return
@@ -277,10 +286,13 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 
 // FeedUnread is the cheap counter the bell badge polls. Read state is
 // per user: one admin opening the bell no longer clears it for the rest.
+// ?attention=true counts only events that need action, so a stream of
+// "build succeeded" doesn't keep the badge lit.
 func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := notifCtx(r)
 	defer cancel()
-	n, err := h.DB.CountUnreadNotificationEventsForUser(ctx, actingUserID(r))
+	attention := r.URL.Query().Get("attention") == "true"
+	n, err := h.DB.CountUnreadNotificationEventsForUser(ctx, actingUserID(r), attention)
 	if err != nil {
 		h.fail(w, "unread count", err)
 		return
