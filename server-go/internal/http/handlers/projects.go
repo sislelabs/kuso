@@ -350,6 +350,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// a target pod for kubectl exec, and by future shell tab in the
 	// web UI. Slim summary — name, ready, container list.
 	r.Get("/api/projects/{project}/services/{service}/pods", h.ListPods)
+	// Health-check "Test path": GET one path on one of the service's own
+	// ready pods, from the server. Editor-gated like the settings it tests.
+	r.Post("/api/projects/{project}/services/{service}/healthcheck/test", h.TestHealthcheck)
 
 	r.Get("/api/projects/{project}/envs", h.ListEnvironments)
 	r.Get("/api/projects/{project}/envs/{env}", h.GetEnvironment)

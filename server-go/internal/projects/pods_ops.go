@@ -37,15 +37,10 @@ type PodList struct {
 	Pods      []PodSummary `json:"pods"`
 }
 
-// ListPods returns the pods backing a service's environment. env defaults
-// to "production" and accepts either the short form ("production",
-// "preview-pr-7") or the fully-qualified env CR name. Pod selection
-// mirrors logs.Tail: app.kubernetes.io/instance=<envName>.
-//
-// We require the env CR to exist before listing — otherwise a typo'd env
-// name would silently return zero pods, which is the same response as a
-// scaled-to-zero service, and the caller can't tell the difference.
-func (s *Service) ListPods(ctx context.Context, project, service, env string) (*PodList, error) {
+// resolveOwnedEnv resolves (project, service, env) to the env CR and its
+// namespace, and verifies the env CR really belongs to that project +
+// service.
+func (s *Service) resolveOwnedEnv(ctx context.Context, project, service, env string) (string, *kube.KusoEnvironment, error) {
 	if env == "" {
 		env = "production"
 	}
@@ -59,14 +54,14 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 	}
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, ErrNotFound
+			return "", nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("get env: %w", err)
+		return "", nil, fmt.Errorf("get env: %w", err)
 	}
 	// Tenancy check: the resolved env must actually belong to (project,
 	// service). Without this, a viewer of project-a can list pods for
@@ -77,8 +72,25 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 	// Strict form (as logs.Tail): a `!= ""` guard let an env CR with an
 	// empty spec.project/service pass for any project.
 	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
-		return nil, ErrNotFound
+		return "", nil, ErrNotFound
 	}
+	return ns, envCR, nil
+}
+
+// ListPods returns the pods backing a service's environment. env defaults
+// to "production" and accepts either the short form ("production",
+// "preview-pr-7") or the fully-qualified env CR name. Pod selection
+// mirrors logs.Tail: app.kubernetes.io/instance=<envName>.
+//
+// We require the env CR to exist before listing — otherwise a typo'd env
+// name would silently return zero pods, which is the same response as a
+// scaled-to-zero service, and the caller can't tell the difference.
+func (s *Service) ListPods(ctx context.Context, project, service, env string) (*PodList, error) {
+	ns, envCR, err := s.resolveOwnedEnv(ctx, project, service, env)
+	if err != nil {
+		return nil, err
+	}
+	envName := envCR.Name
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/instance=" + envName,
