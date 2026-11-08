@@ -8,3 +8,11 @@ import type { ReactNode } from "react";
 export function ReducedMotion({ children }: { children: ReactNode }) {
   return <MotionConfig reducedMotion="user">{children}</MotionConfig>;
 }
+
+// For scrollIntoView/scrollTo: an explicit behavior: "smooth" ignores the
+// CSS scroll-behavior override, so script-driven scrolls ask here.
+export function smoothScroll(): ScrollBehavior {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
+}
