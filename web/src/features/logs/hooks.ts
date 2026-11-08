@@ -122,6 +122,7 @@ export function useLogStream(
 
     const accept = createReplayFilter();
     let nextId = 0;
+    let lastArrival = 0;
     // Frames arrive in bursts (a 200-line backfill, a chatty build).
     // Buffer them and commit every ~50ms instead of one state update +
     // full-array copy per line.
@@ -203,9 +204,15 @@ export function useLogStream(
           };
           if (!accept(l)) return;
           const approx = !hasPreciseTimestamp(l.ts);
-          // Arrival time for imprecise frames: monotonic in arrival order,
+          // Arrival time for imprecise frames, never earlier than the
+          // previous line's (wall-clock steps can't reorder the column),
           // unlike the server's shared whole-second stamp.
-          pending.push({ ...l, id: nextId++, ts: approx ? new Date().toISOString() : (l.ts ?? ""), approx });
+          let ts = l.ts ?? "";
+          if (approx) {
+            lastArrival = Math.max(Date.now(), lastArrival);
+            ts = new Date(lastArrival).toISOString();
+          }
+          pending.push({ ...l, id: nextId++, ts, approx });
           if (timer === null) timer = setTimeout(flush, 50);
         } else if (f.type === "phase" && f.value) {
           setPhase(f.value);
