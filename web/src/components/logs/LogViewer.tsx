@@ -7,6 +7,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowDown,
+  ListFilter,
   Clock,
   Copy,
   CornerDownLeft,
@@ -23,6 +24,7 @@ import { useEnvironments } from "@/features/projects";
 import { serviceEnvOptions } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { AnsiText } from "./AnsiText";
 import { JsonSummary } from "./LogLineText";
@@ -52,6 +54,8 @@ export interface ViewLine {
   stream?: string;
   service?: string;
   env?: string;
+  // ts is only the arrival time (live frame without a real timestamp).
+  approx?: boolean;
   // The source object, used as the level-cache key.
   src: object;
 }
@@ -188,7 +192,7 @@ export function LogViewer({
   // ---- rows ---------------------------------------------------------------
   const rawLines: ViewLine[] = useMemo(() => {
     if (live) {
-      return stream.lines.map((l) => ({ key: `l${l.id}`, ts: l.ts, pod: l.pod, line: l.line, stream: l.stream, src: l }));
+      return stream.lines.map((l) => ({ key: `l${l.id}`, ts: l.ts, pod: l.pod, line: l.line, stream: l.stream, approx: l.approx, src: l }));
     }
     const out: ViewLine[] = [];
     const pages = archive.data?.pages ?? [];
@@ -220,6 +224,7 @@ export function LogViewer({
       const row: Row = {
         ...l,
         ts: p.appTs ?? l.ts,
+        approx: p.appTs ? false : l.approx,
         level: cont && prev ? prev.level : p.level,
         cont,
         json: p.json,
@@ -407,9 +412,15 @@ export function LogViewer({
   const withDate = !live && spanMs > 20 * 3_600_000;
   const filtersActive = view.levels.length > 0 || !!view.pod;
   const loading = live ? stream.connection === "connecting" && rows.length === 0 : archive.isPending;
+  const narrow = useNarrow();
+  const approxTimes = live && rows.some((r) => r.approx);
+  const announcement = useStreamAnnouncement(live, stream.connection, levelCounts.error);
 
   return (
     <div className={cn("flex min-h-0 flex-col gap-2", className)}>
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </div>
       {/* Row 1: search + range */}
       <div className="flex flex-wrap items-center gap-2">
         <form
@@ -439,7 +450,15 @@ export function LogViewer({
               }
             }}
             aria-label={live ? "Filter live logs" : "Search logs"}
-            placeholder={live ? "Filter live lines — Enter searches history" : "Search logs (substring, case-insensitive)"}
+            placeholder={
+              narrow
+                ? live
+                  ? "Filter lines"
+                  : "Search logs"
+                : live
+                  ? "Filter live lines — Enter searches history"
+                  : "Search logs (substring, case-insensitive)"
+            }
             spellCheck={false}
             autoComplete="off"
             className="h-8 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-primary)] pl-8 pr-16 font-mono text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] focus-visible:border-[var(--border-strong)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]/30"
@@ -524,16 +543,18 @@ export function LogViewer({
             view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : view.range.kind === "abs" ? "custom window" : ""
           }
           query={view.q}
+          approxTimes={approxTimes}
           refreshing={!live && archive.isFetching && !archive.isFetchingNextPage && !archive.isPending}
           onBackToLive={canStream && !live ? () => setRange("live") : undefined}
         />
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <div role="group" aria-label="Filter by level" className="inline-flex items-center gap-0.5">
+          <div role="group" aria-label="Filter by level" className="hidden items-center gap-0.5 sm:inline-flex">
             {LOG_LEVELS.map((l) => (
               <LevelChip key={l} level={l} count={levelCounts[l]} on={view.levels.includes(l)} onClick={() => toggleLevel(l)} />
             ))}
           </div>
+          <LevelPopover counts={levelCounts} levels={view.levels} onToggle={toggleLevel} onClear={() => setView({ levels: [] })} />
           {!live && envOptions.length > 1 && (
             <Select
               size="sm"
@@ -630,6 +651,8 @@ export function LogViewer({
                 setView({ q: "" });
               }}
               onWiden={(p) => setRange(p)}
+              absRange={view.range.kind === "abs" ? view.range : undefined}
+              onWidenAbs={(from, to) => setView({ range: { kind: "abs", from, to }, scrollTop: null })}
               onReconnect={stream.reconnect}
               onOpenDeployments={onOpenDeployments}
               currentPreset={view.range.kind === "preset" ? view.range.preset : ""}
@@ -681,6 +704,103 @@ export function LogViewer({
   );
 }
 
+const NARROW_QUERY = "(max-width: 639px)";
+function subscribeNarrow(fn: () => void): () => void {
+  const mq = window.matchMedia(NARROW_QUERY);
+  mq.addEventListener("change", fn);
+  return () => mq.removeEventListener("change", fn);
+}
+function useNarrow(): boolean {
+  return useSyncExternalStore(subscribeNarrow, () => window.matchMedia(NARROW_QUERY).matches, () => false);
+}
+
+const CONNECTION_ANNOUNCE: Partial<Record<StreamConnection, string>> = {
+  live: "Live log stream connected",
+  reconnecting: "Log stream dropped, reconnecting",
+  ended: "Log stream ended",
+  failed: "Couldn't connect to the log stream",
+};
+
+// useStreamAnnouncement feeds a polite live region: connection changes
+// right away, new error lines at most every 10s (never per line).
+function useStreamAnnouncement(live: boolean, connection: StreamConnection, errors: number): string {
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    if (live) setMsg(CONNECTION_ANNOUNCE[connection] ?? "");
+  }, [live, connection]);
+  const errorsRef = useRef(errors);
+  errorsRef.current = errors;
+  useEffect(() => {
+    if (!live || connection !== "live") return;
+    // The first tick only sets the baseline, so the replayed backlog
+    // isn't announced as new.
+    let seen: number | null = null;
+    const id = setInterval(() => {
+      const n = errorsRef.current;
+      if (seen !== null && n > seen) {
+        const d = n - seen;
+        setMsg(`${d} new error ${d === 1 ? "line" : "lines"} in the log stream`);
+      }
+      seen = n;
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [live, connection]);
+  return msg;
+}
+
+// The level chips collapse into one popover on phones.
+function LevelPopover({
+  counts,
+  levels,
+  onToggle,
+  onClear,
+}: {
+  counts: Record<LogLevel, number>;
+  levels: LogLevel[];
+  onToggle: (l: LogLevel) => void;
+  onClear: () => void;
+}) {
+  const label = levels.length === 0 ? "All levels" : levels.map((l) => l[0].toUpperCase() + l.slice(1)).join(", ");
+  return (
+    <Popover>
+      <PopoverTrigger
+        className={cn(
+          "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs sm:hidden",
+          levels.length
+            ? "border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+            : "border-[var(--border-subtle)] text-[var(--text-secondary)]",
+        )}
+        aria-label={`Filter by level: ${label}`}
+      >
+        <ListFilter aria-hidden className="h-3.5 w-3.5" />
+        {label}
+        {counts.error > 0 && (
+          <span className="inline-flex items-center gap-1 tabular-nums text-[var(--text-tertiary)]">
+            <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />
+            {counts.error}
+          </span>
+        )}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 gap-0.5 p-1">
+        <div role="group" aria-label="Filter by level" className="flex flex-col">
+          {LOG_LEVELS.map((l) => (
+            <LevelChip key={l} level={l} count={counts[l]} on={levels.includes(l)} onClick={() => onToggle(l)} block />
+          ))}
+        </div>
+        {levels.length > 0 && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="mt-0.5 rounded-md border-t border-[var(--border-subtle)] px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            Show all levels
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function rowDomId(key: string): string {
   return `logrow-${key}`;
 }
@@ -723,19 +843,26 @@ const LogRow = memo(function LogRow({
       }}
       className={cn(
         "group relative flex cursor-pointer gap-x-3 pl-3 pr-3 max-sm:flex-wrap [contain-intrinsic-size:auto_1.55em] [content-visibility:auto] hover:bg-[var(--bg-tertiary)]/60",
-        !r.cont && "mt-px",
+        !r.cont && "mt-px max-sm:pt-1",
         meta.row,
         selected && "bg-[var(--bg-tertiary)] outline outline-1 -outline-offset-1 outline-[var(--border-default)] hover:bg-[var(--bg-tertiary)]",
       )}
     >
       <span aria-hidden className={cn("absolute bottom-0 left-0 top-0 w-[3px]", meta.bar, r.cont && "opacity-50")} />
       <span
-        className={cn("shrink-0 select-none tabular-nums text-[var(--text-tertiary)]", withDate ? "w-[10.5rem]" : "w-[6.5rem]", r.cont && "max-sm:hidden")}
-        title={r.ts}
+        className={cn(
+          "shrink-0 select-none tabular-nums text-[var(--text-tertiary)] max-sm:w-auto",
+          withDate ? "w-[10.5rem]" : "w-[6.5rem]",
+          r.cont && "max-sm:hidden",
+        )}
+        title={r.approx ? `Received ${fmtClock(r.ts, true)} — this kuso server doesn't send log timestamps` : r.ts}
       >
-        {r.cont ? "" : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
+        {r.cont ? "" : r.approx ? <ArrivalCell ts={r.ts} /> : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
       </span>
-      <span className={cn("w-7 shrink-0 select-none text-xs font-semibold leading-[1.85]", meta.text, r.cont && "max-sm:hidden")} aria-label={r.level === "none" ? undefined : `level ${r.level}`}>
+      <span
+        className={cn("w-7 shrink-0 select-none text-xs font-semibold leading-[1.85] max-sm:w-auto", meta.text, (r.cont || r.level === "none") && "max-sm:hidden")}
+        aria-label={r.level === "none" ? undefined : `level ${r.level}`}
+      >
         {r.cont ? "" : meta.label}
       </span>
       {serviceLabel && r.service !== undefined && (
@@ -761,6 +888,47 @@ const LogRow = memo(function LogRow({
   );
 });
 
+// One shared 5s clock for every arrival-time cell, so only those cells
+// re-render as they age (not the whole list).
+let ageNow = Date.now();
+const ageListeners = new Set<() => void>();
+let ageTimer: ReturnType<typeof setInterval> | null = null;
+function subscribeAge(fn: () => void): () => void {
+  ageListeners.add(fn);
+  if (!ageTimer) {
+    ageNow = Date.now();
+    ageTimer = setInterval(() => {
+      ageNow = Date.now();
+      ageListeners.forEach((l) => l());
+    }, 5_000);
+  }
+  return () => {
+    ageListeners.delete(fn);
+    if (ageListeners.size === 0 && ageTimer) {
+      clearInterval(ageTimer);
+      ageTimer = null;
+    }
+  };
+}
+
+export function fmtAge(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 5) return "now";
+  if (s < 60) return `−${s}s`;
+  if (s < 3600) return `−${Math.floor(s / 60)}m ${pad2(s % 60)}s`;
+  return `−${Math.floor(s / 3600)}h ${pad2(Math.floor((s % 3600) / 60))}m`;
+}
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+// Arrival age ("now", "−42s") for a line the server sent without a real
+// timestamp — honest ordering instead of a fake shared HH:MM:SS.000.
+function ArrivalCell({ ts }: { ts: string }) {
+  const now = useSyncExternalStore(subscribeAge, () => ageNow, () => ageNow);
+  return <span className="italic">{fmtAge(now - Date.parse(ts))}</span>;
+}
+
 // HH:MM:SS with the milliseconds de-emphasised.
 function ClockCell({ ts }: { ts: string }) {
   const s = fmtClock(ts, false);
@@ -772,7 +940,19 @@ function ClockCell({ ts }: { ts: string }) {
   );
 }
 
-function LevelChip({ level, count, on, onClick }: { level: Exclude<LogLevel, "none">; count: number; on: boolean; onClick: () => void }) {
+function LevelChip({
+  level,
+  count,
+  on,
+  onClick,
+  block,
+}: {
+  level: Exclude<LogLevel, "none">;
+  count: number;
+  on: boolean;
+  onClick: () => void;
+  block?: boolean;
+}) {
   const names = { error: "Error", warn: "Warn", info: "Info", debug: "Debug" } as const;
   const dot = { error: "bg-[var(--error)]", warn: "bg-[var(--warning)]", info: "bg-[var(--info)]", debug: "bg-[var(--text-tertiary)]" }[level];
   return (
@@ -782,7 +962,8 @@ function LevelChip({ level, count, on, onClick }: { level: Exclude<LogLevel, "no
       onClick={onClick}
       title={`${on ? "Hide" : "Show only"} ${names[level].toLowerCase()} lines`}
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
+        "inline-flex items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
+        block ? "h-9 w-full" : "h-7",
         on
           ? "border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
           : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
@@ -790,7 +971,7 @@ function LevelChip({ level, count, on, onClick }: { level: Exclude<LogLevel, "no
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", dot)} />
       {names[level]}
-      <span className="tabular-nums text-[var(--text-tertiary)]">{count}</span>
+      <span className={cn("tabular-nums text-[var(--text-tertiary)]", block && "ml-auto")}>{count}</span>
     </button>
   );
 }
@@ -838,9 +1019,11 @@ function StatusLine({
   total,
   rangeText,
   query,
+  approxTimes,
   refreshing,
   onBackToLive,
 }: {
+  approxTimes?: boolean;
   live: boolean;
   connection: StreamConnection;
   error: string | null;
@@ -868,10 +1051,18 @@ function StatusLine({
               ? { dot: "bg-[var(--text-tertiary)]", text: "Stream ended" }
               : { dot: "bg-[var(--error)]", text: "Disconnected" };
     return (
-      <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--text-secondary)]" aria-live="polite">
+      <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--text-secondary)]">
         <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", state.dot)} />
         <span className="font-medium text-[var(--text-primary)]">{state.text}</span>
         <span className="text-[var(--text-tertiary)]">· {shown}</span>
+        {approxTimes && (
+          <span
+            className="hidden truncate text-[var(--text-tertiary)] sm:inline"
+            title="This kuso server sends live lines without their log timestamps, so rows show how long ago they arrived. Upgrade kuso for exact times; History always has them."
+          >
+            · arrival times
+          </span>
+        )}
         {(connection === "reconnecting" || connection === "ended" || connection === "failed") && (
           <button type="button" onClick={onReconnect} className="inline-flex items-center gap-1 rounded px-1 text-[var(--text-primary)] underline-offset-2 hover:underline">
             <RefreshCw className="h-3 w-3" />
@@ -933,7 +1124,11 @@ function EmptyLogs({
   onWiden,
   onReconnect,
   onOpenDeployments,
+  absRange,
+  onWidenAbs,
 }: {
+  absRange?: { from: string; to: string };
+  onWidenAbs?: (from: string, to: string) => void;
   live: boolean;
   connection: StreamConnection;
   notice: string | null;
@@ -981,6 +1176,40 @@ function EmptyLogs({
         <Clock className="h-3.5 w-3.5" /> Show last 24 hours
       </Button>,
     );
+  } else if (absRange) {
+    const span = `${fmtClock(absRange.from, false).slice(0, 8)}–${fmtClock(absRange.to, false).slice(0, 8)}`;
+    title = query ? `No matches for “${query}” between ${span}` : `No logs between ${span}`;
+    body = query
+      ? "Search is a case-insensitive substring match. The line may have landed just outside this window."
+      : "Nothing was logged in this window. Widen it to see what happened around that moment.";
+    const from = Date.parse(absRange.from);
+    const to = Date.parse(absRange.to);
+    if (onWidenAbs && !Number.isNaN(from) && !Number.isNaN(to)) {
+      const mid = (from + to) / 2;
+      const half = Math.max(10 * 60_000, (to - from) * 2.5);
+      actions.push(
+        <Button
+          key="wa"
+          size="sm"
+          variant="outline"
+          onClick={() => onWidenAbs(new Date(mid - half).toISOString(), new Date(Math.min(Date.now(), mid + half)).toISOString())}
+        >
+          Widen to ±{Math.round(half / 60_000)} min
+        </Button>,
+      );
+    }
+    actions.push(
+      <Button key="24" size="sm" variant="outline" onClick={() => onWiden("24h")}>
+        Last 24 hours
+      </Button>,
+    );
+    if (query) {
+      actions.push(
+        <Button key="cq" size="sm" variant="ghost" onClick={onClearQuery}>
+          Clear search
+        </Button>,
+      );
+    }
   } else {
     title = query ? `No matches for “${query}” in the last ${rangeText}` : `No logs in the last ${rangeText}`;
     body = query

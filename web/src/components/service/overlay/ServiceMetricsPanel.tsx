@@ -7,7 +7,9 @@ import type { KusoEnvironment } from "@/types/projects";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { TimeSeriesChart } from "@/components/shared/s3-TimeSeriesChart";
 import type { ChartMarker, ChartThreshold, Point } from "@/components/shared/s3-TimeSeriesChart";
-import { TimeRange, rangeLabel, rangeToMs } from "@/components/logs/TimeRange";
+import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
+import { openLogsAt } from "@/components/logs/logViewStore";
+import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
 import { MEMORY_WARN_RATIO, memoryPressure, parseMemoryQuantity, useBuilds, useService } from "@/features/services";
 import {
   mergeSamples,
@@ -33,12 +35,18 @@ interface Props {
   env?: KusoEnvironment;
   // Per-pod memory limit (k8s quantity) from the service spec.
   memoryLimit?: string;
+  // Switches the overlay to Logs; a chart click hands it the time window
+  // first. Without it charts aren't clickable.
+  onViewLogs?: () => void;
 }
+
+const rangeToMs = (r: string) => timeRangeMs(r) ?? 0;
+const rangeLabel = timeRangeSpan;
 
 // Shared across mounts so the range survives tab switches.
 let lastRange: string = "1h";
 
-export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Props) {
+export function ServiceMetricsPanel({ project, service, env, memoryLimit, onViewLogs }: Props) {
   const [range, setRangeState] = useState<string>(lastRange);
   const setRange = (r: string) => {
     lastRange = r;
@@ -123,8 +131,26 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
     ? `last ${rangeLabel(histRange)} · ${podCount} replica${podCount === 1 ? "" : "s"} · server-sampled every 30s`
     : `live · ${podCount} replica${podCount === 1 ? "" : "s"} · sampled every 15s while this tab is open`;
 
-  const [trafficHover, setTrafficHover] = useState<number | null>(null);
-  const [resHover, setResHover] = useState<number | null>(null);
+  // One crosshair time for every chart on the tab.
+  const [hoverT, setHoverT] = useState<number | null>(null);
+  const deploysInRange = markers.filter((m) => m.t >= domain[0] && m.t <= domain[1]).length;
+
+  // Logs around the picked moment: one sample step either side, at
+  // least a minute, so the spike's own lines are in view.
+  const pick = onViewLogs
+    ? (t: number, step: number) => {
+        const half = Math.max(60_000, step);
+        openLogsAt(project, service, {
+          q: "",
+          range: { kind: "abs", from: new Date(t - half).toISOString(), to: new Date(Math.min(Date.now(), t + half)).toISOString() },
+          levels: [],
+          pod: "",
+        });
+        onViewLogs();
+      }
+    : undefined;
+  const pickTraffic = pick ? (t: number) => pick(t, stepMs) : undefined;
+  const pickHint = pick ? "Click to open logs from this moment" : undefined;
 
   if (!envName) {
     return (
@@ -144,18 +170,24 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Metrics</h3>
           <p className="text-xs text-[var(--text-secondary)]">
             <span className="font-mono">{envName}</span>
-            {markers.some((m) => m.t >= domain[0]) && <> · ◆ marks a deploy</>}
           </p>
         </div>
-        <TimeRange presets={RANGES} value={range} onChange={setRange} aria-label="Metrics time range" />
+        <div className="flex flex-wrap items-center gap-2">
+          <DeployLegend count={deploysInRange} />
+          <TimeRangePicker presets={RANGES} value={range} onChange={setRange} ariaLabel="Metrics time range" />
+        </div>
       </div>
 
       <section aria-labelledby="m-traffic" className="space-y-3">
-        <SectionHeading id="m-traffic" title="Traffic" note={`last ${rangeLabel(range)} · from the ingress`} />
+        <SectionHeading
+          id="m-traffic"
+          title="Traffic"
+          note={`last ${rangeLabel(range)} · from the ingress${pick ? " · click a chart to see logs from that moment" : ""}`}
+        />
         {traffic.isError ? (
           <QueryErrorState what="traffic metrics" error={traffic.error} onRetry={() => void traffic.refetch()} />
         ) : (
-          <div className="grid gap-3 @2xl:grid-cols-2">
+          <div className="grid gap-3 @2xl:grid-cols-3">
             <ChartCard
               title="Requests"
               value={reqStats.avg === null ? "—" : fmtRate(reqStats.avg)}
@@ -172,8 +204,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
                 gapMs={stepMs * 2.5}
                 markers={markers}
                 minYMax={0.1}
-                hoverT={trafficHover}
-                onHoverT={setTrafficHover}
+                hoverT={hoverT}
+                onHoverT={setHoverT}
+                onPick={pickTraffic}
+                pickHint={pickHint}
                 dim={trafficDim}
               />
             </ChartCard>
@@ -201,8 +235,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
                 gapMs={stepMs * 2.5}
                 markers={markers}
                 minYMax={1}
-                hoverT={trafficHover}
-                onHoverT={setTrafficHover}
+                hoverT={hoverT}
+                onHoverT={setHoverT}
+                onPick={pickTraffic}
+                pickHint={pickHint}
                 dim={trafficDim}
               />
             </ChartCard>
@@ -224,8 +260,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
                 gapMs={stepMs * 2.5}
                 markers={markers}
                 minYMax={10}
-                hoverT={trafficHover}
-                onHoverT={setTrafficHover}
+                hoverT={hoverT}
+                onHoverT={setHoverT}
+                onPick={pickTraffic}
+                pickHint={pickHint}
                 dim={trafficDim}
               />
             </ChartCard>
@@ -251,8 +289,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
             memWarn={memWarn}
             pressure={pressure}
             markers={markers}
-            hoverT={resHover}
-            onHoverT={setResHover}
+            hoverT={hoverT}
+            onHoverT={setHoverT}
+            onPick={pick ? (t) => pick(t, resGapMs / 2.5) : undefined}
+            pickHint={pickHint}
             perPod={current.map((p) => ({ pod: p.pod, cpu: p.cpuMillicores, mem: p.memBytes }))}
           />
         )}
@@ -276,8 +316,12 @@ function ResourceCharts({
   markers,
   hoverT,
   onHoverT,
+  onPick,
+  pickHint,
   perPod,
 }: {
+  onPick?: (t: number) => void;
+  pickHint?: string;
   samples: ResourceSample[];
   now: number;
   rangeMs: number;
@@ -322,7 +366,7 @@ function ResourceCharts({
   }
 
   return (
-    <div className="grid gap-3 @2xl:grid-cols-2">
+    <div className="grid gap-3 @lg:grid-cols-2">
       <ChartCard
         title="CPU"
         value={last ? fmtCpu(last.cpuMillicores) : "—"}
@@ -342,6 +386,8 @@ function ResourceCharts({
           minYMax={10}
           hoverT={hoverT}
           onHoverT={onHoverT}
+          onPick={onPick}
+          pickHint={pickHint}
         />
       </ChartCard>
       <ChartCard
@@ -372,9 +418,27 @@ function ResourceCharts({
           tickUnit={memTickUnit(Math.max(memLimit ? memLimit * n : 0, ...samples.map((s) => s.memBytes)))}
           hoverT={hoverT}
           onHoverT={onHoverT}
+          onPick={onPick}
+          pickHint={pickHint}
         />
       </ChartCard>
     </div>
+  );
+}
+
+// The deploy-marker key: what ◆ on the charts means, and how many fall
+// in the selected range.
+function DeployLegend({ count }: { count: number }) {
+  return (
+    <span
+      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2 text-xs text-[var(--text-secondary)]"
+      title="Each ◆ and dashed line marks a successful deploy. Hover one for its commit."
+    >
+      <svg aria-hidden width="10" height="10" viewBox="0 0 10 10" className="shrink-0">
+        <path d="M5,0 L10,5 L5,10 L0,5 Z" fill="var(--text-primary)" />
+      </svg>
+      {count === 0 ? "No deploys in range" : `${count} ${count === 1 ? "deploy" : "deploys"}`}
+    </span>
   );
 }
 

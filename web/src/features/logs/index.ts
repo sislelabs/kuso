@@ -1,4 +1,4 @@
-export { useLogStream, createReplayFilter } from "./hooks";
+export { useLogStream, createReplayFilter, hasPreciseTimestamp } from "./hooks";
 export type { LogFrame, LogLine, UseLogStreamResult, StreamConnection } from "./hooks";
 export { searchArchive, fetchLogContext, getErrorDetail, fetchErrorTrace } from "./api";
 export type {

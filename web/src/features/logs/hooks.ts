@@ -25,6 +25,16 @@ export interface LogLine {
   line: string;
   ts: string;
   stream?: string;
+  // The frame carried no real timestamp: older servers stamp every frame
+  // with the second they read it (no fraction), so the whole replayed
+  // backlog shares one instant. `ts` is then only the arrival time.
+  approx?: boolean;
+}
+
+// hasPreciseTimestamp: kubelet stamps are RFC3339Nano with a fraction;
+// the old server's receipt stamp is whole-second RFC3339.
+export function hasPreciseTimestamp(ts: string | undefined): boolean {
+  return !!ts && /T\d\d:\d\d:\d\d\.\d/.test(ts);
 }
 
 // connection is the reader-facing state of the stream: "reconnecting"
@@ -192,7 +202,10 @@ export function useLogStream(
             stream: f.stream,
           };
           if (!accept(l)) return;
-          pending.push({ ...l, id: nextId++, ts: l.ts ?? new Date().toISOString() });
+          const approx = !hasPreciseTimestamp(l.ts);
+          // Arrival time for imprecise frames: monotonic in arrival order,
+          // unlike the server's shared whole-second stamp.
+          pending.push({ ...l, id: nextId++, ts: approx ? new Date().toISOString() : (l.ts ?? ""), approx });
           if (timer === null) timer = setTimeout(flush, 50);
         } else if (f.type === "phase" && f.value) {
           setPhase(f.value);
