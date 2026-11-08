@@ -4,7 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, AlertTriangle } from "lucide-react";
+import { X, AlertTriangle, AlertCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { claimEscape } from "@/lib/escape-layer";
 
 interface Props {
@@ -169,11 +170,22 @@ export function ConfirmDialog({
             >
             <header className="flex shrink-0 items-start justify-between gap-3 px-5 pt-5 pb-1">
               <div className="flex items-center gap-2.5">
-                {destructive && (
-                  <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--danger-subtle)]">
+                {/* Non-destructive confirms all touch running workloads
+                    (rollback, redeploy, restart, revert), so they share one
+                    caution treatment; destructive ones stay red. */}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "flex size-7 shrink-0 items-center justify-center rounded-md",
+                    destructive ? "bg-[var(--danger-subtle)]" : "bg-[var(--warning-subtle)]",
+                  )}
+                >
+                  {destructive ? (
                     <AlertTriangle className="size-4 text-[var(--danger)]" />
-                  </span>
-                )}
+                  ) : (
+                    <AlertCircle className="size-4 text-[var(--warning)]" />
+                  )}
+                </span>
                 <h2 id={titleId} className="text-base font-semibold tracking-tight text-[var(--text-primary)]">{title}</h2>
               </div>
               <button

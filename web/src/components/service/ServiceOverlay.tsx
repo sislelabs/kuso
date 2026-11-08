@@ -757,7 +757,7 @@ export function ServiceOverlay({
                     if (specOff) {
                       return (
                         <span
-                          className="inline-flex items-center gap-1 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-0.5 text-xs text-[var(--warning)]"
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
                           title={`Spec out of sync on: ${d.specPending.join(", ")}`}
                         >
                           Pending changes
@@ -1228,7 +1228,7 @@ function RestartControl({
         title={canWrite ? (title ?? `Restart the ${envGroup} pods`) : "Requires editor access on this project"}
         className={
           variant === "chip"
-            ? "inline-flex items-center gap-1 rounded-md border border-[var(--warning)]/45 bg-[var(--warning-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--warning)] hover:brightness-110 disabled:opacity-50"
+            ? "inline-flex items-center gap-1 rounded-md border border-[var(--info)]/45 bg-[var(--info-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--info)] hover:brightness-110 disabled:opacity-50"
             : headerButtonClass
         }
       >
