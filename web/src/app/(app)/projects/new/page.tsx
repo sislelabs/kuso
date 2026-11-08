@@ -1,79 +1,268 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import {
+  Archive,
+  ArrowRight,
+  Check,
+  ChevronRight,
+  FileUp,
+  FolderPlus,
+  GitBranch,
+  Globe,
+  Rocket,
+  Store,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useCreateProject } from "@/features/projects";
-import { friendlyApiError, projectNameError } from "@/features/projects/names";
+import { projectQueryKey, useCreateProject, useProjects } from "@/features/projects";
+import {
+  friendlyApiError,
+  projectNameError,
+  projectSlugFromRepo,
+  serviceSlugError,
+  SERVICE_DISPLAY_NAME_RE,
+} from "@/features/projects/names";
 import { buildCreateProjectBody, DEFAULT_PREVIEW_TTL_DAYS } from "@/features/projects/createProjectBody";
+import { buildCreateServiceBody } from "@/features/services/createServiceBody";
+import { createServiceWithEnv } from "@/features/services/createServiceFlow";
+import { slugifyServiceName } from "@/features/services/slug";
 import { useInstallations } from "@/features/github";
 import { HostClashHint } from "@/components/shared/HostClashHint";
-import { ImportArchiveCard } from "./ImportArchiveCard";
+import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
-import { toast } from "sonner";
-import { Plus, ArrowRight, Globe, Store, FileUp } from "lucide-react";
+import { ImportArchiveCard } from "./ImportArchiveCard";
+import { FormField, SegmentedControl } from "../[project]/services/new/FormField";
+import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "../[project]/services/new/RepoPicker";
+import { useRepoDetection } from "../[project]/services/new/useRepoDetection";
+import { AccessCheck, RuntimeExplainer } from "../[project]/services/new/RepoInsights";
+import { EnvPastePanel, useDotenv } from "../[project]/services/new/EnvPastePanel";
+import { reportCreateOutcome } from "../[project]/services/new/reportCreateOutcome";
 
-// NewProjectPage creates an empty project — just a name and optional
-// base domain. Repos attach later as services (each service owns its
-// own repo). The old combined wizard tried to do everything in one
-// step, which conflated "the project" with "this one repo" and made
-// multi-repo projects impossible.
+type Secondary = "archive" | "empty" | null;
+
+const RUNTIMES = [
+  { value: "dockerfile", label: "Dockerfile" },
+  { value: "nixpacks", label: "Nixpacks" },
+  { value: "static", label: "Static" },
+  { value: "buildpacks", label: "Buildpacks" },
+] as const;
+
+const inputClass = "h-9 text-[13px]";
+const monoInputClass = "h-9 font-mono text-[13px]";
+
+// defaultServiceName keeps the first service named after the project
+// (so it gets the project's bare host) unless that name doesn't fit the
+// 53-char Helm release budget, in which case "web".
+function defaultServiceName(project: string, repoName: string): string {
+  const candidate = project || slugifyServiceName(repoName);
+  if (candidate && !serviceSlugError(project || "x", slugifyServiceName(candidate))) return candidate;
+  return "web";
+}
+
+// NewProjectPage leads with importing a Git repo (project + first
+// service + first build in one step). Templates, compose and archive
+// imports and an empty project sit below as secondary options.
 export default function NewProjectPage() {
   const router = useRouter();
+  const qc = useQueryClient();
   const create = useCreateProject();
-  // The compose importer is admin-only server-side.
+  const projects = useProjects();
+  // The compose and archive importers are admin-only server-side.
   const isAdmin = useCan(Perms.SettingsAdmin);
+  const repoSources = useRepoSources();
+  const installations = useInstallations({ enabled: isAdmin });
+  const instanceDomain = useInstanceDomain() || "kuso.example.com";
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const taken = useMemo(() => new Set((projects.data ?? []).map((p) => p.metadata.name)), [projects.data]);
+
+  // Shared by both create paths (only one is ever submitted).
   const [baseDomain, setBaseDomain] = useState("");
-  // Previews default to enabled — most users want PR-deploy URLs. We
-  // surface the toggle so it's not a hidden default; the previous
-  // version hardcoded enabled:true and users got surprise preview
-  // envs on their first PR.
   const [previewsEnabled, setPreviewsEnabled] = useState(true);
   const [previewsTTLDays, setPreviewsTTLDays] = useState("");
   const [namespace, setNamespace] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // ---- Repo-first path ----
+  const [picked, setPicked] = useState<PickedRepo | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projectNameTouched, setProjectNameTouched] = useState(false);
+  const [serviceName, setServiceName] = useState("");
+  const [serviceNameTouched, setServiceNameTouched] = useState(false);
+  const [path, setPath] = useState("");
+  const [runtime, setRuntime] = useState("");
+  const [port, setPort] = useState("");
+  const [buildOpen, setBuildOpen] = useState(false);
+  const [envOpen, setEnvOpen] = useState(false);
+  const [envText, setEnvText] = useState("");
+  const env = useDotenv(envText);
+  const [importErrors, setImportErrors] = useState<{ project?: string; service?: string; env?: string }>({});
+  const importNameRef = useRef<HTMLInputElement>(null);
+  const detection = useRepoDetection(picked, path, (rt, p) => {
+    setRuntime(rt);
+    if (p) setPort(String(p));
+  });
+
+  const repoName = picked ? (picked.repo.fullName.split("/").pop() ?? "") : "";
+
+  // Re-derive the project name when the taken list arrives, until edited.
+  useEffect(() => {
+    if (!picked || projectNameTouched) return;
+    setProjectName(projectSlugFromRepo(repoName, taken));
+  }, [picked, repoName, taken, projectNameTouched]);
+  useEffect(() => {
+    if (!picked || serviceNameTouched) return;
+    setServiceName(defaultServiceName(projectName, repoName));
+  }, [picked, projectName, repoName, serviceNameTouched]);
+
+  const onPick = (p: PickedRepo) => {
+    setPicked(p);
+    setProjectNameTouched(false);
+    setServiceNameTouched(false);
+    setImportErrors({});
+    setFormError(null);
+    setSecondary(null);
+  };
+  const unpick = () => {
+    setPicked(null);
+    setPath("");
+    setRuntime("");
+    setPort("");
+    setImportErrors({});
+  };
+
+  const projectNameProblem = (n: string): string | null =>
+    projectNameError(n) ?? (taken.has(n) ? `A project named "${n}" already exists.` : null);
+  const serviceSlug = slugifyServiceName(serviceName);
+  const serviceProblem = (): string | null => {
+    const n = serviceName.trim();
+    if (!n) return "Service name is required.";
+    if (!serviceSlug) return "Name needs at least one letter or digit.";
+    if (!SERVICE_DISPLAY_NAME_RE.test(n)) return "Use letters, digits, spaces and dashes only (max 60).";
+    return serviceSlugError(projectName.trim() || "x", serviceSlug);
+  };
+  const liveProjectError = projectNameTouched && projectName ? projectNameProblem(projectName.trim()) : null;
+
+  const onImport = async () => {
+    if (!picked) return;
+    const pName = projectName.trim();
+    const errs = {
+      project: projectNameProblem(pName) ?? undefined,
+      service: serviceProblem() ?? undefined,
+      env: env.errors.length > 0 ? `${env.errors.length === 1 ? "A line" : `${env.errors.length} lines`} in the .env can't be read; fix or remove ${env.errors.length === 1 ? "it" : "them"}.` : undefined,
+    };
+    setImportErrors(errs);
+    if (errs.project) {
+      importNameRef.current?.focus();
+      return;
+    }
+    if (errs.service) {
+      setBuildOpen(true);
+      return;
+    }
+    if (errs.env) {
+      setEnvOpen(true);
+      return;
+    }
+    const repoURL = pickedRepoURL(picked);
+    const branch = picked.repo.defaultBranch;
+    const installationId = picked.byUrl ? 0 : picked.installationId;
+    const pBody = buildCreateProjectBody({
+      name: pName,
+      description: `Imported from ${picked.repo.fullName}`,
+      baseDomain,
+      namespace,
+      repoURL,
+      repoBranch: branch,
+      installationId,
+      previewsEnabled,
+      previewsTTLDays,
+    });
+    if ("error" in pBody) {
+      setFormError(pBody.error);
+      setAdvancedOpen(true);
+      return;
+    }
+    setFormError(null);
+    setSubmitting(true);
+    try {
+      await create.mutateAsync(pBody);
+    } catch (err) {
+      toast.error(friendlyApiError(err, "Failed to create project"));
+      setSubmitting(false);
+      return;
+    }
+    const sBody = buildCreateServiceBody({
+      source: "repo",
+      name: serviceName,
+      repo: { url: repoURL, branch, path, token: picked.byUrl?.token, installationId },
+      projectRepo: { url: repoURL, defaultBranch: branch },
+      kind: "web",
+      runtime: runtime || "nixpacks",
+      port,
+    });
+    const projectHref = `/projects/${encodeURIComponent(pName)}`;
+    try {
+      const out = await createServiceWithEnv(pName, sBody, { envVars: env.vars });
+      await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
+      reportCreateOutcome(out, `${pName}/${sBody.name}`, branch);
+      const tab = out.envFailed.length > 0 ? "variables" : "deployments";
+      router.replace(`${projectHref}?service=${encodeURIComponent(sBody.name)}&tab=${tab}`);
+    } catch (err) {
+      // The project exists; send the user to finish the service there
+      // rather than leaving them on a form that would now 409.
+      toast.error(
+        `Project ${pName} was created, but its service wasn't: ${friendlyApiError(err, "unknown error")}. Add the service again below.`,
+        { duration: Infinity, closeButton: true },
+      );
+      router.replace(`${projectHref}/services/new`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ---- Secondary paths ----
+  const [secondary, setSecondary] = useState<Secondary>(null);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [repoURL, setRepoURL] = useState("");
   const [repoBranch, setRepoBranch] = useState("");
   const [installationId, setInstallationId] = useState(0);
-  const [formError, setFormError] = useState<string | null>(null);
-  const installations = useInstallations();
-  const [submitting, setSubmitting] = useState(false);
-  // Inline validation for the name field — shown under the input and
-  // marked via aria-invalid, instead of a toast that auto-dismisses
-  // before the user finds the offending field. Toasts stay reserved
-  // for server-side failures.
   const [nameError, setNameError] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const emptyRef = useRef<HTMLDivElement>(null);
 
-  // Post-login draft restore. If the user was mid-create when their
-  // session expired (-> /login -> bounced back here), repopulate the
-  // text fields they'd already typed so they don't have to retype
-  // everything. Drafts older than 30 min are dropped by restoreFormDraft.
+  // Post-login draft restore: if the session expired mid-create (->
+  // /login -> back here), reopen the empty-project form with what was
+  // typed. Drafts older than 30 min are dropped by restoreFormDraft.
   useEffect(() => {
     const draft = restoreFormDraft();
     if (!draft) return;
+    if (draft.name || draft.description || draft.baseDomain) setSecondary("empty");
     if (draft.name) setName(draft.name);
     if (draft.description) setDescription(draft.description);
-    if (draft.baseDomain) setBaseDomain(draft.baseDomain);
+    if (draft.baseDomain) {
+      setBaseDomain(draft.baseDomain);
+      setAdvancedOpen(true);
+    }
   }, []);
 
-  const instanceDomain = useInstanceDomain() || "kuso.example.com";
-  // A concrete "web" service reads better than a bracketed placeholder.
-  const exampleService = "web";
-  const previewProject = name.trim() || "my-product";
-  const exampleHost = defaultServiceHost(exampleService, previewProject, baseDomain, instanceDomain);
-  const sameNameHost = defaultServiceHost(previewProject, previewProject, baseDomain, instanceDomain);
+  useEffect(() => {
+    if (secondary) emptyRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [secondary]);
 
-  const onCreate = async (e: React.FormEvent) => {
+  const onCreateEmpty = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    const invalid = projectNameError(trimmed);
+    const invalid = projectNameProblem(trimmed);
     if (invalid) {
       setNameError(invalid);
       nameInputRef.current?.focus();
@@ -93,6 +282,7 @@ export default function NewProjectPage() {
     });
     if ("error" in body) {
       setFormError(body.error);
+      setAdvancedOpen(true);
       return;
     }
     setFormError(null);
@@ -108,255 +298,639 @@ export default function NewProjectPage() {
     }
   };
 
+  const advancedProps = {
+    open: advancedOpen,
+    onToggle: () => setAdvancedOpen((o) => !o),
+    projectName: (secondary === "empty" ? name : projectName).trim(),
+    serviceName: secondary === "empty" ? "web" : serviceSlug || "web",
+    instanceDomain,
+    baseDomain,
+    setBaseDomain,
+    namespace,
+    setNamespace,
+    previewsEnabled,
+    setPreviewsEnabled,
+    previewsTTLDays,
+    setPreviewsTTLDays,
+  };
+
   return (
-    <div className="mx-auto max-w-xl p-6 lg:p-8">
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 lg:py-10">
       <header className="mb-6">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">New project</h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          A project groups services. Each service can come from its own GitHub repo.
+          Import a Git repository and kuso builds and deploys it. A project can hold more services and
+          databases later.
         </p>
       </header>
 
-      {/* Two ways to start: a curated one-click app, or an empty project
-          you fill with your own services. The marketplace lives here (in
-          the create flow) rather than the global nav. */}
-      <Link
-        href="/marketplace"
-        className="group mb-4 flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 transition hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)]"
+      {/* Primary path: import a repo. */}
+      <section
+        aria-labelledby="import-heading"
+        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
       >
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
-          <Store className="h-4 w-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-medium text-[var(--text-primary)]">
-            Start from a template
-          </span>
-          <span className="block text-[12px] text-[var(--text-secondary)]">
-            Deploy a curated app (Gitea, Metabase, Plausible…) in one click.
-          </span>
-        </span>
-        <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
-      </Link>
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+          <h2 id="import-heading" className="text-[15px] font-semibold">
+            Import a Git repository
+          </h2>
+          {picked && (
+            <button
+              type="button"
+              onClick={unpick}
+              className="text-xs text-[var(--text-secondary)] underline hover:text-[var(--text-primary)]"
+            >
+              Pick another
+            </button>
+          )}
+        </div>
+        <div className="p-4 sm:p-5">
+          {!picked ? (
+            <RepoPicker onPick={onPick} listClassName="max-h-64" />
+          ) : (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+                <span className="flex min-w-0 items-center gap-2 text-[13px]">
+                  <Check className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <span className="truncate font-mono">{picked.repo.fullName}</span>
+                </span>
+                <span className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
+                  <GitBranch className="h-3 w-3" />
+                  {picked.byUrl && picked.byUrl.branches.length > 1 ? (
+                    <select
+                      aria-label="Branch"
+                      value={picked.repo.defaultBranch}
+                      onChange={(e) => setPicked({ ...picked, repo: { ...picked.repo, defaultBranch: e.target.value } })}
+                      className="h-7 max-w-40 rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1 font-mono text-xs"
+                    >
+                      {picked.byUrl.branches.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="font-mono">{picked.repo.defaultBranch}</span>
+                  )}
+                </span>
+              </div>
+              <AccessCheck picked={picked} appConfigured={repoSources.appConfigured} />
 
-      {isAdmin && <ImportArchiveCard />}
+              <FormField
+                label="Project name"
+                hint={
+                  <>
+                    Lowercase letters, digits and dashes. Your app will be at{" "}
+                    <span className="font-mono text-[var(--text-primary)]">
+                      https://
+                      {defaultServiceHost(serviceSlug || "web", projectName.trim() || "my-product", baseDomain, instanceDomain)}
+                    </span>
+                  </>
+                }
+                error={importErrors.project ?? liveProjectError}
+                htmlFor="import-project-name"
+              >
+                <Input
+                  id="import-project-name"
+                  ref={importNameRef}
+                  value={projectName}
+                  onChange={(e) => {
+                    setProjectName(e.target.value);
+                    setProjectNameTouched(true);
+                    setImportErrors((x) => ({ ...x, project: undefined }));
+                  }}
+                  placeholder="e.g. my-product"
+                  aria-invalid={importErrors.project || liveProjectError ? true : undefined}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={monoInputClass}
+                />
+              </FormField>
 
-      {isAdmin && (
-        <Link
-          href="/settings/import-compose"
-          className="group mb-4 flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 transition hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)]"
-        >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
-            <FileUp className="h-4 w-4" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-medium text-[var(--text-primary)]">
-              Import docker-compose
-            </span>
-            <span className="block text-[12px] text-[var(--text-secondary)]">
-              Turn a docker-compose.yml into services and databases.
-            </span>
-          </span>
-          <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
-        </Link>
-      )}
+              <div className="space-y-2">
+                <p className="flex flex-wrap items-center gap-2 text-[13px]">
+                  <RuntimeIcon runtime={runtime || "nixpacks"} />
+                  <span className="text-[var(--text-secondary)]">Builds with</span>
+                  <span className="font-mono">{runtime || "…"}</span>
+                  {port && (
+                    <>
+                      <span className="text-[var(--text-secondary)]">on port</span>
+                      <span className="font-mono">{port}</span>
+                    </>
+                  )}
+                </p>
+                <RuntimeExplainer detection={detection} path={path} runtime={runtime} />
+              </div>
 
-      <div className="mb-4 flex items-center gap-3">
-        <div className="h-px flex-1 bg-[var(--border-subtle)]" />
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          or start empty
-        </span>
-        <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+              <Disclosure
+                open={buildOpen}
+                onToggle={() => setBuildOpen((o) => !o)}
+                title="Build settings"
+                summary={importErrors.service ? "fix the service name" : `service ${serviceSlug || "…"} · ${path.trim() || "repo root"}`}
+                invalid={!!importErrors.service}
+              >
+                <div className="space-y-4">
+                  <FormField
+                    label="Service name"
+                    hint={serviceSlug ? <>URL slug: <span className="font-mono">{serviceSlug}</span></> : undefined}
+                    error={importErrors.service}
+                    htmlFor="import-service-name"
+                  >
+                    <Input
+                      id="import-service-name"
+                      value={serviceName}
+                      onChange={(e) => {
+                        setServiceName(e.target.value);
+                        setServiceNameTouched(true);
+                        setImportErrors((x) => ({ ...x, service: undefined }));
+                      }}
+                      placeholder="e.g. web"
+                      aria-invalid={importErrors.service ? true : undefined}
+                      className={inputClass}
+                    />
+                  </FormField>
+                  <FormField
+                    label="Root directory"
+                    hint="For monorepos: the folder the app lives in. Leave empty for the repo root."
+                    optional
+                    htmlFor="import-path"
+                  >
+                    <Input
+                      id="import-path"
+                      value={path}
+                      onChange={(e) => setPath(e.target.value)}
+                      placeholder="e.g. apps/web"
+                      spellCheck={false}
+                      className={monoInputClass}
+                    />
+                  </FormField>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_8rem]">
+                    <FormField label="Runtime" hint="How kuso builds the image.">
+                      <SegmentedControl label="Runtime" value={runtime} options={RUNTIMES} onChange={setRuntime} />
+                    </FormField>
+                    <FormField label="Port" hint="Detected, or 8080." htmlFor="import-port">
+                      <Input
+                        id="import-port"
+                        type="number"
+                        inputMode="numeric"
+                        value={port}
+                        onChange={(e) => setPort(e.target.value)}
+                        placeholder="e.g. 3000"
+                        className={monoInputClass}
+                      />
+                    </FormField>
+                  </div>
+                </div>
+              </Disclosure>
+
+              <Disclosure
+                open={envOpen}
+                onToggle={() => setEnvOpen((o) => !o)}
+                title="Environment variables"
+                summary={
+                  importErrors.env
+                    ? "fix the marked lines"
+                    : env.vars.length > 0
+                      ? `${env.vars.length} ${env.vars.length === 1 ? "variable" : "variables"}`
+                      : "paste or upload a .env"
+                }
+                invalid={!!importErrors.env}
+              >
+                {importErrors.env && (
+                  <p role="alert" className="mb-2 text-xs text-[var(--error)]">
+                    {importErrors.env}
+                  </p>
+                )}
+                <EnvPastePanel
+                  id="import-env"
+                  text={envText}
+                  onChange={(t) => {
+                    setEnvText(t);
+                    setImportErrors((x) => ({ ...x, env: undefined }));
+                  }}
+                  parsed={env}
+                />
+              </Disclosure>
+
+              <AdvancedFields {...advancedProps} />
+
+              {formError && (
+                <p role="alert" className="text-xs text-[var(--error)]">
+                  {formError}
+                </p>
+              )}
+              <div className="flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-[var(--text-secondary)]">
+                  Creates the project and its first service, then starts a build from{" "}
+                  <span className="font-mono">{picked.repo.defaultBranch}</span>.
+                </p>
+                <Button
+                  type="button"
+                  onClick={() => void onImport()}
+                  disabled={submitting || detection.state === "detecting"}
+                  className="h-9 px-4"
+                >
+                  <Rocket className="h-4 w-4" />
+                  {submitting ? "Creating…" : "Create & deploy"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Secondary paths. */}
+      <h2 className="mb-3 mt-8 text-[13px] font-medium text-[var(--text-secondary)]">Or start another way</h2>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <OptionCard href="/marketplace" icon={<Store className="h-4 w-4" />} title="Template" hint="Gitea, Metabase, Plausible…" />
+        {isAdmin && (
+          <OptionCard
+            href="/settings/import-compose"
+            icon={<FileUp className="h-4 w-4" />}
+            title="docker-compose"
+            hint="Services and databases from a compose file"
+          />
+        )}
+        {isAdmin && (
+          <OptionCard
+            icon={<Archive className="h-4 w-4" />}
+            title="Project archive"
+            hint="Restore a kuso export"
+            active={secondary === "archive"}
+            onClick={() => setSecondary((s) => (s === "archive" ? null : "archive"))}
+          />
+        )}
+        <OptionCard
+          icon={<FolderPlus className="h-4 w-4" />}
+          title="Empty project"
+          hint="Add services later"
+          active={secondary === "empty"}
+          onClick={() => {
+            setSecondary((s) => (s === "empty" ? null : "empty"));
+            setFormError(null);
+          }}
+        />
       </div>
 
-      <form
-        onSubmit={onCreate}
-        className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
-      >
-        <div className="space-y-4 px-4 py-4">
-          <Field label="Name" hint="lowercase, dashes; used as the slug" htmlFor="project-name">
-            <Input
-              id="project-name"
-              ref={nameInputRef}
-              name="name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setNameError(null);
-              }}
-              placeholder="my-product"
-              aria-invalid={nameError ? true : undefined}
-              className="h-8 font-mono text-[13px]"
-              autoFocus
-            />
-            {nameError && (
-              <p role="alert" className="mt-1 text-[11px] text-[var(--error)]">
-                {nameError}
-              </p>
-            )}
-          </Field>
-          <Field label="Description" hint="optional; shown on the projects list" htmlFor="project-description">
-            <Input
-              id="project-description"
-              name="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What this project does"
-              className="h-8 text-[13px]"
-              maxLength={120}
-            />
-          </Field>
-          <Field label="Base domain" hint="optional; auto from cluster if blank" htmlFor="project-base-domain">
-            <Input
-              id="project-base-domain"
-              name="baseDomain"
-              value={baseDomain}
-              onChange={(e) => setBaseDomain(e.target.value)}
-              placeholder="my-product.example.com"
-              className="h-8 font-mono text-[13px]"
-            />
-          </Field>
-          <Field label="Default repo" hint="optional; services without their own repo use it" htmlFor="project-repo">
-            <div className="flex gap-2">
-              <Input
-                id="project-repo"
-                value={repoURL}
-                onChange={(e) => setRepoURL(e.target.value)}
-                placeholder="https://github.com/org/repo"
-                className="h-8 flex-1 font-mono text-[13px]"
-              />
-              <Input
-                value={repoBranch}
-                onChange={(e) => setRepoBranch(e.target.value)}
-                placeholder="main"
-                aria-label="Default branch"
-                className="h-8 w-28 font-mono text-[13px]"
-              />
-            </div>
-          </Field>
-          {(installations.data ?? []).length > 0 && (
-            <Field label="GitHub App" hint="installation used to clone private repos" htmlFor="project-installation">
-              <select
-                id="project-installation"
-                value={installationId}
-                onChange={(e) => setInstallationId(Number(e.target.value))}
-                className="block h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
-              >
-                <option value={0}>none</option>
-                {(installations.data ?? []).map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.accountLogin} ({i.accountType.toLowerCase()})
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
-          <Field label="Namespace" hint="optional; where the project's workloads run" htmlFor="project-namespace">
-            <Input
-              id="project-namespace"
-              value={namespace}
-              onChange={(e) => setNamespace(e.target.value)}
-              placeholder={`kuso-${name.trim() || "<name>"}`}
-              className="h-8 font-mono text-[13px]"
-              spellCheck={false}
-            />
-          </Field>
-          <Field label="Preview envs" hint="open a PR → kuso spins up a preview URL">
-            <label className="flex items-center gap-2 text-[13px]">
-              <input
-                type="checkbox"
-                checked={previewsEnabled}
-                onChange={(e) => setPreviewsEnabled(e.target.checked)}
-                className="h-3.5 w-3.5"
-              />
-              <span>
-                Enable preview deploys
-              </span>
-            </label>
-            {previewsEnabled && (
-              <label className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
-                Auto-expire after
-                <Input
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={previewsTTLDays}
-                  onChange={(e) => setPreviewsTTLDays(e.target.value)}
-                  placeholder={String(DEFAULT_PREVIEW_TTL_DAYS)}
-                  aria-label="Preview TTL in days"
-                  className="h-7 w-20 font-mono text-[12px]"
-                />
-                days
-              </label>
-            )}
-          </Field>
-          <Field label="URL preview" hint="where a service named web would be served">
-            <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
-              <Globe className="h-3 w-3 text-[var(--text-tertiary)]" />
-              <span className="truncate">https://{exampleHost}</span>
-            </div>
-            <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
-              A service named after the project is served at{" "}
-              <span className="font-mono">{sameNameHost}</span>.
-              {baseDomain.trim() && (
-                <>
-                  {" "}Point a wildcard DNS record{" "}
-                  <span className="font-mono">*.{baseDomain.trim().replace(/^\.+|\.+$/g, "")}</span>{" "}
-                  (and the bare domain) at the cluster.
-                </>
-              )}
-            </p>
-            <div className="mt-1">
-              <HostClashHint hosts={[exampleHost, sameNameHost]} />
-            </div>
-          </Field>
-        </div>
-        {formError && (
-          <p role="alert" className="px-4 pb-3 text-[11px] text-[var(--error)]">
-            {formError}
-          </p>
+      <div ref={emptyRef} className="scroll-mt-4">
+        {secondary === "archive" && isAdmin && (
+          <div className="mt-3">
+            <ImportArchiveCard />
+          </div>
         )}
-        <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
-          <Link
-            href="/projects"
-            className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+        {secondary === "empty" && (
+          <form
+            onSubmit={onCreateEmpty}
+            className="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
           >
-            ← cancel
-          </Link>
-          <Button type="submit" size="sm" disabled={submitting}>
-            <Plus className="h-3.5 w-3.5" />
-            {submitting ? "Creating…" : "Create project"}
-          </Button>
-        </footer>
-      </form>
+            <div className="space-y-5 p-4 sm:p-5">
+              <FormField
+                label="Project name"
+                hint="Lowercase letters, digits and dashes. Used in URLs."
+                error={nameError ?? (name ? projectNameProblem(name.trim()) : null)}
+                htmlFor="project-name"
+              >
+                <Input
+                  id="project-name"
+                  ref={nameInputRef}
+                  name="name"
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setNameError(null);
+                  }}
+                  placeholder="e.g. my-product"
+                  aria-invalid={nameError ? true : undefined}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={monoInputClass}
+                  autoFocus
+                />
+              </FormField>
+              <FormField label="Description" hint="Shown on the projects list." optional htmlFor="project-description">
+                <Input
+                  id="project-description"
+                  name="description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="e.g. Storefront and its API"
+                  className={inputClass}
+                  maxLength={120}
+                />
+              </FormField>
+              <AdvancedFields
+                {...advancedProps}
+                repo={{
+                  repoURL,
+                  setRepoURL,
+                  repoBranch,
+                  setRepoBranch,
+                  installationId,
+                  setInstallationId,
+                  installations: (installations.data ?? []).map((i) => ({
+                    id: i.id,
+                    label: `${i.accountLogin} (${i.accountType.toLowerCase()})`,
+                  })),
+                }}
+              />
+              {formError && (
+                <p role="alert" className="text-xs text-[var(--error)]">
+                  {formError}
+                </p>
+              )}
+            </div>
+            <footer className="flex flex-col-reverse gap-3 border-t border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <Link href="/projects" className="text-center text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                Cancel
+              </Link>
+              <Button type="submit" disabled={submitting} className="h-9 px-4">
+                {submitting ? "Creating…" : "Create empty project"}
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </footer>
+          </form>
+        )}
+      </div>
     </div>
   );
 }
 
-function Field({
-  label,
+function OptionCard({
+  href,
+  onClick,
+  icon,
+  title,
   hint,
-  htmlFor,
+  active,
+}: {
+  href?: string;
+  onClick?: () => void;
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  active?: boolean;
+}) {
+  const cls =
+    "group flex h-full flex-col gap-1.5 rounded-md border px-3 py-3 text-left transition-colors " +
+    (active
+      ? "border-[var(--accent)] bg-[var(--accent-subtle)]"
+      : "border-[var(--border-subtle)] bg-[var(--bg-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]");
+  const inner = (
+    <>
+      <span className="flex items-center justify-between text-[var(--accent)]">
+        {icon}
+        {href ? (
+          <ArrowRight className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform motion-safe:group-hover:translate-x-0.5" />
+        ) : (
+          <ChevronRight
+            className={
+              "h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform " + (active ? "rotate-90" : "")
+            }
+          />
+        )}
+      </span>
+      <span className="text-[13px] font-medium text-[var(--text-primary)]">{title}</span>
+      <span className="text-xs leading-snug text-[var(--text-secondary)]">{hint}</span>
+    </>
+  );
+  if (href) {
+    return (
+      <Link href={href} className={cls}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} aria-expanded={active} className={cls}>
+      {inner}
+    </button>
+  );
+}
+
+function Disclosure({
+  open,
+  onToggle,
+  title,
+  summary,
+  invalid,
   children,
 }: {
-  label: string;
-  hint?: string;
-  htmlFor?: string;
+  open: boolean;
+  onToggle: () => void;
+  title: string;
+  summary?: string;
+  invalid?: boolean;
   children: React.ReactNode;
 }) {
-  const labelClass = "block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
   return (
-    <div className="grid grid-cols-[140px_1fr] items-start gap-3">
-      <div>
-        {htmlFor ? (
-          <label htmlFor={htmlFor} className={labelClass}>
-            {label}
-          </label>
-        ) : (
-          <div className={labelClass}>{label}</div>
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+      >
+        <ChevronRight
+          className={"h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform " + (open ? "rotate-90" : "")}
+        />
+        <span className="text-[13px] font-medium">{title}</span>
+        {summary && !open && (
+          <span
+            className={
+              "ml-auto min-w-0 truncate text-xs " + (invalid ? "text-[var(--error)]" : "text-[var(--text-tertiary)]")
+            }
+          >
+            {summary}
+          </span>
         )}
-        {hint && <div className="mt-0.5 text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
-      </div>
-      <div>{children}</div>
+      </button>
+      {open && <div className="border-t border-[var(--border-subtle)] p-3 sm:p-4">{children}</div>}
     </div>
+  );
+}
+
+function AdvancedFields({
+  open,
+  onToggle,
+  projectName,
+  serviceName,
+  instanceDomain,
+  baseDomain,
+  setBaseDomain,
+  namespace,
+  setNamespace,
+  previewsEnabled,
+  setPreviewsEnabled,
+  previewsTTLDays,
+  setPreviewsTTLDays,
+  repo,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  projectName: string;
+  serviceName: string;
+  instanceDomain: string;
+  baseDomain: string;
+  setBaseDomain: (v: string) => void;
+  namespace: string;
+  setNamespace: (v: string) => void;
+  previewsEnabled: boolean;
+  setPreviewsEnabled: (v: boolean) => void;
+  previewsTTLDays: string;
+  setPreviewsTTLDays: (v: string) => void;
+  // Only the empty-project form sets a default repo by hand; the import
+  // path takes it from the picked repo.
+  repo?: {
+    repoURL: string;
+    setRepoURL: (v: string) => void;
+    repoBranch: string;
+    setRepoBranch: (v: string) => void;
+    installationId: number;
+    setInstallationId: (v: number) => void;
+    installations: { id: number; label: string }[];
+  };
+}) {
+  const previewProject = projectName || "my-product";
+  const exampleHost = defaultServiceHost(serviceName, previewProject, baseDomain, instanceDomain);
+  const sameNameHost = defaultServiceHost(previewProject, previewProject, baseDomain, instanceDomain);
+  const summary = [
+    baseDomain.trim() || "default domain",
+    previewsEnabled ? "PR previews on" : "previews off",
+    namespace.trim() ? `namespace ${namespace.trim()}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <Disclosure open={open} onToggle={onToggle} title="Advanced" summary={summary}>
+      <div className="space-y-5">
+        <FormField
+          label="Base domain"
+          hint="Services get hosts under it. Leave empty to use this kuso instance's domain."
+          optional
+          htmlFor="project-base-domain"
+        >
+          <Input
+            id="project-base-domain"
+            name="baseDomain"
+            value={baseDomain}
+            onChange={(e) => setBaseDomain(e.target.value)}
+            placeholder="e.g. shop.example.com"
+            spellCheck={false}
+            className={monoInputClass}
+          />
+          <div className="mt-2 space-y-1 text-xs text-[var(--text-secondary)]">
+            <p className="flex items-center gap-1.5">
+              <Globe className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="min-w-0 truncate">
+                A service named <span className="font-mono">{serviceName}</span> is served at{" "}
+                <span className="font-mono text-[var(--text-primary)]">https://{exampleHost}</span>
+              </span>
+            </p>
+            {baseDomain.trim() && (
+              <p>
+                Point a wildcard DNS record{" "}
+                <span className="font-mono">*.{baseDomain.trim().replace(/^\.+|\.+$/g, "")}</span> (and the bare
+                domain) at the cluster.
+              </p>
+            )}
+            <HostClashHint hosts={[exampleHost, sameNameHost]} />
+          </div>
+        </FormField>
+
+        {repo && (
+          <>
+            <FormField
+              label="Default repository"
+              hint="Services added without their own repo build from this one."
+              optional
+              htmlFor="project-repo"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  id="project-repo"
+                  value={repo.repoURL}
+                  onChange={(e) => repo.setRepoURL(e.target.value)}
+                  placeholder="e.g. https://github.com/acme/shop"
+                  spellCheck={false}
+                  className={monoInputClass + " sm:flex-1"}
+                />
+                <Input
+                  value={repo.repoBranch}
+                  onChange={(e) => repo.setRepoBranch(e.target.value)}
+                  placeholder="branch, e.g. main"
+                  aria-label="Default branch"
+                  spellCheck={false}
+                  className={monoInputClass + " sm:w-40"}
+                />
+              </div>
+            </FormField>
+            {repo.installations.length > 0 && (
+              <FormField
+                label="GitHub App installation"
+                hint="Used to clone private repositories and receive pushes."
+                htmlFor="project-installation"
+              >
+                <select
+                  id="project-installation"
+                  value={repo.installationId}
+                  onChange={(e) => repo.setInstallationId(Number(e.target.value))}
+                  className="block h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[13px]"
+                >
+                  <option value={0}>None</option>
+                  {repo.installations.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.label}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+            )}
+          </>
+        )}
+
+        <FormField
+          label="Namespace"
+          hint="The Kubernetes namespace the project's workloads run in."
+          optional
+          htmlFor="project-namespace"
+        >
+          <Input
+            id="project-namespace"
+            value={namespace}
+            onChange={(e) => setNamespace(e.target.value)}
+            placeholder={`e.g. kuso-${previewProject}`}
+            spellCheck={false}
+            className={monoInputClass}
+          />
+        </FormField>
+
+        <FormField label="Preview environments" hint="Each pull request gets its own deploy and URL.">
+          <label className="flex items-center gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={previewsEnabled}
+              onChange={(e) => setPreviewsEnabled(e.target.checked)}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            Deploy a preview for every pull request
+          </label>
+          {previewsEnabled && (
+            <label className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+              Delete previews after
+              <Input
+                type="number"
+                min={1}
+                max={30}
+                value={previewsTTLDays}
+                onChange={(e) => setPreviewsTTLDays(e.target.value)}
+                placeholder={String(DEFAULT_PREVIEW_TTL_DAYS)}
+                aria-label="Preview TTL in days"
+                className="h-8 w-20 font-mono text-[13px]"
+              />
+              days
+            </label>
+          )}
+        </FormField>
+      </div>
+    </Disclosure>
   );
 }

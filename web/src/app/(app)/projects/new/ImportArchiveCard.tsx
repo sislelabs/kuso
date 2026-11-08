@@ -17,9 +17,9 @@ import { friendlyApiError } from "@/features/projects/names";
 import { cn } from "@/lib/utils";
 
 const POLICIES: { value: ImportPolicy; label: string; hint: string }[] = [
-  { value: "error", label: "fail if it exists", hint: "refuse when a project with the same name exists" },
-  { value: "rename", label: "rename", hint: "import as <name>-imported-<timestamp> when the name is taken" },
-  { value: "overwrite", label: "overwrite", hint: "delete the existing project first — destructive" },
+  { value: "error", label: "Fail", hint: "Refuse when a project with the same name exists." },
+  { value: "rename", label: "Rename", hint: "Import as <name>-imported-<timestamp> when the name is taken." },
+  { value: "overwrite", label: "Overwrite", hint: "Delete the existing project first. Destructive." },
 ];
 
 // ImportArchiveCard uploads a tarball from `kuso project export-archive`
@@ -69,7 +69,7 @@ export function ImportArchiveCard() {
   };
 
   return (
-    <section className="mb-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
+    <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
           <Archive className="h-4 w-4" />
@@ -94,7 +94,7 @@ export function ImportArchiveCard() {
           className="block w-full text-[12px] text-[var(--text-secondary)] file:mr-3 file:rounded-md file:border file:border-[var(--border-subtle)] file:bg-[var(--bg-tertiary)] file:px-2 file:py-1 file:text-[12px] file:text-[var(--text-primary)]"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">if the name exists</span>
+          <span className="text-xs text-[var(--text-secondary)]">If the name exists</span>
           <div role="group" aria-label="Name conflict policy" className="inline-flex items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
             {POLICIES.map((p) => (
               <button
@@ -104,7 +104,7 @@ export function ImportArchiveCard() {
                 aria-pressed={policy === p.value}
                 onClick={() => setPolicy(p.value)}
                 className={cn(
-                  "rounded px-1.5 py-1 font-mono text-[10px] whitespace-nowrap transition-colors",
+                  "rounded px-2 py-1 text-xs whitespace-nowrap transition-colors",
                   policy === p.value
                     ? p.value === "overwrite"
                       ? "bg-[var(--error-subtle)] text-[var(--error)]"
@@ -120,9 +120,9 @@ export function ImportArchiveCard() {
             {busy ? "Importing…" : "Import"}
           </Button>
         </div>
-        <p className="text-[10px] text-[var(--text-tertiary)]">{POLICIES.find((p) => p.value === policy)?.hint}</p>
+        <p className="text-xs text-[var(--text-secondary)]">{POLICIES.find((p) => p.value === policy)?.hint}</p>
         {error && (
-          <p role="alert" className="text-[11px] text-[var(--error)]">
+          <p role="alert" className="text-xs text-[var(--error)]">
             {error}
           </p>
         )}
