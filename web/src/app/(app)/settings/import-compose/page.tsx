@@ -1,5 +1,7 @@
 "use client";
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { useState, useRef } from "react";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -13,7 +15,7 @@ import {
 } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FileUp, CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
 import { useCan, Perms } from "@/features/auth";
 import { toast } from "sonner";
 
@@ -131,81 +133,73 @@ export default function ImportComposePage() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-2xl p-6 lg:p-8">
-        <p className="text-sm text-[var(--text-secondary)]">
-          The docker-compose import is admin-only. Ask a team admin to run it for you.
-        </p>
-      </div>
+      <SettingsPage title="Import docker-compose">
+        <SettingsNotice tone="warning">The docker-compose import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
+      </SettingsPage>
     );
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-6 lg:p-8">
-      <header className="mb-6 flex items-start gap-3">
-        <FileUp className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Import docker-compose</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Convert a <code className="font-mono text-[12px]">docker-compose.yml</code> into a kuso
-            project. Datastores (postgres, redis, …) become managed addons; app
-            services become build or image services. Preview is read-only — nothing
-            is created until you apply.
-          </p>
-        </div>
-      </header>
-
+    <SettingsPage
+      title="Import docker-compose"
+      description={
+        <>
+          Convert a <code className="font-mono text-xs">docker-compose.yml</code> into a kuso project. Datastores
+          (postgres, redis, …) become managed addons; app services become build or image services. Preview is
+          read-only: nothing is created until you apply.
+        </>
+      }
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
           preview.mutate();
         }}
-        className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4"
       >
-        <label className="block">
-          <span className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            Project name
-          </span>
-          <Input
-            value={project}
-            onChange={(e) => {
-            setProject(e.target.value);
-            setNameTaken(null);
-          }}
-            placeholder="my-app"
-            className="mt-1 h-8 font-mono text-[13px]"
-            required
-          />
-        </label>
-        <label className="block">
-          <span className="flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            <span>docker-compose.yml</span>
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="text-[var(--text-secondary)] underline-offset-2 hover:underline"
-            >
-              upload file
-            </button>
-          </span>
-          <input ref={fileRef} type="file" accept=".yml,.yaml" className="hidden" onChange={onFile} />
-          <textarea
-            value={composeText}
-            onChange={(e) => setComposeText(e.target.value)}
-            placeholder="services:&#10;  web:&#10;    build: .&#10;    ports: [&quot;80:3000&quot;]&#10;  db:&#10;    image: postgres:16"
-            className="mt-1 h-48 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[12px] outline-none focus:border-[var(--border-strong)]"
-            required
-          />
-        </label>
-        <div className="flex justify-end">
-          <Button type="submit" size="sm" disabled={preview.isPending}>
-            {preview.isPending ? "Converting…" : "Preview import"}
-          </Button>
-        </div>
-        {preview.isError && (
-          <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
-            {preview.error.message}
-          </p>
-        )}
+        <SettingsSection
+          title="Compose file"
+          footerHint="Preview converts the file without creating anything."
+          footer={
+            <Button type="submit" size="sm" disabled={preview.isPending}>
+              {preview.isPending ? "Converting…" : "Preview import"}
+            </Button>
+          }
+        >
+          <SettingsField label="Project name" htmlFor="compose-project">
+            <Input
+              id="compose-project"
+              value={project}
+              onChange={(e) => {
+                setProject(e.target.value);
+                setNameTaken(null);
+              }}
+              placeholder="e.g. my-app"
+              className="font-mono"
+              required
+            />
+          </SettingsField>
+          <SettingsField
+            label="docker-compose.yml"
+            hint="Paste the file or upload it."
+            htmlFor="compose-yaml"
+            aside={
+              <Button type="button" size="xs" variant="outline" onClick={() => fileRef.current?.click()}>
+                Upload file
+              </Button>
+            }
+          >
+            <input ref={fileRef} type="file" accept=".yml,.yaml" className="hidden" onChange={onFile} />
+            <textarea
+              id="compose-yaml"
+              value={composeText}
+              onChange={(e) => setComposeText(e.target.value)}
+              placeholder="services:&#10;  web:&#10;    build: .&#10;    ports: [&quot;80:3000&quot;]&#10;  db:&#10;    image: postgres:16"
+              className="h-48 w-full resize-y rounded-sm border border-border bg-input p-3 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              required
+            />
+          </SettingsField>
+          {preview.isError && <SettingsNotice tone="error">{preview.error.message}</SettingsNotice>}
+        </SettingsSection>
       </form>
 
       {preview.data && (
@@ -219,7 +213,7 @@ export default function ImportComposePage() {
           onApply={(merge) => apply.mutate({ yaml: preview.data!.yaml, merge })}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -247,16 +241,16 @@ function ResultView({
 
   return (
     <section className="mt-6 space-y-4">
-      <header className="flex flex-wrap items-center gap-3 text-[12px]">
+      <header className="flex flex-wrap items-center gap-3 text-xs">
         <StatChip icon={<Package className="h-3 w-3" />} label="services" value={serviceCount} />
         <StatChip icon={<Database className="h-3 w-3" />} label="addons" value={addonCount} />
-        <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="ml-auto text-xs text-[var(--text-secondary)]">
           project <span className="text-[var(--text-secondary)]">{data.project}</span>
         </span>
       </header>
 
       {data.flagged && (
-        <p className="flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]">
+        <p className="flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-xs text-[var(--warning)]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Some services need attention before they&apos;ll deploy (⚠ rows below) —
@@ -269,7 +263,7 @@ function ResultView({
       {missingEnvFiles.length > 0 && (
         <div
           role="alert"
-          className="space-y-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]"
+          className="space-y-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-xs text-[var(--warning)]"
         >
           <p className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -279,7 +273,7 @@ function ResultView({
               importing.
             </span>
           </p>
-          <ul className="ml-5 list-disc font-mono text-[11px]">
+          <ul className="ml-5 list-disc font-mono text-xs">
             {missingEnvFiles.map((f) => (
               <li key={f}>{f}</li>
             ))}
@@ -298,17 +292,17 @@ function ResultView({
       <div className="space-y-3">
         {grouped.map(([svc, notes]) => (
           <div key={svc} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3">
-            <h3 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <h3 className="mb-2 font-mono text-xs font-medium text-[var(--text-primary)]">
               {svc === "" ? "(file)" : svc}
             </h3>
             <ul className="space-y-1">
               {notes.map((n, i) => {
                 const m = ACTION_META[n.action];
                 return (
-                  <li key={i} className="flex items-start gap-2 text-[12px]">
+                  <li key={i} className="flex items-start gap-2 text-xs">
                     <span className={`mt-0.5 flex shrink-0 items-center gap-1 ${m.cls}`}>
                       {m.icon}
-                      <span className="font-mono text-[10px]">{m.label}</span>
+                      <span className="font-mono text-xs">{m.label}</span>
                     </span>
                     <span className="text-[var(--text-secondary)]">{n.detail}</span>
                   </li>
@@ -320,10 +314,10 @@ function ResultView({
       </div>
 
       <details className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3">
-        <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          generated kuso.yaml
+        <summary className="cursor-pointer text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+          Generated kuso.yaml
         </summary>
-        <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--bg-primary)] p-3 font-mono text-[11px] text-[var(--text-secondary)]">
+        <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-secondary)]">
           {data.yaml}
         </pre>
       </details>
@@ -331,7 +325,7 @@ function ResultView({
       {nameTaken && (
         <div
           role="alert"
-          className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-[12px] text-[var(--warning)]"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-xs text-[var(--warning)]"
         >
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">
@@ -352,7 +346,7 @@ function ResultView({
       {applied && stepErrors.length > 0 && (
         <div
           role="alert"
-          className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-3 text-[12px]"
+          className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-3 text-xs"
         >
           <p className="mb-2 font-medium text-[var(--error)]">
             {stepErrors.length} step{stepErrors.length === 1 ? "" : "s"} failed
@@ -360,7 +354,7 @@ function ResultView({
           <ul className="space-y-1">
             {stepErrors.map((e, i) => (
               <li key={i} className="flex gap-2">
-                <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
+                <span className="shrink-0 font-mono text-xs text-[var(--text-secondary)]">
                   {e.op} {e.resource}
                 </span>
                 <span className="text-[var(--error)]">{e.message}</span>
@@ -373,7 +367,7 @@ function ResultView({
       <div className="flex items-center justify-end gap-3">
         {applied && (
           <span
-            className={`flex items-center gap-1 text-[12px] ${stepErrors.length > 0 ? "text-[var(--warning)]" : "text-[var(--success)]"}`}
+            className={`flex items-center gap-1 text-xs ${stepErrors.length > 0 ? "text-[var(--warning)]" : "text-[var(--success)]"}`}
           >
             {stepErrors.length > 0 ? (
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -386,7 +380,7 @@ function ResultView({
         {applied && (
           <Link
             href={`/projects/${encodeURIComponent(data.project)}`}
-            className="text-[12px] text-[var(--text-secondary)] underline-offset-2 hover:underline"
+            className="text-xs text-[var(--text-secondary)] underline-offset-2 hover:underline"
           >
             Open project
           </Link>
@@ -415,7 +409,7 @@ function groupByService(notes: Note[]): [string, Note[]][] {
 
 function StatChip({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
   return (
-    <span className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]">
+    <span className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-xs">
       <span className="text-[var(--text-tertiary)]">{icon}</span>
       <span className="text-[var(--text-primary)]">{value}</span>
       <span className="text-[var(--text-tertiary)]">{label}</span>
