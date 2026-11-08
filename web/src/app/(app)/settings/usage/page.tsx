@@ -126,7 +126,7 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
   return (
     <div className="space-y-6">
       {ratesUnset && (
-        <SettingsNotice tone="warning" title="Cost rates not configured">
+        <SettingsNotice tone="info" title="Cost rates not configured">
             <div>
               Usage curves and share-of-cluster render, but no dollar figures.
               Set <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
@@ -141,7 +141,7 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
       )}
 
       {/* Cluster headline cards. */}
-      <section className="grid gap-3 sm:grid-cols-3">
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card
           label={`Projected ${data.days === 30 ? "this month" : "next 30 days"}`}
           big={

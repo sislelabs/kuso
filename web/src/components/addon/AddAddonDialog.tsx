@@ -369,7 +369,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   {fieldErrors.extURL ? (
                     <FieldError msg={fieldErrors.extURL} />
                   ) : (
-                    <p className="font-mono text-xs text-[var(--text-tertiary)]">
+                    <p className="text-xs text-[var(--text-tertiary)]">
                       Services get it as{" "}
                       <span className="text-[var(--text-secondary)]">{connectionURLKey(kind)}</span>.
                     </p>
@@ -388,7 +388,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   </button>
                   {showAdvanced && (
                     <div className="space-y-2">
-                      <p className="font-mono text-xs text-[var(--text-tertiary)]">
+                      <p className="text-xs text-[var(--text-tertiary)]">
                         These default to the chart's recommended values.
                         <span className="text-[var(--warning)]"> Storage size cannot be reduced after create.</span>
                       </p>
@@ -446,7 +446,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             />
                             Require TLS on the wire (sslmode=require)
                           </label>
-                          <p className="mt-1 pl-5 font-mono text-xs leading-relaxed text-[var(--text-tertiary)]">
+                          <p className="mt-1 pl-5 text-xs leading-relaxed text-[var(--text-tertiary)]">
                             Default is plaintext in-cluster (sslmode=disable) — works with every
                             driver. Enable only if your app mandates encrypted DB connections
                             (Go/pgx, Rails); note default node-postgres rejects the self-signed

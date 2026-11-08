@@ -216,7 +216,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
         </div>
       )}
       {items.length >= BACKUP_LIST_CAP && (
-        <p className="font-mono text-xs text-[var(--text-tertiary)]">
+        <p className="text-xs text-[var(--text-tertiary)]">
           Showing the newest {BACKUP_LIST_CAP} objects; older backups are in the bucket but not listed.
         </p>
       )}
@@ -436,7 +436,7 @@ function BackupScheduleEditor({
             <CronPicker value={schedule} onChange={setSchedule} />
           )}
           {!scheduleValid && (
-            <p className="font-mono text-xs text-[var(--error)]">
+            <p className="text-xs text-[var(--error)]">
               Custom cron must be 5 fields (e.g. <code>0 3 * * *</code>).
             </p>
           )}

@@ -169,7 +169,7 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>Shortcuts work anywhere except while you&apos;re typing in a field.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-x-8 gap-y-6 px-5 py-5 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 px-5 py-5 sm:grid-cols-2">
           {sections.map((g, i) => (
             <ShortcutList key={`${g.title}-${i}`} title={g.title} items={g.items} />
           ))}

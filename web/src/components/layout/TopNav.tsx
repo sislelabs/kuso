@@ -1,5 +1,6 @@
 "use client";
 
+import { SETTINGS_NAV } from "@/components/settings/nav";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -237,31 +238,10 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
   const segs = pathname.replace(/^\/+|\/+$/g, "").split("/");
   // segs[0] === "settings"; segs[1] is the section.
   const section = segs[1];
-  const labels: Record<string, string> = {
-    profile: "Profile",
-    tokens: "API tokens",
-    notifications: "Notifications",
-    nodes: "Cluster nodes",
-    config: "Cluster config",
-    users: "Users",
-    groups: "Groups",
-    activity: "Activity",
-    alerts: "Alerts",
-    backups: "Backups",
-    builds: "Builds",
-    database: "Database",
-    drains: "Log drains",
-    github: "GitHub",
-    health: "Health",
-    import: "Import",
-    "import-compose": "Import compose",
-    "incident-agent": "Incident agent",
-    "instance-secrets": "Instance secrets",
-    roles: "Roles",
-    sessions: "Sessions",
-    updates: "Updates",
-    usage: "Usage",
-  };
+  // Titles come from the settings nav so a new page can't be missing
+  // here; "roles" predates the nav and redirects to groups.
+  const labels: Record<string, string> = { roles: "Roles" };
+  for (const item of SETTINGS_NAV) labels[item.href.split("/")[2] ?? ""] = item.title;
   if (!section) return [{ label: "Settings" }];
   const out: { label: string; href?: string }[] = [
     { label: "Settings", href: "/settings" },

@@ -298,7 +298,7 @@ export default function BackupSettingsPage() {
               </Button>
             }
           >
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field
                 label="Bucket"
                 hint="S3 bucket name."
@@ -319,7 +319,7 @@ export default function BackupSettingsPage() {
               value={form.endpoint}
               onChange={(v) => setForm((s) => ({ ...s, endpoint: v }))}
             />
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field
                 label="Access key ID"
                 value={form.accessKeyId}

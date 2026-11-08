@@ -163,7 +163,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
   };
 
   const renderGrid = (items: ReadonlyArray<Entry>) => (
-    <ul className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {items.map((e) => (
         <ProjectCard
           key={e.model.name}

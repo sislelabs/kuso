@@ -232,7 +232,7 @@ export default function DrainsPage() {
             </Button>
           }
         >
-          <div className="grid gap-5 sm:grid-cols-[12rem_1fr]">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-[12rem_1fr]">
             <SettingsField label="Type" htmlFor="drain-type">
               <SettingsSelect
                 id="drain-type"
@@ -256,7 +256,7 @@ export default function DrainsPage() {
               />
             </SettingsField>
           </div>
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <SettingsField label="Name" htmlFor="drain-name" hint="Optional. Defaults to the host.">
               <Input id="drain-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. grafana cloud" />
             </SettingsField>

@@ -28,7 +28,7 @@ export function ServicePodsSection({
         )}
       </header>
       {!envName ? (
-        <p className="px-3 py-3 font-mono text-xs text-[var(--text-tertiary)]">
+        <p className="px-3 py-3 text-xs text-[var(--text-tertiary)]">
           No environment deployed yet.
         </p>
       ) : pods.isPending ? (
@@ -38,7 +38,7 @@ export function ServicePodsSection({
       ) : pods.isError ? (
         <QueryErrorState className="m-3" what="pods" error={pods.error} onRetry={() => void pods.refetch()} />
       ) : (pods.data.pods ?? []).length === 0 ? (
-        <p className="px-3 py-3 font-mono text-xs text-[var(--text-tertiary)]">
+        <p className="px-3 py-3 text-xs text-[var(--text-tertiary)]">
           No pods running — the service is scaled to zero, asleep, or stopped.
         </p>
       ) : (

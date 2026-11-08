@@ -277,7 +277,7 @@ function ConfigSection({
         <Toggle label="Node down (NotReady for more than 5 min)" checked={draft.triggerNode} onChange={(v) => set({ triggerNode: v })} />
       </fieldset>
 
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <NumField
           label="Max concurrent agents"
           hint="0 = no cap. Bounds Claude Code subscription usage."
@@ -433,7 +433,7 @@ function DiscordSection({
       />
       {!readOnly && (
         <>
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <Field label="Discord bot token" value={botToken} onChange={setBotToken} placeholder="Unchanged" secret />
             <Field label="kuso bot token" hint="An admin API token the bot uses to call kuso." value={kusoBotToken} onChange={setKusoBotToken} placeholder="Unchanged" secret />
           </div>

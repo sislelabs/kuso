@@ -29,11 +29,11 @@ function Count({ n, tone }: { n: number | undefined; tone: string }) {
 
 function StatusCell({ img }: { img: VulnImageReport }) {
   const scan = img.scan;
-  if (!scan) return <span className="text-xs text-[var(--text-tertiary)]">not scanned</span>;
+  if (!scan) return <span className="text-xs text-[var(--text-tertiary)]">Not scanned</span>;
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 font-mono text-xs",
+        "inline-flex items-center gap-1 text-xs capitalize",
         scan.status === "failed" && "text-[var(--error)]",
         isScanActive(scan) && "text-[var(--building)]",
       )}
@@ -69,10 +69,10 @@ export function PlatformImages() {
             <TableHead>Workload</TableHead>
             <TableHead>Image</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead title="Critical (fixable)">C</TableHead>
-            <TableHead title="High (fixable)">H</TableHead>
-            <TableHead>M</TableHead>
-            <TableHead>L</TableHead>
+            <TableHead title="Critical (fixable in brackets)">Critical</TableHead>
+            <TableHead title="High (fixable in brackets)">High</TableHead>
+            <TableHead>Medium</TableHead>
+            <TableHead>Low</TableHead>
             <TableHead>Scanned</TableHead>
           </TableRow>
         </TableHeader>
@@ -89,7 +89,7 @@ export function PlatformImages() {
                       type="button"
                       aria-expanded={expanded}
                       aria-label={expanded ? "Hide findings" : "Show findings"}
-                      className="text-[var(--text-tertiary)]"
+                      className="inline-flex size-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                     >
                       {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                     </button>
@@ -98,7 +98,7 @@ export function PlatformImages() {
                     {img.namespace ? `${img.namespace}/` : ""}
                     {img.workload ?? "?"}
                   </TableCell>
-                  <TableCell className="max-w-[280px] truncate font-mono text-xs" title={img.imageRef}>
+                  <TableCell className="max-w-[220px] truncate font-mono text-xs" title={img.imageRef}>
                     {img.imageRef}
                   </TableCell>
                   <TableCell>

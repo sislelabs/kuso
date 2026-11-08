@@ -178,7 +178,7 @@ export default function BuildSettingsPage() {
         }
         footerHint="Budget = VM size minus 1 Gi and 500m reserved for kuso-server, Traefik, cert-manager and addons. Going over is allowed but risks OOMKills and CPU starvation under load."
       >
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {PRESETS.map((p) => {
             // Show the math so the user can see why cap=N is what it
             // is for this VM size.
@@ -258,7 +258,7 @@ export default function BuildSettingsPage() {
           />
         </SettingsField>
 
-        <div className="grid gap-5 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <SettingsField
             label="Memory limit"
             htmlFor="build-mem-limit"

@@ -37,7 +37,7 @@ export function ServiceAuditSection({
       ) : audit.isError ? (
         <QueryErrorState className="m-3" what="audit trail" error={audit.error} onRetry={() => void audit.refetch()} />
       ) : rows.length === 0 ? (
-        <p className="px-3 py-3 font-mono text-xs text-[var(--text-tertiary)]">
+        <p className="px-3 py-3 text-xs text-[var(--text-tertiary)]">
           No audit entries for {service}.
         </p>
       ) : (

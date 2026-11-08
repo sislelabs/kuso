@@ -232,7 +232,7 @@ function ProfilePage() {
             </Button>
           }
         >
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <SettingsField label="First name" htmlFor="firstName">
               <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
             </SettingsField>
@@ -268,7 +268,7 @@ function ProfilePage() {
               required
             />
           </SettingsField>
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <SettingsField label="New password" htmlFor="pwNew">
               <Input
                 id="pwNew"

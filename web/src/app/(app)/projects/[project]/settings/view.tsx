@@ -285,19 +285,19 @@ export function ProjectSettingsView() {
               id="baseDomain"
               value={baseDomain}
               onChange={(e) => { setBaseDomain(e.target.value); setDirty(true); }}
-              placeholder="myproject.example.com"
+              placeholder="e.g. myproject.example.com"
               className="font-mono"
             />
-            <p className="font-mono text-xs text-[var(--text-tertiary)]">
+            <p className="text-hint">
               Services in this project default to{" "}
-              <code className="rounded bg-[var(--bg-tertiary)] px-1">
+              <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">
                 &lt;service&gt;.{baseDomain || "<base>"}
               </code>
               ; a service named {projectName} gets the bare domain.
             </p>
-            <p className="font-mono text-xs text-[var(--text-tertiary)]">
+            <p className="text-hint">
               DNS: add an A record for{" "}
-              <code className="rounded bg-[var(--bg-tertiary)] px-1">*.{baseDomain || "<base>"}</code>{" "}
+              <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">*.{baseDomain || "<base>"}</code>{" "}
               (and one for the bare domain) pointing at your cluster&apos;s public IP.
             </p>
           </div>
@@ -309,7 +309,7 @@ export function ProjectSettingsView() {
                 id="repoURL"
                 value={repoURL}
                 onChange={(e) => { setRepoURL(e.target.value); setDirty(true); }}
-                placeholder="https://github.com/org/repo"
+                placeholder="e.g. https://github.com/org/repo"
                 className="font-mono flex-1"
               />
               <Input
@@ -321,7 +321,7 @@ export function ProjectSettingsView() {
                 aria-label="Default branch"
               />
             </div>
-            <p className="font-mono text-xs text-[var(--text-tertiary)]">
+            <p className="text-hint">
               Services without their own repository inherit this one. Pushes and PRs on it
               trigger builds and preview envs. Leave blank if every service sets its own repo.
             </p>
@@ -335,7 +335,7 @@ export function ProjectSettingsView() {
               onChange={(e) => { setInstallationId(Number(e.target.value)); setDirty(true); }}
               className="font-mono"
             >
-              <option value={0}>none</option>
+              <option value={0}>None</option>
               {(installations.data ?? []).map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.accountLogin} ({i.accountType.toLowerCase()})
@@ -345,7 +345,7 @@ export function ProjectSettingsView() {
                 <option value={installationId}>#{installationId} (not visible to kuso)</option>
               )}
             </Select>
-            <p className="font-mono text-xs text-[var(--text-tertiary)]">
+            <p className="text-hint">
               The installation kuso mints clone tokens from for private repos. None = public repos only,
               unless a service sets its own.
             </p>

@@ -57,7 +57,7 @@ export function DrainEditForm({
       onSubmit={onSubmit}
       className="space-y-5 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 p-4 sm:p-5"
     >
-      <div className="grid gap-5 sm:grid-cols-[12rem_1fr]">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-[12rem_1fr]">
         <SettingsField label="Type" htmlFor={id("type")}>
           <SettingsSelect
             id={id("type")}
@@ -82,7 +82,7 @@ export function DrainEditForm({
           />
         </SettingsField>
       </div>
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <SettingsField label="Name" htmlFor={id("name")}>
           <Input id={id("name")} value={f.name} onChange={(e) => set("name", e.target.value)} />
         </SettingsField>

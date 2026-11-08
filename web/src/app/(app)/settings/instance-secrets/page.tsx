@@ -140,7 +140,7 @@ export default function InstanceSecretsPage() {
             </Button>
           }
         >
-          <div className="grid gap-5 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <SettingsField label="Key" htmlFor="instance-secret-key" hint="SCREAMING_SNAKE_CASE.">
               <Input
                 id="instance-secret-key"

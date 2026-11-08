@@ -25,7 +25,7 @@ export function AddonPodsSection({ project, addon }: { project: string; addon: s
       ) : pods.isError ? (
         <QueryErrorState className="m-3" what="addon pods" error={pods.error} onRetry={() => void pods.refetch()} />
       ) : list.length === 0 ? (
-        <p className="px-3 py-3 font-mono text-xs text-[var(--warning)]">
+        <p className="px-3 py-3 text-xs text-[var(--warning)]">
           No pods running — connections to this addon will be refused until one starts.
         </p>
       ) : (

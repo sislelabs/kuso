@@ -20,6 +20,7 @@ import { api } from "@/lib/api-client";
 import {
   AlertTriangle,
   Globe,
+  Lock,
   MapPin,
   Plus,
   RefreshCw,
@@ -332,24 +333,24 @@ function ConfigurationSection({
         })()}
       </header>
       <div className="space-y-3 p-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <label className="text-xs font-medium text-[var(--text-tertiary)]">
-              Version <span className="text-[var(--warning)]">· immutable</span>
+              Version <FixedTag />
             </label>
             <Input
               value={version}
-              placeholder="leave empty for chart default"
+              placeholder="Chart default"
               disabled
               className="h-7 font-mono text-xs opacity-60"
             />
-            <p className="font-mono text-xs text-[var(--warning)]">
+            <p className="text-hint">
               {addonBlast("version")?.message}
             </p>
           </div>
           <div className="space-y-1">
             <label className="text-xs font-medium text-[var(--text-tertiary)]">
-              Tier <span className="text-[var(--warning)]">· immutable</span>
+              Tier <FixedTag />
             </label>
             <Select
               size="sm"
@@ -357,19 +358,19 @@ function ConfigurationSection({
               disabled
               className="font-mono opacity-60"
             >
-              <option value="small">small</option>
-              <option value="medium">medium</option>
-              <option value="large">large</option>
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
             </Select>
-            <p className="font-mono text-xs text-[var(--warning)]">
+            <p className="text-hint">
               {addonBlast("size")?.message}
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <label className="text-xs font-medium text-[var(--text-tertiary)]">
-              Storage size <span className="text-[var(--warning)]">· immutable</span>
+              Storage size <FixedTag />
             </label>
             <Input
               value={storageSize}
@@ -377,27 +378,27 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-xs opacity-60"
             />
-            <p className="font-mono text-xs text-[var(--warning)]">
+            <p className="text-hint">
               Cannot be changed after addon create. To resize, take a backup,
               delete the addon, recreate at the new size, restore.
             </p>
           </div>
           <div className="space-y-1">
             <label className="text-xs font-medium text-[var(--text-tertiary)]">
-              Default database <span className="text-[var(--warning)]">· immutable</span>
+              Default database <FixedTag />
             </label>
             <Input
               value={database}
-              placeholder="defaults to project name"
+              placeholder="Project name"
               disabled
               className="h-7 font-mono text-xs opacity-60"
             />
-            <p className="font-mono text-xs text-[var(--warning)]">
+            <p className="text-hint">
               {addonBlast("database")?.message}
             </p>
           </div>
         </div>
-        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 opacity-60">
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -405,12 +406,12 @@ function ConfigurationSection({
               disabled
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
-            <span className="text-xs font-medium">High availability</span>
-            <span className="ml-auto font-mono text-xs text-[var(--warning)]">
-              · immutable
+            <span className="text-xs font-medium text-[var(--text-secondary)]">High availability</span>
+            <span className="ml-auto">
+              <FixedTag />
             </span>
           </label>
-          <p className="mt-1 font-mono text-xs text-[var(--warning)]">
+          <p className="mt-1 text-hint">
             {addonBlast("ha")?.message}
           </p>
         </div>
@@ -425,8 +426,8 @@ function ConfigurationSection({
             <span className="text-xs font-medium">
               Connection pooling (PgBouncer)
             </span>
-            <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
-              point apps at {"${{ <addon>.POOLER_URL }}"}
+            <span className="ml-auto text-xs text-[var(--text-tertiary)]">
+              Point apps at <span className="font-mono">{"${{ <addon>.POOLER_URL }}"}</span>
             </span>
           </label>
         )}
@@ -442,7 +443,7 @@ function ConfigurationSection({
               aria-label="Pool size"
               className="ml-auto h-7 w-24 font-mono text-xs"
             />
-            <span className="font-mono text-xs text-[var(--text-tertiary)]">server connections per db/user</span>
+            <span className="text-xs text-[var(--text-tertiary)]">server connections per database/user</span>
           </label>
         )}
         {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
@@ -462,14 +463,14 @@ function ConfigurationSection({
               </span>
             </label>
             {requireTLS !== initial.requireTLS && (
-              <p className="mt-1.5 pl-5 font-mono text-xs leading-relaxed text-[var(--warning)]">
+              <p className="mt-1.5 pl-5 text-xs leading-relaxed text-[var(--warning)]">
                 The DB pod restarts {requireTLS ? "serving" : "without"} TLS and the
                 conn secret re-renders with the new sslmode — but services keep the
                 OLD value until their pods restart. Redeploy or restart every
                 subscribed service after saving.
               </p>
             )}
-            <p className="mt-1.5 pl-5 font-mono text-xs leading-relaxed text-[var(--text-tertiary)]">
+            <p className="mt-1.5 pl-5 text-xs leading-relaxed text-[var(--text-tertiary)]">
               Data is untouched (pod template + conn secret only). Go/pgx and libpq
               accept the self-signed cert under require; default node-postgres
               rejects it.
@@ -578,8 +579,8 @@ function ExternalSummarySection({
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
             <span className="text-xs font-medium">Connection pooling (PgBouncer)</span>
-            <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
-              point apps at {"${{ <addon>.POOLER_URL }}"}
+            <span className="ml-auto text-xs text-[var(--text-tertiary)]">
+              Point apps at <span className="font-mono">{"${{ <addon>.POOLER_URL }}"}</span>
             </span>
           </label>
           {form.enabled && (
@@ -1124,7 +1125,7 @@ function PublicTCPSection({
               <div className="mt-2 font-mono text-xs text-[var(--text-primary)]">
                 {host}:{port}
               </div>
-              <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
+              <p className="mt-1 text-xs text-[var(--text-tertiary)]">
                 Connect with the credentials from the Overview tab.
               </p>
             </div>
@@ -1195,5 +1196,15 @@ function PublicTCPSection({
         onCancel={() => setConfirmingEnable(false)}
       />
     </section>
+  );
+}
+
+// Marks a field that can only be set when the addon is created.
+function FixedTag() {
+  return (
+    <span className="inline-flex items-center gap-1 font-normal text-[var(--text-tertiary)]" title="Set when the addon was created; can't be changed here">
+      <Lock aria-hidden className="size-3" />
+      Fixed
+    </span>
   );
 }

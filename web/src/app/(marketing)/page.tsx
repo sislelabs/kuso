@@ -76,7 +76,7 @@ export default function LandingPage() {
         </section>
 
         <section className="mx-auto max-w-5xl px-6 pb-24 lg:px-12">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Feature
               Icon={Rocket}
               title="One-screen deploy"

@@ -237,7 +237,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     className="mt-1 h-7 font-mono text-xs"
                     spellCheck={false}
                   />
-                  <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
+                  <p className="mt-1 text-xs text-[var(--text-tertiary)]">
                     Cron fails on non-2xx. Add auth via the URL (token query
                     string) or hit a sibling service via{" "}
                     <code>${"{{ svc.URL }}/cron/..."}</code> at deploy time.

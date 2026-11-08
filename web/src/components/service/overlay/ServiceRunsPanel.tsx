@@ -96,7 +96,7 @@ export function ServiceRunsPanel({ project, service }: Props) {
       {canRun ? (
         <NewRunComposer project={project} service={service} />
       ) : (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-3 font-mono text-xs text-[var(--text-tertiary)]">
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-3 text-xs text-[var(--text-tertiary)]">
           Starting a run requires the admin role.
         </p>
       )}

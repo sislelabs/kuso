@@ -204,7 +204,7 @@ export default function UpdatesPage() {
         </div>
 
         {v.manifest?.components && (
-          <dl className="grid gap-3 border-t border-[var(--border-subtle)] pt-4 text-sm sm:grid-cols-2">
+          <dl className="grid grid-cols-1 gap-3 border-t border-[var(--border-subtle)] pt-4 text-sm sm:grid-cols-2">
             <div className="min-w-0">
               <dt className="text-xs text-[var(--text-secondary)]">Server image</dt>
               <dd className="mt-0.5 truncate font-mono text-xs text-[var(--text-primary)]" title={v.manifest.components.server?.image}>

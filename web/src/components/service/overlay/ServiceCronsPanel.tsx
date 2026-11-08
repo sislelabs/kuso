@@ -52,7 +52,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
       <header className="flex items-center justify-between">
         <div>
           <h3 className="font-mono text-sm font-medium">Crons</h3>
-          <p className="font-mono text-xs text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]">
             Recurring jobs that run the parent service&apos;s image with a custom command.
           </p>
         </div>

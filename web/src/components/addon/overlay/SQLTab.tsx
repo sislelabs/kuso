@@ -93,8 +93,8 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
     // whole tab into a horizontal-scroll mess. With minmax(0, …) the
     // track can shrink below its natural content width, which lets the
     // inner `overflow-auto` actually scroll the table independently.
-    <div className="grid h-full min-w-0 grid-cols-[200px_minmax(0,1fr)] gap-0">
-      <aside className="overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3">
+    <div className="grid h-full min-w-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-0 md:grid-cols-[200px_minmax(0,1fr)] md:grid-rows-1">
+      <aside className="max-h-48 overflow-y-auto border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3 md:max-h-none md:border-r md:border-b-0">
         {(databases.data ?? []).length > 1 && (
           <>
             <h4 className="mb-1 text-xs font-medium text-[var(--text-tertiary)]">
@@ -123,14 +123,14 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
           </>
         )}
         <h4 className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">
-          tables
+          Tables
         </h4>
         {tables.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : tables.isError ? (
           <div className="space-y-2 text-xs">
             <p className="text-[var(--warning)]">
-              {tables.error instanceof Error ? tables.error.message : "load failed"}
+              {tables.error instanceof Error ? tables.error.message : "Couldn't load tables"}
             </p>
             {showRepair ? (
               <>
@@ -139,32 +139,23 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                   matches the password baked into pgdata. Repair resyncs the user via
                   ALTER USER inside the pod.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => repair.mutate()}
-                  disabled={repair.isPending}
-                  className="rounded border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-1 font-mono text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20 disabled:opacity-50"
-                >
-                  {repair.isPending ? "Repairing…" : "Repair password"}
-                </button>
+                <Button size="xs" variant="secondary" onClick={() => repair.mutate()} loading={repair.isPending}>
+                  Repair password
+                </Button>
               </>
             ) : (
               <>
                 <p className="text-[var(--text-tertiary)]">
                   Postgres may still be starting. Click to retry.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => tables.refetch()}
-                  className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-                >
+                <Button size="xs" variant="secondary" onClick={() => tables.refetch()}>
                   Retry
-                </button>
+                </Button>
               </>
             )}
           </div>
         ) : (tables.data ?? []).length === 0 ? (
-          <p className="text-xs text-[var(--text-tertiary)]">no user tables</p>
+          <p className="text-xs text-[var(--text-tertiary)]">No user tables yet.</p>
         ) : (
           <ul className="space-y-0.5">
             {tables.data!.map((t) => (
@@ -217,8 +208,8 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             />
           ) : (
             <div className="flex flex-1 items-center justify-center">
-              <p className="font-mono text-xs text-[var(--text-tertiary)]">
-                pick a table to browse + edit its data.
+              <p className="px-4 text-center text-xs text-[var(--text-tertiary)]">
+                Pick a table to browse and edit its data.
               </p>
             </div>
           )

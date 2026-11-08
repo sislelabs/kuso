@@ -443,7 +443,7 @@ function ConfiguredPanel({
           </>
         }
       >
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
           {appSlug && (
             <>
               <dt className="text-[var(--text-secondary)]">App</dt>

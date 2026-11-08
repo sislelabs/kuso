@@ -77,7 +77,7 @@ export default function ProjectsPage() {
       {isPending && (
         <>
           <div className="mb-5 h-9 w-full max-w-md rounded-md bg-[var(--bg-secondary)] motion-safe:animate-pulse" />
-          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading projects">
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading projects">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <ProjectCardSkeleton key={i} />
             ))}
