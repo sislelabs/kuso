@@ -263,6 +263,7 @@ export default function TokensPage() {
         body={<p>Anything using this token (CLI logins, scripts, CI) stops working immediately.</p>}
         confirmLabel="Revoke token"
         destructive
+        typeToConfirm={revoking?.name || undefined}
         pending={revoke.isPending}
         onConfirm={() => revoking && revoke.mutate(revoking.id)}
         onCancel={() => setRevoking(null)}

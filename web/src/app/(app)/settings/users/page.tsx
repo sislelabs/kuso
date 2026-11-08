@@ -248,7 +248,7 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      toast.error("clipboard unavailable");
+      toast.error("Clipboard unavailable — select the link and copy it by hand");
     }
   };
 
