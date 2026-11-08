@@ -63,7 +63,9 @@ import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
 import { ExternalLink, X, Pencil } from "lucide-react";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
+import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
+import { SERVICE_STATUS, serverStateCause, type ServiceStatus } from "@/lib/status";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
@@ -702,7 +704,7 @@ export function ServiceOverlay({
                       {service || ""}
                     </h2>
                   )}
-                  <StatusPill status={status} detail={stateDetail} />
+                  <StatusPill status={status} detail={stateDetail || serverStateCause(env?.status?.state)} />
                 </div>
                 <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
                   <span className="min-w-0 truncate">
@@ -1479,34 +1481,26 @@ function relativeAge(iso: string): string {
   return `${days}d ago`;
 }
 
+// The overlay's local status keys ("active", "rolling", …) predate the
+// shared vocabulary; this maps them onto it so the header says exactly
+// what the canvas and the Deployments card say.
+const OVERLAY_STATUS: Record<string, ServiceStatus> = {
+  active: "live",
+  rolling: "deploying",
+  building: "building",
+  deploying: "deploying",
+  failed: "failing",
+  crashed: "failing",
+  degraded: "degraded",
+  awaiting: "not_deployed",
+  stopped: "stopped",
+  sleeping: "sleeping",
+  unknown: "unknown",
+};
+
 function StatusPill({ status, detail }: { status: string; detail?: string }) {
-  const map: Record<string, { dot: string; pulse: boolean; label: string }> = {
-    active:    { dot: "bg-[var(--success)]", pulse: false, label: "Online" },
-    rolling:   { dot: "bg-[var(--info)]", pulse: true, label: "Rolling out" },
-    building:  { dot: "bg-[var(--building)]", pulse: true, label: "Building" },
-    deploying: { dot: "bg-[var(--building)]", pulse: true, label: "Deploying" },
-    failed:    { dot: "bg-[var(--error)]", pulse: false, label: "Failed" },
-    // Server-rollup states (env.status.state → deployStatusFromServerState).
-    crashed:   { dot: "bg-[var(--error)]", pulse: true, label: "Crashlooping" },
-    degraded:  { dot: "bg-[var(--warning)]", pulse: false, label: "Degraded" },
-    awaiting:  { dot: "bg-[var(--info)]", pulse: false, label: "Awaiting first build" },
-    stopped:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Stopped" },
-    sleeping:  { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Asleep" },
-    unknown:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Unknown" },
-  };
-  const m = map[status] ?? map.unknown;
-  return (
-    <span
-      title={detail || m.label}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs text-[var(--text-secondary)]"
-    >
-      <span className="relative inline-flex h-2 w-2">
-        {m.pulse && <span className={cn("absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping", m.dot)} />}
-        <span className={cn("relative inline-block h-2 w-2 rounded-full", m.dot)} />
-      </span>
-      {m.label}
-    </span>
-  );
+  const meta = SERVICE_STATUS[OVERLAY_STATUS[status] ?? "unknown"];
+  return <SharedStatusPill status={meta} detail={detail || (status === "rolling" ? "Rolling out a new spec" : undefined)} />;
 }
 
 function UrlPill({ url }: { url: string }) {
@@ -1522,7 +1516,7 @@ function UrlPill({ url }: { url: string }) {
         <span className="truncate">{display}</span>
         <ExternalLink aria-hidden className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
       </a>
-      <CopyButton value={url} what="URL" size="xs" />
+      <CopyButton value={url} label="Copy URL" size="xs" />
     </span>
   );
 }
