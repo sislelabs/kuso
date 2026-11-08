@@ -110,7 +110,7 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
         <button
           type="button"
           onClick={() => setShowToken(true)}
-          className="font-mono text-[10px] text-[var(--text-secondary)] underline"
+          className="font-mono text-xs text-[var(--text-secondary)] underline"
         >
           private repo? add an access token
         </button>
@@ -120,7 +120,7 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
           {error}
         </p>
       )}
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="font-mono text-xs text-[var(--text-tertiary)]">
         No GitHub App needed. To deploy on push, enable the deploy hook in the service&apos;s
         settings afterwards.
       </p>

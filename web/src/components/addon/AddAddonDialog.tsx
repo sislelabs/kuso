@@ -263,7 +263,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
             <div className="space-y-2 border-b border-[var(--border-subtle)] p-3">
               <label
                 htmlFor="addon-name"
-                className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                className="text-xs font-medium text-[var(--text-tertiary)]"
               >
                 name
               </label>
@@ -286,7 +286,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               {fieldErrors.name ? (
                 <FieldError msg={fieldErrors.name} />
               ) : (
-                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <p className="font-mono text-xs text-[var(--text-tertiary)]">
                   Lowercase letters, digits and dashes, up to 32 characters.
                 </p>
               )}
@@ -337,7 +337,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       )}
                     >
                       <span className="text-[12px] font-medium">{labelMap[m]}</span>
-                      <span className="font-mono text-[9px] text-[var(--text-tertiary)]">{subMap[m]}</span>
+                      <span className="font-mono text-xs text-[var(--text-tertiary)]">{subMap[m]}</span>
                     </button>
                   );
                 })}
@@ -347,7 +347,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                 <div className="space-y-1">
                   <label
                     htmlFor="addon-ext-url"
-                    className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                    className="text-xs font-medium text-[var(--text-tertiary)]"
                   >
                     connection URL
                   </label>
@@ -368,7 +368,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   {fieldErrors.extURL ? (
                     <FieldError msg={fieldErrors.extURL} />
                   ) : (
-                    <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    <p className="font-mono text-xs text-[var(--text-tertiary)]">
                       Services get it as{" "}
                       <span className="text-[var(--text-secondary)]">{connectionURLKey(kind)}</span>.
                     </p>
@@ -381,21 +381,21 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   <button
                     type="button"
                     onClick={() => setShowAdvanced((v) => !v)}
-                    className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                    className="text-xs font-medium text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                   >
                     {showAdvanced ? "▾" : "▸"} advanced
                   </button>
                   {showAdvanced && (
                     <div className="space-y-2">
-                      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                      <p className="font-mono text-xs text-[var(--text-tertiary)]">
                         These default to the chart's recommended values.
-                        <span className="text-amber-400"> Storage size cannot be reduced after create.</span>
+                        <span className="text-[var(--warning)]"> Storage size cannot be reduced after create.</span>
                       </p>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label
                             htmlFor="addon-version"
-                            className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                            className="text-xs font-medium text-[var(--text-tertiary)]"
                           >
                             version
                           </label>
@@ -411,7 +411,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         <div>
                           <label
                             htmlFor="addon-storage"
-                            className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                            className="text-xs font-medium text-[var(--text-tertiary)]"
                           >
                             storage size
                           </label>
@@ -445,7 +445,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             />
                             Require TLS on the wire (sslmode=require)
                           </label>
-                          <p className="mt-1 pl-5 font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+                          <p className="mt-1 pl-5 font-mono text-xs leading-relaxed text-[var(--text-tertiary)]">
                             Default is plaintext in-cluster (sslmode=disable) — works with every
                             driver. Enable only if your app mandates encrypted DB connections
                             (Go/pgx, Rails); note default node-postgres rejects the self-signed
@@ -468,7 +468,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   <div>
                     <label
                       htmlFor="addon-inst-name"
-                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                      className="text-xs font-medium text-[var(--text-tertiary)]"
                     >
                       instance addon
                     </label>
@@ -497,7 +497,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       />
                     )}
                     <FieldError msg={fieldErrors.instName} />
-                    <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
                       {availableInstanceNames.length > 0
                         ? `${availableInstanceNames.length} ${kind} server${availableInstanceNames.length === 1 ? "" : "s"} registered for this instance.`
                         : `No ${kind} shared servers registered. Ask an admin or type the name manually.`}

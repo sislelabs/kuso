@@ -76,9 +76,9 @@ export function CellEditor({
           <button
             type="button"
             onClick={() => setDraftNull((n) => !n)}
-            className={`shrink-0 rounded px-1 text-[9px] ${
+            className={`shrink-0 rounded px-1 text-xs ${
               draftNull
-                ? "bg-amber-500/20 text-amber-300"
+                ? "bg-[var(--warning)]/20 text-[var(--warning)]"
                 : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]"
             }`}
             title="toggle NULL"
@@ -138,19 +138,19 @@ export function CellEditor({
           />
         )}
       </div>
-      {err && <span className="px-1 text-[9px] text-red-400">{err}</span>}
+      {err && <span className="px-1 text-xs text-[var(--error)]">{err}</span>}
       <div className="flex justify-end gap-1">
         <button
           type="button"
           onClick={cancel}
-          className="rounded px-1.5 py-0.5 text-[9px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)]"
+          className="rounded px-1.5 py-0.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)]"
         >
           esc
         </button>
         <button
           type="button"
           onClick={commit}
-          className="rounded bg-[var(--accent)]/20 px-1.5 py-0.5 text-[9px] text-[var(--accent)] hover:bg-[var(--accent)]/30"
+          className="rounded bg-[var(--accent)]/20 px-1.5 py-0.5 text-xs text-[var(--accent)] hover:bg-[var(--accent)]/30"
         >
           save
         </button>

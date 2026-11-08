@@ -96,7 +96,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
       <aside className="overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3">
         {(databases.data ?? []).length > 1 && (
           <>
-            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <h4 className="mb-1 text-xs font-medium text-[var(--text-tertiary)]">
               database
             </h4>
             <select
@@ -119,14 +119,14 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             </select>
           </>
         )}
-        <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        <h4 className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">
           tables
         </h4>
         {tables.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : tables.isError ? (
-          <div className="space-y-2 text-[10px]">
-            <p className="text-amber-400">
+          <div className="space-y-2 text-xs">
+            <p className="text-[var(--warning)]">
               {tables.error instanceof Error ? tables.error.message : "load failed"}
             </p>
             {showRepair ? (
@@ -140,7 +140,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                   type="button"
                   onClick={() => repair.mutate()}
                   disabled={repair.isPending}
-                  className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 font-mono text-[10px] text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+                  className="rounded border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-1 font-mono text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20 disabled:opacity-50"
                 >
                   {repair.isPending ? "Repairing…" : "Repair password"}
                 </button>
@@ -153,7 +153,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 <button
                   type="button"
                   onClick={() => tables.refetch()}
-                  className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                  className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
                 >
                   Retry
                 </button>
@@ -161,7 +161,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             )}
           </div>
         ) : (tables.data ?? []).length === 0 ? (
-          <p className="text-[10px] text-[var(--text-tertiary)]">no user tables</p>
+          <p className="text-xs text-[var(--text-tertiary)]">no user tables</p>
         ) : (
           <ul className="space-y-0.5">
             {tables.data!.map((t) => (
@@ -192,7 +192,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
               key={m}
               type="button"
               onClick={() => setMode(m)}
-              className={`rounded px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${
+              className={`rounded px-2 py-1 font-mono text-xs uppercase tracking-wider ${
                 mode === m
                   ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                   : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -214,7 +214,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             />
           ) : (
             <div className="flex flex-1 items-center justify-center">
-              <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              <p className="font-mono text-xs text-[var(--text-tertiary)]">
                 pick a table to browse + edit its data.
               </p>
             </div>
@@ -240,7 +240,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 }}
               />
               <div className="mt-2 flex items-center justify-between">
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <span className="font-mono text-xs text-[var(--text-tertiary)]">
                   this runner is read-only (Browse edits live data) · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
                 </span>
                 <Button size="sm" onClick={() => run.mutate(query)} disabled={run.isPending}>
@@ -251,13 +251,13 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
               {error ? (
-                <pre className="whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-[11px] text-red-400">
+                <pre className="whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] text-[var(--error)]">
                   {error}
                 </pre>
               ) : resp ? (
                 <SQLResults resp={resp} />
               ) : (
-                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <p className="font-mono text-xs text-[var(--text-tertiary)]">
                   no results yet — write a query and hit Run.
                 </p>
               )}
@@ -313,7 +313,7 @@ function SQLResults({
 }) {
   if (resp.columns.length === 0) {
     return (
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="font-mono text-xs text-[var(--text-tertiary)]">
         query returned no columns ({resp.elapsed})
       </p>
     );
@@ -351,11 +351,11 @@ function SQLResults({
           ))}
         </tbody>
       </table>
-      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-xs text-[var(--text-tertiary)]">
         <span>
           {resp.rows.length} row{resp.rows.length === 1 ? "" : "s"}
           {resp.truncated && (
-            <span className="ml-2 text-amber-400">· truncated at 100</span>
+            <span className="ml-2 text-[var(--warning)]">· truncated at 100</span>
           )}
         </span>
         <span>{resp.elapsed}</span>

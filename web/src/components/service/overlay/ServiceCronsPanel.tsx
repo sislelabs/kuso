@@ -90,7 +90,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
                 <Plus className="h-3.5 w-3.5" /> Add cron
               </Button>
             ) : (
-              <span className="font-mono text-[10px]">Adding a cron requires the admin role.</span>
+              <span className="font-mono text-xs">Adding a cron requires the admin role.</span>
             )}
           </div>
         )
@@ -151,14 +151,14 @@ function CronRow({
       <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
       <div className="min-w-0 flex-1">
         <p className="truncate font-mono text-[12px] font-medium">{short}</p>
-        <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+        <p className="truncate font-mono text-xs text-[var(--text-tertiary)]">
           <span className="text-[var(--text-secondary)]">{cron.spec.schedule}</span>
           {" · "}
           {(cron.spec.command ?? []).join(" ")}
         </p>
       </div>
       {cron.spec.suspend && (
-        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-400">
+        <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--warning)]">
           suspended
         </span>
       )}
@@ -178,7 +178,7 @@ function CronRow({
             type="button"
             onClick={() => setConfirming(true)}
             disabled={del.isPending}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
             title="Delete cron"
             aria-label="Delete cron"
           >
@@ -247,7 +247,7 @@ function CronCreateForm({
       className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3"
     >
       <div className="flex items-center justify-between">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        <p className="text-xs font-medium text-[var(--text-tertiary)]">
           New cron
         </p>
         <button
@@ -276,7 +276,7 @@ function CronCreateForm({
         type="button"
         onClick={() => setShowOptions((v) => !v)}
         aria-expanded={showOptions}
-        className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+        className="font-mono text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
       >
         {showOptions ? "− fewer options" : "+ more options"}
       </button>

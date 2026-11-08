@@ -114,7 +114,7 @@ export function SettingsTab({
           <RepairPasswordSection project={project} addon={addon} cr={cr} />
         </>
       )}
-      <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
+      <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4">
         <h4 className="text-sm font-semibold">
           {isExternal ? "Disconnect addon" : "Delete addon"}
         </h4>
@@ -304,7 +304,7 @@ function ConfigurationSection({
           // the badge can't claim "in sync" while the release is broken.
           if (dirty) {
             return (
-              <span className="font-mono text-[10px] text-[var(--warning)]">unsaved</span>
+              <span className="font-mono text-xs text-[var(--warning)]">unsaved</span>
             );
           }
           const rs = addonReconcileState(cr);
@@ -315,7 +315,7 @@ function ConfigurationSection({
             return (
               <span
                 title={msg}
-                className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--error)]"
+                className="inline-flex items-center gap-1 font-mono text-xs text-[var(--error)]"
               >
                 <AlertTriangle className="h-3 w-3" /> upgrade failed
               </span>
@@ -323,18 +323,18 @@ function ConfigurationSection({
           }
           if (rs === "synced") {
             return (
-              <span className="font-mono text-[10px] text-[var(--success)]">in sync</span>
+              <span className="font-mono text-xs text-[var(--success)]">in sync</span>
             );
           }
           // Unknown reconcile state (no conditions yet) — don't assert green.
-          return <span className="font-mono text-[10px] text-[var(--text-tertiary)]">—</span>;
+          return <span className="font-mono text-xs text-[var(--text-tertiary)]">—</span>;
         })()}
       </header>
       <div className="space-y-3 p-3">
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Version <span className="text-amber-400">· immutable</span>
+            <label className="text-xs font-medium text-[var(--text-tertiary)]">
+              Version <span className="text-[var(--warning)]">· immutable</span>
             </label>
             <Input
               value={version}
@@ -342,13 +342,13 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-[var(--warning)]">
+            <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("version")?.message}
             </p>
           </div>
           <div className="space-y-1">
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Tier <span className="text-amber-400">· immutable</span>
+            <label className="text-xs font-medium text-[var(--text-tertiary)]">
+              Tier <span className="text-[var(--warning)]">· immutable</span>
             </label>
             <select
               value={size}
@@ -359,15 +359,15 @@ function ConfigurationSection({
               <option value="medium">medium</option>
               <option value="large">large</option>
             </select>
-            <p className="font-mono text-[10px] text-[var(--warning)]">
+            <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("size")?.message}
             </p>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Storage size <span className="text-amber-400">· immutable</span>
+            <label className="text-xs font-medium text-[var(--text-tertiary)]">
+              Storage size <span className="text-[var(--warning)]">· immutable</span>
             </label>
             <Input
               value={storageSize}
@@ -375,14 +375,14 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-[var(--warning)]">
+            <p className="font-mono text-xs text-[var(--warning)]">
               Cannot be changed after addon create. To resize, take a backup,
               delete the addon, recreate at the new size, restore.
             </p>
           </div>
           <div className="space-y-1">
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Default database <span className="text-amber-400">· immutable</span>
+            <label className="text-xs font-medium text-[var(--text-tertiary)]">
+              Default database <span className="text-[var(--warning)]">· immutable</span>
             </label>
             <Input
               value={database}
@@ -390,7 +390,7 @@ function ConfigurationSection({
               disabled
               className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-[var(--warning)]">
+            <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("database")?.message}
             </p>
           </div>
@@ -404,11 +404,11 @@ function ConfigurationSection({
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
             <span className="text-[12px] font-medium">High availability</span>
-            <span className="ml-auto font-mono text-[10px] text-amber-400">
+            <span className="ml-auto font-mono text-xs text-[var(--warning)]">
               · immutable
             </span>
           </label>
-          <p className="mt-1 font-mono text-[10px] text-[var(--warning)]">
+          <p className="mt-1 font-mono text-xs text-[var(--warning)]">
             {addonBlast("ha")?.message}
           </p>
         </div>
@@ -423,7 +423,7 @@ function ConfigurationSection({
             <span className="text-[12px] font-medium">
               Connection pooling (PgBouncer)
             </span>
-            <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
               point apps at {"${{ <addon>.POOLER_URL }}"}
             </span>
           </label>
@@ -440,7 +440,7 @@ function ConfigurationSection({
               aria-label="Pool size"
               className="ml-auto h-7 w-24 font-mono text-[12px]"
             />
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">server connections per db/user</span>
+            <span className="font-mono text-xs text-[var(--text-tertiary)]">server connections per db/user</span>
           </label>
         )}
         {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
@@ -455,19 +455,19 @@ function ConfigurationSection({
               <span className="text-[12px] font-medium">
                 Require TLS on the wire
               </span>
-              <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+              <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
                 {requireTLS ? "sslmode=require" : "sslmode=disable"}
               </span>
             </label>
             {requireTLS !== initial.requireTLS && (
-              <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-[var(--warning)]">
+              <p className="mt-1.5 pl-5 font-mono text-xs leading-relaxed text-[var(--warning)]">
                 The DB pod restarts {requireTLS ? "serving" : "without"} TLS and the
                 conn secret re-renders with the new sslmode — but services keep the
                 OLD value until their pods restart. Redeploy or restart every
                 subscribed service after saving.
               </p>
             )}
-            <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+            <p className="mt-1.5 pl-5 font-mono text-xs leading-relaxed text-[var(--text-tertiary)]">
               Data is untouched (pod template + conn secret only). Go/pgx and libpq
               accept the self-signed cert under require; default node-postgres
               rejects it.
@@ -576,7 +576,7 @@ function ExternalSummarySection({
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
             <span className="text-[12px] font-medium">Connection pooling (PgBouncer)</span>
-            <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
               point apps at {"${{ <addon>.POOLER_URL }}"}
             </span>
           </label>
@@ -786,7 +786,7 @@ function PlacementSection({
           <MapPin className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           <h4 className="text-sm font-semibold">Placement</h4>
         </div>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="font-mono text-xs text-[var(--text-tertiary)]">
           {!hasEffectiveRules
             ? "schedules anywhere"
             : incompleteRules > 0
@@ -861,7 +861,7 @@ function PlacementSection({
                 type="button"
                 onClick={() => rmLabel(i)}
                 aria-label="Remove rule"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--error)]"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -883,7 +883,7 @@ function PlacementSection({
           <span className="text-[12px] text-[var(--text-secondary)]">
             specific nodes
           </span>
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <span className="font-mono text-xs text-[var(--text-tertiary)]">
             {pickedNodes.length === 0
               ? "any node matching the labels"
               : `${pickedNodes.length} pinned`}
@@ -903,7 +903,7 @@ function PlacementSection({
                   type="button"
                   onClick={() => toggleNode(h)}
                   className={cn(
-                    "inline-flex h-6 items-center rounded-md border px-2 font-mono text-[10px] transition-colors",
+                    "inline-flex h-6 items-center rounded-md border px-2 font-mono text-xs transition-colors",
                     picked
                       ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
                       : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
@@ -918,7 +918,7 @@ function PlacementSection({
       </div>
 
       {hasEffectiveRules && (
-        <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
           {incompleteRules > 0 ? (
             <span>
               fill in the {incompleteRules === 1 ? "empty rule" : "empty rules"} or
@@ -991,7 +991,7 @@ function RepairPasswordSection({
   });
   if (kind !== "postgres") return null;
   return (
-    <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+    <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4">
       <h4 className="text-sm font-semibold">Resync password</h4>
       <p className="mt-1 text-xs text-[var(--text-secondary)]">
         Re-applies the connection-secret&apos;s password to the running database
@@ -1090,7 +1090,7 @@ function PublicTCPSection({
         </div>
         <span
           className={cn(
-            "font-mono text-[10px]",
+            "font-mono text-xs",
             enabled
               ? "text-[var(--warning)]"
               : "text-[var(--text-tertiary)]",
@@ -1108,7 +1108,7 @@ function PublicTCPSection({
         </p>
         {enabled ? (
           <div className="space-y-2">
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+            <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />
                 <span className="text-[11px] font-medium text-[var(--warning)]">
@@ -1118,7 +1118,7 @@ function PublicTCPSection({
               <div className="mt-2 font-mono text-[12px] text-[var(--text-primary)]">
                 {host}:{port}
               </div>
-              <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+              <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
                 Connect with the credentials from the Overview tab.
               </p>
             </div>

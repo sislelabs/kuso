@@ -148,7 +148,7 @@ export function FindingsTable({
                       <VulnIdCell f={f} />
                       {f.ignored && (
                         <span
-                          className="inline-flex items-center gap-0.5 text-[10px] text-[var(--text-tertiary)]"
+                          className="inline-flex items-center gap-0.5 text-xs text-[var(--text-tertiary)]"
                           title="Ignored: excluded from the deploy gate and alerts"
                         >
                           <EyeOff className="h-3 w-3" /> ignored
@@ -160,7 +160,7 @@ export function FindingsTable({
                     <span className="font-mono text-xs" title={f.target}>
                       {f.pkgName}
                     </span>
-                    <span className="ml-1 text-[10px] text-[var(--text-tertiary)]">{f.pkgType}</span>
+                    <span className="ml-1 text-xs text-[var(--text-tertiary)]">{f.pkgType}</span>
                   </TableCell>
                   <TableCell>
                     <span className="inline-flex items-center gap-1 font-mono text-xs">

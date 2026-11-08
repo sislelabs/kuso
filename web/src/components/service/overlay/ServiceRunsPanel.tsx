@@ -54,8 +54,8 @@ function phaseBadge(p: RunPhase) {
   const map: Record<RunPhase, { label: string; cls: string }> = {
     pending:   { label: "PENDING",   cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
     running:   { label: "RUNNING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
-    succeeded: { label: "SUCCEEDED", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
-    failed:    { label: "FAILED",    cls: "bg-red-500/10 text-red-400 border-red-500/30" },
+    succeeded: { label: "SUCCEEDED", cls: "bg-[var(--success-subtle)] text-[var(--success)] border-[var(--success)]/30" },
+    failed:    { label: "FAILED",    cls: "bg-[var(--error-subtle)] text-[var(--error)] border-[var(--error)]/30" },
     cancelled: { label: "CANCELLED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
     unknown:   { label: "UNKNOWN",   cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
   };
@@ -63,7 +63,7 @@ function phaseBadge(p: RunPhase) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest border",
+        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-xs font-semibold tracking-widest border",
         m.cls,
       )}
     >
@@ -176,12 +176,12 @@ function NewRunComposer({ project, service }: { project: string; service: string
 
   return (
     <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+      <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-tertiary)]">
         <Terminal className="h-3.5 w-3.5" />
         Fire a one-shot run
       </div>
       <div>
-        <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <label className="font-mono text-xs text-[var(--text-tertiary)]">
           command
         </label>
         <textarea
@@ -192,13 +192,13 @@ function NewRunComposer({ project, service }: { project: string; service: string
           className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[12px] text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           spellCheck={false}
         />
-        <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
           parsed as argv (space-separated). Use <code>sh -c &quot;…&quot;</code>{" "}
           when you need shell expansion.
         </p>
       </div>
       <div>
-        <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <label className="font-mono text-xs text-[var(--text-tertiary)]">
           env overlay (optional; one KEY=VALUE per line)
         </label>
         <textarea
@@ -211,7 +211,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
         />
       </div>
       <div>
-        <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <label className="font-mono text-xs text-[var(--text-tertiary)]">
           resources (optional; blank = default)
         </label>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -236,7 +236,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
         </div>
       </div>
       <div className="flex items-center justify-between gap-3">
-        <label className="flex items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <label className="flex items-center gap-2 font-mono text-xs text-[var(--text-tertiary)]">
           timeout
           <input
             type="number"
@@ -325,9 +325,9 @@ function RunRow({
     <li
       className={cn(
         "overflow-hidden rounded-md border bg-[var(--bg-secondary)]",
-        phase === "failed" && "border-red-500/30",
-        phase === "succeeded" && "border-emerald-500/30",
-        phase === "running" && "border-amber-500/30",
+        phase === "failed" && "border-[var(--error)]/30",
+        phase === "succeeded" && "border-[var(--success)]/30",
+        phase === "running" && "border-[var(--warning)]/30",
         !["failed", "succeeded", "running"].includes(phase) && "border-[var(--border-subtle)]",
       )}
     >
@@ -342,7 +342,7 @@ function RunRow({
             <div className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={cmd}>
               {cmd || <span className="text-[var(--text-tertiary)]">(no command)</span>}
             </div>
-            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <div className="mt-0.5 font-mono text-xs text-[var(--text-tertiary)]">
               {created ? relativeTime(created) : "—"}
               {completed && phase !== "running" && phase !== "pending" && (
                 <>
@@ -366,7 +366,7 @@ function RunRow({
               )}
             </div>
             {phase === "failed" && msg && (
-              <div className="mt-1 flex items-start gap-1 font-mono text-[11px] text-red-300/90" title={msg}>
+              <div className="mt-1 flex items-start gap-1 font-mono text-[11px] text-[var(--error)]" title={msg}>
                 <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
                 <span className="truncate">{msg}</span>
               </div>
@@ -427,7 +427,7 @@ function CancelRunButton({
         onClick={() => setConfirming(true)}
         disabled={m.isPending}
         title="Cancel this run"
-        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--error)]/40 hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-50"
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs text-[var(--text-secondary)] hover:border-[var(--error)]/40 hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-50"
       >
         <X className="h-3 w-3" />
         {m.isPending ? "…" : "cancel"}

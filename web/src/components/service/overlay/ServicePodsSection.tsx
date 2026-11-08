@@ -22,9 +22,9 @@ export function ServicePodsSection({
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-        <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">Pods</h3>
+        <h3 className="text-xs font-medium text-[var(--text-tertiary)]">Pods</h3>
         {pods.data && (
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{pods.data.namespace}</span>
+          <span className="font-mono text-xs text-[var(--text-tertiary)]">{pods.data.namespace}</span>
         )}
       </header>
       {!envName ? (

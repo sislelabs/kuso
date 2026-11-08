@@ -173,7 +173,7 @@ export function AddOauthAppDialog({
                 className="font-mono text-xs"
                 placeholder="GITHUB"
               />
-              <p className="text-[10px] text-[var(--text-tertiary)]">
+              <p className="text-xs text-[var(--text-tertiary)]">
                 Saved as {prefix.toUpperCase() || "GITHUB"}_CLIENT_ID /
                 _SECRET.
               </p>
@@ -233,7 +233,7 @@ export function AddOauthAppDialog({
               type="password"
               autoComplete="off"
             />
-            <p className="text-[10px] text-[var(--text-tertiary)]">
+            <p className="text-xs text-[var(--text-tertiary)]">
               GitHub only shows the Client Secret once. If you lose it,
               return to the App page and click &ldquo;Generate a new
               client secret&rdquo;.

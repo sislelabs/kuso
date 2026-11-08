@@ -170,7 +170,7 @@ export function TableGrid({
   }
   if (rows.isError) {
     return (
-      <pre className="m-3 whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-[11px] text-red-400">
+      <pre className="m-3 whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] text-[var(--error)]">
         {rows.error instanceof Error ? rows.error.message : "load failed"}
       </pre>
     );
@@ -190,7 +190,7 @@ export function TableGrid({
           </span>
           <span className="text-[var(--text-tertiary)]">· {total} rows</span>
           {!editable && (
-            <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">
+            <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-xs text-[var(--warning)]">
               read-only (no primary key)
             </span>
           )}
@@ -199,7 +199,7 @@ export function TableGrid({
           <button
             type="button"
             onClick={() => setInsertOpen(true)}
-            className="flex items-center gap-1 rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+            className="flex items-center gap-1 rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
           >
             <Plus className="h-3 w-3" /> insert row
           </button>
@@ -220,7 +220,7 @@ export function TableGrid({
                   title={colByName.get(c)?.dataType}
                 >
                   <span className="inline-flex items-center gap-1">
-                    {pk.includes(c) && <span className="text-amber-400/70">★</span>}
+                    {pk.includes(c) && <span className="text-[var(--warning)]">★</span>}
                     {c}
                     {orderBy === c &&
                       (dir === "asc" ? (
@@ -254,7 +254,7 @@ export function TableGrid({
                         title="delete row"
                         aria-label="Delete row"
                       >
-                        <Trash2 className="h-3 w-3 text-red-400/70 hover:text-red-400" />
+                        <Trash2 className="h-3 w-3 text-[var(--error)] hover:text-[var(--error)]" />
                       </button>
                     )}
                   </td>
@@ -306,7 +306,7 @@ export function TableGrid({
       </div>
 
       {/* pagination */}
-      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 font-mono text-xs text-[var(--text-tertiary)]">
         <span>
           {total === 0 ? "0" : `${page * PAGE + 1}–${page * PAGE + data.rows.length}`} of {total}
           <span className="ml-2">· {data.elapsed}</span>

@@ -11,7 +11,7 @@ export function SleepBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]",
+        "inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-tertiary)]",
         className
       )}
     >
