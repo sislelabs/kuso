@@ -47,8 +47,9 @@ export function serviceStatusFromServerState(state: string | undefined): Service
       return "deploying";
     case "building":
       return "building";
+    // release_failed: the new image wasn't promoted; the last green build
+    // keeps serving.
     case "degraded":
-    // The new image wasn't promoted; the last green build keeps serving.
     case "release_failed":
       return "degraded";
     case "crashlooping":
