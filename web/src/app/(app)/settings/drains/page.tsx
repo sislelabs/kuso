@@ -227,7 +227,12 @@ export default function DrainsPage() {
           title="Add log drain"
           description="Send a test line after adding to confirm the sink accepts it."
           footer={
-            <Button size="sm" type="submit" disabled={!url.trim() || create.isPending}>
+            <Button
+              size="sm"
+              type="submit"
+              disabled={!url.trim() || create.isPending}
+              disabledReason={!url.trim() && !create.isPending ? "Enter the drain URL first" : undefined}
+            >
               <Plus className="h-3.5 w-3.5" />
               {create.isPending ? "Saving…" : "Add drain"}
             </Button>

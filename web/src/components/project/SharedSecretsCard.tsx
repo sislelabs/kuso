@@ -399,7 +399,13 @@ function ManualAddRow({
         spellCheck={false}
         autoComplete="new-password"
       />
-      <Button size="sm" type="submit" aria-label="Add secret" disabled={!k.trim() || !v || pending}>
+      <Button
+        size="sm"
+        type="submit"
+        aria-label="Add secret"
+        disabled={!k.trim() || !v || pending}
+        disabledReason={pending ? undefined : !k.trim() ? "Enter a variable name first" : !v ? "Enter a value first" : undefined}
+      >
         <Plus className="h-3.5 w-3.5" />
       </Button>
     </form>

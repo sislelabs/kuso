@@ -135,6 +135,17 @@ export default function InstanceSecretsPage() {
               size="sm"
               type="submit"
               disabled={!newKey.trim() || !newValue || set.isPending || !list.isSuccess}
+              disabledReason={
+                set.isPending
+                  ? undefined
+                  : !list.isSuccess
+                    ? "Waiting for the current secrets to load"
+                    : !newKey.trim()
+                      ? "Enter a key first"
+                      : !newValue
+                        ? "Enter a value first"
+                        : undefined
+              }
             >
               <Plus className="h-3.5 w-3.5" />
               {set.isPending ? "Saving…" : "Save secret"}

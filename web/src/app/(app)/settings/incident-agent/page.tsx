@@ -265,7 +265,12 @@ function ConfigSection({
       footerHint="Changes apply within ~30s."
       footer={
         !readOnly && (
-          <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+          <Button
+            size="sm"
+            disabled={!dirty || save.isPending}
+            disabledReason={!dirty && !save.isPending ? "No changes to save" : undefined}
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? "Saving…" : "Save"}
           </Button>
         )
@@ -344,7 +349,12 @@ function CredentialsSection({
       footerHint="Write-only: stored credentials are never shown back."
       footer={
         !readOnly && (
-          <Button size="sm" disabled={!creds.trim() || save.isPending} onClick={() => save.mutate()}>
+          <Button
+            size="sm"
+            disabled={!creds.trim() || save.isPending}
+            disabledReason={!creds.trim() && !save.isPending ? "Paste the credentials JSON first" : undefined}
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? "Saving…" : "Save credentials"}
           </Button>
         )
@@ -415,7 +425,12 @@ function DiscordSection({
       footerHint="Tokens are write-only. Saving restarts the bot."
       footer={
         !readOnly && (
-          <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+          <Button
+            size="sm"
+            disabled={!dirty || save.isPending}
+            disabledReason={!dirty && !save.isPending ? "Nothing to save: enter a token or change the channel" : undefined}
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? "Saving…" : "Save Discord config"}
           </Button>
         )

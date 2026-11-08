@@ -740,7 +740,22 @@ function AddDomainForm({
         <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
           Cancel
         </Button>
-        <Button type="submit" size="sm" disabled={!ready || pending}>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={!ready || pending}
+          disabledReason={
+            pending || ready
+              ? undefined
+              : !host
+                ? "Enter a hostname first"
+                : validationError
+                  ? validationError
+                  : duplicate
+                    ? "This domain is already on this service"
+                    : "Wildcard domains need a TLS secret"
+          }
+        >
           {pending ? "Adding…" : "Add domain"}
         </Button>
       </div>

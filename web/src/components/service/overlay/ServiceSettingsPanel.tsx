@@ -581,7 +581,13 @@ function EnvBranchSection({
           spellCheck={false}
           className={cn(monoInputClass, "flex-1")}
         />
-        <Button type="submit" size="sm" className="h-8" disabled={!dirty || saving}>
+        <Button
+          type="submit"
+          size="sm"
+          className="h-8"
+          disabled={!dirty || saving}
+          disabledReason={!dirty && !saving ? "No changes to save" : undefined}
+        >
           {saving ? "Saving…" : "Save branch"}
         </Button>
       </form>

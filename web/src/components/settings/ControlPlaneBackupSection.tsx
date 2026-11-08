@@ -152,6 +152,17 @@ export function ControlPlaneBackupSection() {
               size="sm"
               variant="destructive"
               disabled={!file || fileError !== null || restore.isPending || running}
+              disabledReason={
+                restore.isPending
+                  ? undefined
+                  : running
+                    ? "A restore is already running"
+                    : !file
+                      ? "Choose a backup file (.gz) first"
+                      : fileError !== null
+                        ? "This file can't be restored: see the message below"
+                        : undefined
+              }
               onClick={() => setConfirming(true)}
             >
               <Upload className="h-3.5 w-3.5" />
