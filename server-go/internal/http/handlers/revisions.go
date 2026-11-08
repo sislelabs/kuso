@@ -102,6 +102,7 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 	out = visible
 	for i := range out {
 		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
+		out[i].ChangedKeys = projects.RevisionChangedKeys(out[i].Snapshot)
 	}
 	resolveRevisionActors(ctx, out, h.usernameForID)
 	writeJSON(w, http.StatusOK, out)
@@ -173,6 +174,7 @@ func (h *ProjectsHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redactRevisionSnapshotIfNeeded(ctx, h.DB, rev.Project, rev)
+	rev.ChangedKeys = projects.RevisionChangedKeys(rev.Snapshot)
 	if name, ok := h.usernameForID(ctx, rev.Actor); ok {
 		rev.Actor = name
 	}

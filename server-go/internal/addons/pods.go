@@ -49,6 +49,12 @@ type AddonPodSummary struct {
 type AddonPodList struct {
 	Namespace string            `json:"namespace"`
 	Pods      []AddonPodSummary `json:"pods"`
+	// RunningImage is the datastore container's image on a running pod;
+	// RunningVersion is its tag. They answer "which version is this?" when
+	// spec.version is empty (chart default). Omitted when no main pod runs
+	// (scaled down, CNPG-managed HA postgres) or the image is digest-only.
+	RunningImage   string `json:"runningImage,omitempty"`
+	RunningVersion string `json:"runningVersion,omitempty"`
 }
 
 // ListPods returns every pod belonging to an addon — the datastore itself and
@@ -93,8 +99,49 @@ func (s *Service) ListPods(ctx context.Context, project, addon string) (*AddonPo
 		}
 		sum.Message = podProblem(p)
 		out.Pods = append(out.Pods, sum)
+		// Every addon chart puts the datastore first in containers.
+		if out.RunningImage == "" && isMainAddonPod(p, cr.Name) && p.Status.Phase == corev1.PodRunning && len(p.Spec.Containers) > 0 {
+			out.RunningImage = p.Spec.Containers[0].Image
+			out.RunningVersion = imageVersion(out.RunningImage)
+		}
 	}
 	return out, nil
+}
+
+// isMainAddonPod reports whether the pod belongs to the addon's own
+// workload — the StatefulSet (or Deployment) named after the release —
+// rather than a sibling workload such as the pooler or redis sentinels,
+// which share the instance label.
+func isMainAddonPod(p *corev1.Pod, crName string) bool {
+	owner := metav1.GetControllerOf(p)
+	if owner == nil {
+		return false
+	}
+	switch owner.Kind {
+	case "StatefulSet":
+		return owner.Name == crName
+	case "ReplicaSet":
+		i := strings.LastIndexByte(owner.Name, '-')
+		return i > 0 && owner.Name[:i] == crName
+	}
+	return false
+}
+
+// imageVersion returns the tag of an image reference: "postgres:16-alpine"
+// → "16-alpine", "reg:5000/redis:7@sha256:…" → "7". A reference without a
+// tag is "latest" unless it is pinned by digest alone, which has no
+// human-readable version ("").
+func imageVersion(image string) string {
+	name, digest, _ := strings.Cut(image, "@")
+	// The tag colon is the one after the last path segment; an earlier
+	// colon is a registry port.
+	if i := strings.LastIndexByte(name, ':'); i > strings.LastIndexByte(name, '/') {
+		return name[i+1:]
+	}
+	if digest != "" || name == "" {
+		return ""
+	}
+	return "latest"
 }
 
 // podProblem extracts the most specific explanation available for a pod that

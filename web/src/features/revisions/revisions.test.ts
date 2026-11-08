@@ -42,6 +42,24 @@ describe("describeRevision", () => {
     expect(describeRevision(rev({ summary: "patch", snapshot: "garbage" })).revertable).toBe(false);
   });
 
+  it("names the keys of a secret change and never shows a value", () => {
+    const secret = { op: "service.envSecret", informational: true };
+    expect(
+      describeRevision(rev({ summary: "env set STRIPE_KEY (secret)", snapshot: secret, changedKeys: ["STRIPE_KEY"] })),
+    ).toEqual({ label: "Secret changed", detail: "STRIPE_KEY", revertable: false });
+    expect(
+      describeRevision(rev({ snapshot: secret, changedKeys: ["A_KEY", "B_KEY", "STRIPE_KEY"] })).detail,
+    ).toBe("A_KEY +2 more");
+  });
+
+  it("falls back to the key count when the server sends no names", () => {
+    const secret = { op: "service.envSecret", informational: true };
+    expect(describeRevision(rev({ summary: "env set STRIPE_KEY (secret)", snapshot: secret })).detail).toBe("1 key");
+    expect(
+      describeRevision(rev({ summary: "env set STRIPE_KEY (secret)", snapshot: secret, changedKeys: [] })).detail,
+    ).toBe("1 key");
+  });
+
   it("labels legacy patch rows as settings changes with no detail", () => {
     expect(describeRevision(rev({ summary: "patch", snapshot: { patch: {} } }))).toEqual({
       label: "Settings changed",

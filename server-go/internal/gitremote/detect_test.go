@@ -89,3 +89,20 @@ func TestDetectRuntime_OtherHostsAreUnsupported(t *testing.T) {
 		t.Errorf("err = %v, want ErrUnsupported", err)
 	}
 }
+
+func TestReadFile(t *testing.T) {
+	t.Parallel()
+	srv := fakeGitHubAPI(t, "")
+	defer srv.Close()
+	in := &Inspector{HTTP: srv.Client(), GitHubAPI: srv.URL}
+	got, err := in.ReadFile(context.Background(), "https://github.com/acme/app", "main", "services/api/Dockerfile", "")
+	if err != nil || got != "FROM scratch\nEXPOSE 9090\n" {
+		t.Fatalf("ReadFile = %q, %v", got, err)
+	}
+	if got, err := in.ReadFile(context.Background(), "https://github.com/acme/app", "main", ".env.example", ""); err != nil || got != "" {
+		t.Errorf("missing file = %q, %v; want empty, nil", got, err)
+	}
+	if _, err := in.ReadFile(context.Background(), "https://gitlab.com/acme/app", "main", ".env.example", ""); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("gitlab = %v, want ErrUnsupported", err)
+	}
+}

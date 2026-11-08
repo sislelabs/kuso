@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -577,6 +578,7 @@ func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request
 		if repos == nil {
 			repos = []db.GithubRepo{}
 		}
+		db.SortGithubReposByPushed(repos)
 		rs = append(rs, wireInstall{ID: ins.ID, AccountLogin: ins.AccountLogin, AccountType: ins.AccountType, AccountID: ins.AccountID, Repos: repos})
 	}
 	writeJSON(w, http.StatusOK, rs)
@@ -590,9 +592,10 @@ func (h *GithubHandler) ListRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type wireRepo struct {
-		FullName       string `json:"fullName"`
-		DefaultBranch  string `json:"defaultBranch"`
-		InstallationID int64  `json:"installationId"`
+		FullName       string     `json:"fullName"`
+		DefaultBranch  string     `json:"defaultBranch"`
+		InstallationID int64      `json:"installationId"`
+		PushedAt       *time.Time `json:"pushedAt,omitempty"`
 	}
 	out := []wireRepo{}
 	if h.Cache == nil {
@@ -607,12 +610,23 @@ func (h *GithubHandler) ListRepos(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	type entry struct {
+		repo db.GithubRepo
+		inst int64
+	}
+	var all []entry
 	for _, ins := range insts {
 		var repos []db.GithubRepo
 		_ = json.Unmarshal([]byte(ins.RepositoriesJSON), &repos)
 		for _, rp := range repos {
-			out = append(out, wireRepo{FullName: rp.FullName, DefaultBranch: rp.DefaultBranch, InstallationID: ins.ID})
+			all = append(all, entry{repo: rp, inst: ins.ID})
 		}
+	}
+	// Sort across installations so the most recently pushed repo leads
+	// whichever account owns it.
+	sort.SliceStable(all, func(i, j int) bool { return db.GithubRepoPushedFirst(all[i].repo, all[j].repo) })
+	for _, e := range all {
+		out = append(out, wireRepo{FullName: e.repo.FullName, DefaultBranch: e.repo.DefaultBranch, InstallationID: e.inst, PushedAt: e.repo.PushedAt})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -646,6 +660,7 @@ func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
+	db.SortGithubReposByPushed(repos)
 	writeJSON(w, http.StatusOK, repos)
 }
 

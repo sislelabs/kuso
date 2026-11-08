@@ -3,6 +3,7 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { ArrowRight, Search, SearchX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -19,6 +20,11 @@ import { AppIcon, categoryLabel } from "@/components/marketplace/AppIcon";
 import { renderMarkdown } from "@/components/marketplace/InlineMarkdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { Perms, useCan } from "@/features/auth";
+
+// Below this many templates the catalog reads as a starter set, so admins
+// get a pointer to where new ones come from.
+const SMALL_CATALOG = 12;
 
 // useSearchParams needs a Suspense boundary in the static export.
 export default function MarketplacePage() {
@@ -33,6 +39,7 @@ function Marketplace() {
   // ?project=<name> (linked from an empty project) preselects the target.
   const targetProject = useSearchParams().get("project")?.trim() || undefined;
   const market = useMarketplace();
+  const isAdmin = useCan(Perms.SettingsAdmin);
   const apps = useMemo(() => market.data ?? [], [market.data]);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("all");
@@ -177,6 +184,15 @@ function Marketplace() {
             </li>
           ))}
         </ul>
+      )}
+
+      {isAdmin && market.isSuccess && apps.length > 0 && apps.length < SMALL_CATALOG && (
+        <p className="mt-6 text-center text-[13px] text-[var(--text-secondary)]">
+          More apps arrive with kuso updates.{" "}
+          <Link href="/settings/updates" className="text-[var(--link)] underline underline-offset-4 hover:text-[var(--text-primary)]">
+            Check for updates
+          </Link>
+        </p>
       )}
 
       {selected && <DeployDialog app={selected} defaultProject={targetProject} onClose={() => setSelected(null)} />}

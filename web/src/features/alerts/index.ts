@@ -8,3 +8,12 @@ export {
 export type { AlertKind, AlertRule, CreateAlertBody } from "./api";
 export { ALERT_KINDS, buildCreateBody, describeRule, emptyRuleForm, formatSec, parseAlertKind, parseDur, prefillRuleForm } from "./form";
 export type { RuleFormState } from "./form";
+export {
+  alertKindsFor,
+  alertRequestText,
+  canEditAlertProject,
+  canManageAlertRule,
+  editableAlertProjects,
+  isClusterWideRule,
+} from "./access";
+export type { AlertAccessSession } from "./access";

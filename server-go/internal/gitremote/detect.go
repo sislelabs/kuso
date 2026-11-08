@@ -3,6 +3,7 @@ package gitremote
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -114,4 +115,25 @@ func escapePath(p string) string {
 		segs[i] = url.PathEscape(s)
 	}
 	return strings.Join(segs, "/")
+}
+
+// ReadFile returns one file at branch through GitHub's contents API
+// (anonymous unless token is set). ("", nil) when the file doesn't exist
+// or the repo isn't readable anonymously — the two look the same to an
+// anonymous caller.
+func (in *Inspector) ReadFile(ctx context.Context, repoURL, branch, path, token string) (string, error) {
+	owner, repo, ok := githubOwnerRepo(repoURL)
+	if !ok {
+		return "", fmt.Errorf("%w: reading files needs a github.com repo", ErrUnsupported)
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
+		in.githubAPI(), url.PathEscape(owner), url.PathEscape(repo), escapePath(strings.Trim(path, "/")), url.QueryEscape(branch))
+	body, err := in.githubGet(ctx, u, "application/vnd.github.raw+json", token)
+	if errors.Is(err, ErrNotAccessible) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }

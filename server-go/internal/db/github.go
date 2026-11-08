@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -28,6 +30,29 @@ type GithubRepo struct {
 	FullName      string `json:"fullName"`
 	Private       bool   `json:"private"`
 	DefaultBranch string `json:"defaultBranch"`
+	// PushedAt is GitHub's pushed_at as of the last cache refresh. Nil for
+	// rows cached before the field existed.
+	PushedAt *time.Time `json:"pushedAt,omitempty"`
+}
+
+// SortGithubReposByPushed orders repos most recently pushed first.
+func SortGithubReposByPushed(repos []GithubRepo) {
+	sort.SliceStable(repos, func(i, j int) bool { return GithubRepoPushedFirst(repos[i], repos[j]) })
+}
+
+// GithubRepoPushedFirst reports whether a sorts before b: newer push
+// first, repos without a push time last, ties broken on full name so
+// the order is stable across requests.
+func GithubRepoPushedFirst(a, b GithubRepo) bool {
+	switch {
+	case a.PushedAt != nil && b.PushedAt != nil && !a.PushedAt.Equal(*b.PushedAt):
+		return a.PushedAt.After(*b.PushedAt)
+	case a.PushedAt != nil && b.PushedAt == nil:
+		return true
+	case a.PushedAt == nil && b.PushedAt != nil:
+		return false
+	}
+	return strings.ToLower(a.FullName) < strings.ToLower(b.FullName)
 }
 
 // GithubUserLink mirrors the Prisma GithubUserLink model.

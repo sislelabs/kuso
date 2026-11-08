@@ -131,6 +131,21 @@ func (d *DB) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 	return out, rows.Err()
 }
 
+// GetAlertRuleScope returns a rule's project ("" = cluster-wide) and
+// kind, for the per-project permission check before a mutation.
+func (d *DB) GetAlertRuleScope(ctx context.Context, id string) (project, kind string, err error) {
+	err = d.QueryRowContext(ctx,
+		`SELECT COALESCE("project",''), "kind" FROM "AlertRule" WHERE "id" = $1`, id,
+	).Scan(&project, &kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrAlertNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("get alert rule scope: %w", err)
+	}
+	return project, kind, nil
+}
+
 func (d *DB) DeleteAlertRule(ctx context.Context, id string) error {
 	res, err := d.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "id" = $1`, id)
 	if err != nil {

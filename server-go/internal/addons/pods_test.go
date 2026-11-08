@@ -137,3 +137,52 @@ func TestListAddonPods_RefusesOtherProjectsAddon(t *testing.T) {
 		t.Fatalf("owner ListPods: err=%v out=%+v", err, out)
 	}
 }
+
+func TestImageVersion(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"postgres:16-alpine": "16-alpine",
+		"docker.redpanda.com/redpandadata/redpanda:v24.2.7": "v24.2.7",
+		"registry:5000/redis:7.4-alpine":                    "7.4-alpine",
+		"registry:5000/redis":                               "latest",
+		"redis":                                             "latest",
+		"postgres:16@sha256:" + sha:                         "16",
+		"postgres@sha256:" + sha:                            "",
+		"registry:5000/postgres@sha256:" + sha:              "",
+		"":                                                  "",
+	}
+	for in, want := range cases {
+		if got := imageVersion(in); got != want {
+			t.Errorf("imageVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+const sha = "3f1e5c2a9b7d4e6f8a0c1b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f"
+
+// The running version comes from the datastore pod, never the pooler.
+func TestListAddonPods_RunningVersionFromMainPod(t *testing.T) {
+	t.Parallel()
+	ctrl := true
+	mk := func(name, ownerKind, owner, image string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso",
+				Labels:          map[string]string{"app.kubernetes.io/instance": "alpha-pg", "kuso.sislelabs.com/component": "x"},
+				OwnerReferences: []metav1.OwnerReference{{Kind: ownerKind, Name: owner, Controller: &ctrl}}},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: image}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	s := addonPodsService(t,
+		mk("alpha-pg-0-pooler", "ReplicaSet", "alpha-pg-pooler-5d9f", "edoburu/pgbouncer:v1.25.1-p0"),
+		mk("alpha-pg-0-sentinel", "StatefulSet", "alpha-pg-sentinel", "redis:7-alpine"),
+		mk("alpha-pg-1", "StatefulSet", "alpha-pg", "postgres:16.4-alpine"),
+	)
+	out, err := s.ListPods(context.Background(), "alpha", "pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.RunningImage != "postgres:16.4-alpine" || out.RunningVersion != "16.4-alpine" {
+		t.Fatalf("running = %q / %q, want the postgres pod's image", out.RunningImage, out.RunningVersion)
+	}
+}

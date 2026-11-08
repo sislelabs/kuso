@@ -13,6 +13,9 @@ export interface Revision {
   summary?: string;
   snapshot: unknown;
   createdAt: string;
+  // Key names a secret write touched (never values). Absent on servers
+  // older than this field.
+  changedKeys?: string[];
 }
 
 export async function listRevisions(

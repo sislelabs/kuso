@@ -85,3 +85,5 @@ export { serviceUrl } from "./serviceUrl";
 export { useLatestBuilds, useProjectCrons } from "./projectQueries";
 export type { ProjectCron } from "./projectQueries";
 export type { CronNodeSpec } from "./cronSpec";
+export { testHealthcheck, isHealthcheckTestUnsupported, healthcheckTestPassed } from "./healthcheckTest";
+export type { HealthcheckTestRequest, HealthcheckTestResult } from "./healthcheckTest";
