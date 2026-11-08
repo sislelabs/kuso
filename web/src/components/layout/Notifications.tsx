@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Bell, BellOff, Trash2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Trash2 } from "lucide-react";
+import { Segmented } from "@/components/ui/segmented";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -54,7 +55,7 @@ function useNotificationFeed() {
     retry: false,
     throwOnError: false,
   });
-  const feedPath = isAdmin ? "/api/notifications/feed?limit=30" : "/api/notifications/my-feed?limit=30";
+  const feedPath = isAdmin ? `/api/notifications/feed?limit=${FEED_LIMIT}` : `/api/notifications/my-feed?limit=${FEED_LIMIT}`;
   // One const so the optimistic-clear write and the useQuery key can't drift.
   const feedKey = ["notifications", "feed", isAdmin ? "admin" : "scoped"] as const;
   const feed = useQuery<FeedEvent[]>({
@@ -65,10 +66,26 @@ function useNotificationFeed() {
     retry: false,
     throwOnError: false,
   });
+  // Optimistic: the badge drops to 0 and rows lose their unread styling
+  // at once; both roll back if the server refuses.
   const markRead = useMutation({
     mutationFn: () => api("/api/notifications/feed/read-all", { method: "POST" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ["notifications", "unread-count"] });
+      const prevCount = qc.getQueryData<{ unread: number }>(["notifications", "unread-count"]);
+      const prevFeed = qc.getQueryData<FeedEvent[]>(feedKey);
+      const now = new Date().toISOString();
+      qc.setQueryData(["notifications", "unread-count"], { unread: 0 });
+      if (prevFeed) qc.setQueryData(feedKey, prevFeed.map((e) => (e.readAt ? e : { ...e, readAt: now })));
+      return { prevCount, prevFeed };
+    },
+    onError: (e, _vars, ctx) => {
+      if (ctx?.prevCount) qc.setQueryData(["notifications", "unread-count"], ctx.prevCount);
+      if (ctx?.prevFeed) qc.setQueryData(feedKey, ctx.prevFeed);
+      toast.error(e instanceof Error ? `Couldn't mark notifications read: ${e.message}` : "Couldn't mark notifications read");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
     },
   });
   // Optimistically blank the feed, restore it on error (the feed query is
@@ -95,35 +112,44 @@ function useNotificationFeed() {
   const onOpenChange = (next: boolean) => {
     if (next) {
       void feed.refetch();
+      void unread.refetch();
     } else if (isAdmin && unreadCount > 0) {
-      // Mark read on CLOSE, not open: marking on open cleared readAt
+      // Seen = read, on CLOSE, not open: marking on open cleared readAt
       // before the feed rendered, so nothing could show as new.
       markRead.mutate();
     }
   };
-  return { isAdmin, feed, unreadCount, clearAll, onOpenChange };
+  return { isAdmin, feed, unreadCount, clearAll, markRead, onOpenChange };
 }
+
+const FEED_LIMIT = 30;
 
 type Feed = ReturnType<typeof useNotificationFeed>;
 
 function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
-  const { isAdmin, feed, clearAll } = state;
-  const items = feed.data ?? [];
+  const { isAdmin, feed, clearAll, markRead, unreadCount } = state;
+  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const all = feed.data ?? [];
+  const items = filter === "unread" ? all.filter((e) => !e.readAt) : all;
   return (
     <>
       <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-        <p className="text-sm font-semibold tracking-tight">Notifications</p>
+        <div className="flex min-w-0 items-baseline gap-2">
+          <p className="text-sm font-semibold tracking-tight">Notifications</p>
+          {isAdmin && unreadCount > 0 && (
+            <span className="text-xs text-[var(--text-secondary)] tabular-nums">{unreadCount} unread</span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
-          {isAdmin && items.length > 0 && (
+          {isAdmin && unreadCount > 0 && (
             <button
               type="button"
-              onClick={() => clearAll.mutate()}
-              disabled={clearAll.isPending}
-              title="Clear all notifications (for everyone)"
-              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+              onClick={() => markRead.mutate()}
+              disabled={markRead.isPending}
+              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
             >
-              <Trash2 className="size-3.5" aria-hidden />
-              Clear all
+              <CheckCheck className="size-3.5" aria-hidden />
+              Mark all read
             </button>
           )}
           {isAdmin && (
@@ -137,6 +163,30 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
           )}
         </div>
       </header>
+      {isAdmin && all.length > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5">
+          <Segmented
+            size="sm"
+            label="Show"
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: "all", label: "All" },
+              { value: "unread", label: "Unread" },
+            ]}
+          />
+          <button
+            type="button"
+            onClick={() => clearAll.mutate()}
+            disabled={clearAll.isPending}
+            title="Delete every notification in the feed, for every admin"
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+            Clear all
+          </button>
+        </div>
+      )}
       <div className="max-h-[min(28rem,70dvh)] overflow-y-auto">
         {feed.isPending ? (
           <LoadingState kind="inline" className="px-3 py-4" />
@@ -147,7 +197,9 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center px-6 py-10 text-center">
             <BellOff aria-hidden className="mb-2 size-5 text-[var(--text-tertiary)]" />
-            <p className="text-sm font-medium text-[var(--text-primary)]">You&apos;re all caught up</p>
+            <p className="text-sm font-medium text-[var(--text-primary)]">
+              {filter === "unread" ? "No unread notifications" : "You\u2019re all caught up"}
+            </p>
             <p className="mt-1 text-xs text-[var(--text-tertiary)]">
               Builds, deploys and node alerts show up here as they happen.
             </p>
@@ -158,6 +210,12 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
               <NotificationRow key={e.id} event={e} unread={isAdmin && !e.readAt} onClose={onClose} />
             ))}
           </ul>
+        )}
+        {all.length >= FEED_LIMIT && filter === "all" && (
+          <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
+            Showing the {FEED_LIMIT} most recent.
+            {unreadCount > all.filter((e) => !e.readAt).length && " Older unread ones are cleared by Mark all read."}
+          </p>
         )}
       </div>
     </>
@@ -173,7 +231,7 @@ function BellIcon({ unread }: { unread: number }) {
           aria-hidden
           className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)]"
         >
-          {unread > 9 ? "9+" : unread}
+          {unread > 99 ? "99+" : unread}
         </span>
       )}
     </>
