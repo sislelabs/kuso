@@ -384,8 +384,52 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 			slog.Default().Warn("rollback: repoint crons", "project", project, "service", service, "err", cerr)
 		}
 	}
+	s.rollbackFromServiceConsumers(ctx, ns, project, service, group, buildName, now, kube.KusoImage{Repository: imageRepo, Tag: imageTag})
 	s.emitRolledBack(project, service, group, buildName, prevBuild, imageTag, opts)
 	return &e, nil
+}
+
+// rollbackFromServiceConsumers moves runtime=worker services that reuse
+// this service's image (spec.fromService) onto the rolled-back image in
+// the same env group. Without it a rollback left the workers on the bad
+// build until the next deploy. Best-effort: the source env already
+// rolled, so failures are logged, not returned.
+func (s *Service) rollbackFromServiceConsumers(ctx context.Context, ns, project, service, group, buildName, promotedAt string, img kube.KusoImage) {
+	log := slog.Default()
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Warn("rollback: list services for fromService consumers", "project", project, "err", err)
+		return
+	}
+	patch := fmt.Sprintf(
+		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
+		img.Repository, img.Tag, annPromotedBuild, buildName, annPromotedAt, promotedAt,
+	)
+	for i := range raw.Items {
+		var w kube.KusoService
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &w); err != nil {
+			continue
+		}
+		if w.Spec.Project != project || w.Spec.FromService != service {
+			continue
+		}
+		workerShort := strings.TrimPrefix(w.Name, project+"-")
+		env, err := s.resolveEnv(ctx, ns, project, workerShort, group)
+		if err != nil {
+			// The worker may simply not run in this env group.
+			continue
+		}
+		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Patch(ctx, env.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+			log.Warn("rollback: patch fromService consumer", "env", env.Name, "err", err)
+			continue
+		}
+		if isProductionEnv(env) {
+			if cerr := s.repointCrons(ctx, ns, project, workerShort, img, log); cerr != nil {
+				log.Warn("rollback: repoint worker crons", "service", w.Name, "err", cerr)
+			}
+		}
+	}
 }
 
 func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, imageTag string, opts RollbackOptions) {
