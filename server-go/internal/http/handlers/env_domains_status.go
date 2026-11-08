@@ -23,6 +23,10 @@ const (
 	domainStatusMaxEntries = 512
 	domainStatusDNSTimeout = 3 * time.Second
 	domainStatusBudget     = 10 * time.Second
+	// domainStatusFreshFloor: a ?fresh=1 request ("Check again") skips a
+	// cached result older than this, so repeated clicks still can't
+	// fan out DNS lookups faster than once per floor.
+	domainStatusFreshFloor = 5 * time.Second
 )
 
 type domainKind string
@@ -245,6 +249,7 @@ func certCovers(c hostcheck.Cert, host string) bool {
 
 type domainStatusCacheEntry struct {
 	resp    envDomainsStatusResponse
+	stored  time.Time
 	expires time.Time
 }
 
@@ -255,11 +260,11 @@ type domainStatusCache struct {
 	entries map[string]domainStatusCacheEntry
 }
 
-func (c *domainStatusCache) get(key string, now time.Time) (envDomainsStatusResponse, bool) {
+func (c *domainStatusCache) get(key string, now time.Time, fresh bool) (envDomainsStatusResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
-	if !ok || !now.Before(e.expires) {
+	if !ok || !now.Before(e.expires) || (fresh && now.Sub(e.stored) >= domainStatusFreshFloor) {
 		return envDomainsStatusResponse{}, false
 	}
 	return e.resp, true
@@ -285,11 +290,12 @@ func (c *domainStatusCache) put(key string, resp envDomainsStatusResponse, now t
 			delete(c.entries, k)
 		}
 	}
-	c.entries[key] = domainStatusCacheEntry{resp: resp, expires: now.Add(domainStatusTTL)}
+	c.entries[key] = domainStatusCacheEntry{resp: resp, stored: now, expires: now.Add(domainStatusTTL)}
 }
 
 // GET /api/projects/{project}/services/{service}/envs/{env}/domains/status
-// Per-host DNS + TLS state for one env. {env} is the short env name
+// Per-host DNS + TLS state for one env. ?fresh=1 bypasses the cache
+// (down to domainStatusFreshFloor) for an explicit re-check. {env} is the short env name
 // ("production", "staging", "pr-12"), resolved to the CR the same way the
 // PUT/POST/DELETE .../envs/{env}/domains handlers do.
 func (h *ProjectsHandler) GetEnvDomainsStatus(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +316,8 @@ func (h *ProjectsHandler) GetEnvDomainsStatus(w http.ResponseWriter, r *http.Req
 	// The host list is part of the key so a just-added domain gets checked
 	// straight away instead of waiting out the TTL.
 	key := domainStatusKey(project, service, envName, env)
-	if resp, ok := h.domainStatus.get(key, time.Now()); ok {
+	fresh := r.URL.Query().Get("fresh") == "1"
+	if resp, ok := h.domainStatus.get(key, time.Now(), fresh); ok {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}

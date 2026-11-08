@@ -242,3 +242,23 @@ func TestBuildDomainsStatusWithoutCertManager(t *testing.T) {
 		}
 	}
 }
+
+func TestDomainStatusCacheFresh(t *testing.T) {
+	t.Parallel()
+	var c domainStatusCache
+	t0 := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	c.put("k", envDomainsStatusResponse{CheckedAt: "t0"}, t0)
+
+	if _, ok := c.get("k", t0.Add(2*time.Second), true); !ok {
+		t.Fatal("fresh re-check inside the floor should still hit the cache")
+	}
+	if _, ok := c.get("k", t0.Add(10*time.Second), false); !ok {
+		t.Fatal("poll inside the TTL should hit the cache")
+	}
+	if _, ok := c.get("k", t0.Add(10*time.Second), true); ok {
+		t.Fatal("fresh re-check past the floor should miss")
+	}
+	if _, ok := c.get("k", t0.Add(domainStatusTTL), false); ok {
+		t.Fatal("expired entry should miss")
+	}
+}
