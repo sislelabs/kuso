@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 import { Save, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { StatusPill } from "@/components/ui/status-pill";
+import { RUN_STATUS, type StatusMeta } from "@/lib/status";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { cn } from "@/lib/utils";
 import { useCan, Perms } from "@/features/auth";
@@ -48,18 +50,20 @@ interface BackupHealthResp {
   serviceVolumes?: ServiceVolumeRow[];
 }
 
-type CoverageBadge = "ok" | "failing" | "via instance" | "not covered";
+type CoverageBadge = "succeeded" | "failed" | "via-instance" | "not-covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
-  if (!row.covered) return row.instanceShared ? "via instance" : "not covered";
-  return row.healthy ? "ok" : "failing";
+  if (!row.covered) return row.instanceShared ? "via-instance" : "not-covered";
+  return row.healthy ? "succeeded" : "failed";
 }
 
-const BADGE_TONE: Record<CoverageBadge, string> = {
-  ok: "bg-[var(--success-subtle)] text-[var(--success)]",
-  failing: "bg-[var(--error-subtle)] text-[var(--error)]",
-  "via instance": "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
-  "not covered": "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
+// Run outcomes use the shared vocabulary; the two coverage states are
+// facts about the setup, not runs, so they stay neutral.
+const BADGE: Record<CoverageBadge, StatusMeta> = {
+  succeeded: RUN_STATUS.succeeded,
+  failed: RUN_STATUS.failed,
+  "via-instance": { label: "Via instance", tone: "neutral" },
+  "not-covered": { label: "Not backed up", tone: "neutral" },
 };
 
 function CoverageRow({
@@ -77,11 +81,11 @@ function CoverageRow({
     <li className="flex items-center gap-3 px-4 py-2 text-sm sm:px-5" title={detail}>
       <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-[var(--text-primary)]">{name}</span>
       {age && (
-        <span className="shrink-0 text-xs text-[var(--text-tertiary)]" title="last run exited OK">
+        <span className="shrink-0 text-xs text-[var(--text-tertiary)]" title="Last run that succeeded">
           {age}
         </span>
       )}
-      <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", BADGE_TONE[badge])}>{badge}</span>
+      <StatusPill status={BADGE[badge]} variant="tinted" />
     </li>
   );
 }
@@ -96,7 +100,7 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { failing: 0, ok: 1, "via instance": 2, "not covered": 3 };
+  const rank: Record<CoverageBadge, number> = { failed: 0, succeeded: 1, "via-instance": 2, "not-covered": 3 };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );
@@ -105,7 +109,7 @@ function AddonBackupList({
       title="Addon backups"
       description={
         <>
-          Failing first. Ages are the last run that exited OK.
+          Failures first. Ages are the last run that succeeded.
           {!complete && <span className="ml-1 text-[var(--warning)]">Partial list: some namespaces couldn&apos;t be read.</span>}
         </>
       }
@@ -125,7 +129,7 @@ function AddonBackupList({
           <CoverageRow
             key={`${v.project ?? ""}/${v.service}`}
             name={`${v.service} · ${v.volumes.join(", ")}`}
-            badge="not covered"
+            badge="not-covered"
             detail={v.detail}
           />
         ))}

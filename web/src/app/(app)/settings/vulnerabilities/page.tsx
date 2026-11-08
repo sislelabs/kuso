@@ -31,7 +31,7 @@ function VulnScanningAdmin() {
   const scanAll = useScanAllVulns();
   return (
     <SettingsPage
-      title="Vulnerability scanning"
+      title="Vulnerabilities"
       description="kuso scans every image it runs for known CVEs with Trivy: service images after each build and nightly, addon and platform images nightly."
       actions={
         <Button
@@ -68,7 +68,7 @@ export default function VulnerabilityScanningPage() {
   const isAdmin = useCan(Perms.SettingsAdmin);
   if (!isAdmin) {
     return (
-      <SettingsPage title="Vulnerability scanning">
+      <SettingsPage title="Vulnerabilities">
         <SettingsNotice tone="neutral">Vulnerability scanning settings are admin-only.</SettingsNotice>
       </SettingsPage>
     );

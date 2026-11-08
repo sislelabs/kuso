@@ -14,7 +14,7 @@ import {
   Github,
   Cpu,
   Activity,
-  ShieldCheck,
+  HeartPulse,
   ShieldAlert,
   ArrowDown,
   DollarSign,
@@ -62,7 +62,7 @@ export const SETTINGS_NAV: SettingsNavItem[] = [
   { href: "/settings/backups", title: "Backups", description: "S3 credentials for addon backups and control-plane backup health.", icon: HardDrive, perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot bucket registry gc" },
   { href: "/settings/updates", title: "Updates", description: "Self-update the kuso server, operator and CRDs.", icon: Package, perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update changelog" },
   { href: "/settings/usage", title: "Usage & cost", description: "Per-node CPU and memory rollup with a monthly cost projection.", icon: DollarSign, perm: Perms.SettingsRead, group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },
-  { href: "/settings/health", title: "Health", description: "Failed helm releases, stuck addons and orphaned envs, with fixes.", icon: ShieldCheck, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook" },
+  { href: "/settings/health", title: "Health", description: "Failed helm releases, stuck addons and orphaned envs, with fixes.", icon: HeartPulse, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook" },
   { href: "/settings/vulnerabilities", title: "Vulnerabilities", description: "Trivy CVE scanning: deploy gate, nightly sweep, platform images.", icon: ShieldAlert, perm: Perms.SettingsAdmin, group: "cluster", keywords: "cve vulnerability security trivy scan image gate block enforce report" },
 
   // Team

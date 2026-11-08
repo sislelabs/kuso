@@ -16,7 +16,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  ShieldCheck,
+  HeartPulse,
   AlertTriangle,
   AlertCircle,
   Info,
@@ -161,7 +161,7 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
                   : "bg-[var(--success)]/15 text-[var(--success)]",
               )}
             >
-              <ShieldCheck className="h-5 w-5" />
+              <HeartPulse className="h-5 w-5" />
             </span>
             <div>
               <div className="text-sm font-semibold text-[var(--text-primary)]">
