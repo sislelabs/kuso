@@ -1,0 +1,17 @@
+apiVersion: kuso/v1
+project: homer
+services:
+  - name: homer
+    runtime: image
+    port: 8080
+    image:
+      repository: b4bz/homer
+      tag: "v26.08.3"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: assets
+        mountPath: /www/assets
+        sizeGi: 1
+    scale: { min: 1, max: 1 }

@@ -1,0 +1,12 @@
+name: cyberchef
+title: CyberChef
+description: The "Cyber Swiss Army Knife" for encoding, decoding, encryption and data analysis. Runs entirely in the browser.
+category: dev-tools
+website: https://gchq.github.io/CyberChef
+appVersion: "11.5.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname CyberChef will be served on.

@@ -1,0 +1,15 @@
+name: healthchecks
+title: Healthchecks
+description: >-
+  Cron job and heartbeat monitoring: get alerted when a ping doesn't arrive
+  on time. Public sign-up is off; create the first account with
+  `kuso shell <project> healthchecks`, then `./manage.py createsuperuser`.
+category: monitoring
+website: https://healthchecks.io
+appVersion: "5.0.3"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Healthchecks will be served on.

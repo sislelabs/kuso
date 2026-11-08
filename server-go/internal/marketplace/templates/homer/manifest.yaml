@@ -1,0 +1,15 @@
+name: homer
+title: Homer
+description: >-
+  Static start page for your services, configured with one YAML file
+  (assets/config.yml, edit it with `kuso shell`). Don't put secrets in it:
+  the page is public.
+category: productivity
+website: https://github.com/bastienwirtz/homer
+appVersion: "26.08.3"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Homer will be served on.

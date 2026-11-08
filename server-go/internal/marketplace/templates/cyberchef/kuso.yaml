@@ -1,0 +1,12 @@
+apiVersion: kuso/v1
+project: cyberchef
+services:
+  - name: cyberchef
+    runtime: image
+    port: 8080
+    image:
+      repository: ghcr.io/gchq/cyberchef
+      tag: "11.5.0"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true

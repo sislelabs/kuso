@@ -1,0 +1,18 @@
+apiVersion: kuso/v1
+project: excalidraw
+services:
+  - name: excalidraw
+    runtime: image
+    port: 80
+    image:
+      repository: excalidraw/excalidraw
+      tag: "sha-4bfc5bb"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    # Stock nginx: the master binds :80 as root, chowns its cache dirs and
+    # runs workers as the nginx user.
+    securityContext:
+      capabilities:
+        add: ["NET_BIND_SERVICE", "SETUID", "SETGID", "CHOWN"]
+      allowPrivilegeEscalation: true
