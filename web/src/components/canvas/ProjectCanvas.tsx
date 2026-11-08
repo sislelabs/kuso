@@ -18,6 +18,7 @@ import {
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useSkipTarget } from "@/lib/skip-targets";
 
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
 import {
@@ -139,6 +140,7 @@ export function ProjectCanvas({
   // Error + vuln badge counts: one project-wide request each, shared
   // with the mobile cards so both surfaces show the same numbers.
   const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
+  useSkipTarget("canvas-root", "Skip to canvas");
 
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
@@ -1151,8 +1153,7 @@ export function ProjectCanvas({
   return (
     <div
       ref={wrapperRef}
-      // Skip-link target (R3-4 registers "Skip to canvas" for this id);
-      // focusing the region forwards to the active node.
+      // Skip-link target; focusing the region forwards to the active node.
       id="canvas-root"
       tabIndex={-1}
       role="region"
