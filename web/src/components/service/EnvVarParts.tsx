@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronDown, ClipboardPaste, Github, KeyRound, MoreHorizontal, Plus } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Github, KeyRound, Link2, MoreHorizontal, Plus } from "lucide-react";
 import type { DriftReport } from "@/features/services/api";
 import { cn } from "@/lib/utils";
 
@@ -30,10 +30,10 @@ export function VarBadge({
     <span
       title={title}
       className={cn(
-        "shrink-0 rounded border px-1 py-px font-mono text-[9px] leading-tight",
+        "shrink-0 rounded border px-1.5 py-px text-[11px] leading-4",
         tone === "neutral" && "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
         tone === "accent" && "border-[var(--accent)]/40 text-[var(--accent)]",
-        tone === "warn" && "border-amber-500/40 text-amber-400",
+        tone === "warn" && "border-[var(--warning)]/40 text-[var(--warning)]",
       )}
     >
       {children}
@@ -84,7 +84,7 @@ export function RowMenu({ label, items }: { label: string; items: MenuItem[] }) 
               className={cn(
                 "rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[var(--bg-tertiary)]",
                 item.destructive
-                  ? "text-red-400"
+                  ? "text-[var(--error)]"
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
               )}
             >
@@ -99,11 +99,13 @@ export function RowMenu({ label, items }: { label: string; items: MenuItem[] }) 
 
 export function AddMenu({
   onNew,
+  onReference,
   onShared,
   onPaste,
   onGithub,
 }: {
   onNew: () => void;
+  onReference?: () => void;
   onShared: () => void;
   onPaste: () => void;
   onGithub?: () => void;
@@ -113,13 +115,28 @@ export function AddMenu({
     setOpen(false);
     fn();
   };
-  const items: { icon: ReactNode; label: string; run: () => void }[] = [
-    { icon: <Plus className="h-3.5 w-3.5" />, label: "New variable", run: onNew },
-    { icon: <KeyRound className="h-3.5 w-3.5" />, label: "Project secret", run: onShared },
-    { icon: <ClipboardPaste className="h-3.5 w-3.5" />, label: "Paste .env", run: onPaste },
+  const items: { icon: ReactNode; label: string; hint: string; run: () => void }[] = [
+    { icon: <Plus className="h-3.5 w-3.5" />, label: "New variable", hint: "A plain KEY=value", run: onNew },
   ];
+  if (onReference) {
+    items.push({
+      icon: <Link2 className="h-3.5 w-3.5" />,
+      label: "Reference",
+      hint: "An addon key or another service's URL",
+      run: onReference,
+    });
+  }
+  items.push(
+    { icon: <KeyRound className="h-3.5 w-3.5" />, label: "Project secret", hint: "Shared across services", run: onShared },
+    { icon: <ClipboardPaste className="h-3.5 w-3.5" />, label: "Paste .env", hint: "Many at once", run: onPaste },
+  );
   if (onGithub) {
-    items.push({ icon: <Github className="h-3.5 w-3.5" />, label: "Sign in with GitHub", run: onGithub });
+    items.push({
+      icon: <Github className="h-3.5 w-3.5" />,
+      label: "Sign in with GitHub",
+      hint: "Register an OAuth app",
+      run: onGithub,
+    });
   }
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -130,16 +147,19 @@ export function AddMenu({
           </Button>
         }
       />
-      <PopoverContent align="end" className="w-48 gap-0 p-1">
+      <PopoverContent align="end" className="w-64 gap-0 p-1">
         {items.map((i) => (
           <button
             key={i.label}
             type="button"
             onClick={pick(i.run)}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            className="flex items-start gap-2.5 rounded-md px-2 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
           >
-            {i.icon}
-            {i.label}
+            <span className="mt-0.5">{i.icon}</span>
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-[var(--text-primary)]">{i.label}</span>
+              <span className="block text-xs text-[var(--text-tertiary)]">{i.hint}</span>
+            </span>
           </button>
         ))}
       </PopoverContent>
@@ -196,7 +216,7 @@ export function SharedPickerDialog({
           <div className="max-h-[50vh] space-y-3 overflow-y-auto">
             {sources.map((src) => (
               <div key={src.secret}>
-                <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <p className="mb-1 text-xs font-medium text-[var(--text-secondary)]">
                   {src.secret === INSTANCE_SHARED_SECRET ? "Instance" : "Project"}
                 </p>
                 {[...src.keys].sort().map((k) => (
@@ -237,6 +257,8 @@ export function SharedPickerDialog({
   );
 }
 
+// onApply returns an error message to keep the dialog open with the text
+// intact (malformed lines), or null once the paste was staged.
 export function PasteEnvDialog({
   open,
   onOpenChange,
@@ -244,11 +266,15 @@ export function PasteEnvDialog({
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onApply: (text: string) => void;
+  onApply: (text: string) => string | null;
 }) {
   const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (open) setText("");
+    if (open) {
+      setText("");
+      setError(null);
+    }
   }, [open]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -259,15 +285,28 @@ export function PasteEnvDialog({
         <textarea
           autoFocus
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setError(null);
+          }}
           spellCheck={false}
           rows={10}
+          aria-label=".env contents"
           placeholder={"API_URL=https://…\nNODE_ENV=production"}
-          className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+          className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-xs text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--border-strong)]"
         />
+        {error ? (
+          <p role="alert" className="text-xs text-[var(--error)]">
+            {error}
+          </p>
+        ) : (
+          <p className="text-xs text-[var(--text-tertiary)]">
+            Existing names are overwritten. Nothing is saved until you review and save.
+          </p>
+        )}
         <DialogFooter>
-          <Button size="sm" disabled={!text.trim()} onClick={() => onApply(text)}>
-            Add
+          <Button size="sm" disabled={!text.trim()} onClick={() => setError(onApply(text))}>
+            Stage variables
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -282,16 +321,16 @@ export function DeployStatus({ drift }: { drift: DriftReport | undefined }) {
   const helmErr = drift.helmError?.trim();
   if (helmErr) {
     return (
-      <span title={helmErr} className="inline-flex items-center gap-1.5 text-[11px] text-red-400">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+      <span title={helmErr} className="inline-flex items-center gap-1.5 text-xs text-[var(--error)]">
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />
         Deploy failed
       </span>
     );
   }
   if (drift.rolloutPending || (drift.podsStale?.length ?? 0) > 0) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] text-blue-400">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
+      <span className="inline-flex items-center gap-1.5 text-xs text-[var(--info)]">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--info)]" />
         Rolling out
       </span>
     );
