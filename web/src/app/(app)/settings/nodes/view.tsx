@@ -10,8 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
-// X is already imported above; the modal close button reuses it.
+import { ChevronRight, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -335,9 +335,9 @@ function FloatingSaveBar({
           transition={{ type: "spring", stiffness: 360, damping: 32 }}
           className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
         >
-          <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
-            unsaved on {count} {count === 1 ? "node" : "nodes"}
+          <span className="mr-auto inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+            <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+            Unsaved label changes on {count} {count === 1 ? "node" : "nodes"}
           </span>
           <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
             Discard
@@ -365,50 +365,36 @@ function NodeCard({
   isDirty: boolean;
   advisory?: NodeUpdateAdvisory;
 }) {
+  const status = node.unreachable
+    ? { text: "Unreachable", tone: "danger" as const, title: "kuso cordoned this node because it has been NotReady past the threshold. It is uncordoned automatically when the node recovers." }
+    : !node.ready
+      ? { text: "Not ready", tone: "danger" as const, title: "The kubelet on this node isn't reporting Ready." }
+      : !node.schedulable
+        ? { text: "Cordoned", tone: "warning" as const, title: "New pods won't be scheduled here." }
+        : { text: "Ready", tone: "success" as const, title: undefined };
   return (
     <li
       className={cn(
-        "rounded-md border bg-[var(--bg-secondary)] p-4 transition-colors",
-        isDirty
-          ? "border-[var(--warning)]/30 bg-[var(--warning-subtle)]"
-          : "border-[var(--border-subtle)]"
+        "overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
+        isDirty ? "border-[var(--warning)]/50" : "border-[var(--border-subtle)]"
       )}
     >
-      <header className="flex items-start gap-3">
-        <span
-          className={cn(
-            "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
-            node.ready ? "bg-emerald-400" : "bg-red-400"
-          )}
-          title={node.ready ? "Ready" : "NotReady"}
-          role="img"
-          aria-label={node.ready ? "Ready" : "NotReady"}
-        />
+      <header className="flex items-start gap-3 px-4 pt-4 sm:px-5">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-mono text-sm font-medium">{node.name}</h3>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <h3 className="truncate font-mono text-sm font-semibold text-[var(--text-primary)]">{node.name}</h3>
+            <Badge variant={status.tone} title={status.title}>
+              <span aria-hidden className="size-1.5 rounded-full bg-current" />
+              {status.text}
+            </Badge>
+            {isDirty && <Badge variant="warning">Unsaved</Badge>}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-tertiary)]">
             {node.roles.map((r) => (
-              <span key={r} className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5">
-                {r}
-              </span>
+              <span key={r}>{roleLabel(r)}</span>
             ))}
-            {node.zone && <span>zone {node.zone}</span>}
-            {node.unreachable ? (
-              <span
-                className="rounded bg-[var(--error-subtle)] px-1.5 py-0.5 text-[var(--error)]"
-                title="kuso has cordoned this node because it has been NotReady past the threshold. Will auto-uncordon when the node recovers."
-              >
-                unreachable
-              </span>
-            ) : !node.schedulable ? (
-              <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">cordoned</span>
-            ) : null}
+            {node.zone && <span>Zone <span className="font-mono">{node.zone}</span></span>}
             {!node.schedulable && !node.unreachable && <UncordonButton node={node.name} />}
-            {isDirty && (
-              <span className="ml-auto rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-[var(--warning)]">
-                unsaved
-              </span>
-            )}
           </div>
         </div>
         {/* Hide Remove on the control plane — the server refuses
@@ -416,16 +402,25 @@ function NodeCard({
         {!node.roles.includes("control-plane") && <RemoveNodeButton node={node} />}
       </header>
 
-      <NodeStats node={node} />
+      <div className="space-y-3 px-4 pt-4 pb-4 sm:px-5">
+        <NodeStats node={node} />
+        <PackageUpdates advisory={advisory} />
+      </div>
 
-      <PackageUpdates advisory={advisory} />
-
-      {/* The chip strip is the entire label UI now. No header label,
-          no separate "Labels" section — the chips ARE the labels.
-          Adding/removing happens here too. */}
-      <ChipStrip labels={labels} onChange={onChange} />
+      {/* The chip strip is the entire label UI: the chips ARE the
+          labels, and adding/removing happens here too. */}
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 px-4 py-3 sm:px-5">
+        <span className="pt-1.5 text-xs font-medium text-[var(--text-secondary)]">Labels</span>
+        <ChipStrip labels={labels} onChange={onChange} />
+      </div>
     </li>
   );
+}
+
+function roleLabel(role: string): string {
+  if (role === "control-plane" || role === "master") return "Control plane";
+  if (role === "worker") return "Worker";
+  return role.charAt(0).toUpperCase() + role.slice(1).replace(/-/g, " ");
 }
 
 // PackageUpdates renders the per-node host package-update advisory plus
@@ -467,34 +462,34 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
 
   if (!advisory || !advisory.present) {
     return (
-      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-        <Package className="h-3 w-3" /> package updates: checking…
+      <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+        <Package className="h-3.5 w-3.5" /> Checking host packages…
       </div>
     );
   }
   if (advisory.pkgMgr === "unsupported" || advisory.pkgMgr === "") {
     return (
-      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-        <Package className="h-3 w-3" /> package updates: unsupported OS
+      <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+        <Package className="h-3.5 w-3.5" /> Host package updates aren&apos;t tracked on this OS
       </div>
     );
   }
   const checked = advisory.checkedAt ? relativeTime(advisory.checkedAt) : "—";
   if (advisory.count === 0) {
     return (
-      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--success)]">
-        <Package className="h-3 w-3" /> up to date
-        <span className="text-[var(--text-tertiary)]">· checked {checked}</span>
-        {phase === "done" && advisory.apply.at && (
-          <span className="text-[var(--text-tertiary)]">· patched {relativeTime(advisory.apply.at)}</span>
-        )}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-tertiary)]">
+        <span className="inline-flex items-center gap-2 text-[var(--success)]">
+          <Package className="h-3.5 w-3.5" /> Host packages up to date
+        </span>
+        <span>· checked {checked}</span>
+        {phase === "done" && advisory.apply.at && <span>· patched {relativeTime(advisory.apply.at)}</span>}
       </div>
     );
   }
   // In-flight apply banner — shown while a patch/reboot is running.
   if (inFlight) {
     return (
-      <div className="mt-3 flex items-center gap-1.5 rounded-md border border-[var(--info)]/20 bg-[var(--info-subtle)] px-3 py-2 text-[11px] text-[var(--info)]">
+      <div className="flex items-center gap-2 rounded-md border border-[var(--info)]/25 bg-[var(--info-subtle)] px-3 py-2 text-xs text-[var(--info)]">
         <RotateCcw className="h-3.5 w-3.5 shrink-0 animate-spin" />
         {phase === "settling"
           ? "Rebooted — waiting for workloads to settle…"
@@ -503,60 +498,62 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
           : phase === "draining"
             ? "Patched — draining node before reboot…"
             : "Applying host package updates…"}
-        <span className="ml-auto font-mono text-[9px] text-[var(--text-tertiary)]">
+        <span className="ml-auto text-xs text-[var(--text-tertiary)]">
           {advisory.apply.at ? relativeTime(advisory.apply.at) : ""}
         </span>
       </div>
     );
   }
   return (
-    <div className="mt-3 rounded-md border border-[var(--warning)]/20 bg-[var(--warning-subtle)] px-3 py-2">
-      <div className="flex items-center gap-2 text-[11px]">
-        <Package className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
-        <span className="font-medium text-[var(--warning)]">
-          {advisory.count} package update{advisory.count === 1 ? "" : "s"} available
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+        <Package className="h-4 w-4 shrink-0 text-[var(--warning)]" aria-hidden />
+        <span className="text-[13px] font-medium text-[var(--text-primary)]">
+          {advisory.count} host package update{advisory.count === 1 ? "" : "s"}
         </span>
         {advisory.rebootRequired && (
-          <span
-            className="inline-flex items-center gap-1 rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
-            title="A host reboot is required to fully apply these updates."
-          >
-            <RotateCcw className="h-2.5 w-2.5" /> reboot needed
-          </span>
+          <Badge variant="warning" title="A host reboot is required to fully apply these updates.">
+            <RotateCcw aria-hidden /> Reboot needed
+          </Badge>
         )}
-        <span className="ml-auto font-mono text-[9px] text-[var(--text-tertiary)]">
-          {advisory.pkgMgr} · checked {checked}
+        <span className="text-xs text-[var(--text-tertiary)]">
+          <span className="font-mono">{advisory.pkgMgr}</span> · checked {checked}
         </span>
-      </div>
-      {advisory.sample.length > 0 && (
-        <ul className="mt-1.5 space-y-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-          {advisory.sample.map((s) => (
-            <li key={s} className="truncate">
-              {s}
-            </li>
-          ))}
-          {advisory.count > advisory.sample.length && (
-            <li className="text-[var(--text-tertiary)]/70">
-              …and {advisory.count - advisory.sample.length} more
-            </li>
-          )}
-        </ul>
-      )}
-      {phase === "failed" && (
-        <p className="mt-1.5 truncate font-mono text-[10px] text-[var(--error)]" title={advisory.apply.log}>
-          last apply failed: {advisory.apply.log || "see server logs"}
-        </p>
-      )}
-      <div className="mt-2 flex justify-end">
-        <button
-          type="button"
+        <Button
+          size="sm"
+          variant="secondary"
+          className="ml-auto"
           onClick={() => setConfirmOpen(true)}
           disabled={apply.isPending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-2.5 text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/25 disabled:opacity-50"
         >
-          <Package className="h-3 w-3" /> Apply updates
-        </button>
+          <Package aria-hidden /> Apply updates
+        </Button>
       </div>
+      {advisory.sample.length > 0 && (
+        <details className="group mt-2">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] [&::-webkit-details-marker]:hidden">
+            <ChevronRight aria-hidden className="size-3.5 transition-transform group-open:rotate-90" />
+            Show packages
+          </summary>
+          <ul className="mt-1.5 space-y-0.5 pl-4.5 font-mono text-xs text-[var(--text-secondary)]">
+            {advisory.sample.map((s) => (
+              <li key={s} className="truncate" title={s}>
+                {s}
+              </li>
+            ))}
+            {advisory.count > advisory.sample.length && (
+              <li className="font-sans text-[var(--text-tertiary)]">
+                …and {advisory.count - advisory.sample.length} more
+              </li>
+            )}
+          </ul>
+        </details>
+      )}
+      {phase === "failed" && (
+        <p className="mt-2 truncate text-xs text-[var(--error)]" title={advisory.apply.log}>
+          Last apply failed: <span className="font-mono">{advisory.apply.log || "see server logs"}</span>
+        </p>
+      )}
       <ConfirmDialog
         open={confirmOpen}
         title={`Apply ${advisory.count} update${advisory.count === 1 ? "" : "s"} on ${advisory.node}?`}
@@ -638,7 +635,7 @@ function ChipStrip({
   };
 
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
       {labels.map((l, i) => (
         <Chip key={`${l.key}-${i}`} label={l} onRemove={() => remove(i)} />
       ))}
@@ -647,7 +644,7 @@ function ChipStrip({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 font-mono text-[11px] text-[var(--text-tertiary)] hover:border-[var(--accent)]/40 hover:bg-[var(--accent-subtle)] hover:text-[var(--accent)]"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-[var(--border-default)] px-2 text-xs text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:bg-[var(--accent-subtle)] hover:text-[var(--accent)]"
         >
           <Plus className="h-3 w-3" />
           {labels.length === 0 ? "Add label" : "Add"}
@@ -676,7 +673,7 @@ function Chip({ label, onRemove }: { label: Label; onRemove: () => void }) {
   return (
     <span
       className={cn(
-        "group inline-flex h-7 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px]",
+        "group inline-flex h-7 items-center gap-1.5 rounded-md border pr-1 pl-2 font-mono text-xs",
         isRegion
           ? "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--accent)]"
           : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/60 text-[var(--text-secondary)]"
@@ -694,9 +691,9 @@ function Chip({ label, onRemove }: { label: Label; onRemove: () => void }) {
         type="button"
         onClick={onRemove}
         aria-label={`Remove ${label.key}`}
-        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-primary)] hover:text-[var(--error)] group-hover:opacity-100"
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-tertiary)] opacity-60 transition-opacity group-hover:opacity-100 hover:bg-[var(--bg-primary)] hover:text-[var(--error)] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none pointer-coarse:opacity-100"
       >
-        <X className="h-2.5 w-2.5" />
+        <X className="h-3 w-3" />
       </button>
     </span>
   );
@@ -760,7 +757,7 @@ function DraftEditor({
         onKeyDown={onKeyKeyDown}
         placeholder="key"
         list="kuso-node-label-suggestions"
-        className="h-6 w-24 border-0 bg-transparent font-mono text-[11px] focus-visible:ring-0"
+        className="h-6 w-24 border-0 bg-transparent font-mono text-xs focus-visible:ring-0"
       />
       <span className="font-mono text-xs text-[var(--text-tertiary)]/60">=</span>
       <Input
@@ -769,7 +766,7 @@ function DraftEditor({
         onChange={(e) => onChangeValue(e.target.value)}
         onKeyDown={onValueKeyDown}
         placeholder="value"
-        className="h-6 w-24 border-0 bg-transparent font-mono text-[11px] focus-visible:ring-0"
+        className="h-6 w-24 border-0 bg-transparent font-mono text-xs focus-visible:ring-0"
       />
       <button
         type="button"
@@ -799,7 +796,7 @@ function DraftEditor({
                 onChangeKey(s);
                 valueRef.current?.focus();
               }}
-              className="inline-flex h-5 items-center rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)]/60 px-1.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:border-[var(--accent)]/30 hover:text-[var(--accent)]"
+              className="inline-flex h-5 items-center rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)]/60 px-1.5 font-mono text-xs text-[var(--text-tertiary)] hover:border-[var(--accent)]/30 hover:text-[var(--accent)]"
             >
               {s}
             </button>
@@ -822,65 +819,46 @@ function DraftEditor({
 function NodeStats({ node }: { node: NodeSummary }) {
   const [openMetric, setOpenMetric] = useState<NodeMetricKind | null>(null);
   const hasUsage = (node.cpuUsageMilli ?? 0) > 0 || (node.memUsageBytes ?? 0) > 0;
+  const pct = (used: number, cap: number | undefined) => (cap ? Math.min(100, Math.round((used / cap) * 100)) : null);
+  const diskUsed = (node.diskCapacityBytes ?? 0) - (node.diskAvailableBytes ?? 0);
   return (
     <>
-      {/* gap-4 (vs gap-2) puts a clean visual gutter between the three
-          stats so CPU/RAM/Disk read as separate metrics, not a single
-          smashed strip. p-3 also bumps the inner padding by one
-          step. */}
-      <div className="mt-3 grid grid-cols-1 gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-[10px] sm:grid-cols-3 sm:gap-4">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-4">
         <Stat
           label="CPU"
-          value={
+          detail={
             hasUsage
-              ? `${formatCPU(node.cpuUsageMilli ?? 0)} / ${formatCPU(node.cpuCapacityMilli ?? 0)}`
-              : `cap ${formatCPU(node.cpuCapacityMilli ?? 0)}`
+              ? `${formatCPU(node.cpuUsageMilli ?? 0)} of ${formatCPU(node.cpuCapacityMilli ?? 0)} cores`
+              : `${formatCPU(node.cpuCapacityMilli ?? 0)} cores`
           }
-          pct={
-            hasUsage && node.cpuCapacityMilli
-              ? Math.min(100, Math.round(((node.cpuUsageMilli ?? 0) / node.cpuCapacityMilli) * 100))
-              : null
-          }
+          pct={hasUsage ? pct(node.cpuUsageMilli ?? 0, node.cpuCapacityMilli) : null}
           onClick={() => setOpenMetric("cpu")}
         />
         <Stat
-          label="RAM"
-          value={
+          label="Memory"
+          detail={
             hasUsage
-              ? `${formatBytes(node.memUsageBytes ?? 0)} / ${formatBytes(node.memCapacityBytes ?? 0)}`
-              : `cap ${formatBytes(node.memCapacityBytes ?? 0)}`
+              ? `${formatBytes(node.memUsageBytes ?? 0)} of ${formatBytes(node.memCapacityBytes ?? 0)}`
+              : formatBytes(node.memCapacityBytes ?? 0)
           }
-          pct={
-            hasUsage && node.memCapacityBytes
-              ? Math.min(100, Math.round(((node.memUsageBytes ?? 0) / node.memCapacityBytes) * 100))
-              : null
-          }
+          pct={hasUsage ? pct(node.memUsageBytes ?? 0, node.memCapacityBytes) : null}
           onClick={() => setOpenMetric("mem")}
         />
         <Stat
           label="Disk"
-          value={
+          detail={
             node.diskCapacityBytes
-              ? `${formatBytes((node.diskCapacityBytes ?? 0) - (node.diskAvailableBytes ?? 0))} / ${formatBytes(node.diskCapacityBytes ?? 0)}`
-              : "—"
+              ? `${formatBytes(diskUsed)} of ${formatBytes(node.diskCapacityBytes)}`
+              : "Not reported"
           }
-          pct={
-            node.diskCapacityBytes && node.diskAvailableBytes !== undefined
-              ? Math.min(
-                  100,
-                  Math.round(
-                    ((node.diskCapacityBytes - node.diskAvailableBytes) / node.diskCapacityBytes) * 100
-                  )
-                )
-              : null
-          }
+          pct={node.diskAvailableBytes !== undefined ? pct(diskUsed, node.diskCapacityBytes) : null}
           onClick={() => setOpenMetric("disk")}
         />
-        {node.podsCapacity ? (
-          <p className="col-span-3 mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-            {node.pods ?? 0} / {node.podsCapacity} pods scheduled
-          </p>
-        ) : null}
+        <Stat
+          label="Pods"
+          detail={node.podsCapacity ? `${node.pods ?? 0} of ${node.podsCapacity} slots` : "Not reported"}
+          pct={node.podsCapacity ? pct(node.pods ?? 0, node.podsCapacity) : null}
+        />
       </div>
       {openMetric && (
         <NodeHistoryModal
@@ -895,43 +873,52 @@ function NodeStats({ node }: { node: NodeSummary }) {
 
 type NodeMetricKind = "cpu" | "mem" | "disk";
 
+// A capacity tile: big percentage, a pressure-coloured bar and the raw
+// numbers. Tiles with history open the 7-day drill-down on click.
 function Stat({
   label,
-  value,
+  detail,
   pct,
   onClick,
 }: {
   label: string;
-  value: string;
+  detail: string;
   pct: number | null;
   onClick?: () => void;
 }) {
-  // Color the bar by pressure level — green <60%, amber 60-85, red >85.
-  const bar =
-    pct === null
-      ? "bg-[var(--bg-tertiary)]"
-      : pct < 60
-        ? "bg-emerald-500"
-        : pct < 85
-          ? "bg-amber-500"
-          : "bg-red-500";
+  const tone =
+    pct === null ? null : pct < 60 ? "var(--success)" : pct < 85 ? "var(--warning)" : "var(--danger)";
+  const body = (
+    <>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>
+        {onClick && <span className="text-xs text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100">7-day history</span>}
+      </div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--text-primary)]">
+        {pct === null ? "—" : `${pct}%`}
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
+        <div
+          className="h-full rounded-full transition-[width]"
+          style={{ width: pct === null ? "0%" : `${Math.max(pct, 2)}%`, background: tone ?? undefined }}
+        />
+      </div>
+      <div className="mt-1.5 truncate text-xs tabular-nums text-[var(--text-tertiary)]">{detail}</div>
+    </>
+  );
+  const cls = "group bg-[var(--bg-primary)] px-3 py-2.5 text-left";
+  if (!onClick) return <div className={cls}>{body}</div>;
   return (
     <button
       type="button"
       onClick={onClick}
-      className="space-y-1 rounded p-1 text-left transition-colors hover:bg-[var(--bg-tertiary)]/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+      aria-label={`${label}: ${pct === null ? "no usage data" : `${pct}% used`}, ${detail}. Show 7-day history`}
+      className={cn(
+        cls,
+        "transition-colors outline-none hover:bg-[var(--bg-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-inset"
+      )}
     >
-      <div className="flex items-center justify-between font-mono text-[var(--text-tertiary)]">
-        <span>{label}</span>
-        {pct !== null && <span className="text-[var(--text-secondary)]">{pct}%</span>}
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded bg-[var(--bg-tertiary)]">
-        <div
-          className={cn("h-full transition-all", bar)}
-          style={{ width: pct === null ? "0%" : `${pct}%` }}
-        />
-      </div>
-      <div className="font-mono text-[var(--text-secondary)]">{value}</div>
+      {body}
     </button>
   );
 }
@@ -977,14 +964,9 @@ function UncordonButton({ node }: { node: string }) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Uncordon failed"),
   });
   return (
-    <button
-      type="button"
-      onClick={() => uncordon.mutate()}
-      disabled={uncordon.isPending}
-      className="rounded border border-[var(--border-subtle)] px-1.5 py-0.5 hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
-    >
-      {uncordon.isPending ? "…" : "uncordon"}
-    </button>
+    <Button size="xs" variant="secondary" onClick={() => uncordon.mutate()} loading={uncordon.isPending}>
+      Uncordon
+    </Button>
   );
 }
 
@@ -1021,15 +1003,16 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
   });
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => setOpen(true)}
-        className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
         aria-label={`Remove ${node.name}`}
-        title="Remove this node"
+        className="-mr-1.5 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
       >
-        <X className="h-3.5 w-3.5" />
-      </button>
+        <Trash2 aria-hidden />
+        <span className="hidden sm:inline">Remove</span>
+      </Button>
       <ConfirmDialog
         open={open}
         title={`Remove ${node.name}?`}
@@ -1037,18 +1020,18 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
           <div className="space-y-2">
             <p>Workloads move to other nodes, then the node leaves the cluster.</p>
             {preflight.isPending ? (
-              <p className="text-[11px] text-[var(--text-tertiary)]">Checking for data on this node…</p>
+              <p className="text-xs text-[var(--text-tertiary)]">Checking for data on this node…</p>
             ) : preflight.isError ? (
-              <p className="text-[11px] text-[var(--warning)]">
+              <p className="text-xs text-[var(--warning)]">
                 Couldn&apos;t check for data on this node:{" "}
                 {preflight.error instanceof Error ? preflight.error.message : "unknown error"}
               </p>
             ) : pinned.length > 0 ? (
               <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-2">
-                <p className="text-[12px] font-medium text-[var(--error)]">
+                <p className="text-xs font-medium text-[var(--error)]">
                   This data lives only on {node.name} and will be lost:
                 </p>
-                <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                <ul className="mt-1 space-y-0.5 font-mono text-xs">
                   {pinned.map((p) => (
                     <li key={`${p.namespace}/${p.pvc}`} className="flex gap-2">
                       <span className="truncate">
@@ -1231,11 +1214,11 @@ function AddNodeModal({
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <h2 className="font-mono text-sm font-medium">Add node</h2>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <h2 className="text-sm font-medium">Add node</h2>
+            <p className="text-xs text-[var(--text-tertiary)]">
               {mode === "bootstrap"
-                ? "paste one command on the new VM"
-                : "k3s agent join · validate, then install"}
+                ? "Paste one command on the new VM"
+                : "k3s agent join: validate, then install"}
             </p>
           </div>
           <button
@@ -1252,8 +1235,8 @@ function AddNodeModal({
             kept for legacy / firewall-asymmetric environments. */}
         <div className="flex border-b border-[var(--border-subtle)] px-4 pt-3">
           {[
-            { id: "bootstrap" as const, label: "Bootstrap", subtitle: "recommended" },
-            { id: "ssh" as const, label: "SSH", subtitle: "legacy" },
+            { id: "bootstrap" as const, label: "Bootstrap", subtitle: "Recommended" },
+            { id: "ssh" as const, label: "SSH", subtitle: "Legacy" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1261,14 +1244,14 @@ function AddNodeModal({
               disabled={busy}
               onClick={() => setMode(tab.id)}
               className={cn(
-                "mr-1 -mb-px border-b-2 px-3 py-1.5 font-mono text-[12px] transition disabled:opacity-40",
+                "mr-1 -mb-px min-h-10 border-b-2 px-3 py-2 text-[13px] font-medium transition disabled:opacity-40",
                 mode === tab.id
-                  ? "border-[var(--accent-primary)] text-[var(--text-primary)]"
+                  ? "border-[var(--accent)] text-[var(--text-primary)]"
                   : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
               )}
             >
               {tab.label}{" "}
-              <span className="text-[10px] text-[var(--text-tertiary)]">· {tab.subtitle}</span>
+              <span className="text-xs text-[var(--text-tertiary)]">· {tab.subtitle}</span>
             </button>
           ))}
         </div>
@@ -1284,7 +1267,7 @@ function AddNodeModal({
           {/* Step 1: SSH key. Either pick from the library or
               generate a fresh ed25519 keypair on the server. */}
           <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <p className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
               SSH key
             </p>
             {keys.isPending ? (
@@ -1309,11 +1292,11 @@ function AddNodeModal({
             )}
             {selectedKey && (
               <div className="mt-2 space-y-1.5">
-                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <p className="text-xs text-[var(--text-tertiary)]">
                   Paste this public key into the new VM&apos;s{" "}
                   <span className="font-mono">~/.ssh/authorized_keys</span>:
                 </p>
-                <code className="block max-h-24 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-[10px] break-all">
+                <code className="block max-h-24 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-xs break-all">
                   {selectedKey.publicKey}
                 </code>
                 <Button
@@ -1328,7 +1311,7 @@ function AddNodeModal({
                 </Button>
                 {confirmKeyDelete ? (
                   <div className="flex flex-wrap items-center gap-2 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-2 py-1.5">
-                    <span className="flex-1 font-mono text-[10px] text-[var(--error)]">
+                    <span className="flex-1 text-xs text-[var(--error)]">
                       Delete {selectedKey.name}? Joined nodes keep running; the private key is gone from kuso for good.
                     </span>
                     <Button size="sm" variant="ghost" onClick={() => setConfirmKeyDelete(false)} disabled={deleteKey.isPending}>
@@ -1374,12 +1357,12 @@ function AddNodeModal({
 
           {/* Step 2: Host details. */}
           <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <p className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
               Target VM
             </p>
             <div className="grid grid-cols-3 gap-2">
               <div className="col-span-2 space-y-1">
-                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">Host / IP</label>
+                <label className="text-xs text-[var(--text-tertiary)]">Host / IP</label>
                 <Input
                   value={host}
                   onChange={(e) => {
@@ -1391,7 +1374,7 @@ function AddNodeModal({
                 />
               </div>
               <div className="space-y-1">
-                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">Port</label>
+                <label className="text-xs text-[var(--text-tertiary)]">Port</label>
                 <Input
                   value={port}
                   onChange={(e) => {
@@ -1404,7 +1387,7 @@ function AddNodeModal({
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">SSH user</label>
+                <label className="text-xs text-[var(--text-tertiary)]">SSH user</label>
                 <Input
                   value={user}
                   onChange={(e) => {
@@ -1415,7 +1398,7 @@ function AddNodeModal({
                 />
               </div>
               <div className="space-y-1">
-                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <label className="text-xs text-[var(--text-tertiary)]">
                   Region label (optional)
                 </label>
                 <Input
@@ -1431,16 +1414,16 @@ function AddNodeModal({
           {/* Step 3: Validation results. */}
           {validation && (
             <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              <p className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
                 Validation
               </p>
               <ul className="space-y-1">
                 {validation.checks.map((c, i) => (
-                  <li key={i} className="flex items-start gap-2 font-mono text-[11px]">
+                  <li key={i} className="flex items-start gap-2 font-mono text-xs">
                     <span
                       className={cn(
                         "mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                        c.ok ? "bg-emerald-400" : "bg-red-400"
+                        c.ok ? "bg-[var(--success)]" : "bg-[var(--danger)]"
                       )}
                       role="img"
                       aria-label={c.ok ? "passed" : "failed"}
@@ -1458,7 +1441,7 @@ function AddNodeModal({
           )}
 
           {output && (
-            <pre className="max-h-48 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[10px] text-[var(--text-secondary)]">
+            <pre className="max-h-48 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs text-[var(--text-secondary)]">
               {output}
             </pre>
           )}
@@ -1611,12 +1594,12 @@ function BootstrapBody({
         {!minted && (
           <>
             <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              <p className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
                 Optional metadata
               </p>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <label className="text-xs text-[var(--text-tertiary)]">
                     Region
                   </label>
                   <Input
@@ -1627,7 +1610,7 @@ function BootstrapBody({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <label className="text-xs text-[var(--text-tertiary)]">
                     Tier
                   </label>
                   <Input
@@ -1639,7 +1622,7 @@ function BootstrapBody({
                 </div>
               </div>
               <div className="mt-2 space-y-1">
-                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                <label className="text-xs text-[var(--text-tertiary)]">
                   Node name override (optional)
                 </label>
                 <Input
@@ -1650,7 +1633,7 @@ function BootstrapBody({
                 />
               </div>
             </section>
-            <p className="font-mono text-[11px] text-[var(--text-secondary)]">
+            <p className="text-xs text-[var(--text-secondary)]">
               You&apos;ll get a one-line curl command. Paste it as root on the new VM —
               it detects facts (arch, cloud, instance type), redeems a single-use
               token, and runs the standard k3s agent install. Token expires in 15
@@ -1662,10 +1645,10 @@ function BootstrapBody({
         {minted && (
           <>
             <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              <p className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
                 Run this on the new VM
               </p>
-              <code className="block max-h-32 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-[11px] break-all text-[var(--text-primary)]">
+              <code className="block max-h-32 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-xs break-all text-[var(--text-primary)]">
                 {minted.oneLiner}
               </code>
               <div className="mt-2 flex items-center gap-2">
@@ -1679,32 +1662,32 @@ function BootstrapBody({
                 >
                   Copy command
                 </Button>
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                  expires {new Date(minted.expiresAt).toLocaleTimeString()}
+                <span className="text-xs text-[var(--text-tertiary)]">
+                  Expires {new Date(minted.expiresAt).toLocaleTimeString()}
                 </span>
               </div>
             </section>
             <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-              <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              <p className="mb-1 text-xs text-[var(--text-secondary)] font-medium">
                 Status
               </p>
-              <div className="flex items-center gap-2 font-mono text-[12px]">
+              <div className="flex items-center gap-2 font-mono text-xs">
                 {stillPending ? (
                   <>
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--warning)]" />
                     <span className="text-[var(--text-secondary)]">
-                      waiting for the new VM to call home…
+                      Waiting for the new VM to call home…
                     </span>
                   </>
                 ) : pending.isSuccess ? (
                   <>
-                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
+                    <span className="inline-block h-2 w-2 rounded-full bg-[var(--success)]" />
                     <span className="text-[var(--text-secondary)]">
-                      node phoned home — joining the cluster
+                      Node phoned home — joining the cluster
                     </span>
                   </>
                 ) : (
-                  <span className="text-[var(--text-tertiary)]">checking…</span>
+                  <span className="text-[var(--text-tertiary)]">Checking…</span>
                 )}
               </div>
             </section>
@@ -1811,14 +1794,14 @@ function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="key name (e.g. workers-eu)"
-        className="h-7 text-[12px]"
+        className="h-7 text-xs"
       />
       <button
         type="button"
         onClick={() => setAdvanced((v) => !v)}
-        className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+        className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
       >
-        {advanced ? "generate ed25519 instead" : "paste an existing key instead"}
+        {advanced ? "Generate an ed25519 key instead" : "Paste an existing key instead"}
       </button>
       {advanced && (
         <>
@@ -1828,7 +1811,7 @@ function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
             placeholder="ssh-ed25519 AAAA… user@host"
             spellCheck={false}
             rows={2}
-            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs"
           />
           <textarea
             value={privateKey}
@@ -1836,7 +1819,7 @@ function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
             placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…"
             spellCheck={false}
             rows={4}
-            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs"
           />
         </>
       )}
@@ -1892,8 +1875,8 @@ function NodeHistoryModal({
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <h2 className="font-mono text-sm font-medium">{node.name}</h2>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <h2 className="text-sm font-medium">{node.name}</h2>
+            <p className="text-xs text-[var(--text-tertiary)]">
               {title} · last 7 days · sampled every 5 min
             </p>
           </div>
@@ -1910,11 +1893,11 @@ function NodeHistoryModal({
           {history.isPending ? (
             <Skeleton className="h-40 w-full" />
           ) : history.isError ? (
-            <p className="font-mono text-[11px] text-[var(--error)]">
+            <p className="text-xs text-[var(--error)]">
               Failed to load history: {history.error?.message}
             </p>
           ) : samples.length === 0 ? (
-            <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
+            <p className="text-xs text-[var(--text-tertiary)]">
               No samples yet. The kuso server samples nodes every 5 min — check back shortly after
               a fresh deploy.
             </p>
@@ -1993,13 +1976,13 @@ function TopConsumers({ node, metric }: { node: NodeSummary; metric: NodeMetricK
 
   return (
     <section className="mt-4 border-t border-[var(--border-subtle)] pt-3">
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+      <h3 className="mb-2 text-xs text-[var(--text-secondary)] font-medium">
         Top consumers · now
       </h3>
       {q.isPending ? (
         <Skeleton className="h-24 w-full" />
       ) : q.isError ? (
-        <p className="font-mono text-[11px] text-[var(--error)]">
+        <p className="text-xs text-[var(--error)]">
           {q.error instanceof ApiError ? q.error.message : "Failed to load consumers"}
         </p>
       ) : section ? (
@@ -2057,7 +2040,7 @@ function ConsumerList({
   rows.sort((a, b) => b.value - a.value);
 
   if (rows.length === 0) {
-    return <p className="font-mono text-[11px] text-[var(--text-tertiary)]">No usage reported yet.</p>;
+    return <p className="text-xs text-[var(--text-tertiary)]">No usage reported yet.</p>;
   }
   const max = rows[0].value || 1;
   return (
@@ -2065,11 +2048,11 @@ function ConsumerList({
       {rows.map((r) => {
         const pct = capacity > 0 ? Math.round((r.value / capacity) * 100) : null;
         return (
-          <li key={r.key} className="font-mono text-[11px]">
+          <li key={r.key} className="font-mono text-xs">
             <div className="flex items-baseline justify-between gap-3">
               <div className="flex min-w-0 items-baseline gap-2">
                 {r.kind && (
-                  <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1 text-[9px] uppercase tracking-wider text-[var(--text-tertiary)]">
+                  <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1 text-2xs text-[var(--text-secondary)] font-medium">
                     {r.kind}
                   </span>
                 )}
@@ -2077,7 +2060,7 @@ function ConsumerList({
                   {r.label}
                 </span>
                 {r.detail && (
-                  <span className="hidden truncate text-[10px] text-[var(--text-tertiary)] sm:inline" title={r.detail}>
+                  <span className="hidden truncate text-xs text-[var(--text-tertiary)] sm:inline" title={r.detail}>
                     {r.detail}
                   </span>
                 )}
@@ -2088,7 +2071,7 @@ function ConsumerList({
               </span>
             </div>
             <div className="mt-0.5 h-0.5 w-full overflow-hidden rounded bg-[var(--bg-tertiary)]">
-              <div className="h-full bg-emerald-500/70" style={{ width: `${(r.value / max) * 100}%` }} />
+              <div className="h-full bg-[var(--success)]/70" style={{ width: `${(r.value / max) * 100}%` }} />
             </div>
           </li>
         );
@@ -2106,15 +2089,15 @@ function consumerDetail(c: Consumer): string | undefined {
 function PinnedVolumes({ volumes }: { volumes: PinnedVolume[] }) {
   return (
     <div className="mt-4">
-      <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+      <h3 className="text-xs text-[var(--text-secondary)] font-medium">
         Volumes on this disk · allocated size
       </h3>
-      <p className="mb-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="mb-2 text-xs text-[var(--text-tertiary)]">
         local-path volumes can&apos;t be measured individually; their data is part of &quot;volumes, logs &amp; OS&quot; above.
       </p>
       <ul className="grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
         {volumes.map((v) => (
-          <li key={`${v.namespace}/${v.pvc}`} className="flex justify-between gap-2 font-mono text-[11px]">
+          <li key={`${v.namespace}/${v.pvc}`} className="flex justify-between gap-2 font-mono text-xs">
             <span className="truncate text-[var(--text-secondary)]" title={`${v.namespace}/${v.pvc}`}>
               {v.project && v.owner ? `${v.project} / ${v.owner}` : v.pvc}
             </span>
@@ -2250,9 +2233,9 @@ function Sparkline({
 
   return (
     <div>
-      <div className="mb-2 grid grid-cols-2 gap-2 font-mono text-[11px]">
+      <div className="mb-2 grid grid-cols-2 gap-2 font-mono text-xs">
         <div className="flex items-baseline justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1">
-          <span className="text-[var(--text-tertiary)]">last sample</span>
+          <span className="font-sans text-[var(--text-tertiary)]">Last sample</span>
           <span>
             <span className="text-[var(--text-primary)]">{latestUsed}</span>{" "}
             <span className="text-[var(--text-tertiary)]">
@@ -2288,7 +2271,7 @@ function Sparkline({
               y={y(t)}
               dy="0.32em"
               textAnchor="end"
-              className="fill-[var(--text-tertiary)] font-mono text-[9px]"
+              className="fill-[var(--text-tertiary)] font-mono text-2xs"
             >
               {t}%
             </text>
@@ -2333,13 +2316,13 @@ function Sparkline({
             x={x(p.ts)}
             y={H - 6}
             textAnchor={i === 0 ? "start" : i === xLabels.length - 1 ? "end" : "middle"}
-            className="fill-[var(--text-tertiary)] font-mono text-[9px]"
+            className="fill-[var(--text-tertiary)] font-mono text-2xs"
           >
             {fmtTs(p.ts)}
           </text>
         ))}
       </svg>
-      <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="mt-2 text-xs text-[var(--text-tertiary)]">
         {points.length} sample{points.length === 1 ? "" : "s"}
       </p>
     </div>
@@ -2398,28 +2381,28 @@ function PendingBootstrapTokensCard() {
   if (tokens.length === 0) return null;
   return (
     <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3">
-      <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--warning)]">
+      <p className="mb-2 text-xs text-[var(--warning)] font-medium">
         Pending bootstrap tokens · {tokens.length}
       </p>
       <ul className="space-y-1.5">
         {tokens.map((t) => (
           <li
             key={t.jtiHash}
-            className="flex flex-wrap items-center justify-between gap-2 rounded bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+            className="flex flex-wrap items-center justify-between gap-2 rounded bg-[var(--bg-primary)] p-2 font-mono text-xs"
           >
             <div className="min-w-0 flex-1 space-y-0.5">
               <div className="truncate text-[var(--text-secondary)]">
-                <span className="text-[var(--text-tertiary)]">prefix:</span>{" "}
+                <span className="font-sans text-[var(--text-tertiary)]">Prefix</span>{" "}
                 <span>{t.jtiPrefix}…</span>
                 {t.nodeName && (
                   <>
-                    <span className="ml-3 text-[var(--text-tertiary)]">name:</span>{" "}
+                    <span className="ml-3 font-sans text-[var(--text-tertiary)]">Name</span>{" "}
                     <span>{t.nodeName}</span>
                   </>
                 )}
               </div>
-              <div className="text-[10px] text-[var(--text-tertiary)]">
-                expires {new Date(t.expiresAt).toLocaleTimeString()}
+              <div className="text-xs text-[var(--text-tertiary)]">
+                Expires {new Date(t.expiresAt).toLocaleTimeString()}
                 {t.labels && Object.keys(t.labels).length > 0 && (
                   <>
                     {" · "}
