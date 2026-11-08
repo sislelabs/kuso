@@ -33,6 +33,11 @@ export interface NodeStatus {
 const S = (kind: NodeStatusKind, label: string, tone: NodeStatusTone, detail?: string): NodeStatus =>
   detail ? { kind, label, tone, detail } : { kind, label, tone };
 
+// Labels stick to the shared vocabulary (Live, Deploying, Building,
+// Degraded, Failing, Sleeping, Stopped, Not deployed, Unknown); the
+// specific cause ("Crashing", "Build failed") moves into the detail.
+const because = (cause: string, detail?: string) => (detail ? `${cause}: ${detail}` : cause);
+
 function serverState(state: string | undefined, detail?: string): NodeStatus | null {
   switch (state) {
     case "running":
@@ -41,15 +46,15 @@ function serverState(state: string | undefined, detail?: string): NodeStatus | n
       return S("degraded", "Degraded", "warning", detail);
     // The new image wasn't promoted; the last green build keeps serving.
     case "release_failed":
-      return S("degraded", "Release failed", "warning", detail);
+      return S("degraded", "Degraded", "warning", because("Release failed", detail));
     case "crashlooping":
-      return S("crashing", "Crashing", "error", detail);
+      return S("crashing", "Failing", "error", because("Crashing", detail));
     case "deploying":
       return S("deploying", "Deploying", "progress", detail);
     case "building":
       return S("building", "Building", "progress", detail);
     case "build_failed":
-      return S("build_failed", "Build failed", "error", detail);
+      return S("build_failed", "Failing", "error", because("Build failed", detail));
     case "sleeping":
       return S("sleeping", "Sleeping", "muted", detail);
     case "stopped":
@@ -91,8 +96,8 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
   if (!env) return S("not_deployed", "Not deployed", "info");
   if (env.status?.ready) return S("live", "Live", "success", detail);
 
-  if (build === "failed" || build === "error") return S("build_failed", "Build failed", "error", detail);
-  if (build === "release-failed") return S("build_failed", "Release failed", "error", detail);
+  if (build === "failed" || build === "error") return S("build_failed", "Failing", "error", because("Build failed", detail));
+  if (build === "release-failed") return S("build_failed", "Failing", "error", because("Release failed", detail));
 
   // A build-based service is held at 0 replicas until its first image
   // exists; that's "not deployed yet", not broken.
@@ -100,12 +105,12 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
 
   const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
   const want = r?.desired ?? r?.max ?? 0;
-  if (want > 0 && (r?.ready ?? 0) === 0) return S("crashing", "No ready pods", "error", detail);
+  if (want > 0 && (r?.ready ?? 0) === 0) return S("crashing", "Failing", "error", because("No ready pods", detail));
 
   const phase = String(env.status?.phase ?? "").toLowerCase();
   if (phase === "building") return S("building", "Building", "progress", detail);
   if (phase === "deploying") return S("deploying", "Deploying", "progress", detail);
-  if (phase === "failed" || phase === "error") return S("crashing", "Failed", "error", detail);
+  if (phase === "failed" || phase === "error") return S("crashing", "Failing", "error", detail);
   if (phase === "sleeping") return S("sleeping", "Sleeping", "muted", detail);
   return S("unknown", "Unknown", "muted", detail);
 }
@@ -118,7 +123,7 @@ export function deriveAddonStatus(addon: KusoAddon): NodeStatus {
   const failure = conditions.find(
     (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
   );
-  if (failure) return S("build_failed", "Release failed", "error", failure.message || undefined);
+  if (failure) return S("build_failed", "Failing", "error", because("Release failed", failure.message || undefined));
   if (conditions.some((c) => c.type === "Deployed" && c.status === "True")) return S("live", "Live", "success");
   return S("provisioning", "Provisioning", "progress");
 }

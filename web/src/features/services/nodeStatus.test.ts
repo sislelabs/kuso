@@ -35,11 +35,11 @@ describe("deriveServiceStatus", () => {
     const cases: [string, string, string][] = [
       ["running", "live", "Live"],
       ["degraded", "degraded", "Degraded"],
-      ["release_failed", "degraded", "Release failed"],
-      ["crashlooping", "crashing", "Crashing"],
+      ["release_failed", "degraded", "Degraded"],
+      ["crashlooping", "crashing", "Failing"],
       ["deploying", "deploying", "Deploying"],
       ["building", "building", "Building"],
-      ["build_failed", "build_failed", "Build failed"],
+      ["build_failed", "build_failed", "Failing"],
       ["sleeping", "sleeping", "Sleeping"],
       ["stopped", "stopped", "Stopped"],
       ["no_image", "not_deployed", "Not deployed"],
@@ -52,6 +52,11 @@ describe("deriveServiceStatus", () => {
 
   it("server state beats a stale ready flag", () => {
     expect(kind({ env: env({ state: "crashlooping", ready: true }) })).toBe("crashing");
+  });
+
+  it("keeps the specific cause in the detail, not the label", () => {
+    const s = deriveServiceStatus({ env: env({ state: "crashlooping", stateDetail: "OOMKilled" }) });
+    expect([s.label, s.detail]).toEqual(["Failing", "Crashing: OOMKilled"]);
   });
 
   it("carries the server's stateDetail", () => {
@@ -95,7 +100,7 @@ describe("deriveAddonStatus", () => {
         { type: "ReleaseFailed", status: "True", message: "boom" },
       ]),
     );
-    expect([s.kind, s.detail]).toEqual(["build_failed", "boom"]);
+    expect([s.kind, s.label, s.detail]).toEqual(["build_failed", "Failing", "Release failed: boom"]);
   });
 
   it("deployed is live, otherwise provisioning", () => {
