@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bell, BellOff, CheckCheck, Trash2 } from "lucide-react";
 import { Segmented } from "@/components/ui/segmented";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,7 +12,17 @@ import { useCan, Perms } from "@/features/auth";
 import { useSystemVersion } from "@/features/system-version";
 import { api } from "@/lib/api-client";
 import { describeError, toastError } from "@/lib/errors";
-import { collapseUpdates, needsAttention, setBellPrefs, useBellPrefs, type BellView } from "@/lib/notification-attention";
+import {
+  badgeCount,
+  collapseUpdates,
+  forgetLocalReads,
+  markLocallyRead,
+  needsAttention,
+  setBellPrefs,
+  useBellPrefs,
+  useLocalReads,
+  type BellView,
+} from "@/lib/notification-attention";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -79,10 +89,17 @@ function useNotificationFeed() {
     throwOnError: false,
   });
   const version = useSystemVersion();
+  const localReads = useLocalReads();
   const items = useMemo(() => {
     const rows = collapseUpdates(feed.data ?? [], version.data?.needsUpdate);
     return view === "attention" ? rows.filter(needsAttention) : rows;
   }, [feed.data, version.data?.needsUpdate, view]);
+  const locallyRead = useMemo(() => new Set(localReads.map((r) => r.id)), [localReads]);
+  // Rows the server has since marked read no longer need a local entry.
+  useEffect(() => {
+    if (!feed.data) return;
+    forgetLocalReads(new Set(feed.data.filter((e) => e.readAt).map((e) => e.id)));
+  }, [feed.data]);
 
   // Optimistic: the badge drops to 0 and rows lose their unread styling
   // at once; both roll back if the server refuses.
@@ -96,6 +113,9 @@ function useNotificationFeed() {
       qc.setQueriesData({ queryKey: ["notifications", "unread-count"] }, { unread: 0 });
       if (prevFeed) qc.setQueryData(feedKey, prevFeed.map((e) => (e.readAt ? e : { ...e, readAt: now })));
       return { prevCount, prevFeed };
+    },
+    onSuccess: () => {
+      forgetLocalReads();
     },
     onError: (e, _vars, ctx) => {
       if (ctx?.prevCount) qc.setQueryData(countKey, ctx.prevCount);
@@ -117,6 +137,7 @@ function useNotificationFeed() {
       return { previous };
     },
     onSuccess: () => {
+      forgetLocalReads();
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
       qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
     },
@@ -126,18 +147,16 @@ function useNotificationFeed() {
     },
   });
 
-  const unreadCount = unread.data?.unread ?? 0;
+  // Opening or closing the feed never marks anything read: a row is read
+  // once it's opened, or after "Mark all read".
+  const localDiscount = localReads.filter((r) => prefs.countAll || r.attention).length;
+  const unreadCount = Math.max(0, (unread.data?.unread ?? 0) - localDiscount);
   const onOpenChange = (next: boolean) => {
     setOpen(next);
-    if (next) {
-      void unread.refetch();
-    } else if (isAdmin && unreadCount > 0) {
-      // Seen = read, on CLOSE, not open: marking on open cleared readAt
-      // before the feed rendered, so nothing could show as new.
-      markRead.mutate();
-    }
+    if (next) void unread.refetch();
   };
-  return { isAdmin, open, feed, items, view, unreadCount, clearAll, markRead, onOpenChange };
+  const isUnread = (e: FeedEvent) => isAdmin && !e.readAt && !locallyRead.has(e.id);
+  return { isAdmin, open, feed, items, view, unreadCount, isUnread, clearAll, markRead, onOpenChange };
 }
 
 const FEED_LIMIT = 30;
@@ -145,7 +164,7 @@ const FEED_LIMIT = 30;
 type Feed = ReturnType<typeof useNotificationFeed>;
 
 function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
-  const { isAdmin, feed, items, view, clearAll, markRead, unreadCount } = state;
+  const { isAdmin, feed, items, view, clearAll, markRead, unreadCount, isUnread } = state;
   const raw = feed.data ?? [];
   return (
     <>
@@ -241,7 +260,7 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
         ) : (
           <ul className="divide-y divide-[var(--border-subtle)]">
             {items.map((e) => (
-              <NotificationRow key={e.id} event={e} unread={isAdmin && !e.readAt} onClose={onClose} />
+              <NotificationRow key={e.id} event={e} unread={isUnread(e)} onClose={onClose} />
             ))}
           </ul>
         )}
@@ -262,9 +281,9 @@ function BellIcon({ unread }: { unread: number }) {
       {unread > 0 && (
         <span
           aria-hidden
-          className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--text-primary)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)]"
+          className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--text-primary)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)] ring-2 ring-[var(--bg-primary)]"
         >
-          {unread > 99 ? "99+" : unread}
+          {badgeCount(unread)}
         </span>
       )}
     </>
@@ -385,9 +404,31 @@ function NotificationRow({
   if (href) {
     return (
       <li className="transition-colors hover:bg-[var(--bg-tertiary)]/60">
-        <Link href={href} onClick={onClose} className="block px-3 py-2.5 focus-visible:outline-offset-[-2px]">
+        <Link
+          href={href}
+          onClick={() => {
+            if (unread) markLocallyRead(event);
+            onClose();
+          }}
+          className="block px-3 py-2.5 focus-visible:outline-offset-[-2px]"
+        >
           {body}
         </Link>
+      </li>
+    );
+  }
+  // Nothing to open: the row itself marks it read.
+  if (unread) {
+    return (
+      <li className="transition-colors hover:bg-[var(--bg-tertiary)]/60">
+        <button
+          type="button"
+          onClick={() => markLocallyRead(event)}
+          title="Mark as read"
+          className="block w-full px-3 py-2.5 text-left focus-visible:outline-offset-[-2px]"
+        >
+          {body}
+        </button>
       </li>
     );
   }
