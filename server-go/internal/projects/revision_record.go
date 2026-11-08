@@ -92,6 +92,29 @@ func RevisionInformational(snapshot []byte) bool {
 	return probe.Informational
 }
 
+// RevisionChangedKeys returns the env key names a secret-write revision
+// touched, sorted and deduped. Only names that are valid env identifiers
+// pass, so nothing value-shaped a malformed row might hold is echoed.
+func RevisionChangedKeys(snapshot []byte) []string {
+	var probe struct {
+		Op   string   `json:"op"`
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(snapshot, &probe); err != nil || probe.Op != revOpEnvSecret {
+		return nil
+	}
+	seen := make(map[string]bool, len(probe.Keys))
+	var out []string
+	for _, k := range probe.Keys {
+		if validEnvVarName(k) && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // envRevisionName is the environment-kind revision name: the env CR name
 // without the project prefix ("web-staging").
 func envRevisionName(project, service, envName string) string {

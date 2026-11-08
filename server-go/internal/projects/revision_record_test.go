@@ -563,3 +563,48 @@ func TestSetServiceBranchInEnvUnknownServiceIsNotFound(t *testing.T) {
 		t.Fatalf("unknown service: err = %v, want ErrNotFound", err)
 	}
 }
+
+// History names the keys a secret write touched ("Secret changed ·
+// STRIPE_KEY") — the names only, never the value or anything derived
+// from it.
+func TestRevisionChangedKeysNamesSecretKeysNotValues(t *testing.T) {
+	t.Parallel()
+	s := revisionFixture(t, kube.KusoServiceSpec{})
+	got := captureRevisions(s)
+	ctx := aliceCtx()
+	sv := "sk_live_value_123"
+	if _, err := s.SetEnvVar(ctx, "alpha", "web", "STRIPE_KEY", SetEnvVarRequest{SecretValue: &sv}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("want 1 revision, got %d", len(*got))
+	}
+	keys := RevisionChangedKeys((*got)[0].snapshot)
+	if len(keys) != 1 || keys[0] != "STRIPE_KEY" {
+		t.Fatalf("changed keys = %v, want [STRIPE_KEY]", keys)
+	}
+	b, err := json.Marshal(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), sv) || strings.Contains(string(b), "17") {
+		t.Errorf("changed keys leak the value or its length: %s", b)
+	}
+}
+
+func TestRevisionChangedKeysRejectsNonNames(t *testing.T) {
+	t.Parallel()
+	// A malformed row whose "keys" hold value-shaped strings must not be
+	// echoed as names.
+	snap := []byte(`{"op":"service.envSecret","informational":true,"keys":["B_KEY","A_KEY","B_KEY","STRIPE_KEY=sk_live_x","sk live"]}`)
+	if got := RevisionChangedKeys(snap); strings.Join(got, ",") != "A_KEY,B_KEY" {
+		t.Errorf("changed keys = %v, want [A_KEY B_KEY]", got)
+	}
+	// Only secret-write rows carry changed keys.
+	if got := RevisionChangedKeys([]byte(`{"op":"service.envVars","keys":["A"]}`)); got != nil {
+		t.Errorf("non-secret op returned %v", got)
+	}
+	if got := RevisionChangedKeys([]byte(`{broken`)); got != nil {
+		t.Errorf("unparseable snapshot returned %v", got)
+	}
+}

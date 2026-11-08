@@ -59,14 +59,23 @@ function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
+// namedKeys renders "STRIPE_KEY" or "STRIPE_KEY +2 more".
+export function namedKeys(keys: string[]): string {
+  const [first, ...rest] = keys;
+  return rest.length > 0 ? `${first} +${rest.length} more` : (first ?? "");
+}
+
 export function describeRevision(rev: Revision): RevisionView {
   const p = probe(rev.snapshot);
   const op = p?.op ?? "";
   const summary = rev.summary ?? "";
   const label = OP_LABEL[op] ?? "Config changed";
   const items = summaryItems(summary);
+  const changedKeys = (rev.changedKeys ?? []).filter(Boolean);
   let detail = "";
-  if (items) {
+  if (op === "service.envSecret" && changedKeys.length > 0) {
+    detail = namedKeys(changedKeys);
+  } else if (items) {
     const noun = op.endsWith("domains") ? "domain" : op.endsWith("subscribedAddons") ? "addon" : "key";
     detail = plural(items.length, noun);
   } else if (summary && summary !== "patch") {
