@@ -44,7 +44,7 @@ export function EmptyProjectState({ project, onAddDatabase }: { project: string;
           href={`/marketplace?project=${p}`}
           icon={<LayoutTemplate className="h-5 w-5" />}
           title="Start from a template"
-          body="One-click apps from the marketplace: databases with UIs, analytics, CMSs, monitoring and more."
+          body="One-click installs from the marketplace: self-hosted apps like analytics, monitoring and dev tools."
           cta="Browse templates"
         />
         <Option
