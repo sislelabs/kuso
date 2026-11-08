@@ -53,3 +53,31 @@ func TestListPods_SumsRestarts(t *testing.T) {
 		t.Fatalf("pods = %+v, want one ready pod with 5 restarts", out.Pods)
 	}
 }
+
+func TestPodWaitReason(t *testing.T) {
+	t.Parallel()
+	waiting := func(reason, msg string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: msg}}}
+	}
+	cases := []struct {
+		name       string
+		status     corev1.PodStatus
+		wantReason string
+	}{
+		{"pulling", corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{waiting("ContainerCreating", "")}}, "ContainerCreating"},
+		{"init first", corev1.PodStatus{
+			InitContainerStatuses: []corev1.ContainerStatus{waiting("ImagePullBackOff", "back-off pulling")},
+			ContainerStatuses:     []corev1.ContainerStatus{waiting("PodInitializing", "")},
+		}, "ImagePullBackOff"},
+		{"unschedulable", corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "0/3 nodes"},
+		}}, "Unschedulable"},
+		{"running", corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}, ""},
+	}
+	for _, tc := range cases {
+		got, _ := podWaitReason(&corev1.Pod{Status: tc.status})
+		if got != tc.wantReason {
+			t.Errorf("%s: reason = %q, want %q", tc.name, got, tc.wantReason)
+		}
+	}
+}
