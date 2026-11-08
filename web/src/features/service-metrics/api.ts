@@ -42,6 +42,9 @@ export interface UsageHistoryResponse {
   since: number | null;
 }
 
+// The first release that serves getServiceUsageHistory.
+export const USAGE_HISTORY_MIN_VERSION = "v0.36.0";
+
 // Resolves null when the server predates the endpoint (404), so the
 // caller can fall back to its own polling.
 export async function getServiceUsageHistory(

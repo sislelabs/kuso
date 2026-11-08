@@ -10,9 +10,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // The scanner stores ErrorEvent.service as the log line's service, which is
@@ -135,5 +140,52 @@ func TestErrorsSummary_KeysByShortServiceName(t *testing.T) {
 	}
 	if code, _ = get("?since=nonsense"); code != http.StatusBadRequest {
 		t.Errorf("bad since: status=%d, want 400", code)
+	}
+}
+
+// Errors of a deleted service must not count toward the project summary.
+func TestErrorsSummary_DropsDeletedServices(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, e := range []db.ErrorEvent{
+		{Project: "shop", Service: "shop-api", Fingerprint: "a", Message: "boom", Ts: time.Now().Add(-time.Minute)},
+		{Project: "shop", Service: "shop-gone", Fingerprint: "b", Message: "bang", Ts: time.Now().Add(-time.Minute)},
+	} {
+		if err := d.InsertErrorEvent(ctx, e); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		kube.GVRProjects: "KusoProjectList", kube.GVRServices: "KusoServiceList",
+	})
+	for _, o := range []struct {
+		gvr        schema.GroupVersionResource
+		kind, name string
+	}{{kube.GVRProjects, "KusoProject", "shop"}, {kube.GVRServices, "KusoService", "shop-api"}} {
+		u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+		u.SetGroupVersionKind(o.gvr.GroupVersion().WithKind(o.kind))
+		u.SetName(o.name)
+		u.SetNamespace("kuso")
+		if err := dyn.Tracker().Create(o.gvr, u, "kuso"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &ErrorsHandler{DB: d, Logger: slog.Default(), Kube: &kube.Client{Dynamic: dyn}, Namespace: "kuso"}
+	r := chi.NewRouter()
+	h.Mount(r)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/shop/errors/summary", nil)
+	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
+		&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out errorSummaryResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out.Services["gone"]; ok || out.Services["api"].Occurrences != 1 {
+		t.Fatalf("services = %+v; want only api", out.Services)
 	}
 }

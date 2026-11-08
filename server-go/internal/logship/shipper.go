@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/errorscan"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/linescan"
 	"kuso/server/internal/safego"
@@ -73,6 +74,8 @@ const (
 	// is ingest time, and the previous leader may have died holding an
 	// unflushed buffer: a few duplicate lines beat a gap.
 	resumeOverlap              = 2 * time.Second
+	// resumeDedupeMax bounds the stored lines read to dedupe that rewind.
+	resumeDedupeMax = 2000
 	defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 )
 
@@ -133,6 +136,7 @@ type Shipper struct {
 	// Seams for tests; New wires them to the clientset and the DB.
 	openLogs     func(ctx context.Context, ns, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
 	lastStoredTs func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error)
+	storedSince  func(ctx context.Context, project, service, pod string, since time.Time) ([]string, error)
 	envGroup     func(ctx context.Context, ns, envCR string) string
 
 	// flushing is a single-flight guard for the out-of-band flush that
@@ -180,6 +184,10 @@ type Shipper struct {
 	// not block: it runs on the per-container stream goroutine.
 	Tap LineTap
 
+	// PodKinds, when set, records each listed pod as runtime or not
+	// (build, release hook, …) for the error scanner. Optional.
+	PodKinds *errorscan.PodKinds
+
 	// runCtx is the lifecycle context set by Run. Detached out-of-band
 	// flushes (kicked from append() when the buffer exceeds the batch
 	// threshold) use this so they get cancelled on shutdown — the
@@ -211,6 +219,9 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 	}
 	s.lastStoredTs = func(ctx context.Context, project, service, pod string, since time.Time) (time.Time, error) {
 		return s.DB.LatestPodLogTs(ctx, project, service, pod, since)
+	}
+	s.storedSince = func(ctx context.Context, project, service, pod string, since time.Time) ([]string, error) {
+		return s.DB.PodLinesSince(ctx, project, service, pod, since, resumeDedupeMax)
 	}
 	s.envGroup = func(ctx context.Context, ns, envCR string) string {
 		if s.Kube == nil || s.Kube.Dynamic == nil || envCR == "" {
@@ -372,6 +383,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 		p := &pods.Items[i]
 		podKey := ns + "/" + string(p.UID)
 		seen[podKey] = struct{}{}
+		s.PodKinds.Observe(p.Name, p.Labels)
 		switch p.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 		default:
@@ -401,6 +413,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 			s.streamContainer(streamCtx, ns, pod, container, st, terminated, restarts)
 		})
 	}
+	s.PodKinds.Sweep()
 	// Drop state (and any stream) for vanished pods.
 	s.mu.Lock()
 	for key, st := range s.containers {
@@ -469,6 +482,11 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	s.mu.Lock()
 	seeded, lastTs, nAtLast := st.seeded, st.lastTs, st.nAtLast
 	s.mu.Unlock()
+	// replayed counts the lines already stored inside the resume overlap;
+	// the rewind re-serves them, and storing them again doubled every
+	// recent line (and its error count) on each leader change.
+	var replayed map[string]int
+	var storedAt time.Time
 	if !seeded {
 		// No in-memory cursor: first sight of this container, or a
 		// fresh leader. Resume after what an earlier run stored.
@@ -478,6 +496,15 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 			s.Logger.Debug("logship resume point", "pod", pod.Name, "err", err)
 		} else if !stored.IsZero() {
 			lastTs, nAtLast = stored.Add(-resumeOverlap), 0
+			storedAt = stored
+			if s.storedSince != nil {
+				if lines, err := s.storedSince(ctx, project, service, pod.Name, lastTs); err == nil && len(lines) > 0 {
+					replayed = make(map[string]int, len(lines))
+					for _, l := range lines {
+						replayed[l]++
+					}
+				}
+			}
 		}
 		s.mu.Lock()
 		st.seeded, st.lastTs, st.nAtLast = true, lastTs, nAtLast
@@ -529,6 +556,12 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 			continue
 		}
 		line = db.SanitizeLogLine(line)
+		// Emitted no later than the newest stored ingest time and stored
+		// already: a replay of the overlap, not a new line.
+		if ok && replayed[line] > 0 && !ts.After(storedAt) {
+			replayed[line]--
+			continue
+		}
 		if !s.append(db.LogLine{
 			Ts: time.Now().UTC(), Pod: pod.Name,
 			Project: project, Service: service, Env: env,

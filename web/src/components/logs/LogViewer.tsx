@@ -31,7 +31,7 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, detectLevel, fmtClock, linesToText, LOG_LEVELS, parseJsonLine, shortPod, stripAnsi } from "./logParse";
+import { buildMatcher, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -777,7 +777,7 @@ function LevelPopover({
         {counts.error > 0 && (
           <span className="inline-flex items-center gap-1 tabular-nums text-[var(--text-tertiary)]">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />
-            {counts.error}
+            {levelCountText("error", counts.error).count} {levelCountText("error", counts.error).noun}
           </span>
         )}
       </PopoverTrigger>
@@ -852,10 +852,10 @@ const LogRow = memo(function LogRow({
       <span
         className={cn(
           "shrink-0 select-none tabular-nums text-[var(--text-tertiary)] max-sm:w-auto",
-          withDate ? "w-[10.5rem]" : "w-[6.5rem]",
+          withDate ? "w-[10.5rem]" : r.approx ? "w-[7.5rem]" : "w-[6.5rem]",
           r.cont && "max-sm:hidden",
         )}
-        title={r.approx ? `Received ${fmtClock(r.ts, true)} — this kuso server doesn't send log timestamps` : r.ts}
+        title={r.approx ? `Arrival time ${fmtClock(r.ts, true)} (server didn't send timestamps)` : r.ts}
       >
         {r.cont ? "" : r.approx ? <ArrivalCell ts={r.ts} /> : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
       </span>
@@ -888,45 +888,19 @@ const LogRow = memo(function LogRow({
   );
 });
 
-// One shared 5s clock for every arrival-time cell, so only those cells
-// re-render as they age (not the whole list).
-let ageNow = Date.now();
-const ageListeners = new Set<() => void>();
-let ageTimer: ReturnType<typeof setInterval> | null = null;
-function subscribeAge(fn: () => void): () => void {
-  ageListeners.add(fn);
-  if (!ageTimer) {
-    ageNow = Date.now();
-    ageTimer = setInterval(() => {
-      ageNow = Date.now();
-      ageListeners.forEach((l) => l());
-    }, 5_000);
-  }
-  return () => {
-    ageListeners.delete(fn);
-    if (ageListeners.size === 0 && ageTimer) {
-      clearInterval(ageTimer);
-      ageTimer = null;
-    }
-  };
-}
-
-export function fmtAge(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 5) return "now";
-  if (s < 60) return `−${s}s`;
-  if (s < 3600) return `−${Math.floor(s / 60)}m ${pad2(s % 60)}s`;
-  return `−${Math.floor(s / 3600)}h ${pad2(Math.floor((s % 3600) / 60))}m`;
-}
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-// Arrival age ("now", "−42s") for a line the server sent without a real
-// timestamp — honest ordering instead of a fake shared HH:MM:SS.000.
+// Arrival time for a line the server sent without its log timestamp:
+// absolute like every other row, marked "≈" so it isn't read as the time
+// the app logged it.
 function ArrivalCell({ ts }: { ts: string }) {
-  const now = useSyncExternalStore(subscribeAge, () => ageNow, () => ageNow);
-  return <span className="italic">{fmtAge(now - Date.parse(ts))}</span>;
+  return (
+    <span>
+      <span aria-hidden className="mr-0.5">
+        ≈
+      </span>
+      <span className="sr-only">about </span>
+      <ClockCell ts={ts} />
+    </span>
+  );
 }
 
 // HH:MM:SS with the milliseconds de-emphasised.
@@ -954,13 +928,14 @@ function LevelChip({
   block?: boolean;
 }) {
   const names = { error: "Error", warn: "Warn", info: "Info", debug: "Debug" } as const;
+  const text = levelCountText(level, count);
   const dot = { error: "bg-[var(--error)]", warn: "bg-[var(--warning)]", info: "bg-[var(--info)]", debug: "bg-[var(--text-tertiary)]" }[level];
   return (
     <button
       type="button"
       aria-pressed={on}
       onClick={onClick}
-      title={`${on ? "Hide" : "Show only"} ${names[level].toLowerCase()} lines`}
+      title={`${on ? "Show all levels again" : `Show only ${names[level].toLowerCase()} lines`} · counts the lines loaded in this view, not the service's error groups`}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
         block ? "h-9 w-full" : "h-7",
@@ -970,11 +945,12 @@ function LevelChip({
       )}
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", dot)} />
-      {names[level]}
-      <span className={cn("tabular-nums text-[var(--text-tertiary)]", block && "ml-auto")}>{count}</span>
+      <span className="tabular-nums">{text.count}</span>
+      <span className={cn(!on && "text-[var(--text-tertiary)]", block && "mr-auto")}>{text.noun}</span>
     </button>
   );
 }
+
 
 function IconToggle({
   label,
@@ -1058,9 +1034,9 @@ function StatusLine({
         {approxTimes && (
           <span
             className="hidden truncate text-[var(--text-tertiary)] sm:inline"
-            title="This kuso server sends live lines without their log timestamps, so rows show how long ago they arrived. Upgrade kuso for exact times; History always has them."
+            title="This kuso server sends live lines without their log timestamps, so ≈ rows show when each line reached your browser, in order. Upgrade kuso for exact times; searched history always has them."
           >
-            · arrival times
+            · ≈ arrival times
           </span>
         )}
         {(connection === "reconnecting" || connection === "ended" || connection === "failed") && (

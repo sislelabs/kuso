@@ -167,6 +167,30 @@ func (d *LogDB) LatestPodLogTs(ctx context.Context, project, service, pod string
 	return ts.Time, nil
 }
 
+// PodLinesSince returns the text of one pod's lines stored at or after
+// since (ingest time), at most limit of them. logship uses it to drop the
+// lines it replays when resuming a pod after a leader change.
+func (d *LogDB) PodLinesSince(ctx context.Context, project, service, pod string, since time.Time, limit int) ([]string, error) {
+	rows, err := d.DB.DB.QueryContext(ctx,
+		`SELECT "line" FROM "LogLine"
+		  WHERE "project" = $1 AND "service" = $2 AND "pod" = $3 AND "ts" >= $4
+		  ORDER BY "ts" DESC, "id" DESC LIMIT $5`,
+		project, service, pod, since.UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("pod lines since: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return nil, fmt.Errorf("pod lines since scan: %w", err)
+		}
+		out = append(out, line)
+	}
+	return out, rows.Err()
+}
+
 // PodLogTail returns the last n archived lines of the pods whose names
 // start with podPrefix, oldest-first. since bounds the index scan to the
 // pods' lifetime. cronwatch uses it for a failed Job whose pod the Job

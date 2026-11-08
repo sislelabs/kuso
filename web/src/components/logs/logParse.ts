@@ -261,3 +261,17 @@ export function fmtClock(iso: string, withDate: boolean): string {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${months[d.getMonth()]} ${d.getDate()} ${time}`;
 }
+
+// levelCountText labels a level chip as lines ("5 error lines") so the
+// count can't be read as the Errors tab's error total.
+export function levelCountText(level: Exclude<LogLevel, "none">, n: number): { count: string; noun: string } {
+  const count = n.toLocaleString();
+  switch (level) {
+    case "error":
+      return { count, noun: n === 1 ? "error line" : "error lines" };
+    case "warn":
+      return { count, noun: n === 1 ? "warning" : "warnings" };
+    default:
+      return { count, noun: level };
+  }
+}

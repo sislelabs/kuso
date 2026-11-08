@@ -7,6 +7,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Sc
 import { useBuilds, useErrors } from "@/features/services";
 import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
+import { errorCountLabel, useServiceErrorCount } from "@/features/errors";
 import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
 import { serviceEnvOptions } from "@/lib/env-group";
@@ -50,7 +51,11 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
   const fqn = service ? project + "-" + service : "";
   const envOptions = useMemo(() => serviceEnvOptions(envs.data ?? [], fqn), [envs.data, fqn]);
   const groups = errors.data ?? [];
-  const total = groups.reduce((a, g) => a + g.count, 0);
+  // The headline total comes from the same summary as the canvas badge and
+  // the tab badge, so the three agree even when the list is cut at 50.
+  const count = useServiceErrorCount(project, service, since, env);
+  const total = count.data?.occurrences ?? groups.reduce((a, g) => a + g.count, 0);
+  const groupCount = count.data?.groups ?? groups.length;
   const builds = useBuilds(project, service);
   const windowStart = Date.now() - (timeRangeMs(since) ?? 0);
   const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${since}/${env}`);
@@ -67,6 +72,8 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
         : { kind: "abs", from: new Date(t - pad).toISOString(), to: new Date(t + pad).toISOString() },
       levels: [],
       pod: "",
+      // A Logs view left on another env would hide the occurrence.
+      env,
     });
     onViewLogs?.();
   };
@@ -79,7 +86,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
           <p className="text-xs text-[var(--text-secondary)]">
             {errors.isError || errors.isPending
               ? `Last ${timeRangeSpan(since)}`
-              : `${plural(groups.length, "group")} · ${plural(total, "occurrence")} · last ${timeRangeSpan(since)}`}
+              : `${errorCountLabel(total, since)} · ${plural(groupCount, "group")}${groupCount > groups.length ? ` · newest ${groups.length} shown` : ""}`}
           </p>
           <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
             {announcement}
@@ -118,8 +125,9 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
         <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-10 text-center">
           <p className="text-sm font-medium text-[var(--text-primary)]">No errors in the last {timeRangeSpan(since)}</p>
           <p className="mx-auto mt-1 max-w-md text-[13px] text-[var(--text-secondary)]">
-            The scanner watches this service&apos;s logs for ERROR, Exception, panic and Traceback lines. Errors logged in
-            another shape won&apos;t appear here. Logs are kept for 7 days.
+            The scanner watches this service&apos;s runtime logs for ERROR, Exception, panic and Traceback lines. Build and
+            release-hook output isn&apos;t counted (it&apos;s on Deployments), and errors logged in another shape won&apos;t
+            appear here. Logs are kept for 7 days.
           </p>
           {since !== "7d" && (
             <Button size="sm" variant="outline" className="mt-3" onClick={() => setSince("7d")}>
@@ -408,9 +416,10 @@ function ErrorDetail({
                   <button
                     type="button"
                     onClick={() => onViewLogs(needle, o.ts)}
+                    aria-label={`View in logs at ${fmtClock(o.ts, false).slice(0, 8)}`}
                     className="shrink-0 text-[var(--text-secondary)] underline-offset-2 hover:text-[var(--text-primary)] hover:underline"
                   >
-                    Logs
+                    View in logs
                   </button>
                 )}
               </li>
@@ -422,11 +431,11 @@ function ErrorDetail({
       <div className="flex flex-wrap items-center gap-2">
         {onViewLogs && (
           <Button size="sm" variant="outline" onClick={() => onViewLogs(needle, latest.ts)}>
-            <ScrollText className="h-3.5 w-3.5" /> View in logs
+            <ScrollText className="h-3.5 w-3.5" /> View in logs at {fmtClock(latest.ts, false).slice(0, 8)}
           </Button>
         )}
-        <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]">
-          Opens logs ±30s around the latest occurrence, searching “{needle}”
+        <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]" title={`Searches “${needle}”`}>
+          Opens the Logs tab 30s either side of the latest occurrence
         </span>
         <button
           type="button"

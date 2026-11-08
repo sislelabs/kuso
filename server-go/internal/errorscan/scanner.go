@@ -79,6 +79,9 @@ type Scanner struct {
 	// Further behind, the scanner jumps to max(id)-MaxLag: those lines
 	// are near the prune edge and nobody reads week-old error groups.
 	MaxLag int64
+	// Pods is logship's record of which pods are builds/release hooks.
+	// Optional: nil, or a pod it hasn't seen, falls back to a heuristic.
+	Pods *PodKinds
 }
 
 const watermarkKey = "errorscan.lastLogLineId"
@@ -221,7 +224,7 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 		if id > maxID {
 			maxID = id
 		}
-		if !matchesAnyPattern(line) {
+		if !s.runtimeLine(pod, line) || !matchesAnyPattern(line) {
 			continue
 		}
 		fp := fingerprintFor(line)

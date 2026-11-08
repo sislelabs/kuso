@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -75,8 +78,15 @@ func (h *ErrorsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	live := projectServiceNames(ctx, h.Kube, h.Namespace, project)
 	out := errorSummaryResponse{Since: since.UTC(), Services: make(map[string]errorSummaryServiceResponse, len(rows))}
 	for _, s := range rows {
+		// A deleted service's errors linger until retention prunes them;
+		// counted here they made a project's total exceed the sum of its
+		// services' badges.
+		if live != nil && !live[s.Service] {
+			continue
+		}
 		out.Services[strings.TrimPrefix(s.Service, project+"-")] = errorSummaryServiceResponse{
 			Occurrences: s.Occurrences,
 			Groups:      s.Groups,
@@ -200,4 +210,46 @@ func (h *ErrorsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// projectServiceNames returns the FQ names of the project's KusoServices,
+// or nil when they can't be listed (no kube client, transient error); the
+// caller then filters nothing.
+func projectServiceNames(ctx context.Context, kc *kube.Client, homeNS, project string) map[string]bool {
+	if kc == nil || kc.Dynamic == nil {
+		return nil
+	}
+	if homeNS == "" {
+		homeNS = "kuso"
+	}
+	p, err := lookupCR(ctx, kc, kube.GVRProjects, homeNS, project)
+	if err != nil {
+		return nil
+	}
+	ns := homeNS
+	if v, _, _ := unstructured.NestedString(p.Object, "spec", "namespace"); v != "" {
+		ns = v
+	}
+	var items []*unstructured.Unstructured
+	cached := false
+	if kc.Cache != nil {
+		items, cached = kc.Cache.ListFromCache(kube.GVRServices, ns, labels.Everything())
+	}
+	if !cached {
+		list, err := kc.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil
+		}
+		for i := range list.Items {
+			items = append(items, &list.Items[i])
+		}
+	}
+	out := make(map[string]bool, len(items))
+	prefix := project + "-"
+	for _, u := range items {
+		if strings.HasPrefix(u.GetName(), prefix) {
+			out[u.GetName()] = true
+		}
+	}
+	return out
 }

@@ -40,6 +40,19 @@ type ErrorGroup struct {
 	SamplePod   string    `json:"samplePod,omitempty"`
 }
 
+// Build and release-hook output that the error scanner stored before it
+// skipped non-runtime pods (see errorscan/source.go). Every reader below
+// excludes rows matching either pattern, passed as query parameters. Both
+// are valid Go RE2 and Postgres ARE.
+const (
+	// BuildkitStepPattern matches buildctl's plain progress output
+	// ("#5 ERROR: …"), which no runtime logger prints.
+	BuildkitStepPattern = `^#[0-9]+ `
+	// ReleasePodPattern matches a release-hook Job pod name,
+	// <env>-release-<tag>-<sha256[:8]>-<pod suffix>.
+	ReleasePodPattern = `-release-[a-z0-9-]+-[0-9a-f]{8}-[a-z0-9]{5}$`
+)
+
 // InsertErrorEvent appends an occurrence row.
 func (d *DB) InsertErrorEvent(ctx context.Context, e ErrorEvent) error {
 	_, err := d.ExecContext(ctx, `
@@ -87,26 +100,30 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service, env string, 
 		           AND e2.service = e.service
 		           AND e2.fingerprint = e.fingerprint
 		           AND ($6 = '' OR e2.env = $6)
+		           AND NOT (e2."rawLine" ~ $7 OR e2.pod ~ $8)
 		         ORDER BY ts DESC LIMIT 1) AS sample_line,
 		       (SELECT env FROM "ErrorEvent" e3
 		         WHERE e3.project = e.project
 		           AND e3.service = e.service
 		           AND e3.fingerprint = e.fingerprint
 		           AND ($6 = '' OR e3.env = $6)
+		           AND NOT (e3."rawLine" ~ $7 OR e3.pod ~ $8)
 		         ORDER BY ts DESC LIMIT 1) AS sample_env,
 		       (SELECT pod FROM "ErrorEvent" e4
 		         WHERE e4.project = e.project
 		           AND e4.service = e.service
 		           AND e4.fingerprint = e.fingerprint
 		           AND ($6 = '' OR e4.env = $6)
+		           AND NOT (e4."rawLine" ~ $7 OR e4.pod ~ $8)
 		         ORDER BY ts DESC LIMIT 1) AS sample_pod
 		FROM "ErrorEvent" e
 		WHERE project = $1 AND service = $2 AND ts >= $3
 		  AND ($6 = '' OR env = $6)
+		  AND NOT (e."rawLine" ~ $7 OR e.pod ~ $8)
 		GROUP BY project, service, fingerprint
 		ORDER BY last_seen DESC
 		LIMIT $4 OFFSET $5`,
-		project, service, since.UTC(), limit, offset, env,
+		project, service, since.UTC(), limit, offset, env, BuildkitStepPattern, ReleasePodPattern,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ListErrorGroups: %w", err)
@@ -209,9 +226,10 @@ func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fin
 		FROM "ErrorEvent"
 		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
 		  AND ($5 = '' OR env = $5)
+		  AND NOT ("rawLine" ~ $7 OR pod ~ $8)
 		GROUP BY bucket
 		ORDER BY bucket`,
-		project, service, fingerprint, since.UTC(), env, b,
+		project, service, fingerprint, since.UTC(), env, b, BuildkitStepPattern, ReleasePodPattern,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("GetErrorGroupDetail buckets: %w", err)
@@ -234,9 +252,10 @@ func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fin
 		FROM "ErrorEvent"
 		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
 		  AND ($5 = '' OR env = $5)
+		  AND NOT ("rawLine" ~ $7 OR pod ~ $8)
 		ORDER BY ts DESC
 		LIMIT $6`,
-		project, service, fingerprint, since.UTC(), env, limit,
+		project, service, fingerprint, since.UTC(), env, limit, BuildkitStepPattern, ReleasePodPattern,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("GetErrorGroupDetail occurrences: %w", err)
@@ -269,10 +288,11 @@ func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, si
 	rows, err := d.QueryContext(ctx, `
 		SELECT service, COUNT(*), COUNT(DISTINCT fingerprint), MAX(ts)
 		FROM "ErrorEvent"
-		WHERE project = $1 AND ts >= $2 AND ($3 = '' OR env = $3)
+		WHERE project = $1 AND service <> '' AND ts >= $2 AND ($3 = '' OR env = $3)
+		  AND NOT ("rawLine" ~ $4 OR pod ~ $5)
 		GROUP BY service
 		ORDER BY service`,
-		project, since.UTC(), env,
+		project, since.UTC(), env, BuildkitStepPattern, ReleasePodPattern,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("SummarizeProjectErrors: %w", err)
