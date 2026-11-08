@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Globe, Lock, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, Check, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -18,16 +18,19 @@ import type { KusoEnvironment } from "@/types/projects";
 import { Section, Callout, Code, monoInputClass } from "./_primitives";
 import {
   BUDGET_WARN_AT,
+  diagnose,
   hostError,
   normalizeHostInput,
   recentAdds,
   registrableDomain,
+  resolveCheck,
   suggestRecords,
   summarizeDomain,
   type DomainKind,
   type DomainStatus,
   type DomainStatusResponse,
   type DomainSummary,
+  type ResolveCheck,
   type Tone,
 } from "./domainHelpers";
 
@@ -79,6 +82,21 @@ export function DomainsCard({
 
   const refreshStatus = () => qc.invalidateQueries({ queryKey: domainStatusKey(project, service, envName) });
 
+  // "Check again" asks the server to skip its 30s cache (older servers
+  // ignore ?fresh and answer from cache, which is still a valid answer).
+  const [rechecking, setRechecking] = useState(false);
+  const checkAgain = async () => {
+    setRechecking(true);
+    try {
+      const fresh = await fetchDomainStatus(project, service, envName, true);
+      qc.setQueryData(domainStatusKey(project, service, envName), fresh);
+    } catch {
+      toast.error("Couldn't check the domains right now");
+    } finally {
+      setRechecking(false);
+    }
+  };
+
   const onRemove = async () => {
     if (!removing) return;
     try {
@@ -123,12 +141,14 @@ export function DomainsCard({
                 tlsSecret={r.tlsSecret}
                 tlsEnabled={env.spec.tlsEnabled !== false}
                 status={byHost.get(r.host.toLowerCase())}
+                expectedIPs={status.data?.expectedIPs ?? []}
+                checkedAt={status.data?.checkedAt}
                 statusLoading={status.isLoading}
                 statusUnavailable={statusUnavailable}
                 forceOpen={justAdded.includes(r.host)}
                 canWrite={canWrite}
-                checking={status.isFetching}
-                onCheck={() => void status.refetch()}
+                checking={rechecking}
+                onCheck={() => void checkAgain()}
                 onRemove={() => setRemoving({ host: r.host, kind: r.kind })}
               />
             ))}
@@ -210,13 +230,16 @@ export function DomainsCard({
 const domainStatusKey = (project: string, service: string, env: string) =>
   ["projects", project, "services", service, "envs", env, "domain-status"] as const;
 
+function fetchDomainStatus(project: string, service: string, env: string, fresh = false) {
+  return api<DomainStatusResponse>(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(env)}/domains/status${fresh ? "?fresh=1" : ""}`,
+  );
+}
+
 function useDomainStatus(project: string, service: string, env: string, enabled: boolean) {
   return useQuery({
     queryKey: domainStatusKey(project, service, env),
-    queryFn: () =>
-      api<DomainStatusResponse>(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(env)}/domains/status`,
-      ),
+    queryFn: () => fetchDomainStatus(project, service, env),
     enabled: enabled && !!project && !!service,
     retry: false,
     staleTime: 10_000,
@@ -241,6 +264,8 @@ function DomainRow({
   tlsSecret,
   tlsEnabled,
   status,
+  expectedIPs,
+  checkedAt,
   statusLoading,
   statusUnavailable,
   forceOpen,
@@ -254,6 +279,8 @@ function DomainRow({
   tlsSecret?: string;
   tlsEnabled: boolean;
   status?: DomainStatus;
+  expectedIPs: string[];
+  checkedAt?: string;
   statusLoading: boolean;
   statusUnavailable: boolean;
   forceOpen: boolean;
@@ -263,10 +290,14 @@ function DomainRow({
   onRemove: () => void;
 }) {
   const summary = status ? summarizeDomain(status) : null;
+  const diagnosis = status && kind !== "wildcard" && summary?.tone !== "ok" ? diagnose(status) : null;
+  const resolve = status && kind !== "wildcard" ? resolveCheck(status, expectedIPs) : null;
   // The generated default domain is kuso's DNS; only custom domains need
   // the user to create records.
   const needsDns = kind === "custom";
-  const autoOpen = needsDns && (summary ? summary.pending : forceOpen);
+  // Once DNS is confirmed pointing here the record table is noise; the
+  // diagnosis explains whatever is still pending.
+  const autoOpen = needsDns && (summary ? summary.pending && resolve?.state !== "match" : forceOpen);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? autoOpen;
   const url = `${hostScheme(tlsEnabled, host)}://${host}`;
@@ -325,7 +356,7 @@ function DomainRow({
           Served with TLS secret <Code>{tlsSecret}</Code>.
         </p>
       )}
-      {summary?.detail && summary.tone !== "ok" && kind !== "wildcard" && (
+      {!diagnosis && summary?.detail && summary.tone !== "ok" && kind !== "wildcard" && (
         <p
           className={cn(
             "mt-1.5 pl-5.5 text-xs",
@@ -335,16 +366,26 @@ function DomainRow({
           {summary.detail}
         </p>
       )}
-      {open && needsDns && (
-        <div className="mt-3 space-y-2 pl-0 sm:pl-5.5">
-          <DnsInstructions host={host} />
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="xs" onClick={onCheck} disabled={checking || statusUnavailable}>
-              <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} />
-              {checking ? "Checking…" : "Check again"}
-            </Button>
-            <span className="text-xs text-[var(--text-tertiary)]">Rechecks automatically every 15 seconds.</span>
-          </div>
+      {(diagnosis || (open && needsDns)) && (
+        <div className="mt-3 space-y-3 sm:pl-5.5">
+          {diagnosis && <DiagnosisNote diagnosis={diagnosis} />}
+          {diagnosis && resolve && <ResolveLine host={host} check={resolve} />}
+          {open && needsDns && <DnsInstructions host={host} />}
+          {!statusUnavailable && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <Button type="button" variant="outline" size="xs" onClick={onCheck} disabled={checking}>
+                <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} />
+                {checking ? "Checking…" : "Check again"}
+              </Button>
+              <span className="text-xs text-[var(--text-tertiary)]" aria-live="polite">
+                {checking
+                  ? `Looking up ${host}…`
+                  : checkedAt
+                    ? `Last checked ${formatClock(checkedAt)}${summary?.pending ? " · rechecks every 15 seconds" : ""}`
+                    : "Rechecks automatically every 15 seconds."}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </li>
@@ -391,6 +432,115 @@ function StatusChip({
       {summary.label}
     </span>
   );
+}
+
+const DIAG_STYLE = {
+  error: { icon: AlertCircle, className: "text-[var(--error)]" },
+  pending: { icon: Clock, className: "text-[var(--warning)]" },
+  neutral: { icon: Info, className: "text-[var(--text-secondary)]" },
+} as const;
+
+// DiagnosisNote is the likely reason, in plain words, that the domain
+// isn't serving HTTPS yet.
+function DiagnosisNote({ diagnosis }: { diagnosis: NonNullable<ReturnType<typeof diagnose>> }) {
+  const { icon: Icon, className } = DIAG_STYLE[diagnosis.tone];
+  return (
+    <div className="flex gap-2">
+      <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", className)} aria-hidden />
+      <div className="min-w-0 space-y-1">
+        <p className="text-[13px] font-medium text-[var(--text-primary)]">{diagnosis.title}</p>
+        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{diagnosis.body}</p>
+        {diagnosis.record && (
+          <dl className="flex flex-wrap gap-x-4 gap-y-1 pt-0.5 text-xs">
+            {(
+              [
+                ["Type", diagnosis.record.type],
+                ["Name", diagnosis.record.name],
+                ["Value", diagnosis.record.value],
+              ] as const
+            ).map(([k, v]) => (
+              <div key={k} className="flex items-center gap-1.5">
+                <dt className="text-[var(--text-tertiary)]">{k}</dt>
+                <dd className="inline-flex items-center gap-1 font-mono text-[var(--text-primary)]">
+                  {v}
+                  {k !== "Type" && <CopyButton value={v} label={`Copy ${k.toLowerCase()} ${v}`} size="xs" />}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {diagnosis.raw && (
+          <details className="text-xs text-[var(--text-tertiary)]">
+            <summary className="cursor-pointer select-none hover:text-[var(--text-secondary)]">
+              Details from cert-manager
+            </summary>
+            <p className="mt-1 font-mono break-words text-[var(--text-secondary)]">{diagnosis.raw}</p>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ResolveLine is the live lookup result next to what kuso expects. The
+// expected side prefers the public ingress targets (what the record
+// table tells you to create) over the server's full set, which also
+// lists private node addresses.
+function ResolveLine({ host, check }: { host: string; check: ResolveCheck }) {
+  const targets = useIngressTargets();
+  const t = targets.data;
+  const expected =
+    t && t.source !== "none" ? (t.hostnames.length > 0 && t.ips.length === 0 ? t.hostnames : t.ips) : check.expected;
+  const list = (xs: string[]) => {
+    const shown = xs.slice(0, 3);
+    return (
+      <>
+        {shown.map((x, i) => (
+          <span key={x}>
+            {i > 0 && ", "}
+            <span className="font-mono text-[var(--text-primary)]">{x}</span>
+          </span>
+        ))}
+        {xs.length > shown.length && ` +${xs.length - shown.length} more`}
+      </>
+    );
+  };
+  const tone =
+    check.state === "match" ? "ok" : check.state === "elsewhere" ? "error" : check.state === "proxied" ? "neutral" : "pending";
+  const Icon = check.state === "match" ? Check : check.state === "elsewhere" ? X : check.state === "proxied" ? Info : Clock;
+  return (
+    <div className="flex gap-2 text-xs text-[var(--text-secondary)]">
+      <Icon
+        className={cn(
+          "mt-0.5 h-3.5 w-3.5 shrink-0",
+          tone === "ok" && "text-[var(--success)]",
+          tone === "error" && "text-[var(--error)]",
+          tone === "pending" && "text-[var(--warning)]",
+          tone === "neutral" && "text-[var(--text-tertiary)]",
+        )}
+        aria-hidden
+      />
+      <p className="min-w-0 leading-relaxed">
+        {check.state === "unresolved" ? (
+          <>
+            <span className="font-mono text-[var(--text-primary)]">{host}</span> doesn&apos;t resolve yet
+          </>
+        ) : (
+          <>Resolves to {list(check.resolved)}</>
+        )}
+        {check.state === "match" && " — that's this cluster."}
+        {check.state === "proxied" && " (Cloudflare's proxy, so the origin can't be checked from DNS)."}
+        {(check.state === "elsewhere" || check.state === "unresolved") &&
+          (expected.length > 0 ? <>; expected {list(expected)}.</> : ".")}
+      </p>
+    </div>
+  );
+}
+
+function formatClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 // DnsInstructions shows the exact record(s) to create, with copy buttons.

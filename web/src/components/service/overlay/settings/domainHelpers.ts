@@ -53,7 +53,7 @@ export function recordName(host: string): string {
 }
 
 export interface DnsRecord {
-  type: "A" | "AAAA" | "CNAME";
+  type: "A" | "AAAA" | "CNAME" | "CAA";
   name: string;
   value: string;
 }
@@ -79,12 +79,32 @@ export function suggestRecords(host: string, targets: IngressTargetsLike): DnsRe
 export type DomainKind = "auto" | "custom" | "wildcard";
 export type DnsState = "ok" | "mismatch" | "unresolved" | "proxied" | "skipped";
 export type TlsState = "ready" | "issuing" | "failed" | "missing" | "external" | "unknown";
+export type TlsCause =
+  | "cert_manager_missing"
+  | "rate_limited"
+  | "caa"
+  | "dns_not_pointed"
+  | "cloudflare_proxy"
+  | "expired"
+  | "validation_failed"
+  | "issuing"
+  | "not_requested";
 
 export interface DomainStatus {
   host: string;
   kind: DomainKind;
   dns: { status: DnsState; resolved: string[]; message?: string };
-  tls: { status: TlsState; notAfter?: string; reason?: string; message?: string };
+  tls: {
+    status: TlsState;
+    notAfter?: string;
+    reason?: string;
+    message?: string;
+    // Newer servers only; older ones omit these and causeOf derives one.
+    cause?: TlsCause;
+    since?: string;
+    lastFailure?: string;
+    attempts?: number;
+  };
 }
 
 export interface DomainStatusResponse {
@@ -105,6 +125,12 @@ export interface DomainSummary {
 }
 
 export function summarizeDomain(d: DomainStatus): DomainSummary {
+  const cause = causeOf(d);
+  if (cause === "cert_manager_missing") {
+    return { tone: "neutral", label: "HTTP only", detail: "cert-manager isn't installed.", pending: false };
+  }
+  if (cause === "rate_limited") return { tone: "error", label: "Rate limited", pending: true };
+  if (cause === "caa") return { tone: "error", label: "Blocked by CAA", pending: true };
   if (d.dns.status === "mismatch") {
     const at = d.dns.resolved.length ? ` (${d.dns.resolved.join(", ")})` : "";
     return {
@@ -155,6 +181,149 @@ export function summarizeDomain(d: DomainStatus): DomainSummary {
     default:
       return { tone: "neutral", label: "Status unknown", detail: d.tls.message, pending: false };
   }
+}
+
+// ----- diagnosis: why isn't the certificate serving? -----
+
+function mentions(text: string, ...subs: string[]): boolean {
+  const t = text.toLowerCase();
+  return subs.some((s) => t.includes(s));
+}
+
+// causeOf returns the server's diagnosis, or derives the same one from
+// the fields every server version sends.
+export function causeOf(d: DomainStatus): TlsCause | null {
+  if (d.tls.cause) return d.tls.cause;
+  const { status } = d.tls;
+  if (status === "ready" || status === "external" || status === "unknown") return null;
+  const text = [d.tls.reason, d.tls.message].filter(Boolean).join(" ");
+  if (mentions(text, "ratelimited", "rate limit", "too many certificates", "too many failed authorizations")) {
+    return "rate_limited";
+  }
+  if (mentions(text, "error:caa", "caa record")) return "caa";
+  if (d.dns.status === "mismatch" || d.dns.status === "unresolved") return "dns_not_pointed";
+  if (status === "failed") {
+    if (d.tls.reason === "Expired") return "expired";
+    return d.dns.status === "proxied" ? "cloudflare_proxy" : "validation_failed";
+  }
+  return status === "issuing" ? "issuing" : "not_requested";
+}
+
+export interface Diagnosis {
+  tone: "pending" | "error" | "neutral";
+  title: string;
+  body: string;
+  // Raw cert-manager text, shown secondary when the plain words can't
+  // say exactly what went wrong.
+  raw?: string;
+  // A record that fixes it, shown with copy buttons.
+  record?: DnsRecord;
+}
+
+const LONG_ISSUE_MS = 5 * 60 * 1000;
+
+export function diagnose(d: DomainStatus, now: number = Date.now()): Diagnosis | null {
+  const cause = causeOf(d);
+  if (!cause) return null;
+  const root = registrableDomain(d.host);
+  const raw = [d.tls.reason, d.tls.message].filter(Boolean).join(": ") || undefined;
+  switch (cause) {
+    case "dns_not_pointed":
+      return d.dns.status === "unresolved"
+        ? {
+            tone: "pending",
+            title: "DNS doesn't point here yet",
+            body: "There's no DNS record for this name yet. Create the record below; new records usually show up within a few minutes, and the certificate is requested automatically once they do.",
+          }
+        : {
+            tone: "error",
+            title: "DNS doesn't point here yet",
+            body: "The domain resolves to a different server. Change the record below to the cluster's address; the certificate is requested automatically once it points here.",
+          };
+    case "caa":
+      return {
+        tone: "error",
+        title: "A CAA record blocks Let's Encrypt",
+        body: `${root} has a CAA record that doesn't allow Let's Encrypt. Add this record alongside it, or remove the existing CAA records:`,
+        record: { type: "CAA", name: recordName(root), value: '0 issue "letsencrypt.org"' },
+        raw,
+      };
+    case "rate_limited":
+      return {
+        tone: "error",
+        title: "Let's Encrypt rate limit reached",
+        body: `Too many certificates or failed attempts for ${root} recently. kuso keeps retrying with growing pauses, so it fixes itself once the limit resets (up to a week for the certificate limit). Don't remove and re-add the domain: that uses up more of the limit.`,
+        raw,
+      };
+    case "cloudflare_proxy":
+      return {
+        tone: "error",
+        title: "Cloudflare's proxy may be blocking the check",
+        body: "The domain points at Cloudflare, and Let's Encrypt couldn't reach this cluster through it. Set the record to DNS only until the certificate is issued, or turn off \"Always Use HTTPS\" for this host.",
+        raw,
+      };
+    case "expired":
+      return {
+        tone: "error",
+        title: "Certificate expired",
+        body: "Renewal didn't succeed before the certificate ran out. Check that DNS still points here; kuso keeps retrying.",
+        raw,
+      };
+    case "validation_failed":
+      return {
+        tone: "error",
+        title: "Let's Encrypt couldn't verify the domain",
+        body: "DNS points here, but the validation request didn't reach this service. kuso retries automatically; if it keeps failing, check for a firewall or proxy in front of the cluster.",
+        raw,
+      };
+    case "cert_manager_missing":
+      return {
+        tone: "neutral",
+        title: "No certificate issuer in this cluster",
+        body: "cert-manager isn't installed, so kuso can't request certificates. The domain is served over plain HTTP until it is.",
+      };
+    case "issuing": {
+      const since = d.tls.since ? Date.parse(d.tls.since) : NaN;
+      const slow = Number.isFinite(since) && now - since > LONG_ISSUE_MS;
+      // Only claim DNS is fine when the server actually looked it up.
+      const lead = d.dns.status === "ok" ? "DNS points here and " : "";
+      return {
+        tone: "pending",
+        title: "Still issuing",
+        body: slow
+          ? `${lead ? `${lead}the` : "The"} certificate has been issuing for ${Math.round((now - since) / 60_000)} minutes, longer than usual. If it isn't done after 15 minutes, the reason shows up here.`
+          : `${lead}Let's Encrypt is checking the domain. Usually under 2 minutes.`,
+      };
+    }
+    case "not_requested":
+      return {
+        tone: "pending",
+        title: "Certificate not requested yet",
+        body: "kuso requests one as soon as the ingress picks the domain up, usually within a minute of adding it.",
+      };
+  }
+}
+
+export type ResolveState = "match" | "elsewhere" | "unresolved" | "proxied";
+
+export interface ResolveCheck {
+  state: ResolveState;
+  resolved: string[];
+  expected: string[];
+}
+
+// resolveCheck is the live "resolves to …" line; null when the server
+// didn't look the host up (internal, uncheckable, or ingress IPs unknown).
+export function resolveCheck(d: DomainStatus, expected: readonly string[]): ResolveCheck | null {
+  const map: Partial<Record<DnsState, ResolveState>> = {
+    ok: "match",
+    mismatch: "elsewhere",
+    unresolved: "unresolved",
+    proxied: "proxied",
+  };
+  const state = map[d.dns.status];
+  if (!state) return null;
+  return { state, resolved: d.dns.resolved, expected: [...expected] };
 }
 
 // ----- Let's Encrypt edit budget -----
