@@ -63,6 +63,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const displayName = data.service.spec.displayName?.trim() || shortName;
   const deployedAt = lastDeployedAt(data.env);
   const dimmed = status.kind === "sleeping" || status.kind === "stopped";
+  const live = liveBuildOf(data.latestBuild);
 
   return (
     <div
@@ -128,6 +129,14 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         <span className="flex min-w-0 items-center gap-1.5">
           <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
           <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
+          {live?.rolledBack && (
+            <span
+              className="shrink-0 rounded-full border border-[var(--warning)]/45 bg-[var(--warning-subtle)] px-1.5 font-medium text-[var(--warning)]"
+              title="Rolled back to an older build. The next deploy replaces it."
+            >
+              Rolled back
+            </span>
+          )}
           {deployedAt && (
             <span className="truncate text-[var(--text-tertiary)]" title={`Deployed ${new Date(deployedAt).toLocaleString()}`}>
               · deployed {relativeTime(deployedAt)}
@@ -149,24 +158,52 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   );
 }
 
-// BuildRef shows which commit the latest build is for. A failed latest
-// build on a still-live service is flagged here, next to the commit, so
-// the status line can stay about what's serving traffic.
+// LiveBuildRef is the build the env actually runs when it isn't the
+// latest one (after a rollback, or when the newest build failed). The
+// server adds it to the latest-builds response; older servers omit it.
+interface LiveBuildRef {
+  id: string;
+  branch?: string;
+  commitSha?: string;
+  ref?: string;
+  rolledBack?: boolean;
+}
+
+function liveBuildOf(build?: BuildSummary): LiveBuildRef | undefined {
+  const v: unknown = (build as { live?: unknown } | undefined)?.live;
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.id !== "string") return undefined;
+  const str = (k: string) => (typeof o[k] === "string" ? (o[k] as string) : undefined);
+  return { id: o.id, branch: str("branch"), commitSha: str("commitSha"), ref: str("ref"), rolledBack: o.rolledBack === true };
+}
+
+// BuildRef shows the commit that's serving: the live build when the
+// server reports one, else the latest build. A failed latest build on a
+// still-live service is flagged here, next to the commit, so the status
+// line can stay about what's serving traffic.
 function BuildRef({ build }: { build?: BuildSummary }) {
   if (!build) return null;
-  const sha = buildRefLabel(build, 7);
+  const live = liveBuildOf(build);
+  const latestSha = buildRefLabel(build, 7);
   const st = (build.status ?? "").toLowerCase();
   const failed = st === "failed" || st === "error" || st === "release-failed";
-  const label = `${build.branch || "main"}${sha ? `@${sha}` : ""}`;
+  const sha = live ? buildRefLabel(live, 7) : latestSha;
+  const label = `${(live ? live.branch : build.branch) || build.branch || "main"}${sha ? `@${sha}` : ""}`;
+  const latestLabel = `${build.branch || "main"}${latestSha ? `@${latestSha}` : ""}`;
+  const title = live
+    ? `Running ${label}. Latest build: ${latestLabel} (${st || "unknown"})`
+    : `Latest build: ${label} (${st || "unknown"})`;
   return (
     <span
       className={cn(
         "ml-auto min-w-[3.5rem] shrink-[4] truncate font-mono text-xs",
-        failed ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
+        failed && !live ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
       )}
-      title={`Latest build: ${label} (${st || "unknown"})`}
+      title={title}
     >
-      {failed && <span className="sr-only">Latest build failed: </span>}
+      {failed && !live && <span className="sr-only">Latest build failed: </span>}
+      {live && <span className="sr-only">Running </span>}
       {label}
     </span>
   );

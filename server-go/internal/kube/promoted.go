@@ -8,6 +8,10 @@ import "time"
 // build. The UI's "deployed N ago" reads it.
 const AnnPromotedAt = "kuso.sislelabs.com/promoted-at"
 
+// AnnPromotedBuild names the build an env currently runs. Written with
+// AnnPromotedAt by promotion and rollback.
+const AnnPromotedBuild = "kuso.sislelabs.com/promoted-build"
+
 // StampPromotedAt sets AnnPromotedAt on env to now.
 func StampPromotedAt(env *KusoEnvironment, now time.Time) {
 	if env.Annotations == nil {

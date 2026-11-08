@@ -3321,7 +3321,7 @@ func (p *Poller) deleteCloneTokenSecret(ns, buildName string) {
 // annotations gives last-trigger-wins semantics regardless of which
 // finishes first.
 const (
-	annPromotedBuild = "kuso.sislelabs.com/promoted-build"
+	annPromotedBuild = kube.AnnPromotedBuild
 	annPromotedAt    = kube.AnnPromotedAt
 )
 

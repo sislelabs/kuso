@@ -167,8 +167,10 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 	// commit chip the morning after a deploy day and decays to "env
 	// created Nd ago". Best-effort: an archive read failure still
 	// returns the live results.
+	var records []db.BuildRecord
 	if h.DB != nil {
-		records, rerr := h.DB.ListProjectBuildRecords(ctx, project, 0)
+		var rerr error
+		records, rerr = h.DB.ListProjectBuildRecords(ctx, project, 0)
 		if rerr != nil {
 			h.Logger.Warn("latest builds: archive read", "project", project, "err", rerr)
 		} else {
@@ -184,6 +186,7 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	h.stampLiveBuilds(ctx, project, ns, envFilter, out, raw, records)
 	// Stamp queue positions on any queued latest-builds so the canvas
 	// can mirror the deployments tab's "QUEUED #N" badge.
 	if len(out) > 0 {
@@ -199,6 +202,94 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// stampLiveBuilds sets Live on each latest-build summary whose service's
+// env (in the requested group) runs a different build, e.g. after a
+// rollback or when the newest build failed. The canvas showed the latest
+// build's commit as if it were serving. Best-effort: an env list error
+// leaves the summaries as they are.
+func (h *BuildsHandler) stampLiveBuilds(ctx context.Context, project, ns, envFilter string, out map[string]buildSummary, raw []kube.KusoBuild, records []db.BuildRecord) {
+	if len(out) == 0 || h.Svc.Kube == nil {
+		return
+	}
+	group := envFilter
+	if group == "" {
+		group = "production"
+	}
+	envs, err := h.Svc.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
+	if err != nil {
+		h.Logger.Warn("latest builds: list envs", "project", project, "err", err)
+		return
+	}
+	liveName := map[string]string{}
+	for i := range envs {
+		if envs[i].Labels[kube.LabelEnv] != group {
+			continue
+		}
+		if b := envs[i].Annotations[kube.AnnPromotedBuild]; b != "" {
+			liveName[envs[i].Labels[kube.LabelService]] = b
+		}
+	}
+	shortOf := func(s string) string { return strings.TrimPrefix(s, project+"-") }
+	for short, latest := range out {
+		name := liveName[short]
+		if name == "" || name == latest.ID {
+			continue
+		}
+		var history []buildSummary
+		seen := map[string]bool{}
+		for _, b := range raw {
+			if shortOf(b.Spec.Service) == short {
+				history = append(history, toBuildSummary(b))
+				seen[b.Name] = true
+			}
+		}
+		for _, rec := range records {
+			if shortOf(rec.Service) == short && !seen[rec.BuildName] {
+				history = append(history, recordToSummary(rec))
+			}
+		}
+		latest.Live = liveBuildFor(name, history)
+		out[short] = latest
+	}
+}
+
+// liveBuildRef is the build an env actually runs, when it isn't the
+// latest build.
+type liveBuildRef struct {
+	ID        string `json:"id"`
+	Branch    string `json:"branch,omitempty"`
+	CommitSha string `json:"commitSha,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	// RolledBack: a newer successful build of the same branch exists, so
+	// the env was pinned back to this one and the next deploy replaces it.
+	RolledBack bool `json:"rolledBack,omitempty"`
+}
+
+// liveBuildFor describes build name from history (one service's builds,
+// newest first). A build missing from history (archive aged out) still
+// yields its id.
+func liveBuildFor(name string, history []buildSummary) *liveBuildRef {
+	ref := &liveBuildRef{ID: name}
+	idx := -1
+	for i := range history {
+		if history[i].ID == name {
+			idx = i
+			ref.Branch, ref.CommitSha, ref.Ref = history[i].Branch, history[i].CommitSha, history[i].Ref
+			break
+		}
+	}
+	if idx < 0 {
+		return ref
+	}
+	for _, b := range history[:idx] {
+		if b.Status == "succeeded" && b.Branch == ref.Branch {
+			ref.RolledBack = true
+			break
+		}
+	}
+	return ref
 }
 
 // backfillLatestFromArchive fills services missing from `out` with their
@@ -342,6 +433,9 @@ type buildSummary struct {
 	// not promoted until every same-repo sibling build of the same
 	// commit is green. Present only while held.
 	PromoteHold string `json:"promoteHold,omitempty"`
+	// Live is the build the env actually runs when it differs from this
+	// one. Set by LatestPerService only.
+	Live *liveBuildRef `json:"live,omitempty"`
 	// LiveEnvs names the env groups this build is currently promoted to
 	// (the env's promoted-build annotation). Set by List only.
 	LiveEnvs []string `json:"liveEnvs,omitempty"`
