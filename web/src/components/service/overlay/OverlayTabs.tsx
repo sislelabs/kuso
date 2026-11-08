@@ -1,8 +1,7 @@
 "use client";
 
-import { smoothScroll } from "@/lib/reduced-motion";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
@@ -24,14 +23,12 @@ const BADGE_TONE = {
 } as const;
 
 const MORE_WIDTH = 84;
-// Below this the strip scrolls sideways instead of folding into "More":
-// on a phone a swipe is cheaper than a popover.
-const SCROLL_QUERY = "(max-width: 639px)";
 
-// OverlayTabs is an ARIA tablist for the service/addon overlays. On desktop
-// tabs that don't fit move into a "More" popover (the active tab always
-// stays in the strip); on phones the strip scrolls horizontally with a fade
-// hint instead. `pinned` sits at the right edge at every width. Arrow keys,
+// OverlayTabs is an ARIA tablist for the service/addon overlays. Tabs that
+// don't fit move into a "More" popover (the active tab always stays in the
+// strip), at every width: a sideways-scrolling strip on phones left a
+// clipped label ("M" of Metrics) at its edge. `pinned` sits at the right
+// edge. Arrow keys,
 // Home and End move focus; Enter/Space activates (manual activation, so
 // arrowing past Logs doesn't open a log stream on the way).
 export function OverlayTabs<T extends string>({
@@ -53,34 +50,11 @@ export function OverlayTabs<T extends string>({
   const measureRef = useRef<HTMLDivElement>(null);
   const [fitCount, setFitCount] = useState(tabs.length);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [scrollMode, setScrollMode] = useState(false);
-  const [fade, setFade] = useState({ left: false, right: false });
-
-  const updateFade = useCallback(() => {
-    const strip = stripRef.current;
-    if (!strip) return;
-    const max = strip.scrollWidth - strip.clientWidth;
-    setFade({ left: strip.scrollLeft > 2, right: max - strip.scrollLeft > 2 });
-  }, []);
-
-  const scrollByPage = (dir: 1 | -1) => {
-    const strip = stripRef.current;
-    if (!strip) return;
-    strip.scrollBy({ left: dir * strip.clientWidth * 0.7, behavior: smoothScroll() });
-  };
 
   const measure = useCallback(() => {
     const strip = stripRef.current;
     const m = measureRef.current;
     if (!strip || !m) return;
-    if (window.matchMedia(SCROLL_QUERY).matches) {
-      setScrollMode(true);
-      setFitCount(tabs.length);
-      updateFade();
-      return;
-    }
-    setScrollMode(false);
-    setFade({ left: false, right: false });
     const avail = strip.clientWidth;
     const widths = Array.from(m.children).map((c) => (c as HTMLElement).offsetWidth);
     const total = widths.reduce((a, b) => a + b, 0);
@@ -96,7 +70,7 @@ export function OverlayTabs<T extends string>({
       n++;
     }
     setFitCount(Math.max(1, n));
-  }, [tabs.length, updateFade]);
+  }, [tabs.length]);
 
   useLayoutEffect(() => {
     measure();
@@ -108,21 +82,6 @@ export function OverlayTabs<T extends string>({
     Array.from(strip.children).forEach((c) => ro.observe(c));
     return () => ro.disconnect();
   }, [measure, tabs]);
-
-  // Phones: keep the active tab scrolled into view (deep links to Shell,
-  // g-chords, Back/Forward).
-  useEffect(() => {
-    if (!scrollMode) return;
-    const strip = stripRef.current;
-    const el = strip?.querySelector<HTMLElement>(`#${CSS.escape(`${idPrefix}-tab-${active}`)}`);
-    if (!strip || !el) return;
-    const left = el.offsetLeft - strip.offsetLeft;
-    // 48px = the edge fade; a tab under it doesn't count as visible.
-    const lo = strip.scrollLeft > 0 ? strip.scrollLeft + 48 : 0;
-    if (left < lo || left + el.offsetWidth > strip.scrollLeft + strip.clientWidth - 48) {
-      strip.scrollTo({ left: Math.max(0, left - 48), behavior: smoothScroll() });
-    }
-  }, [scrollMode, active, idPrefix]);
 
   // The active tab must stay visible: if it would overflow, it takes the
   // last visible slot.
@@ -197,40 +156,7 @@ export function OverlayTabs<T extends string>({
       className="relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3"
     >
       <div className="relative flex min-w-0 flex-1">
-        {/* Edge fades say "more this way"; the chevron scrolls a page.
-            Pointer-only: keyboard users arrow through the tabs. */}
-        {scrollMode && fade.left && (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            onClick={() => scrollByPage(-1)}
-            className="absolute inset-y-0 left-0 z-10 flex w-12 items-center justify-start bg-gradient-to-r from-[var(--bg-primary)] from-40% to-transparent text-[var(--text-tertiary)]"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-        )}
-        {scrollMode && fade.right && (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            onClick={() => scrollByPage(1)}
-            className="absolute inset-y-0 right-0 z-10 flex w-12 items-center justify-end bg-gradient-to-l from-[var(--bg-primary)] from-40% to-transparent text-[var(--text-tertiary)]"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        )}
-        <div
-          ref={stripRef}
-          onScroll={scrollMode ? updateFade : undefined}
-          className={cn(
-            "relative flex min-w-0 flex-1 items-center",
-            scrollMode
-              ? "overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-              : "overflow-hidden",
-          )}
-        >
+        <div ref={stripRef} className="relative flex min-w-0 flex-1 items-center overflow-hidden">
           {visible.map((t) => tabButton(t))}
           {overflow.length > 0 && (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
