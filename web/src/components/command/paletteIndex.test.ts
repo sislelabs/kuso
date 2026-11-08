@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectSummaryItem } from "@/features/projects";
-import { buildPaletteIndex, envVarHref, matchScore, parseRecents, pushRecent, RECENTS_MAX, type RecentItem } from "./paletteIndex";
+import {
+  buildPaletteIndex,
+  envVarHref,
+  matchScore,
+  parseRecents,
+  pushRecent,
+  RECENTS_MAX,
+  serviceActions,
+  type RecentItem,
+} from "./paletteIndex";
 
 function item(): ProjectSummaryItem {
   return {
@@ -117,5 +126,25 @@ describe("matchScore", () => {
     // Keywords never fuzz: "new schedule job" contains w…e…b in order.
     expect(matchScore("web", "Add cron job", ["new", "schedule", "job"])).toBe(0);
     expect(matchScore("bckoffice", "backoffice")).toBeGreaterThan(0);
+  });
+});
+
+describe("serviceActions", () => {
+  const idx = buildPaletteIndex([item()]);
+  const actions = serviceActions(idx.services);
+
+  it("offers every verb for every service, skipping redeploy where there's no build", () => {
+    const labels = actions.map((a) => a.label);
+    expect(labels).toContain("Logs: shop/web");
+    expect(labels).toContain("Restart: shop/web (staging)");
+    expect(labels).toContain("Redeploy: shop/web");
+    expect(labels).not.toContain("Redeploy: shop/worker");
+  });
+
+  it("matches a bare verb, so typing logs anywhere finds every service's logs", () => {
+    const hits = actions.filter((a) => matchScore("logs", a.label, a.keywords) > 0).map((a) => a.label);
+    expect(hits).toEqual(["Logs: shop/web", "Logs: shop/web (staging)", "Logs: shop/worker"]);
+    const scoped = actions.filter((a) => matchScore("logs worker", a.label, a.keywords) > 0);
+    expect(scoped.map((a) => a.label)).toEqual(["Logs: shop/worker"]);
   });
 });
