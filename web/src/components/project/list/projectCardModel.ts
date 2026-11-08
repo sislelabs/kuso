@@ -1,6 +1,6 @@
 import { stripRepoCredentials } from "@/lib/format";
 import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
-import { projectLastDeployedAt, projectPrimaryDomain } from "@/features/projects/facts";
+import { projectLastDeployedAt, projectPrimaryDomain, type ProjectDomain } from "@/features/projects/facts";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
 
@@ -38,6 +38,9 @@ export interface ProjectCardModel {
   lastDeployAt?: string;
   domain?: string;
   domainHref?: string;
+  // The full pick, so the card can swap in the auto host while a custom
+  // domain isn't serving (useLiveProjectDomain).
+  primaryDomain?: ProjectDomain;
   repo?: string;
   repoHref?: string;
   publicURL?: string;
@@ -178,6 +181,7 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     lastDeployAt,
     domain,
     domainHref,
+    primaryDomain: primary,
     repo,
     repoHref: repoWebURL(repoRaw) ?? undefined,
     publicURL,

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
 import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
+import { useLiveProjectDomain } from "@/features/projects/liveDomain";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCpu, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -85,6 +86,7 @@ export function ProjectCard({
 }) {
   const deployed = model.lastDeployAt ? relativeTime(model.lastDeployAt) : null;
   const metrics = model.metrics && model.metrics.pods > 0 ? model.metrics : null;
+  const domain = useLiveProjectDomain(model.name, model.primaryDomain);
 
   return (
     <li className="h-full" data-roving-cell onContextMenu={onContextMenu}>
@@ -143,34 +145,36 @@ export function ProjectCard({
         )}
 
         <div className="mt-3 space-y-1.5">
-          {model.domain && <ExternalRow icon={Globe} text={model.domain} href={model.domainHref} label="Site" />}
+          {domain && <ExternalRow icon={Globe} text={domain.host} href={domain.href} label="Site" />}
           {model.repo && <ExternalRow icon={GitBranch} text={model.repo} href={model.repoHref} label="Repository" />}
         </div>
 
         <div aria-hidden className="min-h-3 flex-1" />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--border-subtle)] pt-3 text-xs text-[var(--text-tertiary)]">
-          <span>
-            {deployed ? (
-              <>Deployed {deployed}</>
-            ) : model.hasSummary && model.serviceCount > 0 ? (
-              "No deploys yet"
-            ) : model.createdAt ? (
-              <>Created {relativeTime(model.createdAt)}</>
-            ) : null}
-          </span>
-          {model.serviceCount > 0 && (
+        {/* Two fixed columns: facts wrap on the left, usage stays one unit on the right. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 border-t border-[var(--border-subtle)] pt-3 text-xs text-[var(--text-tertiary)]">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <span>
-              {model.serviceCount} service{model.serviceCount === 1 ? "" : "s"}
+              {deployed ? (
+                <>Deployed {deployed}</>
+              ) : model.hasSummary && model.serviceCount > 0 ? (
+                "No deploys yet"
+              ) : model.createdAt ? (
+                <>Created {relativeTime(model.createdAt)}</>
+              ) : null}
             </span>
-          )}
-          {model.serviceCount > 0 && <ErrorsChip project={model.name} />}
+            {model.serviceCount > 0 && (
+              <span>
+                {model.serviceCount} service{model.serviceCount === 1 ? "" : "s"}
+              </span>
+            )}
+            {model.serviceCount > 0 && <ErrorsChip project={model.name} />}
+          </div>
           {metrics && (
             <span
-              className="ml-auto tabular-nums"
-              title={`${formatCpu(metrics.cpuMillicores)} CPU, ${formatBytes(metrics.memBytes)} memory across ${metrics.pods} pod${metrics.pods === 1 ? "" : "s"}`}
+              className="whitespace-nowrap tabular-nums"
+              title={`${formatCpu(metrics.cpuMillicores)} CPU, ${formatBytes(metrics.memBytes)} memory across ${metrics.pods} service pod${metrics.pods === 1 ? "" : "s"}`}
             >
-              {metrics.cpuMillicores > 0 && <>{formatCpu(metrics.cpuMillicores)} CPU · </>}
-              {formatBytes(metrics.memBytes)}
+              {formatCpu(metrics.cpuMillicores)} · {formatBytes(metrics.memBytes)}
             </span>
           )}
         </div>

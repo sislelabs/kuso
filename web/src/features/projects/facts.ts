@@ -43,6 +43,10 @@ export function projectLastDeployedAt(envs: ReadonlyArray<KusoEnvironment>): str
 export interface ProjectDomain {
   host: string;
   href: string;
+  // Set when host is a custom domain: the service it belongs to (short
+  // name) and the kuso auto host to show instead while the custom one
+  // isn't serving yet (DNS not pointed, cert not issued).
+  custom?: { service: string; fallback?: { host: string; href: string } };
 }
 
 function isProductionService(s: KusoService): boolean {
@@ -123,13 +127,23 @@ export function projectPrimaryDomain(
         a.s.metadata.name.localeCompare(b.s.metadata.name),
     );
   for (const c of ranked) {
+    const short = serviceShortName(name, c.s.metadata.name);
+    const autoHost = c.env?.spec.host;
+    const fallback = autoHost
+      ? { host: autoHost, href: `${hostScheme(c.env?.spec.tlsEnabled ?? true, autoHost)}://${autoHost}` }
+      : undefined;
     if (c.headline) {
-      return { host: c.headline, href: `${hostScheme(c.env?.spec.tlsEnabled ?? true, c.headline)}://${c.headline}` };
+      return {
+        host: c.headline,
+        href: `${hostScheme(c.env?.spec.tlsEnabled ?? true, c.headline)}://${c.headline}`,
+        custom: { service: short, fallback },
+      };
     }
     const href = serviceUrl(c.s, c.env);
     if (!href) continue;
     try {
-      return { host: new URL(href).host, href };
+      const host = new URL(href).host;
+      return { host, href, ...(c.custom && host !== autoHost ? { custom: { service: short, fallback } } : {}) };
     } catch {
       continue;
     }

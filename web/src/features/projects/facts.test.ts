@@ -86,7 +86,7 @@ describe("projectPrimaryDomain", () => {
   it("prefers a service with a custom domain over the alphabetically first one", () => {
     const services = [svc("api"), svc("web")];
     const envs = [env("api", { state: "running" }), env("web", { additionalHosts: ["shop.com"] })];
-    expect(projectPrimaryDomain(project, services, envs)).toEqual({ host: "shop.com", href: "https://shop.com" });
+    expect(projectPrimaryDomain(project, services, envs)).toMatchObject({ host: "shop.com", href: "https://shop.com" });
   });
 
   it("falls back to the auto host, live service first, then by name", () => {
@@ -118,7 +118,7 @@ describe("projectPrimaryDomain", () => {
   it("reads a service-level custom domain when the env has no host", () => {
     const e = env("web");
     e.spec.host = undefined;
-    expect(projectPrimaryDomain(project, [svc("web", { domains: [{ host: "shop.io", tls: true }] })], [e])).toEqual({
+    expect(projectPrimaryDomain(project, [svc("web", { domains: [{ host: "shop.io", tls: true }] })], [e])).toMatchObject({
       host: "shop.io",
       href: "https://shop.io",
     });
