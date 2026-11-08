@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
 // A small hand-rolled time-series chart (inline SVG, no chart lib):
 // one series, hairline grid, y ticks on clean numbers, time ticks on
 // clean intervals, hover/keyboard crosshair with a tooltip, optional
-// threshold lines (limits) and event markers (deploys). Several charts
+// threshold lines (limits) and event markers (deploys). A series with
+// too few samples for a trend draws as dots (seriesShape). Several charts
 // can share one crosshair through hoverT/onHoverT.
 
 export type Point = [number, number | null]; // [epoch ms, value]
@@ -40,6 +41,9 @@ export interface TimeSeriesChartProps {
   // Previous render held at reduced opacity while refetching.
   dim?: boolean;
   color?: string;
+  // Shade under the line. Off for levels like latency, where the area
+  // implies a quantity and its edges at every gap read as drops to zero.
+  fill?: boolean;
   // Ticks land on round multiples of this unit (e.g. 1 MiB for bytes).
   tickUnit?: number;
   // Click / Enter on a time: the caller opens something scoped to it
@@ -71,6 +75,7 @@ export function TimeSeriesChart({
   onHoverT,
   dim,
   color = "var(--chart-1)",
+  fill = true,
   tickUnit = 1,
   onPick,
   pickHint,
@@ -109,22 +114,7 @@ export function TimeSeriesChart({
   const x = (t: number) => left + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (v: number) => M.top + plotH - (v / yTop) * plotH;
 
-  const segments = useMemo(() => {
-    const segs: [number, number][][] = [];
-    let cur: [number, number][] = [];
-    let prevT: number | null = null;
-    for (const p of points) {
-      const v = p[1];
-      if (v === null || !Number.isFinite(v) || (gapMs && prevT !== null && p[0] - prevT > gapMs)) {
-        if (cur.length) segs.push(cur);
-        cur = [];
-      }
-      if (v !== null && Number.isFinite(v)) cur.push([p[0], v]);
-      prevT = p[0];
-    }
-    if (cur.length) segs.push(cur);
-    return segs;
-  }, [points, gapMs]);
+  const shape = useMemo(() => seriesShape(points, gapMs, [t0, t1]), [points, gapMs, t0, t1]);
 
   const xTicks = useMemo(() => timeTicks(t0, t1, Math.max(3, Math.floor(plotW / 80))), [t0, t1, plotW]);
 
@@ -229,15 +219,32 @@ export function TimeSeriesChart({
             </text>
           ))}
           <g clipPath={`url(#${clipId})`}>
-            {segments.map((seg, i) =>
-              seg.length > 1 ? <path key={`a${i}`} d={area(seg)} fill={color} opacity={0.1} /> : null,
-            )}
-            {segments.map((seg, i) =>
-              seg.length > 1 ? (
-                <path key={`l${i}`} d={line(seg)} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-              ) : (
-                <circle key={`l${i}`} cx={x(seg[0][0])} cy={y(seg[0][1])} r={2.5} fill={color} />
-              ),
+            {shape.sparse ? (
+              // Too few samples for a trend: each one is a dot, joined
+              // faintly only to an adjacent sample, never filled to zero.
+              <g>
+                {shape.segments.map((seg, i) =>
+                  seg.length > 1 ? (
+                    <path key={`l${i}`} d={line(seg)} fill="none" stroke={color} strokeWidth={1.25} opacity={0.45} strokeLinejoin="round" />
+                  ) : null,
+                )}
+                {shape.segments.flat().map((p) => (
+                  <circle key={p[0]} cx={x(p[0])} cy={y(p[1])} r={3} fill={color} />
+                ))}
+              </g>
+            ) : (
+              <g>
+                {shape.segments.map((seg, i) =>
+                  fill && seg.length >= DENSE_RUN ? <path key={`a${i}`} d={area(seg)} fill={color} opacity={0.1} /> : null,
+                )}
+                {shape.segments.map((seg, i) =>
+                  seg.length > 1 ? (
+                    <path key={`l${i}`} d={line(seg)} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                  ) : (
+                    <circle key={`l${i}`} cx={x(seg[0][0])} cy={y(seg[0][1])} r={2.5} fill={color} />
+                  ),
+                )}
+              </g>
             )}
             {thresholds.map((th) => (
               <g key={th.label}>
@@ -314,6 +321,48 @@ export function TimeSeriesChart({
       )}
     </div>
   );
+}
+
+// A run shorter than this draws as a sliver (a two-point line with its
+// area under it reads as a spike to zero), so it doesn't count as "line".
+export const DENSE_RUN = 3;
+
+export interface SeriesShape {
+  // Runs of finite points; a null value or a gap wider than gapMs
+  // between neighbours ends a run, so missing data is never drawn as 0.
+  segments: [number, number][][];
+  samples: number;
+  // Too few samples, most of them isolated, or covering under half the
+  // window (a few short plateaus look like bars): draw dots, not a line.
+  sparse: boolean;
+}
+
+export function seriesShape(points: Point[], gapMs?: number, domain?: [number, number]): SeriesShape {
+  const segments: [number, number][][] = [];
+  let cur: [number, number][] = [];
+  let prevT: number | null = null;
+  for (const [t, v] of points) {
+    const ok = v !== null && Number.isFinite(v);
+    if (!ok || (gapMs && prevT !== null && t - prevT > gapMs)) {
+      if (cur.length) segments.push(cur);
+      cur = [];
+    }
+    if (ok) {
+      cur.push([t, v]);
+      prevT = t;
+    } else prevT = null;
+  }
+  if (cur.length) segments.push(cur);
+  const samples = segments.reduce((n, s) => n + s.length, 0);
+  const inRuns = segments.reduce((n, s) => n + (s.length >= DENSE_RUN ? s.length : 0), 0);
+  let sparse = samples > 0 && (samples < 4 || inRuns / samples < 0.6);
+  if (!sparse && domain && domain[1] > domain[0]) {
+    // Each sample stands for one sampling interval (the median spacing).
+    const diffs = segments.flatMap((seg) => seg.slice(1).map((p, i) => p[0] - seg[i][0])).sort((a, b) => a - b);
+    const interval = diffs[Math.floor(diffs.length / 2)] ?? 0;
+    sparse = (samples * interval) / (domain[1] - domain[0]) < 0.5;
+  }
+  return { segments, samples, sparse };
 }
 
 // niceTicks returns 0..top on a 1/2/2.5/5×10^n step, about `count` ticks.
