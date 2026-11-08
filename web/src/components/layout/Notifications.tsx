@@ -25,6 +25,7 @@ import {
 } from "@/lib/notification-attention";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { humanizeNotification } from "@/lib/format-notification";
 
 // FeedEvent matches the server's NotificationEvent wire shape. Only
 // the fields the feed renders are typed.
@@ -344,10 +345,6 @@ export function NotificationsSheetButton({ className, children }: { className?: 
 
 // Server titles carry a status glyph for chat channels ("✓ Build
 // succeeded"); the row's dot already says that.
-function feedTitle(title: string): string {
-  return title.replace(/^(?:\s|\u2713|\u2714|\u2717|\u2718|\u26A0|\uFE0F|\u274C|\u2705|\u{1F534}|\u{1F7E2}|\u{1F7E1})+/u, "");
-}
-
 // NotificationRow is one feed entry. Rows with a target (server url, or a
 // project/service fallback for pre-v0.8.2 events) are links that close
 // the feed before navigating; others are plain rows.
@@ -361,6 +358,7 @@ function NotificationRow({
   onClose: () => void;
 }) {
   const where = [event.project, event.service].filter(Boolean).join("/");
+  const text = humanizeNotification(event);
   const body = (
     <div className="flex items-start gap-2.5">
       <span
@@ -377,11 +375,19 @@ function NotificationRow({
       <div className="min-w-0 flex-1">
         <p className={cn("truncate text-[13px] text-[var(--text-primary)]", unread ? "font-semibold" : "font-medium")}>
           {unread && <span className="sr-only">New: </span>}
-          {feedTitle(event.title)}
+          {text.title}
         </p>
-        {(event.classification?.summary || event.body) && (
+        {text.body.length > 0 && (
           <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-secondary)]">
-            {event.classification?.summary || event.body}
+            {text.body.map((p, i) =>
+              p.code ? (
+                <code key={i} className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">
+                  {p.text}
+                </code>
+              ) : (
+                <span key={i}>{p.text}</span>
+              ),
+            )}
           </p>
         )}
         <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-[var(--text-tertiary)]">
