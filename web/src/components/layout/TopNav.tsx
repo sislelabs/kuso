@@ -24,7 +24,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
-import { useSession, useSignOut, useCan, useCanOnProject, Perms } from "@/features/auth";
+import { useSession, useSignOut, useCanOnProject, Perms } from "@/features/auth";
 import {
   useProjects,
   useEnvGroups,
@@ -60,8 +60,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { openShortcutsHelp } from "@/lib/shortcuts";
 import { classifyError } from "@/lib/error-kind";
 import { NotificationsButton } from "./Notifications";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
+import { useQueryClient } from "@tanstack/react-query";
 import { ServersPopover } from "./ServersPopover";
 import { CommandTrigger } from "@/components/command/CommandPalette";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
@@ -152,7 +151,6 @@ export function TopNav() {
         >
           <Settings className="size-4" aria-hidden />
           <span className="hidden xl:inline">Settings</span>
-          <UpdateDot />
         </Link>
         <div className="hidden sm:flex">
           <ServersPopover />
@@ -563,26 +561,6 @@ function EnvironmentSwitcher({ project }: { project: string }) {
         }}
       />
     </>
-  );
-}
-
-// UpdateDot marks the Settings link when a newer kuso release exists.
-// Shares the updates page's query key so both stay in sync.
-function UpdateDot() {
-  const isAdmin = useCan(Perms.SettingsAdmin);
-  const version = useQuery<{ needsUpdate: boolean; latest: string }>({
-    queryKey: ["system", "version"],
-    queryFn: () => api("/api/system/version"),
-    enabled: isAdmin,
-    staleTime: 5 * 60_000,
-  });
-  if (!isAdmin || !version.data?.needsUpdate) return null;
-  return (
-    <span
-      className="absolute right-1 top-1 size-2 rounded-full bg-[var(--warning)] ring-2 ring-[var(--bg-primary)]"
-      title={`Update available: ${version.data.latest}`}
-      aria-label="Update available"
-    />
   );
 }
 

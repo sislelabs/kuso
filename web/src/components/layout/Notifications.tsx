@@ -1,16 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Bell, BellOff, CheckCheck, Trash2 } from "lucide-react";
 import { Segmented } from "@/components/ui/segmented";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { LoadingState } from "@/components/ui/loading-state";
 import { useCan, Perms } from "@/features/auth";
+import { useSystemVersion } from "@/features/system-version";
 import { api } from "@/lib/api-client";
+import { describeError, toastError } from "@/lib/errors";
+import { collapseUpdates, needsAttention, setBellPrefs, useBellPrefs, type BellView } from "@/lib/notification-attention";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -43,53 +45,69 @@ interface FeedEvent {
 // clear mutations, shared by the desktop popover and the mobile sheet.
 // Admins get the full feed with read-tracking; everyone else gets a
 // project-scoped read-only feed (/my-feed).
+//
+// Signal over noise: the default view and the badge cover only events
+// that need attention (failures, alerts, security, updates). Successes
+// live under "All activity" and only count toward the badge when the
+// user opts in (Settings → Notifications).
 function useNotificationFeed() {
   const isAdmin = useCan(Perms.SettingsAdmin);
+  const prefs = useBellPrefs();
+  const [open, setOpen] = useState(false);
   const qc = useQueryClient();
+  const countKey = ["notifications", "unread-count", prefs.countAll ? "all" : "attention"] as const;
   const unread = useQuery<{ unread: number }>({
-    queryKey: ["notifications", "unread-count"],
-    queryFn: () => api("/api/notifications/feed/unread-count"),
+    queryKey: countKey,
+    queryFn: () => api(`/api/notifications/feed/unread-count${prefs.countAll ? "" : "?attention=true"}`),
     enabled: isAdmin,
     refetchInterval: 30_000,
     staleTime: 15_000,
     retry: false,
     throwOnError: false,
   });
-  const feedPath = isAdmin ? `/api/notifications/feed?limit=${FEED_LIMIT}` : `/api/notifications/my-feed?limit=${FEED_LIMIT}`;
-  // One const so the optimistic-clear write and the useQuery key can't drift.
-  const feedKey = ["notifications", "feed", isAdmin ? "admin" : "scoped"] as const;
+  const view = prefs.view;
+  const base = isAdmin ? "/api/notifications/feed" : "/api/notifications/my-feed";
+  const feedPath = `${base}?limit=${FEED_LIMIT}${view === "attention" ? "&attention=true" : ""}`;
+  // One const so the optimistic writes and the useQuery key can't drift.
+  const feedKey = ["notifications", "feed", isAdmin ? "admin" : "scoped", view] as const;
   const feed = useQuery<FeedEvent[]>({
     queryKey: feedKey,
     queryFn: () => api(feedPath),
-    enabled: false, // fetched when the feed is opened
+    enabled: open, // fetched while the feed is open
     staleTime: 15_000,
     retry: false,
     throwOnError: false,
   });
+  const version = useSystemVersion();
+  const items = useMemo(() => {
+    const rows = collapseUpdates(feed.data ?? [], version.data?.needsUpdate);
+    return view === "attention" ? rows.filter(needsAttention) : rows;
+  }, [feed.data, version.data?.needsUpdate, view]);
+
   // Optimistic: the badge drops to 0 and rows lose their unread styling
   // at once; both roll back if the server refuses.
   const markRead = useMutation({
     mutationFn: () => api("/api/notifications/feed/read-all", { method: "POST" }),
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ["notifications", "unread-count"] });
-      const prevCount = qc.getQueryData<{ unread: number }>(["notifications", "unread-count"]);
+      const prevCount = qc.getQueryData<{ unread: number }>(countKey);
       const prevFeed = qc.getQueryData<FeedEvent[]>(feedKey);
       const now = new Date().toISOString();
-      qc.setQueryData(["notifications", "unread-count"], { unread: 0 });
+      qc.setQueriesData({ queryKey: ["notifications", "unread-count"] }, { unread: 0 });
       if (prevFeed) qc.setQueryData(feedKey, prevFeed.map((e) => (e.readAt ? e : { ...e, readAt: now })));
       return { prevCount, prevFeed };
     },
     onError: (e, _vars, ctx) => {
-      if (ctx?.prevCount) qc.setQueryData(["notifications", "unread-count"], ctx.prevCount);
+      if (ctx?.prevCount) qc.setQueryData(countKey, ctx.prevCount);
       if (ctx?.prevFeed) qc.setQueryData(feedKey, ctx.prevFeed);
-      toast.error(e instanceof Error ? `Couldn't mark notifications read: ${e.message}` : "Couldn't mark notifications read");
+      toastError(e, "Couldn't mark notifications read");
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+      void qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
     },
   });
-  // Optimistically blank the feed, restore it on error (the feed query is
-  // enabled:false, so an invalidate alone wouldn't refetch).
+  // Optimistically blank the feed, restore it on error.
   const clearAll = useMutation({
     mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
     onMutate: async () => {
@@ -100,18 +118,18 @@ function useNotificationFeed() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
-      qc.invalidateQueries({ queryKey: feedKey });
+      qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
     },
     onError: (e, _vars, ctx) => {
-      toast.error(e instanceof Error ? `Couldn't clear notifications: ${e.message}` : "Couldn't clear notifications");
+      toastError(e, "Couldn't clear notifications", { retry: () => clearAll.mutate() });
       if (ctx?.previous) qc.setQueryData(feedKey, ctx.previous);
     },
   });
 
   const unreadCount = unread.data?.unread ?? 0;
   const onOpenChange = (next: boolean) => {
+    setOpen(next);
     if (next) {
-      void feed.refetch();
       void unread.refetch();
     } else if (isAdmin && unreadCount > 0) {
       // Seen = read, on CLOSE, not open: marking on open cleared readAt
@@ -119,7 +137,7 @@ function useNotificationFeed() {
       markRead.mutate();
     }
   };
-  return { isAdmin, feed, unreadCount, clearAll, markRead, onOpenChange };
+  return { isAdmin, open, feed, items, view, unreadCount, clearAll, markRead, onOpenChange };
 }
 
 const FEED_LIMIT = 30;
@@ -127,10 +145,8 @@ const FEED_LIMIT = 30;
 type Feed = ReturnType<typeof useNotificationFeed>;
 
 function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
-  const { isAdmin, feed, clearAll, markRead, unreadCount } = state;
-  const [filter, setFilter] = useState<"all" | "unread">("all");
-  const all = feed.data ?? [];
-  const items = filter === "unread" ? all.filter((e) => !e.readAt) : all;
+  const { isAdmin, feed, items, view, clearAll, markRead, unreadCount } = state;
+  const raw = feed.data ?? [];
   return (
     <>
       <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
@@ -158,23 +174,23 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
               onClick={onClose}
               className="inline-flex h-7 items-center rounded-md px-2 text-xs text-[var(--link)] hover:bg-[var(--bg-tertiary)]"
             >
-              Channels
+              Settings
             </Link>
           )}
         </div>
       </header>
-      {isAdmin && all.length > 0 && (
-        <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5">
-          <Segmented
-            size="sm"
-            label="Show"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "all", label: "All" },
-              { value: "unread", label: "Unread" },
-            ]}
-          />
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5">
+        <Segmented
+          size="sm"
+          label="Show"
+          value={view}
+          onChange={(v: BellView) => setBellPrefs({ view: v })}
+          options={[
+            { value: "attention", label: "Needs attention" },
+            { value: "all", label: "All activity" },
+          ]}
+        />
+        {isAdmin && raw.length > 0 && (
           <button
             type="button"
             onClick={() => clearAll.mutate()}
@@ -185,24 +201,42 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
             <Trash2 className="size-3.5" aria-hidden />
             Clear all
           </button>
-        </div>
-      )}
+        )}
+      </div>
       <div className="max-h-[min(28rem,70dvh)] overflow-y-auto">
         {feed.isPending ? (
           <LoadingState kind="inline" className="px-3 py-4" />
         ) : feed.isError ? (
-          <p role="alert" className="px-3 py-4 text-sm text-[var(--error)]">
-            Couldn&apos;t load notifications: {feed.error instanceof Error ? feed.error.message : "unknown error"}
-          </p>
+          <div role="alert" className="flex items-start justify-between gap-3 px-3 py-4">
+            <p className="text-sm text-[var(--error)]">{describeError(feed.error, "Couldn't load notifications.")}</p>
+            <button
+              type="button"
+              onClick={() => void feed.refetch()}
+              className="shrink-0 text-xs font-medium text-[var(--link)] hover:underline"
+            >
+              Retry
+            </button>
+          </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center px-6 py-10 text-center">
             <BellOff aria-hidden className="mb-2 size-5 text-[var(--text-tertiary)]" />
             <p className="text-sm font-medium text-[var(--text-primary)]">
-              {filter === "unread" ? "No unread notifications" : "You\u2019re all caught up"}
+              {view === "attention" ? "Nothing needs your attention" : "No activity yet"}
             </p>
             <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-              Builds, deploys and node alerts show up here as they happen.
+              {view === "attention"
+                ? "Failed builds, crashes, alerts, security findings and updates show up here."
+                : "Builds, deploys and node events show up here as they happen."}
             </p>
+            {view === "attention" && (
+              <button
+                type="button"
+                onClick={() => setBellPrefs({ view: "all" })}
+                className="mt-3 text-xs font-medium text-[var(--link)] hover:underline"
+              >
+                Show all activity
+              </button>
+            )}
           </div>
         ) : (
           <ul className="divide-y divide-[var(--border-subtle)]">
@@ -211,10 +245,9 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
             ))}
           </ul>
         )}
-        {all.length >= FEED_LIMIT && filter === "all" && (
+        {raw.length >= FEED_LIMIT && (
           <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
             Showing the {FEED_LIMIT} most recent.
-            {unreadCount > all.filter((e) => !e.readAt).length && " Older unread ones are cleared by Mark all read."}
           </p>
         )}
       </div>
@@ -241,11 +274,7 @@ function BellIcon({ unread }: { unread: number }) {
 export function NotificationsButton({ className }: { className?: string }) {
   const state = useNotificationFeed();
   // Controlled so a row's <Link> click closes the popover before routing.
-  const [open, setOpen] = useState(false);
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    state.onOpenChange(next);
-  };
+  const { open, onOpenChange } = state;
   const n = state.unreadCount;
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -269,11 +298,7 @@ export function NotificationsButton({ className }: { className?: string }) {
 // Mobile: the same feed in a bottom sheet, opened from the bottom bar.
 export function NotificationsSheetButton({ className, children }: { className?: string; children?: React.ReactNode }) {
   const state = useNotificationFeed();
-  const [open, setOpen] = useState(false);
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    state.onOpenChange(next);
-  };
+  const { open, onOpenChange } = state;
   const n = state.unreadCount;
   return (
     <>
