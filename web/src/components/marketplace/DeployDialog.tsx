@@ -288,9 +288,9 @@ export function DeployDialog({
                     resetOutcome();
                   }}
                   className={cn(
-                    "h-8 rounded text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50",
+                    "h-8 rounded text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50",
                     target === t
-                      ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
+                      ? "bg-[var(--selected)] text-[var(--text-primary)] shadow-[var(--shadow-sm)] ring-1 ring-[var(--selected-border)]"
                       : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
                   )}
                 >

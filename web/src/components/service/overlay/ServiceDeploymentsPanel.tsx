@@ -456,7 +456,7 @@ function ImageDeploymentCard({
         </div>
       )}
 
-      {state.status !== "idle" && <RolloutSteps state={state} />}
+      {(state.status === "active" || state.status === "failed") && <RolloutSteps state={state} />}
 
       {live && url && (
         <div className="mt-3 flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-1 pl-2.5 pr-1">
@@ -474,11 +474,6 @@ function ImageDeploymentCard({
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
         </div>
-      )}
-      {!live && (
-        <p className="mt-3 text-xs text-[var(--text-tertiary)]">
-          Prebuilt images deploy without a build. To ship a new version, change the tag in Settings.
-        </p>
       )}
     </section>
   );
@@ -520,7 +515,7 @@ function RolloutBadge({ state }: { state: RolloutState }) {
 function RolloutSteps({ state }: { state: RolloutState }) {
   const current = ROLLOUT_STEPS.findIndex((s) => s.step === state.step);
   return (
-    <ol className="mt-4 grid grid-cols-4 gap-2" aria-label="Rollout progress">
+    <ol className="mt-4 grid grid-cols-4 gap-1.5 sm:gap-2" aria-label="Rollout progress">
       {ROLLOUT_STEPS.map((s, i) => {
         const done = i < current || (i === current && state.status === "done");
         const failed = i === current && state.status === "failed";
@@ -535,18 +530,18 @@ function RolloutSteps({ state }: { state: RolloutState }) {
             />
             <div
               className={cn(
-                "mt-1.5 flex items-center gap-1 text-xs",
+                "mt-1.5 flex items-start gap-1 text-2xs leading-tight sm:text-xs",
                 done || active || failed ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
               )}
             >
               {done ? (
-                <Check className="h-3 w-3 shrink-0 text-[var(--success)]" aria-hidden />
+                <Check className="mt-px h-3 w-3 shrink-0 text-[var(--success)]" aria-hidden />
               ) : failed ? (
                 <X className="h-3 w-3 shrink-0 text-[var(--danger)]" aria-hidden />
               ) : active ? (
                 <Loader2 className="h-3 w-3 shrink-0 text-[var(--info)] motion-safe:animate-spin" aria-hidden />
               ) : null}
-              <span className="truncate">{s.label}</span>
+              <span className="min-w-0">{s.label}</span>
             </div>
           </li>
         );
