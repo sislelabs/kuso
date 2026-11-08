@@ -38,6 +38,10 @@ export function useUserDirectory(): {
       const prev = byId.get(me.id);
       byId.set(me.id, { id: me.id, username: prev?.username ?? me.name, image: me.image });
     }
-    return { resolve: (id: string) => byId.get(id) ?? null, canList };
+    // Some audit writers store the username instead of the id
+    // (service.terminal does), so fall back to a username match.
+    const byName = new Map<string, ResolvedUser>();
+    for (const u of byId.values()) byName.set(u.username, u);
+    return { resolve: (id: string) => byId.get(id) ?? byName.get(id) ?? null, canList };
   }, [list.data, me, canList]);
 }

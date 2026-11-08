@@ -149,7 +149,7 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 
 	if h.Audit != nil {
 		h.Audit.Log(r.Context(), audit.Entry{
-			User:     claims.Username,
+			User:     claims.UserID,
 			Severity: "warn",
 			Action:   "service.terminal",
 			Pipeline: project,

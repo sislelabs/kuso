@@ -140,7 +140,7 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 
 	if h.Audit != nil {
 		h.Audit.Log(r.Context(), audit.Entry{
-			User:     claims.Username,
+			User:     claims.UserID,
 			Severity: "warn",
 			Action:   "addon.portforward",
 			// Audit the RESOLVED CR's owner project, not the caller-
