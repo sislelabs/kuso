@@ -88,7 +88,7 @@ spec:
         # values — we want the token inline in `authorization { ... }`
         # which doesn't expand env. Pre-process to /etc/nats/nats.conf.
         - name: render-conf
-          image: alpine:3.20
+          image: alpine:3.24
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           args:
@@ -109,7 +109,7 @@ spec:
               mountPath: /etc/nats
       containers:
         - name: nats
-          image: {{ printf "nats:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "nats:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           args: ["-c", "/etc/nats/nats.conf"]

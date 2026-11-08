@@ -101,7 +101,7 @@ metadata:
     # deliberate teardown goes through the PurgeData path, not helm uninstall.
     "helm.sh/resource-policy": keep
 spec:
-  imageName: {{ printf "ghcr.io/cloudnative-pg/postgresql:%s" $version | quote }}
+  imageName: {{ include "kusoaddon.image" (list $ (printf "ghcr.io/cloudnative-pg/postgresql:%s" $version)) }}
   instances: 3
   {{- /* CNPG creates the DB pods itself and copies only inheritedMetadata
          onto them, not the Cluster's own labels. The project
@@ -113,6 +113,10 @@ spec:
     labels:
       {{- include "kusoaddon.cnpgPodLabels" . | nindent 6 }}
   primaryUpdateStrategy: unsupervised
+  # Image updates roll the replicas first, then promote one and update
+  # the old primary last: a few seconds of write unavailability instead
+  # of restarting the primary in place (CNPG's default, "restart").
+  primaryUpdateMethod: switchover
   storage:
     size: {{ include "kusoaddon.storageSize" . }}
   bootstrap:

@@ -111,6 +111,8 @@ type VulnReport struct {
 	EffectiveMode string           `json:"effectiveMode,omitempty"`
 	Image         *VulnImageReport `json:"image"`
 	Findings      []VulnFinding    `json:"findings"`
+	// ImageUpdate is set for addons only.
+	ImageUpdate *AddonImageUpdate `json:"imageUpdate,omitempty"`
 }
 
 type VulnPolicy struct {
@@ -138,6 +140,28 @@ type VulnSettings struct {
 	ScanPlatform      bool   `json:"scanPlatform"`
 	NightlyHourUTC    int    `json:"nightlyHourUTC"`
 	NotifyMinSeverity string `json:"notifyMinSeverity"`
+	AutoUpdateAddons  bool   `json:"autoUpdateAddons"`
+}
+
+// AddonImageUpdateState is the addon image updater's view of one addon.
+type AddonImageUpdateState struct {
+	Image          string `json:"image"`
+	Running        string `json:"running,omitempty"`
+	Latest         string `json:"latest,omitempty"`
+	CheckedAt      string `json:"checkedAt,omitempty"`
+	Status         string `json:"status"`
+	Message        string `json:"message,omitempty"`
+	FixableRunning int    `json:"fixableRunning"`
+	FixableLatest  int    `json:"fixableLatest"`
+	AppliedAt      string `json:"appliedAt,omitempty"`
+}
+
+// AddonImageUpdate is the imageUpdate block of an addon's vulns report.
+type AddonImageUpdate struct {
+	Auto          bool                   `json:"auto"`
+	WindowHourUTC int                    `json:"windowHourUTC"`
+	Available     bool                   `json:"available"`
+	State         *AddonImageUpdateState `json:"state"`
 }
 
 type VulnIgnoreRequest struct {
@@ -244,6 +268,12 @@ func (k *KusoClient) ScanAllVulns() (*resty.Response, error) {
 
 func (k *KusoClient) GetVulnScan(id string) (*resty.Response, error) {
 	return k.client.Get("/api/admin/vulns/scans/" + esc(id))
+}
+
+// UpdateAddonImage pins an addon to its tag's newest image now; the
+// addon restarts.
+func (k *KusoClient) UpdateAddonImage(project, addon string) (*resty.Response, error) {
+	return k.client.Post(VulnTarget{Project: project, Addon: addon}.base() + "/update-image")
 }
 
 func (k *KusoClient) GetVulnSettings() (*resty.Response, error) {

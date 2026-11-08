@@ -142,7 +142,7 @@ spec:
       # creds with reserved chars round-trip intact.
       initContainers:
         - name: render-userlist
-          image: alpine/k8s:1.30.4
+          image: alpine/k8s:1.35.10
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: [/bin/sh, -ec]
           args:
@@ -165,7 +165,7 @@ spec:
             - { name: shared, mountPath: /shared }
       containers:
         - name: pgbouncer
-          image: edoburu/pgbouncer:v1.25.1-p0
+          image: edoburu/pgbouncer:v1.25.2-p0
           imagePullPolicy: IfNotPresent
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:

@@ -1,5 +1,6 @@
 import { api } from "@/lib/api-client";
 import type {
+  AddonImageUpdateState,
   AddonVulnsResponse,
   AddVulnIgnoreInput,
   PlatformFindingsResponse,
@@ -35,6 +36,13 @@ export function getServiceVulns(project: string, service: string, env: string): 
 
 export function getAddonVulns(project: string, addon: string): Promise<AddonVulnsResponse> {
   return api<AddonVulnsResponse>(`${vulnOwnerPath({ kind: "addon", project, name: addon })}?includeIgnored=true`);
+}
+
+// Pins the addon to its tag's newest image now; the addon restarts.
+export function updateAddonImage(project: string, addon: string): Promise<AddonImageUpdateState> {
+  return api<AddonImageUpdateState>(`${vulnOwnerPath({ kind: "addon", project, name: addon })}/update-image`, {
+    method: "POST",
+  });
 }
 
 export function rescanVulns(owner: VulnOwner): Promise<ScanQueuedResponse> {

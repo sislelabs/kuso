@@ -49,7 +49,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: minio
-          image: {{ printf "minio/minio:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "minio/minio:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           args: ["server", "/data", "--console-address", ":9001"]
           ports:

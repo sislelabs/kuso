@@ -229,12 +229,12 @@ func TestVulnsSettingsSetSendsMergedObject(t *testing.T) {
 			put = body
 			return 200, body
 		}
-		return 200, `{"mode":"enforce","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":3,"notifyMinSeverity":"high"}`
+		return 200, `{"mode":"enforce","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":3,"notifyMinSeverity":"high","autoUpdateAddons":true}`
 	})
 	if _, err := runRoot(t, "vulns", "settings", "set", "--mode", "report", "--scan-platform=false"); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":3,"notifyMinSeverity":"high"}`
+	want := `{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":3,"notifyMinSeverity":"high","autoUpdateAddons":true}`
 	if put != want {
 		t.Errorf("PUT body = %s, want %s", put, want)
 	}

@@ -150,6 +150,18 @@ spec:
                         user/db). 0 = chart default of 25. Set below an
                         external provider's usable connection cap; the reserve
                         pool scales with it.
+                imagePin:
+                  type: object
+                  description: >-
+                    Digest pin for the main container, stamped by the
+                    addon image updater. Applied only while image equals
+                    the tag the chart renders for the current version.
+                  properties:
+                    image:
+                      type: string
+                    digest:
+                      type: string
+                      pattern: '^sha256:[a-f0-9]{64}$'
                 publicTCP:
                   type: object
                   description: >-

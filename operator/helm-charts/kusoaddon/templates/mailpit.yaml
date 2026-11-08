@@ -33,7 +33,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: mailpit
-          image: {{ printf "axllent/mailpit:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "axllent/mailpit:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           ports:

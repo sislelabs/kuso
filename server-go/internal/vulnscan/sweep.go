@@ -57,6 +57,9 @@ type Sweeper struct {
 	Notify  Emitter
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Updater, when set, rolls addons onto newer images of their tag
+	// every tick (rolls only inside the nightly window).
+	Updater *AddonUpdater
 
 	// alertedThrough: scans finished before this were already looked
 	// at by the alert pass in this process. Zero after a restart, which
@@ -119,6 +122,11 @@ func (s *Sweeper) Tick(ctx context.Context) {
 	}
 	if err := s.AlertNew(ctx, settings); err != nil {
 		s.log().Warn("vulnscan: alert pass", "err", err)
+	}
+	if s.Updater != nil {
+		if err := s.Updater.Tick(ctx, settings); err != nil {
+			s.log().Warn("vulnscan: addon image updates", "err", err)
+		}
 	}
 }
 

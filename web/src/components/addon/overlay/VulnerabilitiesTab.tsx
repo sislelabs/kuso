@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { useAddonVulns, useProjectVulns, useRescanVulns, type VulnOwner } from "@/features/vulns";
 import { VulnReport } from "@/components/vulns/VulnReport";
+import { AddonImageUpdatePanel } from "@/components/vulns/AddonImageUpdatePanel";
 
 export function VulnerabilitiesTab({ project, addon }: { project: string; addon: string }) {
   const owner: VulnOwner = { kind: "addon", project, name: addon };
@@ -21,6 +22,11 @@ export function VulnerabilitiesTab({ project, addon }: { project: string; addon:
         query={q}
         canEdit={canEdit}
         modeOff={projectVulns.data?.mode === "off"}
+        header={
+          q.data?.imageUpdate ? (
+            <AddonImageUpdatePanel project={project} addon={addon} update={q.data.imageUpdate} canEdit={canEdit} />
+          ) : undefined
+        }
         modeOffHint="Vulnerability scanning is disabled for this instance. An admin can enable it under Settings → Vulnerability scanning."
         onRescan={() => rescan.mutate(undefined, { onSuccess: () => toast.success("Rescan queued") })}
         rescanPending={rescan.isPending}

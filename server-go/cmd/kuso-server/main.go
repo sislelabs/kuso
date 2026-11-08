@@ -1473,6 +1473,16 @@ func main() {
 					Cluster: vulnscan.KubeCluster{Kube: kubeClient},
 					Notify:  notifyDisp,
 					Logger:  logger.With("component", "vulnscan"),
+					Updater: &vulnscan.AddonUpdater{
+						DB:        database,
+						Cluster:   vulnscan.KubeCluster{Kube: kubeClient},
+						Addons:    vulnscan.KubeAddons{Kube: kubeClient},
+						Resolver:  vulnscan.PublicDigests{},
+						Notify:    notifyDisp,
+						Logger:    logger.With("component", "addon-image-updater"),
+						Kube:      kubeClient.Clientset,
+						Namespace: *namespace,
+					},
 				}
 				vulnWorker := &vulnscan.Worker{
 					Kube:      kubeClient.Clientset,

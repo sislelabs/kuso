@@ -1033,6 +1033,18 @@ type KusoAddonSpec struct {
 	// when your app's driver accepts an unverified chain or you pin
 	// the CA. See operator/helm-charts/kusoaddon/templates/postgres.yaml.
 	TLS string `json:"tls,omitempty"`
+	// ImagePin pins the main container to a digest of the tag the chart
+	// renders. The chart applies it only while Image still equals that
+	// tag, so a version change drops a stale pin by itself. Stamped by
+	// the addon image updater (vulnscan.AddonUpdater).
+	ImagePin *KusoAddonImagePin `json:"imagePin,omitempty"`
+}
+
+// KusoAddonImagePin is spec.imagePin: Image is the tag reference the
+// chart renders ("postgres:16"), Digest the index digest to run.
+type KusoAddonImagePin struct {
+	Image  string `json:"image"`
+	Digest string `json:"digest"`
 }
 
 // KusoAddonPooler is the opt-in connection-pooler block on

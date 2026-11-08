@@ -67,7 +67,7 @@ spec:
         # "Read-only file system". Stage our default-user.xml into a
         # WRITABLE emptyDir the entrypoint can also write to.
         - name: seed-userconf
-          image: {{ printf "clickhouse/clickhouse-server:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "clickhouse/clickhouse-server:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           args:
@@ -79,7 +79,7 @@ spec:
               mountPath: /etc/clickhouse-server/users.d
       containers:
         - name: clickhouse
-          image: {{ printf "clickhouse/clickhouse-server:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "clickhouse/clickhouse-server:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           ports:

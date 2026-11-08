@@ -16,6 +16,7 @@ import {
   rescanVulns,
   scanAllVulns,
   setServiceVulnPolicy,
+  updateAddonImage,
 } from "./api";
 import { isScanActive, shouldPollScan } from "./logic";
 import type { AddVulnIgnoreInput, VulnOwner, VulnPolicy, VulnScanSettings, VulnScanSummary } from "./types";
@@ -88,7 +89,12 @@ export function useAddonVulns(project: string, addon: string, awaitingScanId: nu
     queryKey: vulnKeys.findings(owner),
     queryFn: () => getAddonVulns(project, addon),
     enabled: !!project && !!addon,
-    refetchInterval: (query) => (shouldPollScan(query.state.data?.image?.scan, awaitingScanId) ? POLL_MS : false),
+    refetchInterval: (query) => {
+      if (shouldPollScan(query.state.data?.image?.scan, awaitingScanId)) return POLL_MS;
+      // A restart onto a new image is in flight: watch the digest change.
+      const status = query.state.data?.imageUpdate?.state?.status;
+      return status === "updating" || status === "rolling" ? POLL_MS : false;
+    },
   });
   useInvalidateOnScanSettled(q.data?.image?.scan, project);
   return q;
@@ -107,6 +113,14 @@ export function useRescanVulns(owner: VulnOwner) {
   return useMutation({
     mutationFn: () => rescanVulns(owner),
     onSuccess: () => invalidateOwner(qc, owner),
+  });
+}
+
+export function useUpdateAddonImage(project: string, addon: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => updateAddonImage(project, addon),
+    onSuccess: () => invalidateOwner(qc, { kind: "addon", project, name: addon }),
   });
 }
 

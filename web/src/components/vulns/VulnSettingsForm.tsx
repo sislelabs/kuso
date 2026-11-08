@@ -35,7 +35,8 @@ function same(a: VulnScanSettings, b: VulnScanSettings): boolean {
     a.scanAddons === b.scanAddons &&
     a.scanPlatform === b.scanPlatform &&
     a.nightlyHourUTC === b.nightlyHourUTC &&
-    a.notifyMinSeverity === b.notifyMinSeverity
+    a.notifyMinSeverity === b.notifyMinSeverity &&
+    a.autoUpdateAddons === b.autoUpdateAddons
   );
 }
 
@@ -99,6 +100,23 @@ export function VulnSettingsForm({ initial }: { initial: VulnScanSettings }) {
             className="h-4 w-4 accent-[var(--accent)]"
           />
           Scan addon images nightly (postgres, redis, …)
+        </label>
+        <label className={cn("flex items-start gap-3 text-sm", !draft.scanAddons && "opacity-50")}>
+          <input
+            type="checkbox"
+            checked={draft.autoUpdateAddons && draft.scanAddons}
+            disabled={!draft.scanAddons}
+            onChange={(e) => set("autoUpdateAddons", e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+          />
+          <span>
+            Auto-update addon images
+            <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">
+              Moves each addon onto the newest build of its version (postgres:16 stays 16) in the 4 hours after the
+              nightly sweep, once that build is scanned and has no more fixable critical/high findings. Addons restart
+              one or two at a time; a build that doesn&apos;t become ready within 30 minutes is rolled back.
+            </span>
+          </span>
         </label>
         <label className="flex items-center gap-3 text-sm">
           <input

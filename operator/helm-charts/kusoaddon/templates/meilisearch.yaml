@@ -42,7 +42,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: meilisearch
-          image: {{ printf "getmeili/meilisearch:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "getmeili/meilisearch:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           ports:

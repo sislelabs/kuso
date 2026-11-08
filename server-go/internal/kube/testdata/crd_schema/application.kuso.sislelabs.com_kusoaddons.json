@@ -53,6 +53,19 @@
             "default": false,
             "type": "boolean"
           },
+          "imagePin": {
+            "description": "Digest pin for the main container, stamped by the addon image updater. Applied only while image equals the tag the chart renders for the current version.",
+            "properties": {
+              "digest": {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "image": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "kind": {
             "enum": [
               "postgres",

@@ -739,11 +739,14 @@ type VulnScanSettings struct {
 	ScanPlatform      bool   `json:"scanPlatform"`
 	NightlyHourUTC    int    `json:"nightlyHourUTC"`
 	NotifyMinSeverity string `json:"notifyMinSeverity"`
+	// AutoUpdateAddons rolls addons onto their tag's newest image in the
+	// nightly window when that image scans no worse (vulnscan.AddonUpdater).
+	AutoUpdateAddons bool `json:"autoUpdateAddons"`
 }
 
 // DefaultVulnScanSettings is a fresh install's config.
 func DefaultVulnScanSettings() VulnScanSettings {
-	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high"}
+	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high", AutoUpdateAddons: true}
 }
 
 // GetVulnScanSettings reads vulnscan.* over the defaults.
@@ -780,6 +783,10 @@ func (d *DB) GetVulnScanSettings(ctx context.Context) (VulnScanSettings, error) 
 			if s := unquote(v); s != "" {
 				out.NotifyMinSeverity = s
 			}
+		case "vulnscan.autoUpdateAddons":
+			if b, err := strconv.ParseBool(v); err == nil {
+				out.AutoUpdateAddons = b
+			}
 		}
 	}
 	return out, rows.Err()
@@ -793,6 +800,7 @@ func (d *DB) SetVulnScanSettings(ctx context.Context, in VulnScanSettings, updat
 		{"vulnscan.scanPlatform", strconv.FormatBool(in.ScanPlatform)},
 		{"vulnscan.nightlyHourUTC", strconv.Itoa(in.NightlyHourUTC)},
 		{"vulnscan.notifyMinSeverity", quote(in.NotifyMinSeverity)},
+		{"vulnscan.autoUpdateAddons", strconv.FormatBool(in.AutoUpdateAddons)},
 	}
 	for _, p := range pairs {
 		if err := d.SetSetting(ctx, p.key, p.value, updatedBy); err != nil {
