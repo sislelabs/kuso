@@ -14,6 +14,7 @@ import {
   useStartService,
   useRestartService,
   useWakeService,
+  useErrors,
   pickRollbackTarget,
   healthProblem,
   needsRestart,
@@ -58,8 +59,11 @@ const ServiceTerminalPanel = dynamic(
   },
 );
 import { FailureBanner } from "./overlay/FailureBanner";
+import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
+import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
-import { Check, Copy, ExternalLink, X, Pencil } from "lucide-react";
+import { ExternalLink, X, Pencil } from "lucide-react";
+import { CopyButton } from "@/components/shared/s2-CopyButton";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
@@ -147,18 +151,19 @@ type Tab =
 // Crons and Runs always show for users who can create them (admin —
 // the server gates creation on secrets:read); for everyone else they
 // only appear once the service has at least one cron / run.
-const ALL_MAIN_TABS: { id: Tab; label: string; alwaysShow?: boolean }[] = [
-  { id: "deployments", label: "Deployments", alwaysShow: true },
-  { id: "variables", label: "Variables", alwaysShow: true },
-  { id: "metrics", label: "Metrics", alwaysShow: true },
-  { id: "logs", label: "Logs", alwaysShow: true },
-  { id: "errors", label: "Errors", alwaysShow: true },
-  { id: "vulnerabilities", label: "Vulnerabilities", alwaysShow: true },
-  { id: "shell", label: "Shell", alwaysShow: true },
-  { id: "crons", label: "Crons" },
-  { id: "runs", label: "Runs" },
+// Order is priority: when the strip is narrow the tail moves into "More".
+const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean }[] = [
+  { id: "deployments", label: "Deployments", chord: "d", alwaysShow: true },
+  { id: "variables", label: "Variables", chord: "v", alwaysShow: true },
+  { id: "logs", label: "Logs", chord: "l", alwaysShow: true },
+  { id: "metrics", label: "Metrics", chord: "m", alwaysShow: true },
+  { id: "errors", label: "Errors", chord: "e", alwaysShow: true },
+  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true },
+  { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
+  { id: "crons", label: "Crons", chord: "c" },
+  { id: "runs", label: "Runs", chord: "r" },
 ];
-const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Settings" };
+const PINNED_TAB: { id: Tab; label: string; chord?: string } = { id: "settings", label: "Settings", chord: "s" };
 
 // TAB_ALIASES maps deep-link tab slugs that aren't overlay tabs onto the
 // tab that owns that content. The server's failures.TabBuild ("build")
@@ -302,20 +307,6 @@ export function ServiceOverlay({
   const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
-
-  // Scroll the active tab into view when `tab` changes. Previously
-  // this lived in the button's ref={el => el.scrollIntoView(...)},
-  // which fires on every render (including state updates that don't
-  // touch the tab) — so any dirty-state flip or panels-map churn
-  // would re-trigger a smooth-scroll animation on the active tab.
-  // useEffect keyed on tab fires once per actual change.
-  useEffect(() => {
-    if (!open) return;
-    const root = panelRef.current;
-    if (!root) return;
-    const el = root.querySelector<HTMLElement>(`[data-tab="${tab}"][data-active="1"]`);
-    if (el) el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
-  }, [tab, open]);
 
   // Per-panel dirty + save registry. Children call useOverlayDirty
   // and (optionally) supply onSave/onDiscard so the shell can render
@@ -494,6 +485,26 @@ export function ServiceOverlay({
     [showCrons, showRuns, tab, canShell],
   );
 
+  // Errors seen in the last 24h across envs, as a tab badge. Shares its
+  // cache entry with the Errors panel's default range.
+  const errors = useErrors(project, service ?? "", "24h");
+  const errorCount = (errors.data ?? []).reduce((n, g) => n + g.count, 0);
+  const tabItems = useMemo<OverlayTabItem<Tab>[]>(
+    () =>
+      MAIN_TABS.map((t) =>
+        t.id === "errors" && errorCount > 0 ? { ...t, badge: errorCount, badgeTone: "error" as const } : t,
+      ),
+    [MAIN_TABS, errorCount],
+  );
+
+  useOverlayKeyboard({
+    open,
+    panelRef,
+    chords: Object.fromEntries(
+      [...MAIN_TABS, PINNED_TAB].filter((t) => t.chord).map((t) => [t.chord as string, () => guardedSetTab(t.id)]),
+    ),
+  });
+
   // If the visibility-driven tab list drops the current tab (e.g.
   // user was on Crons and deleted their last cron), fall back to
   // Deployments so the strip + content stay in sync. Only fires on
@@ -626,7 +637,13 @@ export function ServiceOverlay({
   return (
     <AnimatePresence>
       {open && (
-        <div ref={rootRef} className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+        <div
+          ref={rootRef}
+          className="fixed inset-0 z-50 flex"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Service ${svc.data?.spec.displayName?.trim() || service || ""}`}
+        >
           {/* Backdrop — clickable to close. */}
           <motion.button
             type="button"
@@ -644,11 +661,12 @@ export function ServiceOverlay({
               filtered by its blur. */}
           <motion.div
             ref={panelRef}
+            tabIndex={-1}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)] sm:max-w-3xl"
+            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:max-w-3xl sm:border-l sm:border-[var(--border-subtle)]"
           >
             {/* Sticky header. Tighter padding on small screens so the
                 overlay's title row uses the full width of a phone. */}
@@ -674,23 +692,24 @@ export function ServiceOverlay({
                       {service || ""}
                     </h2>
                   )}
-                  <StatusDot status={status} detail={stateDetail} />
+                  <StatusPill status={status} detail={stateDetail} />
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
-                  <span className="font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
+                  <span className="min-w-0 truncate">
                     {project}
-                    {svc.data?.spec.displayName?.trim() && service ? (
-                      <>
-                        {" · "}
-                        <span className="text-[var(--text-secondary)]">{service}</span>
-                      </>
-                    ) : null}
+                    <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+                    <span className="font-mono">{service}</span>
+                    {envParam !== "production" && (
+                      <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-[11px]">{envParam}</span>
+                    )}
                   </span>
                   {url ? (
                     <UrlPill url={url} />
                   ) : (
-                    <span className="font-mono text-[10px] text-[var(--text-tertiary)]">no URL yet</span>
+                    <span className="text-[var(--text-tertiary)]">No public URL yet</span>
                   )}
+                </div>
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5 empty:hidden">
                   {/* Diagnostic chip. The "rolling out" state lives
                       on StatusDot now — this chip exists purely for
                       actionable diagnostics:
@@ -710,7 +729,7 @@ export function ServiceOverlay({
                     if (d.helmError && d.helmError.length > 0) {
                       return (
                         <span
-                          className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-mono text-[10px] text-red-200"
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] px-2 py-0.5 text-xs text-[var(--error)]"
                           title={d.helmError}
                         >
                           Config couldn&apos;t be applied
@@ -734,21 +753,21 @@ export function ServiceOverlay({
                         fields.length > 0 ? ` (${fields.join(", ")})` : "";
                       return (
                         <span
-                          className="inline-flex items-center gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] text-sky-200"
+                          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
                           title={`Rolling out the latest spec${what}. Pods are restarting to pick up your change.`}
                         >
-                          <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
-                          applying changes{what}…
+                          <span className="size-1.5 animate-pulse rounded-full bg-[var(--info)]" />
+                          Applying changes{what}…
                         </span>
                       );
                     }
                     if (specOff) {
                       return (
                         <span
-                          className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200"
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-0.5 text-xs text-[var(--warning)]"
                           title={`Spec out of sync on: ${d.specPending.join(", ")}`}
                         >
-                          pending changes
+                          Pending changes
                         </span>
                       );
                     }
@@ -804,66 +823,24 @@ export function ServiceOverlay({
               />
             ) : null}
 
-            {/* Tab strip: scrollable left rail for the view tabs,
-                pinned Settings on the right. The left rail scrolls
-                horizontally on narrow viewports; Settings stays
-                visible so the destructive actions are always one
-                click away regardless of width. */}
-            <nav className="flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3">
-              <div className="flex flex-1 min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {MAIN_TABS.map((t) => {
-                  const active = t.id === tab;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      data-tab={t.id}
-                      data-active={active ? "1" : undefined}
-                      onClick={() => guardedSetTab(t.id)}
-                      className={cn(
-                        "relative inline-flex h-10 shrink-0 items-center px-3 text-sm font-medium transition-colors whitespace-nowrap",
-                        active
-                          ? "text-[var(--text-primary)]"
-                          : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                      )}
-                    >
-                      {t.label}
-                      {active && (
-                        <motion.span
-                          layoutId="overlay-tab-underline"
-                          className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
-                          transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                        />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => guardedSetTab(PINNED_TAB.id)}
-                className={cn(
-                  "relative ml-2 inline-flex h-10 shrink-0 items-center border-l border-[var(--border-subtle)] pl-3 pr-2 text-sm font-medium transition-colors whitespace-nowrap",
-                  tab === PINNED_TAB.id
-                    ? "text-[var(--text-primary)]"
-                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                )}
-              >
-                {PINNED_TAB.label}
-                {tab === PINNED_TAB.id && (
-                  <motion.span
-                    layoutId="overlay-tab-underline"
-                    className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
-                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                  />
-                )}
-              </button>
-            </nav>
+            <OverlayTabs
+              tabs={tabItems}
+              pinned={{ ...PINNED_TAB }}
+              active={tab}
+              onChange={guardedSetTab}
+              idPrefix="svc-overlay"
+              label="Service sections"
+            />
 
             {/* Body — switches by tab. Wraps in motion.div so each
                 tab swap fades, but the body itself owns its own scroll.
                 Relative for the unified SaveBar's absolute anchor. */}
-            <div className="relative flex-1 min-h-0 overflow-hidden">
+            <div
+              id="svc-overlay-panel"
+              role="tabpanel"
+              aria-labelledby={`svc-overlay-tab-${tab}`}
+              className="relative flex-1 min-h-0 overflow-hidden"
+            >
               {svc.isPending ? (
                 <div className="space-y-3 p-6">
                   <Skeleton className="h-8 w-48" />
@@ -871,7 +848,7 @@ export function ServiceOverlay({
                   <Skeleton className="h-32 w-full" />
                 </div>
               ) : svc.isError ? (
-                <p className="p-6 text-sm text-red-400">
+                <p className="p-6 text-sm text-[var(--error)]">
                   Failed to load service: {svc.error?.message}
                 </p>
               ) : (
@@ -912,7 +889,7 @@ export function ServiceOverlay({
                     )}
                     {tab === "deployments" && (
                       <div className="p-5">
-                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} />
+                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={url} />
                       </div>
                     )}
                     {tab === "variables" && (
@@ -1037,17 +1014,17 @@ export function ServiceOverlay({
                     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
                       <div className="pointer-events-auto flex max-w-[90%] flex-col gap-1 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
                         <div className="flex items-center gap-3">
-                          <span className="font-mono text-[11px] text-[var(--text-secondary)]">
-                            unsaved changes
+                          <span className="text-xs text-[var(--text-secondary)]">
+                            Unsaved changes
                           </span>
                           {active.onDiscard && (
                             <button
                               type="button"
                               onClick={() => active.onDiscard?.()}
                               disabled={active.saving}
-                              className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                              className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
                             >
-                              discard
+                              Discard
                             </button>
                           )}
                           <button
@@ -1082,7 +1059,7 @@ export function ServiceOverlay({
                           // panel clears this on next save attempt.
                           <p
                             role="alert"
-                            className="font-mono text-[10px] text-red-300 max-w-[40ch] truncate"
+                            className="max-w-[40ch] truncate text-xs text-[var(--error)]"
                             title={active.saveError}
                           >
                             ✗ {active.saveError}
@@ -1159,22 +1136,16 @@ function StopStartControl({
   if (stopped) {
     return (
       <>
-        <span
-          title="This service is stopped — 0 replicas, visitors get a 503."
-          className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-300"
-        >
-          <span className="size-1.5 rounded-full bg-slate-400" />
-          stopped
-        </span>
+
         <button
           type="button"
           disabled={start.isPending || !canWrite}
           onClick={onStart}
           title={canWrite ? "Start the service" : "Requires editor access on this project"}
-          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300 hover:brightness-110 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--success)]/45 bg-[var(--success-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--success)] hover:brightness-110 disabled:opacity-50"
         >
           <Play className="h-3 w-3" />
-          {start.isPending ? "starting…" : "Start"}
+          {start.isPending ? "Starting…" : "Start"}
         </button>
       </>
     );
@@ -1191,7 +1162,7 @@ function StopStartControl({
             ? "Stop the service (takes it offline)"
             : "Requires editor access on this project"
         }
-        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:brightness-110 disabled:opacity-50"
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] h-7 px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50"
       >
         <Square className="h-3 w-3" />
         Stop
@@ -1258,7 +1229,7 @@ function HealthBanner({
       />
       <span className="text-xs font-medium text-[var(--text-primary)]">{label}</span>
       {detail ? (
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-secondary)]" title={detail}>
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={detail}>
           {detail}
         </span>
       ) : (
@@ -1284,7 +1255,7 @@ function HealthBanner({
 }
 
 const headerButtonClass =
-  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
+  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] h-7 px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50 disabled:hover:brightness-100";
 
 function BannerButton({
   onClick,
@@ -1341,7 +1312,7 @@ function RestartControl({
         title={canWrite ? (title ?? `Restart the ${envGroup} pods`) : "Requires editor access on this project"}
         className={
           variant === "chip"
-            ? "inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110 disabled:opacity-50"
+            ? "inline-flex items-center gap-1 rounded-md border border-[var(--warning)]/45 bg-[var(--warning-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--warning)] hover:brightness-110 disabled:opacity-50"
             : headerButtonClass
         }
       >
@@ -1381,10 +1352,10 @@ function WakeControl({ project, service, env }: { project: string; service: stri
       disabled={wake.isPending || !canWrite}
       onClick={onWake}
       title={canWrite ? "Start a pod now instead of on the next request" : "Requires editor access on this project"}
-      className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300 hover:brightness-110 disabled:opacity-50"
+      className="inline-flex items-center gap-1 rounded-md border border-[var(--success)]/45 bg-[var(--success-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--success)] hover:brightness-110 disabled:opacity-50"
     >
       <Sun className="h-3 w-3" />
-      {wake.isPending ? "waking…" : "Wake"}
+      {wake.isPending ? "Waking…" : "Wake"}
     </button>
   );
 }
@@ -1444,7 +1415,7 @@ function RollbackControl({
             ? `Roll ${envGroup} back to ${sha}${ageStamp ? ` (${ageStamp})` : ""}`
             : "Requires editor access on this project"
         }
-        className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100"
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--warning)]/45 bg-[var(--warning-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--warning)] hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100"
       >
         <Undo2 className="h-3 w-3" />
         Roll back
@@ -1480,71 +1451,50 @@ function relativeAge(iso: string): string {
   return `${days}d ago`;
 }
 
-function StatusDot({ status, detail }: { status: string; detail?: string }) {
+function StatusPill({ status, detail }: { status: string; detail?: string }) {
   const map: Record<string, { dot: string; pulse: boolean; label: string }> = {
-    active:    { dot: "bg-emerald-400", pulse: false, label: "Active" },
-    rolling:   { dot: "bg-blue-400",    pulse: true,  label: "Rolling" },
-    building:  { dot: "bg-amber-400",   pulse: true,  label: "Building" },
-    deploying: { dot: "bg-amber-400",   pulse: true,  label: "Deploying" },
-    failed:    { dot: "bg-red-400",     pulse: false, label: "Failed" },
+    active:    { dot: "bg-[var(--success)]", pulse: false, label: "Online" },
+    rolling:   { dot: "bg-[var(--info)]", pulse: true, label: "Rolling out" },
+    building:  { dot: "bg-[var(--building)]", pulse: true, label: "Building" },
+    deploying: { dot: "bg-[var(--building)]", pulse: true, label: "Deploying" },
+    failed:    { dot: "bg-[var(--error)]", pulse: false, label: "Failed" },
     // Server-rollup states (env.status.state → deployStatusFromServerState).
-    crashed:   { dot: "bg-red-400",     pulse: true,  label: "Crashlooping" },
+    crashed:   { dot: "bg-[var(--error)]", pulse: true, label: "Crashlooping" },
     degraded:  { dot: "bg-[var(--warning)]", pulse: false, label: "Degraded" },
-    awaiting:  { dot: "bg-sky-400",     pulse: false, label: "Awaiting first build" },
-    stopped:   { dot: "bg-slate-400",   pulse: false, label: "Stopped" },
-    sleeping:  { dot: "bg-slate-400",   pulse: false, label: "Sleeping" },
-    unknown:   { dot: "bg-[var(--text-tertiary)]/50", pulse: false, label: "Idle" },
+    awaiting:  { dot: "bg-[var(--info)]", pulse: false, label: "Awaiting first build" },
+    stopped:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Stopped" },
+    sleeping:  { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Asleep" },
+    unknown:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Unknown" },
   };
   const m = map[status] ?? map.unknown;
   return (
     <span
       title={detail || m.label}
-      className="relative inline-flex h-2 w-2 shrink-0 items-center justify-center"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs text-[var(--text-secondary)]"
     >
-      {m.pulse && (
-        <span className={cn("absolute inset-0 rounded-full opacity-60 animate-ping", m.dot)} />
-      )}
-      <span className={cn("relative inline-block h-2 w-2 rounded-full", m.dot)} />
+      <span className="relative inline-flex h-2 w-2">
+        {m.pulse && <span className={cn("absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping", m.dot)} />}
+        <span className={cn("relative inline-block h-2 w-2 rounded-full", m.dot)} />
+      </span>
+      {m.label}
     </span>
   );
 }
 
 function UrlPill({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false);
   const display = url.replace(/^https?:\/\//, "");
-
-  const onCopy = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      toast.success("URL copied");
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      toast.error("Couldn't copy");
-    }
-  };
-
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] pl-2 pr-1 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] py-0.5 pl-2 pr-0.5">
       <a
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="inline-flex items-center gap-1 hover:text-[var(--accent)]"
+        className="inline-flex min-w-0 items-center gap-1 font-mono text-xs text-[var(--text-primary)] hover:underline"
       >
-        {display}
-        <ExternalLink className="h-2.5 w-2.5" />
+        <span className="truncate">{display}</span>
+        <ExternalLink aria-hidden className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
       </a>
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label="Copy URL"
-        className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
-      >
-        {copied ? <Check className="h-2.5 w-2.5 text-emerald-400" /> : <Copy className="h-2.5 w-2.5" />}
-      </button>
+      <CopyButton value={url} what="URL" size="xs" />
     </span>
   );
 }
