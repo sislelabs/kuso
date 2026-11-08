@@ -541,3 +541,22 @@ func TestClassify_BuildkitFooterDoesNotShadowSpecificCause(t *testing.T) {
 		t.Errorf("runtime logs reached build detectors: %q", c.Kind)
 	}
 }
+
+// QA r4: a clone that failed on DNS read "generic · Deploy failed".
+func TestClassify_CloneUnreachable(t *testing.T) {
+	t.Parallel()
+	lines := []string{
+		"Cloning into '/workspace'...",
+		"fatal: unable to access 'https://github.com/acme/reports.git/': Could not resolve host: github.com",
+	}
+	c := Classify(lines, Signal{})
+	if c.Kind != KindCloneUnreachable {
+		t.Fatalf("kind = %q, want %q", c.Kind, KindCloneUnreachable)
+	}
+	if !strings.Contains(c.Summary, "github.com") {
+		t.Errorf("summary %q should name the host", c.Summary)
+	}
+	if c.Remediation == nil {
+		t.Error("want a remediation")
+	}
+}

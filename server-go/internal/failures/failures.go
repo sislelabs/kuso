@@ -74,6 +74,10 @@ const (
 	// image with fixable critical CVEs (internal/vulnscan). Hyphenated,
 	// unlike its siblings, because docs/VULN_SCANNING.md fixes the slug.
 	KindVulnBlocked Kind = "vuln-blocked"
+	// KindCloneUnreachable is the clone step failing to reach the git host
+	// (DNS lookup or connection failure). An infrastructure problem, not
+	// the user's repo.
+	KindCloneUnreachable Kind = "clone_unreachable"
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -416,6 +420,29 @@ var logDetectors = []logDetector{
 		},
 	},
 
+	// The git host couldn't be reached: DNS failed or the connection was
+	// refused/timed out. Nothing in the repo is wrong; the cluster's
+	// outbound network or DNS is. Narrow to git/curl's own phrasing so a
+	// RUN step's npm network error still reads as a dependency failure.
+	{
+		kind:      KindCloneUnreachable,
+		tab:       TabLogs,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)fatal: unable to access '[^']*'|could not resolve host:|ssh: could not resolve hostname`),
+		summarize: func(line string) string {
+			if h := extractUnreachableHost(line); h != "" {
+				return "The build couldn't reach " + h + " to clone the repository (the host name didn't resolve or the connection failed)."
+			}
+			return "The build couldn't reach the git host to clone the repository (the host name didn't resolve or the connection failed)."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:  "Check the cluster's outbound network and DNS",
+				Detail: "The clone step couldn't connect to the git host. The repository is fine; the build node couldn't resolve or reach the host. Check DNS and outbound internet access from the cluster's nodes, then redeploy.",
+			}
+		},
+	},
+
 	// pnpm/npm patch file missing from the build context. The package
 	// manager reads `patchedDependencies` from package.json, tries to
 	// open the patch file, and ENOENTs because the Dockerfile copied
@@ -657,6 +684,18 @@ var logDetectors = []logDetector{
 // don't match that convention exist but are rare and the cost of a
 // false miss is just a less-specific summary string.
 var envNameRE = regexp.MustCompile(`[A-Z][A-Z0-9_]{1,63}`)
+
+var unreachableHostRe = regexp.MustCompile(`(?i)(?:could not resolve host(?:name)?:?\s*|unable to access 'https?://)([A-Za-z0-9.-]+)`)
+
+// extractUnreachableHost pulls the host name out of a git/curl
+// connection error, or "".
+func extractUnreachableHost(line string) string {
+	m := unreachableHostRe.FindStringSubmatch(line)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimRight(m[1], ".")
+}
 
 func extractEnvName(line string) string {
 	return envNameRE.FindString(line)
