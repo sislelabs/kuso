@@ -14,6 +14,9 @@ export interface OverlayTabItem<T extends string> {
   badgeTone?: "error" | "warning" | "neutral";
   // Second key of the "g" chord that jumps here, shown in the tooltip.
   chord?: string;
+  // Always listed under "More" (unless active), whatever the width, so
+  // the strip reads the same for every service.
+  secondary?: boolean;
 }
 
 const BADGE_TONE = {
@@ -50,6 +53,8 @@ export function OverlayTabs<T extends string>({
   const measureRef = useRef<HTMLDivElement>(null);
   const [fitCount, setFitCount] = useState(tabs.length);
   const [moreOpen, setMoreOpen] = useState(false);
+  const primary = useMemo(() => tabs.filter((t) => !t.secondary || t.id === active), [tabs, active]);
+  const secondary = useMemo(() => tabs.filter((t) => t.secondary && t.id !== active), [tabs, active]);
 
   const measure = useCallback(() => {
     const strip = stripRef.current;
@@ -58,8 +63,8 @@ export function OverlayTabs<T extends string>({
     const avail = strip.clientWidth;
     const widths = Array.from(m.children).map((c) => (c as HTMLElement).offsetWidth);
     const total = widths.reduce((a, b) => a + b, 0);
-    if (total <= avail) {
-      setFitCount(tabs.length);
+    if (total + (secondary.length > 0 ? MORE_WIDTH : 0) <= avail) {
+      setFitCount(primary.length);
       return;
     }
     let used = MORE_WIDTH;
@@ -70,7 +75,7 @@ export function OverlayTabs<T extends string>({
       n++;
     }
     setFitCount(Math.max(1, n));
-  }, [tabs.length]);
+  }, [primary.length, secondary.length]);
 
   useLayoutEffect(() => {
     measure();
@@ -81,20 +86,20 @@ export function OverlayTabs<T extends string>({
     // Badges and web fonts change tab widths without resizing the strip.
     Array.from(strip.children).forEach((c) => ro.observe(c));
     return () => ro.disconnect();
-  }, [measure, tabs]);
+  }, [measure, primary]);
 
   // The active tab must stay visible: if it would overflow, it takes the
   // last visible slot.
   const { visible, overflow } = useMemo(() => {
-    if (fitCount >= tabs.length) return { visible: tabs, overflow: [] as OverlayTabItem<T>[] };
-    const head = tabs.slice(0, fitCount);
+    if (fitCount >= primary.length) return { visible: primary, overflow: secondary };
+    const head = primary.slice(0, fitCount);
     if (!head.some((t) => t.id === active)) {
       const act = tabs.find((t) => t.id === active);
       if (act) head.splice(head.length - 1, 1, act);
     }
     const ids = new Set(head.map((t) => t.id));
-    return { visible: tabs.filter((t) => ids.has(t.id)), overflow: tabs.filter((t) => !ids.has(t.id)) };
-  }, [tabs, fitCount, active]);
+    return { visible: primary.filter((t) => ids.has(t.id)), overflow: tabs.filter((t) => !ids.has(t.id)) };
+  }, [tabs, primary, secondary, fitCount, active]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
@@ -204,7 +209,7 @@ export function OverlayTabs<T extends string>({
       {pinned && tabButton(pinned, true)}
       {/* Off-screen copy of every tab at natural width, for measuring. */}
       <div ref={measureRef} aria-hidden className="pointer-events-none invisible absolute left-0 top-0 flex h-0 overflow-hidden whitespace-nowrap">
-        {tabs.map((t) => (
+        {primary.map((t) => (
           <span key={t.id} className="inline-flex shrink-0 items-center gap-1.5 px-3 text-sm font-medium">
             {t.icon && <span className="inline-block h-3.5 w-3.5" />}
             {t.label}

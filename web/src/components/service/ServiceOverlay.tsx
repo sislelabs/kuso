@@ -26,7 +26,8 @@ import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
-import { useCanOnProject, Perms } from "@/features/auth";
+import { useCan, useCanOnProject, Perms } from "@/features/auth";
+import Link from "next/link";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -156,14 +157,15 @@ type Tab =
 // the server gates creation on secrets:read); for everyone else they
 // only appear once the service has at least one cron / run.
 // Order is priority: when the strip is narrow the tail moves into "More".
-const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean }[] = [
+const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean; secondary?: boolean }[] = [
   { id: "deployments", label: "Deployments", chord: "d", alwaysShow: true },
   { id: "variables", label: "Variables", chord: "v", alwaysShow: true },
   { id: "logs", label: "Logs", chord: "l", alwaysShow: true },
   { id: "metrics", label: "Metrics", chord: "m", alwaysShow: true },
   { id: "errors", label: "Errors", chord: "e", alwaysShow: true },
   { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
-  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true },
+  // Always under More, so every service type shows the same strip.
+  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true, secondary: true },
   { id: "crons", label: "Crons", chord: "c" },
   { id: "runs", label: "Runs", chord: "r" },
 ];
@@ -495,6 +497,8 @@ export function ServiceOverlay({
   // AddonOverlay makes for its SQL tab: rendering a terminal that can
   // only 403 on connect is worse than not offering it.
   const canShell = useCanOnProject(project, Perms.ShellExec);
+  // Kube events live on Settings → Health, which is admin-only.
+  const canSeeEvents = useCan(Perms.SettingsAdmin);
   // Always show whichever tab the user is on so the active-tab
   // underline has something to anchor to after a deep link.
   const MAIN_TABS = useMemo(
@@ -612,6 +616,7 @@ export function ServiceOverlay({
   // rolling through StatusDot; the drift chip stays purely
   // diagnostic.
   const rollingNow = !!drift.data?.rolloutPending;
+  const rolloutSlow = useRolloutSlow(rollingNow, drift.data?.lastSpecMutation);
   // Server-derived unified rollup (env.status.state) wins when
   // present — it folds build + deployment + pod health into one
   // answer (crashloops and degraded replica counts are invisible to
@@ -619,10 +624,11 @@ export function ServiceOverlay({
   // overlay on top of a healthy state since drift is fetched here.
   const serverState = deployStatusFromServerState(env?.status?.state);
   const stateDetail = env?.status?.stateDetail;
+  // With a server rollup the header follows it exactly, like the canvas
+  // node (deriveServiceStatus); an in-flight rollout is a chip next to
+  // it, not a different status.
   const status = serverState
-    ? serverState === "active" && rollingNow
-      ? "rolling"
-      : serverState
+    ? serverState
     : phase === "building" || phase === "deploying"
       ? "building"
       : ready && rollingNow
@@ -768,6 +774,24 @@ export function ServiceOverlay({
                     // changes" badge was their save not taking). Naming
                     // the in-flight field (envVars/image/…) makes it
                     // obvious the edit was accepted and is propagating.
+                    if (rolling && rolloutSlow) {
+                      return (
+                        <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-0.5 text-xs text-[var(--warning)]">
+                          <AlertTriangle aria-hidden className="h-3 w-3" />
+                          Rollout taking longer than expected
+                          <span aria-hidden>·</span>
+                          {canSeeEvents ? (
+                            <Link href="/settings/health#kube-events" className="underline underline-offset-2">
+                              View events
+                            </Link>
+                          ) : (
+                            <button type="button" onClick={() => navigateTo("logs")} className="underline underline-offset-2">
+                              View logs
+                            </button>
+                          )}
+                        </span>
+                      );
+                    }
                     if (rolling) {
                       const fields = stale ? d.podsStale : [];
                       const what =
@@ -1448,4 +1472,28 @@ function UrlPill({ url }: { url: string }) {
       <CopyButton value={url} label="Copy URL" size="xs" />
     </span>
   );
+}
+
+const ROLLOUT_SLOW_MS = 10 * 60_000;
+
+// useRolloutSlow flags a rollout still pending ROLLOUT_SLOW_MS after the
+// spec write that started it (or, on servers that don't report that
+// write, after this panel first saw it pending), so a rollout that never
+// finishes stops reading as "Applying changes…" forever.
+function useRolloutSlow(rolling: boolean, specWrittenAt?: string): boolean {
+  const [seenAt, setSeenAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setSeenAt(rolling ? Date.now() : null);
+  }, [rolling]);
+  const written = specWrittenAt ? Date.parse(specWrittenAt) : NaN;
+  const since = Number.isNaN(written) ? seenAt : written;
+  useEffect(() => {
+    if (!rolling || since === null) return;
+    const left = since + ROLLOUT_SLOW_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => setNow(Date.now()), left + 50);
+    return () => clearTimeout(t);
+  }, [rolling, since]);
+  return rolling && since !== null && now - since >= ROLLOUT_SLOW_MS;
 }

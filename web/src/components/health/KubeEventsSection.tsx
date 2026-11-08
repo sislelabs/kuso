@@ -24,7 +24,7 @@ export function KubeEventsSection() {
   const rows = (events.data ?? []).filter((e) => !warningsOnly || e.type === "Warning");
 
   return (
-    <section className="mt-10">
+    <section id="kube-events" className="mt-10 scroll-mt-4">
       <header className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-heading text-lg font-semibold tracking-tight">Kubernetes events</h2>
