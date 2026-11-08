@@ -1,7 +1,7 @@
 {{- if and .Values.registry.enabled .Values.registry.create .Values.registry.gc.enabled -}}
 # Registry garbage collection.
 #
-# The in-cluster registry (`registry:2`) doesn't reap unreferenced
+# The in-cluster registry (`registry:3`) doesn't reap unreferenced
 # blobs automatically — every successful build leaves an image tag
 # plus its content-addressable layer blobs forever. On a busy cluster
 # doing 30 builds/day, the PVC grows ~150-300GB/year and eventually
@@ -98,7 +98,7 @@ data:
     fi
 
     echo "[gc] running garbage-collect --delete-untagged"
-    /bin/registry garbage-collect /etc/docker/registry/config.yml --delete-untagged
+    /bin/registry garbage-collect /etc/distribution/config.yml --delete-untagged
     rc=$?
     echo "[gc] garbage-collect exit code: $rc"
     exit $rc
@@ -144,13 +144,14 @@ spec:
                   mountPath: /shared
           containers:
             - name: gc
-              image: registry:2.8.3
+              image: registry:3.1.2
               command:
                 - sh
                 - /scripts/run-gc.sh
               env:
-                # registry:2 ships `registry` at /bin/registry; verify
-                # via PATH in case the image layout drifts.
+                # registry:3 ships `registry` at /bin/registry and its
+                # config at /etc/distribution/config.yml (registry:2 used
+                # /etc/docker/registry/config.yml).
                 - name: PATH
                   value: /shared:/bin:/usr/bin:/sbin:/usr/sbin
               volumeMounts:

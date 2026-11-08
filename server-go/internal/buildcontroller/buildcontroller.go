@@ -77,7 +77,7 @@ const (
 	defaultBuildpacksBuilder  = "paketobuildpacks/builder-jammy-base:latest"
 	defaultStaticBuilderImage = "node:20-alpine"
 	defaultStaticRuntimeImage = "nginx:1.30-alpine"
-	defaultBuildkitImage      = "moby/buildkit:v0.16.0"
+	defaultBuildkitImage      = "moby/buildkit:v0.34.2"
 	defaultCloneImage         = "alpine/git:2.54.0"
 	defaultCacheInitImage     = "alpine:3.24"
 	defaultBuildkitHost       = "tcp://kuso-buildkitd.kuso.svc.cluster.local:1234"

@@ -53,7 +53,7 @@ spec:
     spec:
       containers:
       - name: registry
-        image: registry:2.8.3
+        image: registry:3.1.2
         ports:
         - containerPort: 5000
         env:
@@ -64,6 +64,13 @@ spec:
         # to delete anything and the PVC grows unbounded.
         - name: REGISTRY_STORAGE_DELETE_ENABLED
           value: "true"
+        # The registry:3 image's bundled config logs at debug and serves
+        # pprof + /metrics on :5001; keep registry:2's info logging and
+        # no debug listener.
+        - name: REGISTRY_LOG_LEVEL
+          value: info
+        - name: REGISTRY_HTTP_DEBUG_ADDR
+          value: ""
         volumeMounts:
         - name: registry-data
           mountPath: /var/lib/registry

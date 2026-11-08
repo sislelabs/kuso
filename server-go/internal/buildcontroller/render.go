@@ -1213,11 +1213,14 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     --local dockerfile="$CTX" \
     --opt filename="$DF" \
     "$@" \
-    --output type=image,name="$IMAGE",push=false,registry.insecure=$INSECURE \
+    --output type=image,name="$IMAGE",push=false,oci-mediatypes=false,registry.insecure=$INSECURE \
     --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
     --progress plain
 fi
 
+# oci-mediatypes=false: buildkit >= v0.31 pushes OCI manifests by default, and
+# registry 2.8 answers the docker-v2-only HEAD in builds/registry_client.go
+# (image-retention sweep) with 404 for those, silently disabling the sweep.
 exec buildctl \
   --addr "$BUILDKIT_HOST" \
   build \
@@ -1226,7 +1229,7 @@ exec buildctl \
   --local dockerfile="$CTX" \
   --opt filename="$DF" \
   "$@" \
-  --output type=image,name="$IMAGE",push=true,registry.insecure=$INSECURE \
+  --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=$INSECURE \
   --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE \
   --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
   --progress plain

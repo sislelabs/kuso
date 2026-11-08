@@ -612,7 +612,7 @@ spec:
         # No special caps needed here: buildctl is just a TCP
         # client. The privilege boundary lives in the daemon.
         - name: buildkit
-          image: moby/buildkit:v0.16.0
+          image: moby/buildkit:v0.34.2
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -697,7 +697,7 @@ spec:
                 --local dockerfile="$CTX" \
                 --opt filename="$DF" \
                 $BUILD_ARGS \
-                --output type=image,name="$IMAGE",push=true,registry.insecure=true \
+                --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=true \
                 --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
                 --import-cache type=registry,ref="$CACHE",registry.insecure=true \
                 --progress plain

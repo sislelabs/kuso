@@ -4,7 +4,7 @@
 // CronJob (operator/helm-charts/kuso/templates/registry-gc.yaml) reclaims
 // the now-unreferenced blobs — we only do the untag here, not blob GC.
 //
-// The default in-cluster registry (kuso-registry, registry:2) is
+// The default in-cluster registry (kuso-registry, registry:3) is
 // anonymous and runs with REGISTRY_STORAGE_DELETE_ENABLED=true, so a
 // plain HTTP DELETE works with no auth. External registries (when
 // RegistryAuthSecret is set) are NOT pruned here — their lifecycle is
@@ -25,13 +25,6 @@ import (
 	"net/url"
 	"time"
 )
-
-// manifestV2Accept is the media type that makes the registry return the
-// v2 schema-2 manifest, whose Docker-Content-Digest header we need to
-// address the DELETE. Requesting without it can yield a schema-1
-// manifest with a DIFFERENT digest, and deleting that digest leaves the
-// schema-2 blob dangling.
-const manifestV2Accept = "application/vnd.docker.distribution.manifest.v2+json"
 
 // ImageDeleter unties an image tag from a registry. Exported so main.go
 // can wire it into the Poller; an interface so the sweep is testable
@@ -126,7 +119,11 @@ func (c *registryClient) manifestDigest(ctx context.Context, repo, tag string) (
 	if err != nil {
 		return "", fmt.Errorf("registry head request: %w", err)
 	}
-	req.Header.Set("Accept", manifestV2Accept)
+	// Every manifest type, not just docker v2: buildkit v0.34 (unlike
+	// v0.16) pushes OCI manifests, which a docker-v2-only Accept answers
+	// with 404, so the tag would read as absent (rollback refused,
+	// image-missing alarms).
+	req.Header.Set("Accept", manifestAnyAccept)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("registry head: %w", err)
