@@ -165,7 +165,12 @@ export function SharedSecretsCard({ project }: { project: string }) {
             autoFocus
           />
           <div className="flex items-center justify-end gap-2">
-            <Button size="sm" type="submit" disabled={!editingValue || set.isPending || !listReady}>
+            <Button
+              size="sm"
+              type="submit"
+              disabled={!editingValue || set.isPending || !listReady}
+              disabledReason={!listReady ? "Loading the current secrets…" : !editingValue ? "Paste a value first" : undefined}
+            >
               <Plus className="h-3.5 w-3.5" />
               {set.isPending ? "Saving…" : "Save"}
             </Button>

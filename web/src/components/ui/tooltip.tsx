@@ -1,5 +1,7 @@
 "use client"
 
+import type * as React from "react"
+
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
@@ -64,3 +66,29 @@ function TooltipContent({
 }
 
 export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider }
+
+// ReasonTooltip explains why a control can't be used, on hover and on
+// keyboard focus. The child must stay focusable: mark it aria-disabled
+// and ignore its clicks rather than setting `disabled`, which drops it
+// from the tab order and swallows the hover.
+function ReasonTooltip({
+  reason,
+  side = "top",
+  children,
+}: {
+  reason?: React.ReactNode
+  side?: TooltipPrimitive.Positioner.Props["side"]
+  children: React.ReactElement
+}) {
+  if (!reason) return children
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipContent side={side} className="block max-w-64 text-left">
+        {reason}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+export { ReasonTooltip }

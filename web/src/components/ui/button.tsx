@@ -1,6 +1,9 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Loader2 } from "lucide-react"
+import * as React from "react"
+
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 import { cn } from "@/lib/utils"
 
@@ -60,6 +63,13 @@ type ButtonProps = ButtonPrimitive.Props &
   VariantProps<typeof buttonVariants> & {
     /** Shows a spinner, sets aria-busy and blocks clicks while true. */
     loading?: boolean
+    /**
+     * Why the button is disabled: shown on hover and on keyboard focus (the
+     * button stays focusable) and read out as its description. A `title` on
+     * a disabled button is used the same way, since a disabled button never
+     * gets the hover that would show a native title.
+     */
+    disabledReason?: React.ReactNode
   }
 
 function Button({
@@ -68,9 +78,44 @@ function Button({
   size = "default",
   loading = false,
   disabled,
+  disabledReason,
   children,
   ...props
 }: ButtonProps) {
+  const reasonId = React.useId()
+  const reason = disabled && !loading ? (disabledReason ?? props.title) : undefined
+  if (reason) {
+    const { title: _title, ...rest } = props
+    return (
+      <>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <ButtonPrimitive
+                data-slot="button"
+                data-variant={variant}
+                disabled
+                focusableWhenDisabled
+                aria-describedby={reasonId}
+                className={cn(
+                  buttonVariants({ variant, size, className }),
+                  "aria-disabled:pointer-events-auto aria-disabled:cursor-not-allowed"
+                )}
+                {...rest}
+              />
+            }
+          >
+            {children}
+          </TooltipTrigger>
+          <TooltipContent className="block max-w-64 text-left">{reason}</TooltipContent>
+        </Tooltip>
+        {/* Outside the button so it describes it without joining its name. */}
+        <span id={reasonId} className="sr-only">
+          {reason}
+        </span>
+      </>
+    )
+  }
   return (
     <ButtonPrimitive
       data-slot="button"

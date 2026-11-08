@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { cloneElement, useState } from "react";
 import Link from "next/link";
 import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -259,7 +259,9 @@ export function ServiceHeaderActions({
                   <RotateCw className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
                   <span className="min-w-0">
                     <span className="block text-sm text-[var(--text-primary)]">Restart</span>
-                    <span className="block text-xs text-[var(--text-secondary)]">{EXPLAIN.restart(group)}</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">
+                      {canWrite ? EXPLAIN.restart(group) : NO_ACCESS}
+                    </span>
                   </span>
                 </button>
               )}
@@ -276,7 +278,7 @@ export function ServiceHeaderActions({
                   <Square className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--danger)]" />
                   <span className="min-w-0">
                     <span className="block text-sm text-[var(--danger)]">Stop service</span>
-                    <span className="block text-xs text-[var(--text-secondary)]">{EXPLAIN.stop}</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">{canWrite ? EXPLAIN.stop : NO_ACCESS}</span>
                   </span>
                 </button>
               )}
@@ -331,10 +333,26 @@ export function ServiceHeaderActions({
   );
 }
 
-function Explained({ label, explain, children }: { label: string; explain: string; children: React.ReactElement }) {
+function Explained({
+  label,
+  explain,
+  children,
+}: {
+  label: string;
+  explain: string;
+  children: React.ReactElement<{ disabled?: boolean; className?: string; focusableWhenDisabled?: boolean }>;
+}) {
+  // A disabled button gets no hover or focus, so its explanation (often
+  // "why you can't") would never show: keep it focusable and hoverable.
+  const trigger = children.props.disabled
+    ? cloneElement(children, {
+        focusableWhenDisabled: true,
+        className: cn(children.props.className, "aria-disabled:pointer-events-auto aria-disabled:cursor-not-allowed"),
+      })
+    : children;
   return (
     <Tooltip>
-      <TooltipTrigger render={children} />
+      <TooltipTrigger render={trigger} />
       <TooltipContent side="bottom" className="block max-w-64 text-left">
         <span className="block font-medium">{label}</span>
         <span className="mt-0.5 block opacity-80">{explain}</span>

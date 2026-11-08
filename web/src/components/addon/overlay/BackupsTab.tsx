@@ -22,6 +22,7 @@ import {
 } from "@/features/projects";
 import type { KusoAddon } from "@/types/projects";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/shared/SaveButton";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -536,14 +537,20 @@ function BackupScheduleEditor({
               Discard
             </Button>
           )}
-          <Button
-            size="sm"
+          <SaveButton
+            dirty={dirty}
+            saving={save.isPending}
             onClick={() => save.mutate()}
-            disabled={!canWrite || !dirty || !scheduleValid || !retentionValid || save.isPending}
-            title={canWrite ? undefined : "Requires editor access on this project"}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </Button>
+            blockedReason={
+              !canWrite
+                ? "Requires editor access on this project"
+                : !scheduleValid
+                  ? "Fix the schedule first"
+                  : !retentionValid
+                    ? "Fix the retention first"
+                    : undefined
+            }
+          />
         </div>
       </div>
     </section>

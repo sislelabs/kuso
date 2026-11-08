@@ -13,6 +13,7 @@ import {
 import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/shared/SaveButton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
@@ -577,6 +578,23 @@ function KindIcon({ kind }: { kind: NotifKind }) {
   return <Webhook className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />;
 }
 
+function editorSnapshot(n: Notification) {
+  const cfg: Record<string, string> = {};
+  for (const [k, v] of Object.entries(n.config ?? {})) {
+    if (typeof v === "string" && v !== "") cfg[k] = v;
+    else if (typeof v === "number") cfg[k] = String(v);
+  }
+  return {
+    name: n.name,
+    type: n.type,
+    enabled: n.enabled,
+    cfg,
+    events: n.events ?? [],
+    pipelines: n.pipelines ?? [],
+    mentions: (n.config.mentions as Record<string, string> | undefined) ?? {},
+  };
+}
+
 function NotificationEditor({
   notification,
   onClose,
@@ -648,6 +666,20 @@ function NotificationEditor({
   );
   const eventsIncomplete = eventsMode === "custom" && events.length === 0;
   const projectsIncomplete = projectsMode === "selected" && pipelines.length === 0;
+  // Edits compare against the stored channel; a new channel is always
+  // savable once complete.
+  const dirty =
+    isNew ||
+    JSON.stringify(editorSnapshot(notification)) !==
+      JSON.stringify({
+        name,
+        type,
+        enabled,
+        cfg: Object.fromEntries(Object.entries(cfg).filter(([, v]) => v !== "")),
+        events: eventsMode === "all" ? [] : events,
+        pipelines: projectsMode === "all" ? [] : pipelines,
+        mentions,
+      });
 
   const save = useMutation({
     mutationFn: () => {
@@ -777,15 +809,23 @@ function NotificationEditor({
         <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>
           Cancel
         </Button>
-        <Button
-          size="sm"
+        <SaveButton
+          dirty={dirty}
+          saving={save.isPending}
           onClick={() => save.mutate()}
-          disabled={
-            save.isPending || !name || !configComplete || eventsIncomplete || projectsIncomplete
+          label={isNew ? "Create" : "Save"}
+          blockedReason={
+            !name
+              ? "Give the channel a name"
+              : !configComplete
+                ? "Fill in the required connection fields"
+                : eventsIncomplete
+                  ? "Pick at least one event, or send all events"
+                  : projectsIncomplete
+                    ? "Pick at least one project, or send for all projects"
+                    : undefined
           }
-        >
-          {save.isPending ? "Saving…" : isNew ? "Create" : "Save"}
-        </Button>
+        />
       </footer>
     </div>
   );
