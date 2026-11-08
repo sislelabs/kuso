@@ -11,10 +11,18 @@ const FILTERS: ReadonlyArray<{
   label: string;
   dot?: string;
   always?: boolean;
+  hint?: string;
 }> = [
   { id: "all", label: "All", always: true },
   { id: "live", label: "Live", dot: "bg-[var(--success)]", always: true },
-  { id: "failing", label: "Failing", dot: "bg-[var(--error)]", always: true },
+  {
+    id: "failing",
+    label: "Failing",
+    dot: "bg-[var(--error)]",
+    always: true,
+    // Failing is rollout health only; log errors are their own chip.
+    hint: "A service is crashing, degraded, or its build or release failed. Errors in the logs are counted separately on each card.",
+  },
   { id: "building", label: "Deploying", dot: "bg-[var(--building)]" },
   { id: "sleeping", label: "Sleeping", dot: "bg-[var(--info)]" },
   {
@@ -95,6 +103,7 @@ export function ProjectsToolbar({
                 key={f.id}
                 type="button"
                 aria-pressed={active}
+                title={f.hint}
                 onClick={() => onStatus(f.id)}
                 className={cn(
                   "inline-flex h-7 shrink-0 items-center gap-1.5 rounded px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)]",

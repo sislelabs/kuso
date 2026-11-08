@@ -27,6 +27,7 @@ export {
   buildsQueryKey,
   errorsQueryKey,
   useProjectErrorSummary,
+  projectErrorSummaryQueryKey,
   runsQueryKey,
   cronsQueryKey,
 } from "./hooks";
@@ -40,6 +41,7 @@ export {
   cancelBuild,
   searchServiceLogs,
   listErrors,
+  getProjectErrorSummary,
   triggerBuild,
   runPhase,
   runMessage,
