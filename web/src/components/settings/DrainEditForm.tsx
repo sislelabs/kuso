@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Switch } from "@/components/ui/switch";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,7 @@ export function DrainEditForm({
   typeLabels: Record<DrainType, string>;
   onDone: () => void;
 }) {
+  const uid = useId();
   const update = useUpdateDrain();
   const [f, setF] = useState<DrainEditFormState>(() => drainToEditForm(drain));
   const set = <K extends keyof DrainEditFormState>(k: K, v: DrainEditFormState[K]) =>
@@ -130,19 +132,15 @@ export function DrainEditForm({
       </SettingsField>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         {drain.secret && (
-          <label className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)]">
-            <input
-              type="checkbox"
-              checked={f.clearSecret}
-              onChange={(e) => set("clearSecret", e.target.checked)}
-            />
-            Remove secret
-          </label>
+          <span className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+            <Switch on={f.clearSecret} onChange={(v) => set("clearSecret", v)} labelledBy={`${uid}-clear-secret`} size="sm" />
+            <span id={`${uid}-clear-secret`}>Remove secret</span>
+          </span>
         )}
-        <label className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)]">
-          <input type="checkbox" checked={f.enabled} onChange={(e) => set("enabled", e.target.checked)} />
-          Enabled
-        </label>
+        <span className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+          <Switch on={f.enabled} onChange={(v) => set("enabled", v)} labelledBy={`${uid}-enabled`} size="sm" />
+          <span id={`${uid}-enabled`}>Enabled</span>
+        </span>
       </div>
       <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] pt-4">
         <Button size="sm" variant="ghost" type="button" onClick={onDone} disabled={update.isPending}>

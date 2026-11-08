@@ -1,5 +1,6 @@
 "use client";
 
+import { Switch } from "@/components/ui/switch";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
@@ -124,22 +125,25 @@ export default function SessionSettingsPage() {
           </Button>
         }
       >
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={s.neverExpire}
-            onChange={(e) => setS({ ...s, neverExpire: e.target.checked })}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
+        <div className="flex items-start gap-3">
+          <Switch
+            on={s.neverExpire}
+            onChange={(v) => setS({ ...s, neverExpire: v })}
+            labelledBy="sessions-never-expire"
+            describedBy="sessions-never-expire-hint"
+            className="mt-0.5"
           />
           <span className="min-w-0">
-            <span className="block text-sm font-medium text-[var(--text-primary)]">Never log out</span>
-            <span className="mt-0.5 block text-xs leading-relaxed text-[var(--text-secondary)]">
+            <span id="sessions-never-expire" className="block text-sm font-medium text-[var(--text-primary)]">
+              Never log out
+            </span>
+            <span id="sessions-never-expire-hint" className="mt-0.5 block text-xs leading-relaxed text-[var(--text-secondary)]">
               Sessions stay valid until the user logs out or an admin revokes access. Convenient for a single-user or
               homelab install, but a leaked session cookie stays valid until revoked. Only enable this if you trust
               every device that signs in.
             </span>
           </span>
-        </label>
+        </div>
 
         <div className={cn("space-y-5", s.neverExpire && "pointer-events-none opacity-50")} aria-disabled={s.neverExpire}>
           <SettingsField label="Preset" hint="Pick a common lifetime.">

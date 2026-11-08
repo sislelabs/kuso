@@ -1,5 +1,6 @@
 "use client";
 
+import { Switch } from "@/components/ui/switch";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { useState } from "react";
@@ -356,10 +357,15 @@ function ProvisionDialog({
             <label className="text-xs font-medium text-[var(--text-secondary)]">Storage size</label>
             <Input value={storageSize} onChange={(e) => setStorageSize(e.target.value)} className="mt-1 h-7 font-mono text-xs" placeholder="20Gi" />
           </div>
-          <label className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
-            <input type="checkbox" checked={ha} onChange={(e) => setHa(e.target.checked)} className="h-3.5 w-3.5" />
-            High availability (CNPG, 3 replicas — requires the CNPG operator installed cluster-wide)
-          </label>
+          <div className="flex items-start gap-3">
+            <Switch on={ha} onChange={setHa} labelledBy="instance-pg-ha" describedBy="instance-pg-ha-hint" className="mt-0.5" />
+            <div className="min-w-0">
+              <p id="instance-pg-ha" className="text-sm font-medium text-[var(--text-primary)]">High availability</p>
+              <p id="instance-pg-ha-hint" className="text-xs text-[var(--text-secondary)]">
+                Three CNPG replicas. Needs the CNPG operator installed cluster-wide.
+              </p>
+            </div>
+          </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>

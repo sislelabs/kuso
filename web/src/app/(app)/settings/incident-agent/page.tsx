@@ -251,15 +251,15 @@ function ConfigSection({
         </span>
       }
       actions={
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
+        <span className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+          <Switch
+            on={draft.enabled}
             disabled={readOnly}
-            onChange={(e) => set({ enabled: e.target.checked })}
+            onChange={(v) => set({ enabled: v })}
+            labelledBy="incident-agent-enabled"
           />
-          Enabled
-        </label>
+          <span id="incident-agent-enabled">{draft.enabled ? "Enabled" : "Disabled"}</span>
+        </span>
       }
       footerHint="Changes apply within ~30s."
       footer={
@@ -447,10 +447,12 @@ function DiscordSection({
 // --- small shared bits ---
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      {label}
-    </label>
+    <div className="flex items-center gap-2.5 text-sm text-[var(--text-secondary)]">
+      <Switch on={checked} onChange={onChange} label={label} size="sm" />
+      <span aria-hidden className="cursor-pointer" onClick={() => onChange(!checked)}>
+        {label}
+      </span>
+    </div>
   );
 }
 
