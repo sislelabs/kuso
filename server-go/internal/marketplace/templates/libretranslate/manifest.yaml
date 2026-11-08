@@ -1,0 +1,16 @@
+name: libretranslate
+title: LibreTranslate
+description: >-
+  Self-hosted machine translation API and web UI with no external services.
+  Loads English, Spanish, French and German by default; change
+  LT_LOAD_ONLY to add languages. Models download on first start.
+category: ai
+website: https://libretranslate.com
+appVersion: "1.9.6"
+size: large
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname LibreTranslate will be served on.

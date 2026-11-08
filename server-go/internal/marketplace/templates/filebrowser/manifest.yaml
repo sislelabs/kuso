@@ -1,0 +1,14 @@
+name: filebrowser
+title: File Browser
+description: >-
+  Web file manager for uploading, sharing and editing files. Log in as
+  `admin`; the random first-start password is printed in the service logs.
+category: productivity
+website: https://filebrowser.org
+appVersion: "2.63.23"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname File Browser will be served on.

@@ -1,0 +1,27 @@
+name: nocodb
+title: NocoDB
+description: >-
+  Spreadsheet-style interface on top of a database, an open-source Airtable
+  alternative. Later sign-ups get the viewer role; turn on invite-only
+  sign-up in the account settings to close it.
+category: data
+website: https://nocodb.com
+appVersion: "2026.10.1"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname NocoDB will be served on.
+  - key: admin_email
+    title: Admin email
+    kind: string
+    required: true
+    placeholder: you@example.com
+    help: The super admin, created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
+    help: At least 8 characters.

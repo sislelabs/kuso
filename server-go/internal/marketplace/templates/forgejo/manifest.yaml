@@ -1,0 +1,16 @@
+name: forgejo
+title: Forgejo
+description: >-
+  Community-governed, lightweight Git forge (a Gitea fork). Public sign-up
+  is off; create the admin with `kuso shell <project> forgejo`, then
+  `su git -c "forgejo admin user create --admin --username <name> --email <email> --random-password"`.
+category: dev-tools
+website: https://forgejo.org
+appVersion: "17.0.1"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Forgejo will be served on.

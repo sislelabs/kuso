@@ -1,6 +1,9 @@
 name: vaultwarden
 title: Vaultwarden
-description: Unofficial Bitwarden-compatible password manager server.
+description: >-
+  Unofficial Bitwarden-compatible password manager server. Open sign-up is
+  off: invite accounts from /admin, logging in with the generated
+  ADMIN_TOKEN from the service's variables.
 category: dev-tools
 website: https://github.com/dani-garcia/vaultwarden
 appVersion: "1.32.1"

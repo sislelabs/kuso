@@ -1,0 +1,12 @@
+apiVersion: kuso/v1
+project: openspeedtest
+services:
+  - name: openspeedtest
+    runtime: image
+    port: 3000
+    image:
+      repository: openspeedtest/latest
+      tag: "v2.0.8"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true

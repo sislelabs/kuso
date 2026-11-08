@@ -1,0 +1,22 @@
+name: pgadmin
+title: pgAdmin
+description: Web administration and development platform for PostgreSQL.
+category: dev-tools
+website: https://www.pgadmin.org
+appVersion: "9.19.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname pgAdmin will be served on.
+  - key: admin_email
+    title: Admin email
+    kind: string
+    required: true
+    placeholder: you@example.com
+    help: Login for the initial pgAdmin user. pgAdmin refuses to start without it.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true

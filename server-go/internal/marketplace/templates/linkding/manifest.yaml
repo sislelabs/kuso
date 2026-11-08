@@ -1,0 +1,21 @@
+name: linkding
+title: linkding
+description: Minimal, fast bookmark manager with tags, search and browser extensions.
+category: productivity
+website: https://linkding.link
+appVersion: "1.47.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname linkding will be served on.
+  - key: admin_username
+    title: Admin username
+    kind: string
+    default: admin
+    help: linkding has no sign-up page; this account is created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true

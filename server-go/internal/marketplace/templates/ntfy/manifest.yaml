@@ -1,0 +1,15 @@
+name: ntfy
+title: ntfy
+description: >-
+  Send push notifications to your phone or desktop with a simple HTTP PUT/POST.
+  All topics are closed by default: create an admin with
+  `kuso shell <project> ntfy`, then `ntfy user add --role=admin <name>`.
+category: comms
+website: https://ntfy.sh
+appVersion: "2.37.2"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname ntfy will be served on.

@@ -1,0 +1,19 @@
+apiVersion: kuso/v1
+project: ackee
+services:
+  - name: ackee
+    runtime: image
+    port: 3000
+    image:
+      repository: electerious/ackee
+      tag: "3.7.1"
+    env:
+      ACKEE_MONGODB: "${{ ackee-db.MONGODB_URI }}"
+      ACKEE_USERNAME: "${{ prompt.admin_username }}"
+      ACKEE_PASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: ackee-db
+    kind: mongodb

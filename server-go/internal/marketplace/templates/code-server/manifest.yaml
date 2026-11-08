@@ -1,0 +1,18 @@
+name: code-server
+title: code-server
+description: VS Code in the browser, running on your own server. Your home directory is persisted.
+category: dev-tools
+website: https://coder.com/docs/code-server
+appVersion: "4.145.2"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname code-server will be served on.
+  - key: password
+    title: Password
+    kind: password
+    required: true
+    help: Password for the login page. Anyone with it gets a shell in the container.

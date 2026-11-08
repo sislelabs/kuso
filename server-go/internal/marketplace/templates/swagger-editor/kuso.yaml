@@ -1,0 +1,12 @@
+apiVersion: kuso/v1
+project: swagger-editor
+services:
+  - name: swagger-editor
+    runtime: image
+    port: 8080
+    image:
+      repository: swaggerapi/swagger-editor
+      tag: "v5.10.1-unprivileged"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true

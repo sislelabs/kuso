@@ -1,0 +1,23 @@
+apiVersion: kuso/v1
+project: filebrowser
+services:
+  - name: filebrowser
+    runtime: image
+    port: 80
+    image:
+      repository: filebrowser/filebrowser
+      tag: "v2.63.23"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: files
+        mountPath: /srv
+        sizeGi: 10
+      - name: database
+        mountPath: /database
+        sizeGi: 1
+      - name: config
+        mountPath: /config
+        sizeGi: 1
+    scale: { min: 1, max: 1 }

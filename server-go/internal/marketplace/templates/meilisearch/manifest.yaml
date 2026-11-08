@@ -1,0 +1,15 @@
+name: meilisearch
+title: Meilisearch
+description: >-
+  Fast, typo-tolerant search engine with a RESTful API, exposed publicly.
+  The generated MEILI_MASTER_KEY in the service's variables is the admin
+  key. For an internal search backend, use the Meilisearch addon instead.
+category: data
+website: https://www.meilisearch.com
+appVersion: "1.56.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname the Meilisearch API will be served on.

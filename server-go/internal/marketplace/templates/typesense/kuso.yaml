@@ -1,0 +1,21 @@
+apiVersion: kuso/v1
+project: typesense
+services:
+  - name: typesense
+    runtime: image
+    port: 8108
+    image:
+      repository: typesense/typesense
+      tag: "30.2"
+    env:
+      TYPESENSE_API_KEY: { generate: hex32 }
+      TYPESENSE_DATA_DIR: /data
+      TYPESENSE_ENABLE_CORS: "true"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 5
+    scale: { min: 1, max: 1 }

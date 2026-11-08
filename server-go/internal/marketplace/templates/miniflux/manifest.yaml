@@ -1,0 +1,22 @@
+name: miniflux
+title: Miniflux
+description: Minimalist, fast RSS and Atom feed reader.
+category: productivity
+website: https://miniflux.app
+appVersion: "2.3.5"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Miniflux will be served on.
+  - key: admin_username
+    title: Admin username
+    kind: string
+    default: admin
+    help: Miniflux has no sign-up page; this account is created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
+    help: At least 6 characters.

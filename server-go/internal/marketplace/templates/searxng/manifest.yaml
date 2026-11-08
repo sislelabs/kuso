@@ -1,0 +1,12 @@
+name: searxng
+title: SearXNG
+description: Privacy-respecting metasearch engine that aggregates results without tracking or profiling you.
+category: productivity
+website: https://docs.searxng.org
+appVersion: "2026.11.6"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname SearXNG will be served on.

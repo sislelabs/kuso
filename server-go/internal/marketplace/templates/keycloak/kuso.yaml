@@ -1,0 +1,29 @@
+apiVersion: kuso/v1
+project: keycloak
+services:
+  - name: keycloak
+    runtime: image
+    port: 8080
+    image:
+      repository: quay.io/keycloak/keycloak
+      tag: "26.8.2"
+    command: ["/opt/keycloak/bin/kc.sh", "start"]
+    env:
+      KC_HOSTNAME: "https://${{ prompt.host }}"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_DB: postgres
+      KC_DB_URL_HOST: "${{ keycloak-db.POSTGRES_HOST }}"
+      KC_DB_URL_PORT: "${{ keycloak-db.POSTGRES_PORT }}"
+      KC_DB_URL_DATABASE: "${{ keycloak-db.POSTGRES_DB }}"
+      KC_DB_USERNAME: "${{ keycloak-db.POSTGRES_USER }}"
+      KC_DB_PASSWORD: "${{ keycloak-db.POSTGRES_PASSWORD }}"
+      KC_BOOTSTRAP_ADMIN_USERNAME: "${{ prompt.admin_username }}"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: keycloak-db
+    kind: postgres
+    version: "16"

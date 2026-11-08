@@ -1,0 +1,12 @@
+name: openspeedtest
+title: OpenSpeedTest
+description: Browser-based network speed test (download, upload, ping) against your own server. Stores nothing.
+category: monitoring
+website: https://openspeedtest.com
+appVersion: "2.0.8"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname OpenSpeedTest will be served on.

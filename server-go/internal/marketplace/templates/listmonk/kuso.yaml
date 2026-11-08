@@ -1,0 +1,37 @@
+apiVersion: kuso/v1
+project: listmonk
+services:
+  - name: listmonk
+    runtime: image
+    port: 9000
+    image:
+      repository: listmonk/listmonk
+      tag: "v6.2.0"
+    # Mirrors the official compose: install the schema (idempotent), apply
+    # upgrades, then serve. --config '' makes listmonk read only env vars.
+    command:
+      - sh
+      - -c
+      - ./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && exec ./listmonk --config ''
+    env:
+      LISTMONK_app__address: "0.0.0.0:9000"
+      LISTMONK_db__host: "${{ listmonk-db.POSTGRES_HOST }}"
+      LISTMONK_db__port: "${{ listmonk-db.POSTGRES_PORT }}"
+      LISTMONK_db__user: "${{ listmonk-db.POSTGRES_USER }}"
+      LISTMONK_db__password: "${{ listmonk-db.POSTGRES_PASSWORD }}"
+      LISTMONK_db__database: "${{ listmonk-db.POSTGRES_DB }}"
+      LISTMONK_db__ssl_mode: disable
+      # Read by --install, so the first-run setup page never opens.
+      LISTMONK_ADMIN_USER: "${{ prompt.admin_username }}"
+      LISTMONK_ADMIN_PASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: uploads
+        mountPath: /listmonk/uploads
+        sizeGi: 2
+addons:
+  - name: listmonk-db
+    kind: postgres
+    version: "16"

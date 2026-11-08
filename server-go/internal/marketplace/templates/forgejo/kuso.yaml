@@ -1,0 +1,40 @@
+apiVersion: kuso/v1
+project: forgejo
+services:
+  - name: forgejo
+    runtime: image
+    port: 3000
+    image:
+      repository: codeberg.org/forgejo/forgejo
+      tag: "17.0.1"
+    env:
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: "${{ forgejo-db.POSTGRES_HOST }}"
+      FORGEJO__database__NAME: "${{ forgejo-db.POSTGRES_DB }}"
+      FORGEJO__database__USER: "${{ forgejo-db.POSTGRES_USER }}"
+      FORGEJO__database__PASSWD: "${{ forgejo-db.POSTGRES_PASSWORD }}"
+      FORGEJO__server__ROOT_URL: "https://${{ prompt.host }}/"
+      FORGEJO__server__DOMAIN: "${{ prompt.host }}"
+      # Skip the web installer: the settings above are all it would ask for.
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__SECRET_KEY: { generate: hex32 }
+      # Otherwise the first visitor to register becomes the site admin.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 5
+    scale: { min: 1, max: 1 }
+    # The s6 entrypoint runs as root, chowns /data and drops to the `git`
+    # user via su-exec.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
+addons:
+  - name: forgejo-db
+    kind: postgres
+    version: "16"
