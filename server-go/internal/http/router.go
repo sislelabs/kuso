@@ -42,6 +42,7 @@ import (
 	"kuso/server/internal/logs"
 	"kuso/server/internal/migration"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/podusage"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/reconcilehealth"
@@ -105,6 +106,9 @@ type Deps struct {
 	// duplicating them here is a small price for a clean wire.
 	Kube      *kube.Client
 	Namespace string
+	// UsageHistory backs the per-service CPU/memory history endpoint.
+	// Optional: nil → the route isn't mounted.
+	UsageHistory *podusage.Store
 	// Updater drives /api/system/version + /update. Optional — when
 	// nil the handler returns a flat "no updates available" response.
 	Updater *updater.Service
@@ -683,6 +687,9 @@ func mountAuthenticatedRoutes(
 			alertsH.Mount(r)
 			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			errH.Mount(r)
+			if d.UsageHistory != nil {
+				(&httphandlers.ServiceUsageHandler{Store: d.UsageHistory, DB: d.DB, Kube: d.Kube, Namespace: d.Namespace}).Mount(r)
+			}
 		}
 		if d.Audit != nil {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}

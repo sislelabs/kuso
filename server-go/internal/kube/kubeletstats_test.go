@@ -113,3 +113,18 @@ func TestParseSummaryUsage_HostProcesses(t *testing.T) {
 		t.Errorf("host = %+v (the pods cgroup must not double-count)", got.Host)
 	}
 }
+
+func TestNodesPodUsage_KeysPodsByNode(t *testing.T) {
+	cfg, node := fakeKubelet(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"node":{"fs":{"capacityBytes":10,"usedBytes":5}},
+		"pods":[{"podRef":{"name":"web-1","namespace":"kuso"},"cpu":{"usageNanoCores":250000000},"memory":{"workingSetBytes":4096}}]}`))
+	})
+	got, errs := (&Client{Config: cfg}).NodesPodUsage(context.Background(), []*corev1.Node{node})
+	if len(errs) != 0 {
+		t.Fatalf("errs: %v", errs)
+	}
+	want := PodUsage{Namespace: "kuso", Name: "web-1", CPUNanoCores: 250_000_000, MemWorkingSetBytes: 4096}
+	if pods := got["kuso-worker"]; len(pods) != 1 || pods[0] != want {
+		t.Fatalf("got %+v", got)
+	}
+}
