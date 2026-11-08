@@ -243,7 +243,7 @@ function ConnectionRows({
   // the first time when the server withheld it.
   const plaintext = async (k: string): Promise<string> => {
     if (!isMasked(k)) return values[k] ?? "";
-    if (!conn.serverMasked) return values[k] ?? "";
+    if (conn.legacyPlain) return conn.legacyPlain[k] ?? "";
     if (k in revealed) return revealed[k];
     setBusy(k);
     try {
@@ -307,7 +307,7 @@ function ConnectionRows({
     <ul>
       {rows.map((r, i) => {
         const secret = isMasked(r.source);
-        const raw = !secret ? (values[r.source] ?? "") : revealed[r.source] ?? (conn.serverMasked ? undefined : values[r.source]);
+        const raw = !secret ? (values[r.source] ?? "") : revealed[r.source] ?? conn.legacyPlain?.[r.source];
         const value = raw !== undefined && r.transform ? (r.transform(raw) ?? "") : raw;
         return (
           <ConnectionRow
@@ -316,7 +316,7 @@ function ConnectionRows({
             preview={secret ? (r.transform ? "" : values[r.source] ?? "") : (values[r.source] ?? "")}
             value={value}
             secret={secret}
-            empty={(values[r.source] ?? "").trim() === "" && !secret}
+            empty={!secret && (values[r.source] ?? "").trim() === ""}
             visible={!secret || !!shown[r.k]}
             busy={busy === r.source}
             accent={r.accent}

@@ -8,9 +8,10 @@ import { api } from "@/lib/api-client";
 export interface AddonConnection {
   values: Record<string, string>;
   masked: string[];
-  // false when the server predates masked mode and sent everything in
-  // the clear (and audited the read): reveal is then local only.
-  serverMasked: boolean;
+  // Set only when the server predates masked mode and sent every value in
+  // the clear (and audited that read): reveals are then served from here
+  // and `values` holds the client-side redaction.
+  legacyPlain?: Record<string, string>;
 }
 
 const base = (project: string, addon: string) =>
@@ -20,11 +21,30 @@ export async function getAddonConnection(project: string, addon: string): Promis
   const res = await api<{ values?: Record<string, string>; masked?: string[] }>(`${base(project, addon)}?masked=1`);
   const values = res.values ?? {};
   if (Array.isArray(res.masked)) {
-    return { values, masked: res.masked, serverMasked: true };
+    return { values, masked: res.masked };
   }
   // Older server: plaintext for every key. Mask the same keys client-side
   // so nothing secret is on screen until the user asks.
-  return { values, masked: Object.keys(values).filter((k) => isSensitiveConnectionKey(k, values[k] ?? "")), serverMasked: false };
+  const masked = Object.keys(values).filter((k) => (values[k] ?? "") !== "" && isSensitiveConnectionKey(k, values[k] ?? ""));
+  const display: Record<string, string> = { ...values };
+  for (const k of masked) display[k] = redactConnectionURL(values[k] ?? "");
+  return { values: display, masked: masked.sort(), legacyPlain: values };
+}
+
+// redactConnectionURL keeps a DSN's structure and hides its password, or
+// returns "" when the value isn't such a URL.
+export function redactConnectionURL(v: string): string {
+  try {
+    const u = new URL(v);
+    if (!u.password || !u.host) return "";
+    u.password = "";
+    const user = u.username;
+    u.username = "";
+    const rest = u.toString().slice(u.protocol.length + 2);
+    return `${u.protocol}//${user}:••••••••@${rest}`;
+  } catch {
+    return "";
+  }
 }
 
 // revealAddonSecret fetches one plaintext value. Audited server-side as

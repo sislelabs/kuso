@@ -65,16 +65,16 @@ export function InsertRowDialog({
       }
       if (Object.keys(nextErrs).length) {
         setErrs(nextErrs);
-        throw new Error("fix the highlighted fields");
+        throw new Error("Fix the highlighted fields");
       }
       setErrs({});
       return insertSQLRow(project, addon, schema, table, values, database);
     },
     onSuccess: () => {
-      toast.success("row inserted");
+      toast.success("Row inserted");
       onInserted();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "insert failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Insert failed"),
   });
 
   // A half-filled row survives a stray click outside; Escape and the
@@ -94,8 +94,8 @@ export function InsertRowDialog({
         className="flex max-h-[80vh] max-w-lg flex-col gap-0 overflow-hidden rounded-lg bg-[var(--bg-primary)] p-0 sm:max-w-lg"
       >
           <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-            <DialogTitle className="font-mono text-sm font-normal text-[var(--text-primary)]">
-              insert into {schema === "public" ? table : `${schema}.${table}`}
+            <DialogTitle className="text-sm font-medium text-[var(--text-primary)]">
+              Insert a row into <span className="font-mono">{schema === "public" ? table : `${schema}.${table}`}</span>
             </DialogTitle>
             <button type="button" onClick={onClose} aria-label="Close">
               <X className="h-4 w-4 text-[var(--text-tertiary)]" />

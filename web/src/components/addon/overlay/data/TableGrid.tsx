@@ -98,10 +98,10 @@ export function TableGrid({
       deleteSQLRow(project, addon, schema, table, pkVals, database),
     onSuccess: () => {
       setPendingDelete(null);
-      toast.success("row deleted");
+      toast.success("Row deleted");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "delete failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
 
   const update = useMutation({
@@ -110,10 +110,10 @@ export function TableGrid({
       set: Record<string, SQLCellValue>;
     }) => updateSQLRow(project, addon, schema, table, v.pk, v.set, database),
     onSuccess: () => {
-      toast.success("saved");
+      toast.success("Saved");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "update failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
   });
 
   // Build the PK value map for a given displayed row. Throws if a PK column
@@ -136,7 +136,7 @@ export function TableGrid({
     try {
       return pkOf(rowIdx);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "could not resolve primary key");
+      toast.error(e instanceof Error ? e.message : "Couldn't resolve the primary key");
       return null;
     }
   };
@@ -171,7 +171,7 @@ export function TableGrid({
   if (rows.isError) {
     return (
       <pre className="m-3 whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-xs text-[var(--error)]">
-        {rows.error instanceof Error ? rows.error.message : "load failed"}
+        {rows.error instanceof Error ? rows.error.message : "Couldn't load rows"}
       </pre>
     );
   }
@@ -184,14 +184,14 @@ export function TableGrid({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* toolbar */}
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-        <div className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
-          <span className="text-[var(--text-primary)]">
+        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <span className="font-mono text-[var(--text-primary)]">
             {schema === "public" ? table : `${schema}.${table}`}
           </span>
-          <span className="text-[var(--text-tertiary)]">· {total} rows</span>
+          <span className="text-[var(--text-tertiary)]">· {total} {total === 1 ? "row" : "rows"}</span>
           {!editable && (
-            <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-xs text-[var(--warning)]">
-              read-only (no primary key)
+            <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]">
+              Read-only: no primary key
             </span>
           )}
         </div>
@@ -199,9 +199,9 @@ export function TableGrid({
           <button
             type="button"
             onClick={() => setInsertOpen(true)}
-            className="flex items-center gap-1 rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+            className="flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
           >
-            <Plus className="h-3 w-3" /> insert row
+            <Plus className="h-3 w-3" /> Insert row
           </button>
         )}
       </div>
@@ -251,7 +251,7 @@ export function TableGrid({
                           if (k) setPendingDelete(k);
                         }}
                         className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-                        title="delete row"
+                        title="Delete row"
                         aria-label="Delete row"
                       >
                         <Trash2 className="h-3 w-3 text-[var(--error)] hover:text-[var(--error)]" />
@@ -306,7 +306,7 @@ export function TableGrid({
       </div>
 
       {/* pagination */}
-      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 font-mono text-xs text-[var(--text-tertiary)]">
+      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-tertiary)] tabular-nums">
         <span>
           {total === 0 ? "0" : `${page * PAGE + 1}–${page * PAGE + data.rows.length}`} of {total}
           <span className="ml-2">· {data.elapsed}</span>
@@ -316,6 +316,7 @@ export function TableGrid({
             type="button"
             disabled={page === 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
+            aria-label="Previous page"
             className="disabled:opacity-30"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -327,6 +328,7 @@ export function TableGrid({
             type="button"
             disabled={page + 1 >= pages}
             onClick={() => setPage((p) => p + 1)}
+            aria-label="Next page"
             className="disabled:opacity-30"
           >
             <ChevronRight className="h-4 w-4" />
