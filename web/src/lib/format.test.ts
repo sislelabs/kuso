@@ -23,7 +23,7 @@ describe("relativeTime", () => {
 
 describe("formatCpu", () => {
   it("uses mCPU below one core and cores above", () => {
-    expect(formatCpu(0)).toBe("0 mCPU");
+    expect(formatCpu(0)).toBe("<1 mCPU");
     expect(formatCpu(0.4)).toBe("<1 mCPU");
     expect(formatCpu(3)).toBe("3 mCPU");
     expect(formatCpu(250.4)).toBe("250 mCPU");

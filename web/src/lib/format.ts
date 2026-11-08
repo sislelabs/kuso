@@ -61,7 +61,9 @@ export function stripRepoCredentials(raw?: string): string {
 // ("3 mCPU", "250 mCPU"), cores from there ("1 core", "1.3 cores",
 // "12 cores"). Idle pods read "<1 mCPU", never "0".
 export function formatCpu(milli: number): string {
-  if (!Number.isFinite(milli) || milli <= 0) return "0 mCPU";
+  if (!Number.isFinite(milli)) return "—";
+  // metrics-server reports whole millicores, so 0 from a running pod means
+  // "under 1", not "nothing".
   if (milli < 1) return "<1 mCPU";
   if (milli < 999.5) return `${Math.round(milli)} mCPU`;
   const cores = milli / 1000;

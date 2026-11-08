@@ -33,7 +33,7 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
         status.stale && "opacity-60",
       )}
     >
-      <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", status.state === "up" ? "bg-[var(--success)]" : status.state === "down" ? "bg-[var(--error)]" : "bg-[var(--warning)]")} />
+      <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", v.state === "up" ? "bg-[var(--success)]" : v.state === "down" ? "bg-[var(--error)]" : v.state === "failing" ? "bg-[var(--warning)]" : "bg-[var(--text-tertiary)]")} />
       Health check {v.label}
     </span>
   );
