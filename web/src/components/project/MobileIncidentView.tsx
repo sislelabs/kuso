@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
+import { humanizeNotification } from "@/lib/format-notification";
 import { ErrorBadge, VulnBadge } from "@/components/canvas/NodeBadges";
 import { useServiceBadges } from "@/components/canvas/useServiceBadges";
 import type { ErrorSummary, VulnSummary } from "@/components/canvas/badgeSummary";
@@ -192,6 +193,7 @@ interface FeedEvent {
   project?: string;
   service?: string;
   createdAt: string;
+  classification?: { kind?: string; summary?: string };
 }
 
 // ProjectAlerts surfaces the recent notification feed filtered to THIS
@@ -249,10 +251,7 @@ function ProjectAlerts({
                 onClick={() => e.service && onSelectService?.(serviceShortName(project, e.service), "logs")}
                 className="min-w-0 flex-1 text-left"
               >
-                <p className="truncate text-sm font-medium">{e.title}</p>
-                {e.body && (
-                  <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-secondary)]">{e.body}</p>
-                )}
+                <AlertText event={e} />
                 <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{relativeTime(e.createdAt)}</p>
               </button>
             </li>
@@ -260,6 +259,30 @@ function ProjectAlerts({
         </ul>
       )}
     </section>
+  );
+}
+
+// Feed text is written for chat (backticks, Go durations, build CR names);
+// the shared humanizer turns it into dashboard copy.
+function AlertText({ event }: { event: FeedEvent }) {
+  const text = humanizeNotification(event);
+  return (
+    <>
+      <p className="truncate text-sm font-medium">{text.title}</p>
+      {text.body.length > 0 && (
+        <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-[var(--text-secondary)]">
+          {text.body.map((p, i) =>
+            p.code ? (
+              <code key={i} className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">
+                {p.text}
+              </code>
+            ) : (
+              <span key={i}>{p.text}</span>
+            ),
+          )}
+        </p>
+      )}
+    </>
   );
 }
 
