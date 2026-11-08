@@ -469,7 +469,7 @@ function HealthStrip({
   const hasBackups = backupsApplicable(cr);
   const list = useAddonBackups(project, addon, hasBackups);
   const summary = hasBackups ? backupSummary(cr, backupsListState(list)) : null;
-  const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode; title?: string }[] = [
+  const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode }[] = [
     {
       k: "Status",
       v: (
@@ -486,20 +486,30 @@ function HealthStrip({
       v: <span className="capitalize">{tier}</span>,
       d: `${storageSize} disk${cr?.spec.ha ? " · HA" : ""}`,
     },
-    summary
-      ? { k: "Backups", v: summary.headline, d: summary.detail || undefined, title: summary.sentence }
-      : { k: "Backups", v: "Not available", d: `No managed backups for ${kind || "this kind"}` },
   ];
   return (
-    <section aria-label="Addon health" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] sm:grid-cols-4">
+    <section aria-label="Addon health" className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)]">
       {tiles.map((t) => (
-        <div key={t.k} title={t.title} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
+        <div key={t.k} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
           <div className="text-xs text-[var(--text-secondary)]">{t.k}</div>
           <div className="mt-0.5 truncate text-sm font-medium text-[var(--text-primary)]">{t.v}</div>
           {t.d && <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{t.d}</div>}
         </div>
       ))}
-      <div className="col-span-2 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:col-span-4">
+      {/* Full width so the whole sentence fits: it's the same backupSummary
+          wording the Backups tab shows. */}
+      <div className="col-span-3 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+        <span>Backups</span>
+        {summary ? (
+          <span>
+            <span className="text-sm font-medium text-[var(--text-primary)]">{summary.headline}</span>
+            <span className="text-[var(--text-tertiary)]">{summary.sentence.slice(summary.headline.length)}</span>
+          </span>
+        ) : (
+          <span className="text-[var(--text-tertiary)]">Not available for {kind || "this kind"} addons</span>
+        )}
+      </div>
+      <div className="col-span-3 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
         <span>Name</span>
         <span className="font-mono text-[var(--text-primary)]">{addon}</span>
         <CopyButton value={addon} label="Copy addon name" size="xs" />
