@@ -65,8 +65,9 @@ const COPY: Record<FailureKind, CopyPair> = {
     body: "Something inside the container is binding the same port the service is configured for.",
   },
   healthcheck_failed: {
-    headline: "Health probe failing.",
-    body: "The pod isn't accepting traffic on the configured port. Check the app's startup time and probe path.",
+    headline: "Health check failing.",
+    body: "The pod isn't answering its health check. Check the app's startup time and the health check path and port.",
+    action: { label: "Open Settings → Health check", tab: "settings", anchor: "healthcheck" },
   },
   build_command_failed: {
     headline: "Build command exited non-zero.",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -38,6 +38,9 @@ const ProjectCanvas = dynamic(
   },
 );
 
+// Search params that describe the open overlay; dropped together on close.
+const OVERLAY_PARAMS = ["service", "addon", "tab", "kind", "highlight"] as const;
+
 // ProjectDetailView is canvas-only. Project name + repo live in the
 // TopNav breadcrumb; service interactions happen via right-click on
 // canvas nodes (open / view logs / trigger build / delete) or by
@@ -48,30 +51,81 @@ export function ProjectDetailView() {
   const search = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  // Closing an overlay drops the deep-link params; otherwise the effect
-  // below re-opens it on the next unrelated URL change (e.g. env switch).
-  const clearDeepLink = () => {
-    const next = new URLSearchParams(search?.toString() ?? "");
-    const before = next.toString();
-    for (const k of ["service", "addon", "tab", "kind", "highlight"]) next.delete(k);
+  // Overlay state lives in the URL: ?service=<s>&tab=<t> or
+  // ?addon=<a>&tab=<t>. Opening pushes a history entry so Back closes the
+  // overlay; tab switches replace it; reload and shared links restore
+  // exactly what was on screen. The bell and ⌘K palette open overlays the
+  // same way, by navigating to the URL.
+  //
+  // Notifications have written both the short and the "<project>-" FQ
+  // service name over time; the overlay queries by short name.
+  const stripPrefix = (s: string) => {
+    const p = projectName + "-";
+    return s.startsWith(p) ? s.slice(p.length) : s;
+  };
+  const urlService = search?.get("service");
+  const urlAddon = search?.get("addon");
+  const selectedService = urlService ? stripPrefix(urlService) : null;
+  // The addon overlay addresses addons by full CR name (<project>-<addon>).
+  const selectedAddon = !selectedService && urlAddon
+    ? urlAddon.startsWith(projectName + "-") ? urlAddon : `${projectName}-${urlAddon}`
+    : null;
+  const selectedTab = search?.get("tab") ?? undefined;
+  // ?kind=<failures.Kind> from a bell failure notification: the overlay
+  // shows a FailureBanner on the routed tab until the user switches tabs.
+  const failureKind = selectedService ? (search?.get("kind") ?? undefined) : undefined;
+
+  // The URL (minus overlay params) we pushed the overlay on top of. Close
+  // goes Back to it when nothing else changed since, so the history stack
+  // doesn't grow a duplicate entry per open/close.
+  const pushedFrom = useRef<string | null>(null);
+  const urlWithout = (params: URLSearchParams) => {
+    const next = new URLSearchParams(params.toString());
+    for (const k of OVERLAY_PARAMS) next.delete(k);
     const qs = next.toString();
-    if (qs !== before) router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    return qs ? `${pathname}?${qs}` : pathname;
+  };
+  const navigate = (mutate: (p: URLSearchParams) => void, mode: "push" | "replace") => {
+    const next = new URLSearchParams(search?.toString() ?? "");
+    mutate(next);
+    const qs = next.toString();
+    const url = qs ? `${pathname}?${qs}` : pathname;
+    if (mode === "push") router.push(url, { scroll: false });
+    else router.replace(url, { scroll: false });
+  };
+  const openOverlay = (key: "service" | "addon", name: string, tab?: string) => {
+    const current = new URLSearchParams(search?.toString() ?? "");
+    const wasOpen = current.has("service") || current.has("addon");
+    if (!wasOpen) pushedFrom.current = urlWithout(current);
+    navigate((p) => {
+      for (const k of OVERLAY_PARAMS) p.delete(k);
+      p.set(key, name);
+      if (tab) p.set("tab", tab);
+    }, wasOpen ? "replace" : "push");
+  };
+  const closeOverlay = () => {
+    const current = new URLSearchParams(search?.toString() ?? "");
+    if (!current.has("service") && !current.has("addon")) return;
+    if (pushedFrom.current !== null && pushedFrom.current === urlWithout(current)) {
+      pushedFrom.current = null;
+      router.back();
+      return;
+    }
+    pushedFrom.current = null;
+    navigate((p) => {
+      for (const k of OVERLAY_PARAMS) p.delete(k);
+    }, "replace");
+  };
+  const changeTab = (tab: string) => {
+    if (search?.get("tab") === tab) return;
+    navigate((p) => {
+      p.set("tab", tab);
+      // A tab switch dismisses the failure banner and any highlight.
+      p.delete("kind");
+      p.delete("highlight");
+    }, "replace");
   };
 
-  // Overlay state — in-component, NOT in the URL. The panel is a
-  // transient inspector, not a route.
-  const [selectedService, setSelectedService] = useState<string | null>(null);
-  const [selectedServiceTab, setSelectedServiceTab] = useState<string | undefined>(undefined);
-  const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
-  const [selectedAddonTab, setSelectedAddonTab] = useState<string | undefined>(undefined);
-  // Failure deep-link state: when a bell-popover row carries
-  // ?kind=missing_env (etc.), the ServiceOverlay renders a FailureBanner
-  // at the top of the routed tab. The matching ?highlight=<n> param
-  // is also parsed below but not yet plumbed into the FTS-backed Logs
-  // viewer; that follow-up needs a line-anchor surface in the log
-  // table so the viewer can scroll-to + flash a specific row. Cleared
-  // on overlay close so re-opening doesn't resurrect a stale banner.
-  const [failureKind, setFailureKind] = useState<string | undefined>(undefined);
   // Add-addon dialog: opened from the empty-state CTA so a user who
   // wants to start with a managed DB doesn't need to discover the
   // canvas right-click menu. Closed by AddAddonDialog on success.
@@ -96,56 +150,6 @@ export function ProjectDetailView() {
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
-
-  // Notification-link entry point: when the URL carries ?service= /
-  // ?addon=, open the matching overlay on mount. Lets bell-icon
-  // notifications navigate straight to the relevant resource (e.g.
-  // build.succeeded → /projects/<p>?service=<s> → opens the
-  // service overlay's Deployments tab). One-shot — we only honour
-  // the param on first render so closing the overlay doesn't snap
-  // back open on a re-render.
-  //
-  // Both notification storage shapes hit this entry point: the
-  // notify package writes the SHORT service name on the URL, but
-  // the legacy build poller used to write the FQ name. Strip the
-  // "<project>-" prefix here so either form opens the right
-  // overlay (the overlay queries by short name).
-  useEffect(() => {
-    const stripPrefix = (s: string) => {
-      const p = projectName + "-";
-      return s.startsWith(p) ? s.slice(p.length) : s;
-    };
-    const svc = search?.get("service");
-    const addon = search?.get("addon");
-    const tab = search?.get("tab") ?? undefined;
-    const kind = search?.get("kind") ?? undefined;
-    if (svc) {
-      setSelectedService(stripPrefix(svc));
-      // cmd-K palette and bell-icon notifications encode a deep-link
-      // tab via ?tab=logs / ?tab=variables / ?tab=settings. Without
-      // this wire-up every "Tail logs · X" entry landed on the
-      // default Deployments tab. Set unconditionally — the overlay
-      // falls back to its own default when undefined.
-      setSelectedServiceTab(tab);
-      // Bell-popover deep-links for *failure* events also carry
-      // ?kind=<failures.Kind>. Surface it to ServiceOverlay so it
-      // can render the FailureBanner at the top of the routed tab.
-      // Clear back to undefined when the URL has no failure params —
-      // otherwise a second notification click would re-show the prior
-      // banner.
-      setFailureKind(kind);
-    }
-    if (addon) {
-      // The addon overlay and its tabs address the addon by its full CR
-      // name (<project>-<addon>), so normalise the other way here.
-      const p = projectName + "-";
-      setSelectedAddon(addon.startsWith(p) ? addon : p + addon);
-      setSelectedAddonTab(tab);
-    }
-    // Re-run on URL change so the cmd-K palette can navigate from
-    // /projects/<p>?service=A to /projects/<p>?service=B by pushing
-    // a new URL — without this, the overlay keeps showing A.
-  }, [search, projectName]);
 
   // Env switcher legitimately changes what's on screen and survives
   // reload, so it stays in the URL as ?env=<short>.
@@ -360,14 +364,8 @@ export function ProjectDetailView() {
     );
   }
 
-  const selectService = (shortName: string, tab?: string) => {
-    setSelectedService(shortName);
-    setSelectedServiceTab(tab);
-  };
-  const selectAddon = (name: string, tab?: string) => {
-    setSelectedAddon(name);
-    setSelectedAddonTab(tab);
-  };
+  const selectService = (shortName: string, tab?: string) => openOverlay("service", shortName, tab);
+  const selectAddon = (name: string, tab?: string) => openOverlay("addon", stripPrefix(name), tab);
 
   return (
     <>
@@ -434,25 +432,18 @@ export function ProjectDetailView() {
         project={projectName}
         service={selectedService}
         env={selectedEnv}
-        defaultTab={selectedServiceTab}
+        defaultTab={selectedService ? selectedTab : undefined}
         failureKind={failureKind}
-        onClose={() => {
-          setSelectedService(null);
-          setSelectedServiceTab(undefined);
-          setFailureKind(undefined);
-          clearDeepLink();
-        }}
+        onTabChange={changeTab}
+        onClose={closeOverlay}
       />
 
       <AddonOverlay
         project={projectName}
         addon={selectedAddon}
-        defaultTab={selectedAddonTab}
-        onClose={() => {
-          setSelectedAddon(null);
-          setSelectedAddonTab(undefined);
-          clearDeepLink();
-        }}
+        defaultTab={selectedAddon ? selectedTab : undefined}
+        onTabChange={changeTab}
+        onClose={closeOverlay}
       />
     </>
   );

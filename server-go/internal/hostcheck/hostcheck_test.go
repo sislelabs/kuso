@@ -76,6 +76,33 @@ func TestListCertificatesParsesStatus(t *testing.T) {
 	}
 }
 
+func TestParseCertIssuingFailure(t *testing.T) {
+	t.Parallel()
+	u := certObj("ns", "x-tls", []string{"x.example.com"}, "", "False", "DoesNotExist", "Issuing certificate as Secret does not exist", time.Now())
+	st := u.Object["status"].(map[string]any)
+	st["conditions"] = append(st["conditions"].([]any), map[string]any{
+		"type": "Issuing", "status": "False", "reason": "Failed", "message": "429 urn:ietf:params:acme:error:rateLimited",
+	})
+	st["failedIssuanceAttempts"] = int64(3)
+	st["lastFailureTime"] = "2026-11-08T10:00:00Z"
+	c := parseCert(u)
+	if c.IssuingFailure != "429 urn:ietf:params:acme:error:rateLimited" || c.FailedAttempts != 3 {
+		t.Errorf("cert = %+v", c)
+	}
+	if c.LastFailure == nil || !c.LastFailure.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("lastFailure = %v", c.LastFailure)
+	}
+	if c.Reason != "DoesNotExist" {
+		t.Errorf("Ready condition lost: %+v", c)
+	}
+
+	// An Issuing condition that is in progress isn't a failure.
+	st["conditions"] = []any{map[string]any{"type": "Issuing", "status": "True", "reason": "DoesNotExist", "message": "Issuing"}}
+	if c := parseCert(u); c.IssuingFailure != "" {
+		t.Errorf("in-progress Issuing read as failure: %q", c.IssuingFailure)
+	}
+}
+
 func TestCertProblem(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)

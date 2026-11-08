@@ -9,6 +9,7 @@ import {
   waitingLabel,
   previousSucceeded,
   rollForwardTarget,
+  newerReleaseFailure,
 } from "./live";
 import type { DeployBuild } from "./types";
 
@@ -146,5 +147,29 @@ describe("previousSucceeded / rollForwardTarget", () => {
   it("rolls forward to the newest newer success only when rolled back", () => {
     expect(rollForwardTarget(builds, builds[2])?.id).toBe("n");
     expect(rollForwardTarget(builds, builds[0])).toBeUndefined();
+  });
+});
+
+describe("newerReleaseFailure", () => {
+  const at = (h: number) => new Date(Date.UTC(2026, 0, 1, h)).toISOString();
+  it("returns the newer build whose release hook failed while live stays older", () => {
+    const live = b("old", { finishedAt: at(1) });
+    const rf = b("new", { status: "release-failed", finishedAt: at(3) });
+    expect(newerReleaseFailure([rf, live], live)?.id).toBe("new");
+  });
+  it("ignores it once a newer attempt succeeded or failed", () => {
+    const live = b("old", { finishedAt: at(1) });
+    const rf = b("rf", { status: "release-failed", finishedAt: at(2) });
+    expect(newerReleaseFailure([b("ok", { finishedAt: at(3) }), rf, live], live)).toBeUndefined();
+    expect(newerReleaseFailure([b("bad", { status: "failed", finishedAt: at(3) }), rf, live], live)).toBeUndefined();
+  });
+  it("skips in-flight builds and other branches, and older release failures", () => {
+    const live = b("live", { finishedAt: at(2) });
+    const rf = b("rf", { status: "release-failed", finishedAt: at(3) });
+    const running = b("run", { status: "running", startedAt: at(4) });
+    const other = b("pr", { branch: "feat", status: "succeeded", finishedAt: at(5) });
+    expect(newerReleaseFailure([other, running, rf, live], live)?.id).toBe("rf");
+    const olderRf = b("orf", { status: "release-failed", finishedAt: at(1) });
+    expect(newerReleaseFailure([live, olderRf], live)).toBeUndefined();
   });
 });

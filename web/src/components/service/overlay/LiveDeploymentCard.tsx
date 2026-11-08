@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ExternalLink, Undo2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ExternalLink, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -37,6 +37,8 @@ export function LiveDeploymentCard({
   serving = true,
   canDeploy,
   extra,
+  releaseFailed,
+  onShowBuild,
 }: {
   project: string;
   service: string;
@@ -55,6 +57,11 @@ export function LiveDeploymentCard({
   serving?: boolean;
   canDeploy: boolean;
   extra?: React.ReactNode;
+  // A newer build whose release hook (migration) failed, so this one is
+  // still serving.
+  releaseFailed?: DeployBuild;
+  // Opens a history row (the failed release) and scrolls to it.
+  onShowBuild?: (buildId: string) => void;
 }) {
   const [logOpen, setLogOpen] = useState(false);
   const went = deployedAt || build.finishedAt || build.startedAt;
@@ -94,6 +101,21 @@ export function LiveDeploymentCard({
             </span>
           )}
           {extra}
+          {releaseFailed && (
+            <button
+              type="button"
+              onClick={() => onShowBuild?.(releaseFailed.id)}
+              disabled={!onShowBuild}
+              title={`${buildRefLabel(releaseFailed, 7) || releaseFailed.id} built, but its release command failed. Show it in the history.`}
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-[var(--warning)]/45 bg-[var(--warning-subtle)] px-2 py-0.5 text-left font-medium text-[var(--warning)] hover:border-[var(--warning)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+            >
+              <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" />
+              <span className="min-w-0">
+                Newer build failed release — still serving{" "}
+                <span className="font-mono">{buildRefLabel(build, 7) || build.id}</span>
+              </span>
+            </button>
+          )}
           {rolledBack && (
             <span className="rounded-full border border-[var(--warning)]/45 bg-[var(--warning-subtle)] px-2 py-0.5 font-medium text-[var(--warning)]">
               Rolled back

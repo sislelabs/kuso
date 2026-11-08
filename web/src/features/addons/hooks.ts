@@ -1,6 +1,9 @@
 "use client";
 
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { listBackups } from "@/features/projects";
+import { addonBackupsQueryKey, isBackupsNotConfigured, runBackupNow } from "./backups";
 import { getSubscribedAddons, setSubscribedAddons, type SubscribedAddons } from "./api";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { putSubscriptionRebased } from "./subscriptionDelta";
@@ -44,5 +47,33 @@ export function useToggleAddonSubscription(project: string) {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       invalidateProjectDescribe(qc, project);
     },
+  });
+}
+
+// useAddonBackups is the one backups-list query: the Overview tile, the
+// header's Back up now and the Backups tab all read this cache.
+export function useAddonBackups(project: string, addon: string, enabled = true) {
+  return useQuery({
+    queryKey: addonBackupsQueryKey(project, addon),
+    queryFn: () => listBackups(project, addon),
+    enabled: enabled && !!project && !!addon,
+    refetchInterval: (q) => (isBackupsNotConfigured(q.state.error) ? false : 30_000),
+    // A 503 "S3 not set up" is an answer, not a blip worth retrying.
+    retry: (n, e) => !isBackupsNotConfigured(e) && n < 2,
+  });
+}
+
+// useBackupNow runs the addon's scheduled backup job once, on demand.
+export function useBackupNow(project: string, addon: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => runBackupNow(project, addon),
+    onSuccess: (res) => {
+      toast.success("Backup started", {
+        description: `Job ${res.job}. It shows up under Backups once the upload finishes.`,
+      });
+      void qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
   });
 }

@@ -114,6 +114,10 @@ type changedFields struct {
 	// RequestLimits covers a change on the service or on its project;
 	// the env carries the two resolved into one block.
 	RequestLimits bool
+	// Healthcheck carries spec.healthcheck changes. The mirror below is
+	// unconditional, but a healthcheck-only PATCH still needs a flag or
+	// propagateChangedToEnvs returns early and the probe never changes.
+	Healthcheck bool
 }
 
 // any reports whether any field changed.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deployStage, firstErrorLine, formatStepDuration, parseBuildLog } from "./phases";
+import { deployStage, failedStepFromBuild, failedStepTitle, firstErrorLine, formatStepDuration, parseBuildLog } from "./phases";
 
 const SUCCESS = [
   "Cloning into '/workspace/src'...",
@@ -142,5 +142,21 @@ describe("formatStepDuration", () => {
     expect(formatStepDuration(16.1)).toBe("16s");
     expect(formatStepDuration(88.7)).toBe("1m 29s");
     expect(formatStepDuration(undefined)).toBe("");
+  });
+});
+
+describe("failed step", () => {
+  it("names the failing BuildKit step from the log", () => {
+    expect(failedStepTitle(parseBuildLog(FAILED_TAIL, { failed: true }))).toBe(
+      "RUN npm install -g npm@11 && npm ci --omit=dev · prod-deps · 5/5",
+    );
+    expect(failedStepTitle(parseBuildLog(SUCCESS))).toBeUndefined();
+  });
+
+  it("falls back to the container the server says exited, then the failure kind", () => {
+    expect(failedStepFromBuild({ errorMessage: "container exited with code 128 (clone)" })).toBe("Clone repository");
+    expect(failedStepFromBuild({ errorMessage: "container exited with code 1 (buildkit)" })).toBe("Run the build");
+    expect(failedStepFromBuild({ failureClass: { kind: "lockfile_drift" } })).toBe("Install dependencies");
+    expect(failedStepFromBuild({ errorMessage: "boom" })).toBeUndefined();
   });
 });

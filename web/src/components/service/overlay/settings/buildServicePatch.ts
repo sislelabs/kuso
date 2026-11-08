@@ -1,8 +1,8 @@
-import type { PatchServiceBody } from "@/features/services";
 import { parseWatchPathsText } from "@/features/services/watchPaths";
 import type { FormState } from "./_primitives";
 import { releasePatch } from "./releasePatch";
 import { extraServicePatch } from "./servicePatchExtras";
+import { describeHealthcheck, healthcheckPatch, type ServicePatchBody } from "./healthcheckPatch";
 
 // buildServicePatch turns the edited form into the PATCH body, sending only
 // fields that differ from the baseline. Returns the first validation error
@@ -12,8 +12,8 @@ export function buildServicePatch(
   state: FormState,
   baseline: FormState,
   stored: { command?: string[]; releaseCommand?: string[] },
-): { body: PatchServiceBody } | { error: string } {
-  const body: PatchServiceBody = {};
+): { body: ServicePatchBody } | { error: string } {
+  const body: ServicePatchBody = {};
   if (state.displayName !== baseline.displayName) {
     const trimmed = state.displayName.trim();
     if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {
@@ -246,6 +246,9 @@ export function buildServicePatch(
       allowPrivilegeEscalation: state.allowPrivilegeEscalation,
     };
   }
+  const hc = healthcheckPatch(state, baseline);
+  if ("error" in hc) return { error: hc.error };
+  if (hc.healthcheck) body.healthcheck = hc.healthcheck;
   const extra = extraServicePatch(state, baseline, stored.command);
   if ("error" in extra) return { error: extra.error };
   Object.assign(body, extra.body);
@@ -341,6 +344,7 @@ export function fieldDiffValues(field: string, base: FormState, next: FormState)
         .join(", "),
     previews: (s) => (s.previewsDisabled ? "disabled" : "enabled"),
     waitForCI: (s) => (s.waitForCI ? "wait for CI" : "build immediately"),
+    healthcheck: describeHealthcheck,
     uptime: (s) => (s.uptimeEnabled ? `checked at ${s.uptimePath.trim() || "default path"}` : "not checked"),
     release: (s) =>
       s.releaseCommand.trim()
