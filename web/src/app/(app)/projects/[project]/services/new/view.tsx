@@ -198,7 +198,7 @@ export function AddServiceView() {
   const willBuild = source === "repo" && kind === "web";
   const showConfigure = source === "image" || !!picked;
 
-  const onAdd = async () => {
+  const onAdd = async (deploy = true) => {
     // Inline per-field errors + focus the first invalid field in visual
     // order. Toasts are for server-side failures only.
     const errs: typeof fieldErrors = {};
@@ -255,6 +255,7 @@ export function AddServiceView() {
     try {
       const out = await createServiceWithEnv(project, body, {
         envVars: env.vars,
+        deploy,
         // Addons come after the service so a rejected service POST can't
         // leave a database behind. A service with no explicit subscription
         // list mounts every project addon, so it still gets DATABASE_URL.
@@ -290,6 +291,11 @@ export function AddServiceView() {
   };
 
   const submitLabel = submitting ? "Creating…" : kind === "worker" && source === "repo" ? "Create worker" : "Create & deploy";
+  const submitDisabled =
+    submitting ||
+    (willBuild && detection.state === "detecting") ||
+    // The server hard-rejects a worker with no fromService.
+    (source === "repo" && kind === "worker" && !fromService);
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:py-8">
@@ -683,20 +689,24 @@ export function AddServiceView() {
                 >
                   Cancel
                 </Link>
-                <Button
-                  type="button"
-                  onClick={onAdd}
-                  // The server hard-rejects a worker with no fromService.
-                  disabled={
-                    submitting ||
-                    (willBuild && detection.state === "detecting") ||
-                    (source === "repo" && kind === "worker" && !fromService)
-                  }
-                  className="h-9 px-4"
-                >
-                  <Rocket className="h-4 w-4" />
-                  {submitLabel}
-                </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                  {willBuild && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void onAdd(false)}
+                      disabled={submitDisabled}
+                      title="Create the service without building it. Add variables or addons, then deploy from the Deployments tab."
+                      className="h-9 px-4"
+                    >
+                      Create without deploying
+                    </Button>
+                  )}
+                  <Button type="button" onClick={() => void onAdd()} disabled={submitDisabled} className="h-9 px-4">
+                    <Rocket className="h-4 w-4" />
+                    {submitLabel}
+                  </Button>
+                </div>
               </div>
             </div>
           )}

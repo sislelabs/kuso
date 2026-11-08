@@ -16,6 +16,8 @@ export interface CreateServiceBody {
   github?: { installationId: number };
   resources?: SizingBody["resources"];
   scale?: SizingBody["scale"];
+  // Request-only: create without starting the first build.
+  skipFirstBuild?: boolean;
 }
 
 export interface CreateServiceRepoInput {

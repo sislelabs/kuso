@@ -151,7 +151,7 @@ export default function NewProjectPage() {
   };
   const liveProjectError = projectNameTouched && projectName ? projectNameProblem(projectName.trim()) : null;
 
-  const onImport = async () => {
+  const onImport = async (deploy = true) => {
     if (!picked) return;
     const pName = projectName.trim();
     const errs = {
@@ -211,7 +211,7 @@ export default function NewProjectPage() {
     });
     const projectHref = `/projects/${encodeURIComponent(pName)}`;
     try {
-      const out = await createServiceWithEnv(pName, sBody, { envVars: env.vars });
+      const out = await createServiceWithEnv(pName, sBody, { envVars: env.vars, deploy });
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
       reportCreateOutcome(out, `${pName}/${sBody.name}`, branch);
       const tab = out.envFailed.length > 0 ? "variables" : "deployments";
@@ -523,15 +523,27 @@ export default function NewProjectPage() {
                   Creates the project and its first service, then starts a build from{" "}
                   <span className="font-mono">{picked.repo.defaultBranch}</span>.
                 </p>
-                <Button
-                  type="button"
-                  onClick={() => void onImport()}
-                  disabled={submitting || detection.state === "detecting"}
-                  className="h-9 px-4"
-                >
-                  <Rocket className="h-4 w-4" />
-                  {submitting ? "Creating…" : "Create & deploy"}
-                </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void onImport(false)}
+                    disabled={submitting || detection.state === "detecting"}
+                    title="Create the project and service without building. Add variables first, then deploy from the Deployments tab."
+                    className="h-9 px-4"
+                  >
+                    Create without deploying
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void onImport()}
+                    disabled={submitting || detection.state === "detecting"}
+                    className="h-9 px-4"
+                  >
+                    <Rocket className="h-4 w-4" />
+                    {submitting ? "Creating…" : "Create & deploy"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
