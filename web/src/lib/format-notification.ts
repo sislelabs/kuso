@@ -20,7 +20,7 @@ export interface NotificationText {
 }
 
 // Leading status glyphs (✓ ✗ ⚠ ↩ ⊘ ◼ …): the UI shows severity itself.
-const LEADING_GLYPHS = /^(?:[\s←-⇿⊕-⊡⌀-➿⬀-⯿️]|\p{Extended_Pictographic})+/u;
+const LEADING_GLYPHS = /^(?:[\s\u2190-\u21FF\u2295-\u22A1\u2300-\u27BF\u2B00-\u2BFF]|\uFE0F|\p{Extended_Pictographic})+/u;
 
 const K8S_JOB_MESSAGES: ReadonlyArray<[RegExp, string]> = [
   [/^Job has reached the specified backoff limit\.?$/i, "failed"],
