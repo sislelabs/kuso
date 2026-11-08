@@ -28,7 +28,11 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
-import { deployStatusFromServerState } from "@/components/service/DeployStatusPill";
+import {
+  DEPLOY_STATUS_DETAIL,
+  DEPLOY_STATUS_LABEL,
+  deployStatusFromServerState,
+} from "@/components/service/DeployStatusPill";
 import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "./overlay/ServiceVariablesPanel";
 import { ServiceMetricsPanel } from "./overlay/ServiceMetricsPanel";
@@ -1365,31 +1369,34 @@ function relativeAge(iso: string): string {
 }
 
 function StatusPill({ status, detail }: { status: string; detail?: string }) {
-  const map: Record<string, { dot: string; pulse: boolean; label: string }> = {
-    active:    { dot: "bg-[var(--success)]", pulse: false, label: "Online" },
-    rolling:   { dot: "bg-[var(--info)]", pulse: true, label: "Rolling out" },
-    building:  { dot: "bg-[var(--building)]", pulse: true, label: "Building" },
-    deploying: { dot: "bg-[var(--building)]", pulse: true, label: "Deploying" },
-    failed:    { dot: "bg-[var(--error)]", pulse: false, label: "Failed" },
-    // Server-rollup states (env.status.state → deployStatusFromServerState).
-    crashed:   { dot: "bg-[var(--error)]", pulse: true, label: "Crashlooping" },
-    degraded:  { dot: "bg-[var(--warning)]", pulse: false, label: "Degraded" },
-    awaiting:  { dot: "bg-[var(--info)]", pulse: false, label: "Awaiting first build" },
-    stopped:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Stopped" },
-    sleeping:  { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Asleep" },
-    unknown:   { dot: "bg-[var(--text-tertiary)]", pulse: false, label: "Unknown" },
+  const map: Record<string, { dot: string; pulse: boolean }> = {
+    active:    { dot: "bg-[var(--success)]", pulse: false },
+    rolling:   { dot: "bg-[var(--info)]", pulse: true },
+    building:  { dot: "bg-[var(--building)]", pulse: true },
+    deploying: { dot: "bg-[var(--building)]", pulse: true },
+    failed:    { dot: "bg-[var(--error)]", pulse: false },
+    crashed:   { dot: "bg-[var(--error)]", pulse: true },
+    degraded:  { dot: "bg-[var(--warning)]", pulse: false },
+    awaiting:  { dot: "bg-[var(--info)]", pulse: false },
+    stopped:   { dot: "bg-[var(--text-tertiary)]", pulse: false },
+    sleeping:  { dot: "bg-[var(--text-tertiary)]", pulse: false },
+    unknown:   { dot: "bg-[var(--text-tertiary)]", pulse: false },
   };
-  const m = map[status] ?? map.unknown;
+  const key = (status in map ? status : "unknown") as keyof typeof DEPLOY_STATUS_LABEL;
+  const label = DEPLOY_STATUS_LABEL[key];
+  const cause = detail || DEPLOY_STATUS_DETAIL[key];
+  const m = map[key];
   return (
     <span
-      title={detail || m.label}
+      title={cause || label}
       className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs text-[var(--text-secondary)]"
     >
       <span className="relative inline-flex h-2 w-2">
         {m.pulse && <span className={cn("absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping", m.dot)} />}
         <span className={cn("relative inline-block h-2 w-2 rounded-full", m.dot)} />
       </span>
-      {m.label}
+      {label}
+      {cause && <span className="sr-only">: {cause}</span>}
     </span>
   );
 }
