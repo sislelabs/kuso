@@ -47,7 +47,7 @@ export function TimeRangePicker<T extends string>({
       aria-label={ariaLabel}
       aria-disabled={disabled || undefined}
       className={cn(
-        "scrollbar-none inline-flex max-w-full shrink-0 items-center overflow-x-auto rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] p-0.5",
+        "scrollbar-none inline-flex w-fit max-w-full shrink-0 items-center overflow-x-auto rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] p-0.5",
         disabled && "pointer-events-none opacity-50",
         className,
       )}

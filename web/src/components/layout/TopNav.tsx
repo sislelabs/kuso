@@ -75,9 +75,8 @@ export function TopNav() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const currentProject = params.project ?? "";
   const pathname = usePathname() ?? "";
-  const settingsCrumbs = pathname.startsWith("/settings/")
-    ? settingsBreadcrumb(pathname)
-    : null;
+  const inSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  const settingsCrumbs = inSettings ? settingsBreadcrumb(pathname) : null;
   // A project URL that 404s gets no env switcher or settings cog — they'd
   // offer actions on something that isn't there.
   const projectQuery = useProject(currentProject);
@@ -123,7 +122,7 @@ export function TopNav() {
         )}
 
         {settingsCrumbs?.map((c, i) => (
-          <Crumb key={c.href ?? c.label} className={i === 0 ? "hidden sm:flex" : "min-w-0"}>
+          <Crumb key={c.href ?? c.label} className={i === 0 && settingsCrumbs.length > 1 ? "hidden sm:flex" : "min-w-0"}>
             {c.href ? (
               <Link
                 href={c.href}
@@ -263,6 +262,7 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
     updates: "Updates",
     usage: "Usage",
   };
+  if (!section) return [{ label: "Settings" }];
   const out: { label: string; href?: string }[] = [
     { label: "Settings", href: "/settings" },
   ];
