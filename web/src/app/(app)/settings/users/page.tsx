@@ -101,8 +101,8 @@ export default function UsersPage() {
             <span role="columnheader">Instance role</span>
             <span role="columnheader">Groups</span>
             <span role="columnheader">Last login</span>
-            <span role="columnheader" className="text-right">
-              <span className="sr-only">Actions</span>
+            <span role="columnheader">
+              Active<span className="sr-only"> and actions</span>
             </span>
           </div>
           <div role="rowgroup" className="divide-y divide-[var(--border-subtle)]">
@@ -127,7 +127,9 @@ export default function UsersPage() {
   );
 }
 
-const USER_GRID = "md:grid-cols-[minmax(0,1.6fr)_176px_minmax(0,1fr)_96px_auto] md:items-center md:gap-4";
+// Fixed last column: the header row has no controls in it, so an `auto`
+// track sized differently from the rows' and pushed every header off its column.
+const USER_GRID = "md:grid-cols-[minmax(0,1.6fr)_176px_minmax(0,1fr)_96px_116px] md:items-center md:gap-4";
 
 // ---------- Invitations ----------
 
@@ -555,7 +557,7 @@ function UserRowItem({
       </div>
 
       {/* Mobile: actions sit top-right; desktop: they're the last column. */}
-      <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto">
+      <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto md:justify-start">
         {canWrite && (
           <>
             <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
