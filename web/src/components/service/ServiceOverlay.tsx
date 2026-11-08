@@ -911,6 +911,7 @@ export function ServiceOverlay({
                           service={service ?? ""}
                           env={env}
                           memoryLimit={svc.data?.spec.resources?.limits?.memory}
+                          onViewLogs={() => guardedSetTab("logs")}
                         />
                       </div>
                     )}
