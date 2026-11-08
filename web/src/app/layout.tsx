@@ -1,19 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { Roboto, DM_Sans, Geist_Mono } from "next/font/google";
+import { Instrument_Sans, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { QueryProvider } from "@/lib/query-client";
 import { ThemedToaster } from "@/components/shared/ThemedToaster";
+import { ReducedMotion } from "@/lib/reduced-motion";
 import "./globals.css";
 
-const roboto = Roboto({
-  weight: ["400", "500", "700"],
+// One UI family for prose, labels and headings; Geist Mono only for
+// literal values (hashes, hosts, keys, logs).
+const uiSans = Instrument_Sans({
   subsets: ["latin"],
-  variable: "--font-roboto",
-  display: "swap",
-});
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-dm-sans",
+  variable: "--font-ui",
   display: "swap",
 });
 const geistMono = Geist_Mono({
@@ -45,8 +42,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#FBFBF7" },
+    { media: "(prefers-color-scheme: dark)", color: "#0A0C15" },
   ],
 };
 
@@ -55,14 +52,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${roboto.variable} ${dmSans.variable} ${geistMono.variable}`}
+      className={`${uiSans.variable} ${geistMono.variable}`}
     >
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <QueryProvider>
-            {children}
-            <ThemedToaster />
-          </QueryProvider>
+          <ReducedMotion>
+            <QueryProvider>
+              {children}
+              <ThemedToaster />
+            </QueryProvider>
+          </ReducedMotion>
         </ThemeProvider>
       </body>
     </html>

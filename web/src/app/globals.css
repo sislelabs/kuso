@@ -6,9 +6,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-roboto);
+  --font-sans: var(--font-ui);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-dm-sans);
+  --font-heading: var(--font-ui);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -38,6 +38,40 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+
+  /* Semantic colour utilities: text-fg-muted, bg-surface-raised,
+     border-line, text-success, bg-danger-subtle, ring-focus … so new
+     code doesn't need the text-[var(--…)] escape hatch. */
+  --color-fg: var(--text-primary);
+  --color-fg-secondary: var(--text-secondary);
+  --color-fg-muted: var(--text-tertiary);
+  --color-fg-placeholder: var(--text-placeholder);
+  --color-surface: var(--bg-primary);
+  --color-surface-sunken: var(--bg-secondary);
+  --color-surface-hover: var(--bg-tertiary);
+  --color-surface-raised: var(--bg-elevated);
+  --color-line: var(--border-subtle);
+  --color-line-strong: var(--border-default);
+  --color-brand: var(--accent);
+  --color-brand-subtle: var(--accent-subtle);
+  --color-focus: var(--focus);
+  --color-selected: var(--selected);
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-info: var(--info);
+  --color-info-subtle: var(--info-subtle);
+  --color-building: var(--building);
+  --color-building-subtle: var(--building-subtle);
+
+  /* Type scale. 12px (text-xs) is the floor for anything a person has
+     to read; text-2xs (11px) is for badges/counters only. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -45,25 +79,26 @@
 }
 
 /*
- * Palette derived from the kuso logo. Source colors:
- *   #40476D  slate-blue        — primary/accent (light)
- *   #ACBEA3  sage              — success / positive accent
- *   #EB6534  orange            — warning / live / highlight
- *   #AFBBF2  periwinkle        — primary/accent (dark) + info
- *   #941B0C  deep red          — destructive (both modes)
- *   #5B5941  warm olive        — secondary text / borders (dark)
- *   #271F30  aubergine         — dark mode base background
+ * Palette derived from the kuso logo:
+ *   #40476D slate-blue / #AFBBF2 periwinkle — the brand accent. One hue
+ *            (~230°) in both themes: links, focus rings, selection.
+ *   #ACBEA3 sage   — the one primary action colour (Deploy/Save/Create).
+ *   #EB6534 orange — attention only: warnings, "needs you" states.
+ *   red            — errors and destructive actions.
  *
- * Neutrals are warmed off-whites in light mode and a green-tinted
- * near-black ladder in dark mode so the brand colors don't feel
- * pasted onto a sterile gray UI.
+ * Every text token clears WCAG AA (4.5:1) on every surface it sits on
+ * (bg-primary/secondary/tertiary/elevated); placeholder is deliberately
+ * ~3:1 so it can't be mistaken for a typed value. Enforced by
+ * src/lib/theme-contrast.test.ts.
  */
 :root {
+  color-scheme: light;
   /* Console surfaces (log stream, shell, public reviewer page) stay dark
      in both themes; their text colours assume it. */
   --console-bg: #0b0b0e;
   --console-bg-hover: #1a1a20;
   --console-fg: #c9d1d9;
+
   --bg-primary: #FBFBF7;
   --bg-secondary: #F4F3EC;
   --bg-tertiary: #ECEAE0;
@@ -71,34 +106,36 @@
   --bg-inverse: #271F30;
   --text-primary: #1A1D2E;
   --text-secondary: #4A4F66;
-  --text-tertiary: #8A8E9F;
+  --text-tertiary: #5F6377;
+  --text-placeholder: #85827A;
   --text-inverse: #FBFBF7;
+
   --accent: #40476D;
   --accent-hover: #2F3556;
   --accent-subtle: rgba(64, 71, 109, 0.10);
-  /* Light mode: sage primary CTAs (Save/Create/Deploy), slate-blue
-     secondary. The dark-mode bg #ACBEA3 reads as muddy on the warm
-     cream background — too close to the surrounding cards in
-     lightness, and the dark sage border (#708A6B) wraps it like a
-     bezel. Lift to a brighter mint-leaning sage and use a same-hue
-     border one step darker than the fill so the button reads as a
-     single chip rather than fill+border arguing. Hover deepens
-     slightly (vs. lighter) so the press direction matches what your
-     eye expects on a light surface. */
-  --btn-primary-bg: #C7D8C0;
-  --btn-primary-bg-hover: #B5C9AD;
-  --btn-primary-fg: #1F2E1A;
-  --btn-primary-border: #B5C9AD;
-  --btn-secondary-bg: #40476D;
-  --btn-secondary-bg-hover: #2F3556;
-  --btn-secondary-fg: #FBFBF7;
-  --btn-secondary-border: #2F3556;
+  --accent-fg: #FBFBF7;           /* text on a solid --accent fill */
+  --link: var(--accent);
+  --focus: #4F5A92;               /* focus ring — brand hue, ≥3:1 on every surface */
+  --selected: rgba(64, 71, 109, 0.10);
+  --selected-border: #6B73A0;
+
+  /* The one primary button. Same sage hue as dark mode, deepened so
+     cream text clears AA on the light ground. */
+  --btn-primary-bg: #4D6847;
+  --btn-primary-bg-hover: #3F5A3A;
+  --btn-primary-fg: #FBFBF7;
+  --btn-primary-border: #3F5A3A;
+  --btn-secondary-bg: #FFFFFF;
+  --btn-secondary-bg-hover: #F4F3EC;
+  --btn-secondary-fg: #1A1D2E;
+  --btn-secondary-border: #D3D0C1;
+
   --border-default: #DCD9CB;
   --border-subtle: #E8E5D8;
-  --border-strong: #40476D;       /* slate-blue = hover/focus on light */
-  --shadow-sm: 0 1px 2px rgba(64, 71, 109, 0.06);
-  --shadow-md: 0 4px 12px rgba(64, 71, 109, 0.08);
-  --shadow-lg: 0 12px 40px rgba(64, 71, 109, 0.12);
+  --border-strong: #7A7F9E;       /* hover/active outlines */
+  --shadow-sm: 0 1px 2px rgba(26, 29, 46, 0.06);
+  --shadow-md: 0 4px 12px rgba(26, 29, 46, 0.08);
+  --shadow-lg: 0 12px 40px rgba(26, 29, 46, 0.14);
 
   --background: #FBFBF7;
   --foreground: #1A1D2E;
@@ -106,19 +143,19 @@
   --card-foreground: #1A1D2E;
   --popover: #FFFFFF;
   --popover-foreground: #1A1D2E;
-  --primary: #40476D;
+  --primary: #4D6847;
   --primary-foreground: #FBFBF7;
   --secondary: #F4F3EC;
   --secondary-foreground: #1A1D2E;
   --muted: #ECEAE0;
   --muted-foreground: #4A4F66;
-  --accent-ui: #40476D;
-  --accent-foreground: #FBFBF7;
-  --destructive: #941B0C;
+  --accent-ui: #ECEAE0;
+  --accent-foreground: #1A1D2E;
+  --destructive: #A3200F;
   --border: #DCD9CB;
-  --input: #ECEAE0;
-  --ring: #40476D;
-  --radius: 0.25rem;
+  --input: #FFFFFF;
+  --ring: var(--focus);
+  --radius: 0.375rem;
 
   --sidebar: #F4F3EC;
   --sidebar-foreground: #1A1D2E;
@@ -127,32 +164,28 @@
   --sidebar-accent: #ECEAE0;
   --sidebar-accent-foreground: #1A1D2E;
   --sidebar-border: #DCD9CB;
-  --sidebar-ring: #40476D;
+  --sidebar-ring: var(--focus);
 
-  /* Status hues — same semantic vars dark mode publishes, sized for
-     a light background. Sage/orange/red retain enough saturation to
-     be obvious at small sizes; the *-subtle variants are alpha-mixed
-     so badges + toasts read as tinted, not solid. */
-  --success: #708A6B;             /* sage shadow side */
-  --success-subtle: rgba(112, 138, 107, 0.14);
-  --warning: #C44C1F;             /* orange shadow side */
-  --warning-subtle: rgba(196, 76, 31, 0.14);
-  --building: #B8860B;            /* yellow, shadow side */
-  --building-subtle: rgba(184, 134, 11, 0.16);
-  --error: #941B0C;               /* deep red */
-  --error-subtle: rgba(148, 27, 12, 0.10);
-  --info: #40476D;                /* slate-blue */
+  /* Status hues, darkened to AA as text on the cream surfaces. The
+     *-subtle fills are alpha so badges read as tinted, not solid. */
+  --success: #4E6B48;
+  --success-subtle: rgba(78, 107, 72, 0.12);
+  --warning: #A8441A;
+  --warning-subtle: rgba(196, 76, 31, 0.12);
+  --building: #86600A;
+  --building-subtle: rgba(184, 134, 11, 0.14);
+  --error: #A3200F;
+  --error-subtle: rgba(163, 32, 15, 0.09);
+  --danger: var(--error);
+  --danger-subtle: var(--error-subtle);
+  --info: #40476D;
   --info-subtle: rgba(64, 71, 109, 0.10);
 
-  /* Chart palette: every color from the logo gets a slot, ordered
-     so chart-1 (the most-used series color) is the brand primary,
-     and the remaining slots cycle through complementary hues that
-     stay readable at small sizes. */
   --chart-1: #40476D;
   --chart-2: #EB6534;
-  --chart-3: #ACBEA3;
-  --chart-4: #5B5941;
-  --chart-5: #AFBBF2;
+  --chart-3: #6F8B69;
+  --chart-4: #8C7F4A;
+  --chart-5: #7C89D6;
 
   /* CVE severity scale (vulnerability scanning). Aliases of the status
      hues, so both themes follow automatically. */
@@ -169,114 +202,72 @@
 }
 
 .dark {
-  /* Dark-mode palette — three clear roles:
-       #0A0C15  cool near-black  — main (ground + surfaces, single hue)
-       #EB6534  orange           — accent (borders, links, focus rings)
-       #ACBEA3  sage             — action (Save / Deploy / Create)
-       #40476D  slate-blue       — decorative / secondary CTAs
-     The surface ladder (#0A0C15 → #11141F → #181C29 → #1F2333) all
-     stays within one cool-near-black hue family. Color appears
-     only through:
-       - hover/focus rings (orange)
-       - primary action buttons (sage)
-       - secondary CTAs (slate-blue)
-       - status pills (success=sage, warn=orange, error=red)
-     Periwinkle is no longer in active use as a token target. */
-
-  /* Surface ladder: cool near-black, single hue family. The base
-     #0A0C15 has a slight blue undertone — reads as a "computer
-     screen black" rather than a brand color. Steps lift by ~5%
-     lightness, no hue shift, so cards/popovers feel like the same
-     surface at different elevations. */
-  --bg-primary: #0A0C15;          /* cool near-black — page ground */
-  --bg-secondary: #11141F;        /* +1 step — sidebar */
-  --bg-tertiary: #181C29;         /* +2 step — hovered rows */
-  --bg-elevated: #1F2333;         /* +3 step — cards / popovers */
+  color-scheme: dark;
+  /* Surface ladder: one cool near-black hue, ~5% lightness per step so
+     page < sidebar < hover < card read as elevations of one material. */
+  --bg-primary: #0A0C15;
+  --bg-secondary: #11141F;
+  --bg-tertiary: #181C29;
+  --bg-elevated: #1F2333;
   --bg-inverse: #FBFBF7;
 
-  /* Text: cream primary, cool-grey secondary, muted tertiary.
-     Greys sit in the same cool-temperature family as the new
-     ground (#0A0C15), which keeps text from feeling imported. */
   --text-primary: #ECEAE0;
-  --text-secondary: #A3A8B8;      /* cool grey, lifted */
-  --text-tertiary: #6F7383;       /* cool grey, muted */
+  --text-secondary: #B4B8C6;
+  --text-tertiary: #8C91A3;
+  --text-placeholder: #6B7082;
   --text-inverse: #0A0C15;
 
-  /* Accent: orange (#EB6534) is the primary accent — borders on
-     hover, link colors, focus rings, ambient highlight. Same hue
-     as the action button so the language is consistent: every
-     interactive surface speaks orange. Slate (#40476D) and sage
-     (#ACBEA3) stay as decorative accents for non-interactive
-     content (status pills, secondary callouts). */
-  --accent: #EB6534;              /* orange — primary interactive accent */
-  --accent-hover: #F27A4F;
-  --accent-subtle: rgba(235, 101, 52, 0.14);
-  --accent-2: #40476D;            /* slate-blue — decorative */
+  /* Accent = periwinkle, the same brand hue as light mode's slate.
+     Orange no longer doubles as focus/selection colour. */
+  --accent: #AFBBF2;
+  --accent-hover: #C4CDF6;
+  --accent-subtle: rgba(175, 187, 242, 0.12);
+  --accent-fg: #0A0C15;
+  --link: var(--accent);
+  --focus: #8E9BE0;
+  --selected: rgba(175, 187, 242, 0.12);
+  --selected-border: #7680B8;
+  --accent-2: #40476D;
   --accent-2-subtle: rgba(64, 71, 109, 0.14);
-  --accent-3: #ACBEA3;            /* sage — decorative / success */
+  --accent-3: #ACBEA3;
   --accent-3-subtle: rgba(172, 190, 163, 0.14);
 
-  /* Action color: SAGE for high-emphasis "do the thing" buttons —
-     Save, Create, Deploy, Submit. Sage reads as positive/calm/
-     "this is the next step" rather than the loud "click me" of
-     orange. Orange stays as the universal accent for hover/focus/
-     interactive highlights, sage as the commit-the-action color.
-     Dark text on the pale sage so the button is high-contrast.
-
-     Save the rare orange highlight for when something actually
-     needs attention (warnings, builds in progress, etc) — the
-     scarcity is what makes it useful. */
   --btn-primary-bg: #ACBEA3;
   --btn-primary-bg-hover: #BDCCB4;
   --btn-primary-fg: #0A0C15;
-  --btn-primary-border: #8DA084;
-
-  /* Secondary CTAs (Open / Cancel / nav-style) use the slate
-     accent. shadcn's `default` Button variant routes through here. */
-  --btn-secondary-bg: #2A2F47;
-  --btn-secondary-bg-hover: #40476D;
+  --btn-primary-border: #ACBEA3;
+  --btn-secondary-bg: #181C29;
+  --btn-secondary-bg-hover: #1F2333;
   --btn-secondary-fg: #ECEAE0;
-  --btn-secondary-border: #4F5784;
+  --btn-secondary-border: #3A3F55;
 
-  /* Borders ladder against the cool-black ground. Each step lifts
-     by ~12% lightness from the surface so dividers/cards register
-     without flooding the page with a bright color. Strong = hover
-     uses orange to match the accent system. */
-  --border-subtle: #2A2F40;       /* cool slate, deep — ambient */
-  --border-default: #3A3F55;      /* cool slate, mid — dividers */
-  --border-strong: #EB6534;       /* orange — hover/focus */
+  --border-subtle: #262A3B;
+  --border-default: #3A3F55;
+  --border-strong: #6C7396;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
 
-  /* Tailwind/shadcn hookups. Each named token maps to the
-     cool-black surface ladder defined above — no separate "blue
-     surface" or "navy popover" paths anymore. The surface is one
-     hue family at four lightnesses; color shows up only via
-     accents and the action button. */
   --background: #0A0C15;
   --foreground: #ECEAE0;
-  --card: #1F2333;                /* surface +3 — cards */
+  --card: #1F2333;
   --card-foreground: #ECEAE0;
-  --popover: #1F2333;             /* same — popovers */
+  --popover: #171A27;
   --popover-foreground: #ECEAE0;
-  --primary: #ACBEA3;             /* sage — primary action */
+  --primary: #ACBEA3;
   --primary-foreground: #0A0C15;
-  --secondary: #11141F;           /* surface +1 */
+  --secondary: #11141F;
   --secondary-foreground: #ECEAE0;
-  --muted: #181C29;               /* surface +2 */
-  --muted-foreground: #A3A8B8;    /* cool grey */
+  --muted: #181C29;
+  --muted-foreground: #B4B8C6;
   --accent-ui: #181C29;
   --accent-foreground: #ECEAE0;
-  --destructive: #C9382A;
-  --border: #3A3F55;              /* matches --border-default */
-  --input: #181C29;               /* matches --bg-tertiary */
-  --ring: #EB6534;                /* orange — focus ring */
+  --destructive: #F47A6E;
+  --border: #3A3F55;
+  --input: #11141F;
+  --ring: var(--focus);
 
-  /* Sidebar uses surface +1 so the rail is one shade darker than
-     the cards above it — keeps the visual hierarchy "rail < page <
-     card" within the cool-black family. */
   --sidebar: #11141F;
   --sidebar-foreground: #ECEAE0;
   --sidebar-primary: #ACBEA3;
@@ -284,52 +275,84 @@
   --sidebar-accent: #181C29;
   --sidebar-accent-foreground: #ECEAE0;
   --sidebar-border: #3A3F55;
-  --sidebar-ring: #EB6534;
+  --sidebar-ring: var(--focus);
 
-  /* Status hues — used by Badge, Toast, build/env state pills, etc.
-     These don't have direct CSS-var consumers in shadcn primitives;
-     features import them via utility classes (text-success/etc) or
-     read the var directly.
-
-     building is its own hue (yellow) so "build in progress" doesn't
-     collide with the orange hover/accent — they were the same color
-     before, which made every animated-pulsing service look like it
-     was being hover-targeted. */
-  --success: #ACBEA3;             /* sage */
+  /* building is its own yellow so an in-progress build never reads as
+     the orange "needs attention" warning. Error is a cooler coral so
+     it separates from warning orange at dot size. */
+  --success: #ACBEA3;
   --success-subtle: rgba(172, 190, 163, 0.14);
-  --warning: #EB6534;             /* orange */
+  --warning: #EE7A4C;
   --warning-subtle: rgba(235, 101, 52, 0.14);
-  --building: #F0B429;            /* yellow — build in progress */
-  --building-subtle: rgba(240, 180, 41, 0.18);
-  --error: #C9382A;               /* lifted error */
-  --error-subtle: rgba(201, 56, 42, 0.14);
-  --info: #AFBBF2;                /* periwinkle (alias for accent) */
-  --info-subtle: rgba(175, 187, 242, 0.14);
+  --building: #F0B429;
+  --building-subtle: rgba(240, 180, 41, 0.16);
+  --error: #F47A6E;
+  --error-subtle: rgba(244, 122, 110, 0.13);
+  --danger: var(--error);
+  --danger-subtle: var(--error-subtle);
+  --info: #AFBBF2;
+  --info-subtle: rgba(175, 187, 242, 0.13);
 
-  /* Chart palette spans the whole brand: periwinkle → orange → sage
-     → warm olive → error red. Five hues, all from the source palette,
-     all readable on aubergine. */
-  --chart-1: #AFBBF2;             /* periwinkle */
-  --chart-2: #EB6534;             /* orange */
-  --chart-3: #ACBEA3;             /* sage */
-  --chart-4: #B5B19A;             /* warm olive */
-  --chart-5: #C9382A;             /* error red */
+  --chart-1: #AFBBF2;
+  --chart-2: #EB6534;
+  --chart-3: #ACBEA3;
+  --chart-4: #B5B19A;
+  --chart-5: #F47A6E;
 }
 
 @layer base {
-  * { @apply border-border outline-ring/50; }
+  * { @apply border-border; outline-color: var(--focus); }
   body { @apply bg-background text-foreground; }
-  html { @apply font-sans; }
+  html { @apply font-sans; font-feature-settings: "cv11", "ss01"; }
   button, a, input, textarea, select, [data-slot] {
     transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
   }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  /* Elements that draw their own ring (ring-*) opt out of the default
+     outline so focus never double-draws. */
+  [data-slot="button"]:focus-visible,
+  [data-slot="input"]:focus-visible,
+  [data-slot="select"]:focus-visible,
+  [role="tab"]:focus-visible { outline: none; }
+  ::selection { background: var(--accent-subtle); }
+}
+
+/* Unlayered on purpose: beats every placeholder:text-… utility (those
+   live in @layer utilities), so a hint never looks like a real value. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-placeholder);
+  opacity: 1;
+}
+
+@utility text-label {
+  font-size: var(--text-xs);
+  line-height: 1rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+@utility text-hint {
+  font-size: var(--text-xs);
+  line-height: 1.125rem;
+  color: var(--text-tertiary);
+}
+@utility text-title {
+  font-family: var(--font-ui);
+  font-size: 1.375rem;
+  line-height: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+@utility tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 .text-hero {
   font-size: clamp(3rem, 6vw, 5.5rem);
   line-height: 1.02;
   letter-spacing: -0.035em;
-  font-family: var(--font-dm-sans);
+  font-family: var(--font-ui);
   font-weight: 600;
 }
 
@@ -337,14 +360,34 @@
   font-size: clamp(1.75rem, 3vw, 2.5rem);
   line-height: 1.15;
   letter-spacing: -0.025em;
-  font-family: var(--font-dm-sans);
+  font-family: var(--font-ui);
   font-weight: 600;
 }
 
+/* Respect the OS "reduce motion" setting everywhere: CSS animations,
+   transitions, tw-animate enter/exit, the canvas edge dash and smooth
+   scrolling. Spinners keep spinning slowly so "busy" is still legible. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .react-flow__edge-path,
+  .react-flow__edge.animated path {
+    animation: none !important;
+    stroke-dasharray: none !important;
+  }
+}
+
 /* React Flow Controls — the library ships white-button CSS that
-   overrides inline classes on the buttons themselves. We re-skin
-   to match the dark canvas instead of trying to tame each button
-   individually with className= props. */
+   overrides inline classes on the buttons themselves. Re-skinned here
+   instead of per-button className props. */
 .react-flow__controls {
   box-shadow: none !important;
   border: 1px solid var(--border-subtle);
@@ -368,3 +411,8 @@
 .react-flow__controls-button svg {
   fill: currentColor !important;
 }
+
+/* Hide scrollbars on horizontal strips (tabs, chips) that show a fade
+   affordance instead. */
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
