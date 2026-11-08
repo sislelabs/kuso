@@ -284,7 +284,7 @@ export function serviceActions(services: PaletteService[]): ServiceAction[] {
       out.push({
         kind: def.kind,
         verb: def.verb,
-        label: `${def.verb}: ${svc.project}/${svc.display}`,
+        label: `${def.verb}: ${pathLabel(svc.project, svc.display)}`,
         keywords: [...def.keywords, svc.name, svc.project, svc.group],
         svc,
         tab: def.tab,
@@ -292,4 +292,126 @@ export function serviceActions(services: PaletteService[]): ServiceAction[] {
     }
   }
   return out;
+}
+
+// The one way the palette names something inside a project.
+export function pathLabel(project: string, name: string): string {
+  return `${project} / ${name}`;
+}
+
+// Ranking tiers. Each row's match score gets a boost by how close the
+// row is to what the user is doing: the project in the URL, then what
+// they opened recently, then their starred projects. The gaps (0.3 /
+// ≤0.22 / 0.1) are smaller than the gap between a label hit and a
+// keyword-only hit, so tiers reorder comparable matches without letting
+// a weak fuzzy hit in the current project jump an exact hit elsewhere.
+export const TIER_BOOST = { current: 0.3, recent: 0.2, starred: 0.1 } as const;
+const RECENT_DECAY = 0.01;
+const OWN_RECENT_NUDGE = 0.02;
+
+export interface RankContext {
+  currentProject: string;
+  recents: RecentItem[];
+  starred: ReadonlySet<string>;
+}
+
+// key is the row's own recentKey when it is a recents-able entity.
+export function tierBoost(ctx: RankContext, ref: { project: string; key?: string }): number {
+  const own = ref.key !== undefined && ctx.recents.some((r) => recentKey(r) === ref.key) ? OWN_RECENT_NUDGE : 0;
+  if (ctx.currentProject && ref.project === ctx.currentProject) return TIER_BOOST.current + own;
+  const i = ctx.recents.findIndex((r) => r.project === ref.project);
+  if (i >= 0) return TIER_BOOST.recent - RECENT_DECAY * Math.min(i, RECENTS_MAX - 1) + own;
+  if (ctx.starred.has(ref.project)) return TIER_BOOST.starred;
+  return 0;
+}
+
+export function rankScore(match: number, boost: number): number {
+  return match > 0 ? match + boost : 0;
+}
+
+// Past this many service hits spread over several projects, a flat list
+// stops being scannable, so the palette splits it into one group per
+// project.
+export const GROUP_BY_PROJECT_MIN = 6;
+
+export function shouldGroupByProject(hits: Pick<PaletteService, "project">[]): boolean {
+  return hits.length >= GROUP_BY_PROJECT_MIN && new Set(hits.map((h) => h.project)).size > 1;
+}
+
+// Last index the palette built, so reopening (or a fresh tab) renders
+// results instantly while the summary refetches in the background.
+export const INDEX_SNAPSHOT_KEY = "kuso.palette.index.v1";
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+const STATUSES: readonly string[] = STATUS_RANK;
+
+function isStatus(v: unknown): v is PaletteStatus {
+  return typeof v === "string" && STATUSES.includes(v);
+}
+
+function isSnapService(v: unknown): v is PaletteService {
+  return (
+    isObj(v) &&
+    typeof v.project === "string" &&
+    typeof v.name === "string" &&
+    typeof v.group === "string" &&
+    typeof v.display === "string" &&
+    typeof v.query === "string" &&
+    isStatus(v.status) &&
+    Array.isArray(v.envVarKeys) &&
+    v.envVarKeys.every((k) => typeof k === "string")
+  );
+}
+
+function isSnapProject(v: unknown): v is PaletteProject {
+  return isObj(v) && typeof v.name === "string" && typeof v.services === "number" && typeof v.live === "number" && isStatus(v.status);
+}
+
+function isSnapEnv(v: unknown): v is PaletteEnv {
+  return (
+    isObj(v) &&
+    typeof v.project === "string" &&
+    typeof v.group === "string" &&
+    (v.kind === "preview" || v.kind === "custom") &&
+    typeof v.services === "number"
+  );
+}
+
+// Keyed to the user, so a shared browser never shows one account's
+// projects to the next before the refetch lands.
+export function parseIndexSnapshot(raw: string | null, user: string): PaletteIndex | null {
+  if (!raw || !user) return null;
+  try {
+    const o: unknown = JSON.parse(raw);
+    if (!isObj(o) || o.user !== user) return null;
+    const v = o.index;
+    if (!isObj(v) || !Array.isArray(v.projects) || !Array.isArray(v.services) || !Array.isArray(v.envs)) return null;
+    return {
+      projects: v.projects.filter(isSnapProject),
+      services: v.services.filter(isSnapService),
+      envs: v.envs.filter(isSnapEnv),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function loadIndexSnapshot(user: string): PaletteIndex | null {
+  try {
+    return parseIndexSnapshot(window.localStorage.getItem(INDEX_SNAPSHOT_KEY), user);
+  } catch {
+    return null;
+  }
+}
+
+export function saveIndexSnapshot(index: PaletteIndex, user: string): void {
+  if (!user) return;
+  try {
+    window.localStorage.setItem(INDEX_SNAPSHOT_KEY, JSON.stringify({ user, index }));
+  } catch {
+    // Quota / blocked storage: the palette just waits for the fetch.
+  }
 }
