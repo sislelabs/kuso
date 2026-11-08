@@ -1,6 +1,5 @@
 "use client";
 
-import { Handle, Position } from "@xyflow/react";
 import { MoreHorizontal } from "lucide-react";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import type { KusoAddon } from "@/types/projects";
@@ -8,8 +7,10 @@ import { cn } from "@/lib/utils";
 import { deriveAddonStatus, STATUS_TONE } from "@/features/services";
 import { VulnBadge } from "./NodeBadges";
 import type { VulnSummary } from "./badgeSummary";
+import { NodeHandles } from "./NodeHandles";
+import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 
-export interface AddonNodeData extends Record<string, unknown> {
+export interface AddonNodeData extends CanvasNodeA11y {
   project: string;
   addon: KusoAddon;
   vulns?: VulnSummary;
@@ -17,7 +18,7 @@ export interface AddonNodeData extends Record<string, unknown> {
   __onOpenTab?: (tab: string) => void;
 }
 
-export function AddonNode({ data }: { data: AddonNodeData }) {
+export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
   const status = deriveAddonStatus(data.addon);
   const tone = STATUS_TONE[status.tone];
   const shortName = data.addon.metadata.name.startsWith(data.project + "-")
@@ -31,6 +32,11 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
   return (
     <div
       data-node-context
+      data-canvas-node={id}
+      tabIndex={data.__tabIndex ?? -1}
+      role="group"
+      aria-roledescription="addon"
+      aria-label={`${shortName}, ${addonLabel(data.addon.spec.kind)}, ${status.label}`}
       onContextMenu={data.__onContext}
       title={status.detail ? `${status.label}: ${status.detail}` : undefined}
       className={cn(
@@ -38,11 +44,12 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
         // pieces; both snap to the same 24px grid.
         "group relative flex h-[72px] w-[220px] flex-col justify-center rounded-2xl border-2 bg-[var(--bg-elevated)] px-3 py-2 transition-colors cursor-pointer hover:border-[var(--border-strong)]",
         tone.border,
+        nodeFocusClass,
       )}
     >
-      <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
-      <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
+      <NodeHandles />
       <button
+        tabIndex={-1}
         type="button"
         aria-label={`Actions for ${shortName}`}
         onClick={(e) => {
@@ -59,7 +66,7 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
         <div className="min-w-0 flex-1">
           <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
             <span className="truncate" title={data.addon.metadata.name}>{shortName}</span>
-            <VulnBadge summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+            <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
           </p>
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
             <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />

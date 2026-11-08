@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink, Layers, MoreHorizontal } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
@@ -19,8 +18,10 @@ import { relativeTime } from "@/lib/format";
 import { toast } from "sonner";
 import { ErrorBadge, VulnBadge } from "./NodeBadges";
 import type { ErrorSummary, VulnSummary } from "./badgeSummary";
+import { NodeHandles } from "./NodeHandles";
+import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 
-export interface ServiceNodeData extends Record<string, unknown> {
+export interface ServiceNodeData extends CanvasNodeA11y {
   project: string;
   service: KusoService;
   env?: KusoEnvironment;
@@ -33,8 +34,6 @@ export interface ServiceNodeData extends Record<string, unknown> {
   __onContext?: (e: React.MouseEvent) => void;
   // Injected by ProjectCanvas — opens the service overlay on a tab.
   __onOpenTab?: (tab: string) => void;
-  // Injected by ProjectCanvas — true when the j/k focus index points here.
-  __focused?: boolean;
 }
 
 interface Replicas {
@@ -54,7 +53,7 @@ export function serviceNodeStatus(data: Pick<ServiceNodeData, "service" | "env" 
   return deriveServiceStatus({ stopped: !!data.service.spec?.stopped, env: data.env, latestBuild: data.latestBuild });
 }
 
-export function ServiceNode({ data }: { data: ServiceNodeData }) {
+export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData }) {
   const status = serviceNodeStatus(data);
   const tone = STATUS_TONE[status.tone];
   const url = serviceUrl(data.service, data.env);
@@ -68,6 +67,13 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   return (
     <div
       data-node-context
+      data-canvas-node={id}
+      tabIndex={data.__tabIndex ?? -1}
+      role="group"
+      aria-roledescription="service"
+      aria-label={[displayName, status.label, data.errors?.occurrences ? `${data.errors.occurrences} errors in 24h` : ""]
+        .filter(Boolean)
+        .join(", ")}
       onContextMenu={data.__onContext}
       title={status.detail || undefined}
       className={cn(
@@ -75,13 +81,13 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         tone.border,
         "hover:border-[var(--border-strong)]",
         dimmed && "opacity-70",
-        data.__focused && "outline outline-2 outline-offset-2 outline-[var(--accent)]",
+        nodeFocusClass,
       )}
     >
-      <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
-      <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
+      <NodeHandles />
 
       <button
+        tabIndex={-1}
         type="button"
         aria-label={`Actions for ${displayName}`}
         onClick={(e) => {
@@ -100,8 +106,8 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
         </span>
-        <ErrorBadge summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
-        <VulnBadge summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+        <ErrorBadge tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
+        <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>
 
       <div className="mt-2 flex min-w-0 items-center gap-2">
@@ -187,6 +193,7 @@ function UrlPill({ url }: { url: string }) {
       className="nodrag inline-flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-1 font-mono text-xs text-[var(--text-secondary)]"
     >
       <a
+        tabIndex={-1}
         href={url}
         target="_blank"
         rel="noreferrer"
@@ -197,6 +204,7 @@ function UrlPill({ url }: { url: string }) {
         <span className="sr-only">(opens in a new tab)</span>
       </a>
       <button
+        tabIndex={-1}
         type="button"
         onClick={onCopy}
         aria-label={`Copy ${display}`}

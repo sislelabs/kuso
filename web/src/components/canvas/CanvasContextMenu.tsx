@@ -54,11 +54,48 @@ interface Props {
 // positioned card with click-outside + ESC + Tab-trap is enough.
 export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  // Callers pass a fresh onClose each render; reading it through a ref
+  // keeps the effect below from re-running (and re-grabbing focus) on
+  // every parent render.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
+  // Keyboard: focus moves into the menu on open (so Shift+F10 on a canvas
+  // node is usable), arrows/Home/End rove the items, Esc or Tab closes
+  // and hands focus back to whatever opened it.
   useEffect(() => {
     if (!open) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    const raf = requestAnimationFrame(() => items()[0]?.focus());
+    const close = () => {
+      onCloseRef.current();
+      if (opener?.isConnected) opener.focus();
+    };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" || e.key === "Tab") {
+        e.preventDefault();
+        close();
+        return;
+      }
+      const list = items();
+      if (list.length === 0) return;
+      const i = list.indexOf(document.activeElement as HTMLElement);
+      const to =
+        e.key === "ArrowDown"
+          ? (i + 1) % list.length
+          : e.key === "ArrowUp"
+            ? (i - 1 + list.length) % list.length
+            : e.key === "Home"
+              ? 0
+              : e.key === "End"
+                ? list.length - 1
+                : -1;
+      if (to < 0) return;
+      e.preventDefault();
+      list[to].focus();
     };
     // Close on any pointer down outside the menu. We listen in the
     // capture phase on the document so React Flow's pan/zoom (which
@@ -66,7 +103,7 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
     // the event before we see it. pointerdown also fires for touch +
     // pen + mouse so the menu dismisses on any input modality.
     const onPointer = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      if (ref.current && !ref.current.contains(e.target as Node)) onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     // Wait a tick so the same right-click that opened the menu doesn't
@@ -76,11 +113,12 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
       0
     );
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("pointerdown", onPointer, true);
       window.clearTimeout(t);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   // Clamp to viewport so the menu doesn't render off-screen near the
   // bottom-right corner of the canvas. Width grows for richer menus;
@@ -132,9 +170,9 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
                 >
                   {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />}
                   <div className="min-w-0">
-                    <p className="truncate text-[12px] font-medium">{h.label}</p>
+                    <p className="truncate text-xs font-medium">{h.label}</p>
                     {h.subtitle && (
-                      <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+                      <p className="truncate text-xs text-[var(--text-tertiary)]">
                         {h.subtitle}
                       </p>
                     )}
@@ -158,12 +196,12 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
                   onClose();
                 }}
                 className={cn(
-                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors",
+                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
                   item.disabled
                     ? "cursor-not-allowed text-[var(--text-tertiary)]/60"
                     : item.destructive
-                      ? "text-red-400 hover:bg-red-500/10"
-                      : "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                      ? "text-[var(--error)] hover:bg-[var(--error-subtle)] focus-visible:bg-[var(--error-subtle)]"
+                      : "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)]"
                 )}
               >
                 {Icon ? (
@@ -173,7 +211,7 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
                 )}
                 <span className="flex-1 truncate">{item.label}</span>
                 {item.shortcut && (
-                  <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <span className="text-2xs text-[var(--text-tertiary)]">
                     {item.shortcut}
                   </span>
                 )}
