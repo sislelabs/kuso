@@ -301,7 +301,7 @@ export function NotificationsSheetButton({ className, children }: { className?: 
 // Server titles carry a status glyph for chat channels ("✓ Build
 // succeeded"); the row's dot already says that.
 function feedTitle(title: string): string {
-  return title.replace(/^[\s\u2713\u2714\u2717\u2718\u26A0\uFE0F\u274C\u2705\u{1F534}\u{1F7E2}\u{1F7E1}]+/u, "");
+  return title.replace(/^(?:\s|\u2713|\u2714|\u2717|\u2718|\u26A0|\uFE0F|\u274C|\u2705|\u{1F534}|\u{1F7E2}|\u{1F7E1})+/u, "");
 }
 
 // NotificationRow is one feed entry. Rows with a target (server url, or a
