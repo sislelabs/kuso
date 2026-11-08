@@ -54,11 +54,35 @@ type domainDNS struct {
 	Message  string              `json:"message,omitempty"`
 }
 
+// tlsCause is the likely reason a cert isn't serving yet, so the UI can
+// say it in plain words instead of echoing cert-manager conditions.
+type tlsCause string
+
+const (
+	causeCertManagerMissing tlsCause = "cert_manager_missing"
+	causeRateLimited        tlsCause = "rate_limited"
+	causeCAA                tlsCause = "caa"
+	causeDNSNotPointed      tlsCause = "dns_not_pointed"
+	causeCloudflareProxy    tlsCause = "cloudflare_proxy"
+	causeExpired            tlsCause = "expired"
+	causeValidationFailed   tlsCause = "validation_failed"
+	causeIssuing            tlsCause = "issuing"
+	causeNotRequested       tlsCause = "not_requested"
+)
+
 type domainTLS struct {
 	Status   tlsStatus `json:"status"`
 	NotAfter string    `json:"notAfter,omitempty"`
 	Reason   string    `json:"reason,omitempty"`
 	Message  string    `json:"message,omitempty"`
+	Cause    tlsCause  `json:"cause,omitempty"`
+	// Since is when the cert last stopped being Ready (or was created):
+	// how long issuance has been going on.
+	Since       string `json:"since,omitempty"`
+	LastFailure string `json:"lastFailure,omitempty"`
+	Attempts    int    `json:"attempts,omitempty"`
+	// failure is the raw cert-manager text the cause is matched against.
+	failure string
 }
 
 type domainStatus struct {
@@ -120,10 +144,23 @@ func tlsFor(d envDomain, certs []hostcheck.Cert, now time.Time) domainTLS {
 	if match == nil {
 		return domainTLS{Status: tlsMissing}
 	}
-	out := domainTLS{}
+	out := domainTLS{Attempts: match.FailedAttempts}
 	if match.NotAfter != nil {
 		out.NotAfter = match.NotAfter.UTC().Format(time.RFC3339)
 	}
+	if match.LastFailure != nil {
+		out.LastFailure = match.LastFailure.UTC().Format(time.RFC3339)
+	}
+	if !match.Ready {
+		since := match.ReadyTransition
+		if since.IsZero() {
+			since = match.Created
+		}
+		if !since.IsZero() {
+			out.Since = since.UTC().Format(time.RFC3339)
+		}
+	}
+	out.failure = strings.Join([]string{match.IssuingFailure, match.Reason, match.Message}, " ")
 	if match.NotAfter != nil && !match.NotAfter.After(now) {
 		out.Status = tlsFailed
 		out.Reason = "Expired"
@@ -149,6 +186,52 @@ func tlsFor(d envDomain, certs []hostcheck.Cert, now time.Time) domainTLS {
 	out.Reason = match.Reason
 	out.Message = match.Message
 	return out
+}
+
+// diagnoseTLS picks the most useful single explanation for a host whose
+// cert isn't serving. Order matters: a rate limit or CAA block outlives a
+// DNS fix, so it's reported first; DNS beats the generic failure because
+// it's the usual root cause and the one the user can act on.
+func diagnoseTLS(tls domainTLS, dns hostcheck.DNSStatus, certManagerMissing bool) tlsCause {
+	if tls.Status == tlsReady || tls.Status == tlsExternal || tls.Status == tlsUnknown {
+		return ""
+	}
+	if certManagerMissing {
+		return causeCertManagerMissing
+	}
+	text := strings.ToLower(tls.failure)
+	switch {
+	case containsAny(text, "ratelimited", "rate limit", "too many certificates", "too many failed authorizations", "too many new orders"):
+		return causeRateLimited
+	case containsAny(text, "error:caa", "caa record"):
+		return causeCAA
+	case dns == hostcheck.DNSMismatch || dns == hostcheck.DNSUnresolved:
+		return causeDNSNotPointed
+	}
+	switch tls.Status {
+	case tlsFailed:
+		if tls.Reason == "Expired" {
+			return causeExpired
+		}
+		if dns == hostcheck.DNSProxied {
+			return causeCloudflareProxy
+		}
+		return causeValidationFailed
+	case tlsIssuing:
+		return causeIssuing
+	case tlsMissing:
+		return causeNotRequested
+	}
+	return ""
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func certCovers(c hostcheck.Cert, host string) bool {
@@ -236,7 +319,7 @@ func (h *ProjectsHandler) GetEnvDomainsStatus(w http.ResponseWriter, r *http.Req
 	// checks their own budget off the request context.
 	cctx, ccancel := context.WithTimeout(r.Context(), domainStatusBudget)
 	defer ccancel()
-	resp := h.buildDomainsStatus(cctx, env, time.Now())
+	resp := h.buildDomainsStatus(cctx, env, time.Now(), net.DefaultResolver)
 	h.domainStatus.put(key, resp, time.Now())
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -255,9 +338,17 @@ func envStatusCRName(project, service, envName string) string {
 	return fmt.Sprintf("%s-%s-%s", project, strings.TrimPrefix(service, project+"-"), envName)
 }
 
-func (h *ProjectsHandler) buildDomainsStatus(ctx context.Context, env *kube.KusoEnvironment, now time.Time) envDomainsStatusResponse {
+func (h *ProjectsHandler) buildDomainsStatus(ctx context.Context, env *kube.KusoEnvironment, now time.Time, resolver hostcheck.Resolver) (resp envDomainsStatusResponse) {
 	domains := envDomainsOf(env)
-	resp := envDomainsStatusResponse{
+	certManagerMissing := false
+	// Runs on every return path below, after DNS (if any) is known.
+	defer func() {
+		for i := range resp.Domains {
+			d := &resp.Domains[i]
+			d.TLS.Cause = diagnoseTLS(d.TLS, d.DNS.Status, certManagerMissing)
+		}
+	}()
+	resp = envDomainsStatusResponse{
 		CheckedAt:   now.UTC().Format(time.RFC3339),
 		ExpectedIPs: []string{},
 		Domains:     make([]domainStatus, len(domains)),
@@ -274,6 +365,7 @@ func (h *ProjectsHandler) buildDomainsStatus(ctx context.Context, env *kube.Kuso
 		// cert-manager not installed: no Certificates exist, so every
 		// non-wildcard host is genuinely "missing".
 		certErr = nil
+		certManagerMissing = true
 	}
 	if certErr != nil {
 		h.Logger.Warn("env domains status: list certificates", "namespace", env.Namespace, "err", certErr)
@@ -314,7 +406,7 @@ func (h *ProjectsHandler) buildDomainsStatus(ctx context.Context, env *kube.Kuso
 		return resp
 	}
 	resp.ExpectedIPs = expected
-	results := hostcheck.CheckHosts(ctx, net.DefaultResolver, hosts, expected, domainStatusDNSTimeout)
+	results := hostcheck.CheckHosts(ctx, resolver, hosts, expected, domainStatusDNSTimeout)
 	for j, res := range results {
 		d := domainDNS{Status: res.Status, Resolved: res.Resolved}
 		if d.Resolved == nil {

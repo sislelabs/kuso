@@ -44,6 +44,15 @@ type Cert struct {
 	// when cert-manager hasn't written the condition yet.
 	ReadyTransition time.Time
 	Created         time.Time
+	// IssuingFailure is the Issuing condition's message once an attempt
+	// has failed (status False, reason Failed). The ACME error that
+	// explains a stuck cert (rate limit, CAA, challenge) surfaces here,
+	// not on Ready.
+	IssuingFailure string
+	// FailedAttempts and LastFailure come from status.failedIssuanceAttempts
+	// / status.lastFailureTime; cert-manager backs off between retries.
+	FailedAttempts int
+	LastFailure    *time.Time
 }
 
 // ListCertificates lists every Certificate in the cluster.
@@ -73,10 +82,28 @@ func parseCert(u *unstructured.Unstructured) Cert {
 			c.NotAfter = &t
 		}
 	}
+	if n, ok, _ := unstructured.NestedInt64(u.Object, "status", "failedIssuanceAttempts"); ok {
+		c.FailedAttempts = int(n)
+	}
+	if s, _, _ := unstructured.NestedString(u.Object, "status", "lastFailureTime"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			t = t.UTC()
+			c.LastFailure = &t
+		}
+	}
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, raw := range conds {
 		m, ok := raw.(map[string]any)
-		if !ok || m["type"] != "Ready" {
+		if !ok {
+			continue
+		}
+		if m["type"] == "Issuing" {
+			if m["status"] == "False" && m["reason"] == "Failed" {
+				c.IssuingFailure, _ = m["message"].(string)
+			}
+			continue
+		}
+		if m["type"] != "Ready" {
 			continue
 		}
 		c.Ready = m["status"] == "True"
