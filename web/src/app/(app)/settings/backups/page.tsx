@@ -18,6 +18,7 @@ import { SettingsField, SettingsNotice, SettingsSection } from "@/components/set
 import { cn } from "@/lib/utils";
 import { useCan, Perms } from "@/features/auth";
 import { ControlPlaneBackupSection } from "@/components/settings/ControlPlaneBackupSection";
+import { addonBackupCoverageText, summarizeAddonBackups } from "@/components/health/backupCoverage";
 
 interface HealthEntry {
   healthy: boolean;
@@ -110,7 +111,7 @@ function AddonBackupList({
       title="Addon backups"
       description={
         <>
-          Failures first. Ages are the last run that succeeded.
+          {addonBackupCoverageText(summarizeAddonBackups(addons))}. Failures first. Ages are the last run that succeeded.
           {!complete && <span className="ml-1 text-[var(--warning)]">Partial list: some namespaces couldn&apos;t be read.</span>}
         </>
       }

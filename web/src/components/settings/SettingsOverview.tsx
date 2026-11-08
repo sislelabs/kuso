@@ -9,7 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { useDrains } from "@/features/drains";
 import { useSetupStatus } from "@/features/github";
+import { addonBackupCoverageText, addonBackupFailingText, summarizeAddonBackups } from "@/components/health/backupCoverage";
 import { useSystemVersion } from "@/features/system-version";
+import { pendingInviteCount, type InviteRow } from "@/features/users";
 import { api } from "@/lib/api-client";
 import type { StatusMeta, StatusTone } from "@/lib/status";
 
@@ -147,14 +149,13 @@ function BackupsTile() {
       query={health}
       render={() => {
         const h = health.data;
-        const addons = h?.addonBackups ?? [];
-        const failing = addons.filter((a) => a.covered && !a.healthy).length;
-        const uncovered = addons.filter((a) => !a.covered).length;
+        const c = summarizeAddonBackups(h?.addonBackups ?? []);
+        const { failing, uncovered } = c;
         const cpOK = h?.backup.healthy ?? false;
         if (failing > 0 || !cpOK) {
           return {
             status: meta("danger", "Failing"),
-            value: failing > 0 ? `${plural(failing, "addon backup")} failing` : "Control-plane backup isn't healthy",
+            value: addonBackupFailingText(c) ?? "Control-plane backup isn't healthy",
             detail: !cpOK ? h?.backup.detail : undefined,
           };
         }
@@ -163,7 +164,7 @@ function BackupsTile() {
           value: uncovered > 0 ? "No failing backups" : "Backups healthy",
           detail:
             uncovered > 0
-              ? `${plural(uncovered, "addon")} ${uncovered === 1 ? "has" : "have"} no scheduled backup.`
+              ? `${addonBackupCoverageText(c)}.`
               : "Control plane and every addon back up on schedule.",
         };
       }}
@@ -204,7 +205,7 @@ function UsersTile() {
   });
   const invites = useQuery({
     queryKey: ["admin", "invites"],
-    queryFn: () => api<unknown[]>("/api/invites"),
+    queryFn: () => api<InviteRow[]>("/api/invites"),
   });
   return (
     <Tile
@@ -215,7 +216,7 @@ function UsersTile() {
       render={() => {
         const list = users.data ?? [];
         const active = list.filter((u) => u.isActive).length;
-        const pending = invites.data?.length ?? 0;
+        const pending = pendingInviteCount(invites.data);
         return {
           status: meta("neutral", "Team"),
           value: plural(active, "active user"),

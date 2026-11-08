@@ -127,7 +127,17 @@ export default function UsagePage() {
   return (
     <SettingsPage
       title="Usage & cost"
-      description={`Where CPU and memory go, by project. Figures look ahead 30 days at the pace of the last ${windowDays} days; cost uses the rates set in Cluster config.`}
+      description={
+        <>
+          Where CPU and memory go, by project. Figures look ahead 30 days at the pace of the last {windowDays} days;
+          cost uses the rates set in Cluster config.
+          {/* Matches projectmetrics.Sampler: running pods carrying the project label, every 5 min. */}
+          <span className="mt-1 block text-xs text-[var(--text-tertiary)]">
+            All environments (production, staging, previews), addons and cron jobs · sampled every 5 minutes over the
+            last {windowDays} days · builds not included
+          </span>
+        </>
+      }
       actions={
         <Segmented
           label="Based on the last"
