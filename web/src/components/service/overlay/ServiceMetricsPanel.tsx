@@ -23,6 +23,7 @@ import {
 } from "@/features/service-metrics";
 import type { ResourceSample } from "@/features/service-metrics";
 import { formatCpu, shortSha } from "@/lib/format";
+import { envGroupName } from "@/lib/env-group";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
 
@@ -176,9 +177,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Metrics</h3>
-          <p className="text-xs text-[var(--text-secondary)]">
-            <span className="font-mono">{envName}</span>
-          </p>
+          <p className="text-xs text-[var(--text-secondary)]">{envGroupName(env)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DeployLegend count={deploysInRange} />
@@ -560,8 +559,8 @@ function NoTraffic() {
     <p className="flex items-start gap-1.5 text-left text-xs text-[var(--text-secondary)]">
       <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
       <span>
-        No request data. Request metrics come from the ingress, so they appear once the service has a domain and receives
-        traffic.
+        No requests recorded in this range. Request metrics are read from the ingress through Prometheus, so they stay empty
+        until traffic reaches the service&apos;s domain, or if this cluster has no Prometheus scraping the ingress.
       </span>
     </p>
   );

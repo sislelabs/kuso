@@ -53,7 +53,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
 
   return (
     <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
-      <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm">
+      <table className="w-full min-w-[560px] border-separate border-spacing-0 text-sm">
         <caption className="sr-only">Services, addons and crons in {project} ({selectedEnv})</caption>
         <thead>
           <tr className="text-left text-xs text-[var(--text-tertiary)]">
@@ -61,7 +61,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
             <th scope="col" className="pb-2 font-medium">Status</th>
             <th scope="col" className="pb-2 font-medium">URL</th>
             <th scope="col" className="pb-2 font-medium">Last deploy</th>
-            <th scope="col" className="pb-2 font-medium">Replicas</th>
+            <th scope="col" className="hidden pb-2 font-medium lg:table-cell">Replicas</th>
             <th scope="col" className="pb-2 pr-3 font-medium">Type</th>
           </tr>
         </thead>
@@ -108,7 +108,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                       <span className="text-[var(--text-tertiary)]">—</span>
                     )}
                   </td>
-                  <td className={cn(cellCls, "whitespace-nowrap tabular-nums text-[var(--text-secondary)]")}>
+                  <td className={cn(cellCls, "hidden whitespace-nowrap tabular-nums text-[var(--text-secondary)] lg:table-cell")}>
                     {r && (r.ready !== undefined || r.desired !== undefined) ? (
                       <span title={r.max && r.max > (r.desired ?? 0) ? `Autoscales up to ${r.max}` : undefined}>
                         {r.ready ?? 0}/{r.desired ?? r.max ?? 0}
@@ -147,7 +147,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                   </td>
                   <td className={cn(cellCls, "text-[var(--text-tertiary)]")}>—</td>
                   <td className={cn(cellCls, "text-[var(--text-tertiary)]")}>—</td>
-                  <td className={cn(cellCls, "whitespace-nowrap text-[var(--text-secondary)]")}>
+                  <td className={cn(cellCls, "hidden whitespace-nowrap text-[var(--text-secondary)] lg:table-cell")}>
                     {a.spec.ha ? "HA" : "Single"}
                   </td>
                   <td className={cn(cellCls, "pr-3 text-[var(--text-secondary)]")}>
@@ -179,7 +179,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                   </td>
                   <td className={cn(cellCls, "text-[var(--text-tertiary)]")}>—</td>
                   <td className={cn(cellCls, "text-[var(--text-tertiary)]")}>—</td>
-                  <td className={cn(cellCls, "text-[var(--text-tertiary)]")}>—</td>
+                  <td className={cn(cellCls, "hidden text-[var(--text-tertiary)] lg:table-cell")}>—</td>
                   <td className={cn(cellCls, "pr-3 text-[var(--text-secondary)]")}>
                     {kind === "http" ? "HTTP" : kind === "command" ? "Command" : "Service"} ·{" "}
                     <span title={c.spec.schedule}>{describeSchedule(c.spec.schedule ?? "")}</span>
@@ -287,7 +287,7 @@ function UrlCell({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   const display = url.replace(/^https?:\/\//, "");
   return (
-    <span className="inline-flex max-w-[280px] items-center gap-1">
+    <span className="inline-flex max-w-[200px] items-center gap-1 lg:max-w-[280px]">
       <a
         href={url}
         target="_blank"

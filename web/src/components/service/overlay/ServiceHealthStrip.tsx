@@ -119,25 +119,26 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
             className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2 text-left transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
           >
             <span className="text-xs text-[var(--text-tertiary)]">{c.label}</span>
+            {/* Value and its note stack and wrap; never an ellipsis. */}
             <span
               className={cn(
-                "flex min-w-0 max-w-full items-center gap-1.5 text-sm font-medium",
+                "flex min-w-0 max-w-full items-start gap-1.5 text-sm font-medium break-words",
                 c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
               )}
             >
-              {c.id === "status" && <StatusDot status={status} />}
-              <span className={c.secondary ? "shrink-0" : "truncate"}>{c.value}</span>
-              {c.secondary && (
-                <span
-                  className={cn(
-                    "truncate text-xs font-normal",
-                    c.secondary.tone === "plain" ? "text-[var(--text-secondary)]" : TONE_CLASSES[c.secondary.tone].text,
-                  )}
-                >
-                  {c.secondary.text}
-                </span>
-              )}
+              {c.id === "status" && <StatusDot status={status} className="mt-1.5" />}
+              <span className="min-w-0">{c.value}</span>
             </span>
+            {c.secondary && (
+              <span
+                className={cn(
+                  "text-xs font-normal",
+                  c.secondary.tone === "plain" ? "text-[var(--text-secondary)]" : TONE_CLASSES[c.secondary.tone].text,
+                )}
+              >
+                {c.secondary.text}
+              </span>
+            )}
           </button>
         </li>
       ))}
