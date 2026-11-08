@@ -17,3 +17,5 @@ export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog 
 export type { BuildLogLine, LiveLogState } from "./logs";
 export { githubRepoSlug, githubCommitUrl, githubCompareUrl } from "./github";
 export type { DeployBuild, BuildRowStatus } from "./types";
+export { parseBuildLog, firstErrorLine, deployStage, formatStepDuration, isErrorLine } from "./phases";
+export type { BuildStep, StepLine, StepStatus, ParsedBuildLog, DeployStage } from "./phases";

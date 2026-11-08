@@ -2480,7 +2480,8 @@ func buildAge(b *kube.KusoBuild) time.Duration {
 // CR from further reconciles. Without it, completed KusoBuilds get
 // reconciled every 60s forever — burning ~10% of one core in a busy
 // cluster on dead work.
-// archiveLogs snapshots the last 200 lines of the kaniko pod's logs
+// archiveLogs snapshots the tail (archiveTailLines lines, at most
+// archiveMaxBytes) of the build pod's logs
 // into the BuildLog table. Best-effort: kube errors are logged at
 // warn and swallowed — the build's terminal phase is the load-bearing
 // patch, log archiving is a UX nice-to-have. Selects the pod by the
@@ -2490,7 +2491,7 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 	if p.LogArchive == nil || p.Svc == nil || p.Svc.Kube == nil {
 		return
 	}
-	const tailLines = 200
+	const tailLines = archiveTailLines
 	lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	pods, err := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{
@@ -2564,12 +2565,9 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 			slog.Default().Warn("builds: persist detectedEnv", "err", err, "build", b.Name)
 		}
 	}
-	// Last-N-line cap. The kaniko build can spit 5k+ lines in a noisy
-	// build (apt-get progress, nix derivations); we want the tail
-	// because that's where the failure usually is.
-	if lines := strings.Split(logs, "\n"); len(lines) > tailLines {
-		logs = strings.Join(lines[len(lines)-tailLines:], "\n")
-	}
+	// Tail cap. A noisy build (apt-get progress, nix derivations) can
+	// print 5k+ lines; the tail is where the failure usually is.
+	logs = capLogTail(logs, tailLines, archiveMaxBytes)
 	if err := p.LogArchive.SaveBuildLog(lctx, b.Name, b.Spec.Project,
 		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), phase, logs); err != nil {
 		slog.Default().Warn("builds: archive save", "err", err, "build", b.Name)
@@ -2611,6 +2609,30 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 			p.archiveRecord(lctx, b, phase)
 		}
 	}
+}
+
+// The archive keeps enough of the log for the dashboard to fold it into
+// BuildKit steps (a 200-line tail started mid-build and lost every step
+// header), bounded in bytes so one chatty build can't bloat the table.
+const (
+	archiveTailLines = 2000
+	archiveMaxBytes  = 384 << 10
+)
+
+// capLogTail keeps the last maxLines lines of logs, then drops whole
+// leading lines until it fits in maxBytes.
+func capLogTail(logs string, maxLines, maxBytes int) string {
+	if lines := strings.Split(logs, "\n"); len(lines) > maxLines {
+		logs = strings.Join(lines[len(lines)-maxLines:], "\n")
+	}
+	if len(logs) <= maxBytes {
+		return logs
+	}
+	cut := logs[len(logs)-maxBytes:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 {
+		return cut[i+1:]
+	}
+	return cut
 }
 
 // extractTerminatedReason inspects the build pod's containerStatuses

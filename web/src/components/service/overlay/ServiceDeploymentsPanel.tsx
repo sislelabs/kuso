@@ -4,8 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { buildTriggerMessage, useBuilds, useService, useTriggerBuild } from "@/features/services";
+import { useBuilds, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
 import { listServicePods, useServicePods } from "@/features/pods";
@@ -27,8 +26,7 @@ import {
 import { envRevisionName, groupRevisionRuns, interleaveTimeline, useRevisions } from "@/features/revisions";
 import type { KusoEnvironment } from "@/types/projects";
 import { Check, ExternalLink, Loader2, Rocket, X } from "lucide-react";
-import { toast } from "sonner";
-import { envGroupName, isProductionGroup } from "@/lib/env-group";
+import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
 import { buildDurationLabel } from "./deployParts";
 import { LiveDeploymentCard, type LiveHealth } from "./LiveDeploymentCard";
@@ -36,6 +34,8 @@ import { AutoDeployBanner, pushDeployState } from "./AutoDeployBanner";
 import { RevisionGroup, RevisionRow } from "./RevisionRow";
 import { ServicePodsSection } from "./ServicePodsSection";
 import { ServiceAuditSection } from "./ServiceAuditSection";
+import { useRedeploy } from "./ServiceHeaderActions";
+import { FirstDeployProgress, FirstLiveCard } from "./FirstDeployProgress";
 import { UptimeBadge } from "@/components/uptime/UptimeBadge";
 import { useProjectUptime } from "@/features/uptime";
 
@@ -45,21 +45,21 @@ interface Props {
   env?: KusoEnvironment;
   // Public URL resolved by the overlay (custom domain → env host → …).
   url?: string;
+  // Jumps to another overlay tab (and optionally a section in it).
+  onNavigate?: (tab: string, anchor?: string) => void;
 }
 
 const HISTORY_PAGE = 20;
 
-export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
+export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate }: Props) {
   const builds = useBuilds(project, service);
-  const trigger = useTriggerBuild(project, service);
+  const redeploy = useRedeploy(project, service, env);
   const svc = useService(project, service);
   const proj = useProject(project);
   const gh = useSetupStatus();
   const isImage = svc.data?.spec.runtime === "image";
   const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
-  const [confirmRedeploy, setConfirmRedeploy] = useState(false);
   const group = envGroupName(env);
-  const branch = env?.spec?.branch || svc.data?.spec.repo?.defaultBranch || proj.data?.project.spec.defaultRepo?.defaultBranch;
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
 
   const uptime = useProjectUptime(project);
@@ -73,22 +73,6 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
     githubConfigured: gh.isSuccess ? gh.data.configured : undefined,
   });
 
-  const redeployBody = env?.spec?.branch ? { branch: env.spec.branch } : {};
-  const onRedeploy = async () => {
-    try {
-      const res = await trigger.mutateAsync(redeployBody);
-      toast.success(buildTriggerMessage(res, "Redeploy started"));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to trigger build");
-    }
-  };
-  // A production redeploy is a real build + rollout; confirm it. Other env
-  // groups are cheap and expected, so they fire straight away.
-  const requestRedeploy = () => {
-    if (env && isProductionGroup(env)) setConfirmRedeploy(true);
-    else void onRedeploy();
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -100,12 +84,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
         </div>
         <div className="flex items-center gap-2">
           {uptimeStatus && <UptimeBadge status={uptimeStatus} />}
-          {isImage ? null : canDeploy ? (
-            <Button size="sm" onClick={requestRedeploy} disabled={trigger.isPending}>
-              <Rocket className="h-3.5 w-3.5" />
-              {trigger.isPending ? "Starting…" : builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"}
-            </Button>
-          ) : (
+          {!isImage && !canDeploy && (
             <span className="text-xs text-[var(--text-tertiary)]" title="Deploying needs editor access on this project">
               View only
             </span>
@@ -141,39 +120,17 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
           repoUrl={repoUrl}
           canDeploy={canDeploy}
           uptimeDown={uptimeStatus?.state === "down"}
-          onDeploy={canDeploy ? requestRedeploy : undefined}
-          deploying={trigger.isPending}
+          onDeploy={canDeploy ? redeploy.request : undefined}
+          deploying={redeploy.pending}
+          autoDeploy={!!pushDeploy?.on}
+          onNavigate={onNavigate}
         />
       )}
 
       <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} />
       <ServiceAuditSection project={project} service={service} />
 
-      <ConfirmDialog
-        open={confirmRedeploy}
-        title={`${builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"} ${group}?`}
-        destructive={false}
-        confirmLabel="Build & deploy"
-        body={
-          <span>
-            Builds the latest commit on{" "}
-            <span className="font-mono text-[var(--text-primary)]">{branch || "the default branch"}</span>
-            {repoUrl ? (
-              <>
-                {" "}
-                of <span className="font-mono text-[var(--text-primary)]">{repoUrl.replace(/^https?:\/\/(www\.)?/, "")}</span>
-              </>
-            ) : null}{" "}
-            and rolls it out to <strong>{group}</strong> once it succeeds. The current version keeps serving until then.
-          </span>
-        }
-        pending={trigger.isPending}
-        onConfirm={() => {
-          setConfirmRedeploy(false);
-          void onRedeploy();
-        }}
-        onCancel={() => setConfirmRedeploy(false)}
-      />
+      {redeploy.dialog}
     </div>
   );
 }
@@ -206,6 +163,8 @@ function DeployList({
   uptimeDown,
   onDeploy,
   deploying,
+  autoDeploy,
+  onNavigate,
 }: {
   project: string;
   service: string;
@@ -218,6 +177,8 @@ function DeployList({
   // Starts a build; shown as the empty state's action when nothing was ever built.
   onDeploy?: () => void;
   deploying?: boolean;
+  autoDeploy?: boolean;
+  onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   const group = envGroupName(env);
   const envCRName = env?.metadata?.name;
@@ -255,15 +216,53 @@ function DeployList({
 
   const [limit, setLimit] = useState(HISTORY_PAGE);
 
-  const history = visible.filter((b) => b.id !== liveId);
+  // First deploy: nothing on any branch has ever succeeded and the newest
+  // build is on its way, or the first success is still starting its pods.
+  const succeededCount = builds.filter((b) => (b.status ?? "").toLowerCase() === "succeeded").length;
+  const newestStatus = (newest?.status ?? "").toLowerCase();
+  const firstDeploy: "queued" | "pending" | "running" | "start" | null =
+    !newest
+      ? null
+      : succeededCount === 0 && ["queued", "pending", "running"].includes(newestStatus)
+        ? (newestStatus as "queued" | "pending" | "running")
+        : succeededCount === 1 && newestStatus === "succeeded" && (!live || podsComingUp(health))
+          ? "start"
+          : null;
+  const firstLive =
+    !firstDeploy && succeededCount === 1 && live && live.id === newest?.id && health?.tone === "ok" && !!url && recentlyFinished(live, 30);
+
+  const history = visible.filter((b) => b.id !== liveId && !(firstDeploy && b.id === newest?.id));
   const timeline = groupRevisionRuns(
     interleaveTimeline(history, [...(serviceRevs.data ?? []), ...(envRevs.data ?? [])]),
   );
   const liveIdx = live ? builds.indexOf(live) : -1;
   const shownTimeline = timeline.slice(0, limit);
+  // Peek at the stored log of the first few failed builds for their
+  // first error line; older failures load it when expanded.
+  const peekIds = new Set(
+    shownTimeline
+      .flatMap((item) => (item.type === "build" && (item.build.status ?? "").toLowerCase() === "failed" ? [item.build.id] : []))
+      .slice(0, 3),
+  );
 
-  const liveCard = live ? (
-    <LiveDeploymentCard
+  const firstDeployCard =
+    firstDeploy && newest ? (
+      <FirstDeployProgress
+        project={project}
+        service={service}
+        build={newest}
+        status={firstDeploy}
+        starting={health && / ready$/.test(health.label) ? `Starting · ${health.label}` : undefined}
+        repoUrl={repoUrl}
+      />
+    ) : null;
+
+  const liveCard = firstDeployCard ? (
+    firstDeployCard
+  ) : live ? (
+    <>
+      {firstLive && url && <FirstLiveCard project={project} service={service} url={url} build={live} autoDeploy={autoDeploy} onNavigate={onNavigate} />}
+      <LiveDeploymentCard
       project={project}
       service={service}
       envGroup={group}
@@ -277,6 +276,7 @@ function DeployList({
       serving={!["stopped", "sleeping"].includes(env?.status?.state ?? "")}
       canDeploy={canDeploy}
     />
+    </>
   ) : visible.length > 0 ? (
     <div className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--text-secondary)]">
       Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet. The first successful build
@@ -359,6 +359,8 @@ function DeployList({
                   build={b}
                   previous={previousSucceeded(builds, b)}
                   newerThanLive={liveIdx >= 0 && builds.indexOf(b) < liveIdx}
+                  liveBuild={live}
+                  peekLog={peekIds.has(b.id)}
                   repoUrl={repoUrl}
                   status={s}
                   duration={s === "running" ? "" : buildDurationLabel(b)}
@@ -381,13 +383,25 @@ function DeployList({
           )}
         </section>
       )}
-      {live && !rolledBackFrom && history.length === 0 && (
+      {live && !firstDeploy && !rolledBackFrom && history.length === 0 && (
         <p className="text-xs text-[var(--text-tertiary)]">
           {buildRefLabel(live, 7)} is the only deployment so far.
         </p>
       )}
     </div>
   );
+}
+
+// podsComingUp: the first pods exist but aren't all ready yet (or none
+// have been created). A crashloop is labelled as such and isn't this.
+function podsComingUp(h?: LiveHealth): boolean {
+  if (!h) return false;
+  return h.label === "No running pods" || (h.tone !== "ok" && / ready$/.test(h.label));
+}
+
+function recentlyFinished(b: DeployBuild, minutes: number): boolean {
+  const t = Date.parse(b.finishedAt ?? "");
+  return Number.isFinite(t) && Date.now() - t < minutes * 60_000;
 }
 
 // ImageDeploymentCard replaces the build history for services that deploy a

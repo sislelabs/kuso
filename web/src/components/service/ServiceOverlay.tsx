@@ -10,8 +10,6 @@ import {
   useServiceCrons,
   useRuns,
   usePatchService,
-  useStopService,
-  useStartService,
   useRestartService,
   useWakeService,
   useErrors,
@@ -24,7 +22,7 @@ import { useEnvironments } from "@/features/projects";
 import { buildRefLabel } from "@/features/builds";
 import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Undo2, Square, Play, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
+import { Undo2, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -61,7 +59,7 @@ const ServiceTerminalPanel = dynamic(
 import { FailureBanner } from "./overlay/FailureBanner";
 import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
-import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
+import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
 import { ExternalLink, X, Pencil } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
@@ -450,24 +448,7 @@ export function ServiceOverlay({
   // user. Counts > 0 keep the tab; counts === 0 hide it.
   const crons = useServiceCrons(project, service ?? "");
   const runs = useRuns(project, service ?? "");
-  // First-deploy coachmark gating: show only when the service has
-  // exactly one successful build AND it finished within the last 60s.
-  // That's a tighter "your very first deploy just landed" signal than
-  // "any recent green build" — re-opening the overlay 5 minutes later
-  // (or after a 2nd deploy) won't re-trigger it. The coachmark itself
-  // also gates on localStorage so even within the 60s window a user
-  // who dismissed before never sees it again.
   const builds = useBuilds(project, service ?? "");
-  const firstDeployJustLanded = useMemo(() => {
-    const list = builds.data ?? [];
-    const succeeded = list.filter((b) => (b.status ?? "").toLowerCase() === "succeeded");
-    if (succeeded.length !== 1) return false;
-    const finishedAt = succeeded[0].finishedAt;
-    if (!finishedAt) return false;
-    const ms = Date.parse(finishedAt);
-    if (!Number.isFinite(ms)) return false;
-    return Date.now() - ms < 60_000;
-  }, [builds.data]);
   // Build-time failure kinds carry the classifier's lineHint + remediation
   // on the build record; the bell link only has ?kind=. Use the newest
   // build with that kind so the banner shows the same fix BuildRow does.
@@ -799,16 +780,14 @@ export function ServiceOverlay({
                   {service && status === "sleeping" && !stopped ? (
                     <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
                   ) : null}
-                  {service && env && !stopped && !restartNeeded && status !== "sleeping" && problem !== "runtime" ? (
-                    <RestartControl project={project} service={service} envGroup={envGroup} variant="button" />
-                  ) : null}
-                  {/* Hard-stop toggle. When the service is stopped we
-                      show a "stopped" badge + a Start button; otherwise
-                      a Stop button. Stop confirms first (it takes the
-                      service offline — visitors get a 503). Reads
-                      spec.stopped off the loaded KusoService. */}
                   {service ? (
-                    <StopStartControl project={project} service={service} stopped={stopped} />
+                    <ServiceHeaderActions
+                      project={project}
+                      service={service}
+                      env={env}
+                      stopped={stopped}
+                      showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                    />
                   ) : null}
                 </div>
               </div>
@@ -897,11 +876,8 @@ export function ServiceOverlay({
                         after a deploy). Self-gates on localStorage so
                         re-opens after dismissal stay quiet. */}
                     {tab === "deployments" && (
-                      <FirstDeployCoachmark shouldShow={firstDeployJustLanded} />
-                    )}
-                    {tab === "deployments" && (
                       <div className="p-5">
-                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={url} />
+                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={url} onNavigate={navigateTo} />
                       </div>
                     )}
                     {tab === "variables" && (
@@ -1117,97 +1093,6 @@ export function ServiceOverlay({
         </div>
       )}
     </AnimatePresence>
-  );
-}
-
-// StopStartControl is the hard-stop toggle in the overlay header.
-// stopped=false → a "Stop" button that confirms (taking the service
-// offline is destructive-adjacent: visitors get a 503 until start).
-// stopped=true → a "stopped" badge + a one-click "Start" button. Both
-// paths toast on success/failure. State comes from spec.stopped on the
-// loaded KusoService; the mutations invalidate the service query so the
-// badge flips once the server accepts.
-function StopStartControl({
-  project,
-  service,
-  stopped,
-}: {
-  project: string;
-  service: string;
-  stopped: boolean;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  const stop = useStopService(project, service);
-  const start = useStartService(project, service);
-  // Stop/start are editor-level mutations; keep the buttons visible
-  // for viewers but disabled with a hint so the affordance stays
-  // discoverable without ending in a 403 toast.
-  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
-
-  const onStop = async () => {
-    try {
-      await stop.mutateAsync();
-      toast.success(`Stopped ${service}`);
-      setConfirming(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to stop service");
-    }
-  };
-
-  const onStart = async () => {
-    try {
-      await start.mutateAsync();
-      toast.success(`Starting ${service}`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to start service");
-    }
-  };
-
-  if (stopped) {
-    return (
-      <>
-
-        <button
-          type="button"
-          disabled={start.isPending || !canWrite}
-          onClick={onStart}
-          title={canWrite ? "Start the service" : "Requires editor access on this project"}
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--success)]/45 bg-[var(--success-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--success)] hover:brightness-110 disabled:opacity-50"
-        >
-          <Play className="h-3 w-3" />
-          {start.isPending ? "Starting…" : "Start"}
-        </button>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <button
-        type="button"
-        disabled={stop.isPending || !canWrite}
-        onClick={() => setConfirming(true)}
-        title={
-          canWrite
-            ? "Stop the service (takes it offline)"
-            : "Requires editor access on this project"
-        }
-        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] h-7 px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50"
-      >
-        <Square className="h-3 w-3" />
-        Stop
-      </button>
-      <ConfirmDialog
-        open={confirming}
-        title={`Stop ${service}`}
-        body="This takes the service offline; visitors get a 503 until you start it."
-        confirmLabel="Stop service"
-        destructive
-        pending={stop.isPending}
-        onConfirm={onStop}
-        onCancel={() => setConfirming(false)}
-      />
-    </>
   );
 }
 

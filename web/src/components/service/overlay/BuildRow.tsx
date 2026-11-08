@@ -3,7 +3,7 @@
 // One deploy-history row: status, commit, meta, the row's actions, and the
 // expandable build log (failure summary first for failed builds).
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -28,6 +28,9 @@ import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
   buildRefLabel,
+  firstErrorLine,
+  parseBuildLog,
+  useStoredBuildLog,
   githubCommitUrl,
   githubCompareUrl,
   isBranchMismatch,
@@ -80,6 +83,10 @@ export interface BuildRowProps {
   previous?: DeployBuild;
   // The build is newer than what's live (the env was rolled back past it).
   newerThanLive?: boolean;
+  // What's live now: the rollback dialog compares against it.
+  liveBuild?: DeployBuild;
+  // Fetch the stored log of a failed build to show its first error line.
+  peekLog?: boolean;
   repoUrl?: string;
   status: BuildRowStatus;
   duration: string;
@@ -96,6 +103,8 @@ export function BuildRow({
   build: b,
   previous,
   newerThanLive,
+  liveBuild,
+  peekLog,
   repoUrl,
   status: s,
   duration,
@@ -114,11 +123,19 @@ export function BuildRow({
   const failed = s === "failed";
   const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
   const logId = `build-log-${b.id}`;
+  const rowRef = useRef<HTMLLIElement>(null);
+  const errorLine = useFirstErrorLine(project, service, b.id, failed && !!peekLog);
+  const failureTitle = b.failureClass?.summary || (isGenericFailure(b.errorMessage) ? "" : b.errorMessage);
+  const viewFailure = () => {
+    if (!isOpen) onToggle();
+    requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
 
   return (
     <li
+      ref={rowRef}
       className={cn(
-        "overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
+        "scroll-mt-2 overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
         failed ? "border-[var(--error)]/35" : s === "running" ? "border-[var(--building)]/35" : "border-[var(--border-subtle)]",
       )}
     >
@@ -134,7 +151,7 @@ export function BuildRow({
               className="min-w-0 flex-1 text-left text-sm font-medium text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded-sm"
             >
               <span className="line-clamp-2 break-words">
-                {b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy")}
+                {buildTitle(b, sha)}
               </span>
               <span className="sr-only">{`, ${m.label}. ${isOpen ? "Hide" : "Show"} build log`}</span>
             </button>
@@ -184,13 +201,46 @@ export function BuildRow({
               The image built, but its release command failed. The previous version is still live.
             </p>
           )}
-          {failed && (b.failureClass?.summary || b.errorMessage) && (
-            <p className="mt-1 break-words text-xs text-[var(--error)]">{b.failureClass?.summary || b.errorMessage}</p>
+          {failed && (failureTitle || errorLine || b.errorMessage) && (
+            <div className="mt-1.5 min-w-0 space-y-1">
+              {failureTitle && <p className="break-words text-xs font-medium text-[var(--error)]">{failureTitle}</p>}
+              {errorLine ? (
+                <p
+                  className="rounded border-l-2 border-[var(--error)] bg-[var(--error-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]"
+                  title={errorLine}
+                >
+                  <span className="line-clamp-2 break-words">{errorLine}</span>
+                </p>
+              ) : (
+                !failureTitle && b.errorMessage && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
+              )}
+              {!isOpen && (
+                <button
+                  type="button"
+                  onClick={viewFailure}
+                  aria-controls={logId}
+                  className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
+                >
+                  View failure
+                </button>
+              )}
+            </div>
           )}
           {note && <p className="mt-1 break-words text-xs text-[var(--text-tertiary)]">{note}</p>}
         </div>
         <div className="col-start-2 flex items-center gap-1 sm:col-start-3 sm:row-start-1 sm:self-start">
-          <PrimaryAction project={project} service={service} env={env} build={b} status={s} sha={sha} canDeploy={canDeploy} newerThanLive={newerThanLive} />
+          <PrimaryAction
+            project={project}
+            service={service}
+            env={env}
+            build={b}
+            status={s}
+            sha={sha}
+            canDeploy={canDeploy}
+            newerThanLive={newerThanLive}
+            liveBuild={liveBuild}
+            repoUrl={repoUrl}
+          />
           <RowMenu build={b} repoUrl={repoUrl} previous={previous} compareHref={compareHref} sha={sha} onToggleLog={onToggle} isOpen={isOpen} />
           <button
             type="button"
@@ -235,6 +285,8 @@ function PrimaryAction({
   sha,
   canDeploy,
   newerThanLive,
+  liveBuild,
+  repoUrl,
 }: {
   project: string;
   service: string;
@@ -244,14 +296,21 @@ function PrimaryAction({
   sha: string;
   canDeploy: boolean;
   newerThanLive?: boolean;
+  liveBuild?: DeployBuild;
+  repoUrl?: string;
 }) {
   if (!canDeploy) return null;
   if (s === "superseded") {
     if (!b.imageTag) {
+      // The retention sweep removed the image; a real SHA can be built
+      // again, a synthetic ref can't be pinned to a commit.
+      if (b.commitSha && FULL_SHA.test(b.commitSha)) {
+        return <RetryBuildButton project={project} service={service} build={b} sha={sha} pruned />;
+      }
       return (
         <span
           tabIndex={0}
-          title="This build's image was removed by the registry retention sweep, so there's nothing to roll back to. Redeploy the commit instead."
+          title="This build's image was removed by the registry retention sweep and it has no commit SHA to rebuild. Redeploy the branch instead."
           className="inline-flex h-7 cursor-help items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 text-xs text-[var(--text-tertiary)]"
         >
           Image pruned
@@ -263,9 +322,9 @@ function PrimaryAction({
         project={project}
         service={service}
         env={env}
-        buildId={b.id}
-        sha={sha}
-        branch={b.branch}
+        build={b}
+        liveBuild={liveBuild}
+        repoUrl={repoUrl}
         label={newerThanLive ? "Roll forward" : "Rollback"}
       />
     );
@@ -435,8 +494,21 @@ function CancelButton({ project, service, buildId }: { project: string; service:
   );
 }
 
-// RetryBuildButton rebuilds the same commit (failed or cancelled build).
-function RetryBuildButton({ project, service, build: b, sha }: { project: string; service: string; build: DeployBuild; sha: string }) {
+// RetryBuildButton rebuilds the same commit: a failed or cancelled build,
+// or (pruned) a succeeded one whose image the retention sweep removed.
+function RetryBuildButton({
+  project,
+  service,
+  build: b,
+  sha,
+  pruned,
+}: {
+  project: string;
+  service: string;
+  build: DeployBuild;
+  sha: string;
+  pruned?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const trigger = useTriggerBuild(project, service);
   const body = { branch: b.branch, ...(b.commitSha ? { ref: b.commitSha } : {}) };
@@ -451,20 +523,37 @@ function RetryBuildButton({ project, service, build: b, sha }: { project: string
   };
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} disabled={trigger.isPending} className={ACTION_BTN} title="Build this commit again">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={trigger.isPending}
+        className={ACTION_BTN}
+        title={
+          pruned
+            ? "This build's image was removed by the registry retention sweep. Build the same commit again to get it back."
+            : "Build this commit again"
+        }
+      >
         <RotateCcw className="h-3.5 w-3.5" />
-        <span>Retry</span>
+        <span>{pruned ? "Rebuild" : "Retry"}</span>
       </button>
       <ConfirmDialog
         open={open}
-        title="Retry this build?"
+        title={pruned ? `Rebuild ${sha}?` : "Retry this build?"}
         destructive={false}
         confirmLabel="Rebuild"
         body={
-          <span>
-            Builds <span className="font-mono text-[var(--text-primary)]">{b.commitSha ? sha : "the latest commit"}</span> on{" "}
-            <span className="font-mono text-[var(--text-primary)]">{b.branch || "the default branch"}</span> again and
-            deploys it if it succeeds.
+          <span className="space-y-2">
+            {pruned && (
+              <span className="block">
+                Its image was removed by the registry retention sweep, so it can&apos;t be rolled back to directly.
+              </span>
+            )}
+            <span className="block">
+              Builds <span className="font-mono text-[var(--text-primary)]">{b.commitSha ? sha : "the latest commit"}</span> on{" "}
+              <span className="font-mono text-[var(--text-primary)]">{b.branch || "the default branch"}</span> again and
+              deploys it if it succeeds{pruned ? ", replacing what's live now" : ""}.
+            </span>
           </span>
         }
         pending={trigger.isPending}
@@ -508,29 +597,31 @@ export function RollbackButton({
   project,
   service,
   env,
-  buildId,
-  sha,
-  branch,
+  build: b,
+  liveBuild,
+  repoUrl,
   label = "Rollback",
 }: {
   project: string;
   service: string;
   env: string;
-  buildId: string;
-  sha: string;
-  branch?: string;
+  build: DeployBuild;
+  liveBuild?: DeployBuild;
+  repoUrl?: string;
   label?: string;
 }) {
   const [step, setStep] = useState<"idle" | "confirm" | "mismatch">("idle");
   const [mismatch, setMismatch] = useState("");
   const m = useRollbackToBuild(project, service, env);
   const target = env || "production";
+  const sha = buildRefLabel(b, 7) || b.id;
+  const back = label === "Rollback";
   const run = (force: boolean) =>
     m.mutate(
-      { build: buildId, force },
+      { build: b.id, force },
       {
         onSuccess: () => {
-          toast.success(`${target} now runs ${sha || buildId}`);
+          toast.success(`${target} now runs ${sha}`);
           setStep("idle");
         },
         onError: (e) => {
@@ -549,7 +640,7 @@ export function RollbackButton({
       <button
         type="button"
         onClick={() => setStep("confirm")}
-        title={`Point ${target} at ${sha || buildId}`}
+        title={`Point ${target} at ${sha} right away, without rebuilding`}
         className={cn(ACTION_BTN, "hover:border-[var(--warning)]/50 hover:text-[var(--warning)]")}
       >
         <Undo2 className="h-3.5 w-3.5" />
@@ -557,15 +648,10 @@ export function RollbackButton({
       </button>
       <ConfirmDialog
         open={step === "confirm"}
-        title={label === "Rollback" ? `Roll ${target} back to ${sha || buildId}?` : `Switch ${target} to ${sha || buildId}?`}
+        title={back ? `Roll ${target} back to ${sha}?` : `Switch ${target} to ${sha}?`}
         destructive={false}
-        confirmLabel={label === "Rollback" ? "Roll back" : "Switch"}
-        body={
-          <span>
-            <strong>{target}</strong> switches to this build&apos;s image right away, no rebuild. Environment variables stay as
-            they are now. The next push to <span className="font-mono">{branch || "the branch"}</span> deploys over it.
-          </span>
-        }
+        confirmLabel={back ? "Roll back" : "Switch"}
+        body={<RollbackSummary target={target} build={b} liveBuild={liveBuild} repoUrl={repoUrl} back={back} />}
         pending={m.isPending}
         onConfirm={() => run(false)}
         onCancel={() => setStep("idle")}
@@ -581,4 +667,100 @@ export function RollbackButton({
       />
     </>
   );
+}
+
+// RollbackSummary names exactly what goes live and what it replaces, with
+// a GitHub compare link for the commits in between.
+function RollbackSummary({
+  target,
+  build: b,
+  liveBuild,
+  repoUrl,
+  back,
+}: {
+  target: string;
+  build: DeployBuild;
+  liveBuild?: DeployBuild;
+  repoUrl?: string;
+  back: boolean;
+}) {
+  const ts = b.finishedAt ?? b.startedAt;
+  const who = triggerLabel(b);
+  const compare =
+    liveBuild && liveBuild.id !== b.id
+      ? back
+        ? githubCompareUrl(repoUrl, b.commitSha, liveBuild.commitSha)
+        : githubCompareUrl(repoUrl, liveBuild.commitSha, b.commitSha)
+      : null;
+  return (
+    <span className="block space-y-3">
+      <span className="block rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2">
+        <span className="block break-words text-sm font-medium text-[var(--text-primary)]">
+          {buildTitle(b, buildRefLabel(b, 7))}
+        </span>
+        <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+          <span className="font-mono">{buildRefLabel(b, 7) || b.id}</span>
+          {b.branch && (
+            <>
+              <Dot />
+              <span>{b.branch}</span>
+            </>
+          )}
+          {who && (
+            <>
+              <Dot />
+              <span>{who}</span>
+            </>
+          )}
+          {ts && (
+            <>
+              <Dot />
+              <time dateTime={ts} title={new Date(ts).toLocaleString()}>
+                built {relativeTime(ts)}
+              </time>
+            </>
+          )}
+        </span>
+      </span>
+      {liveBuild && liveBuild.id !== b.id && (
+        <span className="block text-xs text-[var(--text-secondary)]">
+          Replaces <span className="font-mono text-[var(--text-primary)]">{buildRefLabel(liveBuild, 7) || liveBuild.id}</span>
+          {liveBuild.commitMessage ? <> ({liveBuild.commitMessage})</> : null}, which is live now.
+          {compare && (
+            <>
+              {" "}
+              <a href={compare} target="_blank" rel="noreferrer" className="text-[var(--link)] underline underline-offset-2">
+                {back ? "See the commits being rolled back" : "See the commits being added"}
+              </a>
+            </>
+          )}
+        </span>
+      )}
+      <span className="block text-xs text-[var(--text-secondary)]">
+        <strong className="text-[var(--text-primary)]">{target}</strong> switches to this build&apos;s image right away, with
+        no rebuild. Variables stay as they are now. The next push to{" "}
+        <span className="font-mono">{b.branch || "the branch"}</span> deploys over it.
+      </span>
+    </span>
+  );
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+
+function buildTitle(b: DeployBuild, sha: string): string {
+  return b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy");
+}
+
+// Server-side fallbacks that say a container failed without saying why;
+// the log's own first error line is more useful than these.
+function isGenericFailure(msg?: string): boolean {
+  return !msg || /^container exited with code \d+|backoff limit|^Job has reached/i.test(msg);
+}
+
+function useFirstErrorLine(project: string, service: string, buildId: string, enabled: boolean): string | undefined {
+  const log = useStoredBuildLog(project, service, buildId, enabled);
+  return useMemo(() => {
+    if (!log.data || log.data.length === 0) return undefined;
+    return firstErrorLine(parseBuildLog(log.data.map((l) => l.line), { failed: true }));
+  }, [log.data]);
 }
