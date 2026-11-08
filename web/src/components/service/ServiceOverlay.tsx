@@ -628,8 +628,15 @@ export function ServiceOverlay({
   // With a server rollup the header follows it exactly, like the canvas
   // node (deriveServiceStatus); an in-flight rollout is a chip next to
   // it, not a different status.
+  const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;
+  // Live but short of replicas reads "Degraded", the same rule as the
+  // health strip (ready < desired from the env's replica rollup).
+  const shortOfReplicas =
+    replicas?.desired !== undefined && replicas.desired > 0 && (replicas.ready ?? 0) < replicas.desired;
   const status = serverState
-    ? serverState
+    ? serverState === "active" && shortOfReplicas
+      ? "degraded"
+      : serverState
     : phase === "building" || phase === "deploying"
       ? "building"
       : ready && rollingNow
