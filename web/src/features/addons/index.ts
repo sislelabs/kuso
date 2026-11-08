@@ -26,5 +26,5 @@ export {
   describeCron,
 } from "./backups";
 export type { BackupNowState, BackupSummary, BackupsListState } from "./backups";
-export { useAddonHealth } from "./status";
+export { useAddonHealth, runningImageOf } from "./status";
 export type { AddonHealth } from "./status";
