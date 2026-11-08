@@ -1,0 +1,15 @@
+name: ntfy
+title: ntfy
+description: >-
+  Send push notifications to your phone or desktop with a simple HTTP PUT/POST.
+  Topics are open to anyone who knows the name until you add users with
+  `ntfy user add` (via `kuso shell`).
+category: comms
+website: https://ntfy.sh
+appVersion: "2.37.2"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname ntfy will be served on.

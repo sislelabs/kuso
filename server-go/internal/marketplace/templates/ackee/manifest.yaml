@@ -1,0 +1,23 @@
+name: ackee
+title: Ackee
+description: >-
+  Self-hosted, Node.js based analytics with a focus on privacy. To track a
+  site on another domain, set ACKEE_ALLOW_ORIGIN to that site's origin.
+category: analytics
+website: https://ackee.electerious.com
+appVersion: "3.7.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Ackee will be served on.
+  - key: admin_username
+    title: Admin username
+    kind: string
+    default: admin
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
+    help: Ackee has a single login, set here.

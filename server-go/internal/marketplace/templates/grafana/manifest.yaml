@@ -1,0 +1,15 @@
+name: grafana
+title: Grafana
+description: >-
+  Dashboards and alerting for metrics, logs and traces. Log in as `admin`;
+  the generated password is GF_SECURITY_ADMIN_PASSWORD in the service's
+  variables.
+category: monitoring
+website: https://grafana.com/oss/grafana
+appVersion: "13.2.5"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Grafana will be served on.

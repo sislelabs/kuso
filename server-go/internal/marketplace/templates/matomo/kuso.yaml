@@ -1,0 +1,33 @@
+apiVersion: kuso/v1
+project: matomo
+services:
+  - name: matomo
+    runtime: image
+    port: 80
+    image:
+      repository: matomo
+      tag: "5.14.2-apache"
+    env:
+      MATOMO_DATABASE_ADAPTER: mysql
+      MATOMO_DATABASE_HOST: "${{ matomo-db.MYSQL_HOST }}"
+      MATOMO_DATABASE_USERNAME: "${{ matomo-db.MYSQL_USER }}"
+      MATOMO_DATABASE_PASSWORD: "${{ matomo-db.MYSQL_PASSWORD }}"
+      MATOMO_DATABASE_DBNAME: "${{ matomo-db.MYSQL_DB }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: html
+        mountPath: /var/www/html
+        sizeGi: 5
+    scale: { min: 1, max: 1 }
+    # The entrypoint copies Matomo into the volume and chowns it; Apache
+    # binds :80 as root, then switches to www-data.
+    securityContext:
+      capabilities:
+        add: ["NET_BIND_SERVICE", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
+addons:
+  - name: matomo-db
+    kind: mysql
+    version: "8.0"

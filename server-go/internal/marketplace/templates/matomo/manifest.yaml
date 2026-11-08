@@ -1,0 +1,13 @@
+name: matomo
+title: Matomo
+description: Full-featured, privacy-respecting web analytics (the open-source Google Analytics alternative).
+category: analytics
+website: https://matomo.org
+appVersion: "5.14.2"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Matomo will be served on. The install wizard runs on first visit; the database step is pre-filled.

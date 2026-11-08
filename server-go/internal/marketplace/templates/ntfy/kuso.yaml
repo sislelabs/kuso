@@ -1,0 +1,25 @@
+apiVersion: kuso/v1
+project: ntfy
+services:
+  - name: ntfy
+    runtime: image
+    port: 8080
+    image:
+      repository: binwiederhier/ntfy
+      tag: "v2.37.2"
+    command: ["ntfy", "serve"]
+    env:
+      NTFY_BASE_URL: "https://${{ prompt.host }}"
+      NTFY_LISTEN_HTTP: ":8080"
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /var/lib/ntfy
+        sizeGi: 2
+    scale: { min: 1, max: 1 }

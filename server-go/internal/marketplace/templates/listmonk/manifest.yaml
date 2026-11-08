@@ -1,0 +1,14 @@
+name: listmonk
+title: listmonk
+description: >-
+  Self-hosted newsletter and mailing-list manager. Create the admin account
+  on first visit, then set the root URL and an SMTP server under Settings.
+category: comms
+website: https://listmonk.app
+appVersion: "6.2.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname listmonk will be served on.
