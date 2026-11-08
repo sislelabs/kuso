@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { ChevronRight, HardDrive, Package, Plug, Server, Users } from "lucide-react";
+import { AlertTriangle, ChevronRight, HardDrive, Package, Plug, Server, Users } from "lucide-react";
 import { StatusDot } from "@/components/ui/status-pill";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
@@ -42,6 +42,9 @@ interface TileState {
   status: StatusMeta;
   value: string;
   detail?: string;
+  // A caveat that doesn't change the headline (e.g. "no failures, but
+  // some addons aren't backed up"): own line, amber icon.
+  detailTone?: "warning";
 }
 
 const meta = (tone: StatusTone, label: string): StatusMeta => ({ tone, label });
@@ -86,9 +89,15 @@ function Tile({
                 <span className="sr-only">{state.status.label}: </span>
                 <span className="truncate">{state.value}</span>
               </span>
-              {state.detail && (
-                <span className="mt-0.5 block text-xs leading-relaxed text-[var(--text-secondary)]">{state.detail}</span>
-              )}
+              {state.detail &&
+                (state.detailTone === "warning" ? (
+                  <span className="mt-1 flex items-start gap-1.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+                    <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-[var(--warning)]" />
+                    {state.detail}
+                  </span>
+                ) : (
+                  <span className="mt-0.5 block text-xs leading-relaxed text-[var(--text-secondary)]">{state.detail}</span>
+                ))}
             </>
           ) : (
             <>
@@ -160,7 +169,10 @@ function BackupsTile() {
           };
         }
         return {
-          status: uncovered > 0 ? meta("warning", "Partial") : meta("success", "Healthy"),
+          // The headline says nothing is failing, so its dot is green; the
+          // coverage gap is the amber caveat underneath.
+          status: meta("success", "Healthy"),
+          detailTone: uncovered > 0 ? "warning" : undefined,
           value: uncovered > 0 ? "No failing backups" : "Backups healthy",
           detail:
             uncovered > 0
