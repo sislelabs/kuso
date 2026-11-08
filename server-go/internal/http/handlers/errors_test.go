@@ -88,3 +88,52 @@ func TestErrorsDetail_ReturnsOccurrences(t *testing.T) {
 		t.Errorf("bad since: status=%d", rr.Code)
 	}
 }
+
+func TestErrorsSummary_KeysByShortServiceName(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, e := range []db.ErrorEvent{
+		{Project: "shop", Service: "shop-api", Env: "production", Fingerprint: "a", Message: "boom", Ts: time.Now().Add(-time.Minute)},
+		{Project: "shop", Service: "shop-api", Env: "production", Fingerprint: "b", Message: "bang", Ts: time.Now().Add(-time.Minute)},
+		{Project: "shop", Service: "shop-web", Env: "production", Fingerprint: "c", Message: "x", Ts: time.Now().Add(-2 * time.Hour)},
+	} {
+		if err := d.InsertErrorEvent(ctx, e); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	h := &ErrorsHandler{DB: d, Logger: slog.Default()}
+	r := chi.NewRouter()
+	h.Mount(r)
+	get := func(qs string) (int, errorSummaryResponse) {
+		req := httptest.NewRequest(http.MethodGet, "/api/projects/shop/errors/summary"+qs, nil)
+		req = req.WithContext(auth.WithClaimsForTest(req.Context(),
+			&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		var out errorSummaryResponse
+		if rr.Code == http.StatusOK {
+			if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+		}
+		return rr.Code, out
+	}
+
+	code, out := get("")
+	if code != http.StatusOK {
+		t.Fatalf("status=%d", code)
+	}
+	if api := out.Services["api"]; api.Occurrences != 2 || api.Groups != 2 {
+		t.Errorf("api = %+v; want 2 occurrences in 2 groups", api)
+	}
+	if _, ok := out.Services["web"]; !ok {
+		t.Errorf("web missing from 24h summary: %+v", out.Services)
+	}
+
+	if _, out = get("?since=1h"); len(out.Services) != 1 {
+		t.Errorf("since=1h: want only api, got %+v", out.Services)
+	}
+	if code, _ = get("?since=nonsense"); code != http.StatusBadRequest {
+		t.Errorf("bad since: status=%d, want 400", code)
+	}
+}
