@@ -6,6 +6,11 @@ export interface ServicePod {
   ready: boolean;
   phase?: string;
   containers?: string[];
+  // Waiting/terminated reason (CrashLoopBackOff, ImagePullBackOff, …),
+  // its message, and the summed container restart count.
+  reason?: string;
+  message?: string;
+  restarts?: number;
 }
 
 export interface ServicePodList {

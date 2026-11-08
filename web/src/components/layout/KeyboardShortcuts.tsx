@@ -98,37 +98,23 @@ const PALETTE: Shortcut[] = [
   { keys: ["Esc"], description: "Back, or close the palette" },
 ];
 
-type AnnouncedShortcut = { keys: string[]; label: string };
-type Announced = { title: string; items: Shortcut[] };
-
-// A page that owns its own help (the canvas) fires a cancelable
-// `kuso:shortcuts` event; claiming it opens this dialog with the page's
-// section first instead of the page's local popover.
-function parseAnnounced(detail: unknown): Announced | null {
-  if (typeof detail !== "object" || detail === null) return null;
-  const { scope, shortcuts } = detail as { scope?: unknown; shortcuts?: unknown };
-  if (!Array.isArray(shortcuts)) return null;
-  const items: Shortcut[] = [];
-  for (const raw of shortcuts as unknown[]) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const { keys, label } = raw as Partial<AnnouncedShortcut>;
-    if (!Array.isArray(keys) || typeof label !== "string") continue;
-    items.push({ keys: keys.filter((k): k is string => typeof k === "string"), description: label });
-  }
-  const title = typeof scope === "string" && scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "This page";
-  return items.length > 0 ? { title, items } : null;
+// A page that owns a shortcut group (the canvas) fires a cancelable
+// `kuso:shortcuts` event from its help button. Claim it only when the
+// group is already in the registry (`detail.registered`): the dialog then
+// lists it from there, so adding the announced copy would duplicate it.
+function isRegisteredAnnouncement(detail: unknown): boolean {
+  return typeof detail === "object" && detail !== null && (detail as { registered?: unknown }).registered === true;
 }
 
 function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const registered = useShortcutGroups();
   const [mod, setMod] = useState("Ctrl");
-  const [announced, setAnnounced] = useState<Announced | null>(null);
   useEffect(() => setMod(isMac() ? "⌘" : "Ctrl"), []);
 
   useEffect(() => {
     const onAnnounce = (e: Event) => {
+      if (!isRegisteredAnnouncement((e as CustomEvent<unknown>).detail)) return;
       e.preventDefault();
-      setAnnounced(parseAnnounced((e as CustomEvent<unknown>).detail));
       setShortcutsHelpOpen(true);
     };
     window.addEventListener("kuso:shortcuts", onAnnounce);
@@ -144,12 +130,8 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   ];
 
   // Page sections first: they're what the person was looking at.
-  const pageGroups: { title: string; items: readonly Shortcut[] }[] = [...registered];
-  if (announced && !pageGroups.some((g) => g.title.toLowerCase() === announced.title.toLowerCase())) {
-    pageGroups.unshift(announced);
-  }
   const sections = [
-    ...pageGroups,
+    ...registered,
     { title: "Everywhere", items: global },
     { title: "Command palette", items: PALETTE },
     { title: "Service panel", items: SERVICE_PANEL },
@@ -157,13 +139,7 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   ];
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) setAnnounced(null);
-        onOpenChange(o);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-[var(--border-subtle)] px-5 py-4">
           <DialogTitle>Keyboard shortcuts</DialogTitle>
