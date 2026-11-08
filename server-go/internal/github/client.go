@@ -251,11 +251,12 @@ type CachedInstallation struct {
 
 // CachedRepo is the wire shape stored in GithubInstallation.repositoriesJson.
 type CachedRepo struct {
-	ID            int64  `json:"id"`
-	Name          string `json:"name"`
-	FullName      string `json:"fullName"`
-	Private       bool   `json:"private"`
-	DefaultBranch string `json:"defaultBranch"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	FullName      string     `json:"fullName"`
+	Private       bool       `json:"private"`
+	DefaultBranch string     `json:"defaultBranch"`
+	PushedAt      *time.Time `json:"pushedAt,omitempty"`
 }
 
 // FetchInstallations enumerates every installation visible to the App.
@@ -309,6 +310,7 @@ func (c *Client) FetchInstallationRepos(ctx context.Context, installationID int6
 				FullName:      r.GetFullName(),
 				Private:       r.GetPrivate(),
 				DefaultBranch: r.GetDefaultBranch(),
+				PushedAt:      pushedAt(r),
 			})
 		}
 		if resp.NextPage == 0 {
@@ -316,4 +318,12 @@ func (c *Client) FetchInstallationRepos(ctx context.Context, installationID int6
 		}
 		page = resp.NextPage
 	}
+}
+
+func pushedAt(r *gogithub.Repository) *time.Time {
+	t := r.GetPushedAt().Time
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

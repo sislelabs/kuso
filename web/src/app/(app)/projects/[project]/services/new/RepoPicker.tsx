@@ -5,7 +5,17 @@ import Link from "next/link";
 import { ArrowRight, Github, KeyRound, Link2, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useGithubRepos, useInstallations, useInstallURL } from "@/features/github";
+import {
+  repoOwner,
+  repoOwners,
+  sortReposByPush,
+  useGithubRepos,
+  useInstallations,
+  useInstallURL,
+} from "@/features/github";
+import { relativeTime } from "@/lib/format";
+import { Segmented } from "@/components/ui/segmented";
+import { Select } from "@/components/ui/select";
 import { Perms, useCan, useSession } from "@/features/auth";
 import { ApiError } from "@/lib/api-client";
 import { RepoUrlForm, type RepoByUrl } from "@/components/service/RepoUrlForm";
@@ -19,6 +29,7 @@ export interface PickableRepo {
   fullName: string;
   defaultBranch: string;
   private?: boolean;
+  pushedAt?: string;
 }
 
 // PickedRepo is the repo a service builds from. byUrl is set when the
@@ -48,14 +59,18 @@ export function useRepoSources() {
   const reposQuery = isAdmin ? installs : flatRepos;
   const allRepos = useMemo((): { installationId: number; repo: PickableRepo }[] => {
     if (isAdmin) {
-      return (installs.data ?? []).flatMap((inst) =>
-        inst.repositories.map((r) => ({ installationId: inst.id, repo: r })),
+      return sortReposByPush(
+        (installs.data ?? []).flatMap((inst) =>
+          inst.repositories.map((r) => ({ installationId: inst.id, repo: r })),
+        ),
       );
     }
-    return (flatRepos.data ?? []).map((r) => ({
-      installationId: r.installationId,
-      repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
-    }));
+    return sortReposByPush(
+      (flatRepos.data ?? []).map((r) => ({
+        installationId: r.installationId,
+        repo: { fullName: r.fullName, defaultBranch: r.defaultBranch, pushedAt: r.pushedAt },
+      })),
+    );
   }, [isAdmin, installs.data, flatRepos.data]);
   return {
     isAdmin,
@@ -102,11 +117,18 @@ export function RepoPicker({
       repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
       byUrl: { url: r.url, token: r.token, branches: r.branches },
     });
+  const owners = useMemo(() => repoOwners(src.allRepos), [src.allRepos]);
+  const [owner, setOwner] = useState("");
+  // An owner that disappeared (App uninstalled from it) falls back to all.
+  const activeOwner = owners.includes(owner) ? owner : "";
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return src.allRepos;
-    return src.allRepos.filter(({ repo }) => repo.fullName.toLowerCase().includes(q));
-  }, [src.allRepos, query]);
+    return src.allRepos.filter(
+      ({ repo }) =>
+        (!activeOwner || repoOwner(repo.fullName) === activeOwner) &&
+        (!q || repo.fullName.toLowerCase().includes(q)),
+    );
+  }, [src.allRepos, query, activeOwner]);
 
   let appPanel: React.ReactNode;
   if (src.loading) {
@@ -180,21 +202,52 @@ export function RepoPicker({
       </p>
     );
   } else {
+    const ownerFilter =
+      owners.length < 2 ? null : owners.length <= 3 ? (
+        <Segmented
+          label="Repository owner"
+          size="sm"
+          className="shrink-0 self-start sm:self-auto"
+          value={activeOwner}
+          onChange={setOwner}
+          options={[
+            { value: "", label: "All" },
+            ...owners.map((o) => ({ value: o, label: o })),
+          ]}
+        />
+      ) : (
+        <Select
+          aria-label="Repository owner"
+          value={activeOwner}
+          onChange={(e) => setOwner(e.target.value)}
+          wrapperClassName="sm:w-44 sm:shrink-0"
+        >
+          <option value="">All owners</option>
+          {owners.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </Select>
+      );
     appPanel = (
       <div className="space-y-2">
-        <Input
-          ref={searchRef}
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search ${src.allRepos.length} ${src.allRepos.length === 1 ? "repository" : "repositories"}…`}
-          aria-label="Search repositories"
-          aria-invalid={error ? true : undefined}
-          data-primary-search
-          data-no-draft
-          className="h-9 text-[13px]"
-          autoFocus={autoFocus}
-        />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${src.allRepos.length} ${src.allRepos.length === 1 ? "repository" : "repositories"}…`}
+            aria-label="Search repositories"
+            aria-invalid={error ? true : undefined}
+            data-primary-search
+            data-no-draft
+            className="h-9 min-w-0 flex-1 text-[13px]"
+            autoFocus={autoFocus}
+          />
+          {ownerFilter}
+        </div>
         <ul
           className={
             "divide-y divide-[var(--border-subtle)] overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] " +
@@ -203,7 +256,8 @@ export function RepoPicker({
         >
           {filtered.length === 0 ? (
             <li className="px-3 py-3 text-xs text-[var(--text-secondary)]">
-              No repositories match &ldquo;{query}&rdquo;. Not listed? Use the URL or token tab, or add it
+              No repositories{activeOwner ? ` from ${activeOwner}` : ""}
+              {query.trim() ? <> match &ldquo;{query}&rdquo;</> : null}. Not listed? Use the URL or token tab, or add it
               to the GitHub App&apos;s repository access.
             </li>
           ) : (
@@ -221,9 +275,17 @@ export function RepoPicker({
                       <Lock className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="private" />
                     )}
                   </span>
-                  <span className="flex shrink-0 items-center gap-1 text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)]">
-                    Import
-                    <ArrowRight className="h-3 w-3" />
+                  <span className="flex shrink-0 items-center gap-3 text-xs text-[var(--text-tertiary)]">
+                    {repo.pushedAt && relativeTime(repo.pushedAt) && (
+                      <time dateTime={repo.pushedAt} title={new Date(repo.pushedAt).toLocaleString()}>
+                        <span className="max-sm:sr-only">pushed </span>
+                        {relativeTime(repo.pushedAt)}
+                      </time>
+                    )}
+                    <span className="flex items-center gap-1 group-hover:text-[var(--text-primary)]">
+                      <span className="max-sm:sr-only">Import</span>
+                      <ArrowRight className="h-3 w-3" />
+                    </span>
                   </span>
                 </button>
               </li>

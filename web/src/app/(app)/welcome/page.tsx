@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useInstallURL, useGithubRepos, type GithubRepoRef } from "@/features/github";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { useCreateProject, useProjects } from "@/features/projects";
+import { useCreateProject, useProjects, useProjectsSummary } from "@/features/projects";
 import { projectSlugFromRepo } from "@/features/projects/names";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,7 @@ import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { toastError } from "@/lib/errors";
+import { welcomeProgress, type WelcomeProgress } from "./progress";
 
 // Guided 3-step onboarding for users landing on a fresh kuso install.
 // Before this, the path from "I just signed up" to "I have a service
@@ -36,12 +37,16 @@ import { toastError } from "@/lib/errors";
 
 type Step = 1 | 2 | 3;
 
+function parseStep(raw: string | null | undefined): Step | null {
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return n === 1 || n === 2 || n === 3 ? n : null;
+}
+
 export default function WelcomePage() {
   const router = useRouter();
   const search = useSearchParams();
-  const stepParam = search?.get("step");
-  const step = ((stepParam ? parseInt(stepParam, 10) : 1) || 1) as Step;
-  const project = search?.get("project") ?? "";
+  const explicitStep = parseStep(search?.get("step"));
+  const projectParam = search?.get("project") ?? "";
   // /api/github/repos (projects:create) rather than the admin-only
   // installations endpoints, so instance editors can onboard too.
   const repos = useGithubRepos();
@@ -49,6 +54,31 @@ export default function WelcomePage() {
   const installCount = new Set(repoList.map((r) => r.installationId)).size;
   const hasGitHub = installCount > 0;
   const [pickedInstall, setPickedInstall] = useState<number | null>(null);
+  // Service counts come from the summary; the plain list is the fallback
+  // on a server without it (deploy then never reads as done).
+  const summary = useProjectsSummary();
+  const projectList = useProjects();
+  const settled = !repos.isPending && !summary.isPending && (!summary.isError || !projectList.isPending);
+  const progress: WelcomeProgress | null = settled
+    ? welcomeProgress(
+        hasGitHub,
+        summary.data
+          ? summary.data.map((it) => ({
+              name: it.project.metadata.name,
+              createdAt: it.project.metadata.creationTimestamp,
+              serviceCount: it.services.length,
+            }))
+          : (projectList.data ?? []).map((p) => ({
+              name: p.metadata.name,
+              createdAt: p.metadata.creationTimestamp,
+              serviceCount: null,
+            })),
+      )
+    : null;
+  // Without ?step= the page waits for the data and opens on the first
+  // step that isn't done, instead of flashing step 1.
+  const step: Step | null = explicitStep ?? progress?.step ?? null;
+  const project = projectParam || (explicitStep === null ? (progress?.project ?? "") : "");
 
   const setStep = (n: Step, params: Record<string, string> = {}) => {
     const usp = new URLSearchParams(search?.toString() ?? "");
@@ -72,7 +102,22 @@ export default function WelcomePage() {
         </p>
       </header>
 
-      <Stepper current={step} hasGitHub={hasGitHub} />
+      {step === null ? (
+        <>
+          <Skeleton className="h-6 w-80 max-w-full" />
+          <Skeleton className="mt-6 h-48 w-full" />
+        </>
+      ) : (
+        <>
+      <Stepper
+        current={step}
+        done={{
+          1: progress?.done[1] ?? hasGitHub,
+          2: (progress?.done[2] ?? false) || step > 2,
+          3: progress?.done[3] ?? false,
+        }}
+        onSelect={(n) => setStep(n, n === 3 && project ? { project } : {})}
+      />
 
       <div className="mt-6 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 sm:p-6">
         {step === 1 && (
@@ -96,8 +141,11 @@ export default function WelcomePage() {
             onPicked={(p) => setStep(3, { project: p })}
           />
         )}
-        {step === 3 && <Step3Deploy project={project} />}
+        {step === 3 &&
+          (!projectParam && progress?.allDeployed ? <AllSet /> : <Step3Deploy project={project} />)}
       </div>
+        </>
+      )}
 
       <p className="mt-4 text-center text-[13px] text-[var(--text-secondary)]">
         Already migrating from Coolify? <Link href="/settings/import" className="text-[var(--accent)] hover:underline">Import from there</Link> instead.
@@ -106,42 +154,113 @@ export default function WelcomePage() {
   );
 }
 
-function Stepper({ current, hasGitHub }: { current: Step; hasGitHub: boolean }) {
+function Stepper({
+  current,
+  done,
+  onSelect,
+}: {
+  current: Step;
+  done: Record<Step, boolean>;
+  onSelect: (n: Step) => void;
+}) {
   const steps = [
-    { id: 1 as Step, label: "Install GitHub App", done: hasGitHub },
-    { id: 2 as Step, label: "Pick a repo", done: current > 2 },
-    { id: 3 as Step, label: "Deploy", done: false },
+    { id: 1 as Step, label: "Install GitHub App", done: done[1] },
+    { id: 2 as Step, label: "Pick a repo", done: done[2] },
+    { id: 3 as Step, label: "Deploy", done: done[3] },
   ];
   return (
     <ol aria-label="Progress" className="flex flex-wrap items-center gap-x-2 gap-y-2">
       {steps.map((s, i) => (
-        <li key={s.id} className="flex items-center gap-2" aria-current={s.id === current ? "step" : undefined}>
-          <span
-            className={cn(
-              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
-              s.done
-                ? "border-[var(--success)]/40 bg-[var(--success-subtle)] text-[var(--success)]"
-                : s.id === current
-                  ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--accent)]"
-                  : "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
-            )}
-          >
-            {s.done ? <CheckCircle2 className="h-3.5 w-3.5" aria-label="done" /> : s.id}
-          </span>
-          <span
-            className={cn(
-              "text-[13px]",
-              s.id === current ? "font-medium text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
-            )}
-          >
-            {s.label}
-          </span>
+        <li key={s.id} className="flex items-center gap-2">
+          <StepLabel
+            step={s}
+            current={s.id === current}
+            onSelect={s.id !== current && (s.done || s.id < current) ? () => onSelect(s.id) : undefined}
+          />
           {i < steps.length - 1 && (
             <ArrowRight aria-hidden className="mx-1 h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           )}
         </li>
       ))}
     </ol>
+  );
+}
+
+function StepLabel({
+  step,
+  current,
+  onSelect,
+}: {
+  step: { id: Step; label: string; done: boolean };
+  current: boolean;
+  onSelect?: () => void;
+}) {
+  const inner = (
+    <>
+      <span
+        className={cn(
+          "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
+          step.done
+            ? "border-[var(--success)]/40 bg-[var(--success-subtle)] text-[var(--success)]"
+            : current
+              ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--accent)]"
+              : "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
+        )}
+      >
+        {step.done ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> : step.id}
+      </span>
+      <span
+        className={cn(
+          "text-[13px]",
+          current ? "font-medium text-[var(--text-primary)]" : "text-[var(--text-secondary)]",
+          onSelect && "underline-offset-4 group-hover:text-[var(--text-primary)] group-hover:underline"
+        )}
+      >
+        {step.label}
+        {step.done && <span className="sr-only"> (done)</span>}
+      </span>
+    </>
+  );
+  if (!onSelect) {
+    return (
+      <span className="flex items-center gap-2" aria-current={current ? "step" : undefined}>
+        {inner}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="group flex items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+    >
+      {inner}
+    </button>
+  );
+}
+
+// AllSet is step 3 when every project already runs a service: nothing
+// to prompt for, so point at the places a returning user goes next.
+function AllSet() {
+  return (
+    <div className="flex items-start gap-3">
+      <CheckCircle2 className="mt-1 h-5 w-5 text-[var(--success)]" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <h2 className="text-base font-semibold tracking-tight">You&apos;re set up</h2>
+        <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">
+          Each of your projects already runs a service. Start another project, or head to the dashboard.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Link href="/projects" className={buttonVariants({ size: "sm" })}>
+            Open the dashboard
+            <ArrowRight className="h-3 w-3" />
+          </Link>
+          <Link href="/projects/new" className={buttonVariants({ variant: "secondary", size: "sm" })}>
+            New project
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 }
 

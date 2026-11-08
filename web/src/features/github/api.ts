@@ -19,6 +19,8 @@ export interface GithubRepo {
   fullName: string;
   defaultBranch: string;
   private: boolean;
+  // Absent on servers that predate it and on repos cached before it.
+  pushedAt?: string;
 }
 
 export interface InstallURLResponse {
@@ -51,6 +53,7 @@ export interface GithubRepoRef {
   fullName: string;
   defaultBranch: string;
   installationId: number;
+  pushedAt?: string;
 }
 
 export async function listRepos(): Promise<GithubRepoRef[]> {

@@ -124,3 +124,49 @@ func TestGithubSetupCallback_DebouncesRefreshAndRedirectsToLanding(t *testing.T)
 		t.Fatalf("refresh ran %d times in the debounce window, want 1", calls)
 	}
 }
+
+func TestGithubRepos_SortedByLastPushAcrossInstallations(t *testing.T) {
+	t.Parallel()
+	h := &GithubHandler{Logger: discardLogger(), Cache: &memGithubCache{
+		insts: []db.GithubInstallation{
+			{ID: 7, AccountLogin: "acme", RepositoriesJSON: `[
+				{"fullName":"acme/old","defaultBranch":"main","pushedAt":"2026-01-01T00:00:00Z"},
+				{"fullName":"acme/legacy","defaultBranch":"main"}]`},
+			{ID: 9, AccountLogin: "zed", RepositoriesJSON: `[
+				{"fullName":"zed/new","defaultBranch":"main","pushedAt":"2026-11-01T12:00:00Z"},
+				{"fullName":"zed/mid","defaultBranch":"main","pushedAt":"2026-06-01T00:00:00Z"}]`},
+		},
+	}}
+	req := withPerms(httptest.NewRequest(http.MethodGet, "/api/github/repos", nil), auth.PermProjectsCreate)
+	rr := httptest.NewRecorder()
+	h.ListRepos(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var got []struct {
+		FullName       string  `json:"fullName"`
+		InstallationID int64   `json:"installationId"`
+		PushedAt       *string `json:"pushedAt"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{"zed/new", "zed/mid", "acme/old", "acme/legacy"}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("got %+v", got)
+	}
+	for i, name := range wantOrder {
+		if got[i].FullName != name {
+			t.Fatalf("position %d = %s, want %s (full: %+v)", i, got[i].FullName, name, got)
+		}
+	}
+	if got[0].InstallationID != 9 || got[2].InstallationID != 7 {
+		t.Fatalf("installation ids lost in sort: %+v", got)
+	}
+	if got[0].PushedAt == nil || *got[0].PushedAt != "2026-11-01T12:00:00Z" {
+		t.Fatalf("pushedAt not passed through: %+v", got[0].PushedAt)
+	}
+	if got[3].PushedAt != nil {
+		t.Fatalf("repo cached without pushedAt should omit it, got %v", *got[3].PushedAt)
+	}
+}

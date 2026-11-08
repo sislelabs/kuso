@@ -176,7 +176,7 @@ func (c *Client) RefreshInstallationRepos(ctx context.Context, store CacheStore,
 	dbRepos := make([]db.GithubRepo, len(repos))
 	for i, r := range repos {
 		dbRepos[i] = db.GithubRepo{
-			ID: r.ID, Name: r.Name, FullName: r.FullName, Private: r.Private, DefaultBranch: r.DefaultBranch,
+			ID: r.ID, Name: r.Name, FullName: r.FullName, Private: r.Private, DefaultBranch: r.DefaultBranch, PushedAt: r.PushedAt,
 		}
 	}
 	return store.SetRepos(ctx, id, dbRepos)
