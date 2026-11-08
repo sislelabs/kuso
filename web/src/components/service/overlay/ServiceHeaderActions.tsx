@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
+import Link from "next/link";
+import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,12 +18,25 @@ import {
   useTriggerBuild,
 } from "@/features/services";
 import { useProject } from "@/features/projects";
-import { useCanOnProject, Perms } from "@/features/auth";
+import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
 import type { KusoEnvironment } from "@/types/projects";
 
 const NO_ACCESS = "Requires editor access on this project";
+
+// Prefilled alert-rule links. The alerts page reads
+// ?new=1&kind=&project=&service=&env= and opens its create form with them.
+const ALERT_PRESETS = [
+  { kind: "http_5xx_rate", label: "Error rate is high", hint: "Share of 5xx responses crosses a threshold" },
+  { kind: "http_p95_latency", label: "Responses get slow", hint: "p95 latency crosses a threshold" },
+  { kind: "log_match", label: "Logs match a pattern", hint: "A log line matches text you choose" },
+] as const;
+
+export function alertRuleHref(project: string, service: string, env: string, kind: string): string {
+  const q = new URLSearchParams({ new: "1", kind, project, service, env });
+  return `/settings/alerts?${q.toString()}`;
+}
 
 // What each action does, in one place, so the header tooltips and the
 // confirm dialogs can't drift apart.
@@ -126,6 +140,7 @@ export function ServiceHeaderActions({
   const [confirm, setConfirm] = useState<"restart" | "stop" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const group = envGroupName(env);
+  const canAlert = useCan(Perms.SettingsAdmin);
 
   const onRestart = async () => {
     try {
@@ -208,19 +223,24 @@ export function ServiceHeaderActions({
         )}
       </div>
 
-      {/* <640px: Start stays inline (it's the way back), the rest folds. */}
-      <div className="flex items-center gap-1.5 sm:hidden">
+      {/* <640px: Start stays inline (it's the way back) and Restart/Stop
+          fold into the ⋯ menu. The menu itself shows at every width: it
+          also carries the per-service alert shortcuts. */}
+      <div className="flex items-center gap-1.5">
         {stopped && (
-          <Button size="sm" variant="secondary" onClick={onStart} disabled={!canWrite || start.isPending} className="h-7 px-2.5 text-xs">
+          <Button size="sm" variant="secondary" onClick={onStart} disabled={!canWrite || start.isPending} className="h-7 px-2.5 text-xs sm:hidden">
             <Play className="h-3 w-3" />
             {start.isPending ? "Starting…" : "Start"}
           </Button>
         )}
-        {(restartBtn || !stopped) && (
+        {(restartBtn || !stopped || canAlert) && (
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger
               aria-label="More service actions"
-              className="inline-flex h-7 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              className={cn(
+                "inline-flex h-7 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                !canAlert && "sm:hidden",
+              )}
             >
               <MoreHorizontal className="h-4 w-4" />
             </PopoverTrigger>
@@ -229,7 +249,7 @@ export function ServiceHeaderActions({
                 <button
                   type="button"
                   disabled={!canWrite}
-                  className={menuItem}
+                  className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
                     setConfirm("restart");
@@ -246,7 +266,7 @@ export function ServiceHeaderActions({
                 <button
                   type="button"
                   disabled={!canWrite}
-                  className={menuItem}
+                  className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
                     setConfirm("stop");
@@ -258,6 +278,27 @@ export function ServiceHeaderActions({
                     <span className="block text-xs text-[var(--text-secondary)]">{EXPLAIN.stop}</span>
                   </span>
                 </button>
+              )}
+              {canAlert && (
+                <div role="group" aria-labelledby="svc-alert-menu-heading" className={cn((restartBtn || !stopped) && "border-t border-[var(--border-subtle)] pt-1 sm:border-t-0 sm:pt-0")}>
+                  <div id="svc-alert-menu-heading" className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                    <BellPlus aria-hidden className="h-3.5 w-3.5" />
+                    Alert me when…
+                  </div>
+                  {ALERT_PRESETS.map((p) => (
+                    <Link
+                      key={p.kind}
+                      href={alertRuleHref(project, service, group, p.kind)}
+                      onClick={() => setMenuOpen(false)}
+                      className={cn(menuItem, "pl-7")}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-sm text-[var(--text-primary)]">{p.label}</span>
+                        <span className="block text-xs text-[var(--text-secondary)]">{p.hint}</span>
+                      </span>
+                    </Link>
+                  ))}
+                </div>
               )}
             </PopoverContent>
           </Popover>
