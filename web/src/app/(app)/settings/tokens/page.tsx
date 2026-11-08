@@ -13,7 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon, KeyRound } from "lucide-react";
+import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon } from "lucide-react";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsSection } from "@/components/settings/SettingsSection";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -103,49 +105,54 @@ export default function TokensPage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl p-6 lg:p-8 space-y-6">
-      <header className="flex items-center gap-3">
-        <KeyRound className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">
-            Personal access tokens
-          </h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Use in <span className="font-mono">kuso login --token</span> or pass as{" "}
-            <span className="font-mono">Authorization: Bearer &lt;token&gt;</span> to the API.
-          </p>
-        </div>
-      </header>
-
-      <form
-        onSubmit={onIssue}
-        className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
-      >
-        <div className="space-y-3 p-4">
-          <Field label="name" hint="memo so you remember which device it lives on">
+    <SettingsPage
+      title="API tokens"
+      description={
+        <>
+          Personal access tokens for the CLI and scripts. Use with{" "}
+          <span className="font-mono text-[var(--text-primary)]">kuso login --token</span> or send as{" "}
+          <span className="font-mono text-[var(--text-primary)]">Authorization: Bearer &lt;token&gt;</span>.
+        </>
+      }
+    >
+      <form onSubmit={onIssue}>
+        <SettingsSection
+          title="New token"
+          description="Tokens carry your current permissions and stop working when they expire."
+          footerHint={`Tokens last at most ${MAX_TOKEN_DAYS} days.`}
+          footer={
+            <Button size="sm" type="submit" disabled={issue.isPending}>
+              <Plus className="h-3.5 w-3.5" />
+              {issue.isPending ? "Issuing…" : "Issue token"}
+            </Button>
+          }
+        >
+          <SettingsField label="Name" htmlFor="token-name" hint="A memo so you remember which device or script uses it.">
             <Input
+              id="token-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="my laptop"
-              className="h-8 font-mono text-[12px]"
+              placeholder="e.g. my laptop"
               autoFocus
               required
             />
-          </Field>
-          <Field label="expires" hint="when the token stops working">
-            <div className="flex flex-wrap gap-1">
+          </SettingsField>
+          <SettingsField label="Expires" hint="When the token stops working.">
+            <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Expiry">
               {PRESETS.map((p) => {
                 const active = p.label === preset;
                 return (
                   <button
                     key={p.label}
                     type="button"
+                    role="radio"
+                    aria-checked={active}
                     onClick={() => setPreset(p.label)}
                     className={cn(
-                      "inline-flex h-7 items-center gap-1 rounded-md border px-2 font-mono text-[11px] transition-colors",
+                      "inline-flex h-8 items-center rounded-sm border px-3 text-sm transition-colors",
                       active
-                        ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
-                        : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                        ? "border-[var(--border-strong)] bg-[var(--bg-tertiary)] font-medium text-[var(--text-primary)]"
+                        : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
                     )}
                   >
                     {p.label}
@@ -154,96 +161,78 @@ export default function TokensPage() {
               })}
             </div>
             {preset === "Custom" && (
-              <div className="mt-2 inline-flex items-center gap-1.5">
+              <div className="mt-2 flex items-center gap-2">
                 <Input
                   type="number"
                   min={1}
                   max={MAX_TOKEN_DAYS}
                   value={customDays}
                   onChange={(e) => setCustomDays(parseInt(e.target.value, 10) || 30)}
-                  className="h-7 w-24 font-mono text-[11px]"
+                  aria-label="Custom expiry in days"
+                  className="w-28 font-mono"
                 />
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                  days (max {MAX_TOKEN_DAYS})
-                </span>
+                <span className="text-xs text-[var(--text-secondary)]">days (max {MAX_TOKEN_DAYS})</span>
               </div>
             )}
-          </Field>
-        </div>
-        <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
-          <Button size="sm" type="submit" disabled={issue.isPending}>
-            <Plus className="h-3 w-3" />
-            {issue.isPending ? "Issuing…" : "Issue token"}
-          </Button>
-        </footer>
+          </SettingsField>
+        </SettingsSection>
       </form>
 
       {issued && (
-        <section className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] p-4">
-          <h2 className="text-sm font-semibold">Token issued</h2>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">
-            Save this now — kuso never shows it again.
-          </p>
-          <div className="mt-3 flex items-stretch gap-2">
-            <code className="flex-1 break-all rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[11px]">
+        <section className="rounded-md border border-[var(--success)]/40 bg-[var(--success-subtle)] p-4 sm:p-5">
+          <h2 className="text-base font-semibold text-[var(--text-primary)]">Token issued</h2>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">Copy it now. kuso never shows it again.</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <code className="flex-1 break-all rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2.5 py-2 font-mono text-xs text-[var(--text-primary)]">
               {issued.token}
             </code>
             <Button variant="outline" size="sm" type="button" onClick={() => void copy(issued.token)}>
-              {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
+              {copied ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
           <div className="mt-2 flex items-center justify-between">
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              expires{" "}
-              {isInfinite(issued.expiresAt)
-                ? "never"
-                : new Date(issued.expiresAt).toLocaleDateString()}
+            <span className="text-xs text-[var(--text-secondary)]">
+              Expires{" "}
+              {isInfinite(issued.expiresAt) ? "never" : new Date(issued.expiresAt).toLocaleDateString()}
             </span>
             <Button variant="ghost" size="sm" type="button" onClick={() => setIssued(null)}>
-              dismiss
+              Dismiss
             </Button>
           </div>
         </section>
       )}
 
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <h2 className="text-sm font-semibold tracking-tight">Existing tokens</h2>
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-            {tokens.data?.length ?? 0} {(tokens.data?.length ?? 0) === 1 ? "token" : "tokens"}
-          </span>
-        </header>
+      <SettingsSection
+        title="Your tokens"
+        description={`${tokens.data?.length ?? 0} ${(tokens.data?.length ?? 0) === 1 ? "token" : "tokens"}`}
+        flush
+      >
         {tokens.isPending ? (
-          <Skeleton className="m-3 h-16" />
+          <Skeleton className="m-4 h-16" />
         ) : tokens.isError ? (
-          <QueryErrorState what="tokens" error={tokens.error} onRetry={() => void tokens.refetch()} className="m-3" />
+          <QueryErrorState what="tokens" error={tokens.error} onRetry={() => void tokens.refetch()} className="m-4" />
         ) : (tokens.data ?? []).length === 0 ? (
-          <p className="px-4 py-4 text-[11px] text-[var(--text-tertiary)]">
-            No tokens issued yet.
-          </p>
+          <p className="px-4 py-4 text-sm text-[var(--text-tertiary)] sm:px-5">No tokens issued yet.</p>
         ) : (
-          <ul>
+          <ul className="divide-y divide-[var(--border-subtle)]">
             {tokens.data!.map((t) => (
-              <li
-                key={t.id}
-                className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 last:border-b-0"
-              >
+              <li key={t.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 truncate text-sm font-medium">
-                    {t.name}
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+                    <span className="truncate">{t.name}</span>
                     {isInfinite(t.expiresAt) && (
                       <span
-                        className="inline-flex items-center gap-0.5 rounded bg-[var(--warning-subtle)] px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
+                        className="inline-flex items-center gap-1 rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 text-xs text-[var(--warning)]"
                         title="Never expires"
                       >
-                        <InfinityIcon className="h-2 w-2" />
-                        ∞
+                        <InfinityIcon className="h-3 w-3" />
+                        No expiry
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-                    issued {relativeTime(t.createdAt)} ·{" "}
+                  <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                    Issued {relativeTime(t.createdAt)} ·{" "}
                     {isInfinite(t.expiresAt) ? (
                       <span>does not expire</span>
                     ) : (
@@ -256,6 +245,7 @@ export default function TokensPage() {
                   size="icon-sm"
                   type="button"
                   aria-label={`Revoke ${t.name}`}
+                  title="Revoke"
                   onClick={() => setRevoking({ id: t.id, name: t.name })}
                   disabled={revoke.isPending}
                 >
@@ -265,7 +255,7 @@ export default function TokensPage() {
             ))}
           </ul>
         )}
-      </section>
+      </SettingsSection>
 
       <ConfirmDialog
         open={revoking !== null}
@@ -279,26 +269,6 @@ export default function TokensPage() {
       />
 
       {canManageAll && <AdminTokensSection />}
-    </div>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-1">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {label}
-      </div>
-      {children}
-      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
-    </div>
+    </SettingsPage>
   );
 }

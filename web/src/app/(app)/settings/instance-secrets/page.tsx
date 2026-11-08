@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
-import { Globe, Plus, Trash2, KeyRound } from "lucide-react";
+import { Plus, Trash2, KeyRound } from "lucide-react";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -62,11 +64,9 @@ export default function InstanceSecretsPage() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          Instance-wide secrets are admin-only.
-        </p>
-      </div>
+      <SettingsPage title="Instance secrets">
+        <SettingsNotice tone="warning">Instance-wide secrets are admin-only (settings:admin).</SettingsNotice>
+      </SettingsPage>
     );
   }
 
@@ -107,119 +107,29 @@ export default function InstanceSecretsPage() {
     .sort();
 
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      <header className="mb-6 flex items-start gap-3">
-        <Globe className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Instance secrets</h1>
-          <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
-            Auto-mounted into every service in every project as env vars (via{" "}
-            <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
-              kuso-instance-shared
-            </code>
-            ). Use for cluster-wide integrations like Sentry, Datadog, observability proxies. Per-project
-            secrets live under each project&apos;s settings; per-service vars live on the service itself.
-          </p>
-        </div>
-      </header>
-
-      {/* Existing keys — flat list, no Card chrome */}
-      <section className="space-y-3">
-        <header className="flex items-baseline justify-between">
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            stored ({visibleKeys.length})
-          </h2>
-        </header>
-        {list.isPending ? (
-          <Skeleton className="h-16 w-full" />
-        ) : list.isError ? (
-          <QueryErrorState what="instance secrets" error={list.error} onRetry={() => void list.refetch()} />
-        ) : visibleKeys.length === 0 ? (
-          <EmptyState
-            title="No instance secrets yet"
-            description="Add one below."
-            className="px-3 py-8"
-          />
-        ) : (
-          <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
-            {visibleKeys.map((k) => (
-              <li
-                key={k}
-                className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2 last:border-b-0 hover:bg-[var(--bg-secondary)]/70"
-              >
-                <KeyRound className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-                <span className="flex-1 truncate font-mono text-[12px] text-[var(--text-secondary)]">{k}</span>
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">value hidden</span>
-                <button
-                  type="button"
-                  onClick={() => setPendingDelete(k)}
-                  disabled={unset.isPending}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
-                  aria-label={`Delete ${k}`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Add new */}
-      <section className="mt-8 space-y-3">
-        <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            add or update
-          </h2>
-        </header>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSubmit();
-          }}
-          className="flex flex-col gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3"
-        >
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="flex-1">
-              <label
-                htmlFor="instance-secret-key"
-                className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-              >
-                key
-              </label>
-              <Input
-                id="instance-secret-key"
-                value={newKey}
-                onChange={(e) => setNewKey(e.target.value)}
-                placeholder="SENTRY_DSN"
-                className="h-8 font-mono text-[12px]"
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </div>
-            <div className="flex-[2]">
-              <label
-                htmlFor="instance-secret-value"
-                className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-              >
-                value
-              </label>
-              <Input
-                id="instance-secret-value"
-                value={newValue}
-                onChange={(e) => setNewValue(e.target.value)}
-                type="password"
-                placeholder="paste secret value"
-                className="h-8 font-mono text-[12px]"
-                spellCheck={false}
-                autoComplete="new-password"
-              />
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              SCREAMING_SNAKE_CASE. Saving an existing key asks before replacing it.
-            </p>
+    <SettingsPage
+      title="Instance secrets"
+      description={
+        <>
+          Env vars mounted into every service in every project (via{" "}
+          <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs text-[var(--text-primary)]">
+            kuso-instance-shared
+          </code>
+          ). Use for cluster-wide integrations like Sentry or Datadog. Per-project secrets live in project settings;
+          per-service vars live on the service.
+        </>
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
+        <SettingsSection
+          title="Add or update"
+          footerHint="Saving an existing key asks before replacing it. Services pick up changes on their next restart."
+          footer={
             <Button
               size="sm"
               type="submit"
@@ -228,9 +138,74 @@ export default function InstanceSecretsPage() {
               <Plus className="h-3.5 w-3.5" />
               {set.isPending ? "Saving…" : "Save secret"}
             </Button>
+          }
+        >
+          <div className="grid gap-5 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            <SettingsField label="Key" htmlFor="instance-secret-key" hint="SCREAMING_SNAKE_CASE.">
+              <Input
+                id="instance-secret-key"
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value)}
+                placeholder="e.g. SENTRY_DSN"
+                className="font-mono"
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </SettingsField>
+            <SettingsField label="Value" htmlFor="instance-secret-value" hint="Write-only: it is never shown again.">
+              <Input
+                id="instance-secret-value"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+                type="password"
+                placeholder="Paste the secret value"
+                className="font-mono"
+                spellCheck={false}
+                autoComplete="new-password"
+              />
+            </SettingsField>
           </div>
-        </form>
-      </section>
+        </SettingsSection>
+      </form>
+
+      <SettingsSection
+        title="Stored secrets"
+        description={`${visibleKeys.length} ${visibleKeys.length === 1 ? "key" : "keys"}. Values are write-only.`}
+        flush
+      >
+        {list.isPending ? (
+          <Skeleton className="m-4 h-16" />
+        ) : list.isError ? (
+          <QueryErrorState
+            what="instance secrets"
+            error={list.error}
+            onRetry={() => void list.refetch()}
+            className="m-4"
+          />
+        ) : visibleKeys.length === 0 ? (
+          <EmptyState title="No instance secrets yet" description="Add one above." className="px-3 py-8" />
+        ) : (
+          <ul className="divide-y divide-[var(--border-subtle)]">
+            {visibleKeys.map((k) => (
+              <li key={k} className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
+                <KeyRound className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-[var(--text-primary)]">{k}</span>
+                <span className="hidden text-xs text-[var(--text-tertiary)] sm:inline">Value hidden</span>
+                <button
+                  type="button"
+                  onClick={() => setPendingDelete(k)}
+                  disabled={unset.isPending}
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
+                  aria-label={`Delete ${k}`}
+                  title="Delete"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsSection>
 
       <ConfirmDialog
         open={pendingOverwrite !== null}
@@ -275,6 +250,6 @@ export default function InstanceSecretsPage() {
         }}
         onCancel={() => setPendingDelete(null)}
       />
-    </div>
+    </SettingsPage>
   );
 }

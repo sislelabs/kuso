@@ -9,7 +9,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
-import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Save, Check, ShieldAlert, ShieldCheck } from "lucide-react";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { cn } from "@/lib/utils";
 import { useCan, Perms } from "@/features/auth";
 import { ControlPlaneBackupSection } from "@/components/settings/ControlPlaneBackupSection";
 
@@ -71,14 +74,14 @@ function CoverageRow({
   detail?: string;
 }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-1.5 text-[12px]" title={detail}>
-      <span className="min-w-0 flex-1 truncate font-mono">{name}</span>
+    <li className="flex items-center gap-3 px-4 py-2 text-sm sm:px-5" title={detail}>
+      <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-[var(--text-primary)]">{name}</span>
       {age && (
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]" title="last run exited OK">
+        <span className="shrink-0 text-xs text-[var(--text-tertiary)]" title="last run exited OK">
           {age}
         </span>
       )}
-      <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${BADGE_TONE[badge]}`}>{badge}</span>
+      <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", BADGE_TONE[badge])}>{badge}</span>
     </li>
   );
 }
@@ -98,14 +101,17 @@ function AddonBackupList({
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );
   return (
-    <div className="mb-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-      <h2 className="border-b border-[var(--border-subtle)] px-3 py-2 text-[12px] font-semibold">
-        Addon backups
-        {!complete && (
-          <span className="ml-2 font-mono text-[10px] font-normal text-[var(--warning)]">partial list</span>
-        )}
-      </h2>
-      <ul className="divide-y divide-[var(--border-subtle)]">
+    <SettingsSection
+      title="Addon backups"
+      description={
+        <>
+          Failing first. Ages are the last run that exited OK.
+          {!complete && <span className="ml-1 text-[var(--warning)]">Partial list: some namespaces couldn&apos;t be read.</span>}
+        </>
+      }
+      flush
+    >
+      <ul className="max-h-[480px] divide-y divide-[var(--border-subtle)] overflow-y-auto">
         {sorted.map((a) => (
           <CoverageRow
             key={`${a.namespace}/${a.addon}`}
@@ -124,25 +130,31 @@ function AddonBackupList({
           />
         ))}
       </ul>
-    </div>
+    </SettingsSection>
   );
 }
 
-function HealthBanner({ title, h }: { title: string; h: HealthEntry }) {
-  const tone = h.healthy
-    ? "border-green-500/30 bg-green-500/5 text-[var(--success)]"
-    : "border-[var(--warning)]/40 bg-[var(--warning-subtle)] text-[var(--warning)]";
+function HealthRow({ title, h }: { title: string; h: HealthEntry }) {
   const Icon = h.healthy ? ShieldCheck : ShieldAlert;
   return (
-    <div className={`flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] leading-relaxed ${tone}`}>
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+    <div className="flex items-start gap-3">
+      <Icon
+        className={cn("mt-0.5 h-4 w-4 shrink-0", h.healthy ? "text-[var(--success)]" : "text-[var(--warning)]")}
+      />
       <div className="min-w-0">
-        <p className="font-semibold">{title}</p>
-        <p className="mt-0.5">{h.detail}</p>
+        <p className="text-sm font-medium text-[var(--text-primary)]">{title}</p>
+        <p className={cn("mt-0.5 text-sm", h.healthy ? "text-[var(--text-secondary)]" : "text-[var(--warning)]")}>
+          {h.detail}
+        </p>
         {h.lastSuccessAt && (
-          <p className="mt-0.5 font-mono text-[10px] opacity-80">
-            last success {new Date(h.lastSuccessAt).toLocaleString()}
-            {h.schedule ? ` · schedule ${h.schedule}` : ""}
+          <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
+            Last success {new Date(h.lastSuccessAt).toLocaleString()}
+            {h.schedule && (
+              <>
+                {" · schedule "}
+                <span className="font-mono">{h.schedule}</span>
+              </>
+            )}
           </p>
         )}
       </div>
@@ -167,20 +179,19 @@ function MaintenanceHealthBanners() {
   // failure so an operator investigates instead of assuming green.
   if (health.isError || !health.data) {
     return (
-      <div className="mb-6 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 text-[12px] text-[var(--warning)]">
-        Couldn&apos;t load backup / registry-GC health
-        {health.error instanceof Error ? `: ${health.error.message}` : ""}. Backup
-        status is unknown — check the control plane.
-      </div>
+      <SettingsNotice tone="warning" title="Couldn't load backup and registry-GC health">
+        {health.error instanceof Error ? `${health.error.message}. ` : ""}Backup status is unknown; check the
+        control plane.
+      </SettingsNotice>
     );
   }
   const { backup, registryGC } = health.data;
   return (
     <>
-      <div className="mb-6 space-y-2.5">
-        <HealthBanner title="Control-plane database backup" h={backup} />
-        <HealthBanner title="Registry garbage-collection" h={registryGC} />
-      </div>
+      <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
+        <HealthRow title="Control-plane database backup" h={backup} />
+        <HealthRow title="Registry garbage collection" h={registryGC} />
+      </SettingsSection>
       <AddonBackupList
         addons={health.data.addonBackups ?? []}
         volumes={health.data.serviceVolumes ?? []}
@@ -237,18 +248,10 @@ export default function BackupSettingsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-2xl p-6 lg:p-8">
-      <header className="mb-6 flex items-center gap-3">
-        <HardDrive className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Backups</h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            S3 credentials for addon backups. Every addon with a backup schedule uploads its
-            dumps to this bucket.
-          </p>
-        </div>
-      </header>
-
+    <SettingsPage
+      title="Backups"
+      description="Backup health across the cluster, the control-plane database, and the S3 bucket every addon backup uploads to."
+    >
       <MaintenanceHealthBanners />
 
       {isAdmin && <ControlPlaneBackupSection />}
@@ -275,63 +278,65 @@ export default function BackupSettingsPage() {
             }
             save.mutate(form);
           }}
-          className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
         >
-          <Field
-            label="bucket"
-            hint="S3 bucket name"
-            value={form.bucket}
-            onChange={(v) => setForm((s) => ({ ...s, bucket: v }))}
-          />
-          <Field
-            label="endpoint"
-            hint="https://… for any S3-compatible store"
-            placeholder="https://s3.fr-par.scw.cloud"
-            value={form.endpoint}
-            onChange={(v) => setForm((s) => ({ ...s, endpoint: v }))}
-          />
-          <Field
-            label="region"
-            hint="leave 'auto' for most providers"
-            value={form.region}
-            onChange={(v) => setForm((s) => ({ ...s, region: v }))}
-          />
-          <Field
-            label="access key id"
-            value={form.accessKeyId}
-            onChange={(v) => setForm((s) => ({ ...s, accessKeyId: v }))}
-          />
-          <Field
-            label="secret access key"
-            hint={form.hasSecret ? "leave empty to keep current" : "required"}
-            type="password"
-            value={form.secretAccessKey ?? ""}
-            onChange={(v) => setForm((s) => ({ ...s, secretAccessKey: v }))}
-            last
-          />
-          <footer className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              {settings.data?.hasSecret ? (
+          <SettingsSection
+            title="S3 storage"
+            description="Credentials every addon backup job uses. Schedule backups per addon on its Backups tab (open the addon on the project canvas)."
+            footerHint={
+              settings.data?.hasSecret ? (
                 <span className="inline-flex items-center gap-1">
-                  <Check className="h-3 w-3 text-[var(--success)]" /> configured
+                  <Check className="h-3.5 w-3.5 text-[var(--success)]" /> Configured
                 </span>
               ) : (
-                "not configured"
-              )}
-            </span>
-            <Button size="sm" type="submit" disabled={save.isPending}>
-              <Save className="h-3.5 w-3.5" />
-              {save.isPending ? "Saving…" : "Save"}
-            </Button>
-          </footer>
+                "Not configured"
+              )
+            }
+            footer={
+              <Button size="sm" type="submit" disabled={save.isPending}>
+                <Save className="h-3.5 w-3.5" />
+                {save.isPending ? "Saving…" : "Save"}
+              </Button>
+            }
+          >
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field
+                label="Bucket"
+                hint="S3 bucket name."
+                value={form.bucket}
+                onChange={(v) => setForm((s) => ({ ...s, bucket: v }))}
+              />
+              <Field
+                label="Region"
+                hint="Leave “auto” for most providers."
+                value={form.region}
+                onChange={(v) => setForm((s) => ({ ...s, region: v }))}
+              />
+            </div>
+            <Field
+              label="Endpoint"
+              hint="An https:// URL for any S3-compatible store."
+              placeholder="e.g. https://s3.fr-par.scw.cloud"
+              value={form.endpoint}
+              onChange={(v) => setForm((s) => ({ ...s, endpoint: v }))}
+            />
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field
+                label="Access key ID"
+                value={form.accessKeyId}
+                onChange={(v) => setForm((s) => ({ ...s, accessKeyId: v }))}
+              />
+              <Field
+                label="Secret access key"
+                hint={form.hasSecret ? "Leave empty to keep the current key." : "Required."}
+                type="password"
+                value={form.secretAccessKey ?? ""}
+                onChange={(v) => setForm((s) => ({ ...s, secretAccessKey: v }))}
+              />
+            </div>
+          </SettingsSection>
         </form>
       )}
-
-      <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
-        S3 credentials live here (admin only). Schedule backups per addon on its Backups tab
-        (open the addon on the project canvas). Each backup job uses these credentials.
-      </p>
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -342,7 +347,6 @@ function Field({
   onChange,
   type = "text",
   placeholder,
-  last,
 }: {
   label: string;
   hint?: string;
@@ -350,34 +354,20 @@ function Field({
   onChange: (v: string) => void;
   type?: "text" | "password";
   placeholder?: string;
-  last?: boolean;
 }) {
-  const id = `backup-${label.replace(/\s+/g, "-")}`;
+  const id = `backup-${label.toLowerCase().replace(/\s+/g, "-")}`;
   return (
-    <div
-      className={
-        "flex items-center gap-3 px-3 py-2" +
-        (!last ? " border-b border-[var(--border-subtle)]" : "")
-      }
-    >
-      <div className="min-w-[140px]">
-        <label htmlFor={id} className="block text-[12px] text-[var(--text-secondary)]">
-          {label}
-        </label>
-        {hint && (
-          <div className="font-mono text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>
-        )}
-      </div>
+    <SettingsField label={label} hint={hint} htmlFor={id}>
       <Input
         id={id}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="h-7 max-w-[320px] font-mono text-[12px]"
+        className="font-mono"
         autoComplete="off"
         spellCheck={false}
       />
-    </div>
+    </SettingsField>
   );
 }

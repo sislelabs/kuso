@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { toast } from "sonner";
-import { Cpu, MemoryStick } from "lucide-react";
 import { buildSettingsPayload, type BuildSettingsResponse } from "./payload";
 
 type BuildSettings = Pick<
@@ -145,42 +146,42 @@ export default function BuildSettingsPage() {
   };
 
   if (!loaded) {
-    return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-10 w-1/3" />
-        <Skeleton className="h-32 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+    return <SettingsPageLoading title="Builds" rows={2} />;
   }
 
-  return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8 space-y-8">
-      <header>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Build resources</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          How much CPU and memory each build pod can use, and how many builds
-          can run at the same time. Changes apply to the <em>next</em> build —
-          in-flight builds keep their original limits.
-        </p>
-      </header>
+  const totalMemGi = (memGi(s.memoryLimit) * s.maxConcurrent).toFixed(1);
+  const totalCpuM = cpuM(s.cpuLimit) * s.maxConcurrent;
 
-      {/* Sizing guidance */}
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-        <h2 className="mb-2 text-sm font-semibold">Pick a preset for your VM size</h2>
-        <p className="mb-3 text-xs text-[var(--text-secondary)]">
-          Builds are CPU- and memory-heavy. nixpacks projects in particular
-          need ~2 GB per concurrent build (kaniko has to tar the populated
-          /nix store). Going over your VM&apos;s limit makes builds OOMKill;
-          undersizing leaves capacity on the table.
-        </p>
+  return (
+    <SettingsPage
+      title="Builds"
+      description={
+        <>
+          How much CPU and memory each build can use, and how many builds run at once. Changes apply to the{" "}
+          <em>next</em> build; in-flight builds keep their original limits.
+        </>
+      }
+    >
+      {loadFailed && (
+        <SettingsNotice tone="error" title="Current settings failed to load">
+          Saving is disabled so placeholder values don&apos;t overwrite the real ones. Reload the page to try again.
+        </SettingsNotice>
+      )}
+
+      <SettingsSection
+        title="Presets"
+        description={
+          <>
+            Builds are CPU- and memory-heavy: nixpacks projects need about 2 GB per concurrent build. Going over your
+            VM&apos;s limit makes builds OOMKill; undersizing leaves capacity unused. Pick one to fill the form below.
+          </>
+        }
+        footerHint="Budget = VM size minus 1 Gi and 500m reserved for kuso-server, Traefik, cert-manager and addons. Going over is allowed but risks OOMKills and CPU starvation under load."
+      >
         <div className="grid gap-2 sm:grid-cols-3">
           {PRESETS.map((p) => {
-            // Show the math so the user can SEE why cap=N is what it
-            // is for this VM size — pre-fix the cards just said
-            // "cap 1 · 2Gi mem" with no explanation, and I'd been
-            // burned by the apparent mismatch between the stored cap
-            // and what felt right for a 2-vCPU box.
+            // Show the math so the user can see why cap=N is what it
+            // is for this VM size.
             const memUsedGi = memGi(p.values.memoryLimit) * p.values.maxConcurrent;
             const cpuUsedM = cpuM(p.values.cpuLimit) * p.values.maxConcurrent;
             const memReservedGi = 1; // for kuso-server + addons + traefik
@@ -195,38 +196,56 @@ export default function BuildSettingsPage() {
                   setS({ ...s, ...p.values });
                   setCapEdited(true);
                 }}
-                className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-left hover:border-[var(--accent)]/40 hover:bg-[var(--accent)]/5"
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-left transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"
               >
-                <div className="text-sm font-medium">{p.label}</div>
-                <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">{p.size}</div>
-                <div className="mt-2 font-mono text-[10px] text-[var(--text-secondary)]">
-                  cap {p.values.maxConcurrent} · {p.values.memoryLimit} mem · {p.values.cpuLimit} cpu
+                <div className="text-sm font-medium text-[var(--text-primary)]">{p.label}</div>
+                <div className="mt-0.5 text-xs text-[var(--text-tertiary)]">{p.size}</div>
+                <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                  {p.values.maxConcurrent} concurrent · <span className="font-mono">{p.values.memoryLimit}</span> ·{" "}
+                  <span className="font-mono">{p.values.cpuLimit}</span> CPU
                 </div>
-                <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-                  uses {memUsedGi.toFixed(1)}/{memBudgetGi}Gi · {cpuUsedM}/{cpuBudgetM}m cpu
+                <div className="mt-1 text-xs text-[var(--text-tertiary)]">
+                  Uses {memUsedGi.toFixed(1)} of {memBudgetGi} Gi · {cpuUsedM} of {cpuBudgetM}m CPU
                 </div>
               </button>
             );
           })}
         </div>
-        <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
-          Budget = VM size − 1 Gi − 500m reserved for kuso-server, traefik,
-          cert-manager, and addons. Going over is allowed but risks OOMKills
-          and CPU starvation under load.
-        </p>
-      </section>
+      </SettingsSection>
 
-      <section className="space-y-6">
-        <FieldRow
-          icon={Cpu}
-          label={
-            s.maxConcurrentSet === false && !capEdited
-              ? "Concurrent builds (not set: server sizes it automatically)"
-              : "Concurrent builds"
+      <SettingsSection
+        title="Limits"
+        description="Cluster-wide concurrency and per-build resources."
+        footerHint={
+          <>
+            Quantities like <span className="font-mono">2Gi</span>, <span className="font-mono">1500m</span>,{" "}
+            <span className="font-mono">500Mi</span>. Validated server-side.
+          </>
+        }
+        footer={
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={saving || loadFailed}
+            title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
+          >
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        }
+      >
+        <SettingsField
+          label="Concurrent builds"
+          htmlFor="build-cap"
+          hint={
+            <>
+              {s.maxConcurrentSet === false && !capEdited && "Not set: the server sizes it automatically. "}
+              Cluster-wide cap on simultaneous build pods. Currently budgets {totalMemGi} Gi RAM and {totalCpuM}m CPU in
+              total. 0 disables the cap (not recommended on a single-VM install).
+            </>
           }
-          hint={`Cluster-wide cap on simultaneous build pods. Total budget consumed = cap × per-build limits below — currently ${(memGi(s.memoryLimit) * s.maxConcurrent).toFixed(1)} Gi RAM + ${cpuM(s.cpuLimit) * s.maxConcurrent}m CPU. 0 disables the cap (not recommended on a single-VM install).`}
         >
-          <input
+          <Input
+            id="build-cap"
             type="number"
             min={0}
             max={32}
@@ -235,93 +254,55 @@ export default function BuildSettingsPage() {
               setS({ ...s, maxConcurrent: parseInt(e.target.value || "0", 10) });
               setCapEdited(true);
             }}
-            className="w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono"
+            className="max-w-40 font-mono"
           />
-        </FieldRow>
+        </SettingsField>
 
-        <FieldRow
-          icon={MemoryStick}
-          label="Memory limit (per build)"
-          hint="Hard cap on resident memory for one kaniko Job pod. nixpacks builds peak around 1.5 GB during snapshot — set 2 GB unless you've measured otherwise."
-        >
-          <QtyInput value={s.memoryLimit} onChange={(v) => setS({ ...s, memoryLimit: v })} />
-        </FieldRow>
-
-        <FieldRow
-          icon={MemoryStick}
-          label="Memory request"
-          hint="Reserved memory the scheduler guarantees. Setting this below the limit gives you Burstable QoS — survives host pressure without pre-allocating capacity."
-        >
-          <QtyInput value={s.memoryRequest} onChange={(v) => setS({ ...s, memoryRequest: v })} />
-        </FieldRow>
-
-        <FieldRow
-          icon={Cpu}
-          label="CPU limit"
-          hint="Max CPU one build can use, in millicores. 1500m = 1.5 cores. Keep below your VM's core count so kuso-server doesn't starve."
-        >
-          <QtyInput value={s.cpuLimit} onChange={(v) => setS({ ...s, cpuLimit: v })} />
-        </FieldRow>
-
-        <FieldRow
-          icon={Cpu}
-          label="CPU request"
-          hint="Reserved CPU. 200m is fine for the slow steps (clone, push); the burst happens during nix-env / kaniko snapshot."
-        >
-          <QtyInput value={s.cpuRequest} onChange={(v) => setS({ ...s, cpuRequest: v })} />
-        </FieldRow>
-      </section>
-
-      <div className="flex items-center justify-between border-t border-[var(--border-subtle)] pt-4">
-        <p className="text-xs text-[var(--text-tertiary)]">
-          Quantity strings: <span className="font-mono">"2Gi" · "1500m" · "1G" · "500Mi"</span>.
-          Validated server-side.
-        </p>
-        <Button
-          onClick={save}
-          disabled={saving || loadFailed}
-          title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
-        >
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function FieldRow({
-  icon: Icon,
-  label,
-  hint,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  hint: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-6">
-      <div className="flex flex-1 items-start gap-3">
-        <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
-        <div>
-          <div className="text-sm font-medium">{label}</div>
-          <div className="mt-0.5 text-xs text-[var(--text-secondary)]">{hint}</div>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <SettingsField
+            label="Memory limit"
+            htmlFor="build-mem-limit"
+            hint="Hard cap on memory for one build. nixpacks peaks around 1.5 GB; 2 GB is a safe floor."
+          >
+            <QtyInput id="build-mem-limit" value={s.memoryLimit} onChange={(v) => setS({ ...s, memoryLimit: v })} />
+          </SettingsField>
+          <SettingsField
+            label="Memory request"
+            htmlFor="build-mem-req"
+            hint="Memory the scheduler guarantees. Below the limit gives Burstable QoS."
+          >
+            <QtyInput id="build-mem-req" value={s.memoryRequest} onChange={(v) => setS({ ...s, memoryRequest: v })} />
+          </SettingsField>
+          <SettingsField
+            label="CPU limit"
+            htmlFor="build-cpu-limit"
+            hint="Max CPU for one build. 1500m = 1.5 cores. Keep it below your core count."
+          >
+            <QtyInput id="build-cpu-limit" value={s.cpuLimit} onChange={(v) => setS({ ...s, cpuLimit: v })} />
+          </SettingsField>
+          <SettingsField
+            label="CPU request"
+            htmlFor="build-cpu-req"
+            hint="Reserved CPU. 200m covers clone and push; the burst happens during the image snapshot."
+          >
+            <QtyInput id="build-cpu-req" value={s.cpuRequest} onChange={(v) => setS({ ...s, cpuRequest: v })} />
+          </SettingsField>
         </div>
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
+      </SettingsSection>
+    </SettingsPage>
   );
 }
 
-function QtyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function QtyInput({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   return (
-    <input
+    <Input
+      id={id}
       type="text"
       value={value}
-      placeholder="2Gi"
+      placeholder="e.g. 2Gi"
+      spellCheck={false}
       onChange={(e) => onChange(e.target.value)}
-      className="w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-sm"
+      className="font-mono"
     />
   );
 }

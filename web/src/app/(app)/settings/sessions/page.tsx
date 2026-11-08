@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Clock, Infinity as InfinityIcon } from "lucide-react";
 
 interface SessionSettings {
   ttlSeconds: number;
@@ -76,13 +78,7 @@ export default function SessionSettingsPage() {
   };
 
   if (!loaded) {
-    return (
-      <div className="mx-auto max-w-3xl space-y-4 p-6 lg:p-8">
-        <Skeleton className="h-10 w-1/3" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    );
+    return <SettingsPageLoading title="Sessions" rows={1} />;
   }
 
   // Editing the numeric field is in hours/days via presets; for an
@@ -90,111 +86,109 @@ export default function SessionSettingsPage() {
   const ttlDays = s.ttlSeconds / DAY;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 p-6 lg:p-8">
-      <header>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Sessions</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          How long a dashboard login stays valid before kuso asks the user to
-          sign in again. The change applies the <em>next</em> time someone signs
-          in — existing sessions keep the lifetime they were issued with.
-        </p>
-      </header>
+    <SettingsPage
+      title="Sessions"
+      description={
+        <>
+          How long a dashboard login stays valid before kuso asks the user to sign in again. Changes apply the{" "}
+          <em>next</em> time someone signs in; existing sessions keep the lifetime they were issued with.
+        </>
+      }
+    >
+      {loadFailed && (
+        <SettingsNotice tone="error" title="Current settings failed to load">
+          Saving is disabled so placeholder values don&apos;t overwrite the real ones. Reload the page to try again.
+        </SettingsNotice>
+      )}
 
-      {/* Never-expire toggle */}
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+      <SettingsSection
+        title="Session lifetime"
+        description={
+          s.neverExpire ? (
+            "Sessions never expire."
+          ) : (
+            <>
+              Currently <span className="font-medium text-[var(--text-primary)]">{humanize(s.ttlSeconds)}</span>.
+            </>
+          )
+        }
+        footerHint="Default is 30 days. Lower it for shared environments; raise it (or turn expiry off) to stop frequent logouts."
+        footer={
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={saving || loadFailed}
+            title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
+          >
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        }
+      >
         <label className="flex cursor-pointer items-start gap-3">
           <input
             type="checkbox"
             checked={s.neverExpire}
             onChange={(e) => setS({ ...s, neverExpire: e.target.checked })}
-            className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
           />
-          <span className="flex-1">
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <InfinityIcon className="h-4 w-4 text-[var(--text-tertiary)]" />
-              Never log out
-            </span>
-            <span className="mt-1 block text-xs text-[var(--text-secondary)]">
-              Sessions stay valid until the user explicitly logs out (or an admin
-              revokes access / changes their role). Convenient for a single-user
-              or homelab install. Security tradeoff: a leaked session cookie stays
-              valid indefinitely until revoked — only enable this if you trust
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-[var(--text-primary)]">Never log out</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-[var(--text-secondary)]">
+              Sessions stay valid until the user logs out or an admin revokes access. Convenient for a single-user or
+              homelab install, but a leaked session cookie stays valid until revoked. Only enable this if you trust
               every device that signs in.
             </span>
           </span>
         </label>
-      </section>
 
-      {/* TTL picker — disabled when never-expire is on */}
-      <section
-        className={
-          "space-y-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 " +
-          (s.neverExpire ? "pointer-events-none opacity-50" : "")
-        }
-      >
-        <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-[var(--text-tertiary)]" />
-          <h2 className="text-sm font-semibold">Session lifetime</h2>
-        </div>
-        <p className="text-xs text-[var(--text-secondary)]">
-          Currently <span className="font-mono">{humanize(s.ttlSeconds)}</span>.
-          Pick a preset or set a custom number of days below.
-        </p>
+        <div className={cn("space-y-5", s.neverExpire && "pointer-events-none opacity-50")} aria-disabled={s.neverExpire}>
+          <SettingsField label="Preset" hint="Pick a common lifetime.">
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((p) => {
+                const active = !s.neverExpire && s.ttlSeconds === p.seconds;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setS({ ...s, ttlSeconds: p.seconds, neverExpire: false })}
+                    className={cn(
+                      "rounded-sm border px-3 py-1.5 text-sm transition-colors",
+                      active
+                        ? "border-[var(--border-strong)] bg-[var(--bg-tertiary)] font-medium text-[var(--text-primary)]"
+                        : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]",
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingsField>
 
-        <div className="flex flex-wrap gap-2">
-          {PRESETS.map((p) => {
-            const active = !s.neverExpire && s.ttlSeconds === p.seconds;
-            return (
-              <button
-                key={p.label}
-                type="button"
-                onClick={() => setS({ ...s, ttlSeconds: p.seconds, neverExpire: false })}
-                className={
-                  "rounded-md border px-3 py-1.5 text-sm transition-colors " +
-                  (active
-                    ? "border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--text-primary)]"
-                    : "border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:border-[var(--accent)]/40")
+          <SettingsField
+            label="Custom lifetime (days)"
+            htmlFor="session-days"
+            hint="Between 1 and 365 days. Use “Never log out” for longer."
+          >
+            <Input
+              id="session-days"
+              type="number"
+              min={1}
+              max={365}
+              step={1}
+              value={Number.isInteger(ttlDays) ? ttlDays : ttlDays.toFixed(2)}
+              onChange={(e) => {
+                const days = parseFloat(e.target.value || "1");
+                if (!Number.isNaN(days) && days > 0) {
+                  setS({ ...s, ttlSeconds: Math.round(days * DAY), neverExpire: false });
                 }
-              >
-                {p.label}
-              </button>
-            );
-          })}
+              }}
+              className="max-w-40 font-mono"
+            />
+          </SettingsField>
         </div>
-
-        <div className="flex items-center gap-2 pt-1">
-          <label className="text-xs text-[var(--text-secondary)]">Custom:</label>
-          <input
-            type="number"
-            min={1}
-            max={365}
-            step={1}
-            value={Number.isInteger(ttlDays) ? ttlDays : ttlDays.toFixed(2)}
-            onChange={(e) => {
-              const days = parseFloat(e.target.value || "1");
-              if (!Number.isNaN(days) && days > 0) {
-                setS({ ...s, ttlSeconds: Math.round(days * DAY), neverExpire: false });
-              }
-            }}
-            className="w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-sm"
-          />
-          <span className="text-xs text-[var(--text-secondary)]">days (max 365 — use “never log out” for longer)</span>
-        </div>
-      </section>
-
-      <div className="flex items-center justify-between border-t border-[var(--border-subtle)] pt-4">
-        <p className="text-xs text-[var(--text-tertiary)]">
-          Default is 30 days. Lower it for shared/secure environments; raise it
-          (or turn expiry off) to stop frequent logouts.
-        </p>
-        <Button
-          onClick={save}
-          disabled={saving || loadFailed}
-          title={loadFailed ? "Current settings failed to load. Reload the page to edit." : undefined}
-        >
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
-    </div>
+      </SettingsSection>
+    </SettingsPage>
   );
 }
