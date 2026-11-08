@@ -12,7 +12,8 @@ import { useUserDirectory } from "@/features/users";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { UserBadge } from "@/components/activity/UserBadge";
-import { ExpandableText } from "@/components/activity/ExpandableText";
+import { AuditMessage } from "@/components/activity/AuditMessage";
+import { auditActionLabel } from "@/components/activity/audit-text";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { collapseRuns } from "@/lib/collapse-runs";
@@ -85,7 +86,7 @@ export default function ActivityPage() {
         const name = resolve(r.user)?.username.toLowerCase() ?? "";
         if (!r.user.toLowerCase().includes(u) && !name.includes(u)) return false;
       }
-      if (a && !r.action.toLowerCase().includes(a)) return false;
+      if (a && !r.action.toLowerCase().includes(a) && !auditActionLabel(r.action).toLowerCase().includes(a)) return false;
       return true;
     });
   }, [audit, user, action, resolve]);
@@ -162,7 +163,9 @@ export default function ActivityPage() {
                     <UserBadge id={r.user} />
                   </span>
                   <span role="cell" className="col-span-2 min-w-0 md:col-span-1">
-                    <code className={cn("break-all font-mono text-xs", actionTone(r.action, r.severity))}>{r.action}</code>
+                    <span className={cn("text-sm", actionTone(r.action, r.severity))} title={r.action}>
+                      {auditActionLabel(r.action)}
+                    </span>
                     {count > 1 && (
                       <span
                         className="ml-1.5 inline-flex rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-1.5 text-2xs font-medium tabular-nums text-[var(--text-secondary)]"
@@ -176,7 +179,7 @@ export default function ActivityPage() {
                     {target ? <span className="font-mono text-xs">{target}</span> : <span className="text-[var(--text-tertiary)]">—</span>}
                   </span>
                   <span role="cell" className="col-span-2 min-w-0 text-xs text-[var(--text-secondary)] md:col-span-1 md:text-sm">
-                    {r.message ? <ExpandableText text={r.message} /> : <span className="text-[var(--text-tertiary)]">—</span>}
+                    {r.message ? <AuditMessage action={r.action} message={r.message} /> : <span className="text-[var(--text-tertiary)]">—</span>}
                   </span>
                 </div>
               );
