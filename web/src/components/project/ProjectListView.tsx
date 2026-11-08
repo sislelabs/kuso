@@ -1,5 +1,6 @@
 "use client";
 
+import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { Check, Clock, Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
@@ -8,7 +9,6 @@ import {
   deriveAddonStatus,
   deriveCronStatus,
   deriveServiceStatus,
-  lastDeployAt,
   serviceUrl,
   STATUS_TONE,
   useLatestBuilds,
@@ -76,7 +76,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
               const build = latestBuilds.data?.[short];
               const status = deriveServiceStatus({ stopped: !!s.spec.stopped, env, latestBuild: build });
               const url = serviceUrl(s, env);
-              const deployed = lastDeployAt(env, build);
+              const deployed = lastDeployedAt(env);
               const r = env?.status?.replicas as { ready?: number; desired?: number; max?: number } | undefined;
               const name = s.spec.displayName?.trim() || short;
               const runtime = s.spec.runtime || "dockerfile";
@@ -86,6 +86,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                     icon={<RuntimeIcon runtime={runtime} />}
                     name={name}
                     onOpen={() => onSelectService(short)}
+                    focusKey={`service:${short}`}
                     hint={name !== short ? short : undefined}
                   />
                   <td className={cellCls}>
@@ -139,6 +140,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                     icon={<AddonIcon kind={a.spec.kind} className="h-4 w-4" />}
                     name={short}
                     onOpen={() => onSelectAddon(a.metadata.name)}
+                    focusKey={`addon:${a.metadata.name}`}
                   />
                   <td className={cellCls}>
                     <StatusCell status={status} />
@@ -236,11 +238,14 @@ function NameCell({
   name,
   hint,
   onOpen,
+  focusKey,
 }: {
   icon: React.ReactNode;
   name: string;
   hint?: string;
   onOpen?: () => void;
+  // Lets a closing overlay hand focus back to this row.
+  focusKey?: string;
 }) {
   return (
     <th scope="row" className={cn(cellCls, "pl-3 text-left font-normal")}>
@@ -252,6 +257,7 @@ function NameCell({
           <button
             type="button"
             onClick={onOpen}
+            data-focus-key={focusKey}
             className="min-w-0 truncate rounded text-left font-medium text-[var(--text-primary)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           >
             {name}

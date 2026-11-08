@@ -1,11 +1,11 @@
 "use client";
 
+import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { Check, Copy, ExternalLink, Layers, MoreHorizontal } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
   deriveServiceStatus,
-  lastDeployAt,
   serviceUrl,
   STATUS_TONE,
   type BuildSummary,
@@ -61,13 +61,14 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const replicas = replicasFor(data.env);
   const shortName = serviceShortName(data.project, data.service.metadata.name);
   const displayName = data.service.spec.displayName?.trim() || shortName;
-  const deployedAt = lastDeployAt(data.env, data.latestBuild);
+  const deployedAt = lastDeployedAt(data.env);
   const dimmed = status.kind === "sleeping" || status.kind === "stopped";
 
   return (
     <div
       data-node-context
       data-canvas-node={id}
+      data-focus-key={`service:${shortName}`}
       tabIndex={data.__tabIndex ?? -1}
       role="group"
       aria-roledescription="service"
@@ -100,13 +101,15 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      {/* Badges wrap under the name rather than truncating it. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-7">
-        <span className="flex min-w-0 max-w-full items-center gap-2">
+      {/* One row: the badges keep their size and the name truncates. */}
+      <div className="flex min-w-0 items-center gap-1.5 pr-6">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
           <RuntimeIcon runtime={data.service.spec.runtime} />
-          <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
+          <span className="truncate text-sm font-medium text-[var(--text-primary)]" title={displayName}>
+            {displayName}
+          </span>
         </span>
-        <ErrorBadge tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
+        <ErrorBadge compact tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
         <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>
 
