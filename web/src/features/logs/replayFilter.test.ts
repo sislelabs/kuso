@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createReplayFilter } from "./hooks";
+import { createReplayFilter, hasPreciseTimestamp } from "./hooks";
 
 const line = (pod: string, ts: string, text: string) => ({ pod, ts, line: text });
 
@@ -36,5 +36,13 @@ describe("createReplayFilter", () => {
     const accept = createReplayFilter();
     expect(accept({ pod: "p", line: "x" })).toBe(true);
     expect(accept({ pod: "p", line: "x" })).toBe(true);
+  });
+});
+
+describe("hasPreciseTimestamp", () => {
+  it("accepts kubelet RFC3339Nano stamps and rejects whole-second receipt stamps", () => {
+    expect(hasPreciseTimestamp("2026-11-08T19:01:35.123456789Z")).toBe(true);
+    expect(hasPreciseTimestamp("2026-11-08T19:01:35Z")).toBe(false);
+    expect(hasPreciseTimestamp(undefined)).toBe(false);
   });
 });

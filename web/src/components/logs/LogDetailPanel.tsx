@@ -23,6 +23,7 @@ interface DetailLine {
   stream?: string;
   service?: string;
   env?: string;
+  approx?: boolean;
 }
 
 const LEVEL_PILL: Record<LogLevel, string> = {
@@ -108,8 +109,10 @@ export function LogDetailPanel({
   const d = new Date(line.ts);
   const svc = line.service ? (serviceLabel ? serviceLabel(line.service) : line.service) : undefined;
   const meta: [string, string | undefined][] = [
-    ["Time", Number.isNaN(d.getTime()) ? line.ts : `${fmtClock(line.ts, true)} (local)`],
-    ["UTC", Number.isNaN(d.getTime()) ? undefined : d.toISOString()],
+    line.approx
+      ? ["Received", `${fmtClock(line.ts, true)} (local) — arrival time; this kuso server doesn't send log timestamps`]
+      : ["Time", Number.isNaN(d.getTime()) ? line.ts : `${fmtClock(line.ts, true)} (local)`],
+    ["UTC", Number.isNaN(d.getTime()) || line.approx ? undefined : d.toISOString()],
     ["Service", svc],
     ["Replica", line.pod || undefined],
     ["Environment", line.env || env],
@@ -129,7 +132,9 @@ export function LogDetailPanel({
         <span className={cn("rounded border px-1.5 py-0.5 text-xs font-semibold capitalize", LEVEL_PILL[level])}>
           {level === "none" ? "log" : level}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-secondary)]">{fmtClock(line.ts, true)}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-secondary)]">
+          {line.approx ? `~${fmtClock(line.ts, true).slice(0, -4)}` : fmtClock(line.ts, true)}
+        </span>
         <Button size="sm" variant="outline" onClick={() => void copy()}>
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           {copied ? "Copied" : "Copy line"}
