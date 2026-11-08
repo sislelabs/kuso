@@ -2,7 +2,7 @@
 
 import { Switch } from "@/components/ui/switch";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
@@ -23,14 +23,23 @@ import { toastError } from "@/lib/errors";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice, SettingsSection, SettingsSelect } from "@/components/settings/SettingsSection";
 import { UserAvatar, UserBadge } from "@/components/activity/UserBadge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  hasNeverSignedIn,
+  inviteStatus,
+  lastSeenLabel,
+  nullStr,
+  nullTime,
+  pendingInviteCount,
+  type InviteRow,
+} from "@/features/users";
 
 interface UserRow {
   id: string;
   username: string;
   email?: string;
   isActive: boolean;
-  // The list endpoint sends the legacy role as `role`. provider/lastLogin/
-  // groups aren't sent by summariseUsers yet; the badges render once they are.
+  // The list endpoint sends the legacy role as `role`.
   provider?: string;
   role?: string;
   // v2 direct instance role: "admin" | "editor" | "viewer" | "" (inherit
@@ -100,7 +109,7 @@ export default function UsersPage() {
             <span role="columnheader">User</span>
             <span role="columnheader">Instance role</span>
             <span role="columnheader">Groups</span>
-            <span role="columnheader">Last login</span>
+            <span role="columnheader">Last seen</span>
             <span role="columnheader">
               Active<span className="sr-only"> and actions</span>
             </span>
@@ -129,24 +138,9 @@ export default function UsersPage() {
 
 // Fixed last column: the header row has no controls in it, so an `auto`
 // track sized differently from the rows' and pushed every header off its column.
-const USER_GRID = "md:grid-cols-[minmax(0,1.6fr)_176px_minmax(0,1fr)_96px_116px] md:items-center md:gap-4";
+const USER_GRID = "md:grid-cols-[minmax(0,1.6fr)_176px_minmax(0,1fr)_136px_116px] md:items-center md:gap-4";
 
 // ---------- Invitations ----------
-
-interface InviteRow {
-  id: string;
-  token: string;
-  url: string;
-  groupId?: { String?: string; Valid?: boolean } | null;
-  instanceRole?: { String?: string; Valid?: boolean } | null;
-  createdBy: string;
-  createdAt: string;
-  expiresAt?: { Time?: string; Valid?: boolean } | null;
-  maxUses: number;
-  usedCount: number;
-  revokedAt?: { Time?: string; Valid?: boolean } | null;
-  note?: { String?: string; Valid?: boolean } | null;
-}
 
 interface GroupRow {
   id: string;
@@ -173,11 +167,16 @@ function InvitesSection() {
   });
 
   const items = list.data ?? [];
+  const pendingCount = pendingInviteCount(list.data);
 
   return (
     <SettingsSection
       title="Invitations"
-      description="Links that let people sign up directly into a group."
+      description={
+        pendingCount > 0
+          ? `Links that let people sign up directly into a group. ${pendingCount} pending.`
+          : "Links that let people sign up directly into a group."
+      }
       flush
       actions={
         <Button size="sm" variant="outline" onClick={() => setShowNew(true)}>
@@ -223,26 +222,13 @@ function InvitesSection() {
   );
 }
 
-function nullStr(v: { String?: string; Valid?: boolean } | null | undefined): string {
-  if (!v || !v.Valid) return "";
-  return v.String ?? "";
-}
-
-function nullTime(v: { Time?: string; Valid?: boolean } | null | undefined): string {
-  if (!v || !v.Valid) return "";
-  return v.Time ?? "";
-}
-
 function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void }) {
   const [copied, setCopied] = useState(false);
-  const revoked = !!nullTime(inv.revokedAt);
-  const expired = (() => {
-    const exp = nullTime(inv.expiresAt);
-    return exp ? new Date(exp) < new Date() : false;
-  })();
-  const exhausted = inv.usedCount >= inv.maxUses;
-  const dead = revoked || expired || exhausted;
-  const status = revoked ? "revoked" : expired ? "expired" : exhausted ? "used up" : "active";
+  const status = inviteStatus(inv);
+  const dead = status !== "active";
+  const expiresAt = nullTime(inv.expiresAt);
+  // Independent of status: a revoked invite can also be past its expiry.
+  const expired = !!expiresAt && new Date(expiresAt).getTime() <= Date.now();
   const role = nullStr(inv.instanceRole);
   const note = nullStr(inv.note);
 
@@ -256,7 +242,6 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
     }
   };
 
-  const expiresAt = nullTime(inv.expiresAt);
   const statusTone =
     status === "active"
       ? "bg-[var(--success-subtle)] text-[var(--success)]"
@@ -466,6 +451,10 @@ function UserRowItem({
     onError: (e) => toastError(e, `Couldn't change ${u.username}'s role`),
   });
   const currentRole = u.instanceRole ?? "";
+  // Enabled but never signed in. A disabled account keeps the plain
+  // Disabled state so it can still be re-enabled from the toggle.
+  const invited = u.isActive && hasNeverSignedIn(u);
+  const invitedHintId = useId();
   const groups = u.groups ?? [];
   const visibleGroups = groups.filter((g) => g !== "kuso-pending");
   return (
@@ -476,9 +465,9 @@ function UserRowItem({
           <span
             className={cn(
               "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-secondary)]",
-              u.isActive ? "bg-[var(--success)]" : "bg-[var(--text-tertiary)]",
+              u.isActive && !invited ? "bg-[var(--success)]" : "bg-[var(--text-tertiary)]",
             )}
-            title={u.isActive ? "Active" : "Disabled"}
+            title={invited ? "Invited" : u.isActive ? "Active" : "Disabled"}
           />
         </span>
         <div className="min-w-0">
@@ -487,6 +476,27 @@ function UserRowItem({
               {u.username}
             </span>
             {!u.isActive && <Tag>Disabled</Tag>}
+            {invited && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      tabIndex={0}
+                      aria-describedby={invitedHintId}
+                      className="inline-flex rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                    />
+                  }
+                >
+                  <Tag tone="accent">Invited</Tag>
+                </TooltipTrigger>
+                <TooltipContent>{INVITED_HINT}</TooltipContent>
+              </Tooltip>
+            )}
+            {invited && (
+              <span id={invitedHintId} className="sr-only">
+                {INVITED_HINT}
+              </span>
+            )}
             {u.provider && u.provider !== "local" && (
               <Tag className="capitalize">{u.provider === "github" ? "GitHub" : u.provider}</Tag>
             )}
@@ -546,13 +556,13 @@ function UserRowItem({
       </div>
 
       <div role="cell" className="text-sm text-[var(--text-secondary)]">
-        <span className="mb-1 block text-xs md:hidden">Last login</span>
+        <span className="mb-1 block text-xs md:hidden">Last seen</span>
         {u.lastLogin ? (
           <span title={new Date(u.lastLogin).toLocaleString()} className="whitespace-nowrap">
-            {relativeTime(u.lastLogin)}
+            {lastSeenLabel(u.lastLogin)}
           </span>
         ) : (
-          <span className="text-[var(--text-tertiary)]">Never</span>
+          <span className="whitespace-nowrap text-[var(--text-tertiary)]">{lastSeenLabel(u.lastLogin, Date.now(), u.provider)}</span>
         )}
       </div>
 
@@ -560,14 +570,30 @@ function UserRowItem({
       <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto md:justify-start">
         {canWrite && (
           <>
-            <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
-              <Switch
-                on={u.isActive}
-                onChange={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
-                disabled={toggleActive.isPending}
-                label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
-              />
-            </span>
+            {invited ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="mr-1 inline-flex" />}>
+                  <Switch
+                    on={u.isActive}
+                    onChange={() => {}}
+                    disabled
+                    label={`${u.username} hasn't signed in yet`}
+                    describedBy={invitedHintId}
+                  />
+                </TooltipTrigger>
+                <TooltipContent>{INVITED_HINT}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
+                <Switch
+                  on={u.isActive}
+                  onChange={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
+                  disabled={toggleActive.isPending}
+                  label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
+                />
+              </span>
+            )}
+
             <Button variant="ghost" size="icon-sm" onClick={onReset} aria-label={`Reset password for ${u.username}`} title="Reset password">
               <KeyRound className="h-3.5 w-3.5" />
             </Button>
@@ -646,6 +672,9 @@ function UserRowItem({
     </div>
   );
 }
+
+const INVITED_HINT =
+  "They haven't signed in yet. The account can sign in now; the Active toggle unlocks after their first sign-in. Delete the account to withdraw access.";
 
 function Tag({
   children,
