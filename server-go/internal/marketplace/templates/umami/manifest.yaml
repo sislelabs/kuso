@@ -3,7 +3,8 @@ title: Umami
 description: Privacy-focused, open-source website analytics.
 category: analytics
 website: https://umami.is
-appVersion: "2.13.3"
+appVersion: "2.20.2"
+defaultCredentials: admin/umami
 prompts:
   - key: host
     title: Domain
