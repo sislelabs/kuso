@@ -139,7 +139,7 @@ function useLiveHealth(project: string, service: string, env?: KusoEnvironment, 
   const pods = useServicePods(project, service, env?.metadata?.name);
   const state = env?.status?.state;
   if (state === "crashlooping") return { label: "Crashlooping", tone: "bad" };
-  if (state === "sleeping") return { label: "Asleep", tone: "idle" };
+  if (state === "sleeping") return { label: "Sleeping", tone: "idle" };
   if (state === "stopped") return { label: "Stopped", tone: "idle" };
   if (uptimeDown) return { label: "Not responding", tone: "bad" };
   const list = pods.data?.pods;
