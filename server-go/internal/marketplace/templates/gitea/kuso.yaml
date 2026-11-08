@@ -15,6 +15,11 @@ services:
       GITEA__database__PASSWD: "${{ gitea-db.POSTGRES_PASSWORD }}"
       GITEA__server__ROOT_URL: "https://${{ prompt.host }}/"
       GITEA__server__DOMAIN: "${{ prompt.host }}"
+      # Skip the web installer (its settings are all above) and close public
+      # sign-up: otherwise the first visitor installs or becomes site admin.
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__security__SECRET_KEY: { generate: hex32 }
+      GITEA__service__DISABLE_REGISTRATION: "true"
     domains:
       - host: "${{ prompt.host }}"
         tls: true
