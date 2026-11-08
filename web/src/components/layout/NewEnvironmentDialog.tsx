@@ -151,13 +151,13 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               <AlertTriangle className="h-4 w-4 text-[var(--warning)]" aria-hidden />
               &ldquo;{warned.name}&rdquo; created — check these variables
             </DialogTitle>
-            <DialogDescription className="text-[11px] text-[var(--text-secondary)]">
+            <DialogDescription className="text-xs text-[var(--text-secondary)]">
               These values still name a host under this project&apos;s domain that kuso couldn&apos;t map
               to a clone. Until you change them, this environment may read from or write to production.
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            <ul className="space-y-1 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-3 font-mono text-[11px] text-[var(--text-primary)]">
+            <ul className="space-y-1 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-3 font-mono text-xs text-[var(--text-primary)]">
               {(warned.warnings ?? []).map((w) => (
                 <li key={w} className="break-all">
                   {w}
@@ -165,9 +165,9 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               ))}
             </ul>
             {warned.rewrittenEnvVars && warned.rewrittenEnvVars.length > 0 && (
-              <div className="text-[11px] text-[var(--text-secondary)]">
+              <div className="text-xs text-[var(--text-secondary)]">
                 <p className="font-medium text-[var(--text-primary)]">Rewritten to point at the clones</p>
-                <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                <ul className="mt-1 space-y-0.5 font-mono text-xs">
                   {warned.rewrittenEnvVars.map((r) => (
                     <li key={r} className="break-all">
                       {r}
@@ -201,12 +201,12 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
       >
             <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
               <DialogTitle className="font-heading">New environment</DialogTitle>
-              <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
+              <DialogDescription className="text-xs text-[var(--text-tertiary)]">
                 {scope === "project"
                   ? "Mirror every service + (optionally) addon under a new name. Send the URL to a client for review without touching production."
                   : "Add a long-lived environment (staging, qa…) to one service, building from its own branch."}
               </DialogDescription>
-              <div role="group" aria-label="Environment scope" className="mt-2 inline-flex w-fit items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-[11px]">
+              <div role="group" aria-label="Environment scope" className="mt-2 inline-flex w-fit items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-xs">
                 <PolicyBtn label="whole project" active={scope === "project"} onClick={() => setScope("project")} />
                 <PolicyBtn label="one service" active={scope === "service"} onClick={() => setScope("service")} />
               </div>
@@ -245,7 +245,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                   />
                 </Field>
 
-                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-[11px] text-[var(--text-secondary)]">
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
                   <p className="flex items-center gap-1.5 font-medium text-[var(--text-primary)]">
                     <Sparkles className="h-3 w-3 text-[var(--accent)]" />
                     What gets mirrored
@@ -261,7 +261,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                     </li>
                     <li className="list-disc">
                       URLs follow{" "}
-                      <span className="font-mono text-[10px]">
+                      <span className="font-mono text-xs">
                         &lt;service&gt;-{name || "<env>"}.{project}.&lt;basedomain&gt;
                       </span>
                     </li>
@@ -272,10 +272,10 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               {addonShorts.length > 0 && (
                 <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
                   <div>
-                    <p className="text-[11px] font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
+                    <p className="text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">
                       addons — pick fresh or shared
                     </p>
-                    <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
                       <strong>Fresh</strong> spins up a new pod with its own data. Cloned services
                       get their env-var refs rewritten to point at it.{" "}
                       <strong>Shared</strong> reuses production&apos;s pod — staging writes
@@ -294,12 +294,12 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                             <div className="truncate font-mono text-[12px] text-[var(--text-primary)]">
                               {a.short}
                             </div>
-                            <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                            <div className="text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">
                               {a.kind}
                             </div>
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-[11px]">
+                        <div className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-xs">
                           <PolicyBtn
                             label="fresh"
                             active={policy[a.short] === "fresh"}
@@ -318,7 +318,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                       </li>
                     ))}
                   </ul>
-                  <p className="flex items-start gap-1.5 text-[10px] text-[var(--text-tertiary)]">
+                  <p className="flex items-start gap-1.5 text-xs text-[var(--text-tertiary)]">
                     <Share2 className="mt-0.5 h-3 w-3 shrink-0" />
                     Tip: caches (redis, nats, memcached) are typically safe to share. Stateful
                     stores (postgres, mongodb, mysql) usually want{" "}
@@ -330,7 +330,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
             </div>
 
             <DialogFooter className="m-0 items-center justify-between gap-2 rounded-b-2xl px-4 py-3 sm:justify-between">
-              <p className="text-[10px] text-[var(--text-tertiary)]">
+              <p className="text-xs text-[var(--text-tertiary)]">
                 {services.length === 0 ? (
                   "Add a service first"
                 ) : (
@@ -435,12 +435,12 @@ function Field({
     <div className="space-y-1">
       <label
         htmlFor={htmlFor}
-        className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+        className="block text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase"
       >
         {label}
       </label>
       {children}
-      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
+      {hint && <div className="text-xs text-[var(--text-tertiary)]">{hint}</div>}
     </div>
   );
 }

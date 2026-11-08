@@ -131,7 +131,7 @@ export function ServiceEnvironmentForm({
             spellCheck={false}
           />
         </Label>
-        <div className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-[11px]">
+        <div className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-xs">
           <div role="group" aria-label="Addons" className="flex flex-wrap gap-1">
             <Pill active={!form.shareAddons} onClick={() => set({ shareAddons: false })}>
               own addons
@@ -153,7 +153,7 @@ export function ServiceEnvironmentForm({
               </p>
               {kinds.length > 1 && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <span className="inline-block text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">
                     only
                   </span>
                   {kinds.map((k) => (
@@ -171,13 +171,13 @@ export function ServiceEnvironmentForm({
               )}
               {kinds.includes("postgres") && (
                 <label className="flex items-center gap-2">
-                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <span className="inline-block text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">
                     seed db from
                   </span>
                   <select
                     value={form.seedFrom}
                     onChange={(e) => set({ seedFrom: e.target.value })}
-                    className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+                    className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs"
                   >
                     <option value="">nothing (empty)</option>
                     {seedSources.map((g) => (
@@ -192,7 +192,7 @@ export function ServiceEnvironmentForm({
           )}
         </div>
         {error && (
-          <p role="alert" className="text-[11px] text-[var(--error)]">
+          <p role="alert" className="text-xs text-[var(--error)]">
             {error}
           </p>
         )}
@@ -221,7 +221,7 @@ function Label({
   htmlFor?: string;
   children: React.ReactNode;
 }) {
-  const cls = "block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
+  const cls = "block text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase";
   return (
     <div className="space-y-1">
       {htmlFor ? (
@@ -232,7 +232,7 @@ function Label({
         <div className={cls}>{text}</div>
       )}
       {children}
-      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
+      {hint && <div className="text-xs text-[var(--text-tertiary)]">{hint}</div>}
     </div>
   );
 }
@@ -244,7 +244,7 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "rounded-md border px-2 py-1 font-mono text-[11px] transition-colors",
+        "rounded-md border px-2 py-1 font-mono text-xs transition-colors",
         active
           ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
           : "border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",

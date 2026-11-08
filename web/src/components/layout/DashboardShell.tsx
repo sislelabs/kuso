@@ -2,36 +2,45 @@
 
 import { Suspense, type ReactNode } from "react";
 import { TopNav } from "@/components/layout/TopNav";
+import { MobileNav } from "@/components/layout/MobileNav";
+import { KeyboardShortcuts } from "@/components/layout/KeyboardShortcuts";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { ServerVersionGuard } from "@/components/layout/ServerVersionGuard";
-import { MobileInterstitial } from "@/components/layout/MobileInterstitial";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
-  // Layout: top nav (h-12) is the entire chrome. Project + env
-  // switching, cluster nodes, and the user/admin menus all live there.
-  // The page body gets the full viewport width below the nav.
+  // The top nav (h-12) is the desktop chrome; phones add a bottom tab
+  // bar, so <main> reserves its height below sm.
   //
-  // Suspense boundaries:
-  //   - TopNav internally calls useSearchParams (for the env switcher
-  //     state). Static-export Next requires a Suspense ancestor or it
-  //     bails out the whole subtree to client-only rendering.
-  //   - <main> wraps the children in another boundary because
-  //     individual pages also use useSearchParams (project canvas,
-  //     etc.). One boundary per "island" so a slow page doesn't
-  //     freeze the whole shell.
+  // Suspense boundaries: TopNav and many pages call useSearchParams,
+  // which static export requires to sit under a Suspense ancestor. One
+  // boundary per island so a slow page doesn't freeze the shell.
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[var(--bg-primary)]">
-      <Suspense fallback={<div className="h-12 border-b" />}>
-        <TopNav />
-      </Suspense>
-      <main className="flex-1 overflow-y-auto bg-[var(--bg-primary)]">
-        <Suspense fallback={null}>{children}</Suspense>
-      </main>
-      <CommandPalette />
-      <Suspense fallback={null}>
-        <ServerVersionGuard />
-      </Suspense>
-      <MobileInterstitial />
-    </div>
+    <TooltipProvider delay={300}>
+      <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg-primary)]">
+        <a
+          href="#main"
+          className="sr-only z-[100] rounded-md bg-[var(--bg-elevated)] px-3 py-2 text-sm font-medium shadow-[var(--shadow-md)] focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
+        >
+          Skip to content
+        </a>
+        <Suspense fallback={<div className="h-12 shrink-0 border-b border-[var(--border-subtle)]" />}>
+          <TopNav />
+        </Suspense>
+        <main
+          id="main"
+          tabIndex={-1}
+          className="flex-1 overflow-y-auto bg-[var(--bg-primary)] pb-[calc(3.5rem+env(safe-area-inset-bottom))] outline-none sm:pb-0"
+        >
+          <Suspense fallback={null}>{children}</Suspense>
+        </main>
+        <MobileNav />
+        <CommandPalette />
+        <KeyboardShortcuts />
+        <Suspense fallback={null}>
+          <ServerVersionGuard />
+        </Suspense>
+      </div>
+    </TooltipProvider>
   );
 }

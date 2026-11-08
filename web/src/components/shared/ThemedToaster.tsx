@@ -17,6 +17,8 @@ export function ThemedToaster() {
   return (
     <Toaster
       position="bottom-right"
+      // Clear the mobile bottom tab bar (3.5rem + safe area).
+      mobileOffset={{ bottom: "calc(4rem + env(safe-area-inset-bottom))" }}
       theme={(resolvedTheme === "light" ? "light" : "dark") as "light" | "dark"}
       richColors
       // Per-call durations. We keep the global default at 4s for

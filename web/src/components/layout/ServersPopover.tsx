@@ -76,56 +76,69 @@ export function ServersPopover() {
   return (
     <Popover>
       <PopoverTrigger
-        aria-label="Cluster nodes"
-        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+        aria-label={`Cluster nodes: ${ready} of ${total} ready`}
+        title="Cluster nodes"
+        className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
       >
-        <Server className="h-3.5 w-3.5" />
-        <span className="font-mono">
-          {ready}/{total} nodes
+        <span className="relative">
+          <Server className="size-4" aria-hidden />
+          {total > 0 && (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-[var(--bg-primary)]",
+                ready === total ? "bg-[var(--success)]" : "bg-[var(--error)]"
+              )}
+            />
+          )}
+        </span>
+        <span className="tabular-nums">
+          {ready}/{total}
+          <span className="hidden xl:inline"> nodes</span>
         </span>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-          <p className="text-xs font-semibold tracking-tight">Cluster nodes</p>
+          <p className="text-sm font-semibold tracking-tight">Cluster nodes</p>
           <Link
             href="/settings/nodes"
-            className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+            className="inline-flex h-7 items-center rounded-md px-2 text-xs text-[var(--link)] hover:bg-[var(--bg-tertiary)]"
           >
-            manage →
+            Manage nodes
           </Link>
         </header>
         <div className="max-h-72 overflow-y-auto">
           {nodes.isPending ? (
             <LoadingState kind="inline" className="px-3 py-4" />
           ) : nodes.isError ? (
-            <p className="px-3 py-4 text-xs text-[var(--error)]">
+            <p role="alert" className="px-3 py-4 text-sm text-[var(--error)]">
               Failed to load nodes: {nodes.error?.message}
             </p>
           ) : list.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">
+            <p className="px-3 py-4 text-sm text-[var(--text-tertiary)]">
               No nodes returned. Check that the kuso server has cluster-read RBAC.
             </p>
           ) : (
             <ul className="divide-y divide-[var(--border-subtle)]">
               {regions.map(([region, ns]) => (
                 <li key={region}>
-                  <div className="px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <div className="px-3 pt-2 pb-1 text-xs font-medium text-[var(--text-tertiary)]">
                     {region}
                   </div>
                   <ul>
                     {ns.map((n) => (
                       <li
                         key={n.name}
-                        className="flex items-center gap-2 px-3 py-1.5 text-xs"
+                        className="flex items-center gap-2 px-3 py-1.5 text-[13px]"
                       >
                         <span
                           className={cn(
                             "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                            n.ready ? "bg-emerald-400" : "bg-red-400"
+                            n.ready ? "bg-[var(--success)]" : "bg-[var(--error)]"
                           )}
                         />
                         <span className="truncate font-mono">{n.name}</span>
-                        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+                        <span className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-[var(--text-tertiary)]">
                           {n.roles.map((r) => (
                             <span
                               key={r}
@@ -154,7 +167,7 @@ export function ServersPopover() {
             </ul>
           )}
         </div>
-        <footer className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
+        <footer className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
           Add a <span className="font-mono text-[var(--text-secondary)]">region</span> label to
           group nodes; projects pin to a region with their own label.
         </footer>

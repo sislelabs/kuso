@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { Fragment } from "react";
 import { useMemo, useState } from "react";
 import {
   Avatar,
@@ -24,7 +23,6 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
-import { LoadingState } from "@/components/ui/loading-state";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { useSession, useSignOut, useCan, useCanOnProject, Perms } from "@/features/auth";
 import {
@@ -38,34 +36,41 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { envGroupLabel } from "@/lib/env-group";
 import { pullRequestUrl } from "@/lib/pull-request-url";
 import { toast } from "sonner";
-import { relativeTime } from "@/lib/format";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {
   Check,
   ChevronDown,
-  ChevronRight,
   LogOut,
   Plus,
   User as UserIcon,
   KeyRound,
-  Bell,
   Settings,
   Users,
   Trash2,
   GitPullRequest,
+  Keyboard,
+  Monitor,
+  Moon,
+  Sun,
 } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTheme } from "next-themes";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Kbd } from "@/components/ui/kbd";
+import { openShortcutsHelp } from "@/lib/shortcuts";
+import { classifyError } from "@/lib/error-kind";
+import { NotificationsButton } from "./Notifications";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { ServersPopover } from "./ServersPopover";
 import { CommandTrigger } from "@/components/command/CommandPalette";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
-// TopNav is the persistent shell across every authenticated page. Left
-// side: kuso logomark, then breadcrumb-style project picker + (when on
-// a project) the environment switcher. Right side: servers, theme,
-// notifications, user menu. The whole bar is `h-12 sticky` to leave
-// room below for the page's own toolbar.
+// TopNav is the persistent shell across every authenticated page. Left:
+// logo, then a breadcrumb (project picker → environment, or Settings →
+// section). Right: search, shortcuts, settings, nodes, theme,
+// notifications, account. Labels collapse to icons below lg so the bar
+// never wraps; below sm the global actions move to <MobileNav>.
 export function TopNav() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const currentProject = params.project ?? "";
@@ -73,97 +78,155 @@ export function TopNav() {
   const settingsCrumbs = pathname.startsWith("/settings/")
     ? settingsBreadcrumb(pathname)
     : null;
+  // A project URL that 404s gets no env switcher or settings cog — they'd
+  // offer actions on something that isn't there.
+  const projectQuery = useProject(currentProject);
+  const projectMissing = projectQuery.isError && classifyError(projectQuery.error) === "not-found";
+  const projectScoped = !!currentProject && !settingsCrumbs && !projectMissing;
 
   return (
-    <header
-      role="navigation"
-      className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:gap-1.5 sm:px-3 lg:px-4"
-    >
-      <Link href="/projects" aria-label="Home" className="mr-1 flex shrink-0 items-center sm:mr-1.5">
-        <Logo />
-      </Link>
-
-      {/* Project breadcrumb is suppressed on /settings/* — it'd lie
-          about a project being in scope, and the env switcher would
-          render meaningless options. */}
-      {!settingsCrumbs && (
-        <Crumb>
-          <ProjectPicker currentProject={currentProject} />
-        </Crumb>
-      )}
-
-      {/* Env switcher is redundant on phones — the project canvas
-          already shows the env state per service node, and the
-          drawer eats too much horizontal room next to the picker.
-          Hide on small; bring back at sm. */}
-      {currentProject && !settingsCrumbs && (
-        <Crumb className="hidden sm:flex">
-          <EnvironmentSwitcher project={currentProject} />
-        </Crumb>
-      )}
-
-      {/* Per-project Settings affordance. Before this the page
-          existed (/projects/<name>/settings) but was reachable only
-          via URL-typing or cmd-K — destructive actions like Delete
-          project and Preview TTL had no visible path from the
-          canvas. The cog sits at the end of the breadcrumb so it
-          reads as "settings for the thing in scope". */}
-      {currentProject && !settingsCrumbs && (
+    <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:px-3 lg:px-4">
+      <nav aria-label="Location" className="flex min-w-0 flex-1 items-center gap-1">
         <Link
-          href={`/projects/${encodeURIComponent(currentProject)}/settings`}
-          aria-label="Project settings"
-          title="Project settings"
-          className="hidden sm:inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          href="/projects"
+          aria-label="kuso — all projects"
+          className="mr-0.5 flex shrink-0 items-center rounded-md p-1 sm:mr-1"
         >
-          <Settings className="h-3.5 w-3.5" />
+          <Logo showText={false} className="sm:hidden" />
+          <Logo className="hidden sm:inline-flex" />
         </Link>
-      )}
 
-      {settingsCrumbs?.map((c, i) => (
-        <Fragment key={c.href ?? c.label}>
-          <Crumb className={i === 0 ? "hidden sm:flex" : undefined}>
+        {/* No project picker on /settings/* — it would claim a project
+            is in scope when none is. */}
+        {!settingsCrumbs && (
+          <Crumb className="min-w-0">
+            <ProjectPicker currentProject={currentProject} />
+          </Crumb>
+        )}
+
+        {projectScoped && (
+          <Crumb className="hidden sm:flex">
+            <EnvironmentSwitcher project={currentProject} />
+          </Crumb>
+        )}
+
+        {/* "Settings for the thing in scope" — the only visible path to
+            project-level destructive actions and preview TTLs. */}
+        {projectScoped && (
+          <NavIconLink
+            href={`/projects/${encodeURIComponent(currentProject)}/settings`}
+            label="Project settings"
+            className="hidden sm:inline-flex"
+          >
+            <Settings />
+          </NavIconLink>
+        )}
+
+        {settingsCrumbs?.map((c, i) => (
+          <Crumb key={c.href ?? c.label} className={i === 0 ? "hidden sm:flex" : "min-w-0"}>
             {c.href ? (
               <Link
                 href={c.href}
-                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                className="inline-flex h-7 items-center rounded-md px-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
                 {c.label}
               </Link>
             ) : (
-              <span className="inline-flex h-7 items-center px-2 text-sm font-medium text-[var(--text-primary)] truncate max-w-[180px] sm:max-w-none">
-                {c.label}
+              <span aria-current="page" className="inline-flex h-7 min-w-0 items-center px-2 text-sm font-medium text-[var(--text-primary)]">
+                <span className="truncate">{c.label}</span>
               </span>
             )}
           </Crumb>
-          {void i}
-        </Fragment>
-      ))}
+        ))}
+      </nav>
 
-      <div className="flex-1" />
-
-      {/* The only way to open the palette on touch devices (no ⌘K). */}
-      <CommandTrigger />
-
-      {/* Mobile: icon-only Settings to save horizontal pixels. The
-          full-text version returns at sm. ServersPopover renders an
-          icon either way; ThemeToggle is icon-only. Marketplace lives
-          in the create-project flow, not the global nav. */}
-      <Link
-        href="/settings"
-        aria-label="Settings"
-        className="relative inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-      >
-        <Settings className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">Settings</span>
-        <UpdateDot />
-      </Link>
-      <div className="hidden sm:flex">
-        <ServersPopover />
+      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+        {/* Search + global actions live in the bottom bar on phones. */}
+        <div className="hidden sm:flex">
+          <CommandTrigger />
+        </div>
+        <NavIconButton
+          label="Keyboard shortcuts"
+          shortcut="?"
+          onClick={openShortcutsHelp}
+          className="hidden md:inline-flex"
+        >
+          <Keyboard />
+        </NavIconButton>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          className="relative hidden h-8 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
+        >
+          <Settings className="size-4" aria-hidden />
+          <span className="hidden xl:inline">Settings</span>
+          <UpdateDot />
+        </Link>
+        <div className="hidden sm:flex">
+          <ServersPopover />
+        </div>
+        <div className="hidden sm:flex">
+          <ThemeToggle />
+        </div>
+        <NotificationsButton className="hidden sm:inline-flex" />
+        <UserMenu />
       </div>
-      <ThemeToggle />
-      <NotificationsButton />
-      <UserMenu />
     </header>
+  );
+}
+
+const navIcon =
+  "inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] [&_svg]:size-4";
+
+function NavIconLink({
+  href,
+  label,
+  className,
+  children,
+}: {
+  href: string;
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<Link href={href} aria-label={label} className={cn(navIcon, "size-7 text-[var(--text-tertiary)] [&_svg]:size-3.5", className)} />}
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function NavIconButton({
+  label,
+  shortcut,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  shortcut?: string;
+  onClick: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<button type="button" aria-label={label} onClick={onClick} className={cn(navIcon, className)} />}
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {label}
+        {shortcut && <Kbd className="border-transparent bg-[var(--bg-primary)]/20 text-inherit">{shortcut}</Kbd>}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -224,8 +287,8 @@ function Crumb({
   // crumb (mobile responsiveness). The original fragment-only
   // version stripped the className escape hatch.
   return (
-    <span className={cn("flex shrink-0 items-center gap-1", className)}>
-      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]/60" />
+    <span className={cn("flex shrink-0 items-center gap-0.5", className)}>
+      <span aria-hidden className="shrink-0 text-[var(--border-strong)] select-none">/</span>
       {children}
     </span>
   );
@@ -246,20 +309,21 @@ function ProjectPicker({ currentProject }: { currentProject: string }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+        aria-label={currentProject ? `Project: ${currentProject}. Switch project` : "Switch project"}
+        className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
       >
-        <span className="truncate max-w-[180px]">{label}</span>
-        <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
+        <span className="truncate max-w-[40vw] sm:max-w-[200px]">{label}</span>
+        <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">
         <Command>
           <CommandInput placeholder="Find a project…" className="h-9 text-[13px]" />
           <CommandList className="p-1">
-            <CommandEmpty className="py-6 text-xs">No projects.</CommandEmpty>
+            <CommandEmpty className="py-6 text-sm">No matching projects.</CommandEmpty>
             {sorted.length > 0 && (
               <CommandGroup
                 heading="Projects"
-                className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
+                className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
               >
                 {sorted.map((p) => {
                   const name = p.metadata.name;
@@ -277,7 +341,7 @@ function ProjectPicker({ currentProject }: { currentProject: string }) {
                       <span
                         className={cn(
                           "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                          active ? "bg-[var(--accent)]" : "bg-[var(--text-tertiary)]/30"
+                          active ? "bg-[var(--accent)]" : "bg-[var(--border-default)]"
                         )}
                       />
                       <span className="truncate text-[13px]">{name}</span>
@@ -386,7 +450,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
         <PopoverTrigger
           className={cn(
             "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-sm font-medium transition-colors",
-            "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)] data-[popup-open]:text-[var(--text-primary)]",
+            "border-[var(--border-default)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)] data-[popup-open]:text-[var(--text-primary)]",
           )}
         >
           <span
@@ -394,10 +458,10 @@ function EnvironmentSwitcher({ project }: { project: string }) {
             className={cn(
               "inline-block h-1.5 w-1.5 rounded-full",
               currentEnv === "production"
-                ? "bg-emerald-400"
+                ? "bg-[var(--success)]"
                 : currentEnv.startsWith("pr-") || currentEnv.startsWith("preview-")
-                  ? "bg-amber-400"
-                  : "bg-blue-400",
+                  ? "bg-[var(--info)]"
+                  : "bg-[var(--text-tertiary)]",
             )}
           />
           <span className="sr-only">
@@ -407,18 +471,18 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                 ? "Preview environment:"
                 : "Environment:"}
           </span>
-          <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
-          <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
+          <span className="truncate max-w-[160px] text-[13px]">{currentEnv}</span>
+          <ChevronDown className="size-3.5 text-[var(--text-tertiary)]" aria-hidden />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">
           <Command>
             <CommandInput placeholder="Find an env…" className="h-9 text-[13px]" />
             <CommandList className="p-1">
-              <CommandEmpty className="py-6 text-xs">No environments.</CommandEmpty>
+              <CommandEmpty className="py-6 text-sm">No matching environments.</CommandEmpty>
               {envs.length > 0 && (
                 <CommandGroup
                   heading="Environments"
-                  className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
+                  className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
                 >
                   {envs.map((e) => {
                     const active = currentEnv === e.name;
@@ -433,18 +497,18 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                           className={cn(
                             "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
                             e.kind === "production"
-                              ? "bg-emerald-400"
+                              ? "bg-[var(--success)]"
                               : e.kind === "preview"
-                                ? "bg-amber-400"
-                                : "bg-blue-400",
+                                ? "bg-[var(--info)]"
+                                : "bg-[var(--text-tertiary)]",
                           )}
                         />
-                        <span className="truncate font-mono text-[12px]">{e.name}</span>
-                        <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
-                          {e.services} svc
+                        <span className="truncate text-[13px]">{e.name}</span>
+                        <span className="ml-auto shrink-0 text-xs tabular-nums text-[var(--text-tertiary)]">
+                          {e.services} {e.services === 1 ? "service" : "services"}
                         </span>
                         {e.kind === "preview" && (
-                          <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                          <span className="shrink-0 rounded bg-[var(--info-subtle)] px-1.5 py-0.5 text-2xs font-medium text-[var(--info)]">
                             PR
                           </span>
                         )}
@@ -463,9 +527,9 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                       setOpen(false);
                       setConfirmDelete(true);
                     }}
-                    className="px-2 py-1.5 text-[12px] text-red-400"
+                    className="px-2 py-1.5 text-[13px] text-[var(--danger)]"
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="size-3.5" aria-hidden />
                     Delete {currentEnv}…
                   </CommandItem>
                 )}
@@ -475,9 +539,9 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                     setOpen(false);
                     setShowNewEnv(true);
                   }}
-                  className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
+                  className="px-2 py-1.5 text-[13px] text-[var(--link)]"
                 >
-                  <Plus className="h-3 w-3" />
+                  <Plus className="size-3.5" aria-hidden />
                   New environment
                 </CommandItem>
               </CommandGroup>
@@ -488,7 +552,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
 
       {preview && (
         <span
-          className="hidden items-center gap-1 font-mono text-[11px] text-[var(--text-tertiary)] md:inline-flex"
+          className="hidden items-center gap-1 text-xs text-[var(--text-tertiary)] lg:inline-flex"
           title={
             preview.expiresAt
               ? `Preview expires ${new Date(preview.expiresAt).toLocaleString()}`
@@ -508,7 +572,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
           ) : (
             <span>#{preview.pr}</span>
           )}
-          {preview.branch && <span className="max-w-[160px] truncate">{preview.branch}</span>}
+          {preview.branch && <span className="max-w-[160px] truncate font-mono">{preview.branch}</span>}
         </span>
       )}
 
@@ -562,33 +626,6 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   );
 }
 
-// FeedEvent matches the server's NotificationEvent wire shape. Only
-// the fields the popover renders are typed.
-interface FeedEvent {
-  id: number;
-  type: string;
-  title: string;
-  body?: string;
-  severity?: string;
-  project?: string;
-  service?: string;
-  url?: string;
-  createdAt: string;
-  readAt?: string | null;
-  // classification rides on failure events (build.failed, pod.crashed)
-  // when the server's internal/failures package matched a known kind.
-  // Surfaces the human one-liner as the row subtitle so the popover
-  // tells the user *why* something failed instead of just "Build
-  // failed". Optional — older rows and non-failure events skip it.
-  classification?: {
-    kind?: string;
-    tab?: string;
-    summary?: string;
-    lineHint?: string;
-    lineNum?: number;
-  };
-}
-
 // UpdateDot marks the Settings link when a newer kuso release exists.
 // Shares the updates page's query key so both stay in sync.
 function UpdateDot() {
@@ -602,268 +639,11 @@ function UpdateDot() {
   if (!isAdmin || !version.data?.needsUpdate) return null;
   return (
     <span
-      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[var(--accent)]"
+      className="absolute right-1 top-1 size-2 rounded-full bg-[var(--warning)] ring-2 ring-[var(--bg-primary)]"
       title={`Update available: ${version.data.latest}`}
       aria-label="Update available"
     />
   );
-}
-
-function NotificationsButton() {
-  // Admins get the full feed with read-tracking + clear-all. Non-
-  // admins get a project-scoped read-only feed (/my-feed) so they
-  // still see deploy outcomes on services they own, just without
-  // the read state model (which is global today).
-  const isAdmin = useCan(Perms.SettingsAdmin);
-  const qc = useQueryClient();
-  // Controlled state so a notification's <Link> click can close the
-  // popover before pushing the route — otherwise the popover stays
-  // open over the new page until the user clicks elsewhere.
-  const [open, setOpen] = useState(false);
-  // Unread count drives the dot badge. Admin-only — the my-feed
-  // path has no read-tracking, so we just always show the bell
-  // without a dot for non-admins.
-  const unread = useQuery<{ unread: number }>({
-    queryKey: ["notifications", "unread-count"],
-    queryFn: () => api("/api/notifications/feed/unread-count"),
-    enabled: isAdmin,
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-    retry: false,
-    throwOnError: false,
-  });
-  const feedPath = isAdmin
-    ? "/api/notifications/feed?limit=30"
-    : "/api/notifications/my-feed?limit=30";
-  // Pinned to a single const so the optimistic-clear cache write and
-  // the invalidation can't drift from the useQuery key. The previous
-  // version had the useQuery key at ["notifications", "feed", scope]
-  // but the mutation wrote/invalidated ["notifications", "feed"] —
-  // React Query matches keys tuple-by-tuple, so the writes hit a
-  // different cache slot and the popover only updated after a
-  // close-then-reopen kicked off a fresh refetch.
-  const feedKey = ["notifications", "feed", isAdmin ? "admin" : "scoped"] as const;
-  const feed = useQuery<FeedEvent[]>({
-    queryKey: feedKey,
-    queryFn: () => api(feedPath),
-    enabled: false, // only fetch on popover open
-    staleTime: 15_000,
-    retry: false,
-    throwOnError: false,
-  });
-  const markRead = useMutation({
-    mutationFn: () =>
-      api("/api/notifications/feed/read-all", { method: "POST" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
-    },
-  });
-  // Clear-all wipes the entire feed server-side. Called from the
-  // trash button in the popover header. We optimistically blank the
-  // local feed cache so the empty-state appears immediately, then
-  // refetch on success to confirm — and on error restore the snapshot
-  // (the feed query is enabled:false, so an invalidate wouldn't refetch).
-  const clearAll = useMutation({
-    mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
-    onMutate: async () => {
-      // An in-flight feed refetch would otherwise land after this and
-      // repopulate the list.
-      await qc.cancelQueries({ queryKey: feedKey });
-      const previous = qc.getQueryData<FeedEvent[]>(feedKey);
-      qc.setQueryData(feedKey, [] as FeedEvent[]);
-      return { previous };
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
-      qc.invalidateQueries({ queryKey: feedKey });
-    },
-    onError: (e, _vars, ctx) => {
-      toast.error(e instanceof Error ? `Couldn't clear notifications: ${e.message}` : "Couldn't clear notifications");
-      if (ctx?.previous) qc.setQueryData(feedKey, ctx.previous);
-    },
-  });
-
-  const unreadCount = unread.data?.unread ?? 0;
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    if (next) {
-      void feed.refetch();
-    } else if (isAdmin && unreadCount > 0) {
-      // Mark read on CLOSE, not open: marking on open cleared readAt
-      // before the feed rendered, so nothing could show as new.
-      // Mark-read only exists for admins — non-admin feed has no
-      // read tracking (per-user readAt isn't modelled yet).
-      markRead.mutate();
-    }
-  };
-
-  const badge = unreadCount > 0;
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger
-        aria-label={badge ? `Notifications, ${unreadCount} unread` : "Notifications"}
-        className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-      >
-        <Bell className="h-4 w-4" />
-        {badge && (
-          <span
-            aria-hidden
-            className="absolute right-1.5 top-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]"
-          />
-        )}
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-          <p className="text-xs font-semibold tracking-tight">Notifications</p>
-          <div className="flex items-center gap-3">
-            {/* Clear-all + channels-config are admin-only. Non-
-                admin viewers get a read-only feed with no mutation
-                affordances — the feed is project-scoped and read
-                state isn't tracked per-user yet. */}
-            {isAdmin && (feed.data ?? []).length > 0 && (
-              <button
-                type="button"
-                onClick={() => clearAll.mutate()}
-                disabled={clearAll.isPending}
-                title="Clear all notifications (for everyone)"
-                aria-label="Clear all notifications"
-                className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
-              >
-                <Trash2 className="h-3 w-3" aria-hidden />
-                clear
-              </button>
-            )}
-            {isAdmin && (
-              <Link
-                href="/settings/notifications"
-                onClick={() => setOpen(false)}
-                className="font-mono text-[10px] text-[var(--accent)] hover:underline"
-              >
-                channels →
-              </Link>
-            )}
-          </div>
-        </header>
-        <div className="max-h-96 overflow-y-auto">
-          {feed.isPending ? (
-            <LoadingState kind="inline" className="px-3 py-4" />
-          ) : feed.isError ? (
-            <p className="px-3 py-4 text-xs text-[var(--error)]">
-              {feed.error instanceof Error ? feed.error.message : "Failed to load"}
-            </p>
-          ) : (feed.data ?? []).length === 0 ? (
-            <p className="px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
-              No events yet. Builds, deploys, and node alerts show up here as they happen.
-            </p>
-          ) : (
-            <ul className="divide-y divide-[var(--border-subtle)]">
-              {(feed.data ?? []).map((e) => (
-                <NotificationRow
-                  key={e.id}
-                  event={e}
-                  unread={isAdmin && !e.readAt}
-                  onClose={() => setOpen(false)}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-// NotificationRow is a single bell-popover entry. When the event
-// carries a URL (server populates this for build/pod/node/alert
-// events — see internal/notify/notify.go), wrap the row in a Link
-// that closes the popover before navigating. Otherwise render a
-// plain non-interactive li so events without a meaningful target
-// (e.g. low-importance generic events) don't pretend to be
-// clickable.
-function NotificationRow({
-  event,
-  unread = false,
-  onClose,
-}: {
-  event: FeedEvent;
-  unread?: boolean;
-  onClose: () => void;
-}) {
-  const body = (
-    <div className="flex items-start gap-2">
-      <span
-        aria-hidden
-        className={cn(
-          "mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-          // Use the design-token severity colors so the popover stays
-          // in sync with the rest of the UI when the theme switches.
-          // The previous hardcoded Tailwind (red-400/amber-400/
-          // emerald-400) drifted from --error/--warning/--success in
-          // dark mode, where the tokens use bolder hues for contrast.
-          event.severity === "error"
-            ? "bg-[var(--error)]"
-            : event.severity === "warn"
-              ? "bg-[var(--warning)]"
-              : "bg-[var(--success)]"
-        )}
-      />
-      <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-[12px]", unread ? "font-semibold" : "font-medium")}>
-          {unread && <span className="sr-only">New: </span>}
-          {event.title}
-        </p>
-        {/* Prefer the classifier's human summary over the raw body
-            when both are present. The summary reads "Missing env var:
-            DATABASE_URL"; the raw body would say "build pod exited
-            with code 1" which doesn't tell the user what to fix. */}
-        {event.classification?.summary ? (
-          <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
-            {event.classification.summary}
-          </p>
-        ) : event.body ? (
-          <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
-            {event.body}
-          </p>
-        ) : null}
-        <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-          {event.type}
-          {event.project && ` · ${event.project}`}
-          {event.service && `/${event.service}`}
-          {" · "}
-          {relativeTime(event.createdAt)}
-        </p>
-      </div>
-    </div>
-  );
-
-  // Derive a navigation target. Prefer the server-supplied url
-  // (newer events; carries event-specific deep links), fall back to
-  // a project/service-based URL so events stored before v0.8.2 (which
-  // had no url field) still navigate. Without the fallback the bell
-  // popover renders a non-clickable row for every historical event,
-  // which makes it look broken to a returning user.
-  const href =
-    event.url ||
-    (event.project && event.service
-      ? `/projects/${encodeURIComponent(event.project)}?service=${encodeURIComponent(event.service)}`
-      : event.project
-        ? `/projects/${encodeURIComponent(event.project)}`
-        : "");
-
-  if (href) {
-    return (
-      <li className="hover:bg-[var(--bg-tertiary)]/40 transition-colors">
-        <Link
-          href={href}
-          onClick={onClose}
-          className="block px-3 py-2"
-        >
-          {body}
-        </Link>
-      </li>
-    );
-  }
-  return <li className="px-3 py-2">{body}</li>;
 }
 
 function UserMenu() {
@@ -889,46 +669,38 @@ function UserMenu() {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label="Account menu"
-        className="inline-flex h-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+        className="ml-0.5 inline-flex size-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
       >
-        <Avatar className="h-7 w-7 border border-[var(--border-subtle)]">
+        <Avatar className="size-7">
           {user?.image && <AvatarImage src={user.image} alt={user.name ?? ""} />}
-          <AvatarFallback className="bg-[var(--bg-tertiary)] text-[10px] font-medium">
+          <AvatarFallback className="bg-[var(--bg-tertiary)] text-xs font-medium text-[var(--text-secondary)]">
             {initial}
           </AvatarFallback>
         </Avatar>
       </PopoverTrigger>
-      {/* Trimmed menu. Used to be a 10-row flat index of every
-          settings page; now it's just "your account" + a single
-          "Settings…" escape that lands on /settings (which has
-          its own search). The previous shape made the menu
-          taller than the viewport on a 720p browser and forced
-          users to scan a long list for an action that already
-          exists on /settings — every click in here was wasted
-          chrome. The remaining rows are the personal-scope
-          actions (profile, tokens) and admin shortcuts when the
-          user has them. Cluster-wide knobs (nodes, backups,
-          updates, instance secrets, users, groups) all live on
-          /settings now. */}
-      <PopoverContent align="end" className="w-56 p-1">
-        <div className="border-b border-[var(--border-subtle)] px-2 py-1.5">
+      {/* Personal-scope rows plus one way into /settings; cluster-wide
+          knobs live on /settings, not here. */}
+      <PopoverContent align="end" className="w-60 gap-0 p-1">
+        <div className="mb-1 border-b border-[var(--border-subtle)] px-2 pt-1 pb-2">
           <p className="truncate text-sm font-medium">{user?.name ?? "User"}</p>
-          <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
-            {user?.email ?? ""}
-          </p>
+          {user?.email && (
+            <p className="truncate text-xs text-[var(--text-tertiary)]">{user.email}</p>
+          )}
         </div>
         <MenuRow href="/settings/profile" icon={UserIcon} onNavigate={close}>Profile</MenuRow>
         <MenuRow href="/settings/tokens" icon={KeyRound} onNavigate={close}>API tokens</MenuRow>
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
-        <MenuRow href="/settings" icon={Settings} onNavigate={close}>Settings…</MenuRow>
+        <MenuRow href="/settings" icon={Settings} onNavigate={close}>Settings</MenuRow>
         {canAdmin && <MenuRow href="/settings/users" icon={Users} onNavigate={close}>Users &amp; groups</MenuRow>}
+        <div className="my-1 h-px bg-[var(--border-subtle)]" />
+        <ThemeRow />
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
         <button
           type="button"
           onClick={() => signOut()}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
         >
-          <LogOut className="h-3.5 w-3.5" />
+          <LogOut className="size-4" aria-hidden />
           Sign out
         </button>
       </PopoverContent>
@@ -953,11 +725,43 @@ function MenuRow({
     <Link
       href={href}
       onClick={onNavigate}
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="size-4" aria-hidden />
       {children}
     </Link>
+  );
+}
+
+// ThemeRow: a three-way theme choice inside the account menu, so phones
+// (where the bar's theme button is hidden) can still switch.
+function ThemeRow() {
+  const { theme, setTheme } = useTheme();
+  const options = [
+    { value: "light", label: "Light", Icon: Sun },
+    { value: "dark", label: "Dark", Icon: Moon },
+    { value: "system", label: "System", Icon: Monitor },
+  ] as const;
+  return (
+    <div className="flex items-center justify-between gap-2 px-2 py-1">
+      <span className="text-sm text-[var(--text-secondary)]">Theme</span>
+      <div role="radiogroup" aria-label="Theme" className="flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">
+        {options.map(({ value, label, Icon }) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={theme === value}
+            aria-label={label}
+            title={label}
+            onClick={() => setTheme(value)}
+            className="inline-flex size-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)] aria-checked:bg-[var(--bg-elevated)] aria-checked:text-[var(--text-primary)] aria-checked:shadow-[var(--shadow-sm)]"
+          >
+            <Icon className="size-3.5" aria-hidden />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
