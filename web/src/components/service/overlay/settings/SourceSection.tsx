@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCanOnProject, Perms } from "@/features/auth";
+import { useProject } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { Section, Field, FieldGrid, Code, inputClass, monoInputClass, textareaClass, type SectionProps } from "./_primitives";
@@ -37,6 +38,10 @@ export function SourceSection({
     staleTime: 60_000,
     retry: false,
   });
+  // An empty branch deploys the project's default; show that branch as
+  // the field's value rather than a grey placeholder.
+  const proj = useProject(project);
+  const inheritedBranch = proj.data?.project.spec.defaultRepo?.defaultBranch || "main";
   const repoDisplay = state.repoURL.replace(/^https?:\/\/(www\.)?/, "");
   // Only treat the repo URL as a clickable link when it parses as an
   // http(s) URL. A stored value like `javascript:alert(1)` would
@@ -153,12 +158,19 @@ export function SourceSection({
         </div>
       </Field>
       <FieldGrid>
-        <Field label="Branch" hint="Production, and any environment without its own branch, deploys this." htmlFor="svc-branch">
+        <Field
+          label="Branch"
+          hint={
+            state.repoBranch
+              ? "Production, and any environment without its own branch, deploys this."
+              : "The project's default branch. Production, and any environment without its own branch, deploys this."
+          }
+          htmlFor="svc-branch"
+        >
           <Input
             id="svc-branch"
-            value={state.repoBranch}
-            onChange={(e) => setState((s) => ({ ...s, repoBranch: e.target.value }))}
-            placeholder="main"
+            value={state.repoBranch || inheritedBranch}
+            onChange={(e) => setState((s) => ({ ...s, repoBranch: e.target.value === inheritedBranch && !s.repoBranch ? "" : e.target.value }))}
             className={monoInputClass}
             spellCheck={false}
           />

@@ -97,6 +97,30 @@ const SECTIONS = [
   { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
 
+// Words people search for that aren't a section's name.
+const SECTION_KEYWORDS: Record<string, string> = {
+  source: "repo repository branch git github root directory monorepo deploy hook",
+  domains: "domain hostname dns tls https certificate url",
+  networking: "port internal public expose protocol",
+  scale: "replicas autoscale cpu memory size resources instances",
+  sleep: "idle scale to zero wake",
+  placement: "node region label pin",
+  volumes: "disk storage persistent mount pvc",
+  build: "dockerfile nixpacks buildpacks runtime build args command static",
+  deploy: "auto-deploy push branch watch paths previews pull request",
+  release: "migration release hook pre-deploy command",
+  healthcheck: "readiness liveness probe path",
+  uptime: "monitor ping check",
+  security: "capabilities privilege root security context",
+  danger: "delete remove",
+};
+
+function sectionMatches(id: string, label: string, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return `${label} ${SECTION_KEYWORDS[id] ?? ""}`.toLowerCase().includes(q);
+}
+
 const SECTION_LABEL: Record<string, string> = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
 const ALL_SAVEABLE = Object.keys(SECTION_FIELDS) as SaveableSection[];
 const SAVED_FLASH_MS = 3000;
@@ -278,6 +302,8 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const jump = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  const [find, setFind] = useState("");
+  const railSections = sections.filter((s) => sectionMatches(s.id, s.label, find));
 
   return (
     <SettingsSaveProvider value={saveApi}>
@@ -326,8 +352,25 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           </div>
 
           <nav aria-label="Settings sections" className="sticky top-0 hidden self-start py-6 pr-4 md:block">
+            <Input
+              type="search"
+              value={find}
+              onChange={(e) => setFind(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && railSections[0]) {
+                  e.preventDefault();
+                  jump(railSections[0].id);
+                }
+              }}
+              placeholder="Find a setting"
+              aria-label="Find a setting"
+              className="mb-2 h-7 text-xs"
+            />
+            {railSections.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">No section matches.</p>
+            )}
             <ul className="space-y-0.5 text-[13px]">
-              {sections.map((s) => {
+              {railSections.map((s) => {
                 const isDirty = isSaveableSection(s.id) && dirty.includes(s.id);
                 return (
                   <li key={s.id}>
@@ -531,13 +574,16 @@ function EnvBranchSection({
     const m = url.match(/(?:github|gitlab)\.com[/:]([^/]+\/[^/.]+)/i);
     return m ? m[1] : url;
   })();
-  const [branch, setBranch] = useState(overrideBranch);
+  // The field shows the branch actually deployed here: the override, or
+  // the service default it falls back to.
+  const effectiveBranch = hasOverride ? overrideBranch : serviceDefaultBranch;
+  const [branch, setBranch] = useState(effectiveBranch);
   useEffect(() => {
-    setBranch(overrideBranch);
-  }, [overrideBranch]);
+    setBranch(effectiveBranch);
+  }, [effectiveBranch]);
   // Empty stays unsavable: the server rejects an empty branch, so there
   // is no "clear override" call yet.
-  const dirty = branch.trim() !== "" && branch.trim() !== overrideBranch.trim();
+  const dirty = branch.trim() !== "" && branch.trim() !== effectiveBranch.trim();
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
   const save = async () => {
@@ -576,7 +622,7 @@ function EnvBranchSection({
         <Input
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          placeholder={env}
+          placeholder={serviceDefaultBranch}
           aria-label={`Branch ${service} tracks in ${env}`}
           spellCheck={false}
           className={cn(monoInputClass, "flex-1")}
