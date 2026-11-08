@@ -119,12 +119,13 @@
   --selected: rgba(64, 71, 109, 0.10);
   --selected-border: #6B73A0;
 
-  /* The one primary button. Same sage hue as dark mode, deepened so
-     cream text clears AA on the light ground. */
-  --btn-primary-bg: #4D6847;
-  --btn-primary-bg-hover: #3F5A3A;
+  /* The one primary button. Same green family as dark mode, deepened so
+     cream text clears AA and saturated enough that it reads as the
+     action, not as another muted surface. */
+  --btn-primary-bg: #2E7340;
+  --btn-primary-bg-hover: #245E34;
   --btn-primary-fg: #FBFBF7;
-  --btn-primary-border: #3F5A3A;
+  --btn-primary-border: #245E34;
   --btn-secondary-bg: #FFFFFF;
   --btn-secondary-bg-hover: #F4F3EC;
   --btn-secondary-fg: #1A1D2E;
