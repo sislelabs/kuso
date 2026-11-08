@@ -64,7 +64,7 @@ import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
 import { ServiceHealthStrip } from "./overlay/ServiceHealthStrip";
-import { ExternalLink, X, Pencil } from "lucide-react";
+import { ExternalLink, X, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
 import { SERVICE_STATUS, serverStateCause, type ServiceStatus } from "@/lib/status";
@@ -319,6 +319,7 @@ export function ServiceOverlay({
   const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useExpandedPanel();
 
   // Per-panel dirty + save registry. Children call useOverlayDirty
   // and (optionally) supply onSave/onDiscard so the shell can render
@@ -690,7 +691,10 @@ export function ServiceOverlay({
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:max-w-3xl sm:border-l sm:border-[var(--border-subtle)]"
+            className={cn(
+              "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:border-l sm:border-[var(--border-subtle)]",
+              !expanded && "sm:max-w-3xl",
+            )}
           >
             {/* Sticky header. Tighter padding on small screens so the
                 overlay's title row uses the full width of a phone. */}
@@ -843,6 +847,16 @@ export function ServiceOverlay({
                   ) : null}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setExpanded(!expanded)}
+                aria-pressed={expanded}
+                aria-label={expanded ? "Narrow the panel" : "Expand the panel to full width"}
+                title={expanded ? "Narrow the panel" : "Expand to full width"}
+                className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
+              >
+                {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
               <button
                 type="button"
                 onClick={guardedClose}
@@ -1496,4 +1510,28 @@ function useRolloutSlow(rolling: boolean, specWrittenAt?: string): boolean {
     return () => clearTimeout(t);
   }, [rolling, since]);
   return rolling && since !== null && now - since >= ROLLOUT_SLOW_MS;
+}
+
+const EXPANDED_KEY = "kuso:service-panel-expanded";
+
+// The full-width choice is a per-viewer convenience, so it lives in
+// localStorage (which may be unavailable: then it just isn't remembered).
+function useExpandedPanel(): [boolean, (v: boolean) => void] {
+  const [expanded, setExpandedState] = useState(false);
+  useEffect(() => {
+    try {
+      setExpandedState(window.localStorage.getItem(EXPANDED_KEY) === "1");
+    } catch {
+      // storage blocked
+    }
+  }, []);
+  const setExpanded = useCallback((v: boolean) => {
+    setExpandedState(v);
+    try {
+      window.localStorage.setItem(EXPANDED_KEY, v ? "1" : "0");
+    } catch {
+      // storage blocked
+    }
+  }, []);
+  return [expanded, setExpanded];
 }
