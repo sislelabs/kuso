@@ -225,8 +225,13 @@ export function matchScore(query: string, label: string, keywords: string[] = []
   const l = label.toLowerCase();
   // Tie-break toward shorter labels so "web" beats "web-staging".
   const brevity = Math.min(l.length, 60) * 0.001;
-  if (l === q) return 1;
-  if (l.startsWith(q)) return 0.95 - brevity;
+  // "project / name" labels: the name is what people type, so an exact
+  // or prefix hit on it counts like one on the whole label.
+  // Action rows ("Logs: shop / web") keep whole-label matching, so a bare
+  // name lists the service itself ahead of its actions.
+  const name = l.includes(" / ") && !l.includes(": ") ? l.slice(l.lastIndexOf(" / ") + 3) : l;
+  if (l === q || name === q) return 1;
+  if (l.startsWith(q) || name.startsWith(q)) return 0.95 - brevity;
   const split = (s: string) => s.split(/[\s\-_./·():]+/).filter(Boolean);
   const labelWords = split(l);
   const kw = keywords.map((k) => k.toLowerCase());
@@ -335,7 +340,10 @@ export function rankScore(match: number, boost: number): number {
 export const GROUP_BY_PROJECT_MIN = 6;
 
 export function shouldGroupByProject(hits: Pick<PaletteService, "project">[]): boolean {
-  return hits.length >= GROUP_BY_PROJECT_MIN && new Set(hits.map((h) => h.project)).size > 1;
+  const projects = new Set(hits.map((h) => h.project)).size;
+  // Headings only help when projects hold several hits each; one hit per
+  // project would just put a heading over every row.
+  return hits.length >= GROUP_BY_PROJECT_MIN && projects > 1 && hits.length >= projects * 2;
 }
 
 // Last index the palette built, so reopening (or a fresh tab) renders

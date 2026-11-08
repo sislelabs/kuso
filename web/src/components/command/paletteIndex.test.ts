@@ -254,3 +254,10 @@ describe("parseIndexSnapshot", () => {
     ).toEqual({ projects: [], services: [], envs: [] });
   });
 });
+
+describe("matchScore on project / name labels", () => {
+  it("ranks a service named exactly like the query above a variable that starts with it", () => {
+    expect(matchScore("web", "puncho / web")).toBeGreaterThan(matchScore("web", "WEBSITE_URL"));
+    expect(matchScore("web", "puncho / web")).toBeGreaterThan(matchScore("web", "Logs: puncho / web"));
+  });
+});
