@@ -131,9 +131,77 @@ describe("projectPrimaryDomain", () => {
   });
 });
 
+// Real projects from the live instance (services, ports, internal flags
+// and production hosts as `kuso api` reports them).
+function realCase(
+  name: string,
+  rows: { short: string; host: string; add?: string[]; internal?: boolean; group?: string }[],
+  baseDomain?: string,
+) {
+  const p = { metadata: { name }, spec: { baseDomain } } as KusoProject;
+  const services = rows.map(
+    (r) => ({ metadata: { name: `${name}-${r.short}` }, spec: { project: name, port: 3000, internal: r.internal } }) as KusoService,
+  );
+  const envs = rows.map(
+    (r) =>
+      ({
+        metadata: { name: `${name}-${r.short}-production`, labels: { "kuso.sislelabs.com/env": r.group ?? "production" } },
+        spec: { project: name, service: `${name}-${r.short}`, kind: "production", host: r.host, additionalHosts: r.add },
+        status: { state: "running" },
+      }) as KusoEnvironment,
+  );
+  return projectPrimaryDomain(p, services, envs)?.host;
+}
+
+describe("projectPrimaryDomain on real projects", () => {
+  it("tickero: the apex tickero.bg, not api.tickero.bg", () => {
+    expect(
+      realCase("tickero", [
+        { short: "worker", host: "worker.tickero.sislelabs.com" },
+        { short: "api", host: "api.tickero.sislelabs.com", add: ["api.tickero.bg"] },
+        { short: "frontend", host: "frontend.tickero.sislelabs.com", add: ["tickero.bg"] },
+        { short: "backoffice", host: "backoffice.tickero.sislelabs.com", add: ["app.tickero.bg"] },
+      ]),
+    ).toBe("tickero.bg");
+  });
+
+  it("puncho: the apex puncho.app over app.puncho.app; staging clones and internal services don't count", () => {
+    expect(
+      realCase("puncho", [
+        { short: "web-staging", host: "web-staging.puncho.sislelabs.com", group: "staging" },
+        { short: "web", host: "web.puncho.sislelabs.com", add: ["app.puncho.app"] },
+        { short: "operator", host: "operator.puncho.sislelabs.com", internal: true },
+        { short: "site", host: "site.puncho.sislelabs.com", add: ["puncho.app", "www.puncho.app"] },
+      ]),
+    ).toBe("puncho.app");
+  });
+
+  it("scubatony: the service named like the project, not internal-system", () => {
+    expect(
+      realCase("scubatony", [
+        { short: "scubatony", host: "scubatony.sislelabs.com" },
+        { short: "internal-system", host: "internal-system.scubatony.sislelabs.com" },
+      ]),
+    ).toBe("scubatony.sislelabs.com");
+  });
+
+  it("the project base domain wins over another apex", () => {
+    expect(
+      realCase(
+        "shop",
+        [
+          { short: "docs", host: "docs.shop.kuso.app", add: ["shopdocs.io"] },
+          { short: "store", host: "store.shop.kuso.app", add: ["shop.com"] },
+        ],
+        "shop.com",
+      ),
+    ).toBe("shop.com");
+  });
+});
+
 describe("formatCores", () => {
   it("stays in cores across the 1000m boundary", () => {
-    expect(formatCores(0)).toBe("0 cores");
+    expect(formatCores(0)).toBe("<0.01 cores");
     expect(formatCores(4)).toBe("<0.01 cores");
     expect(formatCores(100)).toBe("0.1 cores");
     expect(formatCores(142)).toBe("0.14 cores");

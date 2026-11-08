@@ -5,6 +5,8 @@
 import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
 import { formatBytes, formatMillicores } from "@/features/project-overview/api";
 import { serviceUrl } from "@/features/services/serviceUrl";
+import { hostScheme } from "@/lib/host-scheme";
+import { serviceShortName } from "@/lib/utils";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 
 export const PROMOTED_AT_ANNOTATION = "kuso.sislelabs.com/promoted-at";
@@ -51,39 +53,78 @@ function prodEnvOf(s: KusoService, envs: ReadonlyArray<KusoEnvironment>): KusoEn
   return envs.find((e) => e.spec.service === s.metadata.name && isProductionGroup(e));
 }
 
-function hasCustomDomain(s: KusoService, env: KusoEnvironment | undefined): boolean {
-  return !!env?.spec.additionalHosts?.some((h) => !!h) || !!s.spec.domains?.some((d) => !!d?.host);
+// Custom hosts a service answers on in production: the env's
+// additionalHosts (where custom domains live now), else spec.domains.
+function customHosts(s: KusoService, env: KusoEnvironment | undefined): string[] {
+  const fromEnv = (env?.spec.additionalHosts ?? []).filter((h): h is string => !!h);
+  if (fromEnv.length) return fromEnv;
+  return (s.spec.domains ?? []).map((d) => d?.host).filter((h): h is string => !!h);
+}
+
+// Registrable domain with no subdomain ("tickero.bg", "shop.co.uk").
+const TWO_PART_SUFFIX = /^(co|com|org|net|ac|gov|edu)$/;
+export function isApexHost(host: string): boolean {
+  const labels = host.toLowerCase().replace(/\.$/, "").split(".");
+  if (labels.length === 2) return true;
+  return labels.length === 3 && TWO_PART_SUFFIX.test(labels[1]) && labels[2].length === 2;
 }
 
 function isLive(env: KusoEnvironment | undefined): boolean {
   return env?.status?.state === "running" || (!env?.status?.state && env?.status?.ready === true);
 }
 
-// The project's headline domain: the primary public service's URL exactly
-// as the canvas node and service overlay show it (serviceUrl on its
-// production env — custom domain first, else the kuso auto host).
-// Primary public service = a non-internal production service with a port,
-// ranked by: has a custom domain, is live, then name.
+const FRONT_NAMES = new Set(["web", "frontend", "app"]);
+
+// The project's headline domain, the URL of its primary public service.
+// Only public production services with a port take part. Ranked by:
+//   1. one of its custom hosts is the project base domain or an apex
+//      (that host is shown, e.g. tickero.bg over api.tickero.bg);
+//   2. its short name is the project's name, or web / frontend / app;
+//   3. it has a custom domain;
+//   4. it is live; then name.
+// Otherwise the URL is exactly what the canvas node shows (serviceUrl:
+// custom domain first, else the kuso auto host).
 export function projectPrimaryDomain(
   project: KusoProject,
   services: ReadonlyArray<KusoService>,
   environments: ReadonlyArray<KusoEnvironment>,
 ): ProjectDomain | undefined {
   const name = project.metadata.name;
+  const base = project.spec.baseDomain?.toLowerCase();
   const ranked = services
     .filter((s) => (!s.spec.project || s.spec.project === name) && isProductionService(s))
     .filter((s) => !s.spec.internal && (s.spec.port ?? 0) > 0)
     .map((s) => {
       const env = prodEnvOf(s, environments);
-      return { s, env, custom: hasCustomDomain(s, env), live: isLive(env) };
+      // Services without a production env (staging clones) aren't public here.
+      const hosts = env ? customHosts(s, env) : [];
+      const baseHost = hosts.find((h) => h.toLowerCase() === base);
+      const headline = baseHost ?? hosts.find(isApexHost);
+      const short = serviceShortName(name, s.metadata.name);
+      return {
+        s,
+        env,
+        headline,
+        // The base domain outranks any other apex.
+        headlineRank: baseHost ? 2 : headline ? 1 : 0,
+        named: short === name || FRONT_NAMES.has(short),
+        custom: hosts.length > 0,
+        live: isLive(env),
+      };
     })
+    .filter((c) => c.env)
     .sort(
       (a, b) =>
+        b.headlineRank - a.headlineRank ||
+        Number(b.named) - Number(a.named) ||
         Number(b.custom) - Number(a.custom) ||
         Number(b.live) - Number(a.live) ||
         a.s.metadata.name.localeCompare(b.s.metadata.name),
     );
   for (const c of ranked) {
+    if (c.headline) {
+      return { host: c.headline, href: `${hostScheme(c.env?.spec.tlsEnabled ?? true, c.headline)}://${c.headline}` };
+    }
     const href = serviceUrl(c.s, c.env);
     if (!href) continue;
     try {
@@ -126,7 +167,7 @@ export function envScopeLabel(env: string): string {
 // Cores throughout, so "0.1 cores" and "1.4 cores" read on one scale
 // (formatMillicores alone switches unit at 1000m).
 export function formatCores(m: number): string {
-  if (m <= 0) return "0 cores";
+  // Idle reads like the metrics panel's sub-unit values, never "0".
   if (m < 10) return "<0.01 cores";
   const v = m < 1000 ? (m / 1000).toFixed(2).replace(/\.?0+$/, "") : formatMillicores(m);
   return `${v} ${v === "1" ? "core" : "cores"}`;
