@@ -100,6 +100,9 @@ interface Props {
   // Lets the canvas right-click "SQL console" / "Backups + restore"
   // entries open the right tab directly. Falls back to "overview".
   defaultTab?: string;
+  // Called when the user switches tabs (and once on open when no tab was
+  // requested) so the page can mirror the tab into the URL.
+  onTabChange?: (tab: string) => void;
   onClose: () => void;
 }
 
@@ -111,7 +114,7 @@ interface Props {
 //
 // Per-tab implementations live under ./overlay/. This file is the
 // shell: open/close, tab gating, the slide-in chrome.
-export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
+export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose }: Props) {
   const open = !!addon;
   const [tab, setTab] = useState<Tab>("overview");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -151,6 +154,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
       e.onDiscard?.();
     }
     setTab(next);
+    onTabChange?.(next);
   };
   const guardedClose = useCallback(() => {
     for (const e of Object.values(panels)) {
@@ -163,12 +167,21 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // The URL is the source of truth for the tab: defaultTab changes on
+  // every tab switch (the page mirrors it into ?tab=) and on Back/Forward.
+  // Panels are only reset when the addon itself changes — resetting on a
+  // tab change would wipe the registration the new tab just made.
+  useEffect(() => {
+    setPanels({});
+  }, [addon]);
+  const onTabChangeRef = useRef(onTabChange);
+  onTabChangeRef.current = onTabChange;
   useEffect(() => {
     if (!addon) return;
     const requested = defaultTab === "vulns" ? "vulnerabilities" : defaultTab;
     const valid = TABS.some((t) => t.id === requested);
     setTab(valid ? (requested as Tab) : "overview");
-    setPanels({});
+    if (!defaultTab) onTabChangeRef.current?.("overview");
   }, [addon, defaultTab]);
 
   useEffect(() => {
