@@ -1202,7 +1202,7 @@ function PublicTCPSection({
 // Marks a field that can only be set when the addon is created.
 function FixedTag() {
   return (
-    <span className="inline-flex items-center gap-1 font-normal text-[var(--text-tertiary)]" title="Set when the addon was created; can't be changed here">
+    <span className="inline-flex items-center gap-1 text-xs font-normal text-[var(--text-tertiary)]" title="Set when the addon was created; can't be changed here">
       <Lock aria-hidden className="size-3" />
       Fixed
     </span>
