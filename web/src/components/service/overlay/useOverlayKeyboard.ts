@@ -23,22 +23,32 @@ function isTypingTarget(el: EventTarget | null): boolean {
 // useOverlayKeyboard gives a slide-over dialog its keyboard model:
 //  - "g" then a letter jumps to a tab (chords map letter → action),
 //  - Tab / Shift+Tab stay inside the panel,
-//  - focus moves into the panel on open and back to whatever had it
-//    (usually the canvas node) on close.
+//  - focus moves into the panel on open and, on close, back to the thing
+//    that opened it: the element carrying data-focus-key={restoreKey}
+//    (canvas node or list row, looked up fresh because the canvas
+//    re-renders its nodes), else whatever had focus, else the canvas.
 // Escape stays with the overlay, which already handles the unsaved-edits
 // confirm.
 export function useOverlayKeyboard({
   open,
   panelRef,
   chords,
+  restoreKey,
 }: {
   open: boolean;
   panelRef: React.RefObject<HTMLElement | null>;
   chords: Record<string, () => void>;
+  restoreKey?: string;
 }) {
   const chordsRef = useRef(chords);
+  const restoreKeyRef = useRef(restoreKey);
+  // Last mounted panel element, for the close-time focus check (the ref
+  // itself may be empty or already pointing elsewhere by then).
+  const lastPanelRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     chordsRef.current = chords;
+    if (restoreKey) restoreKeyRef.current = restoreKey;
+    if (panelRef.current) lastPanelRef.current = panelRef.current;
   });
 
   useEffect(() => {
@@ -104,7 +114,31 @@ export function useOverlayKeyboard({
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onKey, true);
-      if (restoreTo && restoreTo.isConnected) restoreTo.focus({ preventScroll: true });
+      const key = restoreKeyRef.current;
+      const panelEl = lastPanelRef.current;
+      // After the exit frame: the panel's own focus is gone by then and
+      // a re-rendered canvas node is back in the DOM.
+      requestAnimationFrame(() => restoreFocus(key, restoreTo, panelEl));
     };
   }, [open, panelRef]);
+}
+
+function visible(el: HTMLElement | null): el is HTMLElement {
+  return !!el && el.isConnected && el.getClientRects().length > 0;
+}
+
+function restoreFocus(key: string | undefined, prev: HTMLElement | null, panel: HTMLElement | null, attempt = 0) {
+  const active = document.activeElement;
+  // Leave it alone if something else (the palette, a dialog) took focus.
+  const stillOurs = !active || active === document.body || !active.isConnected || !!panel?.contains(active);
+  if (!stillOurs) return;
+  const byKey = key ? document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`) : null;
+  const target = [byKey, prev && prev !== document.body ? prev : null, document.getElementById("canvas-root")].find(visible);
+  if (!target) return;
+  target.focus({ preventScroll: true });
+  // While the panel plays its exit animation the browser can refuse the
+  // move; try again until it has gone (about 0.5s at most).
+  if (document.activeElement !== target && attempt < 6) {
+    setTimeout(() => restoreFocus(key, prev, panel, attempt + 1), 100);
+  }
 }
