@@ -838,6 +838,7 @@ export function ServiceOverlay({
                 detail={stateDetail}
                 env={env}
                 envGroup={envGroup}
+                onDeployments={tab === "deployments"}
                 onNavigate={navigateTo}
               />
             ) : null}
@@ -1145,11 +1146,15 @@ function HealthBanner({
   detail,
   env,
   envGroup,
+  onDeployments,
   onNavigate,
 }: {
   project: string;
   service: string;
   problem: Exclude<HealthProblem, null>;
+  // Already on Deployments: the failed build is right below, so the
+  // jump button would go nowhere.
+  onDeployments: boolean;
   serverState?: string;
   detail?: string;
   env?: KusoEnvironment;
@@ -1188,7 +1193,7 @@ function HealthBanner({
             <RollbackControl project={project} service={service} env={env} envGroup={envGroup} />
             <RestartControl project={project} service={service} envGroup={envGroup} variant="button" />
           </>
-        ) : (
+        ) : onDeployments ? null : (
           <BannerButton onClick={() => onNavigate("deployments")} icon={Rocket}>
             Deployments
           </BannerButton>
