@@ -26,11 +26,12 @@ import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { RegistryCredentialsCard } from "@/components/project/RegistryCredentialsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { friendlyApiError } from "@/features/projects/names";
 import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
 import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
-import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon, Download } from "lucide-react";
+import { Trash2, Save, AlertTriangle, Users as UsersIcon, Download } from "lucide-react";
 
 // Empty or non-numeric input falls back to the 7-day default; anything
 // else is clamped to the 1..30 range the input advertises.
@@ -253,14 +254,12 @@ export function ProjectSettingsView() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-10 p-6 lg:p-8">
-      <header className="flex items-start gap-3">
-        <SettingsIcon className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Project settings</h1>
-          <p className="mt-1 font-mono text-xs text-[var(--text-secondary)]">{projectName}</p>
-        </div>
-      </header>
+    <div className="mx-auto max-w-3xl space-y-10 px-4 pt-6 pb-12 sm:px-6 sm:pt-8 lg:px-8">
+      <PageHeader
+        back={{ href: `/projects/${encodeURIComponent(projectName)}`, label: projectName }}
+        title="Project settings"
+        description="Domains, repository, preview environments, access and the danger zone for this project."
+      />
 
       {/* General */}
       <section className="space-y-4">
