@@ -185,7 +185,7 @@ function Marketplace() {
 }
 
 // Roughly two lines of card text; line-clamp stays as a narrow-screen backstop.
-const CARD_DESCRIPTION_CHARS = 96;
+const CARD_DESCRIPTION_CHARS = 78;
 
 function AppCard({ app: a, onSelect }: { app: MarketplaceApp; onSelect: () => void }) {
   const description = useMemo(() => {

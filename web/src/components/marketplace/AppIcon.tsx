@@ -20,11 +20,11 @@ export function categoryLabel(c: string): string {
 
 // Tint classes per token, spelled out so Tailwind sees them.
 const TINT_CLASS: Record<(typeof LETTERMARK_TINTS)[number], string> = {
-  "--chart-1": "bg-[var(--chart-1)]/15 text-[var(--chart-1)]",
-  "--chart-2": "bg-[var(--chart-2)]/15 text-[var(--chart-2)]",
-  "--chart-3": "bg-[var(--chart-3)]/15 text-[var(--chart-3)]",
-  "--chart-4": "bg-[var(--chart-4)]/15 text-[var(--chart-4)]",
-  "--chart-5": "bg-[var(--chart-5)]/15 text-[var(--chart-5)]",
+  "--chart-1": "bg-[var(--chart-1)]/25 text-[var(--chart-1)]",
+  "--chart-2": "bg-[var(--chart-2)]/25 text-[var(--chart-2)]",
+  "--chart-3": "bg-[var(--chart-3)]/25 text-[var(--chart-3)]",
+  "--chart-4": "bg-[var(--chart-4)]/25 text-[var(--chart-4)]",
+  "--chart-5": "bg-[var(--chart-5)]/25 text-[var(--chart-5)]",
 };
 
 // AppIcon shows the catalog's SVG brand mark over a tinted lettermark.

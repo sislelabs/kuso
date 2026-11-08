@@ -714,15 +714,15 @@ function OptionCard({
     <>
       <span className="flex items-center justify-between text-[var(--accent)]">
         {icon}
-        {href ? (
-          <ArrowRight className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform motion-safe:group-hover:translate-x-0.5" />
-        ) : (
-          <ChevronRight
-            className={
-              "h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform " + (active ? "rotate-90" : "")
-            }
-          />
-        )}
+        {/* One glyph for every card: a chevron that nudges right for a
+            link and turns down when an inline option is open. */}
+        <ChevronRight
+          aria-hidden
+          className={
+            "h-4 w-4 text-[var(--text-tertiary)] transition-transform " +
+            (active ? "rotate-90" : "motion-safe:group-hover:translate-x-0.5")
+          }
+        />
       </span>
       <span className="text-[13px] font-medium text-[var(--text-primary)]">{title}</span>
       <span className="text-xs leading-snug text-[var(--text-secondary)]">{hint}</span>
