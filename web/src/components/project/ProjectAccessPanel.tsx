@@ -143,7 +143,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
     <div className="space-y-3">
       <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-          <h3 className="text-sm font-semibold tracking-tight">Access</h3>
+          <h3 className="text-[13px] font-medium">Grants</h3>
           <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
             {rows.length} {rows.length === 1 ? "grant" : "grants"}
           </span>

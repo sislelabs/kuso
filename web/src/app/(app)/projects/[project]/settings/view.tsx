@@ -1,15 +1,31 @@
 "use client";
 
-import { Select } from "@/components/ui/select";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import {
+  AlertTriangle,
+  Bell,
+  Download,
+  FileCode,
+  Gauge,
+  GitPullRequest,
+  HeartPulse,
+  KeyRound,
+  Package,
+  Settings2,
+  Trash2,
+  Users as UsersIcon,
+} from "lucide-react";
+import { toast } from "sonner";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   useProject,
   useUpdateProject,
@@ -19,31 +35,51 @@ import {
   muteProjectNotifications,
   unmuteProjectNotifications,
   exportProjectArchive,
-  type UpdateProjectBody,
 } from "@/features/projects";
+import {
+  PROJECT_SETTINGS_FIELDS,
+  clampPreviewTtl,
+  formFromSpec,
+  sectionDirty,
+  sectionPatch,
+  type ProjectSettingsForm,
+  type ProjectSettingsSection,
+} from "@/features/projects/settingsForm";
 import { useInstallations } from "@/features/github";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { RegistryCredentialsCard } from "@/components/project/RegistryCredentialsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
+import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { ErrorState } from "@/components/shared/ErrorState";
+import {
+  Callout,
+  Code,
+  Field,
+  FieldGrid,
+  Section,
+  SettingsSaveProvider,
+  SwitchField,
+  inputClass,
+  monoInputClass,
+  type SectionSaveStatus,
+  type SettingsSaveApi,
+} from "@/components/service/overlay/settings/_primitives";
 import { friendlyApiError } from "@/features/projects/names";
-import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
-import { useCan, useProjectRole, Perms } from "@/features/auth/hooks";
-import { toast } from "sonner";
-import { Trash2, Save, AlertTriangle, Users as UsersIcon, Download } from "lucide-react";
+import { useCan, useCanOnProject, useProjectRole, Perms } from "@/features/auth/hooks";
 
-// Empty or non-numeric input falls back to the 7-day default; anything
-// else is clamped to the 1..30 range the input advertises.
-function clampPreviewTtl(raw: string): number {
-  const n = parseInt(raw, 10);
-  if (Number.isNaN(n)) return 7;
-  return Math.min(30, Math.max(1, n));
-}
+const SAVED_FLASH_MS = 2500;
+const SECTION_LABEL: Record<ProjectSettingsSection, string> = {
+  general: "General",
+  previews: "Preview environments",
+  monitoring: "Monitoring",
+  scaling: "Scaling",
+};
+const SECTIONS = Object.keys(PROJECT_SETTINGS_FIELDS) as ProjectSettingsSection[];
 
-// Project settings — flat layout, sections separated by horizontal
-// rules + small section headers. Mirrors the polish of /settings
-// instead of stacking Card components which created visual noise.
+// Project settings: the same card language as service settings (label +
+// hint above a full-width control, one Save per card, danger zone last).
 export function ProjectSettingsView() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const router = useRouter();
@@ -52,99 +88,130 @@ export function ProjectSettingsView() {
   const project = useProject(projectName);
   const update = useUpdateProject(projectName);
   const del = useDeleteProject();
-  const isAdmin = useCan(Perms.SettingsAdmin);
-  // Delete requires project-ADMIN server-side (the single most
-  // destructive op); showing the button to editors just hands them a
-  // confirm-text ritual that ends in a 403.
-  const isProjectAdmin = useProjectRole(projectName) === "admin";
-
-  const [description, setDescription] = useState("");
-  const [baseDomain, setBaseDomain] = useState("");
-  const [repoURL, setRepoURL] = useState("");
-  const [repoBranch, setRepoBranch] = useState("");
-  const [previewsEnabled, setPreviewsEnabled] = useState(false);
-  // Kept as the raw input string so the field can be cleared while
-  // typing; clamped on blur and on save.
-  const [previewsTtl, setPreviewsTtl] = useState("7");
-  const [previewsDomain, setPreviewsDomain] = useState("");
-  // GitHub App installation the project clones with; 0 = none.
-  const [installationId, setInstallationId] = useState(0);
   const installations = useInstallations();
-  const [exporting, setExporting] = useState(false);
-  const [confirmExport, setConfirmExport] = useState(false);
-  const [alwaysOn, setAlwaysOn] = useState(false);
-  // Ingress limit defaults for the project's services. "" = platform
-  // default; kept as strings so a field can be emptied while typing.
-  const [limitMaxConcurrent, setLimitMaxConcurrent] = useState("");
-  const [limitRate, setLimitRate] = useState("");
-  const [limitBurst, setLimitBurst] = useState("");
-  const [uptimeEnabled, setUptimeEnabled] = useState(true);
-  // dirty pins the form once the user edits it: the describe payload
-  // carries live env status, so it refetches (and would re-seed every
-  // field) on focus and after unrelated mutations.
-  const [dirty, setDirty] = useState(false);
-  useUnsavedEdits("project-settings", dirty);
-  const [confirmDomain, setConfirmDomain] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState("");
-  const [purgeData, setPurgeData] = useState(false);
-  // Notification mute is NOT part of the project spec (it lives in the
-  // control-plane DB and takes effect immediately), so the toggle acts
-  // on change instead of waiting for Save. null = still loading.
-  const [muted, setMuted] = useState<boolean | null>(null);
-  const [muteBusy, setMuteBusy] = useState(false);
-  const [muteLoadError, setMuteLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!projectName) return;
-    setMuteLoadError(null);
-    getProjectNotificationMute(projectName)
-      .then((m) => setMuted(m.muted))
-      .catch((e: unknown) => setMuteLoadError(e instanceof Error ? e.message : "request failed"));
-  }, [projectName]);
+  const isAdmin = useCan(Perms.SettingsAdmin);
+  const canWrite = useCanOnProject(projectName, Perms.ProjectWrite);
+  // Delete and archive export need project-ADMIN server-side; showing them
+  // to editors only hands them a ritual that ends in a 403.
+  const isProjectAdmin = useProjectRole(projectName) === "admin";
 
   const spec = project.data?.project?.spec;
   const specKey = JSON.stringify(spec ?? null);
-  // The values the form was last seeded with. save() only sends fields
-  // the user changed from these, so a stale (dirty-pinned) form can't
-  // revert something a config-as-code apply set in the meantime.
-  const seeded = useRef<Record<string, string | boolean>>({});
+  const [form, setForm] = useState<ProjectSettingsForm>(() => formFromSpec(undefined));
+  // What the form was last seeded with; each card diffs against it.
+  const [base, setBase] = useState<ProjectSettingsForm>(() => formFromSpec(undefined));
+  const [saving, setSaving] = useState<ProjectSettingsSection | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<ProjectSettingsSection, string>>>({});
+  const [savedAt, setSavedAt] = useState<Partial<Record<ProjectSettingsSection, number>>>({});
+  const [confirmDomain, setConfirmDomain] = useState(false);
+  const seededOnce = useRef(false);
+
+  const dirtySections = SECTIONS.filter((s) => sectionDirty(s, form, base));
+  useUnsavedEdits("project-settings", dirtySections.length > 0);
+
+  // The describe payload carries live env status and refetches often:
+  // re-seed only the cards the user isn't editing.
   useEffect(() => {
-    if (spec && !dirty) {
-      const s = spec;
-      seeded.current = {
-        description: s.description ?? "",
-        baseDomain: s.baseDomain ?? "",
-        previewsEnabled: !!s.previews?.enabled,
-        previewsTtl: String(s.previews?.ttlDays ?? 7),
-        previewsDomain: s.previews?.baseDomain ?? "",
-        alwaysOn: !!s.alwaysOn,
-        limitMaxConcurrent: String(s.requestLimits?.maxConcurrent || ""),
-        limitRate: String(s.requestLimits?.ratePerSecond || ""),
-        limitBurst: String(s.requestLimits?.burst || ""),
-        uptimeEnabled: s.uptime?.disabled !== true,
-      };
-      setDescription(s.description ?? "");
-      setBaseDomain(s.baseDomain ?? "");
-      setRepoURL(s.defaultRepo?.url ?? "");
-      setRepoBranch(s.defaultRepo?.defaultBranch ?? "");
-      setPreviewsEnabled(!!s.previews?.enabled);
-      setPreviewsTtl(String(s.previews?.ttlDays ?? 7));
-      setPreviewsDomain(s.previews?.baseDomain ?? "");
-      setInstallationId(s.github?.installationId ?? 0);
-      setAlwaysOn(!!s.alwaysOn);
-      setLimitMaxConcurrent(String(s.requestLimits?.maxConcurrent || ""));
-      setLimitRate(String(s.requestLimits?.ratePerSecond || ""));
-      setLimitBurst(String(s.requestLimits?.burst || ""));
-      setUptimeEnabled(s.uptime?.disabled !== true);
+    if (!spec) return;
+    const fresh = formFromSpec(spec);
+    if (!seededOnce.current) {
+      seededOnce.current = true;
+      setForm(fresh);
+      setBase(fresh);
+      return;
     }
-    // specKey stands in for spec: re-seed on content change, not on
-    // every refetch's new object identity.
+    const editing = new Set(SECTIONS.filter((s) => sectionDirty(s, form, base)));
+    const reseed = (prev: ProjectSettingsForm) => {
+      const next = { ...prev };
+      for (const s of SECTIONS) {
+        if (editing.has(s)) continue;
+        for (const k of PROJECT_SETTINGS_FIELDS[s]) (next as Record<string, unknown>)[k] = fresh[k];
+      }
+      return next;
+    };
+    setForm(reseed);
+    setBase(reseed);
+    // specKey stands in for spec: re-seed on content change only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [specKey, dirty]);
+  }, [specKey]);
+
+  useEffect(() => {
+    if (Object.keys(savedAt).length === 0) return;
+    const t = window.setTimeout(() => setSavedAt({}), SAVED_FLASH_MS);
+    return () => window.clearTimeout(t);
+  }, [savedAt]);
+
+  const set = <K extends keyof ProjectSettingsForm>(key: K, value: ProjectSettingsForm[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+
+  const saveSection = async (section: ProjectSettingsSection) => {
+    const patch = sectionPatch(section, form, base);
+    if (!patch.ok) {
+      setErrors((e) => ({ ...e, [section]: patch.error }));
+      return;
+    }
+    setSaving(section);
+    setErrors((e) => ({ ...e, [section]: undefined }));
+    try {
+      await update.mutateAsync(patch.body);
+      // Adopt this card's values as the new baseline right away so it
+      // reads clean even before the refetch lands.
+      setBase((b) => {
+        const next = { ...b };
+        for (const k of PROJECT_SETTINGS_FIELDS[section]) (next as Record<string, unknown>)[k] = form[k];
+        return next;
+      });
+      setSavedAt((s) => ({ ...s, [section]: Date.now() }));
+      toast.success(`${SECTION_LABEL[section]} saved`);
+      await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
+    } catch (e) {
+      setErrors((x) => ({ ...x, [section]: friendlyApiError(e, "Failed to save") }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const saveApi: SettingsSaveApi = useMemo(
+    () => ({
+      canWrite,
+      status: (id: string): SectionSaveStatus | null => {
+        if (!(SECTIONS as string[]).includes(id)) return null;
+        const s = id as ProjectSettingsSection;
+        return {
+          dirty: sectionDirty(s, form, base),
+          saving: saving === s,
+          saved: savedAt[s] !== undefined,
+          error: errors[s] ?? null,
+        };
+      },
+      save: (id: string) => {
+        const s = id as ProjectSettingsSection;
+        // A base-domain change re-hosts every default-host service and
+        // mints new certificates, so it gets its own confirm.
+        if (s === "general" && form.baseDomain.trim() !== base.baseDomain.trim()) {
+          setConfirmDomain(true);
+          return;
+        }
+        void saveSection(s);
+      },
+      discard: (id: string) => {
+        const s = id as ProjectSettingsSection;
+        setForm((f) => {
+          const next = { ...f };
+          for (const k of PROJECT_SETTINGS_FIELDS[s]) (next as Record<string, unknown>)[k] = base[k];
+          return next;
+        });
+        setErrors((e) => ({ ...e, [s]: undefined }));
+      },
+    }),
+    // saveSection closes over form/base, which are already deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canWrite, form, base, saving, savedAt, errors],
+  );
 
   if (project.isPending) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
+      <div className="mx-auto max-w-5xl px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8">
         <Skeleton className="mb-4 h-8 w-48" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -153,591 +220,548 @@ export function ProjectSettingsView() {
 
   if (project.isError) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
-          {project.error?.message}
-        </p>
+      <div className="mx-auto max-w-3xl px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8">
+        <ErrorState what="project settings" error={project.error} onRetry={() => void project.refetch()} back={{ href: "/projects", label: "All projects" }} />
       </div>
     );
   }
 
-  const storedBaseDomain = spec?.baseDomain ?? "";
-  const storedRepoURL = spec?.defaultRepo?.url ?? "";
-
-  const save = async () => {
-    // Blank = 0 = back to the platform default; -1 = no limit.
-    const limits = { maxConcurrent: limitMaxConcurrent, ratePerSecond: limitRate, burst: limitBurst };
-    const requestLimits: Record<string, number> = {};
-    for (const [key, raw] of Object.entries(limits)) {
-      const n = raw.trim() === "" ? 0 : Number(raw);
-      if (!Number.isInteger(n) || n < (key === "burst" ? 0 : -1) || n > 1000000) {
-        toast.error(`${key} must be a whole number${key === "burst" ? "" : ", or -1 for no limit"}`);
-        return;
-      }
-      requestLimits[key] = n;
-    }
-    const storedInstallation = spec?.github?.installationId ?? 0;
-    const github: Pick<UpdateProjectBody, "github"> =
-      installationId !== storedInstallation ? { github: { installationId } } : {};
-    const previewsBaseDomain =
-      previewsDomain.trim() !== (spec?.previews?.baseDomain ?? "") ? { baseDomain: previewsDomain.trim() } : {};
-    const was = seeded.current;
-    const changed = (k: string, v: string | boolean) => was[k] !== v;
-    try {
-      await update.mutateAsync({
-        ...github,
-        // "" clears; the server treats an omitted/null key as "leave alone",
-        // so untouched fields are omitted.
-        ...(changed("description", description) ? { description: description.trim() } : {}),
-        ...(changed("baseDomain", baseDomain) ? { baseDomain: baseDomain.trim() } : {}),
-        // Default repo: services with no spec.repo inherit this. An
-        // emptied field clears it; the server ignores an empty defaultRepo.
-        ...(repoURL.trim()
-          ? { defaultRepo: { url: repoURL.trim(), defaultBranch: repoBranch.trim() || undefined } }
-          : storedRepoURL
-            ? { clearDefaultRepo: true }
-            : {}),
-        ...(changed("previewsEnabled", previewsEnabled) ||
-        changed("previewsTtl", previewsTtl) ||
-        changed("previewsDomain", previewsDomain)
-          ? {
-              previews: {
-                enabled: previewsEnabled,
-                ttlDays: clampPreviewTtl(previewsTtl),
-                ...previewsBaseDomain,
-              },
-            }
-          : {}),
-        ...(changed("alwaysOn", alwaysOn) ? { alwaysOn } : {}),
-        ...(changed("uptimeEnabled", uptimeEnabled) ? { uptime: { disabled: !uptimeEnabled } } : {}),
-        ...(changed("limitMaxConcurrent", limitMaxConcurrent) ||
-        changed("limitRate", limitRate) ||
-        changed("limitBurst", limitBurst)
-          ? { requestLimits }
-          : {}),
-      });
-      await qc.invalidateQueries({ queryKey: projectQueryKey(projectName) });
-      setDirty(false);
-      toast.success("Saved");
-    } catch (e) {
-      toast.error(friendlyApiError(e, "Failed to save"));
-    }
-  };
-
-  const onSave = () => {
-    // A base-domain change re-hosts every service that uses the default
-    // host and mints new certificates, so it gets its own confirm.
-    if (baseDomain.trim() !== storedBaseDomain) {
-      setConfirmDomain(true);
-      return;
-    }
-    void save();
-  };
-
-  const onDelete = async () => {
-    if (confirmDelete !== projectName) {
-      toast.error("Type the project name to confirm");
-      return;
-    }
-    try {
-      const res = await del.mutateAsync({ name: projectName, purgeData });
-      const warnings = res?.warnings ?? [];
-      if (warnings.length > 0) {
-        toast.warning("Project deleted with leftovers", { description: warnings.join("\n") });
-      } else {
-        toast.success("Project deleted");
-      }
-      router.replace("/projects");
-    } catch (e) {
-      toast.error(friendlyApiError(e, "Failed to delete"));
-    }
-  };
+  const domainShown = form.baseDomain.trim() || "<base>";
+  const nav: { id: string; label: string }[] = [
+    { id: "general", label: "General" },
+    { id: "previews", label: "Preview environments" },
+    { id: "notifications", label: "Notifications" },
+    { id: "monitoring", label: "Monitoring" },
+    { id: "scaling", label: "Scaling" },
+    { id: "secrets", label: "Project secrets" },
+    { id: "registry", label: "Registry credentials" },
+    ...(isAdmin ? [{ id: "access", label: "Access" }] : []),
+    { id: "config", label: "Config as code" },
+    ...(isProjectAdmin ? [{ id: "archive", label: "Archive" }, { id: "danger", label: "Danger zone" }] : []),
+  ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-10 px-4 pt-6 pb-12 sm:px-6 sm:pt-8 lg:px-8">
+    <div className="mx-auto w-full max-w-5xl px-4 pt-6 pb-12 sm:px-6 sm:pt-8 lg:px-8">
       <PageHeader
-        back={{ href: `/projects/${encodeURIComponent(projectName)}`, label: projectName }}
+        breadcrumb={[
+          { label: "Projects", href: "/projects" },
+          { label: projectName, href: `/projects/${encodeURIComponent(projectName)}` },
+          { label: "Settings" },
+        ]}
         title="Project settings"
         description="Domains, repository, preview environments, access and the danger zone for this project."
       />
 
-      {/* General */}
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-            General
-          </h2>
-        </header>
-        <div className="space-y-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="description">Description</Label>
-            <Input
-              id="description"
-              value={description}
-              onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
-              placeholder="Short human-readable summary"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="baseDomain">Base domain</Label>
-            <Input
-              id="baseDomain"
-              value={baseDomain}
-              onChange={(e) => { setBaseDomain(e.target.value); setDirty(true); }}
-              placeholder="e.g. myproject.example.com"
-              className="font-mono"
-            />
-            <p className="text-hint">
-              Services in this project default to{" "}
-              <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">
-                &lt;service&gt;.{baseDomain || "<base>"}
-              </code>
-              ; a service named {projectName} gets the bare domain.
-            </p>
-            <p className="text-hint">
-              DNS: add an A record for{" "}
-              <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">*.{baseDomain || "<base>"}</code>{" "}
-              (and one for the bare domain) pointing at your cluster&apos;s public IP.
-            </p>
-          </div>
+      <div className="flex gap-10">
+        <nav aria-label="Project settings sections" className="sticky top-6 hidden h-fit w-44 shrink-0 lg:block">
+          <ul className="space-y-0.5 text-[13px]">
+            {nav.map((n) => {
+              const dirty = (SECTIONS as string[]).includes(n.id) && dirtySections.includes(n.id as ProjectSettingsSection);
+              return (
+                <li key={n.id}>
+                  <a
+                    href={`#${n.id}`}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
+                      n.id === "danger" && "text-[var(--error)] hover:text-[var(--error)]",
+                    )}
+                  >
+                    <span className="flex-1 truncate">{n.label}</span>
+                    {dirty && (
+                      <span aria-label="Unsaved changes" title="Unsaved changes" className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+                    )}
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="repoURL">Default repository</Label>
-            <div className="flex gap-2">
-              <Input
-                id="repoURL"
-                value={repoURL}
-                onChange={(e) => { setRepoURL(e.target.value); setDirty(true); }}
-                placeholder="e.g. https://github.com/org/repo"
-                className="font-mono flex-1"
-              />
-              <Input
-                id="repoBranch"
-                value={repoBranch}
-                onChange={(e) => { setRepoBranch(e.target.value); setDirty(true); }}
-                placeholder="main"
-                className="font-mono w-32"
-                aria-label="Default branch"
-              />
-            </div>
-            <p className="text-hint">
-              Services without their own repository inherit this one. Pushes and PRs on it
-              trigger builds and preview envs. Leave blank if every service sets its own repo.
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="installation">GitHub App installation</Label>
-            <Select
-              id="installation"
-              value={installationId}
-              onChange={(e) => { setInstallationId(Number(e.target.value)); setDirty(true); }}
-              className="font-mono"
+        <div className="min-w-0 flex-1 space-y-6">
+          <SettingsSaveProvider value={saveApi}>
+            <Section
+              id="general"
+              title="General"
+              icon={Settings2}
+              description="What this project is called, where its services are served and which repository they build from."
             >
-              <option value={0}>None</option>
-              {(installations.data ?? []).map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.accountLogin} ({i.accountType.toLowerCase()})
-                </option>
-              ))}
-              {installationId > 0 && !(installations.data ?? []).some((i) => i.id === installationId) && (
-                <option value={installationId}>#{installationId} (not visible to kuso)</option>
-              )}
-            </Select>
-            <p className="text-hint">
-              The installation kuso mints clone tokens from for private repos. None = public repos only,
-              unless a service sets its own.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Preview environments */}
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-            Preview environments
-          </h2>
-        </header>
-        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-          {/* Recommendation banner — copy explicitly calls out the use
-              cases this feature was built for, so users don't enable it
-              for a single-service Express backend and then wonder why
-              their cluster is full of 1-pod previews. */}
-          <div className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-xs text-[var(--text-secondary)]">
-            <p className="font-medium text-[var(--text-primary)]">
-              Recommended for monorepos and full-stack apps
-            </p>
-            <p className="mt-1">
-              Per-PR previews shine when a single PR can change the frontend, the API, and a
-              shared DB schema — kuso spins up a complete environment on every PR so reviewers
-              can click through the full app, not just CI logs. Examples:
-              Next.js fullstack apps, monorepos with API + worker + web, Rails+Inertia. For a
-              single-service backend, &ldquo;+ New environment&rdquo; in the env switcher
-              (mirror once, share the URL) is usually a better fit than spinning up an env on
-              every PR.
-            </p>
-          </div>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={previewsEnabled}
-              onChange={(e) => { setPreviewsEnabled(e.target.checked); setDirty(true); }}
-              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
-            />
-            <span className="flex-1">
-              <span className="text-[13px] font-medium">Spawn a preview env on every PR</span>
-              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
-                Requires the GitHub App installed on the repo and the default repository
-                set above. Each preview clones every service and runs them at{" "}
-                <span className="font-mono">
-                  &lt;svc&gt;-pr-&lt;N&gt;.{baseDomain || "<base>"}
-                </span>
-                . The env tears down automatically when the PR merges or closes; the auto-
-                expire below is the safety net for missed close webhooks.
-              </span>
-            </span>
-          </label>
-          {previewsEnabled && (
-            <div className="space-y-1.5 pl-6">
-              <Label htmlFor="previewsTtl">Auto-expire after (days)</Label>
-              <Input
-                id="previewsTtl"
-                type="number"
-                value={previewsTtl}
-                min={1}
-                max={30}
-                onChange={(e) => { setPreviewsTtl(e.target.value); setDirty(true); }}
-                onBlur={(e) => setPreviewsTtl(String(clampPreviewTtl(e.target.value)))}
-                className="w-32 font-mono"
-              />
-              <Label htmlFor="previewsDomain" className="block pt-2">Preview domain</Label>
-              <Input
-                id="previewsDomain"
-                value={previewsDomain}
-                onChange={(e) => { setPreviewsDomain(e.target.value); setDirty(true); }}
-                placeholder={baseDomain || "same as base domain"}
-                className="font-mono"
-              />
-              <p className="text-xs text-[var(--text-tertiary)]">
-                Previews are served at{" "}
-                <span className="font-mono">&lt;svc&gt;-pr-&lt;N&gt;.{previewsDomain.trim() || baseDomain || "<base>"}</span>
-                . Needs a wildcard DNS record for that domain. Blank = the base domain.
-              </p>
-              <p className="text-xs text-[var(--text-tertiary)]">
-                Each preview gets its own Postgres and Redis addons (Postgres starts as a
-                copy of production data), so reviewers never write to production. This is on
-                by default; a server started with{" "}
-                <code className="font-mono">KUSO_PREVIEW_DB_DISABLED=true</code> skips the
-                clones, and previews then use the production addons.
-              </p>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Notifications */}
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-            Notifications
-          </h2>
-        </header>
-        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={muted === true}
-              disabled={muted === null || muteBusy}
-              onChange={async (e) => {
-                const next = e.target.checked;
-                setMuteBusy(true);
-                try {
-                  if (next) {
-                    await muteProjectNotifications(projectName);
-                  } else {
-                    await unmuteProjectNotifications(projectName);
-                  }
-                  setMuted(next);
-                  void qc.invalidateQueries({ queryKey: ["admin", "notifications", "muted-projects"] });
-                  toast.success(next ? "Notifications muted" : "Notifications unmuted");
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : "Failed to update mute");
-                } finally {
-                  setMuteBusy(false);
+              <Field label="Description" htmlFor="description">
+                <Input
+                  id="description"
+                  value={form.description}
+                  onChange={(e) => set("description", e.target.value)}
+                  placeholder="Short human-readable summary"
+                  className={inputClass}
+                  disabled={!canWrite}
+                />
+              </Field>
+              <Field
+                label="Base domain"
+                htmlFor="baseDomain"
+                hint={
+                  <>
+                    Services default to <Code>&lt;service&gt;.{domainShown}</Code>; a service named {projectName} gets the bare
+                    domain. DNS: an A record for <Code>*.{domainShown}</Code> (and the bare domain) pointing at the cluster&apos;s
+                    public IP.
+                  </>
                 }
-              }}
-              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
-            />
-            <span className="flex-1">
-              <span className="text-[13px] font-medium">Mute external notifications</span>
-              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
-                Stops this project&rsquo;s events (builds, deploys, crashes, info/warn alerts)
-                from reaching Discord, Slack, webhooks, email, Telegram, and Pushover.
-                Error-severity alerts still page through — a mute silences chatter, not
-                &ldquo;service down&rdquo;. The in-app bell feed keeps recording everything,
-                so nothing is lost from the audit trail. Applies immediately — no Save needed.
-              </span>
-            </span>
-          </label>
-          {muteLoadError && (
-            <p role="alert" className="mt-2 text-xs text-[var(--error)]">
-              Couldn&apos;t load the current mute state: {muteLoadError}
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* Monitoring */}
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-            Monitoring
-          </h2>
-        </header>
-        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={uptimeEnabled}
-              onChange={(e) => { setUptimeEnabled(e.target.checked); setDirty(true); }}
-              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
-            />
-            <span className="flex-1">
-              <span className="text-[13px] font-medium">Uptime checks</span>
-              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
-                Ping every production service once a minute and notify when one stops answering.
-              </span>
-            </span>
-          </label>
-        </div>
-      </section>
-
-      {/* Scaling */}
-      <section className="space-y-4">
-        <header>
-          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-            Scaling
-          </h2>
-        </header>
-        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={alwaysOn}
-              onChange={(e) => { setAlwaysOn(e.target.checked); setDirty(true); }}
-              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
-            />
-            <span className="flex-1">
-              <span className="text-[13px] font-medium">Always-on services (disable scale-to-zero)</span>
-              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
-                Overrides every service&apos;s own sleep setting. With this on, services in
-                this project never scale below their minimum replica count, however long
-                they sit idle. Useful for low-traffic but cold-start-
-                sensitive workloads.
-              </span>
-            </span>
-          </label>
-          <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3">
-            <span className="text-[13px] font-medium">Ingress limits (default for every service)</span>
-            <p className="text-xs text-[var(--text-tertiary)]">
-              All projects share one ingress. Past these limits a service answers 429 and the
-              other services keep being served. Counted per ingress replica. Leave a field blank
-              for the platform default (1000 concurrent requests, no rate limit); -1 removes the
-              limit. A service can override them under Settings → Networking.
-            </p>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="limitMaxConcurrent">Max concurrent requests</Label>
+              >
                 <Input
-                  id="limitMaxConcurrent"
-                  type="number"
-                  value={limitMaxConcurrent}
-                  min={-1}
-                  placeholder="1000"
-                  onChange={(e) => { setLimitMaxConcurrent(e.target.value); setDirty(true); }}
-                  className="w-32 font-mono"
+                  id="baseDomain"
+                  value={form.baseDomain}
+                  onChange={(e) => set("baseDomain", e.target.value)}
+                  placeholder="e.g. myproject.example.com"
+                  className={monoInputClass}
+                  spellCheck={false}
+                  disabled={!canWrite}
                 />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="limitRate">Requests per second</Label>
-                <Input
-                  id="limitRate"
-                  type="number"
-                  value={limitRate}
-                  min={-1}
-                  placeholder="none"
-                  onChange={(e) => { setLimitRate(e.target.value); setDirty(true); }}
-                  className="w-32 font-mono"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="limitBurst">Burst</Label>
-                <Input
-                  id="limitBurst"
-                  type="number"
-                  value={limitBurst}
-                  min={0}
-                  placeholder="rate"
-                  onChange={(e) => { setLimitBurst(e.target.value); setDirty(true); }}
-                  className="w-32 font-mono"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+              </Field>
+              <Field
+                label="Default repository and branch"
+                htmlFor="repoURL"
+                hint="Services without their own repository inherit this one, and pushes to the branch deploy production. Leave blank if every service sets its own repo."
+              >
+                <div className="flex gap-2">
+                  <Input
+                    id="repoURL"
+                    value={form.repoURL}
+                    onChange={(e) => set("repoURL", e.target.value)}
+                    placeholder="https://github.com/org/repo"
+                    className={cn(monoInputClass, "min-w-0 flex-1")}
+                    spellCheck={false}
+                    disabled={!canWrite}
+                  />
+                  <Input
+                    id="repoBranch"
+                    aria-label="Default branch"
+                    value={form.repoBranch}
+                    onChange={(e) => set("repoBranch", e.target.value)}
+                    placeholder="main"
+                    className={cn(monoInputClass, "w-28 shrink-0 sm:w-36")}
+                    spellCheck={false}
+                    disabled={!canWrite}
+                  />
+                </div>
+              </Field>
+              <Field
+                label="GitHub App installation"
+                htmlFor="installation"
+                hint="The installation kuso mints clone tokens from for private repos. None means public repos only, unless a service sets its own."
+              >
+                <Select
+                  id="installation"
+                  size="sm"
+                  value={form.installationId}
+                  onChange={(e) => set("installationId", Number(e.target.value))}
+                  disabled={!canWrite}
+                >
+                  <option value={0}>None</option>
+                  {(installations.data ?? []).map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.accountLogin} ({i.accountType.toLowerCase()})
+                    </option>
+                  ))}
+                  {form.installationId > 0 && !(installations.data ?? []).some((i) => i.id === form.installationId) && (
+                    <option value={form.installationId}>#{form.installationId} (not visible to kuso)</option>
+                  )}
+                </Select>
+              </Field>
+            </Section>
 
-      {/* Save */}
+            <Section
+              id="previews"
+              title="Preview environments"
+              icon={GitPullRequest}
+              status={base.previewsEnabled ? "On" : "Off"}
+              description="A full copy of the project for every pull request, torn down when the PR closes. Best for monorepos and full-stack apps where one PR touches the frontend, the API and the schema."
+            >
+              <SwitchField
+                label="Spawn a preview environment on every PR"
+                on={form.previewsEnabled}
+                onChange={(v) => set("previewsEnabled", v)}
+                disabled={!canWrite}
+                hint={
+                  <>
+                    Needs the GitHub App on the repo and a default repository. Each preview clones every service at{" "}
+                    <Code>&lt;svc&gt;-pr-&lt;N&gt;.{form.previewsDomain.trim() || domainShown}</Code>. For a single-service
+                    backend, a named environment from the env switcher is usually the better fit.
+                  </>
+                }
+              />
+              {form.previewsEnabled && (
+                <>
+                  <FieldGrid>
+                    <Field
+                      label="Auto-expire after"
+                      htmlFor="previewsTtl"
+                      hint="Days, 1–30. The safety net for missed PR-close webhooks."
+                    >
+                      <Input
+                        id="previewsTtl"
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={form.previewsTtl}
+                        onChange={(e) => set("previewsTtl", e.target.value)}
+                        onBlur={(e) => set("previewsTtl", String(clampPreviewTtl(e.target.value)))}
+                        className={monoInputClass}
+                        disabled={!canWrite}
+                      />
+                    </Field>
+                    <Field
+                      label="Preview domain"
+                      htmlFor="previewsDomain"
+                      hint="Needs a wildcard DNS record. Blank uses the base domain."
+                    >
+                      <Input
+                        id="previewsDomain"
+                        value={form.previewsDomain}
+                        onChange={(e) => set("previewsDomain", e.target.value)}
+                        placeholder={form.baseDomain || "same as base domain"}
+                        className={monoInputClass}
+                        spellCheck={false}
+                        disabled={!canWrite}
+                      />
+                    </Field>
+                  </FieldGrid>
+                  <Callout>
+                    Each preview gets its own Postgres and Redis (Postgres starts as a copy of production data), so reviewers
+                    never write to production. A server started with <Code>KUSO_PREVIEW_DB_DISABLED=true</Code> skips the
+                    copies and previews share the production addons.
+                  </Callout>
+                </>
+              )}
+            </Section>
+
+            <NotificationsCard project={projectName} canWrite={canWrite} />
+
+            <Section
+              id="monitoring"
+              title="Monitoring"
+              icon={HeartPulse}
+              description="Health checks kuso runs against this project's services."
+            >
+              <SwitchField
+                label="Uptime checks"
+                hint="Ping every production service once a minute and notify when one stops answering."
+                on={form.uptimeEnabled}
+                onChange={(v) => set("uptimeEnabled", v)}
+                disabled={!canWrite}
+              />
+            </Section>
+
+            <Section
+              id="scaling"
+              title="Scaling"
+              icon={Gauge}
+              description="Defaults that apply to every service in the project. A service can override the ingress limits under its own Networking settings."
+            >
+              <SwitchField
+                label="Always on"
+                hint="Disables scale-to-zero for every service, overriding their own sleep settings. Useful for low-traffic but cold-start-sensitive workloads."
+                on={form.alwaysOn}
+                onChange={(v) => set("alwaysOn", v)}
+                disabled={!canWrite}
+              />
+              <Field
+                label="Ingress limits"
+                hint="All projects share one ingress. Past these limits a service answers 429 and everything else keeps being served. Counted per ingress replica. Blank uses the platform default (1000 concurrent, no rate limit); -1 removes a limit."
+              >
+                <FieldGrid cols={3}>
+                  <LimitInput id="limitMaxConcurrent" label="Max concurrent" placeholder="1000" min={-1} value={form.limitMaxConcurrent} onChange={(v) => set("limitMaxConcurrent", v)} disabled={!canWrite} />
+                  <LimitInput id="limitRate" label="Requests per second" placeholder="No limit" min={-1} value={form.limitRate} onChange={(v) => set("limitRate", v)} disabled={!canWrite} />
+                  <LimitInput id="limitBurst" label="Burst" placeholder="Same as rate" min={0} value={form.limitBurst} onChange={(v) => set("limitBurst", v)} disabled={!canWrite} />
+                </FieldGrid>
+              </Field>
+            </Section>
+
+            <Section
+              id="secrets"
+              title="Project secrets"
+              icon={KeyRound}
+              description="Set a value once, then pick it from any service's Variables tab under Add → Project secret."
+            >
+              <SharedSecretsCard project={projectName} />
+            </Section>
+
+            <Section
+              id="registry"
+              title="Registry credentials"
+              icon={Package}
+              description="Logins for private registries (GHCR, ECR, Docker Hub). Attach one to an image service under its Image settings. Passwords are never shown again."
+            >
+              <RegistryCredentialsCard project={projectName} />
+            </Section>
+
+            {isAdmin && (
+              <Section
+                id="access"
+                title="Access"
+                icon={UsersIcon}
+                description="Who can see and change this project. Instance admins always can."
+              >
+                <ProjectAccessPanel project={projectName} />
+              </Section>
+            )}
+
+            <Section
+              id="config"
+              title="Config as code"
+              icon={FileCode}
+              description={
+                <>
+                  The project&apos;s services, addons and crons as one <Code>kuso.yaml</Code>. Edit, dry-run to preview the
+                  diff, then apply. Apply never deletes resources missing from the file; it lists them instead.
+                </>
+              }
+            >
+              <ConfigTab project={projectName} />
+            </Section>
+
+            {isProjectAdmin && <ArchiveCard project={projectName} />}
+            {isProjectAdmin && (
+              <DangerCard
+                project={projectName}
+                pending={del.isPending}
+                onDelete={async (purgeData) => {
+                  try {
+                    const res = await del.mutateAsync({ name: projectName, purgeData });
+                    const warnings = res?.warnings ?? [];
+                    if (warnings.length > 0) {
+                      toast.warning("Project deleted with leftovers", { description: warnings.join("\n") });
+                    } else {
+                      toast.success("Project deleted");
+                    }
+                    router.replace("/projects");
+                  } catch (e) {
+                    toast.error(friendlyApiError(e, "Failed to delete"));
+                  }
+                }}
+              />
+            )}
+          </SettingsSaveProvider>
+        </div>
+      </div>
+
       <ConfirmDialog
         open={confirmDomain}
         title="Change the base domain?"
         body={
           <>
             Every service on a default host moves from{" "}
-            <span className="font-mono">*.{storedBaseDomain || "the instance domain"}</span> to{" "}
-            <span className="font-mono">*.{baseDomain.trim() || "the instance domain"}</span>, and new
-            TLS certificates are requested. The old URLs stop working once this applies. Make sure
-            DNS for the new domain already points at the cluster.
+            <span className="font-mono">*.{base.baseDomain || "the instance domain"}</span> to{" "}
+            <span className="font-mono">*.{form.baseDomain.trim() || "the instance domain"}</span>, and new TLS
+            certificates are requested. The old URLs stop working once this applies. Make sure DNS for the new domain
+            already points at the cluster.
           </>
         }
         confirmLabel="Change domain"
-        pending={update.isPending}
+        pending={saving === "general"}
         onConfirm={() => {
           setConfirmDomain(false);
-          void save();
+          void saveSection("general");
         }}
         onCancel={() => setConfirmDomain(false)}
       />
-      <div className="flex justify-end">
-        <Button onClick={onSave} disabled={update.isPending}>
-          <Save className="h-4 w-4" />
-          {update.isPending ? "Saving…" : "Save changes"}
+    </div>
+  );
+}
+
+function LimitInput({
+  id,
+  label,
+  placeholder,
+  min,
+  value,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  placeholder: string;
+  min: number;
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <label htmlFor={id} className="block text-xs text-[var(--text-secondary)]">
+        {label}
+      </label>
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className={monoInputClass}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+// Mute lives in the control-plane DB, not the project spec, so it applies
+// on toggle: this card has no Save footer.
+function NotificationsCard({ project, canWrite }: { project: string; canWrite: boolean }) {
+  const qc = useQueryClient();
+  const [muted, setMuted] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!project) return;
+    setLoadError(null);
+    getProjectNotificationMute(project)
+      .then((m) => setMuted(m.muted))
+      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : "request failed"));
+  }, [project]);
+
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    try {
+      if (next) await muteProjectNotifications(project);
+      else await unmuteProjectNotifications(project);
+      setMuted(next);
+      void qc.invalidateQueries({ queryKey: ["admin", "notifications", "muted-projects"] });
+      toast.success(next ? "Notifications muted" : "Notifications unmuted");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update mute");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section
+      id="notifications"
+      title="Notifications"
+      icon={Bell}
+      status={muted === null ? undefined : muted ? "Muted" : "On"}
+      description="Applies immediately, no Save needed."
+    >
+      <SwitchField
+        label="Mute external notifications"
+        hint="Stops builds, deploys, crashes and info/warn alerts from reaching Discord, Slack, webhooks, email, Telegram and Pushover. Error-severity alerts still page through, and the in-app feed keeps recording everything."
+        on={muted === true}
+        onChange={(v) => void toggle(v)}
+        disabled={!canWrite || muted === null || busy}
+      />
+      {loadError && (
+        <p role="alert" className="text-xs text-[var(--error)]">
+          Couldn&apos;t load the current mute state: {loadError}
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function ArchiveCard({ project }: { project: string }) {
+  const [exporting, setExporting] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <Section
+      id="archive"
+      title="Archive"
+      icon={Download}
+      description="A tarball of this project's services, environments, addons and secret values, to move it to another kuso instance (import it from New project). Addon data isn't included; use addon backups for that."
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-[var(--text-secondary)]">
+          The file holds every secret in plain text. Store it like a credential.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => setConfirm(true)} disabled={exporting}>
+          <Download className="h-4 w-4" />
+          {exporting ? "Exporting…" : "Export archive"}
         </Button>
       </div>
+      <ConfirmDialog
+        open={confirm}
+        title="Export with secrets?"
+        body={
+          <>
+            The archive contains every secret value in <span className="font-mono">{project}</span> in plain text. The
+            export is recorded in the audit log.
+          </>
+        }
+        destructive={false}
+        confirmLabel="Download"
+        pending={exporting}
+        onConfirm={async () => {
+          setExporting(true);
+          try {
+            await exportProjectArchive(project);
+            setConfirm(false);
+          } catch (e) {
+            toast.error(friendlyApiError(e, "Export failed"));
+          } finally {
+            setExporting(false);
+          }
+        }}
+        onCancel={() => setConfirm(false)}
+      />
+    </Section>
+  );
+}
 
-      {/* Project secrets — flat now, no Card wrapper */}
-      <SharedSecretsCard project={projectName} />
-
-      <RegistryCredentialsCard project={projectName} />
-
-      {/* Access — who can see/act on this project (admin-only). */}
-      {isAdmin && (
-        <section className="space-y-3">
-          <header className="flex items-center gap-2">
-            <UsersIcon className="h-4 w-4 text-[var(--text-tertiary)]" />
-            <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-              Access
-            </h2>
-          </header>
-          <ProjectAccessPanel project={projectName} />
-        </section>
-      )}
-
-      {/* Config as code — kuso.yaml export / dry-run / apply */}
-      <ConfigTab project={projectName} />
-
-      {/* Archive export — the whole project incl. secret values (admin-only server-side). */}
-      {isProjectAdmin && (
-        <section className="space-y-3">
-          <header>
-            <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-              Archive
-            </h2>
-          </header>
-          <div className="flex items-start gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-            <p className="flex-1 text-xs text-[var(--text-secondary)]">
-              Download a tarball of this project&apos;s services, environments, addons and{" "}
-              <span className="text-[var(--text-primary)]">secret values</span> to move it to another kuso
-              instance (import it from New project). Addon data isn&apos;t included; use addon backups
-              for that. Store the file like a credential.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => setConfirmExport(true)} disabled={exporting}>
-              <Download className="h-4 w-4" />
-              {exporting ? "Exporting…" : "Export archive"}
-            </Button>
+function DangerCard({
+  project,
+  pending,
+  onDelete,
+}: {
+  project: string;
+  pending: boolean;
+  onDelete: (purgeData: boolean) => Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [purgeData, setPurgeData] = useState(false);
+  const purgeId = "purge-data";
+  return (
+    <Section
+      id="danger"
+      title="Danger zone"
+      icon={AlertTriangle}
+      tone="danger"
+      description="Deleting a project removes its services, environments, addons, builds and secrets. It can't be undone."
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 space-y-0.5">
+          <div id={`${purgeId}-label`} className="text-[13px] font-medium text-[var(--text-primary)]">
+            Also delete addon data
           </div>
-          <ConfirmDialog
-            open={confirmExport}
-            title="Export with secrets?"
-            body={
-              <>
-                The archive contains every secret value in <span className="font-mono">{projectName}</span>{" "}
-                in plain text. The export is recorded in the audit log.
-              </>
-            }
-            destructive={false}
-            confirmLabel="Download"
-            pending={exporting}
-            onConfirm={async () => {
-              setExporting(true);
-              try {
-                await exportProjectArchive(projectName);
-                setConfirmExport(false);
-              } catch (e) {
-                toast.error(friendlyApiError(e, "Export failed"));
-              } finally {
-                setExporting(false);
-              }
-            }}
-            onCancel={() => setConfirmExport(false)}
-          />
-        </section>
-      )}
-
-      {/* Danger zone — project-admin only, mirroring the server gate */}
-      {isProjectAdmin && (
-      <section className="space-y-3">
-        <header className="flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-[var(--error)]" />
-          <h2 className="text-xs text-[var(--error)] font-medium">
-            Danger zone
-          </h2>
-        </header>
-        <div className="space-y-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4">
-          <ul className="space-y-0.5 text-xs text-[var(--text-secondary)]">
-            <li>Deleted: services, environments, addons, builds, secrets.</li>
-            <li>
-              {purgeData ? "Also deleted" : "Kept"}: addon data and database credentials
-              {purgeData ? " — cannot be undone." : " (reusable or removable later)."}
-            </li>
-          </ul>
-          <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-            <input
-              type="checkbox"
-              checked={purgeData}
-              onChange={(e) => setPurgeData(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            Also delete data
-          </label>
-          <div className="space-y-1.5">
-            <Label htmlFor="confirmDelete" className="text-xs">
-              Type{" "}
-              <span className="font-mono text-[var(--text-primary)]">{projectName}</span> to
-              confirm
-            </Label>
-            <Input
-              id="confirmDelete"
-              value={confirmDelete}
-              onChange={(e) => setConfirmDelete(e.target.value)}
-              className="font-mono"
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={onDelete}
-            disabled={del.isPending || confirmDelete !== projectName}
-          >
-            <Trash2 className="h-4 w-4" />
-            {del.isPending ? "Deleting…" : "Delete project"}
-          </Button>
+          <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+            {purgeData
+              ? "Database volumes and credentials are deleted too. This is permanent."
+              : "Database volumes and credentials are kept so they can be reused or removed later."}
+          </p>
         </div>
-      </section>
-      )}
-    </div>
+        <Switch on={purgeData} onChange={setPurgeData} labelledBy={`${purgeId}-label`} />
+      </div>
+      <Field
+        label={
+          <>
+            Type <span className="font-mono">{project}</span> to confirm
+          </>
+        }
+        htmlFor="confirmDelete"
+      >
+        <Input
+          id="confirmDelete"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className={monoInputClass}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </Field>
+      <div className="flex justify-end">
+        <Button variant="destructive" size="sm" onClick={() => void onDelete(purgeData)} disabled={pending || typed !== project}>
+          <Trash2 className="h-4 w-4" />
+          {pending ? "Deleting…" : purgeData ? "Delete project and data" : "Delete project"}
+        </Button>
+      </div>
+    </Section>
   );
 }
