@@ -533,7 +533,7 @@ fi
 # -------- 5. cert-manager --------
 if ! kubectl get ns cert-manager >/dev/null 2>&1; then
   log "installing cert-manager"
-  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.19.0/cert-manager.yaml >/dev/null
+  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.19.6/cert-manager.yaml >/dev/null
   log "waiting for cert-manager-webhook (up to 3 min)..."
   cm_deadline=$((SECONDS + 180))
   until kubectl wait --for=condition=Available --timeout=5s deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do

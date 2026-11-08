@@ -221,7 +221,7 @@ spec:
           # only needs a POSIX shell + nsenter (alpine ships nsenter in
           # busybox's util-linux applet set is NOT guaranteed, so we call
           # the host's nsenter via /proc — see note). Pinned tag.
-          image: alpine:3.20 # ships nsenter; already cached on nodes
+          image: alpine:3.24 # ships nsenter; already cached on nodes
           command: ["/bin/sh", "/probe/probe.sh"]
           env:
             - name: NODE_NAME

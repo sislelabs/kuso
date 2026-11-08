@@ -514,7 +514,7 @@ func (w *Watcher) buildApplyJob(node, pkgMgr string, allowReboot bool) *batchv1.
 					},
 					Containers: []corev1.Container{{
 						Name:    "apply",
-						Image:   "alpine:3.20",
+						Image:   "alpine:3.24",
 						Command: []string{"/bin/sh", "-c", applyScript},
 						// KUBERNETES_SERVICE_HOST/PORT are injected by kube
 						// automatically; the script uses them for the API

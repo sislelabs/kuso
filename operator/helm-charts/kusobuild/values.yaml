@@ -92,14 +92,14 @@ buildpacks:
   # Cloud Native Buildpacks lifecycle image. The `creator` binary lives
   # at /cnb/lifecycle/creator and runs the full
   # detect→analyze→build→export→push flow in one shot.
-  lifecycleImage: "buildpacksio/lifecycle:0.20.5"
+  lifecycleImage: "buildpacksio/lifecycle:0.20.20"
   # The builder image creator pulls during the build. Paketo's
   # jammy-base supports Node, Python, Go, Java, .NET, Ruby out of the box.
   builderImage: "paketobuildpacks/builder-jammy-base:latest"
 
 static:
   # Runtime image. Default ships a tiny nginx that serves /usr/share/nginx/html.
-  runtimeImage: "nginx:1.27-alpine"
+  runtimeImage: "nginx:1.30-alpine"
   # Sandbox image used to run the (optional) buildCmd. Override when
   # the source needs bun/python/php/etc.
   builderImage: "node:20-alpine"

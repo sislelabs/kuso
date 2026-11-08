@@ -58,7 +58,7 @@ spec:
   # Pin a known-good Postgres minor; CNPG ships images at this tag.
   # Bump deliberately on major upgrades; CNPG handles in-place minor
   # upgrades via rolling restart of the standbys then a switchover.
-  imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16.15"
 
   # Default = 1 instance (single-node primary, no standby). kuso is
   # single-tenant: one team per cluster, typically deployed on one
@@ -184,7 +184,7 @@ spec:
       serviceAccountName: kuso-postgres-dsn
       containers:
         - name: stamp
-          image: alpine/k8s:1.30.4
+          image: alpine/k8s:1.35.10
           command: [/bin/sh, -ec]
           args:
             - |
@@ -441,7 +441,7 @@ spec:
       # operator action.
       initContainers:
         - name: render-userlist
-          image: alpine/k8s:1.30.4
+          image: alpine/k8s:1.35.10
           command: [/bin/sh, -ec]
           args:
             - |
@@ -482,7 +482,7 @@ spec:
           # previous "1.23.1" pulled 404 from the registry and wedged
           # the v0.13.0 rollout (server-go now routes through this
           # pooler, so a missing PgBouncer means crashlooping kuso pods).
-          image: edoburu/pgbouncer:v1.25.1-p0
+          image: edoburu/pgbouncer:v1.25.2-p0
           imagePullPolicy: IfNotPresent
           ports:
             - { name: pgbouncer, containerPort: 6432 }

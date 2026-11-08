@@ -134,11 +134,11 @@ spec:
           # the gc container has both binaries on PATH.
           initContainers:
             - name: install-kubectl
-              image: bitnami/kubectl:1.30
+              image: alpine/k8s:1.35.10
               command:
                 - sh
                 - -c
-                - cp /opt/bitnami/kubectl/bin/kubectl /shared/kubectl && chmod +x /shared/kubectl
+                - cp /usr/bin/kubectl /shared/kubectl && chmod +x /shared/kubectl
               volumeMounts:
                 - name: shared-bin
                   mountPath: /shared
@@ -199,7 +199,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: scale-up
-              image: bitnami/kubectl:1.30
+              image: alpine/k8s:1.35.10
               command:
                 - sh
                 - -c

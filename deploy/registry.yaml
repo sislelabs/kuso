@@ -147,7 +147,7 @@ spec:
           # back up either way.
           initContainers:
             - name: scaler-down
-              image: alpine/k8s:1.30.4
+              image: alpine/k8s:1.35.10
               command: [/bin/sh, -ec]
               args:
                 - |
@@ -197,7 +197,7 @@ spec:
               #   - pod killed (Job backoffLimit exhausted deletes the
               #     pod) → TERM trap restores on the way out, inside
               #     the pod's 30s grace period.
-              image: alpine/k8s:1.30.4
+              image: alpine/k8s:1.35.10
               command: [/bin/sh, -ec]
               args:
                 - |

@@ -23,7 +23,7 @@ import (
 // digest. To bump: `docker buildx imagetools inspect aquasec/trivy:<v>`
 // (no pull needed) and take the top-level "Digest"; re-check the report
 // shape in trivyReport against pkg/types/report.go at that tag.
-const TrivyImage = "aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c"
+const TrivyImage = "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 
 // Markers framing the scan Job's stdout. Everything between the report
 // markers is base64 of the gzipped JSON report.
