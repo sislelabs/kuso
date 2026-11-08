@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { usePatchService, type PatchServiceBody } from "@/features/services";
+import { usePatchService } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,12 +26,13 @@ import {
   Activity,
   Globe,
   GitBranch,
+  HeartPulse,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
-import { serviceBlast } from "@/lib/blast-radius";
+import { serviceBlast, type BlastInfo } from "@/lib/blast-radius";
 import {
   Code,
   Section,
@@ -62,6 +63,8 @@ import { BuildSection } from "./settings/BuildSection";
 import { DeploySection } from "./settings/DeploySection";
 import { ReleaseSection } from "./settings/ReleaseSection";
 import { UptimeSection } from "./settings/UptimeSection";
+import { HealthcheckSection } from "./settings/HealthcheckSection";
+import type { ServicePatchBody } from "./settings/healthcheckPatch";
 import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
 
@@ -88,10 +91,20 @@ const SECTIONS = [
   { id: "build", label: "Build", icon: Hammer },
   { id: "deploy", label: "Deploy", icon: Cloud },
   { id: "release", label: "Release", icon: Rocket },
+  { id: "healthcheck", label: "Health check", icon: HeartPulse },
   { id: "uptime", label: "Uptime", icon: Activity },
   { id: "security", label: "Security", icon: ShieldAlert },
   { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
+
+// Blast radius for fields lib/blast-radius.ts doesn't list yet.
+const LOCAL_BLAST: Record<string, BlastInfo> = {
+  healthcheck: {
+    level: "warn",
+    message:
+      "Rewrites the probes → rolling restart of every environment. If the path doesn't answer, new pods never go ready and the old ones keep serving.",
+  },
+};
 
 const SECTION_LABEL: Record<string, string> = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
 const ALL_SAVEABLE = Object.keys(SECTION_FIELDS) as SaveableSection[];
@@ -100,7 +113,7 @@ const SAVED_FLASH_MS = 3000;
 interface PendingSave {
   sections: SaveableSection[];
   target: FormState;
-  body: PatchServiceBody;
+  body: ServicePatchBody;
 }
 
 // ServiceSettingsPanel orchestrates the per-service settings tab. Each
@@ -252,7 +265,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const diffEntries: DiffEntry[] = pendingSave
     ? Object.keys(pendingSave.body).map((field) => {
         const [before, after] = fieldDiffValues(field, baseline, pendingSave.target);
-        return { field, before, after, warning: serviceBlast(field) ?? undefined };
+        return { field, before, after, warning: serviceBlast(field) ?? LOCAL_BLAST[field] };
       })
     : [];
 
@@ -260,8 +273,13 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // services have nothing to check. Domains need a public ingress.
   const uptimeApplies = state.runtime !== "worker" && !state.internal;
   const domainsApply = !baseline.internal;
+  // Workers have no port, so the chart renders no probes at all.
+  const healthcheckApplies = state.runtime !== "worker";
   const sections = SECTIONS.filter(
-    (s) => (s.id !== "uptime" || uptimeApplies) && (s.id !== "domains" || domainsApply),
+    (s) =>
+      (s.id !== "uptime" || uptimeApplies) &&
+      (s.id !== "domains" || domainsApply) &&
+      (s.id !== "healthcheck" || healthcheckApplies),
   );
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -296,6 +314,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             <BuildSection state={state} setState={setState} project={project} />
             <DeploySection project={project} state={state} setState={setState} />
             <ReleaseSection state={state} setState={setState} />
+            {healthcheckApplies && <HealthcheckSection state={state} setState={setState} />}
             {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
             <SecuritySection state={state} setState={setState} />
             <DangerSection

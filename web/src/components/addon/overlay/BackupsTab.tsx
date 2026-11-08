@@ -2,13 +2,19 @@
 
 import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { RotateCcw, Download, DatabaseBackup } from "lucide-react";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { RotateCcw, Download } from "lucide-react";
 import { Callout } from "@/components/ui/callout";
-import { runBackupNow, downloadStoredBackup } from "@/features/addons";
+import {
+  downloadStoredBackup,
+  useAddonBackups,
+  addonBackupsQueryKey,
+  backupSummary,
+  backupsListState,
+  isBackupsNotConfigured,
+} from "@/features/addons";
 import {
   useAddons,
-  listBackups,
   restoreBackup,
   downloadAddonBackup,
   updateAddon,
@@ -26,7 +32,6 @@ import { CronPicker } from "@/components/shared/CronPicker";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
-import { ApiError } from "@/lib/api-client";
 
 // addonCRName + addonShort mirror the server's CRName/ShortName
 // helpers so we can map between "<project>-<addon>" CR names and the
@@ -95,61 +100,17 @@ function DownloadBackupButton({
   );
 }
 
-// BackupNowButton runs the scheduled backup job once, on demand: same
-// dump, S3 upload and prune as the CronJob. Needs a schedule, since the
-// job only exists while one is set.
-function BackupNowButton({
-  project,
-  addon,
-  hasSchedule,
-  canWrite,
-}: {
-  project: string;
-  addon: string;
-  hasSchedule: boolean;
-  canWrite: boolean;
-}) {
-  const qc = useQueryClient();
-  const run = useMutation({
-    mutationFn: () => runBackupNow(project, addon),
-    onSuccess: (res) => {
-      toast.success("Backup started", { description: `Job ${res.job}. It appears below once the upload finishes.` });
-      void qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
-  });
-  return (
-    <Button
-      size="sm"
-      onClick={() => run.mutate()}
-      disabled={!canWrite || !hasSchedule || run.isPending}
-      title={
-        !canWrite
-          ? "Requires editor access on this project"
-          : hasSchedule
-            ? "Back up to S3 now"
-            : "Turn on scheduled backups above first"
-      }
-    >
-      <DatabaseBackup className="h-3 w-3" />
-      {run.isPending ? "Starting…" : "Back up now"}
-    </Button>
-  );
-}
-
+// BackupsHeader's meta line is the same backupSummary sentence the
+// Overview tile shows. "Back up now" lives only in the overlay header.
 function BackupsHeader({
   project,
   addon,
   kind,
-  hasSchedule,
-  canWrite,
   meta,
 }: {
   project: string;
   addon: string;
   kind?: string;
-  hasSchedule: boolean;
-  canWrite: boolean;
   meta?: React.ReactNode;
 }) {
   return (
@@ -160,9 +121,6 @@ function BackupsHeader({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <DownloadBackupButton project={project} addon={addon} kind={kind} />
-        {kind === "postgres" && (
-          <BackupNowButton project={project} addon={addon} hasSchedule={hasSchedule} canWrite={canWrite} />
-        )}
       </div>
     </header>
   );
@@ -181,11 +139,8 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   const thisAddon = (allAddons.data ?? []).find(
     (a) => a.metadata.name === addonCRName(project, addon),
   );
-  const list = useQuery({
-    queryKey: ["addons", project, addon, "backups"],
-    queryFn: () => listBackups(project, addon),
-    refetchInterval: 30_000,
-  });
+  const list = useAddonBackups(project, addon);
+  const summary = backupSummary(thisAddon, backupsListState(list));
   // Restore + schedule edits are addons:write mutations; viewers get
   // the buttons disabled with a hint instead of a post-click 403.
   const canWrite = useCanOnProject(project, Perms.AddonsWrite);
@@ -203,12 +158,24 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
       toast.success(`Restore job ${res.job} started`);
       setLastRestore({ job: res.job, key: vars.key, into: vars.into, at: new Date() });
       setConfirmKey(null);
-      qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
+      qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
   });
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const hasSchedule = !!thisAddon?.spec.backup?.schedule;
+  const sharedInstance = thisAddon?.spec.useInstanceAddon;
+  // A database on the shared instance postgres is dumped by that addon's
+  // job; the chart renders no CronJob for it, so a schedule here would
+  // save and silently never run.
+  const schedule = sharedInstance ? (
+    <Callout tone="info" title={`Backed up with ${sharedInstance}`}>
+      This database lives on the shared instance database <span className="font-mono text-xs">{sharedInstance}</span>,
+      which dumps it on its own schedule. Those backups are listed below.
+    </Callout>
+  ) : (
+    <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
+  );
   const canDownload = useCanOnProject(project, Perms.SecretsRead);
   const [downloading, setDownloading] = useState<string | null>(null);
   const download = async (key: string) => {
@@ -233,15 +200,13 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   }
   if (list.isError) {
     const msg = list.error instanceof Error ? list.error.message : "load failed";
-    // 503 + "not configured" is the server's "S3 not set up" signal. A
-    // 503 for anything else (bad credentials, unreachable endpoint) is a
-    // real outage and must show its message, not the setup hint.
-    const noS3 =
-      list.error instanceof ApiError && list.error.status === 503 && /not configured/i.test(msg);
+    // Only the "not configured" 503 is the setup hint; any other error
+    // (bad credentials, unreachable endpoint) is a real outage.
+    const noS3 = isBackupsNotConfigured(list.error);
     return (
       <div className="space-y-4 p-5">
-        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
-        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} hasSchedule={hasSchedule} canWrite={canWrite} />
+        {schedule}
+        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} meta={summary.sentence} />
         {noS3 ? (
           <Callout tone="info" title="Off-site backups aren't set up yet">
             Add S3 credentials in{" "}
@@ -263,11 +228,11 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   if (items.length === 0) {
     return (
       <div className="space-y-4 p-5">
-        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
-        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} hasSchedule={hasSchedule} canWrite={canWrite} />
+        {schedule}
+        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} meta={summary.sentence} />
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-          {hasSchedule
-            ? "No backups yet. The first one lands when the schedule fires, or press Back up now."
+          {hasSchedule || sharedInstance
+            ? "No backups yet. The first one lands when the schedule fires, or use Back up now at the top."
             : "No backups yet. Turn on a schedule above to back up to S3 automatically."}
         </p>
       </div>
@@ -278,14 +243,12 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
 
   return (
     <div className="space-y-4 p-5">
-      <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
+      {schedule}
       <BackupsHeader
         project={project}
         addon={addon}
         kind={thisAddon?.spec.kind}
-        hasSchedule={hasSchedule}
-        canWrite={canWrite}
-        meta={`${items.length} ${items.length === 1 ? "backup" : "backups"} in S3, newest first`}
+        meta={`${summary.sentence} · ${items.length} in S3, newest first`}
       />
       {lastRestore && (
         <Callout tone="info" role="status" title={`Restore started ${relativeTime(lastRestore.at.toISOString())}`}>
@@ -470,8 +433,9 @@ function BackupScheduleEditor({
   const trimmed = schedule.trim();
   const scheduleValid = trimmed === "" || CRON_RE.test(trimmed);
   const retentionNum = Number(retention);
+  // An emptied field parses as 0 ("keep forever"); make it a typo instead.
   const retentionValid =
-    Number.isInteger(retentionNum) && retentionNum >= 0 && retentionNum <= 3650;
+    retention.trim() !== "" && Number.isInteger(retentionNum) && retentionNum >= 0 && retentionNum <= 3650;
 
   const dirty =
     trimmed !== initialSchedule.trim() || retentionNum !== initialRetention;
@@ -489,7 +453,7 @@ function BackupScheduleEditor({
           : `Schedule saved: ${trimmed} (retain ${retentionNum}d)`,
       );
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
-      qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
+      qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });

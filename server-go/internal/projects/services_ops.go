@@ -2626,6 +2626,10 @@ type PatchServiceRequest struct {
 	// would need an explicit sentinel; config-as-code re-apply sets it
 	// from the template every time, which covers the common case.
 	SecurityContext *kube.KusoSecurityContext `json:"securityContext,omitempty"`
+	// Healthcheck replaces the HTTP health check wholesale. nil leaves it
+	// alone; an empty Path removes it (back to the default TCP probes).
+	// Zero timing fields fall back to the CRD defaults.
+	Healthcheck *kube.KusoHealthcheck `json:"healthcheck,omitempty"`
 }
 
 // PatchReleaseRequest is the wire shape for editing the release hook.
@@ -3132,6 +3136,15 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			securityContextChanged = true
 		}
+		healthcheckChanged := false
+		if req.Healthcheck != nil {
+			hc, err := normalizeHealthcheck(*req.Healthcheck)
+			if err != nil {
+				return err
+			}
+			svc.Spec.Healthcheck = hc
+			healthcheckChanged = true
+		}
 		imageChanged := false
 		placementChanged := false
 		if req.Placement != nil {
@@ -3312,6 +3325,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			Resources:         resourcesChanged,
 			SecurityContext:   securityContextChanged,
 			RequestLimits:     requestLimitsChanged,
+			Healthcheck:       healthcheckChanged,
 		}
 		return nil
 	})
@@ -3796,6 +3810,45 @@ func (s *Service) storeRepoToken(ctx context.Context, project, service, token st
 // normalizeUptimePath validates a service's uptime-check path. "" clears
 // it. The check always targets the env's own in-cluster host, so the
 // path must be a plain absolute path.
+// normalizeHealthcheck validates a health-check edit. An empty path means
+// "no HTTP check" and returns nil so the chart falls back to TCP probes.
+// Bounds keep a typo from rendering a probe that kills every pod (a 0s
+// timeout) or never fires (a period of hours).
+func normalizeHealthcheck(hc kube.KusoHealthcheck) (*kube.KusoHealthcheck, error) {
+	hc.Path = strings.TrimSpace(hc.Path)
+	if hc.Path == "" {
+		return nil, nil
+	}
+	if len(hc.Path) > 512 {
+		return nil, fmt.Errorf("%w: healthcheck.path is longer than 512 characters", ErrInvalid)
+	}
+	if !strings.HasPrefix(hc.Path, "/") || strings.HasPrefix(hc.Path, "//") || strings.ContainsAny(hc.Path, " \t\r\n\\") {
+		return nil, fmt.Errorf("%w: healthcheck.path must be an absolute path like /health", ErrInvalid)
+	}
+	if hc.Port < 0 || hc.Port > 65535 {
+		return nil, fmt.Errorf("%w: healthcheck.port must be between 1 and 65535", ErrInvalid)
+	}
+	bounds := []struct {
+		name string
+		v    int32
+		max  int32
+	}{
+		{"initialDelaySeconds", hc.InitialDelaySeconds, 3600},
+		{"periodSeconds", hc.PeriodSeconds, 300},
+		{"timeoutSeconds", hc.TimeoutSeconds, 60},
+		{"failureThreshold", hc.FailureThreshold, 30},
+	}
+	for _, b := range bounds {
+		if b.v < 0 || b.v > b.max {
+			return nil, fmt.Errorf("%w: healthcheck.%s must be between 1 and %d", ErrInvalid, b.name, b.max)
+		}
+	}
+	if hc.PeriodSeconds > 0 && hc.TimeoutSeconds > hc.PeriodSeconds {
+		return nil, fmt.Errorf("%w: healthcheck.timeoutSeconds can't be longer than periodSeconds", ErrInvalid)
+	}
+	return &hc, nil
+}
+
 func normalizeUptimePath(p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {

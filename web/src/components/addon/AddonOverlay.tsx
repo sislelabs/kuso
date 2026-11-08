@@ -7,10 +7,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { X, ExternalLink, Plug, DatabaseBackup } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { StatusPill } from "@/components/ui/status-pill";
-import { useAddonHealth, runBackupNow } from "@/features/addons";
+import {
+  useAddonHealth,
+  useAddonBackups,
+  useBackupNow,
+  backupNowState,
+  backupsApplicable,
+  backupsListState,
+} from "@/features/addons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KusoAddon } from "@/types/projects";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
@@ -100,6 +106,9 @@ interface Props {
   // Lets the canvas right-click "SQL console" / "Backups + restore"
   // entries open the right tab directly. Falls back to "overview".
   defaultTab?: string;
+  // Called when the user switches tabs (and once on open when no tab was
+  // requested) so the page can mirror the tab into the URL.
+  onTabChange?: (tab: string) => void;
   onClose: () => void;
 }
 
@@ -111,7 +120,7 @@ interface Props {
 //
 // Per-tab implementations live under ./overlay/. This file is the
 // shell: open/close, tab gating, the slide-in chrome.
-export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
+export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose }: Props) {
   const open = !!addon;
   const [tab, setTab] = useState<Tab>("overview");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -151,6 +160,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
       e.onDiscard?.();
     }
     setTab(next);
+    onTabChange?.(next);
   };
   const guardedClose = useCallback(() => {
     for (const e of Object.values(panels)) {
@@ -163,12 +173,21 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // The URL is the source of truth for the tab: defaultTab changes on
+  // every tab switch (the page mirrors it into ?tab=) and on Back/Forward.
+  // Panels are only reset when the addon itself changes — resetting on a
+  // tab change would wipe the registration the new tab just made.
+  useEffect(() => {
+    setPanels({});
+  }, [addon]);
+  const onTabChangeRef = useRef(onTabChange);
+  onTabChangeRef.current = onTabChange;
   useEffect(() => {
     if (!addon) return;
     const requested = defaultTab === "vulns" ? "vulnerabilities" : defaultTab;
     const valid = TABS.some((t) => t.id === requested);
     setTab(valid ? (requested as Tab) : "overview");
-    setPanels({});
+    if (!defaultTab) onTabChangeRef.current?.("overview");
   }, [addon, defaultTab]);
 
   useEffect(() => {
@@ -245,7 +264,6 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
               addon={addon ?? ""}
               kind={kind}
               cr={data}
-              canBackup={isPostgres && canWriteAddon}
               onConnect={() => {
                 guardedSetTab("overview");
                 // The overview mounts on the next frame after a tab switch.
@@ -376,7 +394,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
 }
 
 const headerButtonClass =
-  "inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50";
+  "inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:border-[var(--border-subtle)] aria-disabled:hover:text-[var(--text-secondary)]";
 
 // AddonHeader matches the service overlay's header: icon, name + status
 // pill, a context line, then the actions you reach for on a datastore.
@@ -385,7 +403,6 @@ function AddonHeader({
   addon,
   kind,
   cr,
-  canBackup,
   onConnect,
   onClose,
 }: {
@@ -393,21 +410,10 @@ function AddonHeader({
   addon: string;
   kind: string;
   cr?: KusoAddon;
-  canBackup: boolean;
   onConnect: () => void;
   onClose: () => void;
 }) {
   const health = useAddonHealth(project, addon, cr);
-  const qc = useQueryClient();
-  const hasSchedule = !!cr?.spec.backup?.schedule;
-  const backup = useMutation({
-    mutationFn: () => runBackupNow(project, addon),
-    onSuccess: (res) => {
-      toast.success("Backup started", { description: `Job ${res.job}. It shows up under Backups when the upload finishes.` });
-      void qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
-  });
   const version = cr?.spec.version;
   const publicPort = cr?.spec.publicTCP?.enabled ? cr.spec.publicTCP.port : undefined;
   return (
@@ -440,22 +446,7 @@ function AddonHeader({
             <Plug className="h-3 w-3" aria-hidden />
             Connect
           </button>
-          {canBackup && (
-            <button
-              type="button"
-              onClick={() => backup.mutate()}
-              disabled={!hasSchedule || backup.isPending}
-              title={
-                hasSchedule
-                  ? "Run the scheduled backup job now: dump, upload to S3, prune"
-                  : "Turn on scheduled backups (Backups tab) to back up to S3 on demand"
-              }
-              className={headerButtonClass}
-            >
-              <DatabaseBackup className="h-3 w-3" aria-hidden />
-              {backup.isPending ? "Starting…" : "Back up now"}
-            </button>
-          )}
+          {backupsApplicable(cr) && <BackupNowButton project={project} addon={addon} cr={cr} />}
           {/* Only addons whose spec.webUI is on (mailpit/nats today); the
               proxy requires the dashboard session. */}
           {cr?.spec.webUI?.enabled && (
@@ -481,5 +472,43 @@ function AddonHeader({
         <X className="h-4 w-4" />
       </button>
     </header>
+  );
+}
+
+// BackupNowButton is the overlay's only "Back up now". backupNowState
+// holds the rules; a blocked button stays focusable (aria-disabled) so
+// hover and keyboard users can still read why.
+function BackupNowButton({ project, addon, cr }: { project: string; addon: string; cr?: KusoAddon }) {
+  const canWrite = useCanOnProject(project, Perms.AddonsWrite);
+  const list = useAddonBackups(project, addon);
+  const run = useBackupNow(project, addon);
+  const state = backupNowState(cr, { canWrite, list: backupsListState(list) });
+  const blocked = !state.enabled || run.isPending;
+  const reasonId = `backup-now-reason-${addon}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-disabled={blocked || undefined}
+            aria-describedby={reasonId}
+            onClick={() => {
+              if (!blocked) run.mutate();
+            }}
+            className={headerButtonClass}
+          >
+            <DatabaseBackup className="h-3 w-3" aria-hidden />
+            {run.isPending ? "Starting…" : "Back up now"}
+            <span id={reasonId} className="sr-only">
+              {state.reason}
+            </span>
+          </button>
+        }
+      />
+      <TooltipContent side="bottom" className="block max-w-64 text-left">
+        {state.reason}
+      </TooltipContent>
+    </Tooltip>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
+import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBuilds, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
@@ -19,6 +20,7 @@ import {
   classifyBuild,
   hasLiveInfo,
   liveBuildId,
+  newerReleaseFailure,
   previousSucceeded,
   rollForwardTarget,
   type DeployBuild,
@@ -50,6 +52,34 @@ interface Props {
 }
 
 const HISTORY_PAGE = 20;
+
+type HistoryFilter = "builds" | "all";
+const FILTER_KEY = "kuso.deploy-history.filter";
+const FILTER_OPTIONS = [
+  { value: "builds", label: "Builds" },
+  { value: "all", label: "All changes", title: "Builds plus config changes (variables, scale, settings)" },
+] as const;
+
+// useHistoryFilter remembers the Builds / All changes choice per browser.
+function useHistoryFilter(): [HistoryFilter, (f: HistoryFilter) => void] {
+  const [filter, setFilter] = useState<HistoryFilter>("all");
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(FILTER_KEY) === "builds") setFilter("builds");
+    } catch {
+      /* storage blocked: keep the default */
+    }
+  }, []);
+  const set = (f: HistoryFilter) => {
+    setFilter(f);
+    try {
+      window.localStorage.setItem(FILTER_KEY, f);
+    } catch {
+      /* storage blocked: the choice lasts for this view only */
+    }
+  };
+  return [filter, set];
+}
 
 export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate }: Props) {
   const builds = useBuilds(project, service);
@@ -199,6 +229,8 @@ function DeployList({
   const liveId = liveBuildId(hasLiveInfo(builds) ? builds : visible, group, envImage?.tag);
   const live = builds.find((b) => b.id === liveId);
   const rolledBackFrom = live ? rollForwardTarget(builds, live) : undefined;
+  const releaseFailed = live ? newerReleaseFailure(builds, live) : undefined;
+  const [filter, setFilter] = useHistoryFilter();
 
   // A failed or in-progress newest build is the thing to look at: open it
   // (once per build, so collapsing it sticks).
@@ -232,18 +264,23 @@ function DeployList({
     !firstDeploy && succeededCount === 1 && live && live.id === newest?.id && health?.tone === "ok" && !!url && recentlyFinished(live, 30);
 
   const history = visible.filter((b) => b.id !== liveId && !(firstDeploy && b.id === newest?.id));
-  const timeline = groupRevisionRuns(
-    interleaveTimeline(history, [...(serviceRevs.data ?? []), ...(envRevs.data ?? [])]),
-  );
+  const revisions = [...(serviceRevs.data ?? []), ...(envRevs.data ?? [])];
+  const timeline = groupRevisionRuns(interleaveTimeline(history, filter === "builds" ? [] : revisions));
   const liveIdx = live ? builds.indexOf(live) : -1;
   const shownTimeline = timeline.slice(0, limit);
-  // Peek at the stored log of the first few failed builds for their
-  // first error line; older failures load it when expanded.
+  // Peek at the stored log of every failed build on screen for the step it
+  // failed in and its first error line (paged, so at most HISTORY_PAGE).
   const peekIds = new Set(
-    shownTimeline
-      .flatMap((item) => (item.type === "build" && (item.build.status ?? "").toLowerCase() === "failed" ? [item.build.id] : []))
-      .slice(0, 3),
+    shownTimeline.flatMap((item) =>
+      item.type === "build" && (item.build.status ?? "").toLowerCase() === "failed" ? [item.build.id] : [],
+    ),
   );
+  const showBuild = (id: string) => {
+    setExpanded(id);
+    requestAnimationFrame(() =>
+      document.getElementById(`build-row-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }),
+    );
+  };
 
   const firstDeployCard =
     firstDeploy && newest ? (
@@ -275,6 +312,8 @@ function DeployList({
       health={health}
       serving={!["stopped", "sleeping"].includes(env?.status?.state ?? "")}
       canDeploy={canDeploy}
+      releaseFailed={releaseFailed}
+      onShowBuild={showBuild}
     />
     </>
   ) : visible.length > 0 ? (
@@ -318,15 +357,24 @@ function DeployList({
   return (
     <div className="space-y-4">
       {liveCard}
-      {timeline.length > 0 && (
+      {(history.length > 0 || revisions.length > 0) && (
         <section aria-labelledby="deploy-history-h" className="space-y-2">
-          <h4 id="deploy-history-h" className="flex items-baseline justify-between text-xs font-medium text-[var(--text-secondary)]">
-            <span>History</span>
-            <span className="font-normal text-[var(--text-tertiary)]">
-              {history.length} build{history.length === 1 ? "" : "s"}
-            </span>
-          </h4>
-          <ul className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 id="deploy-history-h" className="text-xs font-medium text-[var(--text-secondary)]">
+              History
+              <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+                {history.length} build{history.length === 1 ? "" : "s"}
+                {filter === "all" && revisions.length > 0
+                  ? ` · ${revisions.length} config change${revisions.length === 1 ? "" : "s"}`
+                  : ""}
+              </span>
+            </h4>
+            {revisions.length > 0 && (
+              <Segmented size="sm" label="Show in history" options={FILTER_OPTIONS} value={filter} onChange={setFilter} />
+            )}
+          </div>
+          {/* overflow-hidden trims the config-change rail where the list ends */}
+          <ul className="space-y-2 overflow-hidden">
             {shownTimeline.map((item) => {
               if (item.type === "revisions") {
                 return (

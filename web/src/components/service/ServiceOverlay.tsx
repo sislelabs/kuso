@@ -158,8 +158,8 @@ const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: bool
   { id: "logs", label: "Logs", chord: "l", alwaysShow: true },
   { id: "metrics", label: "Metrics", chord: "m", alwaysShow: true },
   { id: "errors", label: "Errors", chord: "e", alwaysShow: true },
-  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true },
   { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
+  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true },
   { id: "crons", label: "Crons", chord: "c" },
   { id: "runs", label: "Runs", chord: "r" },
 ];
@@ -288,13 +288,18 @@ interface Props {
   // scroll-to-line will land in a follow-up once the viewer has a
   // line-anchor surface.)
   failureKind?: string;
+  // Called when the tab changes (user click, g-chord, in-panel link) and
+  // once on open when no tab was requested, so the page can keep ?tab= in
+  // the URL. The URL then flows back in as defaultTab.
+  onTabChange?: (tab: string) => void;
   onClose: () => void;
 }
 
 // ServiceOverlay is the in-page inspector shown when a service is
-// clicked on the canvas/list. No URL — clicking outside or pressing
-// ESC closes it. Slides in from the right with a spring; the dimmed
-// backdrop is its own click target so peripheral clicks dismiss the
+// clicked on the canvas/list. The page mirrors the open service and tab
+// into the URL (?service=&tab=); clicking outside or pressing ESC closes
+// it. Slides in from the right with a spring; the dimmed backdrop is its
+// own click target so peripheral clicks dismiss the
 // panel without bubbling into canvas pan/drag.
 export function ServiceOverlay({
   project,
@@ -302,6 +307,7 @@ export function ServiceOverlay({
   env: envParam = "production",
   defaultTab,
   failureKind,
+  onTabChange,
   onClose,
 }: Props) {
   const open = !!service;
@@ -346,15 +352,23 @@ export function ServiceOverlay({
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
+  const onTabChangeRef = useRef(onTabChange);
+  onTabChangeRef.current = onTabChange;
   const [pendingTab, setPendingTab] = useState<{ tab: Tab; anchor?: string } | null>(null);
   const switchTab = useCallback((next: Tab, anchor?: string) => {
     dirtyMap.current = {};
     setPanels({});
     setTab(next);
+    onTabChangeRef.current?.(next);
     if (anchor) {
       window.setTimeout(() => {
         document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 250);
+      // Cards above the target (domains, pods) can still be loading and
+      // push it down after the first scroll; settle it once more.
+      window.setTimeout(() => {
+        document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 1200);
     }
   }, []);
   const guardedSetTab = useCallback(
@@ -368,9 +382,9 @@ export function ServiceOverlay({
     [switchTab],
   );
 
-  // When a service opens, land on the requested tab (right-click "View
-  // logs" → Logs, etc.) or fall back to the user's last-used tab in
-  // this session. Falls back to Deployments — the most actionable
+  // When a service opens — or the URL's ?tab= changes under us (Back /
+  // Forward) — land on the requested tab (right-click "View logs" → Logs,
+  // etc.) or fall back to the user's last-used tab in this session. Falls back to Deployments — the most actionable
   // default — when there's no remembered tab. Iterating across
   // services to compare logs no longer punishes the user with a
   // forced "back to Deployments" reset on every open.
@@ -386,11 +400,16 @@ export function ServiceOverlay({
       return;
     }
     let remembered: Tab = "deployments";
-    if (typeof window !== "undefined") {
+    try {
       const v = window.sessionStorage.getItem("kuso-service-overlay-tab");
       if (v && [...ALL_MAIN_TABS, PINNED_TAB].some((t) => t.id === v)) remembered = v as Tab;
+    } catch {
+      // Storage blocked: Deployments it is.
     }
     setTab(remembered);
+    // Write the fallback into the URL so a reload or a shared link lands
+    // on exactly this tab.
+    onTabChangeRef.current?.(remembered);
   }, [service, defaultTab]);
 
 
@@ -405,8 +424,11 @@ export function ServiceOverlay({
   // the same place. SessionStorage (not localStorage) so a new tab/
   // window starts fresh.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.sessionStorage.setItem("kuso-service-overlay-tab", tab);
+    try {
+      window.sessionStorage.setItem("kuso-service-overlay-tab", tab);
+    } catch {
+      // Storage blocked: the URL still carries the tab.
+    }
   }, [tab]);
 
   // Escape is easy to hit by accident (and used to leak through from

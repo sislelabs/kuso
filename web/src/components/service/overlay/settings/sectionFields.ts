@@ -56,6 +56,7 @@ export const SECTION_FIELDS = {
   ],
   deploy: ["startCommand", "waitForCI", "previewsDisabled"],
   release: ["releaseCommand", "releaseTimeout", "snapshotBeforeDeploy"],
+  healthcheck: ["hcEnabled", "hcPath", "hcPort", "hcDelay", "hcPeriod", "hcTimeout", "hcThreshold"],
   uptime: ["uptimeEnabled", "uptimePath"],
   security: ["capAdd", "allowPrivilegeEscalation"],
 } as const satisfies Record<string, readonly (keyof FormState)[]>;
