@@ -94,7 +94,7 @@ export function ServersPopover() {
         </span>
         <span className="tabular-nums">
           {ready}/{total}
-          <span className="hidden xl:inline"> nodes</span>
+          <span className="hidden md:inline"> nodes</span>
         </span>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">

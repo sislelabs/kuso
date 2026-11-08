@@ -24,7 +24,6 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
-import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { useSession, useSignOut, useCan, useCanOnProject, Perms } from "@/features/auth";
 import {
   useProjects,
@@ -69,8 +68,8 @@ import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
 // TopNav is the persistent shell across every authenticated page. Left:
 // logo, then a breadcrumb (project picker → environment, or Settings →
-// section). Right: search, shortcuts, settings, nodes, theme,
-// notifications, account. Labels collapse to icons below lg so the bar
+// section). Right: search, settings, nodes,
+// notifications, account (which holds theme + shortcuts). Labels collapse below md so the bar
 // never wraps; below sm the global actions move to <MobileNav>.
 export function TopNav() {
   const params = useRouteParams<{ project: string }>(["project"]);
@@ -145,14 +144,6 @@ export function TopNav() {
         <div className="hidden sm:flex">
           <CommandTrigger />
         </div>
-        <NavIconButton
-          label="Keyboard shortcuts"
-          shortcut="?"
-          onClick={openShortcutsHelp}
-          className="hidden md:inline-flex"
-        >
-          <Keyboard />
-        </NavIconButton>
         <Link
           href="/settings"
           aria-label="Settings"
@@ -165,9 +156,6 @@ export function TopNav() {
         </Link>
         <div className="hidden sm:flex">
           <ServersPopover />
-        </div>
-        <div className="hidden sm:flex">
-          <ThemeToggle />
         </div>
         <NotificationsButton className="hidden sm:inline-flex" />
         <UserMenu />
@@ -198,34 +186,6 @@ function NavIconLink({
         {children}
       </TooltipTrigger>
       <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function NavIconButton({
-  label,
-  shortcut,
-  onClick,
-  className,
-  children,
-}: {
-  label: string;
-  shortcut?: string;
-  onClick: () => void;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<button type="button" aria-label={label} onClick={onClick} className={cn(navIcon, className)} />}
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {label}
-        {shortcut && <Kbd className="border-transparent bg-[var(--bg-primary)]/20 text-inherit">{shortcut}</Kbd>}
-      </TooltipContent>
     </Tooltip>
   );
 }
@@ -673,6 +633,18 @@ function UserMenu() {
         <MenuRow href="/settings" icon={Settings} onNavigate={close}>Settings</MenuRow>
         {canAdmin && <MenuRow href="/settings/users" icon={Users} onNavigate={close}>Users &amp; groups</MenuRow>}
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
+        <button
+          type="button"
+          onClick={() => {
+            close();
+            openShortcutsHelp();
+          }}
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        >
+          <Keyboard className="size-4" aria-hidden />
+          <span className="flex-1">Keyboard shortcuts</span>
+          <Kbd>?</Kbd>
+        </button>
         <ThemeRow />
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
         <button
