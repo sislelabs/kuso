@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCreateBody, describeRule, emptyRuleForm, parseDur, type RuleFormState } from "./form";
+import { buildCreateBody, describeRule, emptyRuleForm, parseDur, prefillRuleForm, type RuleFormState } from "./form";
 import type { AlertRule } from "./api";
 
 function form(over: Partial<RuleFormState>): RuleFormState {
@@ -87,5 +87,29 @@ describe("parseDur", () => {
     expect(parseDur("90")).toBe(90);
     expect(parseDur("1h")).toBe(3600);
     expect(parseDur("nope")).toBe(0);
+  });
+});
+
+describe("prefillRuleForm", () => {
+  const p = (q: string) => prefillRuleForm(new URLSearchParams(q));
+
+  it("returns null without new=1", () => {
+    expect(p("project=a&kind=http_5xx_rate")).toBeNull();
+  });
+
+  it("prefills kind + scope + a name", () => {
+    const f = p("new=1&project=demo&service=api&env=production&kind=http_p95_latency");
+    expect(f).toMatchObject({ kind: "http_p95_latency", project: "demo", service: "api", env: "production", name: "api HTTP p95 latency" });
+  });
+
+  it("maps the error_rate alias and ignores unknown kinds", () => {
+    expect(p("new=1&kind=error_rate")?.kind).toBe("http_5xx_rate");
+    expect(p("new=1&kind=bogus")?.kind).toBe("http_5xx_rate");
+  });
+
+  it("drops scope the kind can't use, and service without project", () => {
+    expect(p("new=1&kind=node_cpu&project=demo&service=api")).toMatchObject({ project: "", service: "", name: "" });
+    expect(p("new=1&kind=log_match&project=demo&env=prod")).toMatchObject({ project: "demo", env: "" });
+    expect(p("new=1&service=api")).toMatchObject({ project: "", service: "" });
   });
 });

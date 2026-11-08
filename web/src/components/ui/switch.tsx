@@ -39,7 +39,7 @@ function Switch({
       disabled={disabled}
       onClick={() => onChange(!on)}
       className={cn(
-        "relative inline-flex shrink-0 cursor-pointer items-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-primary)] disabled:cursor-not-allowed disabled:opacity-50",
+        "relative inline-flex shrink-0 cursor-pointer items-center rounded-full border transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-50",
         sm ? "h-4 w-7" : "h-5 w-9",
         on
           ? "border-transparent bg-[var(--accent)]"

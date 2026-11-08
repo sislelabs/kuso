@@ -133,7 +133,7 @@ func (r *NotificationsRepo) ListEvents(ctx context.Context, limit int, unreadOnl
 	return r.db.ListNotificationEvents(ctx, limit, unreadOnly)
 }
 func (r *NotificationsRepo) ListEventsForProjects(ctx context.Context, limit int, projects []string) ([]NotificationEvent, error) {
-	return r.db.ListNotificationEventsForProjects(ctx, limit, projects)
+	return r.db.ListNotificationEventsForProjects(ctx, limit, projects, false)
 }
 func (r *NotificationsRepo) CountUnreadEvents(ctx context.Context) (int, error) {
 	return r.db.CountUnreadNotificationEvents(ctx)

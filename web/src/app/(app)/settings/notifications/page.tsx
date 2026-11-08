@@ -41,6 +41,7 @@ import { cleanMentionRules } from "./mentions";
 import { useProjects } from "@/features/projects";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { setBellPrefs, useBellPrefs } from "@/lib/notification-attention";
 import { UserBadge } from "@/components/activity/UserBadge";
 import { relativeTime } from "@/lib/format";
 
@@ -273,7 +274,40 @@ export default function NotificationsPage() {
       )}
 
       <MutedProjects />
+
+      <BellPreferences />
     </SettingsPage>
+  );
+}
+
+// BellPreferences — per-browser choices for the in-app bell. Stored
+// locally (lib/notification-attention) since they only change what this
+// person sees, not what any channel delivers.
+function BellPreferences() {
+  const prefs = useBellPrefs();
+  return (
+    <SettingsSection
+      title="In-app bell"
+      description="The bell shows what needs attention by default: failures, crashes, alerts, security findings and updates."
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p id="bell-count-all" className="text-sm font-medium text-[var(--text-primary)]">
+            Count successes in the badge
+          </p>
+          <p id="bell-count-all-hint" className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            Off: successful builds, deploys and recoveries appear under All activity but don&apos;t light up the
+            badge. Applies to this browser.
+          </p>
+        </div>
+        <Switch
+          on={prefs.countAll}
+          onChange={(next) => setBellPrefs({ countAll: next })}
+          labelledBy="bell-count-all"
+          describedBy="bell-count-all-hint"
+        />
+      </div>
+    </SettingsSection>
   );
 }
 

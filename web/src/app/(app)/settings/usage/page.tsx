@@ -18,9 +18,19 @@ import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Segmented } from "@/components/ui/segmented";
 import { api } from "@/lib/api-client";
-import { Cpu, MemoryStick, Server, Folder, ChevronDown, ChevronRight } from "lucide-react";
+import { describeError } from "@/lib/errors";
+import { useProjects } from "@/features/projects";
+import { Cpu, MemoryStick, Server, Folder, ChevronDown, ChevronRight, Database, Archive } from "lucide-react";
 import Link from "next/link";
+
+// Rows are keyed by the pods' project label, which also covers the
+// synthetic instance-addon project and history from projects deleted
+// inside the window. Servers before `kind` existed report everything as
+// a project, so the page classifies against the projects list itself.
+type UsageKind = "project" | "platform" | "deleted";
+const INSTANCE_ADDON_PROJECT = "kuso-instance";
 
 interface ProjectUsageRow {
   project: string;
@@ -28,6 +38,7 @@ interface ProjectUsageRow {
   memGBHours: number;
   cost: number;
   sharePct: number;
+  kind?: UsageKind;
 }
 interface ProjectCostDay {
   project: string;
@@ -69,10 +80,42 @@ interface NodeUsageResponse {
 }
 
 const WINDOWS = [
-  { label: "7 days", days: 7 },
-  { label: "30 days", days: 30 },
-  { label: "90 days", days: 90 },
-];
+  { label: "7 days", value: "7" },
+  { label: "30 days", value: "30" },
+  { label: "90 days", value: "90" },
+] as const;
+
+const HOURS_IN_30_DAYS = 30 * 24;
+
+function rowKind(r: ProjectUsageRow, live: ReadonlySet<string> | null): UsageKind {
+  if (r.kind) return r.kind;
+  if (r.project === INSTANCE_ADDON_PROJECT) return "platform";
+  return live && !live.has(r.project) ? "deleted" : "project";
+}
+
+// Whole numbers above 10 — a projection has no business showing a
+// decimal place on "1597.1".
+function qty(n: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 }).format(n);
+}
+
+function money(n: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
+  } catch {
+    return `${currency} ${n.toFixed(2)}`;
+  }
+}
+
+function rate(n: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumSignificantDigits: 3 }).format(n);
+  } catch {
+    return `${currency} ${n}`;
+  }
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export default function UsagePage() {
   const [windowDays, setWindowDays] = useState(30);
@@ -84,25 +127,15 @@ export default function UsagePage() {
   return (
     <SettingsPage
       title="Usage & cost"
-      description={`Per-project CPU and memory attribution over the last ${windowDays} days. Cost figures use the rates configured on the Kuso CR.`}
+      description={`Where CPU and memory go, by project. Figures look ahead 30 days at the pace of the last ${windowDays} days; cost uses the rates set in Cluster config.`}
       actions={
-        <div role="group" aria-label="Time window" className="inline-flex rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">
-          {WINDOWS.map((w) => (
-            <button
-              key={w.days}
-              type="button"
-              aria-pressed={w.days === windowDays}
-              onClick={() => setWindowDays(w.days)}
-              className={`rounded-[3px] px-3 py-1 text-xs font-medium transition-colors ${
-                w.days === windowDays
-                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              {w.label}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          label="Based on the last"
+          size="sm"
+          value={String(windowDays)}
+          onChange={(v) => setWindowDays(Number(v))}
+          options={WINDOWS}
+        />
       }
     >
       {byProject.isPending ? (
@@ -112,7 +145,7 @@ export default function UsagePage() {
         </div>
       ) : byProject.isError ? (
         <SettingsNotice tone="error" title="Couldn't load usage">
-          {byProject.error instanceof Error ? byProject.error.message : "unknown error"}
+          {describeError(byProject.error, "Try again in a moment.")}
         </SettingsNotice>
       ) : !byProject.data ? null : (
         <UsageBody data={byProject.data} windowDays={windowDays} />
@@ -123,76 +156,166 @@ export default function UsagePage() {
 
 function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDays: number }) {
   const ratesUnset = data.rates.cpuPerHour === 0 && data.rates.memGBPerHour === 0;
+  const projectList = useProjects();
+  const live = projectList.data ? new Set(projectList.data.map((p) => p.metadata.name)) : null;
+  const projects = data.projects.filter((r) => rowKind(r, live) === "project");
+  const platform = data.projects.filter((r) => rowKind(r, live) === "platform");
+  const deleted = data.projects.filter((r) => rowKind(r, live) === "deleted");
+  const cpuHours = data.clusterTotal.cpuMilliHours / 1000;
+  const memGBHours = data.clusterTotal.memGBHours;
+  const extras = [
+    platform.length > 0 ? "shared platform services" : "",
+    deleted.length > 0 ? plural(deleted.length, "deleted project") : "",
+  ].filter(Boolean);
   return (
     <div className="space-y-6">
       {ratesUnset && (
-        <SettingsNotice tone="info" title="Cost rates not configured">
-            <div>
-              Usage curves and share-of-cluster render, but no dollar figures.
-              Set <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
-              <code className="font-mono">spec.cost.memGBPerHour</code> on the
-              Kuso CR via{" "}
-              <Link href="/settings/config" className="underline">
-                Cluster config
-              </Link>{" "}
-              to enable projection.
-            </div>
+        <SettingsNotice tone="info" title="No cost rates set">
+          <div>
+            Usage is tracked, but there are no prices to turn it into cost. Set{" "}
+            <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
+            <code className="font-mono">spec.cost.memGBPerHour</code> in{" "}
+            <Link href="/settings/config" className="underline">
+              Cluster config
+            </Link>{" "}
+            to see what each project costs.
+          </div>
         </SettingsNotice>
       )}
 
       {/* Cluster headline cards. */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card
-          label={`Projected ${data.days === 30 ? "this month" : "next 30 days"}`}
-          big={
-            ratesUnset
-              ? "—"
-              : `${data.rates.currency} ${data.clusterTotal.costTotal.toFixed(2)}`
-          }
+          label="Cost, next 30 days"
+          big={ratesUnset ? "—" : money(data.clusterTotal.costTotal, data.rates.currency)}
           hint={
             ratesUnset
-              ? "configure rates to see cost"
-              : `${data.projects.length} project${data.projects.length === 1 ? "" : "s"} · at $${data.rates.cpuPerHour.toFixed(4)}/cpu·hr + $${data.rates.memGBPerHour.toFixed(4)}/GB·hr`
+              ? "Set rates in Cluster config to see cost"
+              : `At ${rate(data.rates.cpuPerHour, data.rates.currency)} per CPU-hour and ${rate(data.rates.memGBPerHour, data.rates.currency)} per GB-hour of memory`
           }
         />
         <Card
-          label="CPU consumed"
-          big={`${(data.clusterTotal.cpuMilliHours / 1000).toFixed(1)} cpu·hr`}
-          hint={`projected over 30 days from a ${windowDays}-day window`}
+          label="CPU, next 30 days"
+          big={`≈${qty(cpuHours)} CPU-hours`}
+          hint={`About ${qty(cpuHours / HOURS_IN_30_DAYS)} CPU cores busy on average, at the current rate`}
           icon={<Cpu className="h-4 w-4" />}
         />
         <Card
-          label="Memory consumed"
-          big={`${data.clusterTotal.memGBHours.toFixed(1)} GB·hr`}
-          hint={`avg ${(data.clusterTotal.memGBHours / (30 * 24)).toFixed(2)} GB resident`}
+          label="Memory, next 30 days"
+          big={`≈${qty(memGBHours)} GB-hours`}
+          hint={`About ${qty(memGBHours / HOURS_IN_30_DAYS)} GB in use on average, at the current rate`}
           icon={<MemoryStick className="h-4 w-4" />}
         />
       </section>
 
       {/* Per-project table — the headline section. */}
       <section>
-        <header className="mb-3 flex items-baseline justify-between">
+        <header className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h2 className="text-base font-semibold tracking-tight">By project</h2>
           <span className="text-xs text-[var(--text-tertiary)]">
-            window: {data.days} days · {data.projects.length} project
-            {data.projects.length === 1 ? "" : "s"}
+            {plural(projects.length, "project")}
+            {extras.length > 0 && `, plus ${extras.join(" and ")}`} · share of all CPU used
           </span>
         </header>
         {data.projects.length === 0 ? (
           <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-            No project samples in the selected window. The per-project sampler
-            runs every 5 minutes against pods labelled{" "}
-            <code className="font-mono">kuso.sislelabs.com/project</code> —
-            a fresh install won&apos;t have data until then, and a cluster
-            with no running projects will stay empty.
+            No usage recorded in this window yet. kuso measures running projects every 5 minutes, so a new
+            install shows numbers a few minutes after its first deploy.
           </p>
         ) : (
-          <ProjectTable rows={data.projects} daily={data.daily} rates={data.rates} ratesUnset={ratesUnset} />
+          <div className="space-y-4">
+            <ProjectTable rows={projects} daily={data.daily} rates={data.rates} ratesUnset={ratesUnset} />
+            {(platform.length > 0 || deleted.length > 0) && (
+              <div className="space-y-1.5">
+                {platform.map((r) => (
+                  <AggregateRow
+                    key={r.project}
+                    icon={<Database className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+                    title="Shared platform services"
+                    detail="The cluster database and other addons shared by every project"
+                    rows={[r]}
+                    rates={data.rates}
+                    ratesUnset={ratesUnset}
+                  />
+                ))}
+                {deleted.length > 0 && (
+                  <AggregateRow
+                    icon={<Archive className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+                    title={plural(deleted.length, "deleted project")}
+                    detail={`Used resources earlier in this window: ${deleted.map((r) => r.project).join(", ")}`}
+                    rows={deleted}
+                    rates={data.rates}
+                    ratesUnset={ratesUnset}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         )}
       </section>
 
       {/* Secondary: per-node breakdown, collapsed by default. */}
       <NodeBreakdown windowDays={windowDays} />
+    </div>
+  );
+}
+
+function UsageFigures({
+  cpuMilliHours,
+  memGBHours,
+  cost,
+  rates,
+  ratesUnset,
+}: {
+  cpuMilliHours: number;
+  memGBHours: number;
+  cost: number;
+  rates: UsageRates;
+  ratesUnset: boolean;
+}) {
+  return (
+    <div className="flex w-full shrink-0 items-center justify-end gap-4 text-xs tabular-nums text-[var(--text-secondary)] sm:w-[300px]">
+      <span title="CPU-hours over the next 30 days at the current rate">{qty(cpuMilliHours / 1000)} CPU-h</span>
+      <span title="GB-hours of memory over the next 30 days at the current rate">{qty(memGBHours)} GB-h</span>
+      {!ratesUnset && (
+        <span className="w-[72px] text-right font-semibold text-[var(--text-primary)]">{money(cost, rates.currency)}</span>
+      )}
+    </div>
+  );
+}
+
+function AggregateRow({
+  icon,
+  title,
+  detail,
+  rows,
+  rates,
+  ratesUnset,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+  rows: ProjectUsageRow[];
+  rates: UsageRates;
+  ratesUnset: boolean;
+}) {
+  const sum = (f: (r: ProjectUsageRow) => number) => rows.reduce((a, r) => a + f(r), 0);
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-3 sm:flex-nowrap">
+      <span className="w-3.5 shrink-0" aria-hidden />
+      {icon}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-[var(--text-primary)]">{title}</span>
+        <span className="block text-xs text-[var(--text-tertiary)]">{detail}</span>
+      </span>
+      <ShareBar pct={sum((r) => r.sharePct)} />
+      <UsageFigures
+        cpuMilliHours={sum((r) => r.cpuMilliHours)}
+        memGBHours={sum((r) => r.memGBHours)}
+        cost={sum((r) => r.cost)}
+        rates={rates}
+        ratesUnset={ratesUnset}
+      />
     </div>
   );
 }
@@ -221,6 +344,7 @@ function ProjectTable({
           >
             <button
               type="button"
+              aria-expanded={isOpen}
               onClick={() => setExpanded(isOpen ? null : r.project)}
               className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-tertiary)]/40 sm:flex-nowrap"
             >
@@ -234,19 +358,13 @@ function ProjectTable({
                 {r.project}
               </span>
               <ShareBar pct={r.sharePct} />
-              <div className="flex w-full shrink-0 items-center sm:w-[280px] justify-end gap-4 font-mono text-xs text-[var(--text-secondary)]">
-                <span title="CPU consumed (projected)">
-                  {(r.cpuMilliHours / 1000).toFixed(1)} cpu·hr
-                </span>
-                <span title="memory consumed (projected)">
-                  {r.memGBHours.toFixed(1)} GB·hr
-                </span>
-                {!ratesUnset && (
-                  <span className="w-[70px] text-right font-semibold text-[var(--text-primary)]">
-                    {rates.currency} {r.cost.toFixed(2)}
-                  </span>
-                )}
-              </div>
+              <UsageFigures
+                cpuMilliHours={r.cpuMilliHours}
+                memGBHours={r.memGBHours}
+                cost={r.cost}
+                rates={rates}
+                ratesUnset={ratesUnset}
+              />
             </button>
             {isOpen && projectDaily.length > 0 && (
               <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3">
@@ -261,7 +379,7 @@ function ProjectTable({
 }
 
 // ShareBar renders a horizontal % bar for the project's share of
-// cluster CPU·hr. Width is clamped to a sane range so a single
+// cluster CPU. Width is clamped to a sane range so a single
 // project that's the only one in the cluster (sharePct=100) doesn't
 // blow out the row layout.
 function ShareBar({ pct }: { pct: number }) {
@@ -274,14 +392,14 @@ function ShareBar({ pct }: { pct: number }) {
           style={{ width: `${w}%` }}
         />
       </div>
-      <span className="w-9 shrink-0 text-right font-mono text-xs text-[var(--text-tertiary)]">
-        {pct.toFixed(0)}%
+      <span className="w-9 shrink-0 text-right text-xs tabular-nums text-[var(--text-tertiary)]">
+        {pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%
       </span>
     </div>
   );
 }
 
-// DailySpark renders the per-day cpu·hr curve as ASCII-tall sparkline
+// DailySpark renders the per-day CPU-hours curve as ASCII-tall sparkline
 // bars. Cheap to render, no chart lib dependency. Tooltips on each
 // bar show day + value so hovering tells you the spike date.
 function DailySpark({ days }: { days: ProjectCostDay[] }) {
@@ -289,7 +407,7 @@ function DailySpark({ days }: { days: ProjectCostDay[] }) {
   return (
     <div>
       <div className="mb-1 text-xs text-[var(--text-tertiary)]">
-        CPU·hr per day · last {days.length} sample{days.length === 1 ? "" : "s"}
+        CPU-hours used per day · {plural(days.length, "day")} with data
       </div>
       <div className="flex h-12 items-end gap-1">
         {days.map((d) => {
@@ -300,7 +418,7 @@ function DailySpark({ days }: { days: ProjectCostDay[] }) {
               key={d.day}
               className="flex-1 rounded-sm bg-[var(--success)]/40"
               style={{ height: `${h}%`, minWidth: 4 }}
-              title={`${date.toISOString().slice(0, 10)} · ${(d.cpuMilliHours / 1000).toFixed(2)} cpu·hr`}
+              title={`${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}: ${qty(d.cpuMilliHours / 1000)} CPU-hours`}
             />
           );
         })}
@@ -320,25 +438,22 @@ function NodeBreakdown({ windowDays }: { windowDays: number }) {
     <section>
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+        className="flex items-center gap-2 rounded-sm text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
       >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5" />
-        )}
-        <h2 className="text-base font-semibold tracking-tight">
-          By node
-        </h2>
-        <span className="text-xs">
-          {open ? "(hide)" : "(show)"} — same data, node attribution
-        </span>
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <h2 className="text-base font-semibold tracking-tight">By node</h2>
+        <span className="text-xs">Which servers did the work, over the last {windowDays} days</span>
       </button>
       {open && (
         <div className="mt-3">
           {q.isPending ? (
             <Skeleton className="h-16 w-full" />
+          ) : q.isError ? (
+            <SettingsNotice tone="error" title="Couldn't load the node breakdown">
+              {describeError(q.error, "Try again in a moment.")}
+            </SettingsNotice>
           ) : !q.data || q.data.totals.length === 0 ? (
             <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
               No samples in the selected window.
@@ -359,13 +474,11 @@ function NodeBreakdown({ windowDays }: { windowDays: number }) {
                       <Server className="h-4 w-4 text-[var(--text-tertiary)]" />
                       <span className="font-mono text-sm font-medium">{t.node}</span>
                     </div>
-                    <div className="flex items-center gap-4 font-mono text-xs text-[var(--text-secondary)]">
-                      <span>{(t.cpuMilliHours / 1000).toFixed(1)} cpu·hr</span>
-                      <span>{t.memGBHours.toFixed(1)} GB·hr</span>
+                    <div className="flex items-center gap-4 text-xs tabular-nums text-[var(--text-secondary)]">
+                      <span title={`CPU-hours used in the last ${windowDays} days`}>{qty(t.cpuMilliHours / 1000)} CPU-h</span>
+                      <span title={`GB-hours of memory used in the last ${windowDays} days`}>{qty(t.memGBHours)} GB-h</span>
                       {!ratesUnset && (
-                        <span className="font-semibold text-[var(--text-primary)]">
-                          {q.data.rates.currency} {cost.toFixed(2)}
-                        </span>
+                        <span className="font-semibold text-[var(--text-primary)]">{money(cost, q.data.rates.currency)}</span>
                       )}
                     </div>
                   </li>

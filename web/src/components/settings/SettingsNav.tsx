@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ChevronsUpDown, Lock, Search, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsUpDown, Lock, Search, X } from "lucide-react";
 import { useSession } from "@/features/auth";
+import { useSystemVersion } from "@/features/system-version";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import {
@@ -102,6 +103,18 @@ function SettingsNavList({
   const { groups, flat } = useFilteredSettingsNav(query);
   const active = activeSettingsHref(pathname ?? "");
   const searching = query.trim().length > 0;
+  const badges = useSettingsBadges();
+  // Only the current page's group starts open (all of them on the
+  // landing page). Manual toggles are remembered until the person moves
+  // to another group, which re-opens that group.
+  const activeGroup = SETTINGS_NAV.find((it) => it.href === active)?.group ?? null;
+  const [overrides, setOverrides] = useState<{ ctx: string | null; map: Record<string, boolean> }>({
+    ctx: activeGroup,
+    map: {},
+  });
+  const map = overrides.ctx === activeGroup ? overrides.map : {};
+  const isOpen = (id: string) => map[id] ?? (activeGroup === null || id === activeGroup);
+  const toggle = (id: string) => setOverrides({ ctx: activeGroup, map: { ...map, [id]: !isOpen(id) } });
 
   return (
     <nav aria-label="Settings" className="flex flex-col gap-4">
@@ -152,30 +165,62 @@ function SettingsNavList({
           </ul>
         )
       ) : (
-        groups.map((g) => (
-          <div key={g.id}>
-            <div className="mb-1 px-2 text-xs font-medium text-[var(--text-tertiary)]">{g.label}</div>
-            <ul className="space-y-0.5">
-              {g.items.map((it) => (
-                <li key={it.href}>
-                  <NavLink item={it} active={it.href === active} onNavigate={onNavigate} />
-                </li>
-              ))}
-            </ul>
-            {g.lockedCount > 0 && (
-              <div
-                className="mt-1 flex items-center gap-1.5 px-2 text-xs text-[var(--text-tertiary)]"
-                title="Ask an instance admin for access"
+        groups.map((g) => {
+          const open = isOpen(g.id);
+          const badged = !open && g.items.some((it) => badges[it.href]);
+          return (
+            <div key={g.id}>
+              <button
+                type="button"
+                onClick={() => toggle(g.id)}
+                aria-expanded={open}
+                aria-controls={`settings-group-${g.id}`}
+                className="mb-1 flex w-full items-center gap-1 rounded-sm px-2 py-0.5 text-left text-xs font-medium text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
               >
-                <Lock className="h-3 w-3" />
-                {g.lockedCount} more need admin access
-              </div>
-            )}
-          </div>
-        ))
+                <ChevronDown
+                  aria-hidden
+                  className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !open && "-rotate-90")}
+                />
+                <span className="flex-1">{g.label}</span>
+                {badged && (
+                  <span className="size-1.5 rounded-full bg-[var(--info)]">
+                    <span className="sr-only">(has updates)</span>
+                  </span>
+                )}
+              </button>
+              {open && (
+                <div id={`settings-group-${g.id}`}>
+                  <ul className="space-y-0.5">
+                    {g.items.map((it) => (
+                      <li key={it.href}>
+                        <NavLink item={it} active={it.href === active} onNavigate={onNavigate} badge={badges[it.href]} />
+                      </li>
+                    ))}
+                  </ul>
+                  {g.lockedCount > 0 && (
+                    <div
+                      className="mt-1 flex items-center gap-1.5 px-2 text-xs text-[var(--text-tertiary)]"
+                      title="Ask an instance admin for access"
+                    >
+                      <Lock className="h-3 w-3" />
+                      {g.lockedCount} more need admin access
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })
       )}
     </nav>
   );
+}
+
+// useSettingsBadges marks nav items that have something waiting, kept
+// quiet on purpose: the bell is the primary surface for an update.
+function useSettingsBadges(): Record<string, string | undefined> {
+  const version = useSystemVersion();
+  return version.data?.needsUpdate ? { "/settings/updates": `${version.data.latest} available` } : {};
 }
 
 function NavLink({
@@ -183,11 +228,13 @@ function NavLink({
   active,
   onNavigate,
   showDescription = false,
+  badge,
 }: {
   item: SettingsNavItem;
   active: boolean;
   onNavigate?: () => void;
   showDescription?: boolean;
+  badge?: string;
 }) {
   const Icon = item.icon;
   return (
@@ -203,12 +250,17 @@ function NavLink({
       )}
     >
       <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", active ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]")} />
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block truncate">{item.title}</span>
         {showDescription && (
           <span className="block text-xs font-normal text-[var(--text-tertiary)]">{item.description}</span>
         )}
       </span>
+      {badge && (
+        <span title={badge} className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[var(--info)]">
+          <span className="sr-only">{badge}</span>
+        </span>
+      )}
     </Link>
   );
 }

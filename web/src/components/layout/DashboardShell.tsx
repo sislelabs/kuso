@@ -2,6 +2,7 @@
 
 import { Suspense, type ReactNode } from "react";
 import { TopNav } from "@/components/layout/TopNav";
+import { SkipLinks } from "@/components/layout/SkipLinks";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { KeyboardShortcuts } from "@/components/layout/KeyboardShortcuts";
 import { CommandPalette } from "@/components/command/CommandPalette";
@@ -18,12 +19,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   return (
     <TooltipProvider delay={300}>
       <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg-primary)]">
-        <a
-          href="#main"
-          className="sr-only z-[100] rounded-md bg-[var(--bg-elevated)] px-3 py-2 text-sm font-medium shadow-[var(--shadow-md)] focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
-        >
-          Skip to content
-        </a>
+        <SkipLinks />
         <Suspense fallback={<div className="h-12 shrink-0 border-b border-[var(--border-subtle)]" />}>
           <TopNav />
         </Suspense>

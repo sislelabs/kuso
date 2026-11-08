@@ -119,12 +119,13 @@
   --selected: rgba(64, 71, 109, 0.10);
   --selected-border: #6B73A0;
 
-  /* The one primary button. Same sage hue as dark mode, deepened so
-     cream text clears AA on the light ground. */
-  --btn-primary-bg: #4D6847;
-  --btn-primary-bg-hover: #3F5A3A;
+  /* The one primary button. Same green family as dark mode, deepened so
+     cream text clears AA and saturated enough that it reads as the
+     action, not as another muted surface. */
+  --btn-primary-bg: #2E7340;
+  --btn-primary-bg-hover: #245E34;
   --btn-primary-fg: #FBFBF7;
-  --btn-primary-border: #3F5A3A;
+  --btn-primary-border: #245E34;
   --btn-secondary-bg: #FFFFFF;
   --btn-secondary-bg-hover: #F4F3EC;
   --btn-secondary-fg: #1A1D2E;
@@ -307,14 +308,28 @@
   button, a, input, textarea, select, [data-slot] {
     transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
   }
-  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-  /* Elements that draw their own ring (ring-*) opt out of the default
-     outline so focus never double-draws. */
-  [data-slot="button"]:focus-visible,
-  [data-slot="input"]:focus-visible,
-  [data-slot="select"]:focus-visible,
-  [role="tab"]:focus-visible { outline: none; }
+  /* Offset lives in the layer so a row inside a clipping scroller can
+     inset its ring with outline-offset-[-2px]. */
+  :focus-visible { outline-offset: 2px; }
   ::selection { background: var(--accent-subtle); }
+}
+
+/* One focus ring for every focusable: 2px solid --focus. Unlayered on
+   purpose so it beats per-component outline-none / ring-* / outline-colour
+   utilities (all in @layer utilities); the ring-* shadows are zeroed so
+   nothing double-draws. Programmatic focus targets (skip links land on
+   tabindex=-1) and React Flow's node wrapper (the canvas rings the card
+   inside it) opt out. */
+:focus-visible {
+  outline-width: 2px;
+  outline-style: solid;
+  outline-color: var(--focus);
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+}
+[tabindex="-1"]:focus-visible,
+.react-flow__node:focus-visible {
+  outline-style: none;
 }
 
 /* Unlayered on purpose: beats every placeholder:text-… utility (those

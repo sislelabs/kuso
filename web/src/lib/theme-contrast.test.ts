@@ -33,7 +33,8 @@ function resolver(vars: Record<string, string>) {
 const SURFACES = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-elevated"];
 const TEXT = ["text-primary", "text-secondary", "text-tertiary", "muted-foreground", "accent", "link", "success", "warning", "error", "building", "info", "destructive"];
 // Placeholder is intentionally fainter than any real value but still legible.
-const NON_TEXT = ["text-placeholder", "border-strong", "focus", "selected-border"];
+// btn-primary-bg: the primary button must stand out from the page as a shape, not only by its label.
+const NON_TEXT = ["text-placeholder", "border-strong", "focus", "selected-border", "btn-primary-bg"];
 const FILLS: [string, string][] = [
   ["btn-primary-fg", "btn-primary-bg"],
   ["btn-primary-fg", "btn-primary-bg-hover"],

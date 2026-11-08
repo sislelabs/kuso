@@ -207,3 +207,40 @@ export function formatSec(n: number): string {
   if (n >= 60) return `${Math.round(n / 60)}m`;
   return `${n}s`;
 }
+
+// Aliases callers may reasonably use in a prefill link; mapped onto the
+// real kinds so "Alert me when errors spike" links don't silently fall
+// back to the default.
+const KIND_ALIASES: Record<string, AlertKind> = {
+  error_rate: "http_5xx_rate",
+  errors: "http_5xx_rate",
+  "5xx": "http_5xx_rate",
+  latency: "http_p95_latency",
+  p95: "http_p95_latency",
+};
+
+export function parseAlertKind(raw: string | null): AlertKind | null {
+  if (!raw) return null;
+  const k = raw.trim().toLowerCase();
+  if (k in ALERT_KINDS) return k as AlertKind;
+  return KIND_ALIASES[k] ?? null;
+}
+
+// prefillRuleForm reads the /settings/alerts?new=1 deep-link contract:
+// new=1 opens the create form; kind, project, service, env prefill it.
+// Unknown kinds fall back to http_5xx_rate; scope fields the kind
+// doesn't use are dropped. Returns null when new isn't set.
+export function prefillRuleForm(params: URLSearchParams): RuleFormState | null {
+  if (params.get("new") !== "1") return null;
+  const kind = parseAlertKind(params.get("kind")) ?? "http_5xx_rate";
+  const meta = ALERT_KINDS[kind];
+  const f = emptyRuleForm(kind);
+  if (meta.scope !== "none") {
+    f.project = params.get("project")?.trim() ?? "";
+    f.service = f.project ? (params.get("service")?.trim() ?? "") : "";
+    if (meta.scope === "env" && f.project) f.env = params.get("env")?.trim() ?? "";
+  }
+  const target = f.service || f.project;
+  if (target) f.name = `${target} ${meta.label}`;
+  return f;
+}
