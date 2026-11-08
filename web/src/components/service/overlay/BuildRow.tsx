@@ -1,16 +1,35 @@
 "use client";
 
-// Per-build row + inline expand/collapse log viewer + per-row actions
-// (rollback / cancel / retry release).
+// One deploy-history row: status, commit, meta, the row's actions, and the
+// expandable build log (failure summary first for failed builds).
 
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LogStream } from "@/components/logs/LogStream";
+import {
+  AlertTriangle,
+  Ban,
+  CheckCircle2,
+  ChevronDown,
+  CircleDashed,
+  Clock,
+  Loader2,
+  MoreHorizontal,
+  RefreshCw,
+  RotateCcw,
+  Undo2,
+  X,
+  XCircle,
+} from "lucide-react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { cancelBuild } from "@/features/services";
-import type { BuildSummary, BuildFailureClass } from "@/features/services/api";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/services";
+import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
   buildRefLabel,
+  githubCommitUrl,
+  githubCompareUrl,
   isBranchMismatch,
   useRetryRelease,
   useRollbackToBuild,
@@ -18,111 +37,52 @@ import {
   type DeployBuild,
 } from "@/features/builds";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, Undo2, X, Copy, Check, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { memo, useEffect, useState } from "react";
+import { BuildLogViewer } from "./BuildLogViewer";
+import { CommitRef, CompareLink, Dot, LiveDuration, triggerLabel } from "./deployParts";
+import { CopyButton } from "@/components/shared/s2-CopyButton";
 
 export type { BuildRowStatus };
+export { formatDuration, triggerLabel } from "./deployParts";
 
-// formatDuration turns a millisecond span into the kind of label the
-// build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
-// "1h 02m". Sub-second spans floor to "0s" rather than disappear so
-// a freshly-clicked redeploy shows a live counter immediately.
-export function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 60) {
-    return remSec === 0 ? `${min}m` : `${min}m ${String(remSec).padStart(2, "0")}s`;
-  }
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return remMin === 0 ? `${hr}h` : `${hr}h ${String(remMin).padStart(2, "0")}m`;
-}
+const STATUS: Record<
+  BuildRowStatus,
+  { label: string; icon: React.ComponentType<{ className?: string }>; tone: string; badge?: string }
+> = {
+  active: { label: "Live", icon: CheckCircle2, tone: "text-[var(--success)]", badge: "border-[var(--success)]/40 bg-[var(--success-subtle)] text-[var(--success)]" },
+  superseded: { label: "Succeeded", icon: CheckCircle2, tone: "text-[var(--text-tertiary)]" },
+  failed: { label: "Failed", icon: XCircle, tone: "text-[var(--error)]", badge: "border-[var(--error)]/40 bg-[var(--error-subtle)] text-[var(--error)]" },
+  "release-failed": { label: "Release failed", icon: AlertTriangle, tone: "text-[var(--warning)]", badge: "border-[var(--warning)]/40 bg-[var(--warning-subtle)] text-[var(--warning)]" },
+  running: { label: "Building", icon: Loader2, tone: "text-[var(--building)] animate-spin", badge: "border-[var(--building)]/40 bg-[var(--building-subtle)] text-[var(--building)]" },
+  pending: { label: "Starting", icon: CircleDashed, tone: "text-[var(--building)]", badge: "border-[var(--border-default)] text-[var(--text-secondary)]" },
+  queued: { label: "Queued", icon: Clock, tone: "text-[var(--text-secondary)]", badge: "border-dashed border-[var(--border-default)] text-[var(--text-secondary)]" },
+  cancelled: { label: "Cancelled", icon: Ban, tone: "text-[var(--text-tertiary)]", badge: "border-[var(--border-subtle)] text-[var(--text-tertiary)]" },
+  unknown: { label: "Unknown", icon: CircleDashed, tone: "text-[var(--text-tertiary)]" },
+};
 
-// LiveDuration owns the 1s tick for a running build, so only this
-// span re-renders each second — not the panel and its open log view.
-function LiveDuration({ since }: { since: string }) {
-  const startMs = Date.parse(since);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  if (!Number.isFinite(startMs)) return null;
-  return <span className="text-[var(--building)]">{formatDuration(now - startMs)}</span>;
-}
-
-const CHIP =
-  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] disabled:opacity-50";
-
-// statusBadge renders the small mono pill on the left of each row.
-// Kept here so the row + the badge live in one file (the panel only
-// needs the row component). queuePos is the build's 1-based place in
-// the cluster-wide build queue — rendered as "QUEUED #3" so users can
-// see how many builds are ahead of theirs; only meaningful (and only
-// read) when s=queued.
 export function StatusBadge({ s, queuePos }: { s: BuildRowStatus; queuePos?: number }) {
-  const map: Record<BuildRowStatus, { label: string; cls: string }> = {
-    active:     { label: "ACTIVE",     cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
-    superseded: { label: "SUPERSEDED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-    failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
-    // release-failed: the image BUILT fine but its release hook (e.g. a
-    // DB migration) failed, so kuso refused to promote it. Distinct label
-    // from FAILED so the operator knows the build is good and the fix is
-    // in the release step, not the build.
-    "release-failed": { label: "RELEASE FAILED", cls: "bg-orange-500/10 text-orange-400 border-orange-500/30" },
-    running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
-    pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
-    queued:     { label: "QUEUED",     cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)] border-dashed" },
-    cancelled:  { label: "CANCELLED",  cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-    unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-  };
-  const m = map[s];
-  const label = s === "queued" && queuePos ? `QUEUED #${queuePos}` : m.label;
+  const m = STATUS[s];
+  if (!m.badge) return null;
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest border",
-        m.cls
-      )}
-    >
-      {label}
+    <span className={cn("inline-flex shrink-0 items-center rounded border px-1.5 py-px text-[11px] font-medium", m.badge)}>
+      {s === "queued" && queuePos ? `Queued · #${queuePos}` : m.label}
     </span>
   );
-}
-
-// triggerLabel renders the "by X" suffix shown on each build row.
-//   - source=user + user=alice  → "by alice"
-//   - source=user (no name)     → "by you"
-//   - source=webhook + user=bob → "by bob (webhook)"
-//   - source=webhook (no user)  → "via webhook"
-//   - source=api / system       → "via API" / "via system"
-//   - none                      → "" (renderer skips the suffix)
-export function triggerLabel(b: BuildSummary): string {
-  const src = b.triggeredBy ?? "";
-  const user = b.triggeredByUser ?? "";
-  if (src === "user") return user ? `by ${user}` : "by you";
-  if (src === "webhook") return user ? `by ${user} (webhook)` : "via webhook";
-  if (src === "api") return "via API";
-  if (src === "system") return "via system";
-  return "";
 }
 
 export interface BuildRowProps {
   project: string;
   service: string;
-  // env-group short name (production / staging / preview-pr-N) so
-  // the rollback POST scopes to the right env CR. Empty defaults
-  // to production server-side (pre-v0.17.1 behaviour).
+  // env-group short name so rollback scopes to the right env CR.
   env: string;
   build: DeployBuild;
+  // The older successful build on the same branch (compare base).
+  previous?: DeployBuild;
+  // The build is newer than what's live (the env was rolled back past it).
+  newerThanLive?: boolean;
+  repoUrl?: string;
   status: BuildRowStatus;
   duration: string;
-  // startedAt of a running build; renders a self-ticking duration.
   runningSince?: string;
   isOpen: boolean;
   canDeploy: boolean;
@@ -134,6 +94,9 @@ export function BuildRow({
   service,
   env,
   build: b,
+  previous,
+  newerThanLive,
+  repoUrl,
   status: s,
   duration,
   runningSince,
@@ -141,133 +104,119 @@ export function BuildRow({
   canDeploy,
   onToggle,
 }: BuildRowProps) {
-  const sha = buildRefLabel(b, 12);
-  const branch = b.branch ?? "—";
+  const m = STATUS[s];
+  const Icon = m.icon;
+  const sha = buildRefLabel(b, 7);
   const ts = b.startedAt ?? b.finishedAt;
-  const created = ts ? relativeTime(ts) : "—";
   const note = buildNote(b, s);
+  const who = triggerLabel(b);
+  const live = s === "running" || s === "pending" || s === "queued";
+  const failed = s === "failed";
+  const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
+  const logId = `build-log-${b.id}`;
+
   return (
     <li
       className={cn(
-        // overflow-hidden keeps the expanded log <pre> from punching
-        // through the rounded card border on wide builds.
-        "overflow-hidden rounded-md border bg-[var(--bg-secondary)]",
-        s === "failed" && "border-red-500/30",
-        s === "active" && "border-emerald-500/30",
-        s === "running" && "border-amber-500/30",
-        !["failed", "active", "running"].includes(s) && "border-[var(--border-subtle)]"
+        "overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
+        failed ? "border-[var(--error)]/35" : s === "running" ? "border-[var(--building)]/35" : "border-[var(--border-subtle)]",
       )}
     >
-      <div className="flex items-center gap-1 px-3 py-2.5">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex flex-1 items-center gap-3 text-left"
-        >
-          <StatusBadge s={s} queuePos={b.queuePosition} />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">
-              <span className="font-mono">{sha || "—"}</span>
-              <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
-            </div>
-            {b.commitMessage && (
-              <div className="truncate text-xs text-[var(--text-secondary)]">{b.commitMessage}</div>
-            )}
-            {b.promoteHold && (s === "running" || s === "pending") && (
-              <div className="truncate text-xs text-amber-400" title={b.promoteHold}>
-                ⏸ promotion held — {b.promoteHold}
-              </div>
-            )}
-            {s === "release-failed" && (
-              <div className="truncate text-xs text-orange-400" title={b.errorMessage}>
-                Migration failed — previous version still live
-              </div>
-            )}
-            {s === "failed" && b.errorMessage && (
-              <div
-                className="truncate font-mono text-[11px] text-red-300/90"
-                title={b.errorMessage}
-              >
-                ✗ {b.errorMessage}
-              </div>
-            )}
-            {note && (
-              <div className="truncate text-xs text-[var(--text-tertiary)]" title={note}>
-                {note}
-              </div>
-            )}
-            <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              {created}
-              {runningSince ? (
-                <>
-                  {" · "}
-                  <LiveDuration since={runningSince} />
-                </>
-              ) : duration ? (
-                <>
-                  {" · "}
-                  <span>{duration}</span>
-                </>
-              ) : null}
-              {triggerLabel(b) && (
-                <>
-                  {" · "}
-                  <span>{triggerLabel(b)}</span>
-                </>
-              )}
-            </div>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:px-4">
+        <Icon aria-hidden className={cn("mt-0.5 h-4 w-4 shrink-0", m.tone)} />
+        <div className="min-w-0">
+          <div className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={isOpen}
+              aria-controls={logId}
+              className="min-w-0 flex-1 text-left text-sm font-medium text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded-sm"
+            >
+              <span className="line-clamp-2 break-words">
+                {b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy")}
+              </span>
+              <span className="sr-only">{`, ${m.label}. ${isOpen ? "Hide" : "Show"} build log`}</span>
+            </button>
+            <StatusBadge s={s} queuePos={b.queuePosition} />
           </div>
-        </button>
-        {/* Rollback needs the build's image. Once it ages past the
-            image-retention window the sweep prunes the registry tag and
-            blanks b.imageTag; show that instead of silently dropping the chip. */}
-        {s === "superseded" && canDeploy && !!b.imageTag && (
-          <RollbackButton project={project} service={service} env={env} buildId={b.id} sha={sha} />
-        )}
-        {s === "superseded" && canDeploy && !b.imageTag && (
-          <span
-            title="The registry image for this build was deleted by the image-retention sweep, so it can't be rolled back to."
-            className="inline-flex cursor-not-allowed items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-tertiary)]"
-          >
-            <Undo2 className="h-3 w-3" />
-            image pruned
-          </span>
-        )}
-        {s === "release-failed" && canDeploy && (
-          <RetryReleaseButton project={project} service={service} buildId={b.id} sha={sha} />
-        )}
-        {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
-          <CancelButton project={project} service={service} buildId={b.id} />
-        )}
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={isOpen}
-          aria-label={isOpen ? "Hide build log" : "Show build log"}
-          className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-        >
-          {isOpen ? (
-            <ChevronDown className="h-4 w-4 shrink-0" />
-          ) : (
-            <ChevronRight className="h-4 w-4 shrink-0" />
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--text-secondary)]">
+            <CommitRef build={b} repoUrl={repoUrl} />
+            <Dot />
+            <span className="max-w-[16ch] truncate" title={b.branch}>
+              {b.branch ?? "—"}
+            </span>
+            {who && (
+              <>
+                <Dot />
+                <span>{who}</span>
+              </>
+            )}
+            <Dot />
+            <time dateTime={ts} title={ts ? new Date(ts).toLocaleString() : undefined}>
+              {ts ? relativeTime(ts) : "—"}
+            </time>
+            {runningSince ? (
+              <>
+                <Dot />
+                <LiveDuration since={runningSince} />
+              </>
+            ) : duration ? (
+              <>
+                <Dot />
+                <span className="tabular-nums" title="Build time">
+                  {duration}
+                </span>
+              </>
+            ) : null}
+            {compareHref && (
+              <span className="hidden sm:contents">
+                <Dot />
+                <CompareLink repoUrl={repoUrl} from={previous} to={b} />
+              </span>
+            )}
+          </div>
+          {b.promoteHold && (s === "running" || s === "pending") && (
+            <p className="mt-1 text-xs text-[var(--warning)]">Promotion held: {b.promoteHold}</p>
           )}
-        </button>
+          {s === "release-failed" && (
+            <p className="mt-1 text-xs text-[var(--warning)]">
+              The image built, but its release command failed. The previous version is still live.
+            </p>
+          )}
+          {failed && (b.failureClass?.summary || b.errorMessage) && (
+            <p className="mt-1 break-words text-xs text-[var(--error)]">{b.failureClass?.summary || b.errorMessage}</p>
+          )}
+          {note && <p className="mt-1 break-words text-xs text-[var(--text-tertiary)]">{note}</p>}
+        </div>
+        <div className="col-start-2 flex items-center gap-1 sm:col-start-3 sm:row-start-1 sm:self-start">
+          <PrimaryAction project={project} service={service} env={env} build={b} status={s} sha={sha} canDeploy={canDeploy} newerThanLive={newerThanLive} />
+          <RowMenu build={b} repoUrl={repoUrl} previous={previous} compareHref={compareHref} sha={sha} onToggleLog={onToggle} isOpen={isOpen} />
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+            aria-controls={logId}
+            aria-label={isOpen ? "Hide build log" : "Show build log"}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
+          </button>
+        </div>
       </div>
       {isOpen && (
-        <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+        <div id={logId} className="min-w-0 border-t border-[var(--border-subtle)]">
           {s === "release-failed" ? (
             <>
               <ReleaseFailure message={b.errorMessage} job={b.releaseJob} logTail={b.releaseLogTail} />
-              {/* Older servers don't send the release log; the build log is all we have. */}
-              {!b.releaseLogTail && <BuildLogs project={project} service={service} buildId={b.id} />}
+              {!b.releaseLogTail && (
+                <BuildLogViewer project={project} service={service} buildId={b.id} live={false} failed={false} />
+              )}
             </>
           ) : (
             <>
-              <BuildErrorBanner
-                message={s === "failed" ? b.errorMessage : undefined}
-                failureClass={s === "failed" ? b.failureClass : undefined}
-              />
-              <BuildLogs project={project} service={service} buildId={b.id} />
+              {failed && <Remediation failureClass={b.failureClass} />}
+              <BuildLogViewer project={project} service={service} buildId={b.id} live={live} failed={failed} />
             </>
           )}
         </div>
@@ -276,190 +225,185 @@ export function BuildRow({
   );
 }
 
-// BuildErrorBanner renders the sticky red banner above the log viewer
-// when the build has an extracted failure cause. archiveLogs (server-
-// side) scans the tail logs + kubelet's terminated reason and stamps
-// the hit into kuso.sislelabs.com/build-message; the API surfaces it
-// on BuildSummary.errorMessage. Without this, users were hand-grepping
-// 200-600 lines of kaniko log noise to find the one-line cause.
-//
-// When the build also carries a structured failureClass with a
-// remediation, we render the richer card: the classifier's summary,
-// the remediation title + prose, and a copy-pasteable fix block. The
-// bare errorMessage path is the fallback for builds the classifier
-// couldn't (or hasn't yet) tagged.
-function BuildErrorBanner({
-  message,
-  failureClass,
-}: {
-  message?: string;
-  failureClass?: BuildFailureClass;
-}) {
-  const rem = failureClass?.remediation;
-  if (!message && !failureClass) return null;
-  return (
-    <div className="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
-      <div className="flex items-start gap-2">
-        <span aria-hidden className="select-none">
-          ✗
-        </span>
-        <div className="min-w-0 flex-1 space-y-2">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
-              build failure cause
-            </div>
-            <div className="mt-0.5 break-words font-mono text-[11px] leading-snug">
-              {failureClass?.summary || message}
-            </div>
-            {failureClass?.lineHint && (
-              <div className="mt-0.5 break-words font-mono text-[10px] text-red-300/70">
-                {failureClass.lineNum ? `line ${failureClass.lineNum}: ` : ""}
-                {failureClass.lineHint}
-              </div>
-            )}
-          </div>
-
-          {rem && (
-            <div className="rounded-md border border-red-500/30 bg-[var(--bg-primary)]/40 p-2">
-              <div className="text-[11px] font-semibold text-red-100">{rem.title}</div>
-              {rem.detail && (
-                <p className="mt-0.5 text-[11px] leading-snug text-red-200/90">{rem.detail}</p>
-              )}
-              {rem.fix && <FixBlock fix={rem.fix} lang={rem.fixLang} />}
-              {rem.docsAnchor && (
-                <a
-                  href={rem.docsAnchor}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1.5 inline-block font-mono text-[10px] text-red-200/80 underline underline-offset-2 hover:text-red-100"
-                >
-                  read the docs →
-                </a>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// FixBlock is the copy-pasteable remediation snippet. lang labels the
-// block (shell / dockerfile / yaml …) and is purely cosmetic — we
-// don't ship a syntax highlighter, just a language tag + mono pre.
-function FixBlock({ fix, lang }: { fix: string; lang?: string }) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(fix);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("clipboard unavailable");
-    }
-  };
-  return (
-    <div className="mt-1.5 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-2 py-1">
-        <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          {lang || "fix"}
-        </span>
-        <button
-          type="button"
-          onClick={onCopy}
-          aria-label="Copy fix"
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-        >
-          {copied ? (
-            <>
-              <Check className="h-3 w-3 text-emerald-500" /> copied
-            </>
-          ) : (
-            <>
-              <Copy className="h-3 w-3" /> copy
-            </>
-          )}
-        </button>
-      </div>
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
-        {fix}
-      </pre>
-    </div>
-  );
-}
-
-// BuildLogs streams the build pod's logs. LogStream is keyed on env
-// today; we encode the build id as env=build:<id> so the server can
-// route to the kaniko pod by name. If the server doesn't recognise
-// it we fall through to "no logs available" (the server side handles
-// that case gracefully).
-// Memoized: the row re-renders on every builds poll; the log view
-// (up to 10k lines) only needs to when its build changes.
-const BuildLogs = memo(function BuildLogs({ project, service, buildId }: { project: string; service: string; buildId: string }) {
-  return (
-    <div className="h-72 p-2">
-      <LogStream project={project} service={service} env={`build:${buildId}`} height="100%" />
-    </div>
-  );
-});
-
-// CancelButton — POSTs the build's cancel endpoint. No confirm step:
-// cancelling a build is reversible (the user can just trigger a new
-// one) and a confirm dialog on top of a wedged build is friction.
-function CancelButton({
+// PrimaryAction is the one inline action that matters for the row's state.
+function PrimaryAction({
   project,
   service,
-  buildId,
+  env,
+  build: b,
+  status: s,
+  sha,
+  canDeploy,
+  newerThanLive,
 }: {
   project: string;
   service: string;
-  buildId: string;
+  env: string;
+  build: DeployBuild;
+  status: BuildRowStatus;
+  sha: string;
+  canDeploy: boolean;
+  newerThanLive?: boolean;
 }) {
-  const qc = useQueryClient();
-  const m = useMutation({
-    mutationFn: () => cancelBuild(project, service, buildId),
-    onSuccess: () => {
-      toast.success("Build cancelled");
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
-    },
-    onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Cancel failed");
-    },
-  });
+  if (!canDeploy) return null;
+  if (s === "superseded") {
+    if (!b.imageTag) {
+      return (
+        <span
+          tabIndex={0}
+          title="This build's image was removed by the registry retention sweep, so there's nothing to roll back to. Redeploy the commit instead."
+          className="inline-flex h-7 cursor-help items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 text-xs text-[var(--text-tertiary)]"
+        >
+          Image pruned
+        </span>
+      );
+    }
+    return (
+      <RollbackButton
+        project={project}
+        service={service}
+        env={env}
+        buildId={b.id}
+        sha={sha}
+        branch={b.branch}
+        label={newerThanLive ? "Roll forward" : "Rollback"}
+      />
+    );
+  }
+  if (s === "release-failed") return <RetryReleaseButton project={project} service={service} buildId={b.id} sha={sha} />;
+  if (s === "running" || s === "pending" || s === "queued") return <CancelButton project={project} service={service} buildId={b.id} />;
+  if (s === "failed" || s === "cancelled") {
+    return <RetryBuildButton project={project} service={service} build={b} sha={sha} />;
+  }
+  return null;
+}
+
+const ACTION_BTN =
+  "inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50";
+
+// RowMenu holds the secondary actions. On phones it is also the only home for
+// compare (the meta line drops it to save width).
+function RowMenu({
+  build: b,
+  repoUrl,
+  previous,
+  compareHref,
+  sha,
+  onToggleLog,
+  isOpen,
+}: {
+  build: DeployBuild;
+  repoUrl?: string;
+  previous?: DeployBuild;
+  compareHref: string | null;
+  sha: string;
+  onToggleLog: () => void;
+  isOpen: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const commitHref = githubCommitUrl(repoUrl, b.commitSha);
+  const item =
+    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]";
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        m.mutate();
-      }}
-      disabled={m.isPending}
-      title="Cancel this build"
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-red-500/40 hover:bg-red-500/5 hover:text-red-400 disabled:opacity-50"
-    >
-      <X className="h-3 w-3" />
-      {m.isPending ? "…" : "cancel"}
-    </button>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        aria-label="More actions"
+        className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 gap-0.5 rounded-lg p-1">
+        <button
+          type="button"
+          className={item}
+          onClick={() => {
+            onToggleLog();
+            setOpen(false);
+          }}
+        >
+          {isOpen ? "Hide build log" : "Show build log"}
+        </button>
+        {compareHref && (
+          <a className={item} href={compareHref} target="_blank" rel="noreferrer" onClick={() => setOpen(false)}>
+            Compare with {previous ? buildRefLabel(previous, 7) : "previous"}
+          </a>
+        )}
+        {commitHref && (
+          <a
+            className={item}
+            href={commitHref}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => setOpen(false)}
+          >
+            View commit
+          </a>
+        )}
+        <div className={cn(item, "justify-between")}>
+          <span>Copy {b.commitSha ? "commit SHA" : "ref"}</span>
+          <CopyButton value={b.commitSha || b.ref || sha} what="Commit SHA" />
+        </div>
+        <div className={cn(item, "justify-between")}>
+          <span>Copy build ID</span>
+          <CopyButton value={b.id} what="Build ID" />
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-// ReleaseFailure replaces the build-failure banner for release-failed
-// builds: the image built fine, the release hook (migration) didn't.
+// Remediation renders the classifier's fix for a failed build above the log.
+function Remediation({ failureClass }: { failureClass?: BuildFailureClass }) {
+  const rem = failureClass?.remediation;
+  if (!failureClass?.lineHint && !rem) return null;
+  return (
+    <div className="space-y-2 border-b border-[var(--border-subtle)] bg-[var(--error-subtle)] px-3 py-2.5 sm:px-4">
+      {failureClass?.lineHint && (
+        <p className="break-words font-mono text-xs text-[var(--text-secondary)]">
+          {failureClass.lineNum ? `line ${failureClass.lineNum}: ` : ""}
+          {failureClass.lineHint}
+        </p>
+      )}
+      {rem && (
+        <div>
+          <p className="text-sm font-medium text-[var(--text-primary)]">{rem.title}</p>
+          {rem.detail && <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">{rem.detail}</p>}
+          {rem.fix && (
+            <div className="mt-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+              <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-2 py-1">
+                <span className="text-[11px] text-[var(--text-tertiary)]">{rem.fixLang || "Fix"}</span>
+                <CopyButton value={rem.fix} what="Fix" label="Copy" />
+              </div>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs text-[var(--text-secondary)]">
+                {rem.fix}
+              </pre>
+            </div>
+          )}
+          {rem.docsAnchor && (
+            <a
+              href={rem.docsAnchor}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1.5 inline-block text-xs text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+            >
+              Read the docs
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReleaseFailure({ message, job, logTail }: { message?: string; job?: string; logTail?: string }) {
   return (
-    <div className="border-b border-orange-500/40 bg-orange-500/10 px-3 py-2 text-[12px]">
-      <div
-        className="font-mono text-[10px] uppercase tracking-widest text-orange-300/80"
-        title={job ? `job ${job}` : undefined}
-      >
-        release failed
-      </div>
-      {message && (
-        <div className="mt-0.5 break-words font-mono text-[11px] leading-snug text-orange-200">{message}</div>
-      )}
+    <div className="space-y-2 border-b border-[var(--border-subtle)] bg-[var(--warning-subtle)] px-3 py-2.5 sm:px-4">
+      <p className="text-sm font-medium text-[var(--text-primary)]">
+        Release command failed{job ? <span className="ml-1 font-mono text-xs font-normal text-[var(--text-tertiary)]">{job}</span> : null}
+      </p>
+      {message && <p className="break-words font-mono text-xs text-[var(--text-secondary)]">{message}</p>}
       {logTail && (
-        <pre className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--console-bg)] p-2 font-mono text-xs text-[var(--console-fg)]">
           {logTail}
         </pre>
       )}
@@ -467,47 +411,91 @@ function ReleaseFailure({ message, job, logTail }: { message?: string; job?: str
   );
 }
 
-function RetryReleaseButton({
-  project,
-  service,
-  buildId,
-  sha,
-}: {
-  project: string;
-  service: string;
-  buildId: string;
-  sha: string;
-}) {
+function CancelButton({ project, service, buildId }: { project: string; service: string; buildId: string }) {
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: () => cancelBuild(project, service, buildId),
+    onSuccess: () => {
+      toast.success("Build cancelled");
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Cancel failed"),
+  });
+  return (
+    <button
+      type="button"
+      onClick={() => m.mutate()}
+      disabled={m.isPending}
+      title="Stop this build. Nothing changes on the live version."
+      className={cn(ACTION_BTN, "hover:border-[var(--error)]/50 hover:text-[var(--error)]")}
+    >
+      <X className="h-3.5 w-3.5" />
+      <span>{m.isPending ? "Cancelling…" : "Cancel"}</span>
+    </button>
+  );
+}
+
+// RetryBuildButton rebuilds the same commit (failed or cancelled build).
+function RetryBuildButton({ project, service, build: b, sha }: { project: string; service: string; build: DeployBuild; sha: string }) {
+  const [open, setOpen] = useState(false);
+  const trigger = useTriggerBuild(project, service);
+  const body = { branch: b.branch, ...(b.commitSha ? { ref: b.commitSha } : {}) };
+  const run = async () => {
+    try {
+      const res = await trigger.mutateAsync(body);
+      toast.success(buildTriggerMessage(res, "Rebuild started"));
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to start the build");
+    }
+  };
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} disabled={trigger.isPending} className={ACTION_BTN} title="Build this commit again">
+        <RotateCcw className="h-3.5 w-3.5" />
+        <span>Retry</span>
+      </button>
+      <ConfirmDialog
+        open={open}
+        title="Retry this build?"
+        destructive={false}
+        confirmLabel="Rebuild"
+        body={
+          <span>
+            Builds <span className="font-mono text-[var(--text-primary)]">{b.commitSha ? sha : "the latest commit"}</span> on{" "}
+            <span className="font-mono text-[var(--text-primary)]">{b.branch || "the default branch"}</span> again and
+            deploys it if it succeeds.
+          </span>
+        }
+        pending={trigger.isPending}
+        onConfirm={run}
+        onCancel={() => setOpen(false)}
+      />
+    </>
+  );
+}
+
+function RetryReleaseButton({ project, service, buildId, sha }: { project: string; service: string; buildId: string; sha: string }) {
   const [open, setOpen] = useState(false);
   const m = useRetryRelease(project, service);
   const run = () =>
     m.mutate(buildId, {
-      onSuccess: (res) =>
-        toast.success(res.job ? `Release retry started (${res.job})` : "Release retry started"),
+      onSuccess: (res) => toast.success(res.job ? `Release retry started (${res.job})` : "Release retry started"),
       onError: (e) => toast.error(e instanceof Error ? e.message : "Retry failed"),
       onSettled: () => setOpen(false),
     });
   return (
     <>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(true);
-        }}
-        disabled={m.isPending}
-        title="Re-run the release hook for this build"
-        className={cn(CHIP, "hover:border-orange-500/40 hover:bg-orange-500/5 hover:text-orange-400")}
-      >
-        <RefreshCw className="h-3 w-3" />
-        retry release
+      <button type="button" onClick={() => setOpen(true)} disabled={m.isPending} title="Re-run the release command for this build" className={ACTION_BTN}>
+        <RefreshCw className="h-3.5 w-3.5" />
+        <span>Retry release</span>
       </button>
       <ConfirmDialog
         open={open}
         title={`Retry release for ${sha || buildId}?`}
         destructive={false}
         confirmLabel="Retry release"
-        body="Re-runs the release hook (migration). The build goes live if it succeeds."
+        body="Runs the release command (e.g. migrations) again. The build goes live if it succeeds."
         pending={m.isPending}
         onConfirm={run}
         onCancel={() => setOpen(false)}
@@ -516,21 +504,22 @@ function RetryReleaseButton({
   );
 }
 
-// RollbackButton re-points the env at this build. The server refuses a
-// build from another branch with a 400; we surface its message and let
-// the user force it.
-function RollbackButton({
+export function RollbackButton({
   project,
   service,
   env,
   buildId,
   sha,
+  branch,
+  label = "Rollback",
 }: {
   project: string;
   service: string;
   env: string;
   buildId: string;
   sha: string;
+  branch?: string;
+  label?: string;
 }) {
   const [step, setStep] = useState<"idle" | "confirm" | "mismatch">("idle");
   const [mismatch, setMismatch] = useState("");
@@ -541,7 +530,7 @@ function RollbackButton({
       { build: buildId, force },
       {
         onSuccess: () => {
-          toast.success(`Rolled back to ${sha || buildId}`);
+          toast.success(`${target} now runs ${sha || buildId}`);
           setStep("idle");
         },
         onError: (e) => {
@@ -559,24 +548,22 @@ function RollbackButton({
     <>
       <button
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setStep("confirm");
-        }}
-        title={`Roll ${target} back to ${sha || buildId}`}
-        className={cn(CHIP, "hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400")}
+        onClick={() => setStep("confirm")}
+        title={`Point ${target} at ${sha || buildId}`}
+        className={cn(ACTION_BTN, "hover:border-[var(--warning)]/50 hover:text-[var(--warning)]")}
       >
-        <Undo2 className="h-3 w-3" />
-        rollback
+        <Undo2 className="h-3.5 w-3.5" />
+        <span>{label}</span>
       </button>
       <ConfirmDialog
         open={step === "confirm"}
-        title={`Roll ${target} back to ${sha || buildId}?`}
+        title={label === "Rollback" ? `Roll ${target} back to ${sha || buildId}?` : `Switch ${target} to ${sha || buildId}?`}
         destructive={false}
-        confirmLabel="Roll back"
+        confirmLabel={label === "Rollback" ? "Roll back" : "Switch"}
         body={
           <span>
-            <strong>{target}</strong> switches to this build&apos;s image. The next push deploys over it.
+            <strong>{target}</strong> switches to this build&apos;s image right away, no rebuild. Environment variables stay as
+            they are now. The next push to <span className="font-mono">{branch || "the branch"}</span> deploys over it.
           </span>
         }
         pending={m.isPending}

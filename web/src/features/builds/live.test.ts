@@ -7,6 +7,8 @@ import {
   isRolledBack,
   liveBuildId,
   waitingLabel,
+  previousSucceeded,
+  rollForwardTarget,
 } from "./live";
 import type { DeployBuild } from "./types";
 
@@ -125,5 +127,24 @@ describe("buildRefLabel", () => {
 
   it("is empty when the server sent neither", () => {
     expect(buildRefLabel({}, 7)).toBe("");
+  });
+});
+
+describe("previousSucceeded / rollForwardTarget", () => {
+  const builds = [
+    b("n", { commitSha: "ccccccc", finishedAt: "2026-09-03T00:00:00Z", imageTag: "c" }),
+    b("f", { status: "failed", commitSha: "fffffff", finishedAt: "2026-09-02T12:00:00Z" }),
+    b("o", { commitSha: "bbbbbbb", finishedAt: "2026-09-02T00:00:00Z", imageTag: "b" }),
+    b("p", { branch: "feat", commitSha: "ddddddd", finishedAt: "2026-09-01T12:00:00Z" }),
+    b("oo", { commitSha: "aaaaaaa", finishedAt: "2026-09-01T00:00:00Z", imageTag: "a" }),
+  ];
+  it("finds the older success on the same branch", () => {
+    expect(previousSucceeded(builds, builds[0])?.id).toBe("o");
+    expect(previousSucceeded(builds, builds[2])?.id).toBe("oo");
+    expect(previousSucceeded(builds, builds[4])).toBeUndefined();
+  });
+  it("rolls forward to the newest newer success only when rolled back", () => {
+    expect(rollForwardTarget(builds, builds[2])?.id).toBe("n");
+    expect(rollForwardTarget(builds, builds[0])).toBeUndefined();
   });
 });
