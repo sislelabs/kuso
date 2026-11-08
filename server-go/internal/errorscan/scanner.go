@@ -212,38 +212,40 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 	matched := 0
 	scanned := 0
 	maxID := wm
+	g := newGrouper(func(c *errorChain) {
+		if err := s.DB.InsertErrorEvent(ctx, db.ErrorEvent{
+			Project:     c.head.project,
+			Service:     c.head.service,
+			Env:         c.head.env,
+			Pod:         c.head.pod,
+			Fingerprint: fingerprintFor(c.title),
+			Message:     truncateForMessage(c.title),
+			RawLine:     truncateForRaw(c.raw()),
+			Ts:          c.head.ts,
+		}); err != nil {
+			s.Logger.Warn("errorscan: insert", "err", err)
+			return
+		}
+		matched++
+	})
 	for rows.Next() {
-		var id int64
-		var ts time.Time
-		var pod, project, service, env, line string
-		if err := rows.Scan(&id, &ts, &pod, &project, &service, &env, &line); err != nil {
+		var l scanLine
+		if err := rows.Scan(&l.id, &l.ts, &l.pod, &l.project, &l.service, &l.env, &l.line); err != nil {
 			s.Logger.Warn("errorscan: scan row", "err", err)
 			continue
 		}
 		scanned++
-		if id > maxID {
-			maxID = id
+		if l.id > maxID {
+			maxID = l.id
 		}
-		if !s.runtimeLine(pod, line) || !matchesAnyPattern(line) {
+		if !s.runtimeLine(l.pod, l.line) {
 			continue
 		}
-		fp := fingerprintFor(line)
-		msg := truncateForMessage(line)
-		if err := s.DB.InsertErrorEvent(ctx, db.ErrorEvent{
-			Project:     project,
-			Service:     service,
-			Env:         env,
-			Pod:         pod,
-			Fingerprint: fp,
-			Message:     msg,
-			RawLine:     truncateForRaw(line),
-			Ts:          ts,
-		}); err != nil {
-			s.Logger.Warn("errorscan: insert", "err", err)
-			continue
-		}
-		matched++
+		g.feed(l, matchesAnyPattern(l.line))
 	}
+	// A chain cut by the batch boundary is recorded as it stands; the
+	// watermark below moves past its lines either way.
+	g.flush()
 	if err := rows.Err(); err != nil {
 		return scanned, wm, err
 	}

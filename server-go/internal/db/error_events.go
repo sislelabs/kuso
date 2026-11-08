@@ -53,6 +53,25 @@ const (
 	ReleasePodPattern = `-release-[a-z0-9-]+-[0-9a-f]{8}-[a-z0-9]{5}$`
 )
 
+// hideSplitContinuation drops rows the error scanner wrote before it
+// grouped multi-line errors: a continuation line (indented frame, "at …")
+// or a sibling line from the same write ("… line one" / "… line two")
+// that became its own group. A row is such a split when an earlier row
+// from the same pod, with another fingerprint, sits just before it. The
+// sibling test mirrors errorscan's rule (same millisecond, a shared
+// prefix of at least 16 bytes and half the shorter first line). Every
+// reader below applies it to the row aliased e, so counts agree.
+const hideSplitContinuation = `NOT EXISTS (
+		SELECT 1 FROM "ErrorEvent" sib
+		 WHERE sib.project = e.project AND sib.service = e.service AND sib.pod = e.pod
+		   AND sib.ts < e.ts AND sib.ts >= e.ts - interval '100 milliseconds'
+		   AND sib.fingerprint <> e.fingerprint
+		   AND (e."rawLine" ~ '^(\s|at\s)'
+		        OR (sib.ts >= e.ts - interval '1 millisecond'
+		            AND length(split_part(e."rawLine", E'\n', 1)) >= 16
+		            AND left(sib."rawLine", greatest(16, least(length(split_part(sib."rawLine", E'\n', 1)), length(split_part(e."rawLine", E'\n', 1))) / 2))
+		              = left(e."rawLine", greatest(16, least(length(split_part(sib."rawLine", E'\n', 1)), length(split_part(e."rawLine", E'\n', 1))) / 2)))))`
+
 // InsertErrorEvent appends an occurrence row.
 func (d *DB) InsertErrorEvent(ctx context.Context, e ErrorEvent) error {
 	_, err := d.ExecContext(ctx, `
@@ -120,6 +139,7 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service, env string, 
 		WHERE project = $1 AND service = $2 AND ts >= $3
 		  AND ($6 = '' OR env = $6)
 		  AND NOT (e."rawLine" ~ $7 OR e.pod ~ $8)
+		  AND `+hideSplitContinuation+`
 		GROUP BY project, service, fingerprint
 		ORDER BY last_seen DESC
 		LIMIT $4 OFFSET $5`,
@@ -223,10 +243,11 @@ func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fin
 
 	rows, err := d.QueryContext(ctx, `
 		SELECT (floor(extract(epoch FROM ts) / $6) * $6)::bigint AS bucket, COUNT(*)
-		FROM "ErrorEvent"
+		FROM "ErrorEvent" e
 		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
 		  AND ($5 = '' OR env = $5)
 		  AND NOT ("rawLine" ~ $7 OR pod ~ $8)
+		  AND `+hideSplitContinuation+`
 		GROUP BY bucket
 		ORDER BY bucket`,
 		project, service, fingerprint, since.UTC(), env, b, BuildkitStepPattern, ReleasePodPattern,
@@ -249,10 +270,11 @@ func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fin
 
 	occ, err := d.QueryContext(ctx, `
 		SELECT ts, env, pod, "rawLine"
-		FROM "ErrorEvent"
+		FROM "ErrorEvent" e
 		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
 		  AND ($5 = '' OR env = $5)
 		  AND NOT ("rawLine" ~ $7 OR pod ~ $8)
+		  AND `+hideSplitContinuation+`
 		ORDER BY ts DESC
 		LIMIT $6`,
 		project, service, fingerprint, since.UTC(), env, limit, BuildkitStepPattern, ReleasePodPattern,
@@ -287,9 +309,10 @@ type ServiceErrorSummary struct {
 func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, since time.Time) ([]ServiceErrorSummary, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT service, COUNT(*), COUNT(DISTINCT fingerprint), MAX(ts)
-		FROM "ErrorEvent"
+		FROM "ErrorEvent" e
 		WHERE project = $1 AND service <> '' AND ts >= $2 AND ($3 = '' OR env = $3)
 		  AND NOT ("rawLine" ~ $4 OR pod ~ $5)
+		  AND `+hideSplitContinuation+`
 		GROUP BY service
 		ORDER BY service`,
 		project, since.UTC(), env, BuildkitStepPattern, ReleasePodPattern,
