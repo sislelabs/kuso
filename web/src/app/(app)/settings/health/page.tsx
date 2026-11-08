@@ -1,8 +1,10 @@
 "use client";
 
-// /settings/health — reconcile-health dashboard.
+// /settings/health — "is everything I run OK?"
 //
-// Surfaces the server's reconcile scan (GET /api/health/reconcile):
+// Top: the app-level rollup (AppRollupSection) — services, uptime,
+// errors and addons across every project, under one verdict line.
+// Below it, the server's reconcile scan (GET /api/health/reconcile):
 // every Kuso CR + its rendered helm release walked for anything that
 // isn't cleanly reconciling — failed helm installs, stuck addons,
 // orphaned envs. Issues group severity-first (critical → warning →
@@ -39,6 +41,7 @@ import {
   type ReconcileIssue,
 } from "@/features/health";
 import { cn } from "@/lib/utils";
+import { AppRollupSection } from "@/components/health/AppRollupSection";
 import { KubeEventsSection } from "@/components/health/KubeEventsSection";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
@@ -54,6 +57,11 @@ const ORPHAN_KINDS: Record<string, string> = {
   orphan_addon_pvc: "data",
 };
 const isOrphan = (i: ReconcileIssue) => !!i.kind && i.kind in ORPHAN_KINDS;
+
+function reconcileCounts(all: ReconcileIssue[]): { issues: number; critical: number } {
+  const issues = all.filter((i) => !isOrphan(i));
+  return { issues: issues.length, critical: issues.filter((i) => i.severity === "critical").length };
+}
 
 const SEVERITY_META: Record<
   Severity,
@@ -102,8 +110,10 @@ export default function HealthPage() {
   return (
     <SettingsPage
       title="Health"
-      description="Every Kuso resource and its rendered helm release, scanned for anything that isn't reconciling cleanly. Safe fixes apply with one click; the rest hand you a runbook command."
+      description="Whether everything you run is up, across every project. Below that, the reconcile scan of every kuso resource and its helm release, and recent Kubernetes events."
     >
+      <AppRollupSection reconcile={data ? reconcileCounts(data.issues ?? []) : undefined} />
+
       {isPending ? (
         <div className="space-y-3">
           <Skeleton className="h-20 w-full" />
@@ -143,34 +153,27 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
 
   return (
     <div className="space-y-6">
-      <section
-        className={cn(
-          "rounded-md border p-4 sm:p-5",
-          hasIssues
-            ? "border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
-            : "border-[var(--success)]/30 bg-[var(--success-subtle)]",
-        )}
-      >
+      {/* Neutral on purpose: the verdict above is the page's one success state. */}
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span
+              aria-hidden
               className={cn(
-                "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
+                "inline-flex size-8 shrink-0 items-center justify-center rounded-md",
                 hasIssues
                   ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
-                  : "bg-[var(--success)]/15 text-[var(--success)]",
+                  : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
               )}
             >
-              <HeartPulse className="h-5 w-5" />
+              <HeartPulse className="size-4" />
             </span>
             <div>
-              <div className="text-sm font-semibold text-[var(--text-primary)]">
-                {hasIssues
-                  ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need attention`
-                  : "Everything is reconciling cleanly"}
-              </div>
+              <h2 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">Reconcile</h2>
               <div className="mt-0.5 text-sm text-[var(--text-secondary)]">
-                {report.healthy} of {report.scanned} resources healthy
+                {hasIssues
+                  ? `${issues.length} issue${issues.length === 1 ? "" : "s"} · ${report.healthy} of ${report.scanned} resources reconciling cleanly`
+                  : `All ${report.scanned} resources reconciling cleanly`}
               </div>
             </div>
           </div>
