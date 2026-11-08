@@ -1,16 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, ScrollText } from "lucide-react";
-import { useErrors } from "@/features/services";
-import type { ErrorGroup } from "@/features/services";
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
+import { useBuilds, useErrors } from "@/features/services";
+import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
 import { serviceEnvOptions } from "@/lib/env-group";
-import { relativeTime } from "@/lib/format";
+import { relativeTime, shortSha } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +21,7 @@ import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
 import { AnsiText } from "@/components/logs/AnsiText";
 import { openLogsAt } from "@/components/logs/logViewStore";
 import { fmtClock, stripAnsi } from "@/components/logs/logParse";
+import { buildLiveAt, plural, traceFrames } from "@/components/logs/errorInsights";
 import { fmtFull } from "@/components/shared/s3-TimeSeriesChart";
 
 interface Props {
@@ -50,10 +51,15 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
   const envOptions = useMemo(() => serviceEnvOptions(envs.data ?? [], fqn), [envs.data, fqn]);
   const groups = errors.data ?? [];
   const total = groups.reduce((a, g) => a + g.count, 0);
+  const builds = useBuilds(project, service);
+  const windowStart = Date.now() - (timeRangeMs(since) ?? 0);
+  const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${since}/${env}`);
 
+  // ±30s around the occurrence: tight enough that the error's own lines
+  // are on screen, wide enough for the request that caused it.
   const viewInLogs = (needle: string, at: string) => {
     const t = Date.parse(at);
-    const pad = 5 * 60_000;
+    const pad = 30_000;
     openLogsAt(project, service, {
       q: needle,
       range: Number.isNaN(t)
@@ -73,8 +79,11 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
           <p className="text-xs text-[var(--text-secondary)]">
             {errors.isError || errors.isPending
               ? `Last ${timeRangeSpan(since)}`
-              : `${groups.length} ${groups.length === 1 ? "group" : "groups"} · ${total.toLocaleString()} occurrences · last ${timeRangeSpan(since)}`}
+              : `${plural(groups.length, "group")} · ${plural(total, "occurrence")} · last ${timeRangeSpan(since)}`}
           </p>
+          <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+            {announcement}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {envOptions.length > 1 && (
@@ -128,6 +137,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
               service={service}
               since={since}
               env={env}
+              firstBuild={buildLiveAt(builds.data ?? [], g.firstSeen, windowStart)}
               isOpen={expanded === g.fingerprint}
               onToggle={() => setExpanded(expanded === g.fingerprint ? null : g.fingerprint)}
               onViewLogs={onViewLogs ? viewInLogs : undefined}
@@ -137,6 +147,41 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
       )}
     </div>
   );
+}
+
+function useInView(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setSeen(true);
+      return;
+    }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setSeen(true);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, seen]);
+  return seen;
+}
+
+// useNewErrorAnnouncement says "N new errors" when a background refetch
+// raises the occurrence total; a filter change only resets the baseline.
+function useNewErrorAnnouncement(total: number | null, scope: string): string {
+  const [msg, setMsg] = useState("");
+  const base = useRef<{ scope: string; total: number } | null>(null);
+  useEffect(() => {
+    if (total === null) return;
+    const prev = base.current;
+    if (prev && prev.scope === scope && total > prev.total) {
+      const d = total - prev.total;
+      setMsg(`${plural(d, "new error occurrence")}`);
+    }
+    base.current = { scope, total };
+  }, [total, scope]);
+  return msg;
 }
 
 // logNeedle picks a search string for the logs view: the message up to
@@ -155,6 +200,7 @@ function ErrorRow({
   service,
   since,
   env,
+  firstBuild,
   isOpen,
   onToggle,
   onViewLogs,
@@ -164,13 +210,29 @@ function ErrorRow({
   service: string;
   since: string;
   env: string;
+  firstBuild: { build: BuildSummary; afterMs: number } | null;
   isOpen: boolean;
   onToggle: () => void;
   onViewLogs?: (needle: string, at: string) => void;
 }) {
   const panelId = `err-${group.fingerprint}`;
+  const liRef = useRef<HTMLLIElement>(null);
+  const inView = useInView(liRef);
+  // Same query key as the expanded detail's trace, so expanding reuses it.
+  const trace = useQuery({
+    queryKey: ["error-trace", project, service, group.lastSeen, group.samplePod ?? ""],
+    queryFn: () => fetchErrorTrace({ project, service }, { ts: group.lastSeen, pod: group.samplePod, env: group.sampleEnv }),
+    enabled: inView && !!group.sampleLine,
+    staleTime: 5 * 60_000,
+  });
+  const frames = useMemo(
+    () => traceFrames((trace.data ?? []).map((l) => l.line), group.sampleLine),
+    [trace.data, group.sampleLine],
+  );
+  const fb = firstBuild?.build;
+  const fbLabel = fb ? (fb.commitSha ? shortSha(fb.commitSha) : (fb.ref ?? fb.id)) : "";
   return (
-    <li className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+    <li ref={liRef} className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <button
         type="button"
         onClick={onToggle}
@@ -183,16 +245,37 @@ function ErrorRow({
           <div className="line-clamp-2 break-words font-mono text-[13px] text-[var(--text-primary)]">
             {group.message || "(empty error)"}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--text-tertiary)]">
+          {frames.length > 0 && !isOpen && (
+            <div className="mt-1 space-y-px border-l-2 border-[var(--border-default)] pl-2 font-mono text-xs text-[var(--text-tertiary)]">
+              {frames.map((f, i) => (
+                <div key={i} className="truncate" title={f}>
+                  {f}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--text-tertiary)]">
             <span title={group.lastSeen}>Last seen {relativeTime(group.lastSeen)}</span>
             <span title={group.firstSeen}>First seen {relativeTime(group.firstSeen)}</span>
+            {fb && firstBuild && (
+              <span
+                className="inline-flex items-center gap-1"
+                title={`${fb.commitMessage?.split("\n")[0] ?? "Build " + fbLabel} — the build that was live when this error first appeared in the last ${timeRangeSpan(since)}`}
+              >
+                <GitCommitHorizontal aria-hidden className="h-3.5 w-3.5" />
+                in build <span className="font-mono text-[var(--text-secondary)]">{fbLabel}</span>
+                {firstBuild.afterMs < 3_600_000 && (
+                  <span className="text-[var(--warning)]">· {Math.max(1, Math.round(firstBuild.afterMs / 60_000))}m after deploy</span>
+                )}
+              </span>
+            )}
             {group.sampleEnv && <span>{group.sampleEnv}</span>}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="text-right">
             <span className="block text-sm font-semibold tabular-nums text-[var(--text-primary)]">{group.count.toLocaleString()}</span>
-            <span className="block text-xs text-[var(--text-tertiary)]">{group.count === 1 ? "event" : "events"}</span>
+            <span className="block text-xs text-[var(--text-tertiary)]">{group.count === 1 ? "occurrence" : "occurrences"}</span>
           </span>
           {isOpen ? (
             <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -310,7 +393,7 @@ function ErrorDetail({
 
       {detail.data && detail.data.occurrences.length > 0 && (
         <section>
-          <h4 className="mb-1.5 text-xs font-medium text-[var(--text-secondary)]">Recent events</h4>
+          <h4 className="mb-1.5 text-xs font-medium text-[var(--text-secondary)]">Recent occurrences</h4>
           <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-md border border-[var(--border-subtle)]">
             {detail.data.occurrences.slice(0, 10).map((o, i) => (
               <li key={`${o.ts}-${i}`} className="flex items-center gap-3 px-3 py-1.5 text-xs">
@@ -343,7 +426,7 @@ function ErrorDetail({
           </Button>
         )}
         <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]">
-          Opens logs around the latest event, searching “{needle}”
+          Opens logs ±30s around the latest occurrence, searching “{needle}”
         </span>
         <button
           type="button"
@@ -376,7 +459,7 @@ function OccurrenceHistogram({ detail, since }: { detail: ErrorGroupDetail; sinc
       <div
         className="relative flex h-14 items-end gap-[2px]"
         role="img"
-        aria-label={`${detail.buckets.reduce((a, b) => a + b[1], 0)} events in the last ${timeRangeSpan(since)}, peak ${max} per bucket`}
+        aria-label={`${plural(detail.buckets.reduce((a, b) => a + b[1], 0), "occurrence")} in the last ${timeRangeSpan(since)}, peak ${max} per bucket`}
         onPointerLeave={() => setHover(null)}
       >
         {cols.map((col, i) => (
