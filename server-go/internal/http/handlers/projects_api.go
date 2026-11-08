@@ -108,6 +108,7 @@ type ProjectsAPI interface {
 
 	// Pods + diagnostics
 	ListPods(ctx context.Context, project, service, env string) (*projects.PodList, error)
+	TestHealthcheck(ctx context.Context, project, service string, req projects.HealthProbeRequest) (*projects.HealthProbeResult, error)
 }
 
 // Compile-time guard: *projects.Service must satisfy ProjectsAPI.

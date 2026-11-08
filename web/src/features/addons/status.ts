@@ -9,6 +9,21 @@ export interface AddonHealth {
   // "2/2 pods ready · 3 restarts", or the reason it isn't live.
   detail?: string;
   pending: boolean;
+  // Image tag of the running datastore pod ("16-alpine"), for addons on
+  // the chart default. Undefined on servers that don't report it.
+  runningVersion?: string;
+  runningImage?: string;
+}
+
+// runningImageOf reads the additive runningImage/runningVersion fields of
+// the addon pods response (newer servers only).
+export function runningImageOf(data: unknown): { runningVersion?: string; runningImage?: string } {
+  if (!data || typeof data !== "object") return {};
+  const d = data as Record<string, unknown>;
+  return {
+    ...(typeof d.runningVersion === "string" && d.runningVersion ? { runningVersion: d.runningVersion } : {}),
+    ...(typeof d.runningImage === "string" && d.runningImage ? { runningImage: d.runningImage } : {}),
+  };
 }
 
 // useAddonHealth is the overlay's answer to "is this addon up": pod
@@ -41,5 +56,5 @@ export function useAddonHealth(project: string, addon: string, cr: KusoAddon | u
         : `${ready}/${list.length} pods ready${restarts ? ` · ${restarts} restart${restarts === 1 ? "" : "s"}` : ""}${
             firstProblem && ready < list.length ? ` · ${firstProblem}` : ""
           }`;
-  return { status: ADDON_STATUS[kind], detail, pending: false };
+  return { status: ADDON_STATUS[kind], detail, pending: false, ...runningImageOf(pods.data) };
 }
