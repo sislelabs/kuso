@@ -235,7 +235,7 @@ function Row({
       value={id ? `${id}${ID_SEP}${value}` : value}
       keywords={keywords}
       onSelect={onSelect}
-      className="group relative flex min-h-10 cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-2 text-sm text-[var(--text-secondary)] outline-none before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-transparent data-[selected=true]:bg-[var(--bg-tertiary)] data-[selected=true]:text-[var(--text-primary)] data-[selected=true]:before:bg-[var(--accent)]"
+      className="group relative flex min-h-10 cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-2 text-sm text-[var(--text-secondary)] outline-none before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-transparent data-[selected=true]:bg-[var(--selected)] data-[selected=true]:text-[var(--text-primary)] data-[selected=true]:before:bg-[var(--accent)]"
     >
       <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)] group-data-[selected=true]:text-[var(--text-primary)] [&_svg]:h-4 [&_svg]:w-4">
         {icon}
