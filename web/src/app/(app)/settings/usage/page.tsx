@@ -214,7 +214,7 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
           <h2 className="text-base font-semibold tracking-tight">By project</h2>
           <span className="text-xs text-[var(--text-tertiary)]">
             {plural(projects.length, "project")}
-            {extras.length > 0 && ` + ${extras.join(" and ")}`} · share of all CPU used
+            {extras.length > 0 && `, plus ${extras.join(" and ")}`} · share of all CPU used
           </span>
         </header>
         {data.projects.length === 0 ? (

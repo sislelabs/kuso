@@ -160,7 +160,7 @@ function BackupsTile() {
         }
         return {
           status: uncovered > 0 ? meta("warning", "Partial") : meta("success", "Healthy"),
-          value: "Backups healthy",
+          value: uncovered > 0 ? "No failing backups" : "Backups healthy",
           detail:
             uncovered > 0
               ? `${plural(uncovered, "addon")} ${uncovered === 1 ? "has" : "have"} no scheduled backup.`
