@@ -991,7 +991,7 @@ function DetectedSettings({
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
         {rows.map((r) => (
           <div key={r.label} className="min-w-0">
-            <dt className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+            <dt className="flex min-h-5 items-center gap-1.5 text-xs text-[var(--text-secondary)]">
               {r.label}
               {r.marker && <ProvenanceMarker kind={r.marker} />}
             </dt>
