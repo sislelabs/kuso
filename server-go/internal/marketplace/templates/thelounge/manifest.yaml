@@ -1,0 +1,15 @@
+name: thelounge
+title: The Lounge
+description: >-
+  Always-connected web IRC client. Runs in private mode, so there is no
+  sign-up: add users with `kuso shell <project> thelounge`, then
+  `thelounge add <name>`.
+category: comms
+website: https://thelounge.chat
+appVersion: "4.5.2"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname The Lounge will be served on.

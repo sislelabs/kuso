@@ -130,8 +130,8 @@ func TestCatalog_RenderEveryTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
-	if len(entries) < 40 {
-		t.Fatalf("catalog has %d apps, want at least 40", len(entries))
+	if len(entries) < 45 {
+		t.Fatalf("catalog has %d apps, want at least 45", len(entries))
 	}
 	for _, m := range entries {
 		e, err := GetEntry(m.Name)

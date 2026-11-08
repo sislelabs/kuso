@@ -1,0 +1,17 @@
+apiVersion: kuso/v1
+project: thelounge
+services:
+  - name: thelounge
+    runtime: image
+    port: 9000
+    image:
+      repository: thelounge/thelounge
+      tag: "4.5.2"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /var/opt/thelounge
+        sizeGi: 1
+    scale: { min: 1, max: 1 }
