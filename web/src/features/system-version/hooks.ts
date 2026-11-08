@@ -8,6 +8,9 @@ export interface SystemVersionSummary {
   current: string;
   latest: string;
   needsUpdate: boolean;
+  // checksDisabled: the server doesn't poll for releases, so "latest"
+  // is unknown and the running version is all we can report.
+  checksDisabled?: boolean;
 }
 
 // Same key as the updates page so every surface reads one cache entry.

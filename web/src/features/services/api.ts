@@ -198,6 +198,9 @@ export interface BuildSummary {
   promoteHold?: string;
   // liveEnvs names the env groups currently running this build.
   liveEnvs?: string[];
+  // live: the build the env actually runs when it differs from this
+  // (latest) one, e.g. after a rollback.
+  live?: { id: string; branch?: string; commitSha?: string; ref?: string; rolledBack?: boolean };
   startedAt?: string;
   finishedAt?: string;
   // Trigger context: who/what kicked off the build. Surfaces in the

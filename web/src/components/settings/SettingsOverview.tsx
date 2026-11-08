@@ -203,6 +203,9 @@ function UpdatesTile() {
             detail: `Running ${v.current}. Nothing installs until you press Update.`,
           };
         }
+        if (v?.checksDisabled) {
+          return { status: meta("neutral", "Checks off"), value: `Running ${v.current}`, detail: "Update checks are turned off on this server." };
+        }
         return { status: meta("success", "Current"), value: `Up to date`, detail: v ? `Running ${v.current}.` : undefined };
       }}
     />

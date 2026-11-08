@@ -347,6 +347,7 @@ export function failedStepTitle(parsed: ParsedBuildLog): string | undefined {
 // some failures; either names the step without fetching the log.
 const KIND_STEPS: Record<string, string> = {
   clone_ref_missing: "Clone repository",
+  clone_unreachable: "Clone repository",
   dockerfile_not_found: "Run the build",
   dockerfile_missing_copy: "Run the build",
   lockfile_drift: "Install dependencies",

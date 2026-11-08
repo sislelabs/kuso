@@ -28,6 +28,7 @@ export type FailureKind =
   | "build_oom"
   | "registry_auth"
   | "clone_ref_missing"
+  | "clone_unreachable"
   | "release_failed"
   | "missing_capability"
   | "migration_lock"
@@ -104,6 +105,10 @@ const COPY: Record<FailureKind, CopyPair> = {
   clone_ref_missing: {
     headline: "The git ref no longer exists.",
     body: "The branch or commit was deleted or force-pushed away. Pick an existing branch and redeploy.",
+  },
+  clone_unreachable: {
+    headline: "kuso couldn't reach the git host.",
+    body: "The clone failed before any code was read: DNS or the network to the repository host didn't answer. Check the repository URL and the cluster's outbound network, then retry.",
   },
   "vuln-blocked": {
     headline: "Blocked: the image has fixable critical vulnerabilities.",
