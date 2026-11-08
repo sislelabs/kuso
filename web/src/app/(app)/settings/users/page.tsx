@@ -18,6 +18,8 @@ import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { toGoDuration } from "./duration";
+import { INSTANCE_ROLE_GRANTS, roleLabel } from "./roles";
+import { toastError } from "@/lib/errors";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice, SettingsSection, SettingsSelect } from "@/components/settings/SettingsSection";
 import { UserAvatar, UserBadge } from "@/components/activity/UserBadge";
@@ -165,7 +167,7 @@ function InvitesSection() {
       setPendingRevoke(null);
       qc.invalidateQueries({ queryKey: ["admin", "invites"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
+    onError: (e) => toastError(e, "Couldn't revoke the invite"),
   });
 
   const items = list.data ?? [];
@@ -335,7 +337,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["admin", "invites"] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
+    onError: (e) => toastError(e, "Couldn't create the invite"),
   });
 
   return (
@@ -413,6 +415,9 @@ function UserRowItem({
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
+  // The role the select was changed to, awaiting confirmation. The
+  // select stays bound to the saved role, so Cancel needs no revert.
+  const [pendingRole, setPendingRole] = useState<string | null>(null);
   const remove = useMutation({
     mutationFn: () => api(`/api/users/id/${encodeURIComponent(u.id)}`, { method: "DELETE" }),
     onSuccess: () => {
@@ -420,7 +425,7 @@ function UserRowItem({
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       setConfirmOpen(false);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, `Couldn't delete ${u.username}`),
   });
   const toggleActive = useMutation({
     mutationFn: (isActive: boolean) =>
@@ -433,7 +438,7 @@ function UserRowItem({
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       setConfirmDisable(false);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+    onError: (e, isActive) => toastError(e, isActive ? `Couldn't enable ${u.username}` : `Couldn't disable ${u.username}`),
   });
   const pending = (u.groups ?? []).includes("kuso-pending");
   // Instance role: the user's default access level across the instance.
@@ -450,13 +455,15 @@ function UserRowItem({
     onSuccess: (_d, role) => {
       toast.success(
         role
-          ? `${u.username} is now ${role}`
+          ? `${u.username} is now ${roleLabel(role).toLowerCase()}`
           : `${u.username} now inherits from groups`
       );
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      setPendingRole(null);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Role change failed"),
+    onError: (e) => toastError(e, `Couldn't change ${u.username}'s role`),
   });
+  const currentRole = u.instanceRole ?? "";
   const groups = u.groups ?? [];
   const visibleGroups = groups.filter((g) => g !== "kuso-pending");
   return (
@@ -499,44 +506,17 @@ function UserRowItem({
         </div>
       </div>
 
-      {/* Mobile: actions sit top-right; desktop: they're the last column. */}
-      <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto md:order-last">
-        {canWrite && (
-          <>
-            <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
-              <Switch
-                on={u.isActive}
-                onChange={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
-                disabled={toggleActive.isPending}
-                label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
-              />
-            </span>
-            <Button variant="ghost" size="icon-sm" onClick={onReset} aria-label={`Reset password for ${u.username}`} title="Reset password">
-              <KeyRound className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Delete ${u.username}`}
-              title="Delete user"
-              onClick={() => setConfirmOpen(true)}
-              className="hover:text-[var(--error)]"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </>
-        )}
-      </div>
-
       <div role="cell" className="col-span-2 md:col-span-1">
         <span className="mb-1 block text-xs text-[var(--text-secondary)] md:hidden">Instance role</span>
         {canWrite ? (
           <SettingsSelect
             aria-label={`Instance role for ${u.username}`}
             title="Admin sees every project; editor/viewer set the default on granted projects; inherit uses the user's groups."
-            value={u.instanceRole ?? ""}
+            value={currentRole}
             disabled={setInstanceRole.isPending}
-            onChange={(e) => setInstanceRole.mutate(e.target.value)}
+            onChange={(e) => {
+              if (e.target.value !== currentRole) setPendingRole(e.target.value);
+            }}
             className="h-8"
           >
             <option value="">Inherit from groups</option>
@@ -545,7 +525,7 @@ function UserRowItem({
             <option value="viewer">Viewer</option>
           </SettingsSelect>
         ) : (
-          <span className="text-sm capitalize text-[var(--text-primary)]">{u.instanceRole || "Inherit"}</span>
+          <span className="text-sm text-[var(--text-primary)]">{roleLabel(u.instanceRole)}</span>
         )}
       </div>
 
@@ -574,8 +554,59 @@ function UserRowItem({
         )}
       </div>
 
+      {/* Mobile: actions sit top-right; desktop: they're the last column. */}
+      <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto">
+        {canWrite && (
+          <>
+            <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
+              <Switch
+                on={u.isActive}
+                onChange={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
+                disabled={toggleActive.isPending}
+                label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
+              />
+            </span>
+            <Button variant="ghost" size="icon-sm" onClick={onReset} aria-label={`Reset password for ${u.username}`} title="Reset password">
+              <KeyRound className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Delete ${u.username}`}
+              title="Delete user"
+              onClick={() => setConfirmOpen(true)}
+              className="hover:text-[var(--error)]"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
+      </div>
+
       {canWrite && (
         <>
+          <ConfirmDialog
+            open={pendingRole !== null}
+            title={`Change ${u.username}'s instance role?`}
+            body={
+              <div className="space-y-2">
+                <p>
+                  <span className="font-medium text-[var(--text-primary)]">{roleLabel(currentRole)}</span>
+                  {" \u2192 "}
+                  <span className="font-medium text-[var(--text-primary)]">{roleLabel(pendingRole ?? "")}</span>
+                </p>
+                <p>{INSTANCE_ROLE_GRANTS[pendingRole ?? ""] ?? ""}</p>
+                <p>Their sessions are reissued, so the change applies on their next request.</p>
+              </div>
+            }
+            confirmLabel="Change role"
+            destructive={false}
+            pending={setInstanceRole.isPending}
+            onConfirm={() => {
+              if (pendingRole !== null) setInstanceRole.mutate(pendingRole);
+            }}
+            onCancel={() => setPendingRole(null)}
+          />
           <ConfirmDialog
             open={confirmDisable}
             title={`Disable ${u.username}?`}
@@ -659,7 +690,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
+    onError: (e) => toastError(e, `Couldn't create user ${username}`),
   });
   return (
     <Modal title="New user" onClose={onClose} busy={create.isPending}>
@@ -700,7 +731,7 @@ function ResetPasswordDialog({
       toast.success(`${username}'s password reset`);
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Reset failed"),
+    onError: (e) => toastError(e, `Couldn't reset ${username}'s password`),
   });
   return (
     <Modal title={`Reset password for ${username}`} onClose={onClose} busy={reset.isPending}>
