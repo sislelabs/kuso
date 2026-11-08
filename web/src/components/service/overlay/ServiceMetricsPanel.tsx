@@ -5,8 +5,9 @@ import type { ReactNode } from "react";
 import { AlertTriangle, Info } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { TimeSeriesChart } from "@/components/shared/s3-TimeSeriesChart";
-import type { ChartMarker, ChartThreshold, Point } from "@/components/shared/s3-TimeSeriesChart";
+import { TimeSeriesChart, seriesShape } from "@/components/shared/s3-TimeSeriesChart";
+import type { ChartMarker, ChartThreshold, Point, SeriesShape } from "@/components/shared/s3-TimeSeriesChart";
+import { Callout } from "@/components/ui/callout";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { openLogsAt } from "@/components/logs/logViewStore";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
@@ -15,6 +16,7 @@ import {
   mergeSamples,
   parseCpuQuantity,
   stepToMs,
+  USAGE_HISTORY_MIN_VERSION,
   useEnvPodMetrics,
   useEnvTimeseries,
   useServiceUsageHistory,
@@ -59,6 +61,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
   const history = useServiceUsageHistory(project, service, envName, histRange);
   // null (404: older server) or an error both fall back to the tab's own polls.
   const serverHist = history.isError ? null : (history.data ?? null);
+  const historyMissing = history.isSuccess && history.data === null;
   const svc = useService(project, service);
   const builds = useBuilds(project, service);
 
@@ -111,6 +114,9 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
     return den > 0 ? (num / den) * 100 : null;
   }, [series]);
   const p95Stats = stats(p95);
+  const trafficGapMs = stepMs * 2.5;
+  const errShape = seriesShape(err, trafficGapMs, domain);
+  const p95Shape = seriesShape(p95, trafficGapMs, domain);
   const hasTraffic = reqStats.max !== null && reqStats.max > 0;
 
   const limits = svc.data?.spec.resources;
@@ -127,9 +133,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
     [serverHist, pods.samples],
   );
   const resGapMs = serverHist ? Math.max(60_000, serverHist.stepSeconds * 1000 * 2.5) : 60_000;
+  const replicas = `${podCount} replica${podCount === 1 ? "" : "s"}`;
   const resNote = serverHist
-    ? `last ${rangeLabel(histRange)} · ${podCount} replica${podCount === 1 ? "" : "s"} · server-sampled every 30s`
-    : `live · ${podCount} replica${podCount === 1 ? "" : "s"} · sampled every 15s while this tab is open`;
+    ? `last ${rangeLabel(histRange)} · ${replicas} · server-sampled every 30s`
+    : `live · ${replicas} · sampled every 15s while this tab is open`;
 
   // One crosshair time for every chart on the tab.
   const [hoverT, setHoverT] = useState<number | null>(null);
@@ -201,7 +208,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 domain={domain}
                 format={(v) => `${fmtRate(v)}/s`}
                 ariaLabel={`Requests per second, last ${rangeLabel(range)}. Average ${fmtRate(reqStats.avg ?? 0)}, peak ${fmtRate(reqStats.max ?? 0)}.`}
-                gapMs={stepMs * 2.5}
+                gapMs={trafficGapMs}
                 markers={markers}
                 minYMax={0.1}
                 hoverT={hoverT}
@@ -217,6 +224,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
               titleNote="5xx"
               value={errOverall === null ? "—" : fmtPct(errOverall)}
               valueNote={errOverall === null ? "no requests" : "of requests"}
+              foot={errShape.sparse ? `${samplesLabel(errShape)} with traffic` : undefined}
               badge={
                 errOverall !== null && errOverall >= 1 ? (
                   <span className="inline-flex items-center gap-1 rounded border border-[var(--error)]/40 bg-[var(--error-subtle)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--error)]">
@@ -232,7 +240,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 domain={domain}
                 format={fmtPct}
                 ariaLabel={`5xx error rate, last ${rangeLabel(range)}. Overall ${errOverall === null ? "no data" : fmtPct(errOverall)}.`}
-                gapMs={stepMs * 2.5}
+                gapMs={trafficGapMs}
                 markers={markers}
                 minYMax={1}
                 hoverT={hoverT}
@@ -248,7 +256,13 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
               titleNote="p95"
               value={p95Stats.last === null ? "—" : fmtMs(p95Stats.last)}
               valueNote="latest"
-              foot={p95Stats.max !== null ? `peak ${fmtMs(p95Stats.max)} · avg ${fmtMs(p95Stats.avg ?? 0)}` : undefined}
+              foot={
+                p95Stats.max !== null
+                  ? [p95Shape.sparse ? samplesLabel(p95Shape) : null, `peak ${fmtMs(p95Stats.max)}`, `avg ${fmtMs(p95Stats.avg ?? 0)}`]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : undefined
+              }
               loading={traffic.isPending}
               empty={!traffic.isPending && p95.length === 0 ? <p className="text-xs text-[var(--text-secondary)]">Latency is measured per request — none in this range.</p> : undefined}
             >
@@ -256,8 +270,9 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 points={p95}
                 domain={domain}
                 format={fmtMs}
+                fill={false}
                 ariaLabel={`95th percentile response time, last ${rangeLabel(range)}. Peak ${fmtMs(p95Stats.max ?? 0)}.`}
-                gapMs={stepMs * 2.5}
+                gapMs={trafficGapMs}
                 markers={markers}
                 minYMax={10}
                 hoverT={hoverT}
@@ -273,6 +288,13 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
 
       <section aria-labelledby="m-res" className="space-y-3">
         <SectionHeading id="m-res" title="Resources" note={resNote} />
+        {!serverHist && !pods.isError && (historyMissing || history.isError) && (podCount > 0 || resSamples.length > 0) && (
+          <Callout tone="neutral" className="py-2.5 text-xs">
+            {historyMissing
+              ? `CPU and memory history needs kuso ${USAGE_HISTORY_MIN_VERSION} or newer. Until then this shows live samples taken since you opened this tab.`
+              : "Couldn't load CPU and memory history. Showing live samples taken since you opened this tab."}
+          </Callout>
+        )}
         {pods.isError ? (
           <QueryErrorState what="pod metrics" error={pods.error} onRetry={() => void pods.refetch()} />
         ) : (
@@ -281,6 +303,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
             now={now}
             rangeMs={rangeMs}
             gapMs={resGapMs}
+            live={!serverHist}
             loading={pods.isPending || history.isPending}
             podCount={podCount}
             cpuLimit={cpuLimit}
@@ -306,6 +329,7 @@ function ResourceCharts({
   now,
   rangeMs,
   gapMs,
+  live,
   loading,
   podCount,
   cpuLimit,
@@ -326,6 +350,8 @@ function ResourceCharts({
   now: number;
   rangeMs: number;
   gapMs: number;
+  // Samples are this tab's own polls, not server history.
+  live: boolean;
   loading: boolean;
   podCount: number;
   cpuLimit?: number;
@@ -339,14 +365,14 @@ function ResourceCharts({
   perPod: { pod: string; cpu: number; mem: number }[];
 }) {
   const last = samples[samples.length - 1];
-  // Window: at least 15 minutes so a fresh tab isn't one squashed dot,
-  // at most the selected range.
+  // Window: just past the oldest sample (at least 5 minutes) so the
+  // first few samples aren't squashed into the right edge, at most the range.
   const first = samples[0]?.t ?? now;
-  const span = Math.min(rangeMs, Math.max(15 * 60_000, now - first + 60_000));
+  const span = Math.min(rangeMs, Math.max(5 * 60_000, now - first + 60_000));
   const domain: [number, number] = [now - span, now];
   const cpu: Point[] = samples.map((s) => [s.t, s.cpuMillicores]);
   const mem: Point[] = samples.map((s) => [s.t, s.memBytes]);
-  const collecting = samples.length < 3;
+  const shape = seriesShape(cpu, gapMs, domain);
   const n = Math.max(1, podCount);
 
   const cpuTh: ChartThreshold[] = [];
@@ -354,7 +380,11 @@ function ResourceCharts({
   else if (cpuRequest) cpuTh.push({ value: cpuRequest * n, label: `request ${fmtCpu(cpuRequest * n)}` });
   const memTh: ChartThreshold[] = memLimit ? [{ value: memLimit * n, label: `limit ${fmtBytes(memLimit * n)}` }] : [];
 
-  const collectingNote = collecting ? "Collecting — the chart fills in as samples arrive" : undefined;
+  const collectingNote = !shape.sparse
+    ? undefined
+    : live
+      ? `${samplesLabel(shape)} so far · a new one every 15s`
+      : samplesLabel(shape);
 
   if (!loading && podCount === 0 && samples.length === 0) {
     return (
@@ -542,6 +572,10 @@ function EmptyPanel({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+function samplesLabel(shape: SeriesShape): string {
+  return `${shape.samples} sample${shape.samples === 1 ? "" : "s"}`;
 }
 
 function stats(points: Point[]): { avg: number | null; max: number | null; last: number | null } {
