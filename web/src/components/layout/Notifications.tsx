@@ -229,7 +229,7 @@ function BellIcon({ unread }: { unread: number }) {
       {unread > 0 && (
         <span
           aria-hidden
-          className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)]"
+          className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--text-primary)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)]"
         >
           {unread > 99 ? "99+" : unread}
         </span>
@@ -298,6 +298,12 @@ export function NotificationsSheetButton({ className, children }: { className?: 
   );
 }
 
+// Server titles carry a status glyph for chat channels ("✓ Build
+// succeeded"); the row's dot already says that.
+function feedTitle(title: string): string {
+  return title.replace(/^[\s\u2713\u2714\u2717\u2718\u26A0\uFE0F\u274C\u2705\u{1F534}\u{1F7E2}\u{1F7E1}]+/u, "");
+}
+
 // NotificationRow is one feed entry. Rows with a target (server url, or a
 // project/service fallback for pre-v0.8.2 events) are links that close
 // the feed before navigating; others are plain rows.
@@ -327,7 +333,7 @@ function NotificationRow({
       <div className="min-w-0 flex-1">
         <p className={cn("truncate text-[13px] text-[var(--text-primary)]", unread ? "font-semibold" : "font-medium")}>
           {unread && <span className="sr-only">New: </span>}
-          {event.title}
+          {feedTitle(event.title)}
         </p>
         {(event.classification?.summary || event.body) && (
           <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-secondary)]">
