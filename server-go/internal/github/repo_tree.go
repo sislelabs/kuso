@@ -163,12 +163,12 @@ type DetectedRuntime struct {
 
 // DetectRuntime applies the auto-detect rules:
 //
-//   1. Dockerfile present → runtime=dockerfile, port=parseExpose() ?? 8080
-//   2. index.html only (no package.json/go.mod/...) → runtime=static, port=80
-//   3. *.csproj → runtime=buildpacks, port=8080 (Paketo binds ASPNETCORE_URLS to $PORT)
-//   4. package.json → runtime=nixpacks, port=guessNodePort
-//   5. go.mod / Cargo.toml / requirements.txt / pyproject.toml → nixpacks, port=8080
-//   6. fallback → nixpacks, port=8080
+//  1. Dockerfile present → runtime=dockerfile, port=parseExpose() ?? 8080
+//  2. index.html only (no package.json/go.mod/...) → runtime=static, port=80
+//  3. *.csproj → runtime=buildpacks, port=8080 (Paketo binds ASPNETCORE_URLS to $PORT)
+//  4. package.json → runtime=nixpacks, port=guessNodePort
+//  5. go.mod / Cargo.toml / requirements.txt / pyproject.toml → nixpacks, port=8080
+//  6. fallback → nixpacks, port=8080
 func (c *Client) DetectRuntime(ctx context.Context, installationID int64, owner, repo, branch, pathPrefix string) (*DetectedRuntime, error) {
 	entries, err := c.ListRepoTree(ctx, installationID, owner, repo, branch, pathPrefix)
 	if err != nil {

@@ -73,9 +73,9 @@ const (
 	// resumeOverlap rewinds a resume point seeded from the DB. Stored ts
 	// is ingest time, and the previous leader may have died holding an
 	// unflushed buffer: a few duplicate lines beat a gap.
-	resumeOverlap              = 2 * time.Second
+	resumeOverlap = 2 * time.Second
 	// resumeDedupeMax bounds the stored lines read to dedupe that rewind.
-	resumeDedupeMax = 2000
+	resumeDedupeMax            = 2000
 	defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 )
 
