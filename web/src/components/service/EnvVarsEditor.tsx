@@ -147,9 +147,7 @@ export function EnvVarsEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const detected = useDetectedEnv(project, service);
-  // Image services have no repo to read a .env.example from.
-  const svcSpec = useService(project, service).data?.spec;
-  const canImportExample = !!svcSpec && svcSpec.runtime !== "image";
+
   const drift = useDrift(project, service);
   const addons = useAddons(project);
   const perEnvSecrets = useQuery<{ keys: string[]; env: string | null }>({
@@ -221,7 +219,12 @@ export function EnvVarsEditor({
   // A masked session saving would write the sentinel over real values, so
   // masked ⇒ read-only.
   const masked = env.data?.masked ?? false;
-  const canWrite = useCanOnProject(project, Perms.SecretsWrite) && !masked;
+  const canWriteEnv = useCanOnProject(project, Perms.SecretsWrite);
+  const canWrite = canWriteEnv && !masked;
+  // Reading the example file is an editor action server-side (it may hold
+  // real values); image services have no repo to read it from.
+  const svcSpec = useService(project, service).data?.spec;
+  const canImportExample = canWriteEnv && !!svcSpec && svcSpec.runtime !== "image";
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   const saveRef = useRef<() => void>(() => {});

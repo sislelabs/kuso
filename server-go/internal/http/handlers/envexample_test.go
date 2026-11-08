@@ -19,6 +19,7 @@ import (
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
@@ -90,6 +91,40 @@ func TestEnvExample_RequiresProjectAccess(t *testing.T) {
 	}
 	if remote.reads != 0 {
 		t.Errorf("repo read %d times for refused callers", remote.reads)
+	}
+}
+
+// Example files in private repos can hold real values, so reading one is
+// an editor action (same gate as writing env vars). PG-backed: the
+// viewer/editor distinction needs real grants.
+func TestEnvExample_ViewerForbiddenEditorAllowed(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, u := range []string{"envex-viewer", "envex-editor"} {
+		if _, err := d.ExecContext(ctx, `
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
+VALUES ($1, $1, $1 || '@x', 'h', false, true, 'local', NOW(), NOW())`, u); err != nil {
+			t.Fatalf("seed user %s: %v", u, err)
+		}
+	}
+	if _, err := d.AddProjectGrant(ctx, "alpha", "envex-viewer", "", db.ProjectRoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.AddProjectGrant(ctx, "alpha", "envex-editor", "", db.ProjectRoleEditor); err != nil {
+		t.Fatal(err)
+	}
+	h, remote := envExampleHandler(t)
+	h.DB = d
+	viewer := auth.WithClaimsForTest(ctx, &auth.Claims{UserID: "envex-viewer", Permissions: []string{}})
+	if rec := getEnvExample(h, viewer); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer got %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if remote.reads != 0 {
+		t.Fatalf("repo read %d times for a viewer", remote.reads)
+	}
+	editor := auth.WithClaimsForTest(ctx, &auth.Claims{UserID: "envex-editor", Permissions: []string{}})
+	if rec := getEnvExample(h, editor); rec.Code != http.StatusOK {
+		t.Fatalf("editor got %d, want 200: %s", rec.Code, rec.Body)
 	}
 }
 

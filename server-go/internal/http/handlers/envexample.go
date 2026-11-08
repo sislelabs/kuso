@@ -11,8 +11,9 @@ import (
 )
 
 // EnvExample returns the keys + example values of the service repo's
-// .env.example (or .env.sample) for the Variables import dialog. Same
-// gate as reading the service. A repo without the file is a 200 with an
+// .env.example (or .env.sample) for the Variables import dialog. Editors
+// only, like writing env vars: example files in private repos can hold
+// real values, and viewers can't import anyway. A repo without the file is a 200 with an
 // empty file and the paths checked, so a 404 only ever means "service
 // not found" or "this server predates the endpoint".
 func (h *BuildsHandler) EnvExample(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +21,7 @@ func (h *BuildsHandler) EnvExample(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if !requireParent(ctx, w, h.Svc.Kube, h.Svc.Namespace, project, service) {
