@@ -4,13 +4,21 @@ import { HeartPulse } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Section, Field, FieldGrid, SwitchField, WithSuffix, Callout, Code, monoInputClass, type SectionProps } from "./_primitives";
 import { HC_DEFAULTS, secondsUntilRestart } from "./healthcheckPatch";
+import { HealthcheckTestButton, HealthcheckTestResultView, useHealthcheckTestRunner } from "./HealthcheckTest";
 
 // HealthcheckSection edits spec.healthcheck. Off = the chart's default TCP
 // readiness check (the port accepts connections) with no liveness probe.
 // On = HTTP readiness AND liveness against the path, so a process that
 // still accepts connections but has stopped answering gets restarted.
-export function HealthcheckSection({ state, setState }: SectionProps) {
+export function HealthcheckSection({
+  state,
+  setState,
+  project,
+  service,
+  env,
+}: SectionProps & { project: string; service: string; env: string }) {
   const on = state.hcEnabled;
+  const tester = useHealthcheckTestRunner({ project, service, env, path: state.hcPath, port: state.hcPort || state.port });
   const set = (patch: Partial<typeof state>) => setState((s) => ({ ...s, ...patch }));
   const restartAfter = secondsUntilRestart(state);
   const num = (id: string, value: string, key: "hcDelay" | "hcPeriod" | "hcTimeout" | "hcThreshold", placeholder: number, suffix: string) => (
@@ -59,14 +67,17 @@ export function HealthcheckSection({ state, setState }: SectionProps) {
         <>
           <FieldGrid>
             <Field label="Path" hint="Must answer without authentication." htmlFor="hc-path">
-              <Input
-                id="hc-path"
-                value={state.hcPath}
-                onChange={(e) => set({ hcPath: e.target.value })}
-                placeholder="/health"
-                spellCheck={false}
-                className={monoInputClass}
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  id="hc-path"
+                  value={state.hcPath}
+                  onChange={(e) => set({ hcPath: e.target.value })}
+                  placeholder="/health"
+                  spellCheck={false}
+                  className={monoInputClass}
+                />
+                <HealthcheckTestButton runner={tester} />
+              </div>
             </Field>
             <Field label="Port" hint="Blank uses the service port." htmlFor="hc-port">
               <Input
@@ -82,6 +93,7 @@ export function HealthcheckSection({ state, setState }: SectionProps) {
               />
             </Field>
           </FieldGrid>
+          <HealthcheckTestResultView runner={tester} />
           <FieldGrid>
             <Field
               label="Initial delay"
