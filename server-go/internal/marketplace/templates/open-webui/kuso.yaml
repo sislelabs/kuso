@@ -10,6 +10,9 @@ services:
     env:
       WEBUI_URL: "https://${{ prompt.host }}"
       WEBUI_SECRET_KEY: { generate: hex32 }
+      WEBUI_ADMIN_EMAIL: "${{ prompt.admin_email }}"
+      WEBUI_ADMIN_PASSWORD: "${{ prompt.admin_password }}"
+      ENABLE_SIGNUP: "false"
     domains:
       - host: "${{ prompt.host }}"
         tls: true

@@ -10,6 +10,7 @@ services:
     env:
       VIKUNJA_SERVICE_PUBLICURL: "https://${{ prompt.host }}/"
       VIKUNJA_SERVICE_SECRET: { generate: hex32 }
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "false"
       VIKUNJA_DATABASE_TYPE: postgres
       VIKUNJA_DATABASE_HOST: "${{ vikunja-db.POSTGRES_HOST }}"
       VIKUNJA_DATABASE_USER: "${{ vikunja-db.POSTGRES_USER }}"

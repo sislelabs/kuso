@@ -1,8 +1,8 @@
 name: navidrome
 title: Navidrome
 description: >-
-  Music server and streamer compatible with Subsonic/Airsonic clients. The
-  first visitor creates the admin account. Music goes in the /music volume.
+  Music server and streamer compatible with Subsonic/Airsonic clients. Log
+  in as `admin` with the password you set. Music goes in the /music volume.
 category: media
 website: https://www.navidrome.org
 appVersion: "0.64.2"
@@ -12,3 +12,8 @@ prompts:
     kind: domain
     required: true
     help: The hostname Navidrome will be served on.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
+    help: Password for the `admin` user, created on first boot.

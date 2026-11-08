@@ -14,6 +14,9 @@ services:
       NTFY_BEHIND_PROXY: "true"
       NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
       NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      # Nobody can read or publish until you create a user.
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+      NTFY_ENABLE_LOGIN: "true"
       NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
     domains:
       - host: "${{ prompt.host }}"

@@ -1,6 +1,9 @@
 name: hedgedoc
 title: HedgeDoc
-description: Real-time collaborative Markdown editor. Anyone can register an account by default.
+description: >-
+  Real-time collaborative Markdown editor. Public sign-up is off; add
+  accounts with `kuso shell <project> hedgedoc`, then
+  `bin/manage_users --add you@example.com`.
 category: content
 website: https://hedgedoc.org
 appVersion: "1.12.0"

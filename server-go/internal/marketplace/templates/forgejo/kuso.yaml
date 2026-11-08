@@ -18,6 +18,8 @@ services:
       # Skip the web installer: the settings above are all it would ask for.
       FORGEJO__security__INSTALL_LOCK: "true"
       FORGEJO__security__SECRET_KEY: { generate: hex32 }
+      # Otherwise the first visitor to register becomes the site admin.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
     domains:
       - host: "${{ prompt.host }}"
         tls: true

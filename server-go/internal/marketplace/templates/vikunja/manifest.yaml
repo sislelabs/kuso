@@ -1,6 +1,9 @@
 name: vikunja
 title: Vikunja
-description: To-do lists, kanban boards and project planning. Sign up on first visit to create your account.
+description: >-
+  To-do lists, kanban boards and project planning. Public sign-up is off;
+  create accounts with `kuso shell <project> vikunja`, then
+  `./vikunja user create -u <name> -e <email> -p <password>`.
 category: productivity
 website: https://vikunja.io
 appVersion: "2.8.0"

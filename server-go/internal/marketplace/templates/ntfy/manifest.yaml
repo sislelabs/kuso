@@ -2,8 +2,8 @@ name: ntfy
 title: ntfy
 description: >-
   Send push notifications to your phone or desktop with a simple HTTP PUT/POST.
-  Topics are open to anyone who knows the name until you add users with
-  `ntfy user add` (via `kuso shell`).
+  All topics are closed by default: create an admin with
+  `kuso shell <project> ntfy`, then `ntfy user add --role=admin <name>`.
 category: comms
 website: https://ntfy.sh
 appVersion: "2.37.2"

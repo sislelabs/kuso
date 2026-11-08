@@ -25,6 +25,9 @@ services:
       CMD_URL_ADDPORT: "false"
       CMD_SESSION_SECRET: { generate: hex32 }
       CMD_IMAGE_UPLOAD_TYPE: filesystem
+      # No public sign-up or anonymous notes: accounts are created from a shell.
+      CMD_ALLOW_EMAIL_REGISTER: "false"
+      CMD_ALLOW_ANONYMOUS: "false"
     domains:
       - host: "${{ prompt.host }}"
         tls: true

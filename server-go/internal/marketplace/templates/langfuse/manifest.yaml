@@ -3,7 +3,8 @@ title: Langfuse
 description: >-
   LLM observability: traces, evals and prompt management. This is Langfuse
   v2, the last release that runs as a single container on Postgres (v3+
-  also needs ClickHouse, Redis, S3 and a worker). Sign up on first visit.
+  also needs ClickHouse, Redis, S3 and a worker). Sign-up is off; the
+  admin user and its organization are created on first boot.
 category: ai
 website: https://langfuse.com
 appVersion: "2.95.11"
@@ -14,3 +15,12 @@ prompts:
     kind: domain
     required: true
     help: The hostname Langfuse will be served on.
+  - key: admin_email
+    title: Admin email
+    kind: string
+    required: true
+    placeholder: you@example.com
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
