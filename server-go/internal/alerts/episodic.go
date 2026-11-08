@@ -383,6 +383,16 @@ func perEnv(envs []envTarget, vec map[string]float64, combine func(a, b float64)
 
 func sum(a, b float64) float64 { return a + b }
 
+// minPromRangeSeconds floors the PromQL range of the http_* rules.
+// Prometheus 3 range selectors are left-open, so a window at or below
+// the 15s scrape interval holds a single sample and increase()/rate()
+// return nothing: a short-window rule would silently never fire.
+const minPromRangeSeconds = 60
+
+func promRangeSeconds(win time.Duration) int {
+	return max(int(win.Seconds()), minPromRangeSeconds)
+}
+
 func (e *Engine) evalHTTP5xx(ctx context.Context, r *db.AlertRule) (finding, error) {
 	envs, err := e.scopedEnvs(ctx, r)
 	if err != nil || len(envs) == 0 {
@@ -390,7 +400,7 @@ func (e *Engine) evalHTTP5xx(ctx context.Context, r *db.AlertRule) (finding, err
 	}
 	win := ruleWindow(r)
 	m := traefikMatcher(envs)
-	secs := int(win.Seconds())
+	secs := promRangeSeconds(win)
 	totalVec, err := e.promVector(ctx, fmt.Sprintf(
 		`sum by (service) (increase(traefik_service_requests_total{service=~"%s"}[%ds]))`, m, secs))
 	if err != nil {
@@ -427,7 +437,7 @@ func (e *Engine) evalHTTPP95(ctx context.Context, r *db.AlertRule) (finding, err
 	}
 	win := ruleWindow(r)
 	m := traefikMatcher(envs)
-	secs := int(win.Seconds())
+	secs := promRangeSeconds(win)
 	totalVec, err := e.promVector(ctx, fmt.Sprintf(
 		`sum by (service) (increase(traefik_service_requests_total{service=~"%s"}[%ds]))`, m, secs))
 	if err != nil {

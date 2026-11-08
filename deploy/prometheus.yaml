@@ -54,6 +54,11 @@ data:
         # own scrape (up=0 for that pod) instead of filling the TSDB.
         sample_limit: 20000
         body_size_limit: 20MB
+        # Prometheus 3 fails a scrape whose Content-Type is missing or not
+        # a metrics format (2.x silently parsed it as text). Tenant
+        # /metrics handlers often send text/html or nothing, so keep the
+        # 2.x behaviour for this job.
+        fallback_scrape_protocol: PrometheusText0.0.4
         kubernetes_sd_configs:
           - role: pod
             namespaces:
@@ -138,7 +143,7 @@ spec:
       serviceAccountName: kuso-prometheus
       containers:
         - name: prometheus
-          image: prom/prometheus:v2.55.1
+          image: prom/prometheus:v3.16.0
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
