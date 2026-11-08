@@ -1,0 +1,19 @@
+apiVersion: kuso/v1
+project: jupyterlab
+services:
+  - name: jupyterlab
+    runtime: image
+    port: 8888
+    image:
+      repository: quay.io/jupyter/minimal-notebook
+      tag: "2026-11-02"
+    env:
+      JUPYTER_TOKEN: "${{ prompt.token }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: work
+        mountPath: /home/jovyan/work
+        sizeGi: 10
+    scale: { min: 1, max: 1 }

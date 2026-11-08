@@ -1,6 +1,9 @@
 name: gitea
 title: Gitea
-description: Self-hosted, lightweight Git service.
+description: >-
+  Self-hosted, lightweight Git service. Public sign-up is off; create the
+  admin with `kuso shell <project> gitea`, then
+  `su git -c "gitea admin user create --admin --username <name> --email <email> --random-password"`.
 category: dev-tools
 website: https://gitea.io
 appVersion: "1.22.3"

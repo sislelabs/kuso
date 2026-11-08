@@ -1,0 +1,12 @@
+name: privatebin
+title: PrivateBin
+description: Minimalist pastebin where the server has zero knowledge of pasted data (encrypted in the browser).
+category: productivity
+website: https://privatebin.info
+appVersion: "2.1.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname PrivateBin will be served on.

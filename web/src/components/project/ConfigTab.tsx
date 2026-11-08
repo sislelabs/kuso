@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileCode, Play, Rocket, RotateCcw } from "lucide-react";
+import { Play, Rocket, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import {
@@ -99,25 +99,8 @@ export function ConfigTab({ project }: { project: string }) {
   useUnsavedEdits("project-config", dirty);
 
   return (
-    <section className="space-y-4">
-      <header className="flex items-center gap-2">
-        <FileCode className="h-4 w-4 text-[var(--text-tertiary)]" />
-        <h2 className="text-xs text-[var(--text-secondary)] font-medium">
-          Config as code
-        </h2>
-      </header>
-
-      <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
-          The project&apos;s services, addons, and crons as a single{" "}
-          <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">kuso.yaml</code>{" "}
-          document. Edit it, run a <span className="font-medium">dry run</span> to
-          preview the diff, then <span className="font-medium">apply</span>. Resources
-          present on the cluster but absent from the YAML are reported under{" "}
-          <span className="font-mono">wouldDelete</span> — apply never deletes them
-          automatically.
-        </p>
-
+    <div className="space-y-4">
+      <div className="space-y-3">
         {loadError ? (
           <p className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger-subtle)] p-3 text-xs text-[var(--danger)]">
             {loadError}
@@ -172,7 +155,7 @@ export function ConfigTab({ project }: { project: string }) {
 
       {plan && <PlanView plan={plan} title="Dry run — planned changes" />}
       {result && <ResultView result={result} />}
-    </section>
+    </div>
   );
 }
 

@@ -11,10 +11,18 @@ const FILTERS: ReadonlyArray<{
   label: string;
   dot?: string;
   always?: boolean;
+  hint?: string;
 }> = [
   { id: "all", label: "All", always: true },
   { id: "live", label: "Live", dot: "bg-[var(--success)]", always: true },
-  { id: "failing", label: "Failing", dot: "bg-[var(--error)]", always: true },
+  {
+    id: "failing",
+    label: "Failing",
+    dot: "bg-[var(--error)]",
+    always: true,
+    // Failing is rollout health only; log errors are their own chip.
+    hint: "A service is crashing, degraded, or its build or release failed. Errors in the logs are counted separately on each card.",
+  },
   { id: "building", label: "Deploying", dot: "bg-[var(--building)]" },
   { id: "sleeping", label: "Sleeping", dot: "bg-[var(--info)]" },
   {
@@ -48,8 +56,8 @@ export function ProjectsToolbar({
     (f) => f.always || f.id === status || (counts?.[f.id] ?? 0) > 0,
   );
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-3 md:flex-nowrap">
-      <div className="relative min-w-0 flex-1 md:w-80 md:flex-none">
+    <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-3 lg:flex-nowrap">
+      <div className="relative min-w-0 flex-1 lg:w-80 lg:flex-none">
         <Search
           aria-hidden
           className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]"
@@ -84,7 +92,7 @@ export function ProjectsToolbar({
       <div
         role="group"
         aria-label="Filter by status"
-        className="order-last -mx-1 flex w-full min-w-0 items-center overflow-x-auto px-1 py-0.5 [scrollbar-width:none] md:order-none md:w-auto md:flex-1"
+        className="order-last -mx-1 flex w-full min-w-0 items-center overflow-x-auto px-1 py-0.5 [scrollbar-width:none] lg:order-none lg:w-auto lg:flex-1"
       >
         <div className="flex items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">
           {visible.map((f) => {
@@ -95,6 +103,7 @@ export function ProjectsToolbar({
                 key={f.id}
                 type="button"
                 aria-pressed={active}
+                title={f.hint}
                 onClick={() => onStatus(f.id)}
                 className={cn(
                   "inline-flex h-7 shrink-0 items-center gap-1.5 rounded px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)]",

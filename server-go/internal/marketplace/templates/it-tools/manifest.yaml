@@ -1,0 +1,12 @@
+name: it-tools
+title: IT Tools
+description: Collection of handy offline developer utilities (encoders, generators, converters) in one static web app.
+category: dev-tools
+website: https://it-tools.tech
+appVersion: "2024.10.22"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname IT Tools will be served on.

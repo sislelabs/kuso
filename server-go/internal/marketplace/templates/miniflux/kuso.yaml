@@ -1,0 +1,24 @@
+apiVersion: kuso/v1
+project: miniflux
+services:
+  - name: miniflux
+    runtime: image
+    port: 8080
+    image:
+      repository: miniflux/miniflux
+      tag: "2.3.5"
+    env:
+      DATABASE_URL: "${{ miniflux-db.DATABASE_URL }}"
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: "${{ prompt.admin_username }}"
+      ADMIN_PASSWORD: "${{ prompt.admin_password }}"
+      BASE_URL: "https://${{ prompt.host }}"
+      LISTEN_ADDR: "0.0.0.0:8080"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: miniflux-db
+    kind: postgres
+    version: "16"

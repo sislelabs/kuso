@@ -1,0 +1,12 @@
+apiVersion: kuso/v1
+project: drawio
+services:
+  - name: drawio
+    runtime: image
+    port: 8080
+    image:
+      repository: jgraph/drawio
+      tag: "32.6.10"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true

@@ -44,14 +44,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
   };
 
   return (
-    <section className="space-y-4">
-      <header>
-        <h3 className="font-heading text-sm font-semibold tracking-tight">Registry credentials</h3>
-        <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
-          Logins for private registries (GHCR, ECR, Docker Hub). Attach one to a pre-built image
-          service under its Image settings. Passwords are never shown again.
-        </p>
-      </header>
+    <div className="space-y-4">
 
       {creds.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
@@ -149,6 +142,6 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
         }}
         onCancel={() => setPendingDelete(null)}
       />
-    </section>
+    </div>
   );
 }

@@ -94,9 +94,12 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      <div className="flex min-w-0 items-center gap-2 pr-7">
-        <RuntimeIcon runtime={data.service.spec.runtime} />
-        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
+      {/* Badges wrap under the name rather than truncating it. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-7">
+        <span className="flex min-w-0 max-w-full items-center gap-2">
+          <RuntimeIcon runtime={data.service.spec.runtime} />
+          <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
+        </span>
         <ErrorBadge summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
         <VulnBadge summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>

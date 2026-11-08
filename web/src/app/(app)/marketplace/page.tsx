@@ -1,9 +1,9 @@
 "use client";
 
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Suspense, useMemo, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, Search, SearchX, X } from "lucide-react";
+import { Search, SearchX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useMarketplace, type MarketplaceApp } from "@/features/marketplace";
@@ -45,28 +45,29 @@ function Marketplace() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:p-8">
-      <header className="mb-6">
-        {targetProject && (
-          <Link
-            href={`/projects/${encodeURIComponent(targetProject)}`}
-            className="mb-3 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-            Back to <span className="font-mono">{targetProject}</span>
-          </Link>
-        )}
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Marketplace</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          {targetProject ? (
+      <PageHeader
+        className="mb-6 sm:mb-6"
+        breadcrumb={
+          targetProject
+            ? [
+                { label: "Projects", href: "/projects" },
+                { label: targetProject, href: `/projects/${encodeURIComponent(targetProject)}` },
+                { label: "Marketplace" },
+              ]
+            : [{ label: "Projects", href: "/projects" }, { label: "Marketplace" }]
+        }
+        title="Marketplace"
+        description={
+          targetProject ? (
             <>
               Self-hosted apps, pre-configured for kuso. Pick one to deploy it into{" "}
               <span className="font-mono text-[var(--text-primary)]">{targetProject}</span> with storage and secrets set up.
             </>
           ) : (
             "Self-hosted apps, pre-configured for kuso. Pick one, choose a project, and it deploys with storage and secrets set up."
-          )}
-        </p>
-      </header>
+          )
+        }
+      />
 
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center">
         <div className="relative w-full md:w-80 md:flex-none">

@@ -1,0 +1,14 @@
+name: homepage
+title: Homepage
+description: >-
+  Customizable start page for your services and bookmarks, configured with
+  YAML files in /app/config (edit them with `kuso shell`).
+category: productivity
+website: https://gethomepage.dev
+appVersion: "2.7.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Homepage will be served on. It answers only on this hostname, not on the default service URL.

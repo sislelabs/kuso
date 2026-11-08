@@ -1,0 +1,24 @@
+name: directus
+title: Directus
+description: Headless CMS and instant REST/GraphQL API on top of a Postgres database.
+category: content
+website: https://directus.io
+appVersion: "12.6.1"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Directus will be served on.
+  - key: admin_email
+    title: Admin email
+    kind: string
+    required: true
+    placeholder: you@example.com
+    help: Login for the first admin user, created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
+    help: Password for the first admin user.

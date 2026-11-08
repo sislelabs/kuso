@@ -1,0 +1,19 @@
+apiVersion: kuso/v1
+project: code-server
+services:
+  - name: code-server
+    runtime: image
+    port: 8080
+    image:
+      repository: codercom/code-server
+      tag: "4.145.2"
+    env:
+      PASSWORD: "${{ prompt.password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: home
+        mountPath: /home/coder
+        sizeGi: 10
+    scale: { min: 1, max: 1 }

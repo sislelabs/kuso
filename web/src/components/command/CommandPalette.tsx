@@ -21,8 +21,6 @@ import { Command } from "cmdk";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  Bell,
-  Box,
   ChevronRight,
   Clock,
   Copy,
@@ -31,7 +29,6 @@ import {
   ExternalLink,
   GitBranch,
   History,
-  KeyRound,
   LayoutGrid,
   LogOut,
   Moon,
@@ -47,7 +44,6 @@ import {
   Store,
   Sun,
   TriangleAlert,
-  User,
   Variable,
   Shield,
 } from "lucide-react";
@@ -69,12 +65,25 @@ import {
   pushRecent,
   recentKey,
   saveRecents,
+  serviceActions,
   serviceHref,
   type PaletteProject,
   type PaletteService,
   type PaletteStatus,
   type RecentItem,
+  type ServiceActionKind,
 } from "./paletteIndex";
+import { SETTINGS_NAV } from "@/components/settings/nav";
+
+const ACTION_ICON: Record<ServiceActionKind, ReactNode> = {
+  logs: <ScrollText />,
+  deployments: <History />,
+  variables: <Variable />,
+  metrics: <Activity />,
+  settings: <Settings />,
+  redeploy: <Play />,
+  restart: <RotateCw />,
+};
 
 // Nested pages, Railway-style: Enter on a project or service drills in,
 // Backspace on an empty query (or Esc) goes back up.
@@ -137,7 +146,10 @@ function rankRows(children: ReactNode, query: string): { row: RowElement; score:
   const rows = flattenRows(children);
   if (!query) return rows.map((row) => ({ row, score: 1 }));
   return rows
-    .map((row) => ({ row, score: matchScore(query, row.props.value, row.props.keywords) }))
+    .map((row) => {
+      const score = matchScore(query, row.props.value, row.props.keywords);
+      return { row, score: score > 0 ? score + (row.props.boost ?? 0) : 0 };
+    })
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score);
 }
@@ -203,6 +215,8 @@ interface RowProps {
   hint?: ReactNode;
   right?: ReactNode;
   drill?: boolean;
+  // Small rank nudge among near-ties (e.g. the project you're in).
+  boost?: number;
 }
 
 function Row({
@@ -221,7 +235,7 @@ function Row({
       value={id ? `${id}${ID_SEP}${value}` : value}
       keywords={keywords}
       onSelect={onSelect}
-      className="group relative flex min-h-10 cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-2 text-sm text-[var(--text-secondary)] outline-none data-[selected=true]:bg-[var(--bg-tertiary)] data-[selected=true]:text-[var(--text-primary)]"
+      className="group relative flex min-h-10 cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-2 text-sm text-[var(--text-secondary)] outline-none before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-transparent data-[selected=true]:bg-[var(--selected)] data-[selected=true]:text-[var(--text-primary)] data-[selected=true]:before:bg-[var(--accent)]"
     >
       <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-tertiary)] group-data-[selected=true]:text-[var(--text-primary)] [&_svg]:h-4 [&_svg]:w-4">
         {icon}
@@ -277,6 +291,14 @@ export function CommandPalette() {
     for (const s of index.services) m.set(s.project, [...(m.get(s.project) ?? []), s]);
     return m;
   }, [index.services]);
+
+  // Current project's services first so near-ties favour where you are.
+  const actions = useMemo(() => {
+    const ordered = [...index.services].sort(
+      (a, b) => Number(b.project === currentProject) - Number(a.project === currentProject),
+    );
+    return serviceActions(ordered);
+  }, [index.services, currentProject]);
 
   const addons = useMemo(() => {
     if (!open) return [] as { project: string; addon: KusoAddon }[];
@@ -351,8 +373,6 @@ export function CommandPalette() {
   };
 
   const perms = session?.session.permissions ?? [];
-  const isAdmin = perms.includes("user:write");
-  const isSettingsAdmin = perms.includes("settings:admin");
 
   const starred = useMemo(
     () =>
@@ -549,53 +569,50 @@ export function CommandPalette() {
           <Group heading="Starred">{starred.map((p) => projectRow(p, "starred"))}</Group>
         )}
 
-        {query && ctxServices.length > 0 && (
-          <Group heading={`Actions in ${currentProject}`}>
-            {ctxServices.flatMap((svc) => {
-              const recent: RecentItem = { kind: "service", project: svc.project, name: svc.name, group: svc.group };
-              const kw = [svc.name, svc.project];
-              return [
-                <Row key={`l-${svc.name}`} id={`ctxa-l-${svc.name}`} value={`logs ${svc.display}`} keywords={[...kw, "tail"]} onSelect={() => go(serviceHref(svc, "logs"), recent)} icon={<ScrollText />}>
-                  Logs <span className="text-[var(--text-tertiary)]">·</span> {svc.display}
-                </Row>,
-                <Row key={`v-${svc.name}`} id={`ctxa-v-${svc.name}`} value={`variables ${svc.display}`} keywords={[...kw, "env"]} onSelect={() => go(serviceHref(svc, "variables"), recent)} icon={<Variable />}>
-                  Variables <span className="text-[var(--text-tertiary)]">·</span> {svc.display}
-                </Row>,
-                <Row key={`m-${svc.name}`} id={`ctxa-m-${svc.name}`} value={`metrics ${svc.display}`} keywords={[...kw, "cpu", "memory"]} onSelect={() => go(serviceHref(svc, "metrics"), recent)} icon={<Activity />}>
-                  Metrics <span className="text-[var(--text-tertiary)]">·</span> {svc.display}
-                </Row>,
-                ...(svc.runtime !== "image" && svc.runtime !== "worker"
-                  ? [
-                      <Row
-                        key={`d-${svc.name}`}
-                        id={`ctxa-d-${svc.name}`}
-                        value={`deploy ${svc.display}`}
-                        keywords={[...kw, "redeploy", "build"]}
-                        onSelect={() => {
-                          close();
-                          setPending({ kind: "redeploy", svc });
-                        }}
-                        icon={<Play />}
-                      >
-                        Deploy latest <span className="text-[var(--text-tertiary)]">·</span> {svc.display}
-                      </Row>,
-                    ]
-                  : []),
+        {query && actions.length > 0 && (
+          <Group heading="Service actions" limit={30}>
+            {actions.map((a) => {
+              const recent: RecentItem = { kind: "service", project: a.svc.project, name: a.svc.name, group: a.svc.group };
+              const confirmKind = a.kind === "redeploy" || a.kind === "restart" ? a.kind : null;
+              return (
                 <Row
-                  key={`r-${svc.name}`}
-                  id={`ctxa-r-${svc.name}`}
-                  value={`restart ${svc.display}`}
-                  keywords={[...kw, "reboot"]}
+                  key={`act-${a.kind}-${a.svc.project}-${a.svc.name}`}
+                  id={`act-${a.kind}-${a.svc.project}-${a.svc.name}`}
+                  value={a.label}
+                  keywords={a.keywords}
+                  boost={a.svc.project === currentProject ? 0.02 : 0}
                   onSelect={() => {
-                    close();
-                    setPending({ kind: "restart", svc });
+                    if (confirmKind) {
+                      close();
+                      setPending({ kind: confirmKind, svc: a.svc });
+                    } else {
+                      go(serviceHref(a.svc, a.tab), recent);
+                    }
                   }}
-                  icon={<RotateCw />}
+                  icon={ACTION_ICON[a.kind]}
+                  right={<StatusBadge status={a.svc.status} />}
                 >
-                  Restart <span className="text-[var(--text-tertiary)]">·</span> {svc.display}
-                </Row>,
-              ];
+                  {a.verb}
+                  <span className="text-[var(--text-tertiary)]">: </span>
+                  <span className="text-[var(--text-secondary)]">{a.svc.project}/</span>
+                  {a.svc.display}
+                </Row>
+              );
             })}
+            {index.projects.map((p) => (
+              <Row
+                key={`act-psettings-${p.name}`}
+                id={`act-psettings-${p.name}`}
+                value={`Project settings: ${p.name}`}
+                keywords={["config", "domain", "delete", "settings"]}
+                boost={p.name === currentProject ? 0.02 : 0}
+                onSelect={() => go(`/projects/${encodeURIComponent(p.name)}/settings`)}
+                icon={<Settings />}
+              >
+                Project settings<span className="text-[var(--text-tertiary)]">: </span>
+                {p.name}
+              </Row>
+            ))}
           </Group>
         )}
 
@@ -666,40 +683,32 @@ export function CommandPalette() {
           <Row value="go settings" keywords={["preferences", "config"]} onSelect={() => go("/settings")} icon={<Settings />}>
             Settings
           </Row>
-          <Row value="go profile" keywords={["account", "me"]} onSelect={() => go("/settings/profile")} icon={<User />}>
-            Profile
-          </Row>
-          <Row value="go api tokens" keywords={["cli", "pat", "access", "keys"]} onSelect={() => go("/settings/tokens")} icon={<KeyRound />}>
-            API tokens
-          </Row>
-          {isSettingsAdmin && (
-            <>
-              <Row value="go nodes" keywords={["cluster", "servers", "machines"]} onSelect={() => go("/settings/nodes")} icon={<Box />}>
-                Cluster nodes
-              </Row>
-              <Row value="go alerts" keywords={["alerting", "rules", "thresholds"]} onSelect={() => go("/settings/alerts")} icon={<Bell />}>
-                Alerts
-              </Row>
-              <Row value="go health" keywords={["cluster", "status", "events"]} onSelect={() => go("/settings/health")} icon={<Activity />}>
-                Cluster health
-              </Row>
-              <Row value="go backups" keywords={["restore", "s3", "snapshots"]} onSelect={() => go("/settings/backups")} icon={<History />}>
-                Backups
-              </Row>
-              <Row value="go github" keywords={["app", "integration", "repos"]} onSelect={() => go("/settings/github")} icon={<GitBranch />}>
-                GitHub integration
-              </Row>
-            </>
-          )}
-          {isAdmin && (
-            <Row value="go users" keywords={["team", "members", "invite", "roles"]} onSelect={() => go("/settings/users")} icon={<User />}>
-              Users and roles
-            </Row>
-          )}
           <Row value="go welcome" keywords={["getting started", "tour", "onboarding", "help"]} onSelect={() => go("/welcome")} icon={<Star />}>
             Getting started
           </Row>
         </Group>
+
+        {query && (
+          <Group heading="Settings pages">
+            {SETTINGS_NAV.filter((item) => !item.perm || perms.includes(item.perm)).map((item) => {
+              const Icon = item.icon;
+              return (
+                <Row
+                  key={item.href}
+                  id={`nav-${item.href}`}
+                  value={`Settings: ${item.title}`}
+                  keywords={[item.description, item.keywords ?? ""]}
+                  onSelect={() => go(item.href)}
+                  icon={<Icon />}
+                  hint={item.description}
+                >
+                  Settings<span className="text-[var(--text-tertiary)]">: </span>
+                  {item.title}
+                </Row>
+              );
+            })}
+          </Group>
+        )}
 
         <Group heading="Preferences">
           <Row

@@ -1,0 +1,26 @@
+apiVersion: kuso/v1
+project: shlink
+services:
+  - name: shlink
+    runtime: image
+    port: 8080
+    image:
+      repository: shlinkio/shlink
+      tag: "5.1.8"
+    env:
+      DEFAULT_DOMAIN: "${{ prompt.host }}"
+      IS_HTTPS_ENABLED: "true"
+      INITIAL_API_KEY: { generate: hex16 }
+      DB_DRIVER: postgres
+      DB_HOST: "${{ shlink-db.POSTGRES_HOST }}"
+      DB_PORT: "${{ shlink-db.POSTGRES_PORT }}"
+      DB_NAME: "${{ shlink-db.POSTGRES_DB }}"
+      DB_USER: "${{ shlink-db.POSTGRES_USER }}"
+      DB_PASSWORD: "${{ shlink-db.POSTGRES_PASSWORD }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: shlink-db
+    kind: postgres
+    version: "16"

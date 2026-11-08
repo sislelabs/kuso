@@ -1,0 +1,15 @@
+name: vikunja
+title: Vikunja
+description: >-
+  To-do lists, kanban boards and project planning. Public sign-up is off;
+  create accounts with `kuso shell <project> vikunja`, then
+  `./vikunja user create -u <name> -e <email> -p <password>`.
+category: productivity
+website: https://vikunja.io
+appVersion: "2.8.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Vikunja will be served on.

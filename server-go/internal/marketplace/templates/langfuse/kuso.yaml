@@ -1,0 +1,28 @@
+apiVersion: kuso/v1
+project: langfuse
+services:
+  - name: langfuse
+    runtime: image
+    port: 3000
+    image:
+      repository: langfuse/langfuse
+      tag: "2.95.11"
+    env:
+      DATABASE_URL: "${{ langfuse-db.DATABASE_URL }}"
+      NEXTAUTH_URL: "https://${{ prompt.host }}"
+      NEXTAUTH_SECRET: { generate: hex32 }
+      SALT: { generate: hex32 }
+      TELEMETRY_ENABLED: "false"
+      AUTH_DISABLE_SIGNUP: "true"
+      LANGFUSE_INIT_ORG_ID: default
+      LANGFUSE_INIT_ORG_NAME: Default
+      LANGFUSE_INIT_USER_EMAIL: "${{ prompt.admin_email }}"
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: langfuse-db
+    kind: postgres
+    version: "16"

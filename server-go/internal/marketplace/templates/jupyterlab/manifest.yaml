@@ -1,0 +1,18 @@
+name: jupyterlab
+title: JupyterLab
+description: Notebooks for Python and data work in the browser. Your notebooks are kept in the work/ folder.
+category: data
+website: https://jupyter.org
+appVersion: "2026-11-02"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname JupyterLab will be served on.
+  - key: token
+    title: Access token
+    kind: password
+    required: true
+    help: Entered on the login page. Anyone with it can run code in the container.

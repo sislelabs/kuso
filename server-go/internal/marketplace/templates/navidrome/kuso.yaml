@@ -1,0 +1,24 @@
+apiVersion: kuso/v1
+project: navidrome
+services:
+  - name: navidrome
+    runtime: image
+    port: 4533
+    image:
+      repository: deluan/navidrome
+      tag: "0.64.2"
+    env:
+      # Creates the `admin` user on first boot so the "create admin" page
+      # never opens to the public.
+      ND_DEVAUTOCREATEADMINPASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 2
+      - name: music
+        mountPath: /music
+        sizeGi: 50
+    scale: { min: 1, max: 1 }

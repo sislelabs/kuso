@@ -1,0 +1,22 @@
+apiVersion: kuso/v1
+project: libretranslate
+services:
+  - name: libretranslate
+    runtime: image
+    port: 5000
+    image:
+      repository: libretranslate/libretranslate
+      tag: "v1.9.6"
+    env:
+      LT_LOAD_ONLY: "en,es,fr,de"
+      # Per-client requests per minute, so a public endpoint can't be farmed.
+      LT_REQ_LIMIT: "60"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    # Downloaded language models live here, so restarts don't re-download.
+    volumes:
+      - name: models
+        mountPath: /home/libretranslate/.local
+        sizeGi: 5
+    scale: { min: 1, max: 1 }

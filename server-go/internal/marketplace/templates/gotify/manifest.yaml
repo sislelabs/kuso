@@ -1,0 +1,15 @@
+name: gotify
+title: Gotify
+description: >-
+  Self-hosted server for sending and receiving push notifications. Log in
+  as `admin`; the generated password is GOTIFY_DEFAULTUSER_PASS in the
+  service's variables.
+category: comms
+website: https://gotify.net
+appVersion: "2.9.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Gotify will be served on.

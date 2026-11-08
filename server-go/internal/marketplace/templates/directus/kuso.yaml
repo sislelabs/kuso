@@ -1,0 +1,31 @@
+apiVersion: kuso/v1
+project: directus
+services:
+  - name: directus
+    runtime: image
+    port: 8055
+    image:
+      repository: directus/directus
+      tag: "12.6.1"
+    env:
+      PUBLIC_URL: "https://${{ prompt.host }}"
+      SECRET: { generate: hex32 }
+      DB_CLIENT: pg
+      DB_HOST: "${{ directus-db.POSTGRES_HOST }}"
+      DB_PORT: "${{ directus-db.POSTGRES_PORT }}"
+      DB_DATABASE: "${{ directus-db.POSTGRES_DB }}"
+      DB_USER: "${{ directus-db.POSTGRES_USER }}"
+      DB_PASSWORD: "${{ directus-db.POSTGRES_PASSWORD }}"
+      ADMIN_EMAIL: "${{ prompt.admin_email }}"
+      ADMIN_PASSWORD: "${{ prompt.admin_password }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: uploads
+        mountPath: /directus/uploads
+        sizeGi: 5
+addons:
+  - name: directus-db
+    kind: postgres
+    version: "16"

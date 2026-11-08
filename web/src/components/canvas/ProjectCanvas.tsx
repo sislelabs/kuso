@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   ReactFlow,
@@ -43,7 +43,6 @@ import { ApiError } from "@/lib/api-client";
 import { canvasVulnSummaries, summarizeErrors, type ErrorSummary } from "./badgeSummary";
 import { CanvasShortcutsButton, useCanvasShortcuts } from "./CanvasShortcuts";
 import { isTypingTarget } from "@/lib/shortcuts";
-import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { servicesQueryKey } from "@/features/projects";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { anySurfaceOpen } from "@/lib/escape-layer";
@@ -251,6 +250,12 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
+    // A service that has never had an image can't use the connection
+    // yet: its edges draw dashed ("pending") until the first deploy.
+    const notDeployed = (svcFQN: string) => {
+      const env = envs.find((e) => e.spec.service === svcFQN);
+      return !env || env.status?.state === "no_image";
+    };
     // Addon → service edges come in two flavours:
     //
     //   1. "explicit" — the service actively reads the addon (either
@@ -342,15 +347,10 @@ export function ProjectCanvas({
         id: `e:${addonFQN}->${svcFQN}`,
         source: `addon:${addonFQN}`,
         target: `svc:${svcFQN}`,
-        animated: true,
-        // The `kind` field is non-standard React Flow data; we
-        // stash the edge category here so the filter chips can
-        // toggle visibility without re-deriving from the id.
-        // Colour: olive (chart-4), distinct from service refs (the
-        // accent blue) and not orange, which is reserved for warnings.
-        // Full opacity keeps it ≥3:1 on the light canvas.
-        data: { kind: "addon" },
-        style: { stroke: "var(--chart-4)", strokeWidth: 1.5 },
+        // `data` is ours, not React Flow's: the filter chips and
+        // styleEdge read the category from it. Styling happens at
+        // render time so hover/selection can light edges up.
+        data: { kind: "addon", pending: notDeployed(svcFQN) } satisfies EdgeData,
       });
     });
     implicitUsedAddons.forEach((key) => {
@@ -359,14 +359,7 @@ export function ProjectCanvas({
         id: `e:auto:${addonFQN}->${svcFQN}`,
         source: `addon:${addonFQN}`,
         target: `svc:${svcFQN}`,
-        animated: false,
-        data: { kind: "addon" },
-        style: {
-          stroke: "var(--chart-4)",
-          strokeWidth: 1.25,
-          strokeDasharray: "4 4",
-          opacity: 0.4,
-        },
+        data: { kind: "addon", implicit: true, pending: notDeployed(svcFQN) } satisfies EdgeData,
       });
     });
     // Service → service edges from env-var refs. The server resolves
@@ -532,11 +525,7 @@ export function ProjectCanvas({
           id: `eref:${edgeKey}`,
           source: `svc:${targetFqn}`,
           target: `svc:${ownFqn}`,
-          animated: true,
-          data: { kind: "ref" },
-          // Colour: accent (purple). Service-ref edges are direct
-          // dependencies — distinct from addon mounts (amber).
-          style: { stroke: "var(--chart-1)", strokeWidth: 1.5, opacity: 0.85 },
+          data: { kind: "ref", pending: notDeployed(ownFqn) } satisfies EdgeData,
         });
       }
     });
@@ -614,7 +603,15 @@ export function ProjectCanvas({
   });
 
   const qc = useQueryClient();
-  const reducedMotion = usePrefersReducedMotion();
+
+  // Edges sit quietly until you point at (or select) a node; then that
+  // node's connections light up in the accent and the rest step back.
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const hotNodes = useMemo(() => {
+    const ids = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
+    if (hoveredNode) ids.add(hoveredNode);
+    return ids;
+  }, [nodes, hoveredNode]);
 
   // Project-scoped write capabilities. The server enforces these
   // (403), but surfacing them here keeps viewers from clicking
@@ -748,11 +745,17 @@ export function ProjectCanvas({
     return () => window.removeEventListener("keydown", onKey);
   }, [nodes, focusIdx, project, onSelectService, canServicesWrite]);
 
-  useEffect(() => {
+  // Layout effect, not effect: nodes are positioned before the first
+  // paint, so fitView never sees (or flashes) an empty or unlaid graph.
+  // A data refetch keeps whatever the user had selected.
+  useLayoutEffect(() => {
     if (!project) return;
     const stored = loadStoredLayout(project);
-    const laid = autoLayout(initialNodes, initialEdges);
-    setNodes(applyStoredLayout(laid, stored));
+    const laid = applyStoredLayout(autoLayout(initialNodes, initialEdges), stored);
+    setNodes((prev) => {
+      const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id));
+      return selected.size ? laid.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n)) : laid;
+    });
     setEdges(initialEdges);
   }, [project, initialNodes, initialEdges]);
 
@@ -1199,13 +1202,17 @@ export function ProjectCanvas({
             if (kind === "ref" && !edgeFilters.ref) return false;
             return true;
           })
-          .map((e) => (reducedMotion && e.animated ? { ...e, animated: false } : e))}
+          .map((e) => styleEdge(e, hotNodes))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
+        onNodeMouseEnter={(_e, n) => setHoveredNode(n.id)}
+        onNodeMouseLeave={() => setHoveredNode(null)}
         onConnect={onConnect}
         fitView
-        fitViewOptions={{ padding: 0.25, maxZoom: 1, minZoom: 0.4 }}
+        // Never fit below 0.85: card text stays ≥12px on screen and a
+        // big graph pans instead of shrinking into unreadable tiles.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1, minZoom: 0.85 }}
         minZoom={0.2}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
@@ -1528,14 +1535,14 @@ function EdgeLegend({
       >
         <LegendToggle
           label="Addon connections"
-          hint="Solid: the service references the addon in an env var. Dashed: the addon's connection secret is mounted but not referenced by name."
+          hint="A service reads the addon's connection secret. Fainter: mounted but not referenced by name. Dashed: the service hasn't deployed yet."
           swatch="var(--chart-4)"
           on={filters.addon}
           onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
         />
         <LegendToggle
           label="Service references"
-          hint="One service's env vars point at another service's URL or host."
+          hint="One service's env vars point at another service's URL or host. Hover or select a node to highlight its connections."
           swatch="var(--chart-1)"
           on={filters.ref}
           onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
@@ -1580,3 +1587,38 @@ function LegendToggle({
     </button>
   );
 }
+
+interface EdgeData extends Record<string, unknown> {
+  kind: "addon" | "ref";
+  // Conn secret mounted but not referenced by name: drawn fainter.
+  implicit?: boolean;
+  // Target never deployed: the only dashed edges.
+  pending?: boolean;
+}
+
+const EDGE_COLOR: Record<EdgeData["kind"], string> = {
+  addon: "var(--chart-4)",
+  ref: "var(--chart-1)",
+};
+
+// styleEdge: solid and low-contrast by default, accent + thicker when
+// either end is hovered or selected, dimmed when something else is.
+// Never animated — a moving dash read as "in progress" on every edge.
+function styleEdge(e: Edge, hot: Set<string>): Edge {
+  const d = (e.data ?? { kind: "ref" }) as EdgeData;
+  const lit = hot.has(e.source) || hot.has(e.target);
+  const dimmed = hot.size > 0 && !lit;
+  return {
+    ...e,
+    animated: false,
+    zIndex: lit ? 1 : 0,
+    style: {
+      stroke: lit ? "var(--accent)" : EDGE_COLOR[d.kind],
+      strokeWidth: lit ? 2 : 1.25,
+      opacity: lit ? 1 : dimmed ? 0.15 : d.implicit ? 0.35 : 0.55,
+      strokeDasharray: d.pending ? "5 4" : undefined,
+      transition: "opacity 120ms, stroke 120ms",
+    },
+  };
+}
+

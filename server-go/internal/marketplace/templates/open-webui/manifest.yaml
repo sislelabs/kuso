@@ -1,0 +1,25 @@
+name: open-webui
+title: Open WebUI
+description: >-
+  Self-hosted ChatGPT-style interface for OpenAI-compatible APIs and Ollama.
+  Sign-up is off; the admin adds users. Large image (several GB).
+category: ai
+website: https://openwebui.com
+appVersion: "0.13.2"
+size: large
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Open WebUI will be served on.
+  - key: admin_email
+    title: Admin email
+    kind: string
+    required: true
+    placeholder: you@example.com
+    help: The admin account, created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true

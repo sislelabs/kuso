@@ -1,0 +1,20 @@
+apiVersion: kuso/v1
+project: homepage
+services:
+  - name: homepage
+    runtime: image
+    port: 3000
+    image:
+      repository: ghcr.io/gethomepage/homepage
+      tag: "v2.7.0"
+    env:
+      # Homepage refuses requests whose Host header isn't listed here.
+      HOMEPAGE_ALLOWED_HOSTS: "${{ prompt.host }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: config
+        mountPath: /app/config
+        sizeGi: 1
+    scale: { min: 1, max: 1 }

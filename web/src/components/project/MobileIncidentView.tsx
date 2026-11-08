@@ -15,15 +15,17 @@ import {
   useTriggerBuild,
   useStopService,
   useStartService,
+  useRestartService,
   useServiceEnv,
   type BuildSummary,
   type NodeStatus,
 } from "@/features/services";
 import { api } from "@/lib/api-client";
-import { isProductionGroup } from "@/lib/env-group";
+import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ExternalLink,
   RotateCcw,
@@ -31,6 +33,8 @@ import {
   Play,
   Square,
   ChevronDown,
+  MoreHorizontal,
+  RotateCw,
   ChevronRight,
   KeyRound,
   Lock,
@@ -262,8 +266,10 @@ function MobileServiceCard({
   const trigger = useTriggerBuild(project, shortName);
   const stop = useStopService(project, shortName);
   const start = useStartService(project, shortName);
+  const restart = useRestartService(project, shortName);
   const [envOpen, setEnvOpen] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   // Redeploy + stop/start are editor-level mutations; disable with a
   // hint for viewers instead of a post-tap 403 toast.
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
@@ -326,13 +332,13 @@ function MobileServiceCard({
         <p className="mt-2 truncate font-mono text-xs text-[var(--text-tertiary)]">{url.replace(/^https?:\/\//, "")}</p>
       )}
 
-      <div className="mt-3 grid grid-cols-2 gap-2 [&_button]:h-10">
-        <Button type="button" variant="outline" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
-          <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
-        </Button>
+      {/* Redeploy is the one inline action; Restart and Stop live in the
+          overflow so a destructive button never sits beside the primary. */}
+      <div className="mt-3 space-y-2 [&_button]:h-10">
         <Button
           type="button"
           size="sm"
+          className="w-full"
           onClick={redeploy}
           disabled={trigger.isPending || !canWrite}
           title={canWrite ? undefined : "Requires editor access on this project"}
@@ -340,34 +346,62 @@ function MobileServiceCard({
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
           {trigger.isPending ? "Queuing" : "Redeploy"}
         </Button>
-        <Button
-          type="button"
-          variant={stopped ? "default" : "outline"}
-          size="sm"
-          // Start is one tap; Stop takes production offline, so it confirms
-          // like the canvas and overlay do.
-          onClick={stopped ? toggleStop : () => setConfirmingStop(true)}
-          disabled={toggling || !canWrite}
-          title={canWrite ? undefined : "Requires editor access on this project"}
-          className={stopped ? "" : "text-[var(--error)]"}
-        >
-          {stopped ? (
-            <Play className="mr-1.5 h-3.5 w-3.5" />
-          ) : (
-            <Square className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {toggling ? "Working" : stopped ? "Start" : "Stop"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => setEnvOpen((o) => !o)}
-          aria-expanded={envOpen}
-        >
-          <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Env
-          <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${envOpen ? "rotate-180" : ""}`} />
-        </Button>
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
+            <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setEnvOpen((o) => !o)}
+            aria-expanded={envOpen}
+          >
+            <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Env
+            <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${envOpen ? "rotate-180" : ""}`} />
+          </Button>
+          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+            <PopoverTrigger
+              aria-label={`More actions for ${displayName}`}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-52 gap-0 p-1">
+              <button
+                type="button"
+                className={menuItem}
+                disabled={!canWrite || stopped || restart.isPending}
+                onClick={() => {
+                  setMoreOpen(false);
+                  restart.mutate(env ? envGroupName(env) : "production", {
+                    onSuccess: () => toast.success(`Restarting ${shortName}`),
+                    onError: (err) => toast.error(err instanceof Error ? err.message : "Restart failed"),
+                  });
+                }}
+              >
+                <RotateCw className="h-4 w-4 text-[var(--text-tertiary)]" />
+                Restart
+                <span className="ml-auto text-xs text-[var(--text-tertiary)]">same image</span>
+              </button>
+              <button
+                type="button"
+                className={cn(menuItem, !stopped && "text-[var(--error)]")}
+                disabled={!canWrite || toggling}
+                onClick={() => {
+                  setMoreOpen(false);
+                  // Start is one tap; Stop takes the service offline, so it confirms.
+                  if (stopped) toggleStop();
+                  else setConfirmingStop(true);
+                }}
+              >
+                {stopped ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                {toggling ? "Working…" : stopped ? "Start" : "Stop…"}
+              </button>
+              {!canWrite && <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Requires editor access on this project</p>}
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       {envOpen && <MobileEnvReadout project={project} service={shortName} />}
@@ -421,3 +455,6 @@ function MobileEnvReadout({ project, service }: { project: string; service: stri
     </div>
   );
 }
+
+const menuItem =
+  "flex min-h-10 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] disabled:pointer-events-none disabled:opacity-50";

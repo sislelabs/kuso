@@ -111,14 +111,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
   const has = (k: string) => stored.includes(k);
 
   return (
-    <section className="space-y-4">
-      <header>
-        <h3 className="font-heading text-sm font-semibold tracking-tight">Project secrets</h3>
-        <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
-          Set a value once, then pick it from any service&apos;s Variables tab under Add → Project
-          secret.
-        </p>
-      </header>
+    <div className="space-y-4">
 
       {/* Integration tiles — one click prefills the key + opens the
           inline value editor. Existing keys show a green checkmark. */}
@@ -300,7 +293,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
         }}
         onCancel={() => setPendingOverwrite(null)}
       />
-    </section>
+    </div>
   );
 }
 

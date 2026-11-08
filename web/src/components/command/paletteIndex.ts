@@ -245,3 +245,51 @@ export function matchScore(query: string, label: string, keywords: string[] = []
   }
   return (total / tokens.length) * 0.9 - brevity;
 }
+
+// Global service actions: "Logs: shop/web", "Redeploy: shop/web", … for
+// every service in every project, so a verb typed anywhere finds its
+// target without drilling into a project first.
+export type ServiceActionKind = "logs" | "deployments" | "variables" | "metrics" | "settings" | "redeploy" | "restart";
+
+export interface ServiceAction {
+  kind: ServiceActionKind;
+  verb: string;
+  label: string;
+  keywords: string[];
+  svc: PaletteService;
+  // Overlay tab to open; absent for the confirm-first actions.
+  tab?: string;
+}
+
+const ACTION_DEFS: { kind: ServiceActionKind; verb: string; tab?: string; keywords: string[] }[] = [
+  { kind: "logs", verb: "Logs", tab: "logs", keywords: ["tail", "output", "stdout"] },
+  { kind: "deployments", verb: "Deployments", tab: "deployments", keywords: ["builds", "history", "rollback"] },
+  { kind: "variables", verb: "Variables", tab: "variables", keywords: ["env", "secrets", "config"] },
+  { kind: "metrics", verb: "Metrics", tab: "metrics", keywords: ["cpu", "memory", "latency", "requests"] },
+  { kind: "settings", verb: "Settings", tab: "settings", keywords: ["config", "domain", "scale", "port"] },
+  { kind: "redeploy", verb: "Redeploy", keywords: ["deploy", "build", "trigger", "latest"] },
+  { kind: "restart", verb: "Restart", keywords: ["reboot", "roll", "pods"] },
+];
+
+// Image and worker services have no repo build to trigger.
+export function canRedeploy(s: Pick<PaletteService, "runtime">): boolean {
+  return s.runtime !== "image" && s.runtime !== "worker";
+}
+
+export function serviceActions(services: PaletteService[]): ServiceAction[] {
+  const out: ServiceAction[] = [];
+  for (const def of ACTION_DEFS) {
+    for (const svc of services) {
+      if (def.kind === "redeploy" && !canRedeploy(svc)) continue;
+      out.push({
+        kind: def.kind,
+        verb: def.verb,
+        label: `${def.verb}: ${svc.project}/${svc.display}`,
+        keywords: [...def.keywords, svc.name, svc.project, svc.group],
+        svc,
+        tab: def.tab,
+      });
+    }
+  }
+  return out;
+}

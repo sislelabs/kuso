@@ -1,0 +1,12 @@
+name: kroki
+title: Kroki
+description: Stateless API that renders diagrams-as-code (PlantUML, Mermaid, Graphviz, D2 and more) to SVG or PNG.
+category: dev-tools
+website: https://kroki.io
+appVersion: "0.35.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname the Kroki API will be served on.

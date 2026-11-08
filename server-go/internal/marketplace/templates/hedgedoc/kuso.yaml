@@ -1,0 +1,47 @@
+apiVersion: kuso/v1
+project: hedgedoc
+services:
+  - name: hedgedoc
+    runtime: image
+    port: 3000
+    image:
+      repository: quay.io/hedgedoc/hedgedoc
+      tag: "1.12.0"
+    # The addon's DATABASE_URL (injected from its conn Secret) is HedgeDoc's
+    # legacy name for the DB URL, and with the image's empty config.json that
+    # legacy path crashes at boot. A config file with a "production" section
+    # avoids it; every real setting still comes from CMD_* below.
+    command:
+      - sh
+      - -c
+      - |
+        echo '{"production": {}}' > /tmp/hedgedoc.json
+        exec /usr/local/bin/docker-entrypoint.sh node app.js
+    env:
+      CMD_CONFIG_FILE: /tmp/hedgedoc.json
+      CMD_DB_URL: "${{ hedgedoc-db.DATABASE_URL }}"
+      CMD_DOMAIN: "${{ prompt.host }}"
+      CMD_PROTOCOL_USESSL: "true"
+      CMD_URL_ADDPORT: "false"
+      CMD_SESSION_SECRET: { generate: hex32 }
+      CMD_IMAGE_UPLOAD_TYPE: filesystem
+      # No public sign-up or anonymous notes: accounts are created from a shell.
+      CMD_ALLOW_EMAIL_REGISTER: "false"
+      CMD_ALLOW_ANONYMOUS: "false"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: uploads
+        mountPath: /hedgedoc/public/uploads
+        sizeGi: 2
+    scale: { min: 1, max: 1 }
+    # The entrypoint chowns the uploads dir, then drops to `hedgedoc` via gosu.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
+addons:
+  - name: hedgedoc-db
+    kind: postgres
+    version: "16"

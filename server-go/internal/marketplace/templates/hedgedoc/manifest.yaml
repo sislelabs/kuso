@@ -1,0 +1,15 @@
+name: hedgedoc
+title: HedgeDoc
+description: >-
+  Real-time collaborative Markdown editor. Public sign-up is off; add
+  accounts with `kuso shell <project> hedgedoc`, then
+  `bin/manage_users --add you@example.com`.
+category: content
+website: https://hedgedoc.org
+appVersion: "1.12.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname HedgeDoc will be served on.

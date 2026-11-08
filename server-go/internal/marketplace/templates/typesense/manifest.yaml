@@ -1,0 +1,15 @@
+name: typesense
+title: Typesense
+description: >-
+  Typo-tolerant, in-memory search engine with a simple API. The generated
+  TYPESENSE_API_KEY in the service's variables is the admin key.
+category: data
+website: https://typesense.org
+appVersion: "30.2"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname the Typesense API will be served on.

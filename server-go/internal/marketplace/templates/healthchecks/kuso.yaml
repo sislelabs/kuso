@@ -1,0 +1,30 @@
+apiVersion: kuso/v1
+project: healthchecks
+services:
+  - name: healthchecks
+    runtime: image
+    port: 8000
+    image:
+      repository: healthchecks/healthchecks
+      tag: "v5.0.3"
+    env:
+      DEBUG: "False"
+      SECRET_KEY: { generate: hex32 }
+      SITE_ROOT: "https://${{ prompt.host }}"
+      ALLOWED_HOSTS: "${{ prompt.host }}"
+      REGISTRATION_OPEN: "False"
+      DB: postgres
+      DB_HOST: "${{ healthchecks-db.POSTGRES_HOST }}"
+      DB_PORT: "${{ healthchecks-db.POSTGRES_PORT }}"
+      DB_NAME: "${{ healthchecks-db.POSTGRES_DB }}"
+      DB_USER: "${{ healthchecks-db.POSTGRES_USER }}"
+      DB_PASSWORD: "${{ healthchecks-db.POSTGRES_PASSWORD }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    # The image also runs the alert sender; two replicas would double-send.
+    scale: { min: 1, max: 1 }
+addons:
+  - name: healthchecks-db
+    kind: postgres
+    version: "16"

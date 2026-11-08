@@ -1,0 +1,12 @@
+name: swagger-editor
+title: Swagger Editor
+description: Browser-based editor for OpenAPI and AsyncAPI definitions with live preview. Nothing is stored on the server.
+category: dev-tools
+website: https://swagger.io/tools/swagger-editor
+appVersion: "5.10.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Swagger Editor will be served on.

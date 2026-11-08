@@ -1,0 +1,22 @@
+apiVersion: kuso/v1
+project: grafana
+services:
+  - name: grafana
+    runtime: image
+    port: 3000
+    image:
+      repository: grafana/grafana
+      tag: "13.2.5"
+    env:
+      GF_SERVER_ROOT_URL: "https://${{ prompt.host }}"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: { generate: hex16 }
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /var/lib/grafana
+        sizeGi: 2
+    # SQLite on an RWO volume: one instance only.
+    scale: { min: 1, max: 1 }

@@ -7,6 +7,9 @@ import { cn } from "@/lib/utils";
 
 const CATEGORY_LABELS: Record<string, string> = {
   "dev-tools": "Developer tools",
+  ai: "AI",
+  comms: "Communication",
+  content: "Content & CMS",
 };
 
 export function categoryLabel(c: string): string {

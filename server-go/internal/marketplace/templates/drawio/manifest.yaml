@@ -1,0 +1,12 @@
+name: drawio
+title: draw.io
+description: Diagram editor (flowcharts, architecture, UML) that runs in the browser. Diagrams are stored where you save them, not on the server.
+category: productivity
+website: https://www.drawio.com
+appVersion: "32.6.10"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname draw.io will be served on.

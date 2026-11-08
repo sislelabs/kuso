@@ -1,0 +1,28 @@
+apiVersion: kuso/v1
+project: linkding
+services:
+  - name: linkding
+    runtime: image
+    port: 9090
+    image:
+      repository: sissbruecker/linkding
+      tag: "1.47.0"
+    env:
+      LD_SUPERUSER_NAME: "${{ prompt.admin_username }}"
+      LD_SUPERUSER_PASSWORD: "${{ prompt.admin_password }}"
+      # Django rejects form posts from an origin it doesn't know; TLS ends
+      # at the ingress, so it must be told the public https origin.
+      LD_CSRF_TRUSTED_ORIGINS: "https://${{ prompt.host }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /etc/linkding/data
+        sizeGi: 1
+    scale: { min: 1, max: 1 }
+    # bootstrap.sh chowns the data dir; uwsgi then drops to www-data.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
