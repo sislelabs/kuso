@@ -207,6 +207,7 @@ export function RepoPicker({
         <Segmented
           label="Repository owner"
           size="sm"
+          className="shrink-0 self-start sm:self-auto"
           value={activeOwner}
           onChange={setOwner}
           options={[
@@ -216,11 +217,10 @@ export function RepoPicker({
         />
       ) : (
         <Select
-          size="sm"
           aria-label="Repository owner"
           value={activeOwner}
           onChange={(e) => setOwner(e.target.value)}
-          wrapperClassName="sm:w-48"
+          wrapperClassName="sm:w-44 sm:shrink-0"
         >
           <option value="">All owners</option>
           {owners.map((o) => (
@@ -232,20 +232,22 @@ export function RepoPicker({
       );
     appPanel = (
       <div className="space-y-2">
-        {ownerFilter}
-        <Input
-          ref={searchRef}
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search ${src.allRepos.length} ${src.allRepos.length === 1 ? "repository" : "repositories"}…`}
-          aria-label="Search repositories"
-          aria-invalid={error ? true : undefined}
-          data-primary-search
-          data-no-draft
-          className="h-9 text-[13px]"
-          autoFocus={autoFocus}
-        />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${src.allRepos.length} ${src.allRepos.length === 1 ? "repository" : "repositories"}…`}
+            aria-label="Search repositories"
+            aria-invalid={error ? true : undefined}
+            data-primary-search
+            data-no-draft
+            className="h-9 min-w-0 flex-1 text-[13px]"
+            autoFocus={autoFocus}
+          />
+          {ownerFilter}
+        </div>
         <ul
           className={
             "divide-y divide-[var(--border-subtle)] overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] " +
@@ -276,7 +278,8 @@ export function RepoPicker({
                   <span className="flex shrink-0 items-center gap-3 text-xs text-[var(--text-tertiary)]">
                     {repo.pushedAt && relativeTime(repo.pushedAt) && (
                       <time dateTime={repo.pushedAt} title={new Date(repo.pushedAt).toLocaleString()}>
-                        pushed {relativeTime(repo.pushedAt)}
+                        <span className="max-sm:sr-only">pushed </span>
+                        {relativeTime(repo.pushedAt)}
                       </time>
                     )}
                     <span className="flex items-center gap-1 group-hover:text-[var(--text-primary)]">
