@@ -145,7 +145,9 @@ export function ProjectDetailView() {
   const narrow = useMediaQuery("(max-width: 899px)");
   const urlView = search?.get("view");
   const viewMode: ProjectViewMode =
-    urlView === "list" || urlView === "canvas" ? urlView : (storedView ?? (narrow ? "list" : "canvas"));
+    // Narrow screens open on the list; the stored choice is a desktop
+    // preference (a canvas that narrow is mostly panning).
+    urlView === "list" || urlView === "canvas" ? urlView : narrow ? "list" : (storedView ?? "canvas");
   const changeViewMode = (m: ProjectViewMode) => {
     setStoredView(m);
     saveProjectView(projectName, m);

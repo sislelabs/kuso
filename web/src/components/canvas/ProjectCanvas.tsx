@@ -769,6 +769,15 @@ export function ProjectCanvas({
     setEdges(initialEdges);
   }, [project, initialNodes, initialEdges]);
 
+  // The fitView prop only fits the first render; nodes that arrive with
+  // the data (or a changed node count) refit until the user takes over.
+  const nodeCount = initialNodes.length;
+  useEffect(() => {
+    if (nodeCount === 0 || userMovedRef.current) return;
+    const id = requestAnimationFrame(() => void rf.current?.fitView(FIT_VIEW_OPTIONS));
+    return () => cancelAnimationFrame(id);
+  }, [project, nodeCount]);
+
   const onNodesChange: OnNodesChange = (changes) => {
     setNodes((prev) => {
       const next = applyNodeChanges(changes, prev);
@@ -1607,10 +1616,10 @@ function LegendToggle({
       onClick={onClick}
       title={`${on ? "Hide" : "Show"} ${label.toLowerCase()}. ${hint}`}
       className={
-        "inline-flex h-7 items-center gap-2 rounded-md px-2 text-xs transition-colors " +
+        "inline-flex h-7 items-center gap-2 rounded-md border px-2 text-xs transition-colors " +
         (on
-          ? "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
-          : "text-[var(--text-tertiary)] line-through decoration-[var(--text-tertiary)]/60 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]")
+          ? "border-[var(--border-strong)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
+          : "border-transparent text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]")
       }
     >
       <span
@@ -1619,6 +1628,7 @@ function LegendToggle({
         style={{ background: swatch, opacity: on ? 1 : 0.3 }}
       />
       {label}
+      <span className={on ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]"}>{on ? "On" : "Off"}</span>
     </button>
   );
 }
@@ -1661,7 +1671,7 @@ function styleEdge(e: Edge, hot: Set<string>, boxById: Map<string, Box>): BuiltI
     style: {
       stroke: lit ? "var(--accent)" : EDGE_COLOR[d.kind],
       strokeWidth: lit ? 2 : 1.25,
-      opacity: lit ? 1 : dimmed ? 0.06 : d.implicit ? 0.35 : 0.55,
+      opacity: lit ? 1 : dimmed ? 0.06 : d.implicit ? 0.5 : 0.7,
       strokeDasharray: d.pending ? "5 4" : undefined,
       transition: "opacity 120ms, stroke 120ms",
     },
@@ -1688,7 +1698,9 @@ const ARROW_DIR: Record<string, Direction> = {
 
 // Never fit below 0.85: card text stays ≥12px on screen and a big graph
 // pans instead of shrinking into unreadable tiles.
-const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1, minZoom: 0.85 };
+// A small project zooms in to fill the canvas instead of floating in a
+// corner; a big one zooms out far enough to fit.
+const FIT_VIEW_OPTIONS = { padding: 0.15, maxZoom: 1.25, minZoom: 0.5 };
 
 function reducedMotion(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
