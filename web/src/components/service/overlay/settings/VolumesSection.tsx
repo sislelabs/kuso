@@ -1,14 +1,15 @@
 "use client";
 
-import { HardDrive, Plus, X } from "lucide-react";
+import { HardDrive, Plus, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useStorageClasses } from "@/features/services";
 import { cn } from "@/lib/utils";
-import { Section, type SectionProps, type VolumeRow } from "./_primitives";
+import { Section, Field, Segmented, Callout, monoInputClass, type SectionProps, type VolumeRow } from "./_primitives";
 
 const ACCESS_MODES = [
-  { value: "", label: "RWO (default)" },
-  { value: "ReadWriteMany", label: "RWX" },
+  { value: "", label: "Single node (RWO)" },
+  { value: "ReadWriteMany", label: "Shared (RWX)" },
 ] as const;
 
 // existingVolumes is the saved list. The server keys volumes by name and
@@ -34,83 +35,102 @@ export function VolumesSection({
   const remove = (i: number) =>
     setState((s) => ({ ...s, volumes: s.volumes.filter((_, j) => j !== i) }));
 
+  const removedSaved = existingVolumes.filter((e) => !state.volumes.some((v) => v.name === e.name));
+
   return (
     <Section
       id="volumes"
       title="Volumes"
       icon={HardDrive}
-      hint={state.volumes.length === 0 ? "none" : `${state.volumes.length}`}
+      status={state.volumes.length === 0 ? "None" : `${state.volumes.length} volume${state.volumes.length === 1 ? "" : "s"}`}
+      description="Persistent disks mounted into every pod. Use them for SQLite, uploads or anything that must survive a restart."
+      footerNote="Adding or resizing a volume redeploys the service."
     >
       {state.volumes.length === 0 ? (
-        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
-          No persistent volumes. Add one for SQLite, file uploads, or any state that
-          should survive pod restarts.
-        </p>
+        <p className="text-xs text-[var(--text-tertiary)]">No volumes. Pods start with an empty filesystem on every deploy.</p>
       ) : (
-        state.volumes.map((v, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-[120px_minmax(0,1fr)_72px_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
-          >
-            <Input
-              value={v.name}
-              onChange={(e) => update(i, { name: e.target.value })}
-              placeholder="data"
-              className="h-7 min-w-0 font-mono text-[11px]"
-            />
-            <Input
-              value={v.mountPath}
-              onChange={(e) => update(i, { mountPath: e.target.value })}
-              placeholder="/var/lib/app"
-              className="h-7 min-w-0 font-mono text-[11px]"
-            />
-            <div className="relative min-w-0">
-              <Input
-                type="number"
-                value={v.sizeGi}
-                onChange={(e) =>
-                  update(i, { sizeGi: Math.max(1, Number(e.target.value) || 1) })
-                }
-                min={1}
-                className="h-7 min-w-0 pr-6 font-mono text-[11px]"
-              />
-              <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-[var(--text-tertiary)]">
-                Gi
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              aria-label="Remove volume"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
-            >
-              <X className="h-3 w-3" />
-            </button>
-            {!existingVolumes.some((e) => e.name === v.name) ? (
-              <NewVolumeOptions
-                volume={v}
-                classes={classes.isError ? null : (classes.data ?? [])}
-                onChange={(patch) => update(i, patch)}
-              />
-            ) : (v.accessMode || v.storageClass) && (
-              <p
-                className="col-span-4 font-mono text-[10px] text-[var(--text-tertiary)]"
-                title="Fixed when the volume was created; immutable on a bound PVC"
-              >
-                {[v.accessMode, v.storageClass && `class ${v.storageClass}`].filter(Boolean).join(" · ")} (read-only)
-              </p>
-            )}
-          </div>
-        ))
+        <div className="space-y-3">
+          {state.volumes.map((v, i) => {
+            const saved = existingVolumes.some((e) => e.name === v.name);
+            return (
+              <div key={i} className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 p-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_96px_32px] sm:items-end">
+                  <Field label="Name" htmlFor={`vol-name-${i}`}>
+                    <Input
+                      id={`vol-name-${i}`}
+                      value={v.name}
+                      onChange={(e) => update(i, { name: e.target.value })}
+                      placeholder="e.g. data"
+                      className={monoInputClass}
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field label="Mount path" htmlFor={`vol-path-${i}`}>
+                    <Input
+                      id={`vol-path-${i}`}
+                      value={v.mountPath}
+                      onChange={(e) => update(i, { mountPath: e.target.value })}
+                      placeholder="e.g. /var/lib/app"
+                      className={monoInputClass}
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field label="Size" htmlFor={`vol-size-${i}`}>
+                    <div className="relative">
+                      <Input
+                        id={`vol-size-${i}`}
+                        type="number"
+                        inputMode="numeric"
+                        value={v.sizeGi}
+                        onChange={(e) => update(i, { sizeGi: Math.max(1, Number(e.target.value) || 1) })}
+                        min={1}
+                        className={cn(monoInputClass, "pr-8")}
+                      />
+                      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--text-tertiary)]">
+                        GiB
+                      </span>
+                    </div>
+                  </Field>
+                  <button
+                    type="button"
+                    onClick={() => remove(i)}
+                    aria-label={`Remove volume ${v.name || i + 1}`}
+                    className="inline-flex h-8 w-8 items-center justify-center justify-self-end rounded-sm text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--error)]"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {!saved ? (
+                  <NewVolumeOptions
+                    volume={v}
+                    classes={classes.isError ? null : (classes.data ?? [])}
+                    onChange={(patch) => update(i, patch)}
+                  />
+                ) : (
+                  (v.accessMode || v.storageClass) && (
+                    <p className="text-xs text-[var(--text-secondary)]">
+                      {[v.accessMode === "ReadWriteMany" ? "Shared (RWX)" : v.accessMode, v.storageClass && `storage class ${v.storageClass}`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      . Fixed when the volume was created.
+                    </p>
+                  )
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
-      <button
-        type="button"
-        onClick={add}
-        className="flex w-full items-center gap-1.5 border-t border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]/40"
-      >
+      {removedSaved.length > 0 && (
+        <Callout tone="warning">
+          Removing <span className="font-mono">{removedSaved.map((r) => r.name).join(", ")}</span> unmounts it. The disk
+          and its data are kept but nothing mounts it any more.
+        </Callout>
+      )}
+      <Button type="button" variant="outline" size="xs" onClick={add}>
         <Plus className="h-3 w-3" />
-        add volume
-      </button>
+        Add volume
+      </Button>
     </Section>
   );
 }
@@ -133,61 +153,34 @@ function NewVolumeOptions({
   if (options && sc && !options.some((o) => o.value === sc)) options.push({ value: sc, label: `${sc} (missing)` });
   const setClass = (value: string) => onChange({ storageClass: value || undefined });
   return (
-    <div className="col-span-4 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-      <span>class</span>
-      {options ? (
-        <Pills options={options} value={sc} onChange={setClass} label="Storage class" />
-      ) : (
-        <Input
-          value={sc}
-          onChange={(e) => setClass(e.target.value.trim())}
-          placeholder="cluster default"
-          aria-label="Storage class"
-          className="h-6 w-36 font-mono text-[10px]"
-          spellCheck={false}
-        />
-      )}
-      <span>access</span>
-      <Pills
-        options={[...ACCESS_MODES]}
-        value={volume.accessMode ?? ""}
-        onChange={(value) => onChange({ accessMode: value || undefined })}
-        label="Access mode"
-      />
-      <span className="basis-full">fixed once the volume is created · RWX needs a class that supports it (e.g. longhorn, nfs)</span>
-    </div>
-  );
-}
-
-function Pills({
-  options,
-  value,
-  onChange,
-  label,
-}: {
-  options: { value: string; label: string }[];
-  value: string;
-  onChange: (v: string) => void;
-  label: string;
-}) {
-  return (
-    <div role="group" aria-label={label} className="inline-flex flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
-      {options.map((o) => (
-        <button
-          key={o.value || "default"}
-          type="button"
-          aria-pressed={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "rounded px-1.5 py-0.5 text-[10px] whitespace-nowrap transition-colors",
-            value === o.value
-              ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-              : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Storage class">
+          {options ? (
+            <Segmented options={options} value={sc} onChange={setClass} label="Storage class" />
+          ) : (
+            <Input
+              value={sc}
+              onChange={(e) => setClass(e.target.value.trim())}
+              placeholder="cluster default"
+              aria-label="Storage class"
+              className={monoInputClass}
+              spellCheck={false}
+            />
           )}
-        >
-          {o.label}
-        </button>
-      ))}
+        </Field>
+        <Field label="Access">
+          <Segmented
+            options={ACCESS_MODES}
+            value={volume.accessMode ?? ""}
+            onChange={(value) => onChange({ accessMode: value || undefined })}
+            label="Access mode"
+          />
+        </Field>
+      </div>
+      <p className="text-xs text-[var(--text-secondary)]">
+        Both are fixed once the volume exists. Shared (RWX) needs a storage class that supports it, e.g. longhorn or nfs.
+      </p>
     </div>
   );
 }

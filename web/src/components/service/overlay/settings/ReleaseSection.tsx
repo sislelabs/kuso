@@ -2,60 +2,53 @@
 
 import { Rocket } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Section, Row, Toggle, type SectionProps } from "./_primitives";
+import { cn } from "@/lib/utils";
+import { Section, Field, SwitchField, WithSuffix, monoInputClass, type SectionProps } from "./_primitives";
 
 // ReleaseSection configures the pre-deploy release hook: a one-off Job
 // that runs before a rollout is promoted (migrations, etc). Empty
 // command = no hook (the default for every service).
 export function ReleaseSection({ state, setState }: SectionProps) {
   const hasHook = state.releaseCommand.trim().length > 0;
-  const hint = hasHook ? "runs before each deploy" : "no hook";
 
   return (
-    <Section id="release" title="Release hook" icon={Rocket} hint={hint}>
-      <div className="px-3 py-2.5 text-[11px] text-[var(--text-secondary)]">
-        This command runs as a one-off Job with the new image and the
-        service&apos;s env, before the rollout is promoted. A non-zero exit
-        fails the deploy and keeps the old version serving. Empty command =
-        no hook.
-      </div>
-      <Row
-        label="command"
-        hint='e.g. "npm run migrate" or "bundle exec rake db:migrate"'
-        control={
+    <Section
+      id="release"
+      title="Release hook"
+      icon={Rocket}
+      status={hasHook ? "Runs before each deploy" : "No hook"}
+      description="A one-off job that runs with the new image and the service's variables before the rollout is promoted, e.g. database migrations. A non-zero exit fails the deploy and the old version keeps serving."
+      footerNote="Applies from the next deploy."
+    >
+      <Field label="Command" hint="Blank means no hook." htmlFor="release-command">
+        <Input
+          id="release-command"
+          value={state.releaseCommand}
+          onChange={(e) => setState((s) => ({ ...s, releaseCommand: e.target.value }))}
+          placeholder="e.g. npm run migrate"
+          className={monoInputClass}
+          spellCheck={false}
+        />
+      </Field>
+      <Field label="Timeout" hint="Blank uses the server default of 900 seconds." htmlFor="release-timeout">
+        <WithSuffix suffix="seconds">
           <Input
-            value={state.releaseCommand}
-            onChange={(e) => setState((s) => ({ ...s, releaseCommand: e.target.value }))}
-            placeholder="e.g. npm run migrate"
-            className="h-7 w-full font-mono text-[12px]"
-          />
-        }
-      />
-      <Row
-        label="timeout"
-        hint="seconds — blank = server default (900)"
-        control={
-          <Input
+            id="release-timeout"
             type="number"
+            inputMode="numeric"
             value={state.releaseTimeout}
             onChange={(e) => setState((s) => ({ ...s, releaseTimeout: e.target.value }))}
             placeholder="900"
-            className="h-7 w-24 font-mono text-[12px]"
+            className={cn(monoInputClass)}
             min={1}
           />
-        }
-      />
-      <Row
-        label="snapshot before deploy"
-        hint="back up the service's postgres addon(s) before the hook runs · only fires when a hook is set"
-        control={
-          <Toggle
-            on={state.snapshotBeforeDeploy}
-            onChange={(v) => setState((s) => ({ ...s, snapshotBeforeDeploy: v }))}
-            label="Toggle snapshot before deploy"
-          />
-        }
-        last
+        </WithSuffix>
+      </Field>
+      <SwitchField
+        label="Snapshot databases first"
+        hint="Back up this service's Postgres addons before the hook runs. Only fires when a hook is set."
+        on={state.snapshotBeforeDeploy}
+        onChange={(v) => setState((s) => ({ ...s, snapshotBeforeDeploy: v }))}
       />
     </Section>
   );
