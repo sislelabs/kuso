@@ -8,25 +8,38 @@ import { summarizeUptime, useProjectUptime } from "@/features/uptime";
 import { uptimeTitle } from "@/components/uptime/UptimeBadge";
 import { cn } from "@/lib/utils";
 import { ProjectLogsSheet } from "./ProjectLogsSheet";
+import { ViewToggle } from "./ViewToggle";
+import type { ProjectViewMode } from "./projectViewPref";
 
 // ProjectStatusStrip sits above the canvas: the selected env-group's
 // resource rollup (`kuso project metrics`), uptime summary (`kuso uptime
 // status`, production-only — checks don't run against other groups) and
 // the entry point to project-wide log search.
-export function ProjectStatusStrip({ project, selectedEnv }: { project: string; selectedEnv: string }) {
+export function ProjectStatusStrip({
+  project,
+  selectedEnv,
+  view,
+  onViewChange,
+}: {
+  project: string;
+  selectedEnv: string;
+  view?: ProjectViewMode;
+  onViewChange?: (v: ProjectViewMode) => void;
+}) {
   const metrics = useProjectMetrics(project, selectedEnv);
   const uptime = useProjectUptime(project);
   const [logsOpen, setLogsOpen] = useState(false);
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 text-xs text-[var(--text-secondary)]">
+      {view && onViewChange && <ViewToggle value={view} onChange={onViewChange} />}
       <MetricsSummary metrics={metrics} env={selectedEnv} />
       {selectedEnv === "production" && <UptimeSummary uptime={uptime} />}
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        className="ml-auto h-6 gap-1 px-2 font-mono text-[11px]"
+        className="ml-auto h-7 gap-1.5 px-2 text-xs"
         onClick={() => setLogsOpen(true)}
       >
         <ScrollText className="h-3.5 w-3.5" />

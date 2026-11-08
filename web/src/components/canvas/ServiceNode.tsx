@@ -2,542 +2,162 @@
 
 import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Check, Copy, ExternalLink, MoreHorizontal, Square } from "lucide-react";
+import { Check, Copy, ExternalLink, Layers, MoreHorizontal } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
-import type { BuildSummary } from "@/features/services/api";
-import { buildRefLabel } from "@/features/builds";
 import {
-  deployStatusFromServerState,
-  type DeployStatus,
-} from "@/components/service/DeployStatusPill";
-import { SleepBadge } from "@/components/service/SleepBadge";
+  deriveServiceStatus,
+  lastDeployAt,
+  serviceUrl,
+  STATUS_TONE,
+  type BuildSummary,
+  type NodeStatus,
+} from "@/features/services";
+import { buildRefLabel } from "@/features/builds";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
+import { relativeTime } from "@/lib/format";
 import { toast } from "sonner";
-import { hostScheme } from "@/lib/host-scheme";
-import { VulnNodeBadge } from "@/components/vulns/VulnNodeBadge";
+import { ErrorBadge, VulnBadge } from "./NodeBadges";
+import type { ErrorSummary, VulnSummary } from "./badgeSummary";
 
 export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
   service: KusoService;
   env?: KusoEnvironment;
-  // Latest build for this service. Polled at the canvas level so
-  // statusFor can prefer fresh build state over a stale env phase.
+  // Latest build for this service in the selected env group. Polled at
+  // the canvas level, faster than the describe payload refreshes.
   latestBuild?: BuildSummary;
-  // Fixable critical CVEs in the live image (project vulns rollup).
-  fixableCritical?: number;
+  vulns?: VulnSummary;
+  errors?: ErrorSummary;
   // Injected by ProjectCanvas — fires the right-click context menu.
   __onContext?: (e: React.MouseEvent) => void;
-  // Injected by ProjectCanvas — true when the keyboard focus index
-  // points at this node. Drives the canvas focus ring.
+  // Injected by ProjectCanvas — opens the service overlay on a tab.
+  __onOpenTab?: (tab: string) => void;
+  // Injected by ProjectCanvas — true when the j/k focus index points here.
   __focused?: boolean;
-}
-
-function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
-  // Source-of-truth ordering, in priority:
-  //
-  // 1. Any in-progress build (pending/queued/running/deploying) →
-  //    building. The user pushed something and is staring at the
-  //    canvas; pulsing the border tells them "we see it." Older
-  //    versions of this code only pulsed on `running` (kaniko
-  //    actively executing) and stayed green during the `queued` +
-  //    `pending` window — which can be 5-15s on a busy daemon and
-  //    is exactly when the user wonders "did my push register?"
-  //
-  // 2. env.ready = true → active. Steady-state win condition once
-  //    builds are settled.
-  //
-  // 3. env never came up + latest build failed → failed. Brand-new
-  //    service whose first build crashed has no env.ready yet.
-  //
-  // 4. env has desired replicas but 0 ready → failed. Catches
-  //    "stale env.phase=building" where helm-operator never wrote
-  //    phase=failed back.
-  //
-  // 5. Fall through to env.status.phase as the last resort.
-  const buildStatus = (latestBuild?.status ?? "").toLowerCase();
-  if (buildStatus === "pending" || buildStatus === "queued" || buildStatus === "running") {
-    return "building";
-  }
-  if (buildStatus === "deploying") return "deploying";
-
-  // Server-derived unified rollup (env.status.state) wins over the
-  // client-side heuristics below — it folds in pod-level truth
-  // (crashloops, degraded replica counts) the client can't see from
-  // the env CR alone. The in-flight-build check stays above because
-  // the canvas polls builds at a faster cadence than the describe
-  // payload refreshes. Absent state (older server) falls through to
-  // the legacy derivation unchanged.
-  const server = deployStatusFromServerState(env?.status?.state);
-  if (server) return server;
-
-  if (env?.status?.ready) return "active";
-
-  if (!env) return "unknown";
-
-  // release-failed = build OK but release hook (migration) failed, image
-  // not promoted. If the env isn't already serving a prior-good image
-  // (handled by the env.status.ready check above), surface it as failed
-  // rather than falling through to awaiting/unknown.
-  if (buildStatus === "failed" || buildStatus === "error" || buildStatus === "release-failed") {
-    return "failed";
-  }
-
-  // Awaiting the first build: a brand-new build-based service has no
-  // image yet (server holds it at replicas=0 so it doesn't crash-loop a
-  // ":latest" placeholder). No imageTag in status AND no build has ever
-  // succeeded → it's intentionally not-yet-running, not broken. Without
-  // this branch the "desired>0 && ready===0 → failed" check below (or a
-  // stale phase) painted every first deploy red. Build-in-progress is
-  // already handled above, so reaching here with no image means we're
-  // genuinely waiting for the user's first push/trigger.
-  const hasImage = !!env.status?.imageTag;
-  const buildSucceeded = buildStatus === "succeeded";
-  if (!hasImage && !buildSucceeded) return "awaiting";
-
-  const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
-  const desired = r?.max ?? r?.desired ?? 0;
-  const ready = r?.ready ?? 0;
-  if (desired > 0 && ready === 0) return "failed";
-
-  const phase = (env.status?.phase ?? "").toString().toLowerCase();
-  if (phase === "building") return "building";
-  if (phase === "deploying") return "deploying";
-  if (phase === "failed" || phase === "error") return "failed";
-  if (phase === "sleeping") return "sleeping";
-  return "unknown";
 }
 
 interface Replicas {
   ready: number;
-  // Pods the deployment currently wants; max is the autoscale ceiling.
   desired: number;
   max: number;
-  cpuPct?: number;
 }
 
 function replicasFor(env?: KusoEnvironment): Replicas | null {
-  const r = env?.status?.replicas as
-    | { ready?: number; desired?: number; max?: number }
-    | undefined;
-  if (!r || (r.desired === undefined && r.ready === undefined && r.max === undefined)) {
-    return null;
-  }
-  // max falls back to desired when the ceiling isn't surfaced yet (and
-  // vice versa for older servers that only sent one of them).
+  const r = env?.status?.replicas as { ready?: number; desired?: number; max?: number } | undefined;
+  if (!r || (r.desired === undefined && r.ready === undefined && r.max === undefined)) return null;
   const ceil = r.max ?? r.desired ?? 0;
-  const cpu = (env?.status?.cpuPct as number | undefined) ?? undefined;
-  return { ready: r.ready ?? 0, desired: r.desired ?? ceil, max: ceil, cpuPct: cpu };
+  return { ready: r.ready ?? 0, desired: r.desired ?? ceil, max: ceil };
 }
 
-// Footer is always visible so the status line + build sha are
-// discoverable from any zoom level. The previous 0.7 cutoff hid it
-// for users who fit the whole project in viewport (most common
-// default) and required them to zoom in just to see "is this service
-// healthy?" — the answer they came here for. The 10px text reads as
-// fuzzy at extreme zoom-out but the row layout still signals "ready
-// N/M" at a glance.
+export function serviceNodeStatus(data: Pick<ServiceNodeData, "service" | "env" | "latestBuild">): NodeStatus {
+  return deriveServiceStatus({ stopped: !!data.service.spec?.stopped, env: data.env, latestBuild: data.latestBuild });
+}
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
-  // Hard stop (spec.stopped=true) overrides every other status — the
-  // service was explicitly taken offline, so we paint it as "stopped"
-  // regardless of what the env phase / build state say. Distinct from
-  // sleeping (which wakes on traffic): a stopped service stays down.
-  const stopped =
-    !!data.service.spec?.stopped;
-  const status = stopped ? "stopped" : statusFor(data.env, data.latestBuild);
-  const showFooter = true;
-  // Visibility, in priority order:
-  //   internal=true        → no Ingress; show "internal only" chip.
-  //   env.spec.additionalHosts[0]
-  //                        → the env-scoped custom domain. v0.16.19+
-  //                           per-env custom domains live here (NOT in
-  //                           the project-level service.spec.domains),
-  //                           so this is safe to surface on any env's
-  //                           node — a preview env that has no custom
-  //                           domain simply has an empty list and
-  //                           falls through to its own scoped host.
-  //                           This is the user's canonical public URL
-  //                           (e.g. tickero.bg), so prefer it over the
-  //                           auto-generated host (frontend.tickero.bg).
-  //   env.spec.host        → the env-scoped hostname (where the
-  //                           Ingress actually routes for this env).
-  //                           Critical for staging/preview tabs — the
-  //                           service's `domains` list is project-
-  //                           level and points at production hosts;
-  //                           rendering it on a staging node would
-  //                           misdirect the user to the prod URL.
-  //   custom domain set    → fall back to the user's project-level
-  //                           custom domain (with their tls flag).
-  //                           Hit when env.spec.host is unset (rare —
-  //                           operator-side default fills it).
-  //   else                 → env.status.url, the auto-domain.
-  const internal =
-    !!data.service.spec?.internal;
-  const envHost = data.env?.spec?.host;
-  const envTLS = data.env?.spec?.tlsEnabled ?? true;
-  // The env's custom domain wins over its auto-host. Same TLS flag as
-  // the primary host — additionalHosts share the env's ingress, which
-  // is provisioned with a single tls config.
-  const envCustomHost = data.env?.spec?.additionalHosts?.find((h) => !!h);
-  const customDomain = data.service.spec.domains?.find((d) => d?.host)?.host;
-  const customTLS =
-    data.service.spec.domains?.find((d) => d?.host)?.tls ?? true;
-  const url = internal
-    ? undefined
-    : envCustomHost
-      ? `${hostScheme(envTLS, envCustomHost)}://${envCustomHost}`
-      : envHost
-        ? `${hostScheme(envTLS, envHost)}://${envHost}`
-        : customDomain
-          ? `${customTLS ? "https" : "http"}://${customDomain}`
-          : (data.env?.status?.url as string | undefined);
+  const status = serviceNodeStatus(data);
+  const tone = STATUS_TONE[status.tone];
+  const url = serviceUrl(data.service, data.env);
+  const internal = !!data.service.spec?.internal;
   const replicas = replicasFor(data.env);
-  // Display the user-supplied label when set; fall back to the slug
-  // for back-compat with services created before v0.7.43 (no
-  // displayName) or services where the user blanked it.
   const shortName = serviceShortName(data.project, data.service.metadata.name);
   const displayName = data.service.spec.displayName?.trim() || shortName;
+  const deployedAt = lastDeployAt(data.env, data.latestBuild);
+  const dimmed = status.kind === "sleeping" || status.kind === "stopped";
 
   return (
     <div
       data-node-context
       onContextMenu={data.__onContext}
-      // Native tooltip carries the server rollup's human reason
-      // ("release hook failed; last green build still serving") so the
-      // border colour is explainable without opening the overlay.
-      title={data.env?.status?.stateDetail || undefined}
+      title={status.detail || undefined}
       className={cn(
-        // Fixed height (5 × 24px grid units = 120px). Footer packs
-        // replicas + build line on one row, so we don't need the
-        // extra cell that the previous standalone build line ate.
-        // border-2 (vs border-1) so status hue (green/amber/red) is
-        // unambiguously visible at canvas zoom levels.
         "group relative flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        tone.border,
         "hover:border-[var(--border-strong)]",
-        (status === "building" || status === "deploying") &&
-          "border-[var(--building)]/70 animate-pulse",
-        status === "active" && "border-emerald-500/60",
-        (status === "failed" || status === "crashed") && "border-red-500/60",
-        // Degraded — partially serving. Warning hue (not red): traffic
-        // still flows, but not at full replica count.
-        status === "degraded" && "border-[var(--warning)]/60",
-        // Awaiting first build — sky/informational, distinct from both
-        // green (running) and red (broken).
-        status === "awaiting" && "border-sky-500/50",
-        status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
-        // Stopped — dimmed like sleeping but with a slate border so it
-        // reads as an explicit "off", not a low-traffic doze.
-        status === "stopped" && "opacity-60 border-slate-500/50",
-        !["building", "deploying", "active", "awaiting", "failed", "crashed", "degraded", "sleeping", "stopped"].includes(status) &&
-          "border-[var(--border-strong)]",
-        // Keyboard focus ring — outline (not border) so it stacks on
-        // top of the status colour without overriding it.
-        data.__focused && "outline outline-2 outline-offset-2 outline-[var(--accent)]"
+        dimmed && "opacity-70",
+        data.__focused && "outline outline-2 outline-offset-2 outline-[var(--accent)]",
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
 
-      {/* Kebab — left-click affordance for the same context menu
-          right-click fires. Trackpad users on macOS regularly fail
-          to discover right-click on canvas nodes; the kebab gives
-          them a visible target. Positioned absolutely so it doesn't
-          steal flex space from the header row, opacity-0 until hover
-          to keep the card visually clean at rest. */}
       <button
         type="button"
-        aria-label="Service actions"
+        aria-label={`Actions for ${displayName}`}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           data.__onContext?.(e);
         }}
-        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100"
+        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      {/* Header row: runtime icon + name + uptime age. Uptime sits
-          on the same row as the name for fast scanning ("how long
-          has this revision been live?" is asked at the same time as
-          "what is this service?"). One size up so it's legible at
-          canvas zoom. The build line + replicas split the footer
-          row instead. */}
-      <div className="flex items-center justify-between gap-2 pr-7">
-        <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
-          <RuntimeIcon runtime={data.service.spec.runtime} />
-          <span className="truncate">{displayName}</span>
-          <VulnNodeBadge count={data.fixableCritical} />
-        </span>
-        <UptimeBadge env={data.env} status={status} latestBuild={data.latestBuild} />
+      <div className="flex min-w-0 items-center gap-2 pr-7">
+        <RuntimeIcon runtime={data.service.spec.runtime} />
+        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
+        <ErrorBadge summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
+        <VulnBadge summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>
 
-      {/* URL pill */}
-      <div className="mt-2">
+      <div className="mt-2 flex min-w-0 items-center gap-2">
         {url ? (
           <UrlPill url={url} />
-        ) : internal ? (
-          <span className="inline-block font-mono text-[10px] text-[var(--text-tertiary)]">
-            internal only
-          </span>
         ) : (
-          <span className="inline-block font-mono text-[10px] text-[var(--text-tertiary)]">
-            no URL yet
+          <span className="text-xs text-[var(--text-tertiary)]">{internal ? "Internal only" : "No public URL"}</span>
+        )}
+        <BuildRef build={data.latestBuild} />
+      </div>
+
+      <div className="flex-1" />
+
+      <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 text-xs">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
+          <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
+          {deployedAt && (
+            <span className="truncate text-[var(--text-tertiary)]" title={`Deployed ${new Date(deployedAt).toLocaleString()}`}>
+              · deployed {relativeTime(deployedAt)}
+            </span>
+          )}
+        </span>
+        {replicas && !dimmed && (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 tabular-nums text-[var(--text-secondary)]"
+            title={`${replicas.ready} of ${replicas.desired} replicas ready${replicas.max > replicas.desired ? `, autoscales up to ${replicas.max}` : ""}`}
+          >
+            <Layers className="h-3 w-3 text-[var(--text-tertiary)]" aria-hidden />
+            {replicas.ready}/{replicas.desired}
+            <span className="sr-only"> replicas ready</span>
           </span>
         )}
       </div>
-
-      {/* Spacer pushes the footer to the bottom of the fixed-height
-          card so the URL row stays glued to the header above. */}
-      <div className="flex-1" />
-
-      {/* Footer row: replicas left, build line right (or sleep badge
-          if applicable). One row, scannable corners — left tells you
-          health, right tells you what code is running. Hidden below
-          70% zoom — the card border colour carries the status signal
-          at small scales without the footer text turning into
-          illegible blur. */}
-      {showFooter && (
-        <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
-          <ReplicasBadge replicas={replicas} status={status} />
-          {status === "stopped" ? (
-            <StoppedBadge />
-          ) : status === "sleeping" ? (
-            <SleepBadge />
-          ) : (
-            <BuildLine build={data.latestBuild} />
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
-// BuildLine renders a one-row build summary on the canvas card —
-// "main@a4b2f1c · ✓". Lives in the footer alongside ReplicasBadge,
-// so left = health, right = what code is running. Click on the
-// node still opens the overlay where the full Deployments tab
-// lives; this is just glance info.
-function BuildLine({ build }: { build?: BuildSummary }) {
+// BuildRef shows which commit the latest build is for. A failed latest
+// build on a still-live service is flagged here, next to the commit, so
+// the status line can stay about what's serving traffic.
+function BuildRef({ build }: { build?: BuildSummary }) {
   if (!build) return null;
   const sha = buildRefLabel(build, 7);
-  const branch = build.branch || "main";
-  const status = (build.status ?? "").toLowerCase();
-  // Status glyph + color via the shared token vocabulary so it
-  // matches the canvas border state for the same condition.
-  let glyph = "·";
-  let cls = "text-[var(--text-tertiary)]";
-  if (status === "succeeded") {
-    glyph = "✓";
-    cls = "text-[var(--success)]";
-  } else if (status === "failed" || status === "error") {
-    glyph = "✗";
-    cls = "text-[var(--error)]";
-  } else if (status === "release-failed") {
-    // Image built but the release hook failed; the previous green build
-    // keeps serving, so this is a warning, not a dead service.
-    glyph = "!";
-    cls = "text-[var(--warning)]";
-  } else if (status === "cancelled" || status === "superseded") {
-    // Distinct from failed (red) — the build didn't break, it was
-    // replaced by a newer one. Muted gray so a feed of redeploys
-    // doesn't read as a wall of red.
-    glyph = "⊘";
-    cls = "text-[var(--text-tertiary)]";
-  } else if (status === "running" || status === "pending" || status === "queued" || status === "building") {
-    glyph = "…";
-    cls = "text-[var(--building)]";
-  }
-  return (
-    <span className="truncate text-[var(--text-tertiary)]">
-      <span className="text-[var(--text-secondary)]">{branch}</span>
-      {sha && (
-        <>
-          <span className="text-[var(--text-tertiary)]/60">@</span>
-          <span className="text-[var(--text-secondary)]">{sha}</span>
-        </>
-      )}
-      {" "}
-      <span className={cn("ml-0.5", cls)} title={status} aria-label={`build ${status || "unknown"}`}>{glyph}</span>
-    </span>
-  );
-}
-
-// StoppedBadge is the footer chip for a hard-stopped service —
-// mirrors SleepBadge's shape but reads "stopped" with a slate hue so
-// it's clearly an explicit off-state, not a low-traffic doze.
-function StoppedBadge() {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] text-slate-300">
-      <Square className="h-3 w-3" />
-      <span>stopped</span>
-    </span>
-  );
-}
-
-function ReplicasBadge({
-  replicas,
-  status,
-}: {
-  replicas: Replicas | null;
-  status: DeployStatus;
-}) {
-  if (!replicas) {
-    return (
-      <span className="text-[var(--text-tertiary)]">
-        replicas <span className="text-[var(--text-secondary)]">—</span>
-      </span>
-    );
-  }
-  // Replicas are a load proxy: more pods running = more traffic.
-  // Color the dot by ready/max ratio so a glance tells you "comfy
-  // / busy / scaling cliff":
-  //   ratio == 0      grey   — nothing up (failed/sleeping/etc)
-  //   ratio  < 0.5    green  — comfortably under capacity
-  //   ratio  < 0.85   orange — mid-load, autoscaler probably climbing
-  //   ratio >= 0.85   red    — near max, may need more headroom
-  // Sleeping overrides everything (greys out + label changes to asleep).
-  const ratio = replicas.max > 0 ? replicas.ready / replicas.max : 0;
-  let dotCls = "bg-[var(--text-tertiary)]/40";
-  // Color the ready-count number too — same color the dot uses, so
-  // "1/1 ready" reads as a unit. The pre-v0.9.4 layout left the
-  // number grey even when the dot was green, which made a healthy
-  // 1/1 look the same as a 0/1.
-  let countCls = "text-[var(--text-secondary)]";
-  if (status !== "sleeping" && replicas.ready > 0) {
-    if (ratio >= 0.85) {
-      dotCls = "bg-red-400";
-      countCls = "text-red-400";
-    } else if (ratio >= 0.5) {
-      dotCls = "bg-amber-400";
-      countCls = "text-amber-400";
-    } else {
-      dotCls = "bg-emerald-400";
-      countCls = "text-emerald-400";
-    }
-  }
-  return (
-    <span className="inline-flex items-center gap-2 text-[var(--text-tertiary)]">
-      <span className="inline-flex items-center gap-1.5">
-        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
-        <span>
-          {/* ready/desired is the health reading. The autoscale ceiling
-              sits apart as "max N": "4/8 ready" used to read as four
-              pods down when four were wanted and all four were up. */}
-          {status !== "sleeping" && (
-            <>
-              <span className={countCls}>{replicas.ready}</span>
-              <span className="text-[var(--text-tertiary)]/60">/{replicas.desired}</span>{" "}
-            </>
-          )}
-          <span className="text-[var(--text-tertiary)]/80">
-            {status === "sleeping" ? "asleep" : "ready"}
-          </span>
-        </span>
-      </span>
-      {replicas.max > replicas.desired && (
-        <span
-          title="Autoscale ceiling (scale.max)"
-          className="whitespace-nowrap text-[var(--text-tertiary)]/70"
-        >
-          max {replicas.max}
-        </span>
-      )}
-      {replicas.cpuPct !== undefined && replicas.ready > 0 && (
-        <span
-          title="Average CPU vs container limit"
-          className="inline-flex items-center gap-1 rounded bg-[var(--bg-tertiary)]/60 px-1.5 py-0.5 font-mono"
-        >
-          <span className="text-[var(--text-secondary)]">{replicas.cpuPct}</span>
-          <span className="text-[var(--text-tertiary)]/70">%</span>
-        </span>
-      )}
-    </span>
-  );
-}
-
-// UptimeBadge shows how long the latest deploy has been live ("3h",
-// "2d"). Only renders when the env is in a steady state (not
-// building/deploying — those have their own animated border).
-//
-// Source-of-truth priority (latest first):
-//   1. latestBuild.finishedAt  — when the most recent build landed.
-//      This is what users mean by "age of the latest build."
-//   2. env.status.lastDeployedAt — operator-stamped on each helm
-//      reconcile. Resets on redeploy.
-//   3. env.metadata.creationTimestamp — last-resort fallback for
-//      services with no build history (e.g. just-promoted via
-//      rollback). Tagged "env age" in the tooltip so the user can
-//      tell why the badge looks stale.
-//
-// Without #1 the badge showed "19h" on a service that had been
-// redeployed five times in the last hour — the env CR was 19h old
-// but each build was minutes old. The lastDeployedAt fallback only
-// kicks in for the helm-operator-managed reconcile, which doesn't
-// fire reliably on every build.
-function UptimeBadge({
-  env,
-  status,
-  latestBuild,
-}: {
-  env?: KusoEnvironment;
-  status: DeployStatus;
-  latestBuild?: BuildSummary;
-}) {
-  if (!env || status === "building" || status === "deploying") return null;
-  let ts: string | undefined;
-  let label: "build" | "deploy" | "env" = "env";
-  if (latestBuild?.finishedAt) {
-    ts = latestBuild.finishedAt;
-    label = "build";
-  } else if (latestBuild?.startedAt && (latestBuild.status ?? "").toLowerCase() === "succeeded") {
-    // Edge case: succeeded build with finishedAt missing (stale row).
-    ts = latestBuild.startedAt;
-    label = "build";
-  } else if (env.metadata?.annotations?.["kuso.sislelabs.com/promoted-at"]) {
-    // Stamped by the buildcontroller on every image promotion — the
-    // one deploy timestamp that survives the 24h build-CR retention
-    // sweep. Without this tier the badge decayed to "env created Nd
-    // ago" the morning after a deploy day.
-    ts = env.metadata.annotations["kuso.sislelabs.com/promoted-at"];
-    label = "deploy";
-  } else if (env.status?.lastDeployedAt) {
-    ts = env.status.lastDeployedAt as string;
-    label = "deploy";
-  } else if (env.metadata?.creationTimestamp) {
-    ts = env.metadata.creationTimestamp;
-    label = "env";
-  }
-  if (!ts) return null;
-  const tip =
-    label === "build"
-      ? `Latest build finished at ${ts}`
-      : label === "deploy"
-        ? `Last deployed at ${ts}`
-        : `Env created at ${ts}`;
+  const st = (build.status ?? "").toLowerCase();
+  const failed = st === "failed" || st === "error" || st === "release-failed";
+  const label = `${build.branch || "main"}${sha ? `@${sha}` : ""}`;
   return (
     <span
-      title={tip}
-      className="shrink-0 font-mono text-xs text-[var(--text-secondary)]"
+      className={cn(
+        "ml-auto min-w-[3.5rem] shrink-[4] truncate font-mono text-xs",
+        failed ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
+      )}
+      title={`Latest build: ${label} (${st || "unknown"})`}
     >
-      {relativeAge(ts)}
+      {failed && <span className="sr-only">Latest build failed: </span>}
+      {label}
     </span>
   );
-}
-
-// relativeAge → "32s", "5m", "3h", "2d". Same renderer the build
-// list uses; inlined here so this file doesn't reach into a sibling.
-function relativeAge(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "?";
-  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h`;
-  return `${Math.floor(hr / 24)}d`;
 }
 
 function UrlPill({ url }: { url: string }) {
@@ -559,28 +179,27 @@ function UrlPill({ url }: { url: string }) {
 
   return (
     <span
-      // Stop the click from bubbling up to React Flow's onNodeClick
-      // (which would open the overlay). The user explicitly clicked
-      // the URL pill — they want the URL action, not the panel.
+      // The pill is its own target; don't let the click open the overlay.
       onClick={(e) => e.stopPropagation()}
-      className="inline-flex max-w-full items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] pl-2 pr-1 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+      className="nodrag inline-flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-1 font-mono text-xs text-[var(--text-secondary)]"
     >
       <a
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="inline-flex min-w-0 items-center gap-1 truncate hover:text-[var(--accent)]"
+        className="inline-flex min-w-0 items-center gap-1 hover:text-[var(--accent)]"
       >
         <span className="truncate">{display}</span>
-        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+        <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
+        <span className="sr-only">(opens in a new tab)</span>
       </a>
       <button
         type="button"
         onClick={onCopy}
-        aria-label="Copy URL"
-        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
+        aria-label={`Copy ${display}`}
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
       >
-        {copied ? <Check className="h-2.5 w-2.5 text-emerald-400" /> : <Copy className="h-2.5 w-2.5" />}
+        {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
       </button>
     </span>
   );

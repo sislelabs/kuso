@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   ReactFlow,
   Background,
@@ -17,9 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
-import { api } from "@/lib/api-client";
 import {
-  type BuildSummary,
   getServiceEnv,
   setServiceEnv,
 } from "@/features/services/api";
@@ -29,6 +27,7 @@ import { CronNode, type CronNodeData } from "./CronNode";
 import {
   applyStoredLayout,
   autoLayout,
+  clearStoredLayout,
   loadStoredLayout,
   saveStoredLayout,
 } from "./layout";
@@ -38,7 +37,11 @@ import {
   type ContextMenuEntry,
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
-import { canvasVulnBadges, useProjectVulns } from "@/features/vulns";
+import { useProjectVulns } from "@/features/vulns";
+import { errorsQueryKey, listErrors, useLatestBuilds, useProjectCrons } from "@/features/services";
+import { canvasVulnSummaries, summarizeErrors, type ErrorSummary } from "./badgeSummary";
+import { CanvasShortcuts, announceShortcuts } from "./CanvasShortcuts";
+import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { servicesQueryKey } from "@/features/projects";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { anySurfaceOpen } from "@/lib/escape-layer";
@@ -118,42 +121,8 @@ export function ProjectCanvas({
   // the PR's head ref. Without the env filter, a staging build that
   // landed seconds after main's build would render under production's
   // service tile and flicker between the two on each 5s poll tick.
-  const latestBuilds = useQuery<Record<string, BuildSummary>>({
-    queryKey: ["projects", project, "builds", "latest", selectedEnv],
-    queryFn: () =>
-      api(
-        `/api/projects/${encodeURIComponent(project)}/builds/latest?env=${encodeURIComponent(selectedEnv)}`,
-      ),
-    // Pre-v0.9.38 had refetchInterval=5s and staleTime=2s, which on
-    // a busy multi-user dashboard meant 12 fetches/min/project of a
-    // payload that rarely changes. Match staleTime to interval so a
-    // refocus doesn't fire a redundant fetch when one is about to
-    // run anyway. Pause polling while the tab is hidden — the user
-    // isn't watching, kube isn't telling us anything new, and a
-    // 30-tab browser shouldn't burn N×Q pollers in the background.
-    // 5s only while some build is in flight; settled projects poll at 15s.
-    refetchInterval: (q) =>
-      Object.values(q.state.data ?? {}).some((b) =>
-        ["queued", "pending", "running", "deploying"].includes((b.status ?? "").toLowerCase()),
-      )
-        ? 5_000
-        : 15_000,
-    refetchIntervalInBackground: false,
-    staleTime: 5_000,
-  });
-
-  // All KusoCrons in the project — both service-attached and project-
-  // scoped. Service-attached crons are still rendered as canvas nodes
-  // (the right-click "Add cron" only creates the project-scoped
-  // variants, but legacy ones still show up). Filter on the client to
-  // keep the rollup endpoint as a simple GET.
-  const allCrons = useQuery<{ metadata: { name: string }; spec: CronNodeData["cron"]["spec"] }[]>({
-    queryKey: ["projects", project, "crons"],
-    queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/crons`),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    staleTime: 10_000,
-  });
+  const latestBuilds = useLatestBuilds(project, selectedEnv);
+  const allCrons = useProjectCrons(project);
 
   // Env-scoped addon visibility. Per-PR preview clones are named
   // Addon visibility per env is decided UPSTREAM in the project view
@@ -166,10 +135,38 @@ export function ProjectCanvas({
 
   // One rollup request per project; every node reads its badge from it.
   const projectVulns = useProjectVulns(project);
-  const vulnBadges = useMemo(
-    () => canvasVulnBadges(projectVulns.data?.images ?? [], project, selectedEnv),
+  const vulnSummaries = useMemo(
+    () => canvasVulnSummaries(projectVulns.data?.images ?? [], project, selectedEnv),
     [projectVulns.data, project, selectedEnv],
   );
+
+  // 24h error counts per service. Same query key as the overlay's Errors
+  // tab default view (all envs, 24h), so the badge and the tab agree and
+  // share a cache entry. One small request per service, polled slowly.
+  const serviceShorts = useMemo(
+    () => services.map((s) => serviceShortName(project, s.metadata.name)),
+    [services, project],
+  );
+  const errorQueries = useQueries({
+    queries: serviceShorts.map((short) => ({
+      queryKey: errorsQueryKey(project, short, "24h", ""),
+      queryFn: () => listErrors(project, short, "24h"),
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+  const errorDataKey = errorQueries.map((q) => q.dataUpdatedAt).join(",");
+  const errorSummaries = useMemo(() => {
+    const out: Record<string, ErrorSummary | undefined> = {};
+    serviceShorts.forEach((short, i) => {
+      out[short] = summarizeErrors(errorQueries[i]?.data);
+    });
+    return out;
+    // errorQueries is a fresh array each render; key off the data stamps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceShorts, errorDataKey]);
 
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
@@ -202,12 +199,14 @@ export function ProjectCanvas({
         id: `svc:${s.metadata.name}`,
         type: "service",
         position: { x: 0, y: 0 },
+        ariaLabel: `Service ${s.spec.displayName?.trim() || shortName}`,
         data: {
           project,
           service: s,
           env,
           latestBuild,
-          fixableCritical: vulnBadges.services[shortName],
+          vulns: vulnSummaries.services[shortName],
+          errors: errorSummaries[shortName],
         } satisfies ServiceNodeData,
       });
     });
@@ -216,10 +215,11 @@ export function ProjectCanvas({
         id: `addon:${a.metadata.name}`,
         type: "addon",
         position: { x: 0, y: 0 },
+        ariaLabel: `Addon ${serviceShortName(project, a.metadata.name)} (${a.spec.kind})`,
         data: {
           project,
           addon: a,
-          fixableCritical: vulnBadges.addons[serviceShortName(project, a.metadata.name)],
+          vulns: vulnSummaries.addons[serviceShortName(project, a.metadata.name)],
         } satisfies AddonNodeData,
       });
     });
@@ -228,11 +228,12 @@ export function ProjectCanvas({
         id: `cron:${c.metadata.name}`,
         type: "cron",
         position: { x: 0, y: 0 },
+        ariaLabel: `Cron ${c.spec.displayName?.trim() || serviceShortName(project, c.metadata.name)}`,
         data: { project, cron: c } satisfies CronNodeData,
       });
     });
     return out;
-  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnBadges]);
+  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnSummaries, errorSummaries]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -335,7 +336,7 @@ export function ProjectCanvas({
         // colour) so the two categories read as separate at a
         // glance.
         data: { kind: "addon" },
-        style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
+        style: { stroke: "var(--chart-2)", strokeWidth: 1.5, opacity: 0.85 },
       });
     });
     implicitUsedAddons.forEach((key) => {
@@ -347,7 +348,7 @@ export function ProjectCanvas({
         animated: false,
         data: { kind: "addon" },
         style: {
-          stroke: "rgb(245 158 11)",
+          stroke: "var(--chart-2)",
           strokeWidth: 1.25,
           strokeDasharray: "4 4",
           opacity: 0.4,
@@ -521,7 +522,7 @@ export function ProjectCanvas({
           data: { kind: "ref" },
           // Colour: accent (purple). Service-ref edges are direct
           // dependencies — distinct from addon mounts (amber).
-          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
+          style: { stroke: "var(--chart-1)", strokeWidth: 1.5, opacity: 0.85 },
         });
       }
     });
@@ -599,6 +600,7 @@ export function ProjectCanvas({
   });
 
   const qc = useQueryClient();
+  const reducedMotion = usePrefersReducedMotion();
 
   // Project-scoped write capabilities. The server enforces these
   // (403), but surfacing them here keeps viewers from clicking
@@ -629,8 +631,12 @@ export function ProjectCanvas({
   //   l               : open focused service's logs tab
   //   v               : open variables tab
   //   s               : open settings tab
-  //   ?               : flash a help toast listing all of the above
+  //   ?               : show the shortcuts list (CanvasShortcuts)
+  // Tab also reaches every node (React Flow makes them focusable);
+  // Enter on a focused node opens it.
   const [focusIdx, setFocusIdx] = useState(-1);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const openNodeRef = useRef<(id: string) => void>(() => {});
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Don't hijack typing in inputs / textareas / contenteditables.
@@ -649,6 +655,20 @@ export function ProjectCanvas({
       // Ignore when modifiers are held — those are reserved for
       // browser shortcuts (cmd-K opens the palette, cmd-R reloads).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        if (announceShortcuts()) setShortcutsOpen(true);
+        return;
+      }
+      if (e.key === "Enter" && target) {
+        const nodeEl = target.closest<HTMLElement>(".react-flow__node");
+        const id = nodeEl?.dataset.id;
+        if (id) {
+          e.preventDefault();
+          openNodeRef.current(id);
+          return;
+        }
+      }
       const svcNodes = nodes.filter((n) => n.type === "service");
       if (svcNodes.length === 0) return;
       const moveFocus = (delta: number) => {
@@ -704,14 +724,6 @@ export function ProjectCanvas({
             }
             setConfirmRedeploy(focusedShort);
           }
-          break;
-        case "?":
-          e.preventDefault();
-          toast.message("Canvas shortcuts", {
-            description:
-              "j/k or ↑/↓ — focus prev/next · enter — open · l — logs · v — vars · s — settings · r — redeploy",
-            duration: 8_000,
-          });
           break;
       }
     };
@@ -816,7 +828,7 @@ export function ProjectCanvas({
     }
   };
 
-  const onNodeClick: NodeMouseHandler = (_e, node) => {
+  const openNode = (node: Node) => {
     if (node.type === "service" && onSelectService) {
       const data = node.data as ServiceNodeData;
       onSelectService(serviceShortName(data.project, data.service.metadata.name));
@@ -830,6 +842,11 @@ export function ProjectCanvas({
       const data = node.data as unknown as CronNodeData;
       setEditCronName(data.cron.metadata.name);
     }
+  };
+  const onNodeClick: NodeMouseHandler = (_e, node) => openNode(node);
+  openNodeRef.current = (id: string) => {
+    const node = nodes.find((n) => n.id === id);
+    if (node) openNode(node);
   };
 
   // Right-click on a service node — Open / View logs / Redeploy / Delete.
@@ -1018,6 +1035,35 @@ export function ProjectCanvas({
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });
   };
 
+  const resetLayout = () => {
+    clearStoredLayout(project);
+    setNodes(autoLayout(initialNodes, initialEdges));
+  };
+
+  // Right-click on a cron node: the edit dialog is the cron's only
+  // detail surface. (Crons used to fall through to the addon menu, which
+  // read data.addon and threw.)
+  const onCronContext = (e: React.MouseEvent, data: CronNodeData) => {
+    e.preventDefault();
+    const items: ContextMenuEntry[] = [
+      {
+        id: "header",
+        kind: "header",
+        label: data.cron.spec.displayName?.trim() || serviceShortName(project, data.cron.metadata.name),
+        subtitle: `cron · ${data.cron.spec.schedule ?? ""}`,
+        icon: Clock,
+      },
+      {
+        id: "edit",
+        label: "Edit cron…",
+        icon: SettingsIcon,
+        shortcut: "Enter",
+        onSelect: () => setEditCronName(data.cron.metadata.name),
+      },
+    ];
+    setCtx({ open: true, x: e.clientX, y: e.clientY, items });
+  };
+
   // Right-click on empty pane — Add service / Add addon / Reset layout.
   const onPaneContext = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1068,11 +1114,7 @@ export function ProjectCanvas({
         id: "reset-layout",
         label: "Reset layout",
         icon: LayoutGrid,
-        onSelect: () => {
-          saveStoredLayout(project, {});
-          const laid = autoLayout(initialNodes, initialEdges);
-          setNodes(laid);
-        },
+        onSelect: resetLayout,
       },
     ];
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });
@@ -1112,20 +1154,35 @@ export function ProjectCanvas({
                 n.type === "service"
                   ? (e: React.MouseEvent) =>
                       onServiceContext(e, n.data as ServiceNodeData)
-                  : (e: React.MouseEvent) =>
-                      onAddonContext(e, n.data as AddonNodeData),
+                  : n.type === "addon"
+                    ? (e: React.MouseEvent) =>
+                        onAddonContext(e, n.data as AddonNodeData)
+                    : (e: React.MouseEvent) =>
+                        onCronContext(e, n.data as unknown as CronNodeData),
+              __onOpenTab:
+                n.type === "service"
+                  ? (tab: string) =>
+                      onSelectService?.(
+                        serviceShortName(project, (n.data as ServiceNodeData).service.metadata.name),
+                        tab,
+                      )
+                  : n.type === "addon"
+                    ? (tab: string) => onSelectAddon?.((n.data as AddonNodeData).addon.metadata.name, tab)
+                    : undefined,
             },
           }));
         })()}
-        edges={edges.filter((e) => {
-          // Hide categories the user toggled off. Edges without a
-          // kind tag (legacy or future categories) are always shown
-          // so an upgrade can't accidentally swallow them.
-          const kind = (e.data as { kind?: string } | undefined)?.kind;
-          if (kind === "addon" && !edgeFilters.addon) return false;
-          if (kind === "ref" && !edgeFilters.ref) return false;
-          return true;
-        })}
+        edges={edges
+          .filter((e) => {
+            // Hide categories the user toggled off. Edges without a
+            // kind tag (legacy or future categories) are always shown
+            // so an upgrade can't accidentally swallow them.
+            const kind = (e.data as { kind?: string } | undefined)?.kind;
+            if (kind === "addon" && !edgeFilters.addon) return false;
+            if (kind === "ref" && !edgeFilters.ref) return false;
+            return true;
+          })
+          .map((e) => (reducedMotion && e.animated ? { ...e, animated: false } : e))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
@@ -1141,16 +1198,28 @@ export function ProjectCanvas({
         // the alignment they're being given.
         snapToGrid
         snapGrid={[24, 24]}
+        className="[&_.react-flow__node:focus-visible]:outline-none [&_.react-flow__node:focus-visible>div]:outline [&_.react-flow__node:focus-visible>div]:outline-2 [&_.react-flow__node:focus-visible>div]:outline-offset-2 [&_.react-flow__node:focus-visible>div]:outline-[var(--accent)]"
       >
         {/* Brighter dots than the default border-subtle so the
             grid actually reads on the dark bg. zinc-500 at 40%
             opacity-equivalent — visible without being noisy. */}
         <Background gap={24} size={1.5} color="rgb(113 113 122 / 0.55)" />
-        <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
-        <EdgeControlsPanel
-          filters={edgeFilters}
-          setFilters={setEdgeFilters}
+        <Controls
+          className="!border-[var(--border-subtle)] !bg-[var(--bg-elevated)] !shadow-[var(--shadow-sm)]"
         />
+        <EdgeLegend filters={edgeFilters} setFilters={setEdgeFilters} />
+        <Panel position="top-right" className="!m-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetLayout}
+            title="Forget dragged positions and re-run the automatic layout"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-[var(--shadow-sm)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+            Reset layout
+          </button>
+          <CanvasShortcuts open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+        </Panel>
         <AddMenuPanel
           project={project}
           canServicesWrite={canServicesWrite}
@@ -1424,13 +1493,9 @@ function AddMenuPanel({
   );
 }
 
-// EdgeControlsPanel — bottom-right cluster that combines a legend
-// (what each edge colour means) with the filter chips that toggle
-// them. Single React Flow <Panel> so the two pieces sit on the same
-// row and react-flow doesn't stack them. Without the legend the
-// colours feel arbitrary; without the filter chips the user can't
-// dim the noise on dependency-heavy projects.
-function EdgeControlsPanel({
+// EdgeLegend explains the two edge colours and doubles as their
+// visibility toggle: each entry is a pressed/unpressed button.
+function EdgeLegend({
   filters,
   setFilters,
 }: {
@@ -1439,65 +1504,61 @@ function EdgeControlsPanel({
 }) {
   return (
     <Panel position="bottom-right" className="!m-3">
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] shadow-[var(--shadow-sm)]">
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              aria-hidden
-              className="inline-block h-[2px] w-5"
-              style={{ background: "rgb(245 158 11)" }}
-            />
-            addon mount
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              aria-hidden
-              className="inline-block h-[2px] w-5"
-              style={{ background: "var(--accent)" }}
-            />
-            service ref
-          </span>
-        </div>
-        <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]">
-          <span className="px-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            edges
-          </span>
-          <FilterChip
-            label="addon mounts"
-            on={filters.addon}
-            onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
-          />
-          <FilterChip
-            label="service refs"
-            on={filters.ref}
-            onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
-          />
-        </div>
+      <div
+        role="group"
+        aria-label="Edges"
+        className="flex items-center gap-0.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]"
+      >
+        <LegendToggle
+          label="Addon connections"
+          hint="Solid: the service references the addon in an env var. Dashed: the addon's connection secret is mounted but not referenced by name."
+          swatch="var(--chart-2)"
+          on={filters.addon}
+          onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
+        />
+        <LegendToggle
+          label="Service references"
+          hint="One service's env vars point at another service's URL or host."
+          swatch="var(--chart-1)"
+          on={filters.ref}
+          onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
+        />
       </div>
     </Panel>
   );
 }
 
-function FilterChip({
+function LegendToggle({
   label,
+  hint,
+  swatch,
   on,
   onClick,
 }: {
   label: string;
+  hint: string;
+  swatch: string;
   on: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      aria-pressed={on}
       onClick={onClick}
+      title={`${on ? "Hide" : "Show"} ${label.toLowerCase()}. ${hint}`}
       className={
-        "rounded px-2 py-1 font-mono text-[10px] transition-colors " +
+        "inline-flex h-7 items-center gap-2 rounded-md px-2 text-xs transition-colors " +
         (on
-          ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-          : "text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]")
+          ? "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+          : "text-[var(--text-tertiary)] line-through decoration-[var(--text-tertiary)]/60 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]")
       }
     >
+      <span
+        aria-hidden
+        className="inline-block h-[3px] w-5 rounded-full transition-opacity"
+        style={{ background: swatch, opacity: on ? 1 : 0.3 }}
+      />
       {label}
     </button>
   );

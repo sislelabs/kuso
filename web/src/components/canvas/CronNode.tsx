@@ -4,6 +4,7 @@ import { Handle, Position } from "@xyflow/react";
 import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { deriveCronStatus, STATUS_TONE } from "@/features/services";
 
 // Canvas node for KusoCron. Smaller than the service/addon nodes so
 // crons read as a different class of object at a glance — they're
@@ -129,69 +130,57 @@ export function CronNode({ data }: { data: CronNodeData }) {
   const suspended = !!data.cron.spec.suspend;
   const detail = summary(data.cron.spec);
 
+  const status = deriveCronStatus(data.cron.spec);
+  const tone = STATUS_TONE[status.tone];
+  const kindLabel = kind === "http" ? "HTTP" : kind === "command" ? "Command" : "Service";
+
   return (
     <div
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        // 220×96 — bumped from 200×72 to fit a target/command preview
-        // line under the schedule. Still visibly smaller than the
-        // 280×120 service tiles so the visual hierarchy stays.
-        //
-        // Border: --border-strong is orange in dark mode (the accent
-        // hover color the canvas uses for service/addon cards on
-        // hover). For crons we want a neutral resting state — they
-        // don't have a "live status" the way services do, so keying
-        // them at the same intensity as a service's hover state is
-        // misleading. Use --border-subtle as the default + only flip
-        // to amber when suspended.
+        // 220×96: smaller than the 280×120 service tiles so the visual
+        // hierarchy stays. Crons have no live health, so the border stays
+        // neutral; paused crons dim.
         "group relative flex h-[96px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-2.5 transition-colors cursor-pointer",
         suspended
-          ? "opacity-60 border-amber-500/50"
-          : "border-[var(--border-subtle)] hover:border-[var(--accent)]/60",
+          ? "opacity-70 border-[var(--border-default)]"
+          : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]",
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
       <button
         type="button"
-        aria-label="Cron actions"
+        aria-label={`Actions for ${displayName}`}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           data.__onContext?.(e);
         }}
-        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100"
+        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
       <div className="flex items-center gap-1.5 pr-7">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-        <span className="truncate text-[12px] font-medium">{displayName}</span>
-        {suspended && (
-          <span className="ml-auto rounded bg-[var(--bg-tertiary)] px-1 py-0 font-mono text-[9px] uppercase text-[var(--text-tertiary)]">
-            paused
-          </span>
-        )}
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
       </div>
 
-      {/* Target/command preview — gives users a hint of "what is this
-          cron actually pointing at?" without opening the overlay.
-          Truncated; the overlay shows the full thing. */}
-      <div
-        className="mt-1 truncate font-mono text-[10px] text-[var(--text-secondary)]"
-        title={detail}
-      >
+      <div className="mt-1 truncate font-mono text-xs text-[var(--text-secondary)]" title={detail}>
         {detail}
       </div>
 
-      <div className="mt-auto flex items-center justify-between gap-2 text-[10px] text-[var(--text-tertiary)]">
-        <span className="truncate" title={schedule}>
-          <Clock className="mr-1 inline h-2.5 w-2.5" />
-          {describeSchedule(schedule)}
+      <div className="mt-auto flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
+        <span className="flex min-w-0 items-center gap-1.5" title={schedule}>
+          <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+          <span className="truncate">
+            {suspended ? "Paused · " : ""}
+            {describeSchedule(schedule)}
+          </span>
         </span>
-        <span className="font-mono text-[9px] uppercase tracking-wider">{kind}</span>
+        <span className="shrink-0">{kindLabel}</span>
       </div>
     </div>
   );

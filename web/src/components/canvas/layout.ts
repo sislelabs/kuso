@@ -44,7 +44,16 @@ export function loadStoredLayout(project: string): StoredLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY(project));
     if (!raw) return {};
-    return JSON.parse(raw) as StoredLayout;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: StoredLayout = {};
+    for (const [id, pos] of Object.entries(parsed as Record<string, unknown>)) {
+      const p = pos as { x?: unknown; y?: unknown } | null;
+      if (p && typeof p.x === "number" && typeof p.y === "number" && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+        out[id] = { x: p.x, y: p.y };
+      }
+    }
+    return out;
   } catch {
     return {};
   }
@@ -56,6 +65,15 @@ export function saveStoredLayout(project: string, layout: StoredLayout) {
     localStorage.setItem(STORAGE_KEY(project), JSON.stringify(layout));
   } catch {
     // localStorage might be full or disabled; skip silently
+  }
+}
+
+export function clearStoredLayout(project: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(STORAGE_KEY(project));
+  } catch {
+    // storage disabled; nothing to clear
   }
 }
 
