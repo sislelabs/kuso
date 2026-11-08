@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusPill } from "@/components/ui/status-pill";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { relativeTime } from "@/lib/format";
+import { unavailableNotice } from "@/features/system-version";
 import { TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { verdict, type AppRollup, type ReconcileCounts } from "./appRollup";
@@ -66,7 +67,7 @@ export function AppRollupSection({ reconcile }: { reconcile?: ReconcileCounts })
       </ul>
       {!probesPending && !rollup.errors.supported && (
         <p className="border-t border-[var(--border-subtle)] px-4 py-2.5 text-xs text-[var(--text-tertiary)] sm:px-5">
-          Error counts aren&apos;t shown: this kuso server is too old to report them.
+          {unavailableNotice("Error counts", { plural: true })}
         </p>
       )}
     </section>

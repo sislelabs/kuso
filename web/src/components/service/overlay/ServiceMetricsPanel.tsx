@@ -23,6 +23,7 @@ import {
 } from "@/features/service-metrics";
 import type { ResourceSample } from "@/features/service-metrics";
 import { shortSha } from "@/lib/format";
+import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
@@ -291,7 +292,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
         {!serverHist && !pods.isError && (historyMissing || history.isError) && (podCount > 0 || resSamples.length > 0) && (
           <Callout tone="neutral" className="py-2.5 text-xs">
             {historyMissing
-              ? `CPU and memory history needs kuso ${USAGE_HISTORY_MIN_VERSION} or newer. Until then this shows live samples taken since you opened this tab.`
+              ? `${unavailableNotice("CPU and memory history", { since: USAGE_HISTORY_MIN_VERSION })} Showing live samples taken since you opened this tab.`
               : "Couldn't load CPU and memory history. Showing live samples taken since you opened this tab."}
           </Callout>
         )}

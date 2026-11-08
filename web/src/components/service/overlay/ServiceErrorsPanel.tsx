@@ -12,6 +12,7 @@ import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
 import { serviceEnvOptions } from "@/lib/env-group";
 import { relativeTime, shortSha } from "@/lib/format";
+import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -359,7 +360,7 @@ function ErrorDetail({
       <section>
         <div className="mb-1.5 flex items-baseline justify-between gap-2">
           <h4 className="text-xs font-medium text-[var(--text-secondary)]">Occurrences · last {timeRangeSpan(since)}</h4>
-          {detail.data === null && <span className="text-xs text-[var(--text-tertiary)]">history needs a newer kuso server</span>}
+          {detail.data === null && <span className="text-xs text-[var(--text-tertiary)]">{unavailableNotice("History")}</span>}
         </div>
         {detail.isPending ? (
           <Skeleton className="h-16 w-full" />
