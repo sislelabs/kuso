@@ -116,6 +116,15 @@ export interface FormState {
   // default (drop ALL, no escalation).
   capAdd: string;
   allowPrivilegeEscalation: boolean;
+  // HTTP health check (spec.healthcheck). Off = TCP probes only. The
+  // number fields are strings so blank can mean "server default".
+  hcEnabled: boolean;
+  hcPath: string;
+  hcPort: string;
+  hcDelay: string;
+  hcPeriod: string;
+  hcTimeout: string;
+  hcThreshold: string;
   // Release hook — a one-off Job that runs before each deploy is
   // promoted (migrations etc). releaseCommand is the argv joined by
   // spaces for editing as plain text; empty = no hook. releaseTimeout
@@ -155,6 +164,10 @@ export interface NodeSummary {
 export const RUNTIMES = ["dockerfile", "nixpacks", "static", "buildpacks"] as const;
 
 // ----- form ⇄ CR mapping -----
+
+function numStr(n: number | undefined): string {
+  return n ? String(n) : "";
+}
 
 export function fromSvc(svc?: KusoService): FormState {
   const repo = svc?.spec.repo;
@@ -224,6 +237,13 @@ export function fromSvc(svc?: KusoService): FormState {
     uptimePath: svc?.spec.uptime?.path ?? "",
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
+    hcEnabled: !!svc?.spec.healthcheck?.path,
+    hcPath: svc?.spec.healthcheck?.path ?? "",
+    hcPort: numStr(svc?.spec.healthcheck?.port),
+    hcDelay: numStr(svc?.spec.healthcheck?.initialDelaySeconds),
+    hcPeriod: numStr(svc?.spec.healthcheck?.periodSeconds),
+    hcTimeout: numStr(svc?.spec.healthcheck?.timeoutSeconds),
+    hcThreshold: numStr(svc?.spec.healthcheck?.failureThreshold),
     releaseCommand: (svc?.spec.release?.command ?? []).join(" "),
     releaseTimeout: svc?.spec.release?.timeoutSeconds ? String(svc.spec.release.timeoutSeconds) : "",
     privateEgress: !!svc?.spec.privateEgress,
