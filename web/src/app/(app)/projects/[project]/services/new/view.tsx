@@ -27,7 +27,7 @@ import { slugifyServiceName } from "@/features/services/slug";
 import { FormField, SegmentedControl } from "./FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "./RepoPicker";
 import { useRepoDetection } from "./useRepoDetection";
-import { AccessCheck, RuntimeExplainer } from "./RepoInsights";
+import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "./RepoInsights";
 import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
 import { reportCreateOutcome } from "./reportCreateOutcome";
 
@@ -136,6 +136,7 @@ export function AddServiceView() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const repoSearchRef = useRef<HTMLInputElement>(null);
   const envRef = useRef<HTMLDivElement>(null);
+  const runtimeRef = useRef<HTMLDivElement>(null);
 
   // Worker image sources: the project's services minus workers and
   // image services (no builds, so their tag never propagates).
@@ -202,6 +203,15 @@ export function AddServiceView() {
   const willBuild = source === "repo" && kind === "web";
   const showConfigure = source === "image" || !!picked;
   const fastPath = source === "repo" && !!picked && kind === "web" && !advanced;
+
+  // Detection failed: open the full form and land on the runtime picker.
+  const chooseRuntimeManually = () => {
+    setAdvanced(true);
+    requestAnimationFrame(() => {
+      runtimeRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      runtimeRef.current?.querySelector<HTMLButtonElement>("button[aria-pressed=true], button")?.focus({ preventScroll: true });
+    });
+  };
 
   const onAdd = async (deploy = true) => {
     // Inline per-field errors + focus the first invalid field in visual
@@ -386,7 +396,17 @@ export function AddServiceView() {
                       </button>
                     </span>
                   </div>
-                  <AccessCheck picked={picked} appConfigured={repoSources.appConfigured} />
+                  <AccessCheck
+                    picked={picked}
+                    appConfigured={repoSources.appConfigured}
+                    detectionFailed={detection.state === "failed"}
+                  />
+                  <RepoReadFailureCallout
+                    detection={detection}
+                    installURL={repoSources.installURL}
+                    isAdmin={repoSources.isAdmin}
+                    onContinue={kind === "web" ? chooseRuntimeManually : undefined}
+                  />
                 </div>
               ) : (
                 <RepoPicker onPick={pick} searchRef={repoSearchRef} error={fieldErrors.repo} autoFocus />
@@ -605,7 +625,7 @@ export function AddServiceView() {
                     </FormField>
                     {kind === "web" && (
                       <FormField label="Runtime" hint="How kuso builds the image." error={fieldErrors.runtime}>
-                        <div className="space-y-2">
+                        <div ref={runtimeRef} className="space-y-2">
                           <div className="flex items-center gap-2">
                             <RuntimeIcon runtime={runtime || "dockerfile"} />
                             <SegmentedControl
@@ -910,14 +930,14 @@ function DetectedSettings({
     : found
       ? `${result.reason.replace(/ detected$/, "")} found in ${where}`
       : detection.state === "failed"
-        ? "Couldn't read the repo; nixpacks inspects the code at build time"
+        ? "Not detected; nixpacks inspects the code at build time"
         : `No Dockerfile or app manifest in ${where}; nixpacks inspects the code at build time`;
   const portWhy = detecting
     ? "Detecting…"
     : result?.port
       ? `From ${result.reason.replace(/ detected$/, "")}`
       : detection.state === "failed"
-        ? "Couldn't read the repo, so kuso uses 8080 and sets $PORT to match"
+        ? "Not detected, so kuso uses 8080 and sets $PORT to match"
         : "None declared in the repo; kuso uses 8080 and sets $PORT to match";
   const rows: { label: string; value: React.ReactNode; why?: string }[] = [
     {

@@ -6,8 +6,10 @@ import { openShortcutsHelp, useRegisterShortcuts, type Shortcut } from "@/lib/sh
 
 // Bound in ProjectCanvas's key handler; listed in the global "?" dialog.
 export const CANVAS_SHORTCUTS: readonly Shortcut[] = [
-  { keys: ["Tab"], description: "Move between nodes" },
+  { keys: ["Tab"], description: "Move focus into or out of the canvas" },
+  { keys: ["←", "↑", "→", "↓"], description: "Move to the nearest node in that direction" },
   { keys: ["Enter"], description: "Open the focused node" },
+  { keys: ["Shift", "F10"], description: "Actions menu of the focused node" },
   { keys: ["J", "K"], description: "Next / previous service" },
   { keys: ["L"], description: "Logs of the selected service" },
   { keys: ["V"], description: "Variables of the selected service" },

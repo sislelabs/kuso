@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, CircleAlert, Info, Loader2, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { CheckCircle2, CircleAlert, ExternalLink, Info, Loader2, RotateCw, ShieldCheck } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { api } from "@/lib/api-client";
 import { friendlyApiError } from "@/features/projects/names";
 import { DETECTION_RULES, FALLBACK_RUNTIME, type RepoDetection } from "./useRepoDetection";
@@ -25,7 +27,7 @@ export function RuntimeExplainer({
   path: string;
   runtime: string;
 }) {
-  const { state, result, note } = detection;
+  const { state, result } = detection;
   if (state === "idle") return null;
   if (state === "detecting") {
     return (
@@ -59,11 +61,9 @@ export function RuntimeExplainer({
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2.5 text-xs leading-relaxed text-[var(--text-secondary)]">
       <p className="flex items-start gap-1.5 text-[var(--text-primary)]">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
+        {/* The failure's reason is in RepoReadFailureCallout; don't repeat it. */}
         {state === "failed" ? (
-          <span>
-            kuso couldn&apos;t read the repository to detect the runtime
-            {note ? <span className="text-[var(--text-secondary)]"> ({note})</span> : null}.
-          </span>
+          <span>Runtime not detected.</span>
         ) : (
           <span>No known build file in {where(path)}.</span>
         )}
@@ -85,13 +85,82 @@ export function RuntimeExplainer({
   );
 }
 
+// RepoReadFailureCallout is the one place the page says why the repo
+// couldn't be read, with the fix (grant access / token / setup), a retry,
+// and a way past detection so the user is never stuck on it.
+export function RepoReadFailureCallout({
+  detection,
+  installURL,
+  isAdmin,
+  onContinue,
+  className,
+}: {
+  detection: RepoDetection;
+  installURL: string;
+  isAdmin: boolean;
+  // Opens the manual runtime picker. Omit when it's already on screen.
+  onContinue?: () => void;
+  className?: string;
+}) {
+  const f = detection.state === "failed" ? detection.failure : null;
+  if (!f) return null;
+  const linkClass = buttonVariants({ variant: "secondary", size: "sm" });
+  let fix: React.ReactNode = null;
+  if (f.action === "grant-access" && installURL) {
+    fix = (
+      <a href={installURL} target="_blank" rel="noreferrer" className={linkClass}>
+        Grant access on GitHub
+        <ExternalLink />
+      </a>
+    );
+  } else if (f.action === "setup-github" && isAdmin) {
+    fix = (
+      <Link href="/settings/github" className={linkClass}>
+        Set up GitHub
+      </Link>
+    );
+  }
+  return (
+    <Callout tone="warning" role="alert" title={f.title} className={className}>
+      <p className="text-xs leading-relaxed">
+        {f.detail}
+        {f.action === "use-token" && " To add a token, pick the repo again from the Access token tab."}
+        {f.status ? <span className="ml-1 font-mono text-[var(--text-tertiary)]">HTTP {f.status}</span> : null}
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {fix}
+        {f.retryable && (
+          <Button type="button" size="sm" variant="secondary" onClick={detection.retry}>
+            <RotateCw />
+            Retry
+          </Button>
+        )}
+        {onContinue && (
+          <Button type="button" size="sm" variant="ghost" onClick={onContinue}>
+            Continue anyway — choose runtime manually
+          </Button>
+        )}
+      </div>
+    </Callout>
+  );
+}
+
 type AccessState = { key: string; state: "checking" | "ok" | "fail"; message?: string };
 
 // AccessCheck asks the server whether kuso's GitHub App installation can
 // read (and so clone) the repo. Runs once automatically per pick — it is
 // one GitHub API call — and can be re-run after changing the App's
 // repository access on github.com.
-export function AccessCheck({ picked, appConfigured }: { picked: PickedRepo; appConfigured: boolean }) {
+export function AccessCheck({
+  picked,
+  appConfigured,
+  detectionFailed = false,
+}: {
+  picked: PickedRepo;
+  appConfigured: boolean;
+  // RepoReadFailureCallout already explains an unreadable repo.
+  detectionFailed?: boolean;
+}) {
   const key = `${picked.installationId}/${picked.repo.fullName}`;
   const [access, setAccess] = useState<AccessState | null>(null);
   const pasted = !!picked.byUrl;
@@ -121,6 +190,7 @@ export function AccessCheck({ picked, appConfigured }: { picked: PickedRepo; app
 
   if (!relevant) return null;
   const cur = access?.key === key ? access : null;
+  if (detectionFailed && !pasted && cur?.state === "fail") return null;
 
   let verdict: React.ReactNode = null;
   if (cur?.state === "checking") {

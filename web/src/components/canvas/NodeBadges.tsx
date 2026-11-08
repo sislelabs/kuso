@@ -6,11 +6,19 @@ import { cn } from "@/lib/utils";
 import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type VulnSummary } from "./badgeSummary";
 
 const badgeBase =
-  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent)]";
+  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]";
 
 // Security finding marker: shield + count in a neutral/warning style so
 // it never reads as a runtime error. Clicking opens the Vulnerabilities tab.
-export function VulnBadge({ summary, onOpen }: { summary?: VulnSummary; onOpen?: () => void }) {
+export function VulnBadge({
+  summary,
+  onOpen,
+  tabIndex,
+}: {
+  summary?: VulnSummary;
+  onOpen?: () => void;
+  tabIndex?: number;
+}) {
   if (!summary || summary.fixableCritical <= 0) return null;
   const label = vulnBadgeLabel(summary);
   return (
@@ -19,6 +27,7 @@ export function VulnBadge({ summary, onOpen }: { summary?: VulnSummary; onOpen?:
         render={
           <button
             type="button"
+            tabIndex={tabIndex}
             aria-label={label}
             onClick={(e) => {
               e.stopPropagation();
@@ -41,7 +50,15 @@ export function VulnBadge({ summary, onOpen }: { summary?: VulnSummary; onOpen?:
 
 // Runtime errors seen in the logs over 24h, labelled in words so it
 // can't be confused with the vuln count.
-export function ErrorBadge({ summary, onOpen }: { summary?: ErrorSummary; onOpen?: () => void }) {
+export function ErrorBadge({
+  summary,
+  onOpen,
+  tabIndex,
+}: {
+  summary?: ErrorSummary;
+  onOpen?: () => void;
+  tabIndex?: number;
+}) {
   if (!summary || summary.occurrences <= 0) return null;
   const label = errorBadgeLabel(summary);
   return (
@@ -50,6 +67,7 @@ export function ErrorBadge({ summary, onOpen }: { summary?: ErrorSummary; onOpen
         render={
           <button
             type="button"
+            tabIndex={tabIndex}
             aria-label={label}
             onClick={(e) => {
               e.stopPropagation();

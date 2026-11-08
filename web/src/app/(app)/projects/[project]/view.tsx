@@ -19,6 +19,8 @@ import { ProjectStatusStrip } from "@/components/project/ProjectStatusStrip";
 import { EmptyProjectState } from "@/components/project/EmptyProjectState";
 import { ProjectNotFound } from "@/components/project/ProjectNotFound";
 import { ProjectListView } from "@/components/project/ProjectListView";
+import { FirstDeployChecklist } from "@/components/project/FirstDeployChecklist";
+import { useMediaQuery } from "@/components/project/useMediaQuery";
 import {
   loadProjectView,
   saveProjectView,
@@ -131,21 +133,25 @@ export function ProjectDetailView() {
   // canvas right-click menu. Closed by AddAddonDialog on success.
   const [addAddonOpen, setAddAddonOpen] = useState(false);
 
-  // Canvas vs list: ?view= wins (shareable), else the last choice for
-  // this project in this browser.
+  // Canvas vs list: ?view= wins (shareable), else the last explicit
+  // choice for this project in this browser, else list below ~900px
+  // (a canvas that narrow is mostly panning) and canvas above.
   // Lazy init avoids a canvas flash before the effect runs; the first
   // render is the loading skeleton either way, so no hydration mismatch.
-  const [storedView, setStoredView] = useState<ProjectViewMode>(() => loadProjectView(projectName) ?? "canvas");
+  const [storedView, setStoredView] = useState<ProjectViewMode | null>(() => loadProjectView(projectName));
   useEffect(() => {
-    setStoredView(loadProjectView(projectName) ?? "canvas");
+    setStoredView(loadProjectView(projectName));
   }, [projectName]);
+  const narrow = useMediaQuery("(max-width: 899px)");
   const urlView = search?.get("view");
-  const viewMode: ProjectViewMode = urlView === "list" || urlView === "canvas" ? urlView : storedView;
+  const viewMode: ProjectViewMode =
+    urlView === "list" || urlView === "canvas" ? urlView : (storedView ?? (narrow ? "list" : "canvas"));
   const changeViewMode = (m: ProjectViewMode) => {
     setStoredView(m);
     saveProjectView(projectName, m);
     const next = new URLSearchParams(search?.toString() ?? "");
-    if (m === "list") next.set("view", "list");
+    // The URL carries whichever view differs from this width's default.
+    if (m === (narrow ? "canvas" : "list")) next.set("view", m);
     else next.delete("view");
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
@@ -378,7 +384,7 @@ export function ProjectDetailView() {
         onSelectService={selectService}
         onSelectAddon={selectAddon}
       />
-      <div className="hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
+      <div className="relative hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
         {!onProduction && (
           // Sticky banner above the canvas. Reminds the user that the
           // env they're looking at started as a clone — env vars copied
@@ -399,6 +405,13 @@ export function ProjectDetailView() {
             </button>
           </div>
         )}
+        <FirstDeployChecklist
+          project={projectName}
+          selectedEnv={selectedEnv}
+          services={services}
+          envs={envs}
+          onOpenService={selectService}
+        />
         <ProjectStatusStrip
           project={projectName}
           selectedEnv={selectedEnv}

@@ -4,10 +4,16 @@ import {
   buildPaletteIndex,
   envVarHref,
   matchScore,
+  parseIndexSnapshot,
   parseRecents,
   pushRecent,
+  rankScore,
   RECENTS_MAX,
   serviceActions,
+  shouldGroupByProject,
+  tierBoost,
+  type PaletteService,
+  type RankContext,
   type RecentItem,
 } from "./paletteIndex";
 
@@ -135,16 +141,123 @@ describe("serviceActions", () => {
 
   it("offers every verb for every service, skipping redeploy where there's no build", () => {
     const labels = actions.map((a) => a.label);
-    expect(labels).toContain("Logs: shop/web");
-    expect(labels).toContain("Restart: shop/web (staging)");
-    expect(labels).toContain("Redeploy: shop/web");
-    expect(labels).not.toContain("Redeploy: shop/worker");
+    expect(labels).toContain("Logs: shop / web");
+    expect(labels).toContain("Restart: shop / web (staging)");
+    expect(labels).toContain("Redeploy: shop / web");
+    expect(labels).not.toContain("Redeploy: shop / worker");
   });
 
   it("matches a bare verb, so typing logs anywhere finds every service's logs", () => {
     const hits = actions.filter((a) => matchScore("logs", a.label, a.keywords) > 0).map((a) => a.label);
-    expect(hits).toEqual(["Logs: shop/web", "Logs: shop/web (staging)", "Logs: shop/worker"]);
+    expect(hits).toEqual(["Logs: shop / web", "Logs: shop / web (staging)", "Logs: shop / worker"]);
     const scoped = actions.filter((a) => matchScore("logs worker", a.label, a.keywords) > 0);
-    expect(scoped.map((a) => a.label)).toEqual(["Logs: shop/worker"]);
+    expect(scoped.map((a) => a.label)).toEqual(["Logs: shop / worker"]);
+  });
+});
+
+function svc(project: string, name: string): PaletteService {
+  return { project, name, group: "production", display: name, query: `service=${name}`, runtime: "nixpacks", status: "live", envVarKeys: [] };
+}
+
+function rank(services: PaletteService[], query: string, ctx: RankContext): string[] {
+  return serviceActions(services)
+    .map((a) => ({
+      label: a.label,
+      score: rankScore(
+        matchScore(query, a.label, a.keywords),
+        tierBoost(ctx, { project: a.svc.project, key: `s:${a.svc.project}/${a.svc.name}@${a.svc.group}` }),
+      ),
+    }))
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((r) => r.label);
+}
+
+describe("tier ranking", () => {
+  // Long project names first, so brevity alone would rank them last.
+  const services = [
+    svc("a-very-long-project-name", "api"),
+    svc("starred-proj", "api"),
+    svc("recent-proj", "api"),
+    svc("tickero", "backoffice-api"),
+    svc("zz", "api"),
+  ];
+  const ctx: RankContext = {
+    currentProject: "tickero",
+    recents: [{ kind: "project", project: "recent-proj" }],
+    starred: new Set(["starred-proj"]),
+  };
+
+  it("orders redeploy targets current project > recent > starred > rest", () => {
+    expect(rank(services, "redeploy", ctx)).toEqual([
+      "Redeploy: tickero / backoffice-api",
+      "Redeploy: recent-proj / api",
+      "Redeploy: starred-proj / api",
+      "Redeploy: zz / api",
+      "Redeploy: a-very-long-project-name / api",
+    ]);
+  });
+
+  it("lets a much better match beat a tier", () => {
+    // Exact project-name hit elsewhere vs a keyword-only hit in the current project.
+    const out = rank([svc("tickero", "web"), svc("shop", "web")], "logs shop", { ...ctx, recents: [] });
+    expect(out[0]).toBe("Logs: shop / web");
+    const loose = matchScore("tail", "Logs: tickero / web", ["tail"]);
+    expect(loose + tierBoost(ctx, { project: "tickero" })).toBeLessThan(matchScore("logs", "Logs: zz / web"));
+  });
+
+  it("favours the more recent project and the row's own recent entry", () => {
+    const c: RankContext = {
+      currentProject: "",
+      recents: [
+        { kind: "service", project: "b", name: "web", group: "production" },
+        { kind: "project", project: "a" },
+      ],
+      starred: new Set(["a", "b", "c"]),
+    };
+    const b = tierBoost(c, { project: "b", key: "s:b/web@production" });
+    const bOther = tierBoost(c, { project: "b", key: "s:b/api@production" });
+    const a = tierBoost(c, { project: "a" });
+    const starredOnly = tierBoost(c, { project: "c" });
+    expect(b).toBeGreaterThan(bOther);
+    expect(bOther).toBeGreaterThan(a);
+    expect(a).toBeGreaterThan(starredOnly);
+    expect(starredOnly).toBeGreaterThan(tierBoost(c, { project: "d" }));
+    expect(rankScore(0, 1)).toBe(0);
+  });
+});
+
+describe("shouldGroupByProject", () => {
+  it("groups only many hits spread over several projects", () => {
+    const many = ["a", "b", "c", "d", "e", "f"].map((n, i) => svc(i < 3 ? "p1" : "p2", n));
+    expect(shouldGroupByProject(many)).toBe(true);
+    expect(shouldGroupByProject(many.slice(0, 5))).toBe(false);
+    expect(shouldGroupByProject(many.map((s) => ({ ...s, project: "p1" })))).toBe(false);
+  });
+});
+
+describe("parseIndexSnapshot", () => {
+  const snap = (index: unknown, user = "u1") => JSON.stringify({ user, index });
+
+  it("round-trips a built index for the same user only", () => {
+    const idx = buildPaletteIndex([item()]);
+    expect(parseIndexSnapshot(snap(idx), "u1")).toEqual(JSON.parse(JSON.stringify(idx)));
+    expect(parseIndexSnapshot(snap(idx), "u2")).toBeNull();
+    expect(parseIndexSnapshot(snap(idx), "")).toBeNull();
+  });
+
+  it("rejects junk and drops malformed rows", () => {
+    expect(parseIndexSnapshot("nope", "u1")).toBeNull();
+    expect(parseIndexSnapshot(snap({ projects: [] }), "u1")).toBeNull();
+    expect(
+      parseIndexSnapshot(snap({ projects: [{ name: "x" }], services: [{ ...svc("p", "w"), status: "weird" }], envs: [] }), "u1"),
+    ).toEqual({ projects: [], services: [], envs: [] });
+  });
+});
+
+describe("matchScore on project / name labels", () => {
+  it("ranks a service named exactly like the query above a variable that starts with it", () => {
+    expect(matchScore("web", "puncho / web")).toBeGreaterThan(matchScore("web", "WEBSITE_URL"));
+    expect(matchScore("web", "puncho / web")).toBeGreaterThan(matchScore("web", "Logs: puncho / web"));
   });
 });

@@ -61,15 +61,23 @@ import {
   buildPaletteIndex,
   envVarHref,
   matchScore,
+  loadIndexSnapshot,
   loadRecents,
+  pathLabel,
   pushRecent,
+  rankScore,
   recentKey,
+  saveIndexSnapshot,
   saveRecents,
   serviceActions,
   serviceHref,
+  shouldGroupByProject,
+  tierBoost,
+  type PaletteIndex,
   type PaletteProject,
   type PaletteService,
   type PaletteStatus,
+  type RankContext,
   type RecentItem,
   type ServiceActionKind,
 } from "./paletteIndex";
@@ -119,6 +127,17 @@ function StatusBadge({ status, text }: { status: PaletteStatus; text?: string })
   );
 }
 
+// "tickero / api", with the project muted so the target reads first.
+function PathLabel({ project, name }: { project: string; name: ReactNode }) {
+  return (
+    <>
+      <span className="text-[var(--text-secondary)]">{project}</span>
+      <span className="text-[var(--text-tertiary)]"> / </span>
+      {name}
+    </>
+  );
+}
+
 const ID_SEP = "::";
 
 // The palette ranks rows itself (cmdk's built-in fuzzy filter matched
@@ -147,8 +166,7 @@ function rankRows(children: ReactNode, query: string): { row: RowElement; score:
   if (!query) return rows.map((row) => ({ row, score: 1 }));
   return rows
     .map((row) => {
-      const score = matchScore(query, row.props.value, row.props.keywords);
-      return { row, score: score > 0 ? score + (row.props.boost ?? 0) : 0 };
+      return { row, score: rankScore(matchScore(query, row.props.value, row.props.keywords), row.props.boost ?? 0) };
     })
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score);
@@ -215,7 +233,7 @@ interface RowProps {
   hint?: ReactNode;
   right?: ReactNode;
   drill?: boolean;
-  // Small rank nudge among near-ties (e.g. the project you're in).
+  // Tier boost from tierBoost(): current project > recent > starred.
   boost?: number;
 }
 
@@ -255,6 +273,7 @@ export function CommandPalette() {
   const [search, setSearch] = useState("");
   const [pages, setPages] = useState<Page[]>([]);
   const [recents, setRecents] = useState<RecentItem[]>([]);
+  const [snapshot, setSnapshot] = useState<PaletteIndex | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [selected, setSelected] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -284,7 +303,14 @@ export function CommandPalette() {
   const ctxProject = pageProject || currentProject;
   const ctxAddons = useAddons(open ? ctxProject : "");
 
-  const index = useMemo(() => buildPaletteIndex(summary.data ?? []), [summary.data]);
+  // Live summary when we have it; otherwise the last index this browser
+  // built, so the palette never opens on a loading line.
+  const liveIndex = useMemo(() => (summary.data ? buildPaletteIndex(summary.data) : null), [summary.data]);
+  const index = useMemo<PaletteIndex>(() => liveIndex ?? snapshot ?? { projects: [], services: [], envs: [] }, [liveIndex, snapshot]);
+  const userId = session?.user.id ?? "";
+  useEffect(() => {
+    if (liveIndex) saveIndexSnapshot(liveIndex, userId);
+  }, [liveIndex, userId]);
   const projectByName = useMemo(() => new Map(index.projects.map((p) => [p.name, p])), [index.projects]);
   const servicesByProject = useMemo(() => {
     const m = new Map<string, PaletteService[]>();
@@ -292,13 +318,7 @@ export function CommandPalette() {
     return m;
   }, [index.services]);
 
-  // Current project's services first so near-ties favour where you are.
-  const actions = useMemo(() => {
-    const ordered = [...index.services].sort(
-      (a, b) => Number(b.project === currentProject) - Number(a.project === currentProject),
-    );
-    return serviceActions(ordered);
-  }, [index.services, currentProject]);
+  const actions = useMemo(() => serviceActions(index.services), [index.services]);
 
   const addons = useMemo(() => {
     if (!open) return [] as { project: string; addon: KusoAddon }[];
@@ -335,17 +355,26 @@ export function CommandPalette() {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    setSnapshot(loadIndexSnapshot(userId));
+  }, [userId]);
+
+  // Re-read on open: another tab may have added recents since.
+  useEffect(() => {
     setRecents(loadRecents());
   }, [open]);
 
+  // Storage is the source of truth, so a write before the first load (or
+  // from another tab) never clobbers the list.
   const remember = useCallback((item: RecentItem) => {
-    setRecents((prev) => {
-      const next = pushRecent(prev, item);
-      saveRecents(next);
-      return next;
-    });
+    const next = pushRecent(loadRecents(), item);
+    saveRecents(next);
+    setRecents(next);
   }, []);
+
+  // Opening a project any way (sidebar, link, URL) counts as recent.
+  useEffect(() => {
+    if (currentProject) remember({ kind: "project", project: currentProject });
+  }, [currentProject, remember]);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -382,10 +411,18 @@ export function CommandPalette() {
     [index.projects, prefs.byProject],
   );
 
+  const rankCtx = useMemo<RankContext>(
+    () => ({ currentProject, recents, starred: new Set(starred.map((p) => p.name)) }),
+    [currentProject, recents, starred],
+  );
+  const svcKey = (s: PaletteService) => recentKey({ kind: "service", project: s.project, name: s.name, group: s.group });
+  const svcBoost = (s: PaletteService) => tierBoost(rankCtx, { project: s.project, key: svcKey(s) });
+
   const recentRows = useMemo(() => {
     return recents
       .map((r) => {
         if (r.kind === "project") {
+          if (r.project === currentProject) return null;
           const p = projectByName.get(r.project);
           return p ? { r, project: p } : null;
         }
@@ -397,7 +434,7 @@ export function CommandPalette() {
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
       .slice(0, 6);
-  }, [recents, projectByName, servicesByProject]);
+  }, [recents, projectByName, servicesByProject, currentProject]);
 
   const runAction = async ({ kind, svc }: PendingAction) => {
     setPending(null);
@@ -430,6 +467,7 @@ export function CommandPalette() {
       id={`${prefix}-p-${p.name}`}
       value={p.name}
       keywords={[p.description ?? ""]}
+      boost={tierBoost(rankCtx, { project: p.name, key: `p:${p.name}` })}
       onSelect={() => {
         remember({ kind: "project", project: p.name });
         pushPage({ kind: "project", project: p.name });
@@ -452,18 +490,19 @@ export function CommandPalette() {
     <Row
       key={`${prefix}-${s.project}-${s.name}`}
       id={`${prefix}-s-${s.project}-${s.name}`}
-      value={s.display}
-      keywords={[s.project, s.name, s.runtime ?? "", s.repo ?? ""]}
+      value={pathLabel(s.project, s.display)}
+      keywords={[s.name, s.runtime ?? "", s.repo ?? ""]}
+      boost={svcBoost(s)}
       onSelect={() => {
         remember({ kind: "service", project: s.project, name: s.name, group: s.group });
         pushPage({ kind: "service", project: s.project, name: s.name, group: s.group });
       }}
       icon={<Server />}
-      hint={showProject ? s.project : s.runtime}
+      hint={showProject ? undefined : s.runtime}
       right={<StatusBadge status={s.status} />}
       drill
     >
-      {s.display}
+      {showProject ? <PathLabel project={s.project} name={s.display} /> : s.display}
     </Row>
   );
 
@@ -471,8 +510,9 @@ export function CommandPalette() {
     <Row
       key={`${prefix}-${project}-${a.metadata.name}`}
       id={`${prefix}-a-${project}-${a.metadata.name}`}
-      value={a.metadata.name}
-      keywords={[project, a.spec.kind ?? "", "database"]}
+      value={pathLabel(project, a.metadata.name)}
+      keywords={[a.spec.kind ?? "", "database"]}
+      boost={tierBoost(rankCtx, { project, key: `a:${project}/${a.metadata.name}` })}
       onSelect={() =>
         go(`/projects/${encodeURIComponent(project)}?addon=${encodeURIComponent(a.metadata.name)}`, {
           kind: "addon",
@@ -481,9 +521,9 @@ export function CommandPalette() {
         })
       }
       icon={<Database />}
-      hint={showProject ? `${a.spec.kind ?? "addon"} · ${project}` : a.spec.kind}
+      hint={a.spec.kind}
     >
-      {a.metadata.name}
+      {showProject ? <PathLabel project={project} name={a.metadata.name} /> : a.metadata.name}
     </Row>
   );
 
@@ -501,11 +541,19 @@ export function CommandPalette() {
     });
     return () => cancelAnimationFrame(id);
   }, [open, query, pages.length, summary.data]);
-  const loadingIndex = summary.isPending && open;
+  // Only when there's genuinely nothing to show yet (first ever open).
+  const loadingIndex = open && !liveIndex && !snapshot && summary.isFetching;
 
   let body: ReactNode;
   if (!page) {
     const ctxServices = currentProject ? (servicesByProject.get(currentProject) ?? []) : [];
+    // The current project's services live in its "In <project>" group;
+    // the global list covers everything else, split per project when
+    // the query hits many services across several projects.
+    const otherServices = index.services.filter((s) => s.project !== currentProject);
+    const hits = query ? index.services.filter((s) => matchScore(query, pathLabel(s.project, s.display), [s.name, s.runtime ?? "", s.repo ?? ""]) > 0) : [];
+    const groupServices = shouldGroupByProject(hits);
+    const servicesByOtherProject = [...servicesByProject.entries()].filter(([proj]) => proj !== currentProject);
     body = (
       <>
         {!query && recentRows.length > 0 && (
@@ -519,15 +567,13 @@ export function CommandPalette() {
                       <Row
                         key={`recent-${recentKey(row.r)}`}
                         id={`recent-${recentKey(row.r)}`}
-                        value={row.addon ?? ""}
-                        keywords={[row.r.project]}
+                        value={pathLabel(row.r.project, row.addon ?? "")}
                         onSelect={() =>
                           go(`/projects/${encodeURIComponent(row.r.project)}?addon=${encodeURIComponent(row.addon ?? "")}`, row.r)
                         }
                         icon={<Database />}
-                        hint={row.r.project}
                       >
-                        {row.addon}
+                        <PathLabel project={row.r.project} name={row.addon} />
                       </Row>
                     ),
             )}
@@ -580,9 +626,10 @@ export function CommandPalette() {
                   id={`act-${a.kind}-${a.svc.project}-${a.svc.name}`}
                   value={a.label}
                   keywords={a.keywords}
-                  boost={a.svc.project === currentProject ? 0.02 : 0}
+                  boost={svcBoost(a.svc)}
                   onSelect={() => {
                     if (confirmKind) {
+                      remember(recent);
                       close();
                       setPending({ kind: confirmKind, svc: a.svc });
                     } else {
@@ -594,8 +641,7 @@ export function CommandPalette() {
                 >
                   {a.verb}
                   <span className="text-[var(--text-tertiary)]">: </span>
-                  <span className="text-[var(--text-secondary)]">{a.svc.project}/</span>
-                  {a.svc.display}
+                  <PathLabel project={a.svc.project} name={a.svc.display} />
                 </Row>
               );
             })}
@@ -605,8 +651,8 @@ export function CommandPalette() {
                 id={`act-psettings-${p.name}`}
                 value={`Project settings: ${p.name}`}
                 keywords={["config", "domain", "delete", "settings"]}
-                boost={p.name === currentProject ? 0.02 : 0}
-                onSelect={() => go(`/projects/${encodeURIComponent(p.name)}/settings`)}
+                boost={tierBoost(rankCtx, { project: p.name })}
+                onSelect={() => go(`/projects/${encodeURIComponent(p.name)}/settings`, { kind: "project", project: p.name })}
                 icon={<Settings />}
               >
                 Project settings<span className="text-[var(--text-tertiary)]">: </span>
@@ -621,9 +667,16 @@ export function CommandPalette() {
             {index.projects.length > 0 && (
               <Group heading="Projects">{index.projects.map((p) => projectRow(p, "all"))}</Group>
             )}
-            {index.services.length > 0 && (
-              <Group heading="Services" limit={25}>{index.services.map((s) => serviceRow(s, "all"))}</Group>
-            )}
+            {otherServices.length > 0 &&
+              (groupServices ? (
+                servicesByOtherProject.map(([proj, list]) => (
+                  <Group key={proj} heading={`In ${proj}`} limit={8}>
+                    {list.map((s) => serviceRow(s, "all", false))}
+                  </Group>
+                ))
+              ) : (
+                <Group heading="Services" limit={25}>{otherServices.map((s) => serviceRow(s, "all"))}</Group>
+              ))}
             {addons.length > 0 && (
               <Group heading="Databases & addons">{addons.map(({ project, addon }) => addonRow(project, addon, "all"))}</Group>
             )}
@@ -633,14 +686,14 @@ export function CommandPalette() {
                   <Row
                     key={`env-${e.project}-${e.group}`}
                     id={`env-${e.project}`}
-                    value={e.group}
-                    keywords={[e.project, "environment", e.kind]}
+                    value={pathLabel(e.project, e.group)}
+                    keywords={["environment", e.kind]}
+                    boost={tierBoost(rankCtx, { project: e.project })}
                     onSelect={() => go(`/projects/${encodeURIComponent(e.project)}?env=${encodeURIComponent(e.group)}`, { kind: "project", project: e.project })}
                     icon={<GitBranch />}
-                    hint={e.project}
                     right={<span className="ml-auto text-xs text-[var(--text-tertiary)]">{e.kind === "preview" ? "Preview" : "Environment"}</span>}
                   >
-                    {e.group}
+                    <PathLabel project={e.project} name={e.group} />
                   </Row>
                 ))}
               </Group>
@@ -654,9 +707,10 @@ export function CommandPalette() {
                       id={`var-${s.project}-${s.name}`}
                       value={key}
                       keywords={[s.display, s.project, "variable"]}
+                      boost={svcBoost(s)}
                       onSelect={() => go(envVarHref(s, key), { kind: "service", project: s.project, name: s.name, group: s.group })}
                       icon={<Variable />}
-                      hint={`${s.display} · ${s.project}`}
+                      hint={pathLabel(s.project, s.display)}
                     >
                       <span className="font-mono text-[13px]">{key}</span>
                     </Row>
@@ -971,11 +1025,11 @@ export function CommandPalette() {
             <Command.List ref={listRef} className="max-h-[min(460px,62vh)] overflow-y-auto overscroll-contain pb-1.5 [scroll-padding-block:8px]">
               {loadingIndex && (
                 <Command.Loading>
-                  <div className="px-4 py-2 text-xs text-[var(--text-tertiary)]">Loading projects…</div>
+                  <div className="px-4 pt-2 text-xs text-[var(--text-tertiary)]">Loading projects…</div>
                 </Command.Loading>
               )}
               <Command.Empty className="px-4 py-10 text-center text-sm text-[var(--text-tertiary)]">
-                No results for “{query}”.
+                {loadingIndex ? "Searching…" : <>No results for “{query}”.</>}
               </Command.Empty>
               <QueryContext.Provider value={query}>
                 <RankedGroups>{body}</RankedGroups>

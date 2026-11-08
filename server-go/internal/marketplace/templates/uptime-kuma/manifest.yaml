@@ -4,6 +4,7 @@ description: Self-hosted uptime monitoring with a beautiful dashboard.
 category: monitoring
 website: https://uptime.kuma.pet
 appVersion: "1.23.16"
+firstRunSetup: true
 prompts:
   - key: host
     title: Domain

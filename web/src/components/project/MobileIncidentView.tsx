@@ -44,6 +44,10 @@ import {
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
+import { ErrorBadge, VulnBadge } from "@/components/canvas/NodeBadges";
+import { useServiceBadges } from "@/components/canvas/useServiceBadges";
+import type { ErrorSummary, VulnSummary } from "@/components/canvas/badgeSummary";
+import { FirstDeployChecklist } from "./FirstDeployChecklist";
 
 interface Props {
   project: string;
@@ -85,6 +89,7 @@ export function MobileIncidentView({
     const build = latestBuilds.data?.[short];
     return { svc, env, short, build, status: deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: build }) };
   });
+  const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
   const live = rows.filter((r) => r.status.kind === "live").length;
   const failing = rows.filter((r) => r.status.tone === "error").length;
 
@@ -101,6 +106,15 @@ export function MobileIncidentView({
         <span className="shrink-0 font-mono text-xs text-[var(--text-tertiary)]">{selectedEnv}</span>
       </header>
 
+      <FirstDeployChecklist
+        project={project}
+        selectedEnv={selectedEnv}
+        services={services}
+        envs={envs}
+        onOpenService={onSelectService}
+        className="rounded-xl border px-4"
+      />
+
       <ProjectAlerts project={project} onSelectService={onSelectService} />
 
       {rows.map((r) => (
@@ -111,6 +125,8 @@ export function MobileIncidentView({
           env={r.env}
           latest={r.build}
           status={r.status}
+          errors={errorSummaries[r.short]}
+          vulns={vulnSummaries.services[r.short]}
           onSelectService={onSelectService}
         />
       ))}
@@ -252,6 +268,8 @@ function MobileServiceCard({
   env,
   latest,
   status,
+  errors,
+  vulns,
   onSelectService,
 }: {
   project: string;
@@ -259,6 +277,8 @@ function MobileServiceCard({
   env?: KusoEnvironment;
   latest?: BuildSummary;
   status: NodeStatus;
+  errors?: ErrorSummary;
+  vulns?: VulnSummary;
   onSelectService?: (svcName: string, tab?: string) => void;
 }) {
   const shortName = serviceShortName(project, service.metadata.name);
@@ -307,6 +327,12 @@ function MobileServiceCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-base font-semibold">{displayName}</h3>
+          {(errors?.occurrences || vulns?.fixableCritical) ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <ErrorBadge summary={errors} onOpen={() => onSelectService?.(shortName, "errors")} />
+              <VulnBadge summary={vulns} onOpen={() => onSelectService?.(shortName, "vulnerabilities")} />
+            </div>
+          ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
             <StatusLabel status={status} />
             {deployed && <span className="text-[var(--text-tertiary)]">deployed {relativeTime(deployed)}</span>}
@@ -332,76 +358,77 @@ function MobileServiceCard({
         <p className="mt-2 truncate font-mono text-xs text-[var(--text-tertiary)]">{url.replace(/^https?:\/\//, "")}</p>
       )}
 
-      {/* Redeploy is the one inline action; Restart and Stop live in the
-          overflow so a destructive button never sits beside the primary. */}
-      <div className="mt-3 space-y-2 [&_button]:h-10">
+      {/* Logs is the inline action: on a phone you're reading what broke.
+          Redeploy, Restart and Stop live in the overflow so a mutating
+          button is never one stray tap away. */}
+      <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2 [&_button]:h-10">
+        <Button type="button" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
+          <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
+        </Button>
         <Button
           type="button"
+          variant="outline"
           size="sm"
-          className="w-full"
-          onClick={redeploy}
-          disabled={trigger.isPending || !canWrite}
-          title={canWrite ? undefined : "Requires editor access on this project"}
+          onClick={() => setEnvOpen((o) => !o)}
+          aria-expanded={envOpen}
         >
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-          {trigger.isPending ? "Queuing" : "Redeploy"}
+          <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Env
+          <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${envOpen ? "rotate-180" : ""}`} />
         </Button>
-        <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
-            <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setEnvOpen((o) => !o)}
-            aria-expanded={envOpen}
+        <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+          <PopoverTrigger
+            aria-label={`More actions for ${displayName}`}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] data-[popup-open]:bg-[var(--bg-tertiary)]"
           >
-            <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Env
-            <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${envOpen ? "rotate-180" : ""}`} />
-          </Button>
-          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger
-              aria-label={`More actions for ${displayName}`}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+            <MoreHorizontal className="h-4 w-4" />
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-56 gap-0 p-1">
+            <button
+              type="button"
+              className={menuItem}
+              disabled={!canWrite || trigger.isPending}
+              onClick={() => {
+                setMoreOpen(false);
+                redeploy();
+              }}
             >
-              <MoreHorizontal className="h-4 w-4" />
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-52 gap-0 p-1">
-              <button
-                type="button"
-                className={menuItem}
-                disabled={!canWrite || stopped || restart.isPending}
-                onClick={() => {
-                  setMoreOpen(false);
-                  restart.mutate(env ? envGroupName(env) : "production", {
-                    onSuccess: () => toast.success(`Restarting ${shortName}`),
-                    onError: (err) => toast.error(err instanceof Error ? err.message : "Restart failed"),
-                  });
-                }}
-              >
-                <RotateCw className="h-4 w-4 text-[var(--text-tertiary)]" />
-                Restart
-                <span className="ml-auto text-xs text-[var(--text-tertiary)]">same image</span>
-              </button>
-              <button
-                type="button"
-                className={cn(menuItem, !stopped && "text-[var(--error)]")}
-                disabled={!canWrite || toggling}
-                onClick={() => {
-                  setMoreOpen(false);
-                  // Start is one tap; Stop takes the service offline, so it confirms.
-                  if (stopped) toggleStop();
-                  else setConfirmingStop(true);
-                }}
-              >
-                {stopped ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                {toggling ? "Working…" : stopped ? "Start" : "Stop…"}
-              </button>
-              {!canWrite && <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Requires editor access on this project</p>}
-            </PopoverContent>
-          </Popover>
-        </div>
+              <RotateCcw className="h-4 w-4 text-[var(--text-tertiary)]" />
+              {trigger.isPending ? "Queuing…" : "Redeploy"}
+              <span className="ml-auto text-xs text-[var(--text-tertiary)]">new build</span>
+            </button>
+            <button
+              type="button"
+              className={menuItem}
+              disabled={!canWrite || stopped || restart.isPending}
+              onClick={() => {
+                setMoreOpen(false);
+                restart.mutate(env ? envGroupName(env) : "production", {
+                  onSuccess: () => toast.success(`Restarting ${shortName}`),
+                  onError: (err) => toast.error(err instanceof Error ? err.message : "Restart failed"),
+                });
+              }}
+            >
+              <RotateCw className="h-4 w-4 text-[var(--text-tertiary)]" />
+              Restart
+              <span className="ml-auto text-xs text-[var(--text-tertiary)]">same image</span>
+            </button>
+            <button
+              type="button"
+              className={cn(menuItem, !stopped && "text-[var(--error)]")}
+              disabled={!canWrite || toggling}
+              onClick={() => {
+                setMoreOpen(false);
+                // Start is one tap; Stop takes the service offline, so it confirms.
+                if (stopped) toggleStop();
+                else setConfirmingStop(true);
+              }}
+            >
+              {stopped ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+              {toggling ? "Working…" : stopped ? "Start" : "Stop…"}
+            </button>
+            {!canWrite && <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Requires editor access on this project</p>}
+          </PopoverContent>
+        </Popover>
       </div>
 
       {envOpen && <MobileEnvReadout project={project} service={shortName} />}

@@ -1,18 +1,19 @@
 "use client";
 
-import { Handle, Position } from "@xyflow/react";
 import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { deriveCronStatus, STATUS_TONE } from "@/features/services";
+import { NodeHandles } from "./NodeHandles";
+import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 
 // Canvas node for KusoCron. Smaller than the service/addon nodes so
 // crons read as a different class of object at a glance — they're
-// supporting infrastructure, not the main pipeline. Same handle
-// positions (left=target, right=source) so drag-to-connect can wire
-// a cron's HTTP probe target to a sibling service node visually.
+// supporting infrastructure, not the main pipeline. Same side handles
+// so drag-to-connect can wire a cron's HTTP probe target to a sibling
+// service node visually.
 
-export interface CronNodeData {
+export interface CronNodeData extends CanvasNodeA11y {
   project: string;
   cron: {
     metadata: { name: string };
@@ -121,7 +122,7 @@ function summary(spec: CronNodeData["cron"]["spec"]): string {
   }
 }
 
-export function CronNode({ data }: { data: CronNodeData }) {
+export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
   const kind = (data.cron.spec.kind || "service").toLowerCase();
   const Icon = KIND_ICONS[kind] ?? Clock;
   const displayName =
@@ -137,6 +138,11 @@ export function CronNode({ data }: { data: CronNodeData }) {
   return (
     <div
       data-node-context
+      data-canvas-node={id}
+      tabIndex={data.__tabIndex ?? -1}
+      role="group"
+      aria-roledescription="cron job"
+      aria-label={`${displayName}, ${suspended ? "paused" : describeSchedule(schedule)}`}
       onContextMenu={data.__onContext}
       className={cn(
         // 220×96: smaller than the 280×120 service tiles so the visual
@@ -146,11 +152,12 @@ export function CronNode({ data }: { data: CronNodeData }) {
         suspended
           ? "opacity-70 border-[var(--border-default)]"
           : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]",
+        nodeFocusClass,
       )}
     >
-      <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
-      <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
+      <NodeHandles />
       <button
+        tabIndex={-1}
         type="button"
         aria-label={`Actions for ${displayName}`}
         onClick={(e) => {

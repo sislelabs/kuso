@@ -46,6 +46,12 @@ type Manifest struct {
 	// (e.g. "large" for a JVM app). A size set on a service in the
 	// template wins. Omitted = the instance default pod size.
 	Size string `yaml:"size,omitempty" json:"size,omitempty"`
+	// FirstRunSetup marks an app whose first visitor creates the admin
+	// account, so a deploy left unclaimed can be taken over by anyone.
+	FirstRunSetup bool `yaml:"firstRunSetup,omitempty" json:"firstRunSetup,omitempty"`
+	// DefaultCredentials is the login the app ships with (e.g.
+	// "admin/umami") that must be changed right after deploying.
+	DefaultCredentials string `yaml:"defaultCredentials,omitempty" json:"defaultCredentials,omitempty"`
 }
 
 var (

@@ -3,12 +3,20 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Search, SearchX, X } from "lucide-react";
+import { ArrowRight, Search, SearchX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { useMarketplace, type MarketplaceApp } from "@/features/marketplace";
+import {
+  markdownToPlain,
+  parseInlineMarkdown,
+  truncateMarkdown,
+  useMarketplace,
+  versionDisplay,
+  type MarketplaceApp,
+} from "@/features/marketplace";
 import { DeployDialog } from "@/components/marketplace/DeployDialog";
 import { AppIcon, categoryLabel } from "@/components/marketplace/AppIcon";
+import { renderMarkdown } from "@/components/marketplace/InlineMarkdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -165,32 +173,7 @@ function Marketplace() {
         <ul className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((a) => (
             <li key={a.name}>
-              <button
-                type="button"
-                data-app-card
-                onClick={() => setSelected(a)}
-                aria-label={`Deploy ${a.title}`}
-                className="group flex h-full w-full items-start gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 text-left outline-none transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40 focus-visible:border-[var(--ring)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40"
-              >
-                <AppIcon app={a.name} className="h-10 w-10" />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]">{a.title}</span>
-                    <span className="shrink-0 text-xs font-medium text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-                      Deploy →
-                    </span>
-                  </span>
-                  <span className="mt-1 line-clamp-2 text-[13px] leading-snug text-[var(--text-secondary)]" title={a.description}>
-                    {a.description}
-                  </span>
-                  <span className="mt-auto flex items-center gap-2 pt-3 text-xs text-[var(--text-tertiary)]">
-                    <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[var(--text-secondary)]">
-                      {categoryLabel(a.category)}
-                    </span>
-                    {a.appVersion && <span className="font-mono">v{a.appVersion}</span>}
-                  </span>
-                </span>
-              </button>
+              <AppCard app={a} onSelect={() => setSelected(a)} />
             </li>
           ))}
         </ul>
@@ -198,5 +181,53 @@ function Marketplace() {
 
       {selected && <DeployDialog app={selected} defaultProject={targetProject} onClose={() => setSelected(null)} />}
     </div>
+  );
+}
+
+// Roughly two lines of card text; line-clamp stays as a narrow-screen backstop.
+const CARD_DESCRIPTION_CHARS = 78;
+
+function AppCard({ app: a, onSelect }: { app: MarketplaceApp; onSelect: () => void }) {
+  const description = useMemo(() => {
+    const nodes = parseInlineMarkdown(a.description);
+    return { full: markdownToPlain(nodes).replace(/\s+/g, " ").trim(), ...truncateMarkdown(nodes, CARD_DESCRIPTION_CHARS) };
+  }, [a.description]);
+  const version = versionDisplay(a.appVersion);
+  return (
+    <button
+      type="button"
+      data-app-card
+      onClick={onSelect}
+      aria-label={`Deploy ${a.title}`}
+      className="group flex h-full w-full items-start gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 text-left outline-none transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40 focus-visible:border-[var(--ring)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40"
+    >
+      <AppIcon app={a.name} title={a.title} className="h-10 w-10" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[15px] font-semibold text-[var(--text-primary)]">{a.title}</span>
+          <span className="inline-flex shrink-0 items-center gap-1 self-center text-xs font-medium text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+            Deploy
+            <ArrowRight aria-hidden className="h-3.5 w-3.5 motion-safe:transition-transform motion-safe:group-hover:translate-x-0.5" />
+          </span>
+        </span>
+        <span
+          className="mt-1 line-clamp-2 text-[13px] leading-snug text-[var(--text-secondary)]"
+          title={description.truncated ? description.full : undefined}
+        >
+          {renderMarkdown(description.nodes, { links: false })}
+          {description.truncated && "…"}
+        </span>
+        <span className="mt-auto flex items-center gap-2 pt-3 text-xs text-[var(--text-tertiary)]">
+          <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[var(--text-secondary)]">
+            {categoryLabel(a.category)}
+          </span>
+          {version && (
+            <span className={cn(version.literal && "font-mono")} title={version.detail}>
+              {version.label}
+            </span>
+          )}
+        </span>
+      </span>
+    </button>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ReactFlow,
   Background,
@@ -12,6 +12,9 @@ import {
   type NodeMouseHandler,
   type OnNodesChange,
   type Connection,
+  type ReactFlowInstance,
+  type BuiltInEdge,
+  ConnectionMode,
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -37,10 +40,9 @@ import {
   type ContextMenuEntry,
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
-import { useProjectVulns } from "@/features/vulns";
-import { errorsQueryKey, listErrors, useLatestBuilds, useProjectCrons, useProjectErrorSummary } from "@/features/services";
-import { ApiError } from "@/lib/api-client";
-import { canvasVulnSummaries, summarizeErrors, type ErrorSummary } from "./badgeSummary";
+import { facingSides, nextInDirection, readingOrder, type Box, type Direction } from "./geometry";
+import { useLatestBuilds, useProjectCrons } from "@/features/services";
+import { useServiceBadges } from "./useServiceBadges";
 import { CanvasShortcutsButton, useCanvasShortcuts } from "./CanvasShortcuts";
 import { isTypingTarget } from "@/lib/shortcuts";
 import { servicesQueryKey } from "@/features/projects";
@@ -134,52 +136,9 @@ export function ProjectCanvas({
   // dangling edge) and there's a single source of truth.
   const visibleAddons: KusoAddon[] = addons;
 
-  // One rollup request per project; every node reads its badge from it.
-  const projectVulns = useProjectVulns(project);
-  const vulnSummaries = useMemo(
-    () => canvasVulnSummaries(projectVulns.data?.images ?? [], project, selectedEnv),
-    [projectVulns.data, project, selectedEnv],
-  );
-
-  // 24h error counts per service: one project-wide summary request.
-  // Servers without the summary endpoint 404 it; only then fall back to
-  // one small request per service (sharing the Errors tab's cache key).
-  const serviceShorts = useMemo(
-    () => services.map((s) => serviceShortName(project, s.metadata.name)),
-    [services, project],
-  );
-  const errorSummary = useProjectErrorSummary(project);
-  const perServiceErrors =
-    errorSummary.error instanceof ApiError && (errorSummary.error.status === 404 || errorSummary.error.status === 405);
-  const errorQueries = useQueries({
-    queries: (perServiceErrors ? serviceShorts : []).map((short) => ({
-      queryKey: errorsQueryKey(project, short, "24h", ""),
-      queryFn: () => listErrors(project, short, "24h"),
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-      refetchIntervalInBackground: false,
-      retry: false,
-    })),
-  });
-  const errorDataKey = errorQueries.map((q) => q.dataUpdatedAt).join(",");
-  const errorSummaries = useMemo(() => {
-    const out: Record<string, ErrorSummary | undefined> = {};
-    if (perServiceErrors) {
-      serviceShorts.forEach((short, i) => {
-        out[short] = summarizeErrors(errorQueries[i]?.data);
-      });
-      return out;
-    }
-    const data = errorSummary.data;
-    if (!data) return out;
-    for (const short of serviceShorts) {
-      const s = data.services[short];
-      out[short] = s ? { occurrences: s.occurrences, groups: s.groups } : { occurrences: 0, groups: 0 };
-    }
-    return out;
-    // errorQueries is a fresh array each render; key off the data stamps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceShorts, errorDataKey, perServiceErrors, errorSummary.data]);
+  // Error + vuln badge counts: one project-wide request each, shared
+  // with the mobile cards so both surfaces show the same numbers.
+  const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
 
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
@@ -212,7 +171,6 @@ export function ProjectCanvas({
         id: `svc:${s.metadata.name}`,
         type: "service",
         position: { x: 0, y: 0 },
-        ariaLabel: `Service ${s.spec.displayName?.trim() || shortName}`,
         data: {
           project,
           service: s,
@@ -228,7 +186,6 @@ export function ProjectCanvas({
         id: `addon:${a.metadata.name}`,
         type: "addon",
         position: { x: 0, y: 0 },
-        ariaLabel: `Addon ${serviceShortName(project, a.metadata.name)} (${a.spec.kind})`,
         data: {
           project,
           addon: a,
@@ -241,7 +198,6 @@ export function ProjectCanvas({
         id: `cron:${c.metadata.name}`,
         type: "cron",
         position: { x: 0, y: 0 },
-        ariaLabel: `Cron ${c.spec.displayName?.trim() || serviceShortName(project, c.metadata.name)}`,
         data: { project, cron: c } satisfies CronNodeData,
       });
     });
@@ -604,14 +560,23 @@ export function ProjectCanvas({
 
   const qc = useQueryClient();
 
+  // The canvas is one tab stop: the active node holds tabIndex 0 and
+  // arrow keys rove between nodes by geometry. Clicking or tabbing onto
+  // a node makes it active; j/k/l/v/s/r act on it.
+  const [activeId, setActiveId] = useState<string | null>(null);
+  // DOM focus is tracked separately so a focused node lights its edges
+  // like a hovered one does.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
   // Edges sit quietly until you point at (or select) a node; then that
   // node's connections light up in the accent and the rest step back.
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const hotNodes = useMemo(() => {
     const ids = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
     if (hoveredNode) ids.add(hoveredNode);
+    if (focusedId) ids.add(focusedId);
     return ids;
-  }, [nodes, hoveredNode]);
+  }, [nodes, hoveredNode, focusedId]);
 
   // Project-scoped write capabilities. The server enforces these
   // (403), but surfacing them here keeps viewers from clicking
@@ -630,40 +595,95 @@ export function ProjectCanvas({
   const editorGate = (can: boolean) =>
     can ? {} : { disabled: true, shortcut: "needs editor" };
 
-  // Keyboard shortcuts on the canvas. Convention is single-letter,
-  // unmodified, fired only when no input/textarea has focus and no
-  // dialog/overlay is on top (we use document.body as the focus
-  // sentinel — anything more interesting steals focus into itself).
-  //
-  //   j / arrow-down  : focus next service
-  //   k / arrow-up    : focus prev service
-  //   enter           : open the focused service
-  //   r               : redeploy focused service
-  //   l               : open focused service's logs tab
-  //   v               : open variables tab
-  //   s               : open settings tab
-  // "?" is global (KeyboardShortcuts); the Canvas group is registered so
-  // its help dialog lists these. Tab also reaches every node (React Flow
-  // makes them focusable); Enter on a focused node opens it.
+  // Keyboard on the canvas. "?" is global; the Canvas group is
+  // registered so the help dialog lists these keys (CANVAS_SHORTCUTS).
   useCanvasShortcuts();
-  const [focusIdx, setFocusIdx] = useState(-1);
+  const rf = useRef<ReactFlowInstance<Node, BuiltInEdge> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Set once the user pans or zooms; from then on nothing refits.
+  const userMovedRef = useRef(false);
+  const boxes = useMemo(() => nodes.map(nodeBox), [nodes]);
+  const boxById = useMemo(() => new Map(boxes.map((b) => [b.id, b])), [boxes]);
+  const order = useMemo(() => readingOrder(boxes).map((b) => b.id), [boxes]);
+  const tabStopId = activeId && nodes.some((n) => n.id === activeId) ? activeId : (order[0] ?? null);
   const openNodeRef = useRef<(id: string) => void>(() => {});
+
+  const focusNode = (id: string) => {
+    setActiveId(id);
+    const el = wrapperRef.current?.querySelector<HTMLElement>(`[data-canvas-node="${CSS.escape(id)}"]`);
+    el?.focus({ preventScroll: true });
+    // Keep the node on screen without changing the zoom the user chose.
+    const box = boxes.find((b) => b.id === id);
+    const inst = rf.current;
+    const wrap = wrapperRef.current;
+    if (!box || !inst || !wrap) return;
+    const { x, y, zoom } = inst.getViewport();
+    const left = box.x * zoom + x;
+    const top = box.y * zoom + y;
+    const margin = 24;
+    const offscreen =
+      left < margin ||
+      top < margin ||
+      left + box.w * zoom > wrap.clientWidth - margin ||
+      top + box.h * zoom > wrap.clientHeight - margin;
+    if (offscreen) {
+      userMovedRef.current = true;
+      void inst.setCenter(box.x + box.w / 2, box.y + box.h / 2, { zoom, duration: reducedMotion() ? 0 : 200 });
+    }
+  };
+
+  // Keys pressed while a node (or something inside one) has focus.
+  const onCanvasKeyDown = (e: React.KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    const nodeEl = target?.closest<HTMLElement>("[data-canvas-node]");
+    const id = nodeEl?.dataset.canvasNode;
+    if (!nodeEl || !id) return;
+    const onNode = target === nodeEl;
+    if (e.key === "Escape" && !onNode) {
+      // Esc from a control inside a node hands focus back to the node.
+      e.preventDefault();
+      nodeEl.focus();
+      return;
+    }
+    if (!onNode) return;
+    const dir = ARROW_DIR[e.key];
+    if (dir) {
+      e.preventDefault();
+      const next = nextInDirection(boxes, id, dir);
+      if (next) focusNode(next);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openNodeRef.current(id);
+    } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      // The node's actions menu, opened at the node like a right-click.
+      e.preventDefault();
+      const r = nodeEl.getBoundingClientRect();
+      nodeEl.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 16, clientY: r.top + 16 }),
+      );
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const to = e.key === "Home" ? order[0] : order[order.length - 1];
+      if (to) focusNode(to);
+    }
+  };
+
+  // Single-letter shortcuts, fired only when no input has focus and no
+  // dialog/overlay is on top. j/k work from anywhere on the page (they
+  // pull focus into the canvas); l/v/s/r act on the active service.
   // Time of the last bare "g": the next key belongs to a global g-chord
   // (g s = settings), not to the canvas.
   const lastG = useRef(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Don't hijack typing in inputs / textareas / contenteditables.
       if (isTypingTarget(e.target)) return;
-      const target = e.target instanceof HTMLElement ? e.target : null;
-      // Enter on a focused button/link activates that control.
-      if (target && e.key === "Enter" && (target.tagName === "BUTTON" || target.tagName === "A")) return;
       // An overlay, dialog or menu is open on top of the canvas: its
       // keys belong to it (r/l/v/s would otherwise switch services
       // under an overlay with unsaved edits).
       if (e.defaultPrevented || anySurfaceOpen()) return;
-      // Ignore when modifiers are held — those are reserved for
-      // browser shortcuts (cmd-K opens the palette, cmd-R reloads).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "g") {
         lastG.current = e.timeStamp;
@@ -674,76 +694,62 @@ export function ProjectCanvas({
         return;
       }
       lastG.current = 0;
-      if (e.key === "Enter" && target) {
-        const nodeEl = target.closest<HTMLElement>(".react-flow__node");
-        const id = nodeEl?.dataset.id;
-        if (id) {
-          e.preventDefault();
-          openNodeRef.current(id);
+      const svcOrder = order.filter((id) => id.startsWith("svc:"));
+      if (e.key === "j" || e.key === "k") {
+        if (svcOrder.length === 0) return;
+        e.preventDefault();
+        const cur = activeId ? svcOrder.indexOf(activeId) : -1;
+        const delta = e.key === "j" ? 1 : -1;
+        const next = cur < 0 ? (delta > 0 ? 0 : svcOrder.length - 1) : (cur + delta + svcOrder.length) % svcOrder.length;
+        focusNode(svcOrder[next]);
+        return;
+      }
+      const active = activeId?.startsWith("svc:") ? nodes.find((n) => n.id === activeId) : undefined;
+      if (!active) return;
+      const short = serviceShortName(project, (active.data as ServiceNodeData).service.metadata.name);
+      const tab = ({ l: "logs", v: "variables", s: "settings" } as Record<string, string>)[e.key];
+      if (tab) {
+        e.preventDefault();
+        onSelectService?.(short, tab);
+      } else if (e.key === "r") {
+        e.preventDefault();
+        if (!canServicesWrite) {
+          toast.error("Redeploying requires editor access on this project");
           return;
         }
-      }
-      const svcNodes = nodes.filter((n) => n.type === "service");
-      if (svcNodes.length === 0) return;
-      const moveFocus = (delta: number) => {
-        e.preventDefault();
-        setFocusIdx((cur) => {
-          const next = cur < 0 ? 0 : (cur + delta + svcNodes.length) % svcNodes.length;
-          return next;
-        });
-      };
-      const focused = focusIdx >= 0 && focusIdx < svcNodes.length ? svcNodes[focusIdx] : null;
-      const focusedShort = focused
-        ? serviceShortName(project, (focused.data as ServiceNodeData).service.metadata.name)
-        : null;
-      switch (e.key) {
-        case "j":
-        case "ArrowDown":
-          moveFocus(1);
-          break;
-        case "k":
-        case "ArrowUp":
-          moveFocus(-1);
-          break;
-        case "Enter":
-          if (focusedShort) {
-            e.preventDefault();
-            onSelectService?.(focusedShort);
-          }
-          break;
-        case "l":
-          if (focusedShort) {
-            e.preventDefault();
-            onSelectService?.(focusedShort, "logs");
-          }
-          break;
-        case "v":
-          if (focusedShort) {
-            e.preventDefault();
-            onSelectService?.(focusedShort, "variables");
-          }
-          break;
-        case "s":
-          if (focusedShort) {
-            e.preventDefault();
-            onSelectService?.(focusedShort, "settings");
-          }
-          break;
-        case "r":
-          if (focused && focusedShort) {
-            e.preventDefault();
-            if (!canServicesWrite) {
-              toast.error("Redeploying requires editor access on this project");
-              break;
-            }
-            setConfirmRedeploy(focusedShort);
-          }
-          break;
+        setConfirmRedeploy(short);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [nodes, focusIdx, project, onSelectService, canServicesWrite]);
+    // focusNode reads refs + boxes; boxes changes with nodes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, order, activeId, project, onSelectService, canServicesWrite]);
+
+  // Refit when the canvas box changes size (sidebar toggle, window
+  // resize, the env banner appearing) — unless the user has panned or
+  // zoomed, in which case their viewport wins.
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let last = { w: el.clientWidth, h: el.clientHeight };
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (Math.abs(w - last.w) < 2 && Math.abs(h - last.h) < 2) return;
+      last = { w, h };
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!userMovedRef.current) void rf.current?.fitView(FIT_VIEW_OPTIONS);
+      }, 150);
+    });
+    ro.observe(el);
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+    };
+  }, []);
 
   // Layout effect, not effect: nodes are positioned before the first
   // paint, so fitView never sees (or flashes) an empty or unlaid graph.
@@ -1058,6 +1064,8 @@ export function ProjectCanvas({
   const resetLayout = () => {
     clearStoredLayout(project);
     setNodes(autoLayout(initialNodes, initialEdges));
+    userMovedRef.current = false;
+    requestAnimationFrame(() => void rf.current?.fitView({ ...FIT_VIEW_OPTIONS, duration: reducedMotion() ? 0 : 200 }));
   };
 
   // Right-click on a cron node: the edit dialog is the cron's only
@@ -1142,7 +1150,29 @@ export function ProjectCanvas({
 
   return (
     <div
+      ref={wrapperRef}
+      // Skip-link target (R3-4 registers "Skip to canvas" for this id);
+      // focusing the region forwards to the active node.
+      id="canvas-root"
+      tabIndex={-1}
+      role="region"
+      aria-label={`${project} canvas. Arrow keys move between services and addons, Enter opens one.`}
       className="relative flex-1 min-h-0 w-full"
+      onKeyDown={onCanvasKeyDown}
+      onFocus={(e) => {
+        if (e.target === e.currentTarget) {
+          e.currentTarget.querySelector<HTMLElement>('[data-canvas-node][tabindex="0"]')?.focus();
+          return;
+        }
+        const id = e.target instanceof HTMLElement ? e.target.dataset.canvasNode : undefined;
+        if (id) {
+          setActiveId(id);
+          setFocusedId(id);
+        }
+      }}
+      onBlur={(e) => {
+        if (e.target instanceof HTMLElement && e.target.dataset.canvasNode) setFocusedId(null);
+      }}
       onContextMenuCapture={(e) => {
         // React Flow's nodeTypes render their own divs; if a node was
         // right-clicked the event already had its propagation stopped
@@ -1154,44 +1184,29 @@ export function ProjectCanvas({
       }}
     >
       <ReactFlow
-        nodes={(() => {
-          // Inject the keyboard-focused flag onto the matching service
-          // node so ServiceNode can render a focus ring without the
-          // shortcut handler having to know its DOM. The focus index
-          // is over the *service-only* slice; map back to the full
-          // nodes array via the same filter order.
-          const svcOnlyOrder = nodes.filter((n) => n.type === "service");
-          const focusedId =
-            focusIdx >= 0 && focusIdx < svcOnlyOrder.length
-              ? svcOnlyOrder[focusIdx].id
-              : null;
-          return nodes.map((n) => ({
-            ...n,
-            data: {
-              ...n.data,
-              __focused: focusedId === n.id,
-              __onContext:
-                n.type === "service"
-                  ? (e: React.MouseEvent) =>
-                      onServiceContext(e, n.data as ServiceNodeData)
-                  : n.type === "addon"
-                    ? (e: React.MouseEvent) =>
-                        onAddonContext(e, n.data as AddonNodeData)
-                    : (e: React.MouseEvent) =>
-                        onCronContext(e, n.data as unknown as CronNodeData),
-              __onOpenTab:
-                n.type === "service"
-                  ? (tab: string) =>
-                      onSelectService?.(
-                        serviceShortName(project, (n.data as ServiceNodeData).service.metadata.name),
-                        tab,
-                      )
-                  : n.type === "addon"
-                    ? (tab: string) => onSelectAddon?.((n.data as AddonNodeData).addon.metadata.name, tab)
-                    : undefined,
-            },
-          }));
-        })()}
+        nodes={nodes.map((n): Node => ({
+          ...n,
+          data: {
+            ...n.data,
+            __tabIndex: n.id === tabStopId ? (0 as const) : (-1 as const),
+            __onContext:
+              n.type === "service"
+                ? (e: React.MouseEvent) => onServiceContext(e, n.data as ServiceNodeData)
+                : n.type === "addon"
+                  ? (e: React.MouseEvent) => onAddonContext(e, n.data as AddonNodeData)
+                  : (e: React.MouseEvent) => onCronContext(e, n.data as unknown as CronNodeData),
+            __onOpenTab:
+              n.type === "service"
+                ? (tab: string) =>
+                    onSelectService?.(
+                      serviceShortName(project, (n.data as ServiceNodeData).service.metadata.name),
+                      tab,
+                    )
+                : n.type === "addon"
+                  ? (tab: string) => onSelectAddon?.((n.data as AddonNodeData).addon.metadata.name, tab)
+                  : undefined,
+          },
+        }))}
         edges={edges
           .filter((e) => {
             // Hide categories the user toggled off. Edges without a
@@ -1202,17 +1217,30 @@ export function ProjectCanvas({
             if (kind === "ref" && !edgeFilters.ref) return false;
             return true;
           })
-          .map((e) => styleEdge(e, hotNodes))}
+          .map((e) => styleEdge(e, hotNodes, boxById))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         onNodeMouseEnter={(_e, n) => setHoveredNode(n.id)}
         onNodeMouseLeave={() => setHoveredNode(null)}
         onConnect={onConnect}
+        connectionMode={ConnectionMode.Loose}
+        onInit={(inst) => {
+          rf.current = inst;
+        }}
+        // A non-null event means the user dragged or scrolled the
+        // viewport (programmatic fits pass null).
+        onMoveStart={(e) => {
+          if (e) userMovedRef.current = true;
+        }}
+        // Roving focus lives on our node cards: React Flow's own node
+        // wrappers and edges would add a tab stop per element, and its
+        // arrow keys move nodes instead of focus.
+        nodesFocusable={false}
+        edgesFocusable={false}
+        disableKeyboardA11y
         fitView
-        // Never fit below 0.85: card text stays ≥12px on screen and a
-        // big graph pans instead of shrinking into unreadable tiles.
-        fitViewOptions={{ padding: 0.2, maxZoom: 1, minZoom: 0.85 }}
+        fitViewOptions={FIT_VIEW_OPTIONS}
         minZoom={0.2}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
@@ -1222,7 +1250,6 @@ export function ProjectCanvas({
         // the alignment they're being given.
         snapToGrid
         snapGrid={[24, 24]}
-        className="[&_.react-flow__node:focus-visible]:outline-none [&_.react-flow__node:focus-visible>div]:outline [&_.react-flow__node:focus-visible>div]:outline-2 [&_.react-flow__node:focus-visible>div]:outline-offset-2 [&_.react-flow__node:focus-visible>div]:outline-[var(--accent)]"
       >
         {/* Brighter dots than the default border-subtle so the
             grid actually reads on the dark bg. zinc-500 at 40%
@@ -1602,23 +1629,59 @@ const EDGE_COLOR: Record<EdgeData["kind"], string> = {
 };
 
 // styleEdge: solid and low-contrast by default, accent + thicker when
-// either end is hovered or selected, dimmed when something else is.
+// either end is hovered, focused or selected, and nearly gone when
+// another node is. Edges are rounded orthogonal paths that leave and
+// enter on the sides of the two nodes facing each other, so a busy graph
+// reads as tidy lanes instead of crossing curves; several addon edges
+// into one service share its facing side and bundle on the way in.
 // Never animated — a moving dash read as "in progress" on every edge.
-function styleEdge(e: Edge, hot: Set<string>): Edge {
+function styleEdge(e: Edge, hot: Set<string>, boxById: Map<string, Box>): BuiltInEdge {
   const d = (e.data ?? { kind: "ref" }) as EdgeData;
   const lit = hot.has(e.source) || hot.has(e.target);
   const dimmed = hot.size > 0 && !lit;
+  const src = boxById.get(e.source);
+  const dst = boxById.get(e.target);
+  const sides = src && dst ? facingSides(src, dst) : { source: "right" as const, target: "left" as const };
   return {
     ...e,
+    type: "smoothstep",
+    pathOptions: { borderRadius: 14, offset: 20 },
+    sourceHandle: sides.source,
+    targetHandle: sides.target,
     animated: false,
     zIndex: lit ? 1 : 0,
     style: {
       stroke: lit ? "var(--accent)" : EDGE_COLOR[d.kind],
       strokeWidth: lit ? 2 : 1.25,
-      opacity: lit ? 1 : dimmed ? 0.15 : d.implicit ? 0.35 : 0.55,
+      opacity: lit ? 1 : dimmed ? 0.06 : d.implicit ? 0.35 : 0.55,
       strokeDasharray: d.pending ? "5 4" : undefined,
       transition: "opacity 120ms, stroke 120ms",
     },
   };
 }
 
+const NODE_FALLBACK_SIZE: Record<string, { w: number; h: number }> = {
+  service: { w: 280, h: 120 },
+  addon: { w: 220, h: 72 },
+  cron: { w: 220, h: 96 },
+};
+
+function nodeBox(n: Node): Box {
+  const fb = NODE_FALLBACK_SIZE[n.type ?? "service"] ?? NODE_FALLBACK_SIZE.service;
+  return { id: n.id, x: n.position.x, y: n.position.y, w: n.measured?.width ?? fb.w, h: n.measured?.height ?? fb.h };
+}
+
+const ARROW_DIR: Record<string, Direction> = {
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+};
+
+// Never fit below 0.85: card text stays ≥12px on screen and a big graph
+// pans instead of shrinking into unreadable tiles.
+const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1, minZoom: 0.85 };
+
+function reducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}

@@ -13,6 +13,7 @@ export {
   getGithubManifest,
   getInstallURL,
   inspectRepo,
+  checkRepoAccess,
   getDeployHook,
   enableDeployHook,
   disableDeployHook,
@@ -23,6 +24,7 @@ export type {
   GithubRepoRef,
   DetectRuntimeResponse,
   InspectRepoResponse,
+  CheckRepoAccessResponse,
   DeployHook,
   AddonSuggestion,
   SetupStatusResponse,
@@ -30,3 +32,5 @@ export type {
   ConfigureResponse,
   ManifestResponse,
 } from "./api";
+export { classifyRepoReadFailure } from "./repoReadFailure";
+export type { RepoReadFailure, RepoReadFailureKind, RepoReadAction } from "./repoReadFailure";

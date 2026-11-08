@@ -18,6 +18,10 @@ export interface MarketplaceApp {
   website?: string;
   appVersion?: string;
   prompts: MarketplacePrompt[];
+  // The first visitor creates the admin account.
+  firstRunSetup?: boolean;
+  // Login the app ships with, e.g. "admin/umami".
+  defaultCredentials?: string;
 }
 
 export interface RenderResult {

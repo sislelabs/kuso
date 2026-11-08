@@ -6,6 +6,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, ChevronRight, Database, ExternalLink, Globe, KeyRound, Loader2, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -15,11 +17,14 @@ import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import {
   answersPayload,
   landingPath,
+  parseInlineMarkdown,
   renderApp,
   promptError,
+  setupRisk,
   splitPrompts,
   uniqueProjectName,
   useRenderPreview,
+  versionDisplay,
   type MarketplaceApp,
   type MarketplacePrompt,
 } from "@/features/marketplace";
@@ -27,6 +32,7 @@ import { applyConfig, useProjects, type ConfigStepError } from "@/features/proje
 import { projectNameError } from "@/features/projects/names";
 import { useCan } from "@/features/auth";
 import { AppIcon } from "./AppIcon";
+import { renderMarkdown } from "./InlineMarkdown";
 
 type Target = "new" | "existing";
 
@@ -100,6 +106,9 @@ export function DeployDialog({
   const baseDomain = target === "existing" ? existingProject?.spec.baseDomain ?? "" : "";
 
   const { required, advanced } = splitPrompts(app);
+  const risk = setupRisk(app);
+  const version = versionDisplay(app.appVersion);
+  const description = useMemo(() => renderMarkdown(parseInlineMarkdown(app.description)), [app.description]);
   const firstDomainKey = app.prompts.find((p) => p.kind === "domain")?.key;
 
   const suggestion = (p: MarketplacePrompt): string => {
@@ -241,15 +250,32 @@ export function DeployDialog({
     >
       <DialogContent className="block max-h-[90vh] overflow-y-auto p-0 sm:max-w-lg" showCloseButton={!deploying}>
         <div className="flex items-start gap-3 border-b border-[var(--border-subtle)] p-5 pr-12">
-          <AppIcon app={app.name} className="h-11 w-11" />
+          <AppIcon app={app.name} title={app.title} className="h-11 w-11" />
           <div className="min-w-0">
             <DialogTitle className="font-heading text-lg font-semibold tracking-tight text-[var(--text-primary)]">
               Deploy {app.title}
             </DialogTitle>
-            <DialogDescription className="mt-0.5 text-[13px] text-[var(--text-secondary)]">{app.description}</DialogDescription>
-            {(app.appVersion || app.website) && (
+            <DialogDescription className="mt-0.5 text-[13px] text-[var(--text-secondary)]">{description}</DialogDescription>
+            {(version || app.website) && (
               <p className="mt-1.5 flex flex-wrap items-center gap-x-3 text-xs text-[var(--text-tertiary)]">
-                {app.appVersion && <span className="font-mono">v{app.appVersion}</span>}
+                {version &&
+                  (version.detail ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span
+                            tabIndex={0}
+                            className="cursor-default underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                          />
+                        }
+                      >
+                        {version.label}
+                      </TooltipTrigger>
+                      <TooltipContent>{version.detail}</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <span className={cn(version.literal && "font-mono")}>{version.label}</span>
+                  ))}
                 {app.website && (
                   <a
                     href={app.website}
@@ -273,6 +299,22 @@ export function DeployDialog({
           }}
           className="space-y-5 p-5"
         >
+          {risk && (
+            <Callout tone="warning" title="Secure it right after deploying">
+              <ul className="space-y-1">
+                {risk.firstRunSetup && (
+                  <li>This app&apos;s first visitor creates the admin account — open it and finish setup right after deploying.</li>
+                )}
+                {risk.defaultCredentials && (
+                  <li>
+                    Ships with the default login <code className="font-mono text-[var(--text-primary)]">{risk.defaultCredentials}</code> —
+                    change it immediately after deploying.
+                  </li>
+                )}
+              </ul>
+            </Callout>
+          )}
+
           <fieldset>
             <legend className="text-[13px] font-medium text-[var(--text-primary)]">Project</legend>
             <div role="group" aria-label="Deploy target" className="mt-1.5 grid grid-cols-2 gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">

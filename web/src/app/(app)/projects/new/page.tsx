@@ -43,7 +43,7 @@ import { ImportArchiveCard } from "./ImportArchiveCard";
 import { FormField, SegmentedControl } from "../[project]/services/new/FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "../[project]/services/new/RepoPicker";
 import { useRepoDetection } from "../[project]/services/new/useRepoDetection";
-import { AccessCheck, RuntimeExplainer } from "../[project]/services/new/RepoInsights";
+import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "../[project]/services/new/RepoInsights";
 import { EnvPastePanel, useDotenv } from "../[project]/services/new/EnvPastePanel";
 import { reportCreateOutcome } from "../[project]/services/new/reportCreateOutcome";
 
@@ -108,6 +108,15 @@ export default function NewProjectPage() {
   const env = useDotenv(envText);
   const [importErrors, setImportErrors] = useState<{ project?: string; service?: string; env?: string }>({});
   const importNameRef = useRef<HTMLInputElement>(null);
+  const runtimeRef = useRef<HTMLDivElement>(null);
+  // Detection failed: open Build settings and land on the runtime picker.
+  const chooseRuntimeManually = () => {
+    setBuildOpen(true);
+    requestAnimationFrame(() => {
+      runtimeRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      runtimeRef.current?.querySelector<HTMLButtonElement>("button[aria-pressed=true], button")?.focus({ preventScroll: true });
+    });
+  };
   const detection = useRepoDetection(picked, path, (rt, p) => {
     setRuntime(rt);
     if (p) setPort(String(p));
@@ -376,7 +385,17 @@ export default function NewProjectPage() {
                   )}
                 </span>
               </div>
-              <AccessCheck picked={picked} appConfigured={repoSources.appConfigured} />
+              <AccessCheck
+                picked={picked}
+                appConfigured={repoSources.appConfigured}
+                detectionFailed={detection.state === "failed"}
+              />
+              <RepoReadFailureCallout
+                detection={detection}
+                installURL={repoSources.installURL}
+                isAdmin={repoSources.isAdmin}
+                onContinue={chooseRuntimeManually}
+              />
 
               <FormField
                 label="Project name"
@@ -468,7 +487,9 @@ export default function NewProjectPage() {
                   </FormField>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_8rem]">
                     <FormField label="Runtime" hint="How kuso builds the image.">
-                      <SegmentedControl label="Runtime" value={runtime} options={RUNTIMES} onChange={setRuntime} />
+                      <div ref={runtimeRef}>
+                        <SegmentedControl label="Runtime" value={runtime} options={RUNTIMES} onChange={setRuntime} />
+                      </div>
                     </FormField>
                     <FormField label="Port" hint="Detected, or 8080." htmlFor="import-port">
                       <Input
@@ -693,15 +714,15 @@ function OptionCard({
     <>
       <span className="flex items-center justify-between text-[var(--accent)]">
         {icon}
-        {href ? (
-          <ArrowRight className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform motion-safe:group-hover:translate-x-0.5" />
-        ) : (
-          <ChevronRight
-            className={
-              "h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform " + (active ? "rotate-90" : "")
-            }
-          />
-        )}
+        {/* One glyph for every card: a chevron that nudges right for a
+            link and turns down when an inline option is open. */}
+        <ChevronRight
+          aria-hidden
+          className={
+            "h-4 w-4 text-[var(--text-tertiary)] transition-transform " +
+            (active ? "rotate-90" : "motion-safe:group-hover:translate-x-0.5")
+          }
+        />
       </span>
       <span className="text-[13px] font-medium text-[var(--text-primary)]">{title}</span>
       <span className="text-xs leading-snug text-[var(--text-secondary)]">{hint}</span>
