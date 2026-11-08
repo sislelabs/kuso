@@ -14,6 +14,17 @@ import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { UserBadge } from "@/components/activity/UserBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
+import { collapseRuns } from "@/lib/collapse-runs";
+
+// Reads (secret reveals, downloads) are recorded for the trail, not
+// because something went wrong: they render neutral whatever the
+// server-side severity, so warning colour stays meaningful.
+function actionTone(action: string, severity: string): string {
+  if (/(_read|\.read|download)$/.test(action)) return "text-[var(--text-primary)]";
+  if (severity === "error") return "text-[var(--error)]";
+  if (severity === "warn" || severity === "warning") return "text-[var(--warning)]";
+  return "text-[var(--text-primary)]";
+}
 
 // Audit-log UI. Reads /api/audit (instance-wide; admin-only) or
 // /api/audit?project=<n> (project-scoped; Viewer+).
@@ -125,7 +136,7 @@ export default function ActivityPage() {
             <span role="columnheader">Message</span>
           </div>
           <div role="rowgroup" className="divide-y divide-[var(--border-subtle)]">
-            {filtered.map((r) => {
+            {collapseRuns(filtered, (r) => [r.user, r.action, r.pipeline, r.app, r.message, r.severity].join("\u0000")).map(({ item: r, count, last }) => {
               const target = [r.pipeline, r.app].filter(Boolean).join(" / ");
               return (
                 <div
@@ -136,7 +147,13 @@ export default function ActivityPage() {
                   <span
                     role="cell"
                     className="col-start-2 row-start-1 whitespace-nowrap text-xs text-[var(--text-secondary)] md:col-start-auto md:row-start-auto md:text-sm"
-                    title={r.timestamp ? new Date(r.timestamp).toLocaleString() : undefined}
+                    title={
+                      r.timestamp
+                        ? count > 1 && last.timestamp
+                          ? `${count} times, ${new Date(last.timestamp).toLocaleString()} to ${new Date(r.timestamp).toLocaleString()}`
+                          : new Date(r.timestamp).toLocaleString()
+                        : undefined
+                    }
                   >
                     {r.timestamp ? relativeTime(r.timestamp) : "—"}
                   </span>
@@ -144,18 +161,15 @@ export default function ActivityPage() {
                     <UserBadge id={r.user} />
                   </span>
                   <span role="cell" className="col-span-2 min-w-0 md:col-span-1">
-                    <code
-                      className={cn(
-                        "break-all font-mono text-xs",
-                        r.severity === "error"
-                          ? "text-[var(--error)]"
-                          : r.severity === "warn" || r.severity === "warning"
-                            ? "text-[var(--warning)]"
-                            : "text-[var(--text-primary)]",
-                      )}
-                    >
-                      {r.action}
-                    </code>
+                    <code className={cn("break-all font-mono text-xs", actionTone(r.action, r.severity))}>{r.action}</code>
+                    {count > 1 && (
+                      <span
+                        className="ml-1.5 inline-flex rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-1.5 text-2xs font-medium tabular-nums text-[var(--text-secondary)]"
+                        aria-label={`repeated ${count} times`}
+                      >
+                        ×{count}
+                      </span>
+                    )}
                   </span>
                   <span role="cell" className="col-span-2 min-w-0 truncate text-xs text-[var(--text-secondary)] md:col-span-1 md:text-sm" title={r.resource ? `${target} (${r.resource})` : target}>
                     {target ? <span className="font-mono text-xs">{target}</span> : <span className="text-[var(--text-tertiary)]">—</span>}
@@ -169,7 +183,7 @@ export default function ActivityPage() {
           </div>
           {query.data && query.data.count > filtered.length && (
             <p className="border-t border-[var(--border-subtle)] px-4 py-2 text-xs text-[var(--text-secondary)]">
-              Showing {filtered.length} of {query.data.count} entries. User and action filters search the latest{" "}
+              Showing {filtered.length} of {query.data.count} entries (identical repeats in a row are folded into one). User and action filters search the latest{" "}
               {audit?.length ?? 0} only.
             </p>
           )}
