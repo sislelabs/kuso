@@ -55,6 +55,7 @@ import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { isProductionGroup } from "@/lib/env-group";
+import { cronsForEnv } from "@/features/projects/facts";
 import { buildTriggerMessage } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
@@ -196,7 +197,7 @@ export function ProjectCanvas({
         } satisfies AddonNodeData,
       });
     });
-    (allCrons.data ?? []).forEach((c) => {
+    cronsForEnv(allCrons.data ?? [], services, selectedEnv, project).forEach((c) => {
       out.push({
         id: `cron:${c.metadata.name}`,
         type: "cron",
@@ -205,7 +206,7 @@ export function ProjectCanvas({
       });
     });
     return out;
-  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnSummaries, errorSummaries]);
+  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnSummaries, errorSummaries, selectedEnv]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];

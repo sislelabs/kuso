@@ -2,13 +2,13 @@
 
 import { ApiError } from "@/lib/api-client";
 import { relativeTime } from "@/lib/format";
-import { TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
+import { SERVICE_STATUS, TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "@/components/ui/status-pill";
-import { errorCountLabel, useServiceErrorCount } from "@/features/errors";
+import { ERRORS_WINDOW, errorCountLabel, errorsEnvScope, useServiceErrorCount } from "@/features/errors";
 import { useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
-import { useProjectUptime, type UptimeServiceStatus } from "@/features/uptime";
+import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
 
 export interface ServiceHealthStripProps {
@@ -37,13 +37,22 @@ interface Cell {
 // ServiceHealthStrip is the at-a-glance row under the overlay title:
 // status, uptime check, restarts, errors and last deploy. Every cell reads
 // the same query the tab it links to reads, so the numbers match.
-export function ServiceHealthStrip({ project, service, env, envGroup, status, onNavigate }: ServiceHealthStripProps) {
+export function ServiceHealthStrip({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
-  const errors = useServiceErrorCount(project, service);
+  const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
 
-  const podList = pods.data?.pods ?? null;
-  const ready = podList?.filter((p) => p.ready).length ?? 0;
+  // Finished pods (old ReplicaSet, completed jobs) aren't instances.
+  const podList = pods.data?.pods?.filter((p) => p.phase !== "Succeeded" && p.phase !== "Failed") ?? null;
+  // Ready/desired from the env's rollup, the numbers the canvas and list
+  // show; a pod list mid-rollout still holds the old ReplicaSet's pods.
+  const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;
+  const hasRollup = typeof replicas?.desired === "number";
+  const ready = hasRollup ? (replicas?.ready ?? 0) : (podList?.filter((p) => p.ready).length ?? 0);
+  const total = hasRollup ? (replicas?.desired ?? 0) : (podList?.length ?? 0);
+  // Serving, but not on every replica: Degraded, never Live.
+  const status = headerStatus.tone === "success" && total > 0 && ready < total ? SERVICE_STATUS.degraded : headerStatus;
+  const httpService = !env || !!env.spec.host || (env.spec.additionalHosts?.length ?? 0) > 0;
   const restarts = podList?.reduce((n, p) => n + (p.restarts ?? 0), 0) ?? 0;
   const crashing = podList?.some((p) => /crashloop/i.test(p.reason ?? "")) ?? false;
   const deployedAt = lastDeployedAt(env);
@@ -54,14 +63,19 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status, on
       label: "Status",
       value: status.label,
       secondary:
-        podList && podList.length > 0
-          ? { text: `${ready}/${podList.length} ready`, tone: ready === podList.length ? "plain" : ready === 0 ? "danger" : "warning" }
+        total > 0
+          ? { text: `${ready}/${total} ready`, tone: ready === total ? "plain" : ready === 0 ? "danger" : "warning" }
           : undefined,
       tone: status.tone,
-      title: podList ? `${ready} of ${podList.length} instances ready` : status.label,
+      title: total > 0 ? `${ready} of ${total} instances ready` : status.label,
       tab: "deployments",
     },
-    uptimeCell(uptime.data?.enabled, pickUptime(uptime.data?.services ?? null, service, env, envGroup), uptime.error),
+    uptimeCell(
+      uptime.data?.enabled,
+      pickUptime(uptime.data?.services ?? null, service, env, envGroup),
+      uptime.error,
+      httpService,
+    ),
     {
       id: "restarts",
       label: "Restarts",
@@ -140,41 +154,53 @@ function pickUptime(list: UptimeServiceStatus[] | null, service: string, env: Ku
   return byName ?? (envGroup === "production" ? mine.find((s) => !s.env) : undefined);
 }
 
-function uptimeCell(enabled: boolean | undefined, s: UptimeServiceStatus | undefined, error: unknown): Cell {
-  const base = { id: "uptime", label: "Uptime", tab: "settings", anchor: "uptime" } as const;
+function uptimeCell(
+  enabled: boolean | undefined,
+  s: UptimeServiceStatus | undefined,
+  error: unknown,
+  httpService: boolean,
+): Cell {
+  const base = { id: "uptime", label: "Health check", tab: "settings", anchor: "uptime" } as const;
+  if (!httpService) {
+    return { ...base, value: "—", tone: "plain", title: "No HTTP port, so there's nothing for the health check to probe" };
+  }
   if (error instanceof ApiError && error.status === 404) {
-    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report uptime checks" };
+    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report health checks" };
   }
   if (enabled === false) {
-    return { ...base, value: "Checker off", tone: "neutral", title: "Uptime checks are switched off for this kuso instance" };
+    return { ...base, value: "Checker off", tone: "neutral", title: "Health checks are switched off for this kuso instance" };
   }
-  if (!s) {
-    return { ...base, value: "Not set up", tone: "neutral", title: "No uptime check for this environment. Set one up in Settings → Uptime." };
-  }
-  const checked = s.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
-  const stale = s.stale ? " (last known)" : "";
-  switch (s.state) {
+  const v = uptimeView(s);
+  const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
+  switch (v.state) {
+    case "not_set_up":
+      return { ...base, value: v.label, tone: "neutral", title: "No health check for this environment. Set one up in Settings → Uptime." };
     case "up":
       return {
         ...base,
-        value: `Up${s.latencyMs ? ` · ${s.latencyMs} ms` : ""}${stale}`,
+        value: v.label,
         tone: "success",
-        title: `${s.url} answered${s.statusCode ? ` HTTP ${s.statusCode}` : ""}, ${checked}`,
+        title: `${s?.url ?? ""} answered${s?.statusCode ? ` HTTP ${s.statusCode}` : ""}, ${checked}`,
       };
     case "failing":
-      return { ...base, value: `Failing${stale}`, tone: "warning", title: [s.reason || s.error, checked].filter(Boolean).join(" · ") };
+      return { ...base, value: v.label, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
     case "down":
       return {
         ...base,
-        value: `Down${s.since ? ` · ${relativeTime(s.since).replace(/ ago$/, "")}` : ""}${stale}`,
+        value: `${v.label}${s?.since ? ` · ${relativeTime(s.since).replace(/ ago$/, "")}` : ""}`,
         tone: "danger",
-        title: [s.reason || s.error, s.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked].filter(Boolean).join(" · "),
+        title: [s?.reason || s?.error, s?.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked]
+          .filter(Boolean)
+          .join(" · "),
       };
     case "paused":
-      return { ...base, value: "Paused", tone: "neutral", title: "Checks pause while the service sleeps or is stopped" };
-    case "pending":
-      return { ...base, value: "Waiting for first check", tone: "neutral", title: s.url };
+      return {
+        ...base,
+        value: v.label,
+        tone: "neutral",
+        title: s?.state === "disabled" ? "The health check for this service is disabled" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
+      };
     default:
-      return { ...base, value: "Off", tone: "neutral", title: "The uptime check for this service is disabled" };
+      return { ...base, value: v.label, tone: "neutral", title: s?.url ?? "" };
   }
 }

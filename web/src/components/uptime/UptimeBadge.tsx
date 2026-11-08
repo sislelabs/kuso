@@ -1,7 +1,7 @@
 "use client";
 
-import type { UptimeServiceStatus } from "@/features/uptime";
-import { relativeTime } from "@/lib/format";
+import { uptimeView, type UptimeServiceStatus } from "@/features/uptime";
+import { formatLatency, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TONE: Record<string, string> = {
@@ -11,11 +11,11 @@ const TONE: Record<string, string> = {
 };
 
 export function uptimeTitle(s: UptimeServiceStatus): string {
-  const parts = [`Uptime: ${s.state}${s.stale ? " (stale)" : ""}`];
+  const parts = [`Health check: ${uptimeView(s).label}`];
   if (s.url) parts.push(s.url);
   if (s.lastCheckedAt) parts.push(`checked ${relativeTime(s.lastCheckedAt)}`);
   if (s.statusCode) parts.push(`HTTP ${s.statusCode}`);
-  if (s.latencyMs) parts.push(`${s.latencyMs}ms`);
+  if (s.latencyMs) parts.push(formatLatency(s.latencyMs));
   if (s.since) parts.push(`failing since ${relativeTime(s.since)}`);
   if (s.reason) parts.push(s.reason);
   if (s.error) parts.push(s.error);
@@ -23,6 +23,7 @@ export function uptimeTitle(s: UptimeServiceStatus): string {
 }
 
 export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
+  const v = uptimeView(status);
   return (
     <span
       title={uptimeTitle(status)}
@@ -33,8 +34,7 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
       )}
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", status.state === "up" ? "bg-[var(--success)]" : status.state === "down" ? "bg-[var(--error)]" : "bg-[var(--warning)]")} />
-      {status.state === "up" ? "Uptime OK" : status.state === "down" ? "Down" : status.state === "failing" ? "Failing checks" : "Uptime unknown"}
-      {status.state === "up" && status.latencyMs ? ` · ${status.latencyMs}ms` : ""}
+      Health check {v.label}
     </span>
   );
 }

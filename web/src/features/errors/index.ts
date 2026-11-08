@@ -1,6 +1,7 @@
 export {
   ERRORS_WINDOW,
   errorCountLabel,
+  errorsEnvScope,
   summaryUnsupported,
   useProjectErrorCounts,
   useServiceErrorCount,

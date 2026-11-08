@@ -188,17 +188,37 @@ export function projectStatsLabel({ env, cpuMillicores, memBytes, pods, uptime }
     },
     {
       key: "pods",
-      value: `${pods} ${pods === 1 ? "pod" : "pods"}`,
+      value: `${pods} service ${pods === 1 ? "pod" : "pods"}`,
       title: `Pods of ${where} reporting metrics now. Addons and cron jobs excluded.`,
     },
   ];
   if (uptime && uptime.total > 0) {
     parts.push({
       key: "uptime",
-      value: `${uptime.up}/${uptime.total} uptime ${uptime.total === 1 ? "check" : "checks"} up`,
-      title: "Production uptime checks passing on their latest probe.",
+      value: `${uptime.up}/${uptime.total} health ${uptime.total === 1 ? "check" : "checks"} up`,
+      title: "Production health checks passing on their latest probe. Paused and not-yet-run checks aren't counted.",
     });
   }
   const text = [scope, ...parts.map((p) => (p.label ? `${p.label} ${p.value}` : p.value))].join(" · ");
   return { scope, parts, text };
+}
+
+// cronsForEnv: crons run against the production env (the server resolves
+// their image and env vars from "<service>-production"), so they belong
+// on the production view. A non-production group shows only crons
+// attached to a service cloned into that group.
+export function cronsForEnv<C extends { spec: { service?: string } }>(
+  crons: ReadonlyArray<C>,
+  services: ReadonlyArray<KusoService>,
+  envGroup: string,
+  project: string,
+): C[] {
+  if (envGroup === "production") return [...crons];
+  const groupServices = new Set<string>();
+  for (const s of services) {
+    if (s.metadata.labels?.[ENV_GROUP_LABEL] !== envGroup) continue;
+    groupServices.add(s.metadata.name);
+    groupServices.add(serviceShortName(project, s.metadata.name));
+  }
+  return crons.filter((c) => !!c.spec.service && groupServices.has(c.spec.service));
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { lastDeployedAt } from "@/features/projects/facts";
+import { cronsForEnv, lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { Check, Clock, Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
@@ -48,7 +48,7 @@ const RUNTIME_LABEL: Record<string, string> = {
 export function ProjectListView({ project, selectedEnv, services, addons, envs, onSelectService, onSelectAddon }: Props) {
   const latestBuilds = useLatestBuilds(project, selectedEnv);
   const crons = useProjectCrons(project);
-  const cronRows = crons.data ?? [];
+  const cronRows = cronsForEnv(crons.data ?? [], services, selectedEnv, project);
   const [editCron, setEditCron] = useState<string | null>(null);
 
   return (

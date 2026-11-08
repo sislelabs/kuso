@@ -4,6 +4,13 @@ import { api, ApiError } from "@/lib/api-client";
 import { errorsQueryKey, getProjectErrorSummary, listErrors, projectErrorSummaryQueryKey } from "@/features/services";
 import type { ProjectErrorSummary } from "@/features/services/api";
 
+// errorsEnvScope is the env filter for a view of one env-group:
+// production views count the whole project (the cache the project cards
+// share, and rows logged before env tagging), other groups only their own.
+export function errorsEnvScope(envGroup: string): string {
+  return envGroup && envGroup !== "production" ? envGroup : "";
+}
+
 // The product's one definition of "errors": occurrences of a service's
 // runtime error groups (build and release-hook output excluded server
 // side) over ERRORS_WINDOW. The canvas badge, project card chip, overlay
@@ -96,13 +103,14 @@ export function useProjectErrorCounts(
   project: string,
   services: readonly string[],
   since: string = ERRORS_WINDOW,
+  env = "",
 ): { counts: Record<string, ServiceErrorCount | undefined>; total: number | undefined } {
-  const summary = useQuery(summaryQuery(project, since, "", true));
+  const summary = useQuery(summaryQuery(project, since, env, true));
   const fallback = summaryUnsupported(summary.error);
   const lists = useQueries({
     queries: (fallback ? services : []).map((service) => ({
-      queryKey: errorsQueryKey(project, service, since, ""),
-      queryFn: () => listErrors(project, service, since),
+      queryKey: errorsQueryKey(project, service, since, env),
+      queryFn: () => listErrors(project, service, since, env || undefined),
       refetchInterval: 30_000,
       refetchIntervalInBackground: false,
     })),

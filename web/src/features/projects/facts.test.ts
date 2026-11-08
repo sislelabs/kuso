@@ -209,13 +209,13 @@ describe("projectStatsLabel", () => {
     });
     expect(r.scope).toBe("Production");
     expect(r.parts.map((p) => p.key)).toEqual(["cpu", "mem", "pods", "uptime"]);
-    expect(r.text).toBe("Production · 100 mCPU · Mem 390 MiB · 6 pods · 3/3 uptime checks up");
+    expect(r.text).toBe("Production · 100 mCPU · Mem 390 MiB · 6 service pods · 3/3 health checks up");
     expect(r.parts[0].title).toMatch(/production service.*Addons and cron jobs excluded/);
   });
 
   it("names a non-production group and drops empty uptime", () => {
     const r = projectStatsLabel({ env: "staging", cpuMillicores: 1500, memBytes: 0, pods: 1, uptime: { up: 0, total: 0 } });
-    expect(r.text).toBe("staging · 1.5 cores · Mem 0 MiB · 1 pod");
+    expect(r.text).toBe("staging · 1.5 cores · Mem 0 MiB · 1 service pod");
     expect(r.parts[2].title).toMatch(/every staging service/);
   });
 });

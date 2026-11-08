@@ -111,8 +111,9 @@ function UptimeSummary({ uptime }: { uptime: ReturnType<typeof useProjectUptime>
   }
   const services = uptime.data.services ?? [];
   if (!uptime.data.enabled) return <span className="text-[var(--text-tertiary)]">uptime checks off</span>;
-  if (services.length === 0) return null;
   const s = summarizeUptime(services);
+  // Only checks that are on and have a result count toward "N/M up".
+  if (s.checked === 0) return null;
   const bad = services.filter((x) => x.state === "down" || x.state === "failing");
   return (
     <span
@@ -126,7 +127,7 @@ function UptimeSummary({ uptime }: { uptime: ReturnType<typeof useProjectUptime>
         )}
       />
       <span className="tabular-nums">
-        {s.up}/{services.length} uptime {services.length === 1 ? "check" : "checks"} up
+        {s.up}/{s.checked} health {s.checked === 1 ? "check" : "checks"} up
       </span>
       {bad.length > 0 && (
         <span className={s.down > 0 ? "text-[var(--error)]" : "text-[var(--warning)]"}>

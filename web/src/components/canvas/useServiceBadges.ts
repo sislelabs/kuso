@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { KusoService } from "@/types/projects";
 import { useProjectVulns } from "@/features/vulns";
-import { useProjectErrorCounts } from "@/features/errors";
+import { ERRORS_WINDOW, errorsEnvScope, useProjectErrorCounts } from "@/features/errors";
 import { serviceShortName } from "@/lib/utils";
 import { canvasVulnSummaries } from "./badgeSummary";
 
@@ -24,6 +24,6 @@ export function useServiceBadges(project: string, selectedEnv: string, services:
     () => services.map((s) => serviceShortName(project, s.metadata.name)),
     [services, project],
   );
-  const { counts: errorSummaries } = useProjectErrorCounts(project, serviceShorts);
+  const { counts: errorSummaries } = useProjectErrorCounts(project, serviceShorts, ERRORS_WINDOW, errorsEnvScope(selectedEnv));
   return { vulnSummaries, errorSummaries };
 }
