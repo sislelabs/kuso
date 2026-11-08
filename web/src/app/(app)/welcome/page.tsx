@@ -60,12 +60,12 @@ export default function WelcomePage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl p-6 lg:p-8">
+    <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:p-8">
       <header className="mb-8">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Welcome to kuso</h1>
         <p className="mt-2 text-sm text-[var(--text-secondary)]">
-          Three steps from here to a running service. You can leave the wizard at any time —{" "}
-          <Link href="/projects" className="text-[var(--accent)] hover:underline">
+          Three steps from here to a running service. Leave whenever you like:{" "}
+          <Link href="/projects" className="text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--accent)]">
             skip to the dashboard
           </Link>
           .
@@ -74,7 +74,7 @@ export default function WelcomePage() {
 
       <Stepper current={step} hasGitHub={hasGitHub} />
 
-      <div className="mt-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-6">
+      <div className="mt-6 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 sm:p-6">
         {step === 1 && (
           <Step1InstallGitHub
             installCount={installCount}
@@ -99,7 +99,7 @@ export default function WelcomePage() {
         {step === 3 && <Step3Deploy project={project} />}
       </div>
 
-      <p className="mt-4 text-center text-[10px] text-[var(--text-tertiary)]">
+      <p className="mt-4 text-center text-[13px] text-[var(--text-secondary)]">
         Already migrating from Coolify? <Link href="/settings/import" className="text-[var(--accent)] hover:underline">Import from there</Link> instead.
       </p>
     </div>
@@ -113,31 +113,31 @@ function Stepper({ current, hasGitHub }: { current: Step; hasGitHub: boolean }) 
     { id: 3 as Step, label: "Deploy", done: false },
   ];
   return (
-    <ol className="flex items-center gap-2">
+    <ol aria-label="Progress" className="flex flex-wrap items-center gap-x-2 gap-y-2">
       {steps.map((s, i) => (
-        <li key={s.id} className="flex items-center gap-2">
+        <li key={s.id} className="flex items-center gap-2" aria-current={s.id === current ? "step" : undefined}>
           <span
             className={cn(
-              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-mono",
+              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
               s.done
-                ? "border-emerald-500/40 bg-emerald-500/10 text-[var(--success)]"
+                ? "border-[var(--success)]/40 bg-[var(--success-subtle)] text-[var(--success)]"
                 : s.id === current
                   ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--accent)]"
                   : "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
             )}
           >
-            {s.done ? <CheckCircle2 className="h-3 w-3" /> : s.id}
+            {s.done ? <CheckCircle2 className="h-3.5 w-3.5" aria-label="done" /> : s.id}
           </span>
           <span
             className={cn(
-              "font-mono text-[11px]",
-              s.id === current ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]"
+              "text-[13px]",
+              s.id === current ? "font-medium text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
             )}
           >
             {s.label}
           </span>
           {i < steps.length - 1 && (
-            <ArrowRight className="h-3 w-3 mx-1 text-[var(--text-tertiary)]" />
+            <ArrowRight aria-hidden className="mx-1 h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           )}
         </li>
       ))}
@@ -167,8 +167,8 @@ function Step1InstallGitHub({
       <div className="flex items-start gap-3">
         <Github className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold tracking-tight">Install the kuso GitHub App</h2>
-          <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+          <h2 className="text-base font-semibold tracking-tight">Install the kuso GitHub App</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">
             kuso needs read access to your repos to clone them at build time and
             write commit statuses back. The app is installed on a per-org basis
             — pick the orgs/repos you want kuso to see; you can change this
@@ -183,8 +183,8 @@ function Step1InstallGitHub({
           <QueryErrorState what="GitHub repos" error={error} onRetry={onCheckAgain} className="w-full" />
         ) : ready ? (
           <>
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 font-mono text-[11px] text-[var(--success)]">
-              <CheckCircle2 className="h-3 w-3" />
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-[var(--success-subtle)] px-2 py-1 text-xs font-medium text-[var(--success)]">
+              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
               {installCount} installation{installCount === 1 ? "" : "s"} found
             </span>
             <Button onClick={onContinue} size="sm">
@@ -214,29 +214,29 @@ function Step1InstallGitHub({
               // change). Plus a mailto fallback so a user on a fresh
               // install can ping the admin without leaving the page.
               <div className="space-y-2">
-                <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
-                  GitHub App requires an admin. Two paths forward:
+                <p className="text-[13px] text-[var(--text-secondary)]">
+                  Installing the GitHub App needs an admin. Two ways forward:
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <Link
                     href="/projects/new"
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/80 hover:text-[var(--text-primary)]"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/80"
                   >
                     Deploy a pre-built image →
                   </Link>
                   <a
                     href="mailto:?subject=kuso GitHub App install request&body=Hi%20%E2%80%94%20I%27d%20like%20to%20deploy%20a%20service%20on%20our%20kuso%20instance%20but%20the%20GitHub%20App%20isn%27t%20installed%20yet.%20Could%20you%20configure%20it%20at%20%2Fsettings%2Fgithub%3F%20Thanks!"
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-2 font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-3 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                   >
                     Email an admin
                   </a>
                 </div>
               </div>
             ) : (
-              <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
-                GitHub App not configured yet —{" "}
+              <span className="text-[13px] text-[var(--text-secondary)]">
+                The GitHub App isn&apos;t configured yet.{" "}
                 <Link href="/settings/github" className="text-[var(--accent)] hover:underline">
-                  configure it
+                  Configure it
                 </Link>{" "}
                 first.
               </span>
@@ -299,10 +299,10 @@ function Step2PickRepo({
         <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/welcome?step=1"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
           >
-            <ArrowRight className="h-3 w-3 rotate-180" />
-            Back to Step 1
+            <ArrowRight className="h-3 w-3 rotate-180" aria-hidden />
+            Back to step 1
           </Link>
           <Link
             href="/projects/new"
@@ -347,16 +347,16 @@ function Step2PickRepo({
 
   return (
     <div>
-      <h2 className="text-sm font-semibold tracking-tight">Pick a repo to start with</h2>
-      <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+      <h2 className="text-base font-semibold tracking-tight">Pick a repo to start with</h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">
         We&apos;ll create a project named after the repo. You can add more
         services + repos to it from the canvas.
       </p>
 
       {installations.length > 1 && (
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            Org
+          <span className="text-xs text-[var(--text-secondary)]">
+            Account
           </span>
           {installations.map((inst) => (
             <button
@@ -364,7 +364,7 @@ function Step2PickRepo({
               type="button"
               onClick={() => onPickInstall(inst.id)}
               className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px]",
+                "inline-flex h-8 items-center gap-1.5 rounded-md border px-3 font-mono text-xs",
                 installID === inst.id
                   ? "border-[var(--accent)]/50 bg-[var(--accent-subtle)] text-[var(--accent)]"
                   : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
@@ -383,14 +383,14 @@ function Step2PickRepo({
               type="button"
               onClick={() => onPick(r)}
               disabled={busyRepo !== null}
-              className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-[12px] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+              className="flex w-full items-center justify-between gap-3 rounded px-3 py-2.5 text-left text-[13px] outline-none hover:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-50"
             >
-              <span className="flex items-center gap-2">
-                <Github className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
-                <span className="font-mono">{r.fullName}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                <Github className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                <span className="truncate font-mono">{r.fullName}</span>
               </span>
               {busyRepo === r.fullName ? (
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">creating…</span>
+                <span className="shrink-0 text-xs text-[var(--text-tertiary)]">Creating…</span>
               ) : (
                 <ArrowDown className="h-3 w-3 -rotate-90 text-[var(--text-tertiary)]" />
               )}
@@ -399,8 +399,8 @@ function Step2PickRepo({
         ))}
       </ul>
 
-      <p className="mt-3 font-mono text-[10px] text-[var(--text-tertiary)]">
-        or{" "}
+      <p className="mt-3 text-[13px] text-[var(--text-secondary)]">
+        Or{" "}
         <Link href="/projects/new" className="text-[var(--accent)] hover:underline">
           start a project without a repo
         </Link>{" "}
@@ -447,10 +447,10 @@ function Step3Deploy({ project }: { project: string }) {
       <div className="flex items-start gap-3">
         <CheckCircle2 className="mt-1 h-5 w-5 text-[var(--success)]" />
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold tracking-tight">
+          <h2 className="text-base font-semibold tracking-tight">
             Project <span className="font-mono">{project}</span> created
           </h2>
-          <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+          <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">
             One more click. Pick the part of the repo to deploy first
             — kuso will detect the runtime (Dockerfile / nixpacks /
             buildpacks / static) and start a build immediately.
@@ -462,10 +462,10 @@ function Step3Deploy({ project }: { project: string }) {
         <div className="flex items-start gap-3">
           <Rocket className="mt-0.5 h-4 w-4 text-[var(--accent)]" />
           <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-medium text-[var(--text-primary)]">
+            <div className="text-sm font-medium text-[var(--text-primary)]">
               Deploy your first service
             </div>
-            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+            <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
               The first build typically finishes in 60–90s. While it
               runs, you can configure env vars, attach a Postgres
               addon, or wire a custom domain.
@@ -480,7 +480,7 @@ function Step3Deploy({ project }: { project: string }) {
               </Link>
               <Link
                 href={projectPath}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
               >
                 Open project canvas
               </Link>
@@ -489,9 +489,9 @@ function Step3Deploy({ project }: { project: string }) {
         </div>
       </div>
 
-      <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="mt-4 text-[13px] text-[var(--text-secondary)]">
         Tip: each service gets its own URL, e.g. a service named web is served at{" "}
-        <code>{exampleHost}</code>. Bring your own domain under <Link href={`${projectPath}/settings`} className="text-[var(--accent)] hover:underline">project settings</Link>.
+        <code className="font-mono text-xs">{exampleHost}</code>. Bring your own domain under <Link href={`${projectPath}/settings`} className="text-[var(--accent)] hover:underline">project settings</Link>.
       </p>
     </div>
   );
