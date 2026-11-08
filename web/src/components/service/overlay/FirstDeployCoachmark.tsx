@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -81,13 +82,9 @@ export function FirstDeployCoachmark({ shouldShow }: Props) {
               — autoscaling, sleep-when-idle, memory + CPU requests.
             </li>
           </ol>
-          <button
-            type="button"
-            onClick={dismiss}
-            className="mt-3 inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-[12px] font-medium text-[var(--btn-primary-fg)] transition-colors hover:bg-[var(--btn-primary-bg-hover)]"
-          >
+          <Button size="sm" className="mt-3" onClick={dismiss}>
             Got it
-          </button>
+          </Button>
         </div>
         <button
           type="button"

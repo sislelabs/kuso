@@ -7,7 +7,7 @@ import { useInstallURL, useGithubRepos, type GithubRepoRef } from "@/features/gi
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useCreateProject, useProjects } from "@/features/projects";
 import { projectSlugFromRepo } from "@/features/projects/names";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -199,7 +199,7 @@ function Step1InstallGitHub({
                 href={installURL.data.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+                className={buttonVariants({ size: "sm" })}
               >
                 <Github className="h-3.5 w-3.5" />
                 Install on GitHub
@@ -220,7 +220,7 @@ function Step1InstallGitHub({
                 <div className="flex flex-wrap items-center gap-2">
                   <Link
                     href="/projects/new"
-                    className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/80"
+                    className={buttonVariants({ variant: "secondary", size: "sm" })}
                   >
                     Deploy a pre-built image →
                   </Link>
@@ -299,14 +299,14 @@ function Step2PickRepo({
         <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/welcome?step=1"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
           >
             <ArrowRight className="h-3 w-3 rotate-180" aria-hidden />
             Back to step 1
           </Link>
           <Link
             href="/projects/new"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+            className={buttonVariants({ size: "sm" })}
           >
             Start without a repo
             <ArrowRight className="h-3 w-3" />
@@ -473,14 +473,14 @@ function Step3Deploy({ project }: { project: string }) {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Link
                 href={addServicePath}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+                className={buttonVariants({ size: "sm" })}
               >
                 Add service
                 <ArrowRight className="h-3 w-3" />
               </Link>
               <Link
                 href={projectPath}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                className={buttonVariants({ variant: "secondary", size: "sm" })}
               >
                 Open project canvas
               </Link>

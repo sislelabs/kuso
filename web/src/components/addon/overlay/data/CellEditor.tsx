@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import type { SQLColumn, SQLCellValue } from "@/features/projects";
@@ -143,20 +144,12 @@ export function CellEditor({
       </div>
       {err && <span className="px-1 text-xs text-[var(--error)]">{err}</span>}
       <div className="flex justify-end gap-1">
-        <button
-          type="button"
-          onClick={cancel}
-          className="rounded px-1.5 py-0.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)]"
-        >
-          esc
-        </button>
-        <button
-          type="button"
-          onClick={commit}
-          className="rounded bg-[var(--accent)]/20 px-1.5 py-0.5 text-xs text-[var(--accent)] hover:bg-[var(--accent)]/30"
-        >
-          save
-        </button>
+        <Button size="xs" variant="ghost" onClick={cancel} title="Cancel (Esc)">
+          Cancel
+        </Button>
+        <Button size="xs" onClick={commit} title="Save (Enter)">
+          Save
+        </Button>
       </div>
     </div>
   );
