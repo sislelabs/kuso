@@ -23,6 +23,9 @@ export function getSamples(env: string): ResourceSample[] {
 // reference only when something was added).
 export function recordSample(env: string, pods: PodMetric[], now: number): ResourceSample[] {
   const prev = store.get(env) ?? [];
+  // No replicas reporting is missing data, not 0 CPU / 0 bytes: leave a
+  // gap (and let a stopped service show its empty state).
+  if (pods.length === 0) return prev;
   const stamp = pods.map((p) => Date.parse(p.timestamp ?? "")).filter((n) => !Number.isNaN(n));
   const t = stamp.length ? Math.max(...stamp) : now;
   // metrics-server refreshes every ~15s; a repeat timestamp is the same sample.

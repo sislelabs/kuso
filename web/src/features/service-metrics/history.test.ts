@@ -17,6 +17,11 @@ describe("recordSample", () => {
     expect(getSamples("e")).toHaveLength(2);
     expect(getSamples("other")).toEqual([]);
   });
+
+  it("records no sample while no replica reports, so the chart shows a gap", () => {
+    expect(recordSample("e", [], 1000)).toEqual([]);
+    expect(getSamples("e")).toEqual([]);
+  });
 });
 
 describe("mergeSamples", () => {
