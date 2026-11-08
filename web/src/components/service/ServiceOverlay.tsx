@@ -62,6 +62,7 @@ import { FailureBanner } from "./overlay/FailureBanner";
 import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
+import { ServiceHealthStrip } from "./overlay/ServiceHealthStrip";
 import { ExternalLink, X, Pencil } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
@@ -726,6 +727,9 @@ export function ServiceOverlay({
                     <span className="text-[var(--text-tertiary)]">No public URL yet</span>
                   )}
                 </div>
+                {service ? (
+                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[OVERLAY_STATUS[status] ?? "unknown"]} onNavigate={navigateTo} />
+                ) : null}
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5 empty:hidden">
                   {/* Diagnostic chip. The "rolling out" state lives
                       on StatusDot now — this chip exists purely for

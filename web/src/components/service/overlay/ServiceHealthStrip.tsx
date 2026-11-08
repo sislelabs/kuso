@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { StatusDot } from "@/components/ui/status-pill";
 import { errorCountLabel, useServiceErrorCount } from "@/features/errors";
 import { useServicePods } from "@/features/pods";
-import { lastDeployAt, useLatestBuilds } from "@/features/services";
+import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
 
@@ -41,13 +41,12 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status, on
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
   const errors = useServiceErrorCount(project, service);
-  const latest = useLatestBuilds(project, envGroup);
 
   const podList = pods.data?.pods ?? null;
   const ready = podList?.filter((p) => p.ready).length ?? 0;
   const restarts = podList?.reduce((n, p) => n + (p.restarts ?? 0), 0) ?? 0;
   const crashing = podList?.some((p) => /crashloop/i.test(p.reason ?? "")) ?? false;
-  const deployedAt = lastDeployAt(env, latest.data?.[service]);
+  const deployedAt = lastDeployedAt(env);
 
   const cells: Cell[] = [
     {

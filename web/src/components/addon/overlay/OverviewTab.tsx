@@ -481,7 +481,7 @@ function HealthStrip({
       ),
       d: health.detail,
     },
-    { k: "Version", v: cr?.spec.version || "Chart default", d: kind },
+    { k: "Version", v: cr?.spec.version || health.runningVersion || "Chart default", d: kind },
     {
       k: "Size",
       v: <span className="capitalize">{tier}</span>,
