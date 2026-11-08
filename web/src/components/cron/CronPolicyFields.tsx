@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CONCURRENCY_POLICIES, type CronOnFailureForm, type CronPolicy } from "./cronPatch";
 
-const labelClass = "font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
+const labelClass = "text-xs font-medium text-[var(--text-tertiary)]";
 
 const CONCURRENCY_HINT: Record<string, string> = {
   Forbid: "skip a run while the previous one is still going",
@@ -34,7 +34,7 @@ export function CronPolicyFields({
                 aria-pressed={current === p}
                 onClick={() => onChange({ ...value, concurrencyPolicy: p })}
                 className={cn(
-                  "rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors",
+                  "rounded px-1.5 py-0.5 font-mono text-xs transition-colors",
                   current === p
                     ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                     : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
@@ -44,7 +44,7 @@ export function CronPolicyFields({
               </button>
             ))}
           </div>
-          <span className="text-[10px] text-[var(--text-tertiary)]">{CONCURRENCY_HINT[current]}</span>
+          <span className="text-xs text-[var(--text-tertiary)]">{CONCURRENCY_HINT[current]}</span>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -71,7 +71,7 @@ export function CronPolicyFields({
           />
         </label>
       </div>
-      <p className="text-[10px] text-[var(--text-tertiary)]">
+      <p className="text-xs text-[var(--text-tertiary)]">
         Timeout kills a run that takes longer. The missed-run window is how late a run may
         still start after the schedule slipped (e.g. during an outage).
       </p>
@@ -125,7 +125,7 @@ export function CronOnFailureFields({
           </label>
         </div>
       )}
-      <p className="text-[10px] text-[var(--text-tertiary)]">
+      <p className="text-xs text-[var(--text-tertiary)]">
         POSTed when a run fails. Optional HMAC signing key from {project}-shared or an addon&apos;s
         connection secret. Clear the URL to remove the webhook.
       </p>

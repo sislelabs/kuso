@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { AddonPodsSection } from "./AddonPodsSection";
+import { useAddonPods } from "@/features/pods";
+import { CopyButton } from "@/components/shared/s2-CopyButton";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
 // helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
@@ -56,20 +58,7 @@ export function OverviewTab({
   const tier = cr?.spec.size ?? "small";
   return (
     <div className="space-y-4 p-5">
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <Row label="kind" value={kind || "—"} />
-        <Row label="name" value={addon} />
-        <Row
-          label="storage"
-          value={
-            <span className="font-mono text-[12px] text-[var(--text-secondary)]">
-              {storageSize}
-              <span className="ml-2 text-[var(--text-tertiary)]">· tier {tier}</span>
-            </span>
-          }
-          last
-        />
-      </section>
+      <HealthStrip project={project} addon={addon} kind={kind} cr={cr} storageSize={storageSize} tier={tier} />
 
       <UsedBy
         project={project}
@@ -84,24 +73,22 @@ export function OverviewTab({
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-          <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            Connection
-          </h3>
+          <h3 className="text-sm font-medium text-[var(--text-primary)]">Connection</h3>
           <PublicAccessBadge publicTCP={cr?.spec.publicTCP} />
         </header>
         {!canReadSecrets ? (
-          <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">
-            only project admins can view connection details.
+          <p className="px-3 py-3 text-xs text-[var(--text-secondary)]">
+            Only project admins can view connection details.
           </p>
         ) : conn.isPending ? (
           <LoadingState kind="inline" className="px-3 py-3" />
         ) : conn.isError ? (
-          <p className="px-3 py-3 font-mono text-[11px] text-[var(--warning)]">
+          <p className="px-3 py-3 text-xs text-[var(--warning)]">
             {conn.error instanceof Error ? conn.error.message : "load failed"}
           </p>
         ) : Object.keys(conn.data?.values ?? {}).length === 0 ? (
-          <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">
-            connection details are still being generated…
+          <p className="px-3 py-3 text-xs text-[var(--text-secondary)]">
+            Connection details are still being generated…
           </p>
         ) : (
           <ConnectionRows values={conn.data!.values} publicTCP={cr?.spec.publicTCP} />
@@ -151,13 +138,11 @@ function UsedBy({ project, addon, group }: { project: string; addon: string; gro
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <div className="flex items-start justify-between gap-3 px-3 py-2">
-        <span className="pt-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          used by
-        </span>
+        <span className="pt-1 text-sm font-medium text-[var(--text-primary)]">Used by</span>
         {services.isPending || group === undefined ? (
           <LoadingState kind="inline" />
         ) : names.length === 0 ? (
-          <span className="font-mono text-[11px] text-[var(--text-tertiary)]">no services yet</span>
+          <span className="text-xs text-[var(--text-secondary)]">No services in this environment yet</span>
         ) : (
           <div className="flex flex-wrap justify-end gap-1">
             {names.map((svc, i) => {
@@ -264,6 +249,12 @@ function ConnectionRows({
     }
   })();
 
+  // The chart always emits POOLER_* keys; with the pooler off they are
+  // empty, which read as broken values. Fold them into one explanatory row.
+  const poolerKeys = keys.filter((k) => /^POOLER_/.test(k));
+  const poolerOff = poolerKeys.length > 0 && poolerKeys.every((k) => (values[k] ?? "").trim() === "");
+  const shownKeys = poolerOff ? keys.filter((k) => !poolerKeys.includes(k)) : keys;
+
   const onCopy = async (k: string, v: string) => {
     try {
       await navigator.clipboard.writeText(v);
@@ -288,36 +279,39 @@ function ConnectionRows({
     last?: boolean;
     accent?: boolean;
   }) => {
+    const empty = v.trim() === "";
     const visible = !sensitive || !!shown[k];
     return (
       <li
         className={cn(
           "px-3 py-2",
           !last && "border-b border-[var(--border-subtle)]",
-          accent && "bg-amber-500/[0.04]",
+          accent && "bg-[var(--warning-subtle)]",
         )}
       >
         <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
           <span
-            className={cn(
-              "truncate font-mono text-[10px] uppercase tracking-widest",
-              accent ? "text-amber-300/90" : "text-[var(--text-tertiary)]",
-            )}
+            className={cn("truncate font-mono text-xs", accent ? "text-[var(--warning)]" : "text-[var(--text-secondary)]")}
+            title={k}
           >
             {k}
           </span>
-          <span
-            className={cn(
-              "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]",
-              visible
-                ? "text-[var(--text-secondary)]"
-                : "text-[var(--text-tertiary)] tracking-widest",
-            )}
-            title={visible ? v : "click eye to reveal"}
-          >
-            {visible ? v : "•".repeat(Math.min(v.length, 24))}
-          </span>
-          <div className="flex items-center gap-0.5">
+          {empty ? (
+            <span className="truncate px-2 py-1 text-xs italic text-[var(--text-tertiary)]">
+              Not set
+            </span>
+          ) : (
+            <span
+              className={cn(
+                "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs",
+                visible ? "text-[var(--text-primary)]" : "tracking-widest text-[var(--text-tertiary)]",
+              )}
+              title={visible ? v : "Hidden. Use the eye button to reveal."}
+            >
+              {visible ? v : "•".repeat(Math.min(v.length, 24))}
+            </span>
+          )}
+          <div className={cn("flex items-center gap-0.5", empty && "invisible")}>
             {sensitive && (
               <Button
                 type="button"
@@ -337,7 +331,7 @@ function ConnectionRows({
               onClick={() => onCopy(k, v)}
             >
               {copied === k ? (
-                <Check className="h-3 w-3 text-emerald-500" />
+                <Check className="h-3 w-3 text-[var(--success)]" />
               ) : (
                 <Copy className="h-3 w-3" />
               )}
@@ -354,40 +348,24 @@ function ConnectionRows({
       {publicUrl && (
         <FieldRow k="PUBLIC_URL" v={publicUrl} sensitive accent />
       )}
-      {keys.map((k, i) => (
+      {shownKeys.map((k, i) => (
         <FieldRow
           key={k}
           k={k}
           v={values[k]}
           sensitive={isSensitive(k)}
-          last={i === keys.length - 1}
+          last={i === shownKeys.length - 1 && !poolerOff}
         />
       ))}
+      {poolerOff && (
+        <li className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] items-center gap-2 px-3 py-2 sm:grid-cols-[180px_minmax(0,1fr)]">
+          <span className="font-mono text-xs text-[var(--text-secondary)]">POOLER_*</span>
+          <span className="text-xs text-[var(--text-tertiary)]">
+            Connection pooler not enabled. Turn on PgBouncer in Settings to get pooled URLs.
+          </span>
+        </li>
+      )}
     </ul>
-  );
-}
-
-function Row({
-  label,
-  value,
-  last,
-}: {
-  label: string;
-  value: React.ReactNode;
-  last?: boolean;
-}) {
-  return (
-    <div
-      className={
-        "flex items-center justify-between gap-3 px-3 py-2" +
-        (!last ? " border-b border-[var(--border-subtle)]" : "")
-      }
-    >
-      <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {label}
-      </span>
-      <span className="font-mono text-[12px] text-[var(--text-secondary)]">{value}</span>
-    </div>
   );
 }
 
@@ -406,14 +384,110 @@ function PublicAccessBadge({
     !!publicTCP.enabled && typeof publicTCP.port === "number" && publicTCP.port > 0;
   if (!enabled) {
     return (
-      <span className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-        internal only
+      <span className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]">
+        Internal only
       </span>
     );
   }
   return (
-    <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
-      public · :{publicTCP.port}
+    <span className="rounded border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-1.5 py-0.5 text-xs text-[var(--warning)]">
+      Public · port {publicTCP.port}
     </span>
   );
+}
+
+// HealthStrip is the at-a-glance row: is it up, what version, how big,
+// and is it backed up.
+function HealthStrip({
+  project,
+  addon,
+  kind,
+  cr,
+  storageSize,
+  tier,
+}: {
+  project: string;
+  addon: string;
+  kind: string;
+  cr?: import("@/types/projects").KusoAddon;
+  storageSize: string;
+  tier: string;
+}) {
+  const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
+  const pods = useAddonPods(project, external ? "" : addon);
+  const list = pods.data?.pods ?? [];
+  const ready = list.filter((p) => p.ready).length;
+  const restarts = list.reduce((n, p) => n + (p.restarts ?? 0), 0);
+  const status: { label: string; detail?: string; tone: string } = external
+    ? { label: "External", detail: "Managed outside kuso", tone: "bg-[var(--info)]" }
+    : pods.isPending
+      ? { label: "Checking…", tone: "bg-[var(--text-tertiary)]" }
+      : pods.isError
+        ? { label: "Unknown", detail: "Couldn't read pods", tone: "bg-[var(--text-tertiary)]" }
+        : list.length === 0
+          ? { label: "Down", detail: "No pods running", tone: "bg-[var(--error)]" }
+          : ready === list.length
+            ? { label: "Healthy", detail: `${ready}/${list.length} pods ready${restarts ? ` · ${restarts} restarts` : ""}`, tone: "bg-[var(--success)]" }
+            : { label: "Degraded", detail: `${ready}/${list.length} pods ready`, tone: "bg-[var(--warning)]" };
+  const schedule = cr?.spec.backup?.schedule;
+  const backups =
+    kind !== "postgres"
+      ? { label: "Not available", detail: `No managed backups for ${kind || "this kind"}` }
+      : schedule
+        ? {
+            label: describeCron(schedule),
+            detail: cr?.spec.backup?.retentionDays ? `Kept ${cr.spec.backup.retentionDays} days` : "Kept forever",
+          }
+        : { label: "Off", detail: "No backup schedule" };
+  const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode }[] = [
+    {
+      k: "Status",
+      v: (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className={cn("h-2 w-2 rounded-full", status.tone)} />
+          {status.label}
+        </span>
+      ),
+      d: status.detail,
+    },
+    { k: "Version", v: cr?.spec.version || "Chart default", d: kind },
+    {
+      k: "Size",
+      v: <span className="capitalize">{tier}</span>,
+      d: `${storageSize} disk${cr?.spec.ha ? " · HA" : ""}`,
+    },
+    { k: "Backups", v: backups.label, d: backups.detail },
+  ];
+  return (
+    <section aria-label="Addon health" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] sm:grid-cols-4">
+      {tiles.map((t) => (
+        <div key={t.k} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
+          <div className="text-xs text-[var(--text-secondary)]">{t.k}</div>
+          <div className="mt-0.5 truncate text-sm font-medium text-[var(--text-primary)]">{t.v}</div>
+          {t.d && <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{t.d}</div>}
+        </div>
+      ))}
+      <div className="col-span-2 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:col-span-4">
+        <span>Name</span>
+        <span className="font-mono text-[var(--text-primary)]">{addon}</span>
+        <CopyButton value={addon} what="Addon name" size="xs" />
+      </div>
+    </section>
+  );
+}
+
+// describeCron turns the common backup schedules into words; anything
+// unusual falls back to the raw expression.
+function describeCron(expr: string): string {
+  const f = expr.trim().split(/\s+/);
+  if (f.length !== 5) return expr;
+  const [min, hour, dom, mon, dow] = f;
+  const at = /^\d+$/.test(min) && /^\d+$/.test(hour) ? ` at ${hour.padStart(2, "0")}:${min.padStart(2, "0")}` : "";
+  if (dom === "*" && mon === "*" && dow === "*" && at) return `Daily${at}`;
+  if (dom === "*" && mon === "*" && /^\d$/.test(dow) && at) {
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return `Weekly, ${days[Number(dow) % 7]}${at}`;
+  }
+  if (/^\*\/\d+$/.test(hour) && dom === "*" && /^\d+$/.test(min)) return `Every ${hour.slice(2)}h`;
+  return expr;
 }

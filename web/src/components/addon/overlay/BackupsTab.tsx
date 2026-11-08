@@ -153,9 +153,9 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
           <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
           <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
         </div>
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+        <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
           {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
-          <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="mt-2 font-mono text-xs text-[var(--text-tertiary)]">
             {noS3 ? (
               <>
                 S3 credentials live in{" "}
@@ -200,7 +200,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
       <header className="mb-3 flex items-center justify-between gap-3">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
         <div className="flex items-center gap-3">
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <span className="font-mono text-xs text-[var(--text-tertiary)]">
             {items.length} {items.length === 1 ? "object" : "objects"} · auto-refresh 30s
           </span>
           <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
@@ -215,7 +215,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
         </div>
       )}
       {items.length >= BACKUP_LIST_CAP && (
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <p className="font-mono text-xs text-[var(--text-tertiary)]">
           Showing the newest {BACKUP_LIST_CAP} objects; older backups are in the bucket but not listed.
         </p>
       )}
@@ -229,7 +229,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
               <div className="truncate font-mono text-[12px] text-[var(--text-secondary)]">
                 {tail(b.key)}
               </div>
-              <div className="mt-0.5 flex items-center gap-3 font-mono text-[10px] text-[var(--text-tertiary)]">
+              <div className="mt-0.5 flex items-center gap-3 font-mono text-xs text-[var(--text-tertiary)]">
                 <span>{formatBytes(b.size)}</span>
                 <span>·</span>
                 <span title={b.when}>{b.when ? relativeTime(b.when) : "—"}</span>
@@ -239,11 +239,12 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
               size="sm"
               variant="outline"
               disabled={restore.isPending || !canWrite}
-              title={canWrite ? undefined : "Requires editor access on this project"}
+              title={canWrite ? "Overwrite the database with this backup" : "Requires editor access on this project"}
               onClick={() => setConfirmKey(b.key)}
+              className="border-[var(--error)]/40 text-[var(--error)] hover:border-[var(--error)]/70 hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
             >
               <RotateCcw className="h-3 w-3" />
-              Restore
+              Restore…
             </Button>
           </li>
         ))}
@@ -404,7 +405,7 @@ function BackupScheduleEditor({
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
       <header className="mb-3 flex items-center justify-between">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Schedule</h3>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="font-mono text-xs text-[var(--text-tertiary)]">
           {enabled ? "active" : "disabled"}
         </span>
       </header>
@@ -433,14 +434,14 @@ function BackupScheduleEditor({
             <CronPicker value={schedule} onChange={setSchedule} />
           )}
           {!scheduleValid && (
-            <p className="font-mono text-[10px] text-red-400">
+            <p className="font-mono text-xs text-[var(--error)]">
               Custom cron must be 5 fields (e.g. <code>0 3 * * *</code>).
             </p>
           )}
         </div>
 
         <div className="space-y-1">
-          <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          <label className="block text-xs font-medium text-[var(--text-tertiary)]">
             Retention (days)
           </label>
           <Input
@@ -451,10 +452,10 @@ function BackupScheduleEditor({
             onChange={(e) => setRetention(e.target.value)}
             className={cn(
               "h-8 w-24 font-mono text-[12px]",
-              !retentionValid && "border-red-500/60",
+              !retentionValid && "border-[var(--error)]/60",
             )}
           />
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="font-mono text-xs text-[var(--text-tertiary)]">
             {retentionNum === 0
               ? "Keep forever (no automatic prune)."
               : `Backups older than ${retentionNum}d are deleted from S3.`}

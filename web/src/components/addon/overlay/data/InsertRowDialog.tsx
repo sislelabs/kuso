@@ -109,14 +109,14 @@ export function InsertRowDialog({
                 <div key={c.name} className="grid grid-cols-[140px_1fr] items-start gap-2">
                   <label className="pt-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
                     {c.name}
-                    <span className="block text-[9px] text-[var(--text-tertiary)]">
+                    <span className="block text-xs text-[var(--text-tertiary)]">
                       {c.dataType}
                       {c.default ? " · has default" : c.nullable ? " · nullable" : " · required"}
                     </span>
                   </label>
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1">
-                      <label className="flex items-center gap-1 font-mono text-[9px] text-[var(--text-tertiary)]">
+                      <label className="flex items-center gap-1 font-mono text-xs text-[var(--text-tertiary)]">
                         <input
                           type="checkbox"
                           checked={fs.omit}
@@ -128,7 +128,7 @@ export function InsertRowDialog({
                         <button
                           type="button"
                           onClick={() => set(c.name, { isNull: !fs.isNull })}
-                          className={`rounded px-1 text-[9px] ${
+                          className={`rounded px-1 text-xs ${
                             fs.isNull
                               ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
                               : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]"
@@ -170,7 +170,7 @@ export function InsertRowDialog({
                         />
                       ))}
                     {errs[c.name] && (
-                      <span className="text-[9px] text-[var(--error)]">{errs[c.name]}</span>
+                      <span className="text-xs text-[var(--error)]">{errs[c.name]}</span>
                     )}
                   </div>
                 </div>

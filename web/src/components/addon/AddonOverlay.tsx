@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { X, Database, HardDrive, Settings, Info, ExternalLink, ShieldAlert } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -18,6 +17,8 @@ import { BackupsTab } from "./overlay/BackupsTab";
 import { SQLTab } from "./overlay/SQLTab";
 import { SettingsTab } from "./overlay/SettingsTab";
 import { VulnerabilitiesTab } from "./overlay/VulnerabilitiesTab";
+import { OverlayTabs, type OverlayTabItem } from "@/components/service/overlay/OverlayTabs";
+import { useOverlayKeyboard } from "@/components/service/overlay/useOverlayKeyboard";
 
 // AddonOverlayDirtyContext mirrors the per-panel dirty registry on
 // ServiceOverlay. Each form section inside a tab (Configuration,
@@ -79,12 +80,12 @@ export function useAddonOverlayDirty(
 }
 
 type Tab = "overview" | "backups" | "sql" | "vulnerabilities" | "settings";
-const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: "overview", label: "Overview", icon: Info },
-  { id: "backups",  label: "Backups",  icon: HardDrive },
-  { id: "sql",      label: "SQL",      icon: Database },
-  { id: "vulnerabilities", label: "Vulnerabilities", icon: ShieldAlert },
-  { id: "settings", label: "Settings", icon: Settings },
+const TABS: OverlayTabItem<Tab>[] = [
+  { id: "overview", label: "Overview", icon: Info, chord: "o" },
+  { id: "backups", label: "Backups", icon: HardDrive, chord: "b" },
+  { id: "sql", label: "SQL", icon: Database, chord: "q" },
+  { id: "vulnerabilities", label: "Vulnerabilities", icon: ShieldAlert, chord: "u" },
+  { id: "settings", label: "Settings", icon: Settings, chord: "s" },
 ];
 
 interface Props {
@@ -196,11 +197,24 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const isSQLCapable = kind === "postgres" || kind === "postgres-ha";
   const canSQL = useCanOnProject(project, Perms.SQLRead);
   const canWriteAddon = useCanOnProject(project, Perms.AddonsWrite);
+  // Backups and restore are postgres-only today; SQL needs a postgres-wire
+  // addon and sql:read; Settings (delete) needs addons:write.
+  const visibleTabs = TABS.filter((t) => {
+    if (t.id === "backups") return isPostgres;
+    if (t.id === "sql") return isSQLCapable && canSQL;
+    if (t.id === "settings") return canWriteAddon;
+    return true;
+  });
+  useOverlayKeyboard({
+    open,
+    panelRef,
+    chords: Object.fromEntries(visibleTabs.map((t) => [t.chord as string, () => guardedSetTab(t.id)])),
+  });
 
   return (
     <AnimatePresence>
       {open && (
-        <div ref={rootRef} className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+        <div ref={rootRef} className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true" aria-label={`Addon ${addon ?? ""}`}>
           <motion.button
             type="button"
             aria-label="Close"
@@ -213,13 +227,14 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
           />
           <motion.div
             ref={panelRef}
+            tabIndex={-1}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="relative z-10 ml-auto flex h-full w-full max-w-3xl flex-col border-l border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-[var(--shadow-lg)]"
+            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:max-w-3xl sm:border-l sm:border-[var(--border-subtle)]"
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-5 py-4">
+            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:px-5 sm:py-4">
               <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
                 <AddonIcon kind={kind} />
               </span>
@@ -227,10 +242,10 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                 <h2 className="font-heading text-lg font-semibold tracking-tight truncate">
                   {addon ?? ""}
                 </h2>
-                <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-                  <span className="uppercase tracking-widest">{addonLabel(kind)}</span>
-                  <span>·</span>
-                  <span>project {project}</span>
+                <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+                  <span>{addonLabel(kind)}</span>
+                  <span aria-hidden className="text-[var(--text-tertiary)]">·</span>
+                  <span>{project}</span>
                 </div>
               </div>
               {/* Open Web UI: only renders when the addon's spec.webUI
@@ -261,43 +276,21 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
               </button>
             </header>
 
-            <nav className="flex shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-3">
-              {TABS.map((t) => {
-                if (!isPostgres && t.id === "backups") return null;
-                if (!isSQLCapable && t.id === "sql") return null;
-                // SQL tab needs sql:read; Settings (delete) needs
-                // addons:write. Hide entirely for users without —
-                // less confusing than rendering then 403'ing on action.
-                if (t.id === "sql" && !canSQL) return null;
-                if (t.id === "settings" && !canWriteAddon) return null;
-                const active = t.id === tab;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => guardedSetTab(t.id)}
-                    className={cn(
-                      "relative inline-flex h-10 items-center gap-1.5 px-3 text-sm font-medium transition-colors",
-                      active
-                        ? "text-[var(--text-primary)]"
-                        : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                    )}
-                  >
-                    <t.icon className="h-3.5 w-3.5" />
-                    {t.label}
-                    {active && (
-                      <motion.span
-                        layoutId="addon-tab-underline"
-                        className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
-                        transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                      />
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
+            <OverlayTabs
+              tabs={visibleTabs.filter((t) => t.id !== "settings")}
+              pinned={visibleTabs.find((t) => t.id === "settings")}
+              active={tab}
+              onChange={guardedSetTab}
+              idPrefix="addon-overlay"
+              label="Addon sections"
+            />
 
-            <div className="relative min-h-0 flex-1 overflow-y-auto">
+            <div
+              id="addon-overlay-panel"
+              role="tabpanel"
+              aria-labelledby={`addon-overlay-tab-${tab}`}
+              className="relative min-h-0 flex-1 overflow-y-auto"
+            >
               <AddonOverlayDirtyContext.Provider value={dirtyAPI}>
                 {!data && addons.isError ? (
                   <div className="p-6">
@@ -336,17 +329,17 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
                       <div className="pointer-events-auto flex max-w-[90%] flex-col gap-1 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
                         <div className="flex items-center gap-3">
-                          <span className="font-mono text-[11px] text-[var(--text-secondary)]">
-                            unsaved changes
+                          <span className="text-xs text-[var(--text-secondary)]">
+                            Unsaved changes
                           </span>
                           {entry.onDiscard && (
                             <button
                               type="button"
                               onClick={() => entry.onDiscard?.()}
                               disabled={entry.saving}
-                              className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                              className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
                             >
-                              discard
+                              Discard
                             </button>
                           )}
                           <button
@@ -370,7 +363,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                         {entry.saveError && (
                           <p
                             role="alert"
-                            className="font-mono text-[10px] text-red-300 max-w-[40ch] truncate"
+                            className="max-w-[40ch] truncate text-xs text-[var(--error)]"
                             title={entry.saveError}
                           >
                             ✗ {entry.saveError}

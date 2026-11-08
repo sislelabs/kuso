@@ -312,7 +312,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
 
             <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <label className="text-xs font-medium text-[var(--text-tertiary)]">
                   label
                 </label>
                 <Input
@@ -325,19 +325,19 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
               </div>
 
               <div>
-                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <label className="block text-xs font-medium text-[var(--text-tertiary)]">
                   schedule
                 </label>
                 <div className="mt-1.5">
                   <CronPicker value={schedule} onChange={setSchedule} />
                 </div>
                 {upcoming.length > 0 ? (
-                  <p className="mt-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <p className="mt-1.5 font-mono text-xs text-[var(--text-tertiary)]">
                     next: {fmtRun(upcoming[0])}
                     {upcoming[1] ? ` · then ${fmtRun(upcoming[1])}` : ""}
                   </p>
                 ) : (
-                  <p className="mt-1.5 font-mono text-[10px] text-amber-400/80">
+                  <p className="mt-1.5 font-mono text-xs text-[var(--warning)]">
                     couldn&apos;t parse this schedule — double-check the 5 fields
                   </p>
                 )}
@@ -349,7 +349,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   answers "what will actually run" without leaving the page. */}
               <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <span className="text-xs font-medium text-[var(--text-tertiary)]">
                     runs from
                   </span>
                   {kind === "service" && (
@@ -358,7 +358,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                       onClick={() => sync.mutate()}
                       disabled={sync.isPending || save.isPending || del.isPending}
                       title="Re-pin to the service's current production image + secrets"
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
                     >
                       <RefreshCw className={cn("h-3 w-3", sync.isPending && "animate-spin")} />
                       {sync.isPending ? "Syncing…" : "Sync image"}
@@ -389,7 +389,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                         {secrets.map((s) => (
                           <span
                             key={s}
-                            className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+                            className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]"
                           >
                             {s}
                           </span>
@@ -409,7 +409,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 </dl>
 
                 {kind === "service" && (
-                  <p className="mt-2 border-t border-[var(--border-subtle)] pt-2 text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+                  <p className="mt-2 border-t border-[var(--border-subtle)] pt-2 text-xs leading-relaxed text-[var(--text-tertiary)]">
                     Image + env are inherited from{" "}
                     <span className="font-mono text-[var(--text-secondary)]">{cron.spec.service}</span>.{" "}
                     {pinImage ? (
@@ -431,7 +431,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
 
               {kind === "http" && (
                 <div>
-                  <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <label className="text-xs font-medium text-[var(--text-tertiary)]">
                     URL
                   </label>
                   <Input
@@ -448,7 +448,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 <>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px]">
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      <label className="text-xs font-medium text-[var(--text-tertiary)]">
                         image
                       </label>
                       <Input
@@ -460,7 +460,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      <label className="text-xs font-medium text-[var(--text-tertiary)]">
                         tag
                       </label>
                       <Input
@@ -473,7 +473,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                     </div>
                   </div>
                   <div>
-                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    <label className="text-xs font-medium text-[var(--text-tertiary)]">
                       command
                     </label>
                     <Input
@@ -489,7 +489,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
 
               {kind === "service" && (
                 <div>
-                  <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <label className="text-xs font-medium text-[var(--text-tertiary)]">
                     command
                   </label>
                   <Input
@@ -506,7 +506,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 <label className={cn(
                   "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px]",
                   pinImage
-                    ? "border-amber-500/40 bg-amber-500/5"
+                    ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)]"
                     : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
                 )}>
                   <input
@@ -526,7 +526,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
               <label className={cn(
                 "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px]",
                 suspend
-                  ? "border-amber-500/40 bg-amber-500/5"
+                  ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)]"
                   : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
               )}>
                 <input
@@ -555,7 +555,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 type="button"
                 onClick={() => setConfirmDelete(true)}
                 disabled={save.isPending || del.isPending}
-                className="text-red-400 hover:text-red-300"
+                className="text-[var(--error)] hover:text-[var(--error)]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Delete

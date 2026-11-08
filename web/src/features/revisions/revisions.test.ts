@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Revision } from "./api";
 import { describeRevision, envRevisionName, summaryItems } from "./describe";
-import { interleaveTimeline } from "./timeline";
+import { groupRevisionRuns, interleaveTimeline } from "./timeline";
 
 const rev = (over: Partial<Revision>): Revision => ({
   id: "r",
@@ -85,5 +85,15 @@ describe("interleaveTimeline", () => {
       i.type === "build" ? i.build.id : i.revision.id,
     );
     expect(order).toEqual(["q", "new", "b2", "mid", "b1", "old"]);
+  });
+});
+
+describe("groupRevisionRuns", () => {
+  const r = (id: string) => ({ type: "revision" as const, revision: rev({ id }) });
+  const build = (id: string) => ({ type: "build" as const, build: { id } });
+  it("folds runs of three or more and leaves short runs alone", () => {
+    const out = groupRevisionRuns([r("1"), r("2"), r("3"), build("a"), r("4"), build("b"), r("5"), r("6")]);
+    expect(out.map((o) => o.type)).toEqual(["revisions", "build", "revision", "build", "revision", "revision"]);
+    expect(out[0].type === "revisions" && out[0].revisions.map((r) => r.id)).toEqual(["1", "2", "3"]);
   });
 });

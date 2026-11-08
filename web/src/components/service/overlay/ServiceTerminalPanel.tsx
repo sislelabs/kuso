@@ -179,7 +179,7 @@ export function ServiceTerminalPanel({
             <Sun className="h-3.5 w-3.5" /> {wake.isPending ? "Waking…" : "Wake"}
           </Button>
         ) : (
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="font-mono text-xs text-[var(--text-tertiary)]">
             {blocked === "stopped" ? "Start it from the header to open a shell." : "It wakes on the next request."}
           </p>
         )}
@@ -197,11 +197,11 @@ export function ServiceTerminalPanel({
           </span>
           <span
             className={
-              "ml-1 inline-flex items-center gap-1 font-mono text-[10px] " +
+              "ml-1 inline-flex items-center gap-1 font-mono text-xs " +
               (status === "open"
-                ? "text-emerald-400"
+                ? "text-[var(--success)]"
                 : status === "connecting"
-                  ? "text-amber-400"
+                  ? "text-[var(--warning)]"
                   : "text-[var(--text-tertiary)]")
             }
           >
@@ -221,7 +221,7 @@ export function ServiceTerminalPanel({
         ref={hostRef}
         className="h-[420px] w-full overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--console-bg)] p-2"
       />
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="font-mono text-xs text-[var(--text-tertiary)]">
         Interactive shell in the service&apos;s pod. Requires the admin role
         (a shell can read every secret via the environment). The session
         ends when you leave this tab.

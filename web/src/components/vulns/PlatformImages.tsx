@@ -106,11 +106,11 @@ export function PlatformImages() {
                   </TableCell>
                   <TableCell>
                     <Count n={c?.critical} tone={SEVERITY_TONE.CRITICAL.text} />
-                    {c && <span className="ml-1 text-[10px] text-[var(--text-tertiary)]">({c.fixableCritical})</span>}
+                    {c && <span className="ml-1 text-xs text-[var(--text-tertiary)]">({c.fixableCritical})</span>}
                   </TableCell>
                   <TableCell>
                     <Count n={c?.high} tone={SEVERITY_TONE.HIGH.text} />
-                    {c && <span className="ml-1 text-[10px] text-[var(--text-tertiary)]">({c.fixableHigh})</span>}
+                    {c && <span className="ml-1 text-xs text-[var(--text-tertiary)]">({c.fixableHigh})</span>}
                   </TableCell>
                   <TableCell>
                     <Count n={c?.medium} tone={SEVERITY_TONE.MEDIUM.text} />

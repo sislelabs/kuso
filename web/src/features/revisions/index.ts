@@ -3,5 +3,5 @@ export type { Revision, RevisionKind } from "./api";
 export { useRevisions, useRevertRevision, revisionsQueryKey } from "./hooks";
 export { describeRevision, summaryItems, envRevisionName } from "./describe";
 export type { RevisionView } from "./describe";
-export { interleaveTimeline } from "./timeline";
-export type { TimelineItem } from "./timeline";
+export { interleaveTimeline, groupRevisionRuns } from "./timeline";
+export type { TimelineItem, GroupedTimelineItem } from "./timeline";

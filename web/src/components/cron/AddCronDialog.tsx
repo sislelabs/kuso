@@ -191,7 +191,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <label className="text-xs font-medium text-[var(--text-tertiary)]">
                     name
                   </label>
                   <Input
@@ -203,7 +203,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                   />
                 </div>
                 <div>
-                  <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <label className="text-xs font-medium text-[var(--text-tertiary)]">
                     label (optional)
                   </label>
                   <Input
@@ -217,7 +217,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
               </div>
 
               <div>
-                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <label className="block text-xs font-medium text-[var(--text-tertiary)]">
                   schedule
                 </label>
                 <div className="mt-1.5">
@@ -227,7 +227,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
 
               {kind === "http" && (
                 <div>
-                  <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <label className="text-xs font-medium text-[var(--text-tertiary)]">
                     URL
                   </label>
                   <Input
@@ -237,7 +237,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     className="mt-1 h-7 font-mono text-[11px]"
                     spellCheck={false}
                   />
-                  <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
                     Cron fails on non-2xx. Add auth via the URL (token query
                     string) or hit a sibling service via{" "}
                     <code>${"{{ svc.URL }}/cron/..."}</code> at deploy time.
@@ -249,7 +249,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                 <>
                   <div className="grid grid-cols-[1fr_120px] gap-2">
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      <label className="text-xs font-medium text-[var(--text-tertiary)]">
                         image
                       </label>
                       <Input
@@ -261,7 +261,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      <label className="text-xs font-medium text-[var(--text-tertiary)]">
                         tag
                       </label>
                       <Input
@@ -274,7 +274,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     </div>
                   </div>
                   <div>
-                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    <label className="text-xs font-medium text-[var(--text-tertiary)]">
                       command
                     </label>
                     <Input
@@ -284,7 +284,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                       className="mt-1 h-7 font-mono text-[11px]"
                       spellCheck={false}
                     />
-                    <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
                       Whitespace-split into argv. First element is the binary.
                     </p>
                   </div>
@@ -344,7 +344,7 @@ function KindTile({
     >
       <Icon className={cn("h-4 w-4", selected ? "text-[var(--accent)]" : "text-[var(--text-tertiary)]")} />
       <span className="text-[12px] font-medium">{label}</span>
-      <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{hint}</span>
+      <span className="font-mono text-xs text-[var(--text-tertiary)]">{hint}</span>
     </button>
   );
 }

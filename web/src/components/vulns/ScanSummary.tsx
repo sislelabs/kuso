@@ -16,11 +16,11 @@ function CountTile({ severity, count, fixable }: { severity: Severity; count: nu
   const tone = SEVERITY_TONE[severity];
   return (
     <div className={cn("min-w-[72px] rounded-md border px-2.5 py-1.5", tone.border, count > 0 ? tone.bg : "")}>
-      <div className={cn("font-mono text-[10px] font-semibold uppercase tracking-wide", tone.text)}>{severity}</div>
+      <div className={cn("font-mono text-xs font-semibold uppercase tracking-wide", tone.text)}>{severity}</div>
       <div className="flex items-baseline gap-1.5">
         <span className="font-mono text-lg font-semibold text-[var(--text-primary)]">{count}</span>
         {fixable !== undefined && (
-          <span className="text-[10px] text-[var(--text-tertiary)]" title="Fixable by upgrading the package">
+          <span className="text-xs text-[var(--text-tertiary)]" title="Fixable by upgrading the package">
             {fixable} fixable
           </span>
         )}
@@ -89,6 +89,8 @@ export function ScanSummary({ image, actions }: { image: VulnImageReport; action
             </div>
           )}
 
+          {scan.status === "succeeded" && <Verdict counts={scan.counts} />}
+
           {scan.status === "succeeded" && (
             <div className="flex flex-wrap gap-2">
               <CountTile severity="CRITICAL" count={scan.counts.critical} fixable={scan.counts.fixableCritical} />
@@ -105,5 +107,36 @@ export function ScanSummary({ image, actions }: { image: VulnImageReport; action
         </p>
       )}
     </section>
+  );
+}
+
+// Verdict is the one-sentence answer above the tiles: is there anything
+// serious, and can upgrading fix it.
+function Verdict({ counts }: { counts: VulnScanSummary["counts"] }) {
+  const serious = counts.critical + counts.high;
+  const fixable = counts.fixableCritical + counts.fixableHigh;
+  if (serious === 0) {
+    return (
+      <p className="text-sm text-[var(--text-primary)]">
+        No critical or high vulnerabilities.
+        {counts.medium + counts.low > 0 && (
+          <span className="text-[var(--text-secondary)]"> {counts.medium + counts.low} medium/low remain.</span>
+        )}
+      </p>
+    );
+  }
+  const parts = [
+    counts.critical ? `${counts.critical} critical` : "",
+    counts.high ? `${counts.high} high` : "",
+  ].filter(Boolean);
+  return (
+    <p className={cn("text-sm font-medium", counts.critical ? "text-[var(--error)]" : "text-[var(--warning)]")}>
+      {parts.join(" and ")} {serious === 1 ? "vulnerability" : "vulnerabilities"}
+      <span className="font-normal text-[var(--text-secondary)]">
+        {fixable > 0
+          ? ` · ${fixable} fixable by upgrading the affected packages and rebuilding.`
+          : " · no fixed versions published yet."}
+      </span>
+    </p>
   );
 }

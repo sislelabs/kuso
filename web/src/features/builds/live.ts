@@ -96,3 +96,35 @@ export function buildRefLabel(b: { commitSha?: string; ref?: string }, shaLen: n
   if (b.commitSha) return b.commitSha.slice(0, shaLen);
   return b.ref ?? "";
 }
+
+// previousSucceeded is the older successful build on the same branch, i.e.
+// what a deploy replaced. Feeds the "compare" link on deploy rows. Builds
+// arrive newest first.
+export function previousSucceeded(builds: DeployBuild[], b: DeployBuild): DeployBuild | undefined {
+  const idx = builds.indexOf(b);
+  if (idx < 0) return undefined;
+  return builds
+    .slice(idx + 1)
+    .find(
+      (o) =>
+        lower(o.status) === "succeeded" &&
+        (o.branch ?? "") === (b.branch ?? "") &&
+        !!o.commitSha &&
+        o.commitSha !== b.commitSha,
+    );
+}
+
+// rollForwardTarget is the newest successful build on the live build's
+// branch that is newer than it: what "Undo rollback" redeploys.
+export function rollForwardTarget(builds: DeployBuild[], live: DeployBuild): DeployBuild | undefined {
+  if (!isRolledBack(builds, live)) return undefined;
+  const liveT = buildTime(live);
+  const liveIdx = builds.indexOf(live);
+  return builds.find((b, i) => {
+    if (b.id === live.id || lower(b.status) !== "succeeded" || !b.imageTag) return false;
+    if ((b.branch ?? "") !== (live.branch ?? "")) return false;
+    const t = buildTime(b);
+    if (Number.isFinite(t) && Number.isFinite(liveT)) return t > liveT;
+    return liveIdx >= 0 && i < liveIdx;
+  });
+}

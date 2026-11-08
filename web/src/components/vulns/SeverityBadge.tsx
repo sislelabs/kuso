@@ -35,7 +35,7 @@ export function SeverityBadge({ severity, className }: { severity: Severity; cla
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded border px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-wide",
+        "inline-flex items-center rounded border px-1.5 py-px font-mono text-[11px] font-semibold uppercase tracking-wide",
         tone.text,
         tone.bg,
         tone.border,

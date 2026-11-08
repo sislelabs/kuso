@@ -45,10 +45,10 @@ export function IgnoreList({ owner, canEdit }: { owner: VulnOwner; canEdit: bool
               <div className="min-w-0 flex-1 space-y-0.5">
                 <p className="font-mono text-xs text-[var(--text-primary)]">
                   {ig.vulnId}
-                  {ig.expired && <span className="ml-2 text-[10px] text-[var(--text-tertiary)]">expired</span>}
+                  {ig.expired && <span className="ml-2 text-xs text-[var(--text-tertiary)]">expired</span>}
                 </p>
                 <p className="break-words text-xs text-[var(--text-secondary)]">{ig.reason}</p>
-                <p className="text-[10px] text-[var(--text-tertiary)]">
+                <p className="text-xs text-[var(--text-tertiary)]">
                   by {ig.createdBy} · {relativeTime(ig.createdAt)}
                   {ig.expiresAt && (
                     <span title={ig.expiresAt}>

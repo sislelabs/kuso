@@ -33,3 +33,26 @@ export function interleaveTimeline<B extends { startedAt?: string; finishedAt?: 
   while (ri < revs.length) out.push({ type: "revision", revision: revs[ri++] });
   return out;
 }
+
+export type GroupedTimelineItem<B> = TimelineItem<B> | { type: "revisions"; revisions: Revision[] };
+
+// groupRevisionRuns folds `min` or more consecutive revisions into one item.
+export function groupRevisionRuns<B>(items: TimelineItem<B>[], min = 3): GroupedTimelineItem<B>[] {
+  const out: GroupedTimelineItem<B>[] = [];
+  let run: Revision[] = [];
+  const flush = () => {
+    if (run.length >= min) out.push({ type: "revisions", revisions: run });
+    else for (const r of run) out.push({ type: "revision", revision: r });
+    run = [];
+  };
+  for (const it of items) {
+    if (it.type === "revision") {
+      run.push(it.revision);
+      continue;
+    }
+    flush();
+    out.push(it);
+  }
+  flush();
+  return out;
+}

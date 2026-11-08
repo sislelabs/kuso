@@ -10,5 +10,10 @@ export {
   waitingLabel,
   isBranchMismatch,
   buildRefLabel,
+  previousSucceeded,
+  rollForwardTarget,
 } from "./live";
+export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog } from "./logs";
+export type { BuildLogLine, LiveLogState } from "./logs";
+export { githubRepoSlug, githubCommitUrl, githubCompareUrl } from "./github";
 export type { DeployBuild, BuildRowStatus } from "./types";
