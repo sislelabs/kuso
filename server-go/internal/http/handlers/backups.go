@@ -90,6 +90,8 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Put("/api/admin/backup-settings", h.PutSettings)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
+	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
+	r.Get("/api/projects/{project}/addons/{addon}/backups/object", h.DownloadObject)
 	// Direct on-demand dump, streamed to the caller. Independent of the
 	// kuso-backup-s3 config, so it works when List/Restore return 503.
 	r.Get("/api/projects/{project}/addons/{addon}/backups/download", h.Download)
