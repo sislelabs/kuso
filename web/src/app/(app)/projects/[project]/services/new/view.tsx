@@ -516,6 +516,15 @@ export function AddServiceView() {
           >
             {showConfigure && (
               <div className="space-y-5">
+                {advanced && source === "repo" && kind === "web" && (
+                  <button
+                    type="button"
+                    onClick={() => setAdvanced(false)}
+                    className="text-xs text-[var(--link)] underline-offset-4 hover:underline"
+                  >
+                    Back to the detected-settings summary
+                  </button>
+                )}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_9rem]">
                   <FormField
                     label="Service name"
