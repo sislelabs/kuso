@@ -103,7 +103,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
           {isImage ? null : canDeploy ? (
             <Button size="sm" onClick={requestRedeploy} disabled={trigger.isPending}>
               <Rocket className="h-3.5 w-3.5" />
-              {trigger.isPending ? "Starting…" : "Redeploy"}
+              {trigger.isPending ? "Starting…" : builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"}
             </Button>
           ) : (
             <span className="text-xs text-[var(--text-tertiary)]" title="Deploying needs editor access on this project">
@@ -141,6 +141,8 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
           repoUrl={repoUrl}
           canDeploy={canDeploy}
           uptimeDown={uptimeStatus?.state === "down"}
+          onDeploy={canDeploy ? requestRedeploy : undefined}
+          deploying={trigger.isPending}
         />
       )}
 
@@ -149,7 +151,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
 
       <ConfirmDialog
         open={confirmRedeploy}
-        title={`Redeploy ${group}?`}
+        title={`${builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"} ${group}?`}
         destructive={false}
         confirmLabel="Build & deploy"
         body={
@@ -202,6 +204,8 @@ function DeployList({
   repoUrl,
   canDeploy,
   uptimeDown,
+  onDeploy,
+  deploying,
 }: {
   project: string;
   service: string;
@@ -211,6 +215,9 @@ function DeployList({
   repoUrl?: string;
   canDeploy: boolean;
   uptimeDown?: boolean;
+  // Starts a build; shown as the empty state's action when nothing was ever built.
+  onDeploy?: () => void;
+  deploying?: boolean;
 }) {
   const group = envGroupName(env);
   const envCRName = env?.metadata?.name;
@@ -295,8 +302,14 @@ function DeployList({
           <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[var(--text-secondary)]">
             {envBranch && builds.length > 0
               ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}. Push to ${envBranch} or click Redeploy.`
-              : "Push to the connected branch or click Redeploy to build and ship the first version."}
+              : "Nothing has been built yet. Add any variables the app needs, then deploy to build and ship the first version."}
           </p>
+          {onDeploy && builds.length === 0 && (
+            <Button size="sm" className="mt-4" onClick={onDeploy} disabled={deploying}>
+              <Rocket className="h-3.5 w-3.5" />
+              {deploying ? "Starting…" : "Deploy now"}
+            </Button>
+          )}
         </div>
       </div>
     );

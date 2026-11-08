@@ -18,6 +18,7 @@ import {
   Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { projectQueryKey, useCreateProject, useProjects } from "@/features/projects";
 import {
@@ -356,18 +357,20 @@ export default function NewProjectPage() {
                 <span className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
                   <GitBranch className="h-3 w-3" />
                   {picked.byUrl && picked.byUrl.branches.length > 1 ? (
-                    <select
+                    <Select
                       aria-label="Branch"
                       value={picked.repo.defaultBranch}
                       onChange={(e) => setPicked({ ...picked, repo: { ...picked.repo, defaultBranch: e.target.value } })}
-                      className="h-7 max-w-40 rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1 font-mono text-xs"
+                      size="sm"
+                      wrapperClassName="w-auto max-w-40"
+                      className="font-mono text-xs"
                     >
                       {picked.byUrl.branches.map((b) => (
                         <option key={b} value={b}>
                           {b}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   ) : (
                     <span className="font-mono">{picked.repo.defaultBranch}</span>
                   )}
@@ -881,11 +884,10 @@ function AdvancedFields({
                 hint="Used to clone private repositories and receive pushes."
                 htmlFor="project-installation"
               >
-                <select
+                <Select
                   id="project-installation"
                   value={repo.installationId}
                   onChange={(e) => repo.setInstallationId(Number(e.target.value))}
-                  className="block h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[13px]"
                 >
                   <option value={0}>None</option>
                   {repo.installations.map((i) => (
@@ -893,7 +895,7 @@ function AdvancedFields({
                       {i.label}
                     </option>
                   ))}
-                </select>
+                </Select>
               </FormField>
             )}
           </>

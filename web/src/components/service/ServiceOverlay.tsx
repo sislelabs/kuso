@@ -1098,7 +1098,12 @@ export function ServiceOverlay({
           <ConfirmDialog
             open={!!pendingTab}
             title="Discard unsaved changes?"
-            body={`Your edits in ${Object.keys(panels).filter((k) => panels[k]?.dirty).join(", ") || "this tab"} haven't been saved. Switching tabs drops them.`}
+            body={`Your edits in ${
+              Object.keys(panels)
+                .filter((k) => panels[k]?.dirty)
+                .map((k) => k.charAt(0).toUpperCase() + k.slice(1))
+                .join(", ") || "this tab"
+            } haven't been saved. Switching tabs drops them.`}
             confirmLabel="Discard and switch"
             onCancel={() => setPendingTab(null)}
             onConfirm={() => {

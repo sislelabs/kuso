@@ -529,5 +529,5 @@ function fmtBytes(b: number): string {
 }
 
 function memTickUnit(maxBytes: number): number {
-  return maxBytes >= 2 * 1024 ** 3 ? 1024 ** 3 : 1024 ** 2;
+  return maxBytes >= 1024 ** 3 ? 1024 ** 3 : 1024 ** 2;
 }
