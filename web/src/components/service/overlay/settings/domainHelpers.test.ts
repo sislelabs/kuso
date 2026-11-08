@@ -5,6 +5,9 @@ import {
   recentAdds,
   recordName,
   registrableDomain,
+  causeOf,
+  diagnose,
+  resolveCheck,
   suggestRecords,
   summarizeDomain,
   type DomainStatus,
@@ -54,6 +57,62 @@ describe("summarizeDomain", () => {
     expect(summarizeDomain(d("ok", "issuing"))).toMatchObject({ tone: "pending", pending: true });
     expect(summarizeDomain(d("ok", "ready"))).toMatchObject({ tone: "ok", pending: false });
     expect(summarizeDomain(d("proxied", "ready")).label).toContain("Cloudflare");
+  });
+});
+
+describe("certificate diagnosis", () => {
+  const base: DomainStatus = {
+    host: "app.example.com",
+    kind: "custom",
+    dns: { status: "ok", resolved: ["203.0.113.10"] },
+    tls: { status: "issuing" },
+  };
+  const with_ = (dns: Partial<DomainStatus["dns"]>, tls: Partial<DomainStatus["tls"]>): DomainStatus => ({
+    ...base,
+    dns: { ...base.dns, ...dns },
+    tls: { ...base.tls, ...tls },
+  });
+
+  it("trusts the server's cause when it sends one", () => {
+    expect(causeOf(with_({ status: "mismatch" }, { cause: "rate_limited" }))).toBe("rate_limited");
+  });
+  it("derives the same cause from an older server's fields", () => {
+    expect(causeOf(with_({}, { status: "ready" }))).toBeNull();
+    expect(causeOf(with_({ status: "mismatch", resolved: ["198.51.100.1"] }, {}))).toBe("dns_not_pointed");
+    expect(causeOf(with_({ status: "unresolved", resolved: [] }, { status: "missing" }))).toBe("dns_not_pointed");
+    expect(
+      causeOf(with_({}, { status: "failed", reason: "Failed", message: "429 urn:ietf:params:acme:error:rateLimited" })),
+    ).toBe("rate_limited");
+    expect(causeOf(with_({}, { status: "failed", message: "CAA record for example.com prevents issuance" }))).toBe("caa");
+    expect(causeOf(with_({ status: "proxied" }, { status: "failed" }))).toBe("cloudflare_proxy");
+    expect(causeOf(with_({}, { status: "failed", reason: "Expired" }))).toBe("expired");
+    expect(causeOf(with_({}, {}))).toBe("issuing");
+    expect(causeOf(with_({ status: "skipped", resolved: [] }, { status: "missing" }))).toBe("not_requested");
+  });
+  it("says how long issuance has been running once it's slow", () => {
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    expect(diagnose(with_({}, { since: "2026-11-08T11:59:00Z" }), now)?.body).toContain("Usually under 2 minutes");
+    expect(diagnose(with_({}, { since: "2026-11-08T11:48:00Z" }), now)?.body).toContain("12 minutes");
+  });
+  it("names the registered domain for CAA and rate limits", () => {
+    const caa = diagnose(with_({}, { status: "failed", cause: "caa" }));
+    expect(caa?.title).toContain("CAA");
+    expect(caa?.body).toContain("example.com");
+    expect(caa?.record).toEqual({ type: "CAA", name: "@", value: '0 issue "letsencrypt.org"' });
+  });
+  it("labels a cluster without cert-manager as HTTP only and stops nagging", () => {
+    expect(summarizeDomain(with_({}, { status: "missing", cause: "cert_manager_missing" }))).toMatchObject({
+      label: "HTTP only",
+      pending: false,
+    });
+  });
+  it("reports the live lookup against the expected addresses", () => {
+    expect(resolveCheck(with_({ status: "mismatch", resolved: ["198.51.100.1"] }, {}), ["203.0.113.10"])).toEqual({
+      state: "elsewhere",
+      resolved: ["198.51.100.1"],
+      expected: ["203.0.113.10"],
+    });
+    expect(resolveCheck(with_({ status: "skipped", resolved: [] }, {}), [])).toBeNull();
   });
 });
 
