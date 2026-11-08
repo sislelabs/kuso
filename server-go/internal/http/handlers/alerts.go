@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
@@ -37,16 +39,73 @@ func alertsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
-func (h *AlertsHandler) List(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
+// alertAccess is what the caller may do with alert rules. Instance
+// admins manage every rule. Everyone else sees rules scoped to projects
+// they can read and manages rules scoped to projects they can edit.
+// Rules without a project, and node rules (which ignore the project and
+// watch every node), cover the whole cluster and stay admin-only.
+type alertAccess struct {
+	admin   bool
+	tenancy db.GroupTenancy
+}
+
+func (a alertAccess) can(project, kind string, minRole db.ProjectRole) bool {
+	if a.admin {
+		return true
 	}
+	if project == "" || isNodeAlertKind(kind) {
+		return false
+	}
+	return roleAtLeast(auth.ProjectRoleFor(a.tenancy, project), minRole)
+}
+
+func isNodeAlertKind(kind string) bool {
+	switch kind {
+	case db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
+		return true
+	}
+	return false
+}
+
+// alertCaller resolves the caller's alertAccess. On false the response
+// is already written.
+func (h *AlertsHandler) alertCaller(ctx context.Context, w http.ResponseWriter) (alertAccess, bool) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return alertAccess{}, false
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return alertAccess{admin: true}, true
+	}
+	tenancy, err := h.DB.ListUserTenancyCached(ctx, claims.UserID)
+	if err != nil {
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return alertAccess{}, false
+	}
+	return alertAccess{tenancy: tenancy}, true
+}
+
+func (h *AlertsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
+	acc, ok := h.alertCaller(ctx, w)
+	if !ok {
+		return
+	}
 	out, err := h.DB.ListAlertRules(ctx)
 	if err != nil {
 		h.fail(w, "list alerts", err)
 		return
+	}
+	if !acc.admin {
+		visible := make([]db.AlertRule, 0, len(out))
+		for _, rule := range out {
+			if acc.can(rule.Project, rule.Kind, db.ProjectRoleViewer) {
+				visible = append(visible, rule)
+			}
+		}
+		out = visible
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -66,7 +125,10 @@ type createAlertBody struct {
 }
 
 func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
+	ctx, cancel := alertsCtx(r)
+	defer cancel()
+	acc, ok := h.alertCaller(ctx, w)
+	if !ok {
 		return
 	}
 	var body createAlertBody
@@ -76,6 +138,14 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := normalizeAlertBody(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !acc.can(body.Project, body.Kind, db.ProjectRoleEditor) {
+		if body.Project == "" || isNodeAlertKind(body.Kind) {
+			writeErr(w, http.StatusForbidden, "cluster-wide and node alert rules need an instance admin")
+		} else {
+			writeErr(w, http.StatusForbidden, fmt.Sprintf("you need editor access on project %q to add its alert rules", body.Project))
+		}
 		return
 	}
 	rule := db.AlertRule{
@@ -93,8 +163,6 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Severity:        body.Severity,
 		ThrottleSeconds: body.ThrottleSeconds,
 	}
-	ctx, cancel := alertsCtx(r)
-	defer cancel()
 	if err := h.DB.CreateAlertRule(ctx, rule); err != nil {
 		h.fail(w, "create alert", err)
 		return
@@ -184,12 +252,40 @@ func defaultInt(p *int64, def int64) *int64 {
 	return &def
 }
 
-func (h *AlertsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
+// authorizeRuleWrite gates a mutation of an existing rule. A rule the
+// caller can't read answers 404, so ids don't reveal other projects'
+// rules; one they can read but not edit answers 403. On false the
+// response is already written.
+func (h *AlertsHandler) authorizeRuleWrite(ctx context.Context, w http.ResponseWriter, id string) bool {
+	acc, ok := h.alertCaller(ctx, w)
+	if !ok {
+		return false
 	}
+	if acc.admin {
+		return true
+	}
+	project, kind, err := h.DB.GetAlertRuleScope(ctx, id)
+	if err != nil {
+		h.fail(w, "alert scope", err)
+		return false
+	}
+	if !acc.can(project, kind, db.ProjectRoleViewer) {
+		writeErr(w, http.StatusNotFound, "alert rule not found")
+		return false
+	}
+	if !acc.can(project, kind, db.ProjectRoleEditor) {
+		writeErr(w, http.StatusForbidden, fmt.Sprintf("you need editor access on project %q to change its alert rules", project))
+		return false
+	}
+	return true
+}
+
+func (h *AlertsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
+	if !h.authorizeRuleWrite(ctx, w, chi.URLParam(r, "id")) {
+		return
+	}
 	if err := h.DB.DeleteAlertRule(ctx, chi.URLParam(r, "id")); err != nil {
 		h.fail(w, "delete alert", err)
 		return
@@ -206,11 +302,11 @@ func (h *AlertsHandler) Disable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlertsHandler) toggle(w http.ResponseWriter, r *http.Request, on bool) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
+	if !h.authorizeRuleWrite(ctx, w, chi.URLParam(r, "id")) {
+		return
+	}
 	if err := h.DB.SetAlertEnabled(ctx, chi.URLParam(r, "id"), on); err != nil {
 		h.fail(w, "toggle alert", err)
 		return
