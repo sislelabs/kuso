@@ -5,7 +5,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronDown, ClipboardPaste, Github, KeyRound, Link2, MoreHorizontal, Plus } from "lucide-react";
+import { ChevronDown, ClipboardPaste, FileDown, Github, KeyRound, Link2, Lock, MoreHorizontal, Plus } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DriftReport } from "@/features/services/api";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +39,26 @@ export function VarBadge({
     >
       {children}
     </span>
+  );
+}
+
+// SecretLock marks a row whose value is a secret (masked by default).
+export function SecretLock() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label="Secret — value hidden"
+            className="inline-flex shrink-0 items-center text-[var(--text-tertiary)]"
+          />
+        }
+      >
+        <Lock className="h-3 w-3" aria-hidden />
+      </TooltipTrigger>
+      <TooltipContent>Secret — value hidden</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -102,12 +123,14 @@ export function AddMenu({
   onReference,
   onShared,
   onPaste,
+  onImportExample,
   onGithub,
 }: {
   onNew: () => void;
   onReference?: () => void;
   onShared: () => void;
   onPaste: () => void;
+  onImportExample?: () => void;
   onGithub?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -130,6 +153,14 @@ export function AddMenu({
     { icon: <KeyRound className="h-3.5 w-3.5" />, label: "Project secret", hint: "Shared across services", run: onShared },
     { icon: <ClipboardPaste className="h-3.5 w-3.5" />, label: "Paste .env", hint: "Many at once", run: onPaste },
   );
+  if (onImportExample) {
+    items.push({
+      icon: <FileDown className="h-3.5 w-3.5" />,
+      label: "Import .env.example",
+      hint: "Keys from your repo, never overwrites",
+      run: onImportExample,
+    });
+  }
   if (onGithub) {
     items.push({
       icon: <Github className="h-3.5 w-3.5" />,

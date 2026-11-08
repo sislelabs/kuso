@@ -42,6 +42,9 @@ type Revision struct {
 	Summary   string          `json:"summary,omitempty"`
 	Snapshot  json.RawMessage `json:"snapshot"`
 	CreatedAt time.Time       `json:"createdAt"`
+	// ChangedKeys names the env keys a secret write touched. Derived by
+	// the handler from the snapshot on read; never stored, never values.
+	ChangedKeys []string `json:"changedKeys,omitempty"`
 }
 
 // InsertRevision appends a row. The caller already validated the

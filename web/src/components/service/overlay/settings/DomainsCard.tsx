@@ -2,12 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { HostClashHint } from "@/components/shared/HostClashHint";
 import { useIngressTargets } from "@/features/cluster";
@@ -120,8 +121,23 @@ export function DomainsCard({
       status={customCount > 0 ? `${customCount} custom` : undefined}
       description={
         <>
-          Where this service answers in the <Code>{envName}</Code> environment. Domain changes apply immediately and
-          don&apos;t need a Save.
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  tabIndex={0}
+                  className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-[var(--info)]/30 bg-[var(--info-subtle)] px-2 py-px align-[1px] text-xs font-medium text-[var(--info)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                />
+              }
+            >
+              <Zap className="h-3 w-3" aria-hidden />
+              Changes apply immediately
+            </TooltipTrigger>
+            <TooltipContent className="max-w-64">
+              Adding or removing a domain takes effect right away. Unlike the other cards, this one has no Save.
+            </TooltipContent>
+          </Tooltip>
+          Where this service answers in the <Code>{envName}</Code> environment.
         </>
       }
     >

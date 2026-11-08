@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ClipboardPaste,
   Copy,
+  FileDown,
   Eye,
   EyeOff,
   Link2,
@@ -20,7 +21,7 @@ import {
   Variable,
   X,
 } from "lucide-react";
-import { useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
+import { useService, useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
 import { setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { setSharedSecret } from "@/features/project-secrets/api";
 import { applySubscriptionDelta, putSubscriptionRebased } from "@/features/addons/subscriptionDelta";
@@ -51,6 +52,7 @@ import {
   INSTANCE_SHARED_SECRET,
   PasteEnvDialog,
   RowMenu,
+  SecretLock,
   SharedPickerDialog,
   VarBadge,
   type SubscribableShape,
@@ -68,6 +70,7 @@ import {
 } from "@/components/service/envvars/rawEnv";
 import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envvars/RawEnvEditor";
 import { EnvDiffDialog } from "@/components/service/envvars/EnvDiffDialog";
+import { EnvExampleDialog } from "@/components/service/envvars/EnvExampleDialog";
 import { AddReferenceDialog, RefValueInput, type RefValueInputHandle } from "@/components/service/envvars/refCatalog";
 import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
 
@@ -109,6 +112,12 @@ function writeViewPref(v: ViewMode) {
   }
 }
 
+// addonEmptyNote explains an addon key that arrives empty. Pooler keys
+// are the common case: they stay blank while the addon's pooler is off.
+function addonEmptyNote(name: string): string {
+  return /POOL|BOUNCER/i.test(name) ? "Not provided by this addon (pooler disabled)" : "Not provided by this addon";
+}
+
 export function EnvVarsEditor({
   project,
   service,
@@ -138,6 +147,7 @@ export function EnvVarsEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const detected = useDetectedEnv(project, service);
+
   const drift = useDrift(project, service);
   const addons = useAddons(project);
   const perEnvSecrets = useQuery<{ keys: string[]; env: string | null }>({
@@ -209,7 +219,12 @@ export function EnvVarsEditor({
   // A masked session saving would write the sentinel over real values, so
   // masked ⇒ read-only.
   const masked = env.data?.masked ?? false;
-  const canWrite = useCanOnProject(project, Perms.SecretsWrite) && !masked;
+  const canWriteEnv = useCanOnProject(project, Perms.SecretsWrite);
+  const canWrite = canWriteEnv && !masked;
+  // Reading the example file is an editor action server-side (it may hold
+  // real values); image services have no repo to read it from.
+  const svcSpec = useService(project, service).data?.spec;
+  const canImportExample = canWriteEnv && !!svcSpec && svcSpec.runtime !== "image";
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   const saveRef = useRef<() => void>(() => {});
@@ -234,6 +249,7 @@ export function EnvVarsEditor({
   const [sharedOpen, setSharedOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [refOpen, setRefOpen] = useState(false);
+  const [exampleOpen, setExampleOpen] = useState(false);
   const [view, setViewState] = useState<ViewMode>(readViewPref);
   const [rawText, setRawText] = useState("");
   const [rawErrors, setRawErrors] = useState<RawIssue[]>([]);
@@ -627,6 +643,19 @@ export function EnvVarsEditor({
     markDirty();
   };
 
+  // Adds .env.example keys as new rows. Names already present are skipped,
+  // so an import never overwrites a value.
+  const importExample = (entries: { name: string; value: string }[]) => {
+    const fresh = entries.filter((e) => !rowNames.has(e.name));
+    if (fresh.length === 0) return;
+    setRows((prev) => [
+      ...prev,
+      ...fresh.map((e) => ({ id: rid(), name: e.name, value: e.value, fromSecret: false, secretBacked: false, visible: true })),
+    ]);
+    markDirty();
+    toast(`${fresh.length} ${fresh.length === 1 ? "variable" : "variables"} added from .env.example. Review and save to apply.`);
+  };
+
   const applyPaste = (text: string): string | null => {
     const { entries, errors } = parseRawEnv(text);
     if (errors.length) {
@@ -915,8 +944,16 @@ export function EnvVarsEditor({
       // Refs keep their resolved value hidden by default; the ref text
       // itself is shown since it names the source, not the secret.
       const sensitive = isRef || r.fromSecret || isSensitiveVar(r.name, plaintext ?? "");
+      // The rows masked by default for being secret. A ref to a service URL
+      // is hidden too but isn't a secret; a managed-secret row with a plain
+      // value is shown in clear, so it gets no lock either.
+      const secretValued = r.fromSecret || isSensitiveVar(r.name, plaintext ?? "");
+      // The addon's conn Secret carries the key but no value (e.g. its
+      // pooler is off); the pod gets an empty string.
+      const addonEmpty = !!r.addon && !masked && !isRef && r.value === "" && !isChanged(r);
       const badges = (
         <>
+          {secretValued && <SecretLock />}
           {r.addon && <VarBadge title={`Injected by the ${r.addon} addon`}>{r.addon}</VarBadge>}
           {buildTimePrefix(r.name) && (
             <VarBadge title="Inlined into the browser bundle at build time. A change needs a rebuild.">build</VarBadge>
@@ -935,8 +972,14 @@ export function EnvVarsEditor({
           {isChanged(r) && <span className="sr-only">(unsaved)</span>}
         </>
       );
-      const value =
-        isRef && !(shownValues.has(key) || revealAll) ? (
+      const value = addonEmpty ? (
+        <span
+          className="font-sans italic text-[var(--text-tertiary)]"
+          title={`The ${r.addon} addon's connection secret has ${r.name} but no value, so the app reads an empty string.`}
+        >
+          {addonEmptyNote(r.name)}
+        </span>
+      ) : isRef && !(shownValues.has(key) || revealAll) ? (
           <span className="inline-flex max-w-full items-center gap-1 text-[var(--text-secondary)]">
             <Link2 className="h-3 w-3 shrink-0" />
             <span className="truncate">{r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")}</span>
@@ -980,9 +1023,12 @@ export function EnvVarsEditor({
         <div key={key} data-env-key={it.name} className={rowShell(it.name)}>
           {nameCell(
             it.name,
-            <VarBadge tone="accent" title={`Shared ${it.source} secret. Edit it in ${it.source} settings.`}>
-              {it.source}
-            </VarBadge>,
+            <>
+              {sensitive && <SecretLock />}
+              <VarBadge tone="accent" title={`Shared ${it.source} secret. Edit it in ${it.source} settings.`}>
+                {it.source}
+              </VarBadge>
+            </>,
           )}
           {valueCell(valueText(key, v, sensitive))}
           {copyBtn(isVisible(key, sensitive) ? v : undefined, it.name)}
@@ -1009,12 +1055,15 @@ export function EnvVarsEditor({
       <div key={key} data-env-key={it.name} className={rowShell(it.name)}>
         {nameCell(
           it.name,
-          <VarBadge
-            tone="warn"
-            title={`Only on ${envScope}. Change with: kuso env set ${project} ${service} ${it.name}=… --env ${envScope}`}
-          >
-            {envScope} only
-          </VarBadge>,
+          <>
+            {sensitive && <SecretLock />}
+            <VarBadge
+              tone="warn"
+              title={`Only on ${envScope}. Change with: kuso env set ${project} ${service} ${it.name}=… --env ${envScope}`}
+            >
+              {envScope} only
+            </VarBadge>
+          </>,
         )}
         {valueCell(valueText(key, it.value, sensitive))}
         {copyBtn(isVisible(key, sensitive) ? it.value : undefined, it.name)}
@@ -1199,6 +1248,7 @@ export function EnvVarsEditor({
               onReference={() => setRefOpen(true)}
               onShared={() => setSharedOpen(true)}
               onPaste={() => setPasteOpen(true)}
+              onImportExample={canImportExample ? () => setExampleOpen(true) : undefined}
               onGithub={onAddGithubSignIn}
             />
           )}
@@ -1253,6 +1303,11 @@ export function EnvVarsEditor({
               <Button size="sm" variant="outline" onClick={() => setPasteOpen(true)}>
                 <ClipboardPaste className="h-3.5 w-3.5" /> Paste .env
               </Button>
+              {canImportExample && (
+                <Button size="sm" variant="outline" onClick={() => setExampleOpen(true)}>
+                  <FileDown className="h-3.5 w-3.5" /> Import .env.example
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={() => setRefOpen(true)}>
                 <Link2 className="h-3.5 w-3.5" /> Add reference
               </Button>
@@ -1360,6 +1415,14 @@ export function EnvVarsEditor({
         }
       />
       <PasteEnvDialog open={pasteOpen} onOpenChange={setPasteOpen} onApply={applyPaste} />
+      <EnvExampleDialog
+        open={exampleOpen}
+        onOpenChange={setExampleOpen}
+        project={project}
+        service={service}
+        existingNames={rowNames}
+        onImport={importExample}
+      />
       <AddReferenceDialog
         open={refOpen}
         onOpenChange={setRefOpen}
