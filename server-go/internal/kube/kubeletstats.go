@@ -70,11 +70,51 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 	if c == nil || c.Config == nil || len(nodes) == 0 {
 		return out, nil
 	}
+	var mu sync.Mutex
+	errs := c.eachSummary(ctx, nodes, func(n *corev1.Node, body []byte) error {
+		fs, err := ParseSummaryFS(body)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		out[n.Name] = fs
+		mu.Unlock()
+		return nil
+	})
+	return out, errs
+}
+
+// NodesPodUsage reads every node's kubelet summary and returns the
+// per-pod usage of all of them, keyed by node name. Same client,
+// per-node timeout and 403 backoff as NodeFilesystems; a node that
+// fails is absent from the map and its error is in errs.
+func (c *Client) NodesPodUsage(ctx context.Context, nodes []*corev1.Node) (map[string][]PodUsage, []error) {
+	out := map[string][]PodUsage{}
+	if c == nil || c.Config == nil || len(nodes) == 0 {
+		return out, nil
+	}
+	var mu sync.Mutex
+	errs := c.eachSummary(ctx, nodes, func(n *corev1.Node, body []byte) error {
+		sum, err := ParseSummaryUsage(body)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		out[n.Name] = sum.Pods
+		mu.Unlock()
+		return nil
+	})
+	return out, errs
+}
+
+// eachSummary fetches every node's /stats/summary in parallel and hands
+// each body to fn. Errors come back wrapped with the node name; a 403
+// parks the kubelet calls for kubeletStatsForbiddenBackoff.
+func (c *Client) eachSummary(ctx context.Context, nodes []*corev1.Node, fn func(*corev1.Node, []byte) error) []error {
 	st, err := c.kubeletStatsClient()
 	if err != nil {
-		return out, []error{err}
+		return []error{err}
 	}
-
 	var (
 		mu   sync.Mutex
 		errs []error
@@ -85,17 +125,14 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 		go func(n *corev1.Node) {
 			defer wg.Done()
 			body, err := fetchSummary(ctx, st.client, n)
-			var fs NodeFS
 			if err == nil {
-				fs, err = ParseSummaryFS(body)
+				err = fn(n, body)
 			}
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				mu.Lock()
 				errs = append(errs, fmt.Errorf("node %s: %w", n.Name, err))
-				return
+				mu.Unlock()
 			}
-			out[n.Name] = fs
 		}(n)
 	}
 	wg.Wait()
@@ -105,7 +142,7 @@ func (c *Client) NodeFilesystems(ctx context.Context, nodes []*corev1.Node) (map
 			break
 		}
 	}
-	return out, errs
+	return errs
 }
 
 // kubeletStatsClient returns the shared kubelet client, or

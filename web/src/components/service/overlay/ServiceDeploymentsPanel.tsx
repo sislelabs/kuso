@@ -8,7 +8,12 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { buildTriggerMessage, useBuilds, useService, useTriggerBuild } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
-import { useServicePods } from "@/features/pods";
+import { listServicePods, useServicePods } from "@/features/pods";
+import { imageRolloutState, ROLLOUT_STEPS, type RolloutPod, type RolloutState } from "@/features/services/imageRollout";
+import { useQuery } from "@tanstack/react-query";
+import { CopyButton } from "@/components/ui/copy-button";
+import { relativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
   buildRefLabel,
@@ -21,7 +26,7 @@ import {
 } from "@/features/builds";
 import { envRevisionName, groupRevisionRuns, interleaveTimeline, useRevisions } from "@/features/revisions";
 import type { KusoEnvironment } from "@/types/projects";
-import { Rocket } from "lucide-react";
+import { Check, ExternalLink, Loader2, Rocket, X } from "lucide-react";
 import { toast } from "sonner";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
@@ -98,7 +103,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
           {isImage ? null : canDeploy ? (
             <Button size="sm" onClick={requestRedeploy} disabled={trigger.isPending}>
               <Rocket className="h-3.5 w-3.5" />
-              {trigger.isPending ? "Starting…" : "Redeploy"}
+              {trigger.isPending ? "Starting…" : builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"}
             </Button>
           ) : (
             <span className="text-xs text-[var(--text-tertiary)]" title="Deploying needs editor access on this project">
@@ -110,7 +115,15 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
 
       {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} />}
 
-      {builds.isPending ? (
+      {isImage ? (
+        <ImageDeploymentCard
+          project={project}
+          service={service}
+          env={env}
+          url={url}
+          image={svc.data?.spec.image}
+        />
+      ) : builds.isPending ? (
         <div className="space-y-2">
           <Skeleton className="h-36 w-full rounded-lg" />
           <Skeleton className="h-16 w-full rounded-lg" />
@@ -128,6 +141,8 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
           repoUrl={repoUrl}
           canDeploy={canDeploy}
           uptimeDown={uptimeStatus?.state === "down"}
+          onDeploy={canDeploy ? requestRedeploy : undefined}
+          deploying={trigger.isPending}
         />
       )}
 
@@ -136,7 +151,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url }: Props) {
 
       <ConfirmDialog
         open={confirmRedeploy}
-        title={`Redeploy ${group}?`}
+        title={`${builds.data && builds.data.length === 0 ? "Deploy" : "Redeploy"} ${group}?`}
         destructive={false}
         confirmLabel="Build & deploy"
         body={
@@ -189,6 +204,8 @@ function DeployList({
   repoUrl,
   canDeploy,
   uptimeDown,
+  onDeploy,
+  deploying,
 }: {
   project: string;
   service: string;
@@ -198,6 +215,9 @@ function DeployList({
   repoUrl?: string;
   canDeploy: boolean;
   uptimeDown?: boolean;
+  // Starts a build; shown as the empty state's action when nothing was ever built.
+  onDeploy?: () => void;
+  deploying?: boolean;
 }) {
   const group = envGroupName(env);
   const envCRName = env?.metadata?.name;
@@ -282,8 +302,14 @@ function DeployList({
           <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[var(--text-secondary)]">
             {envBranch && builds.length > 0
               ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}. Push to ${envBranch} or click Redeploy.`
-              : "Push to the connected branch or click Redeploy to build and ship the first version."}
+              : "Nothing has been built yet. Add any variables the app needs, then deploy to build and ship the first version."}
           </p>
+          {onDeploy && builds.length === 0 && (
+            <Button size="sm" className="mt-4" onClick={onDeploy} disabled={deploying}>
+              <Rocket className="h-3.5 w-3.5" />
+              {deploying ? "Starting…" : "Deploy now"}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -361,5 +387,178 @@ function DeployList({
         </p>
       )}
     </div>
+  );
+}
+
+// ImageDeploymentCard replaces the build history for services that deploy a
+// registry image: there are no builds, so show the rollout itself
+// (scheduled → image pulled → started → ready) from env state + pods.
+function ImageDeploymentCard({
+  project,
+  service,
+  env,
+  url,
+  image,
+}: {
+  project: string;
+  service: string;
+  env?: KusoEnvironment;
+  url?: string;
+  image?: { repository?: string; tag?: string };
+}) {
+  const envName = env?.metadata?.name;
+  const envState = env?.status?.state;
+  const group = envGroupName(env);
+  // Same cache entry as useServicePods; polls faster until the rollout settles.
+  const pods = useQuery({
+    queryKey: ["pods", "service", project, service, envName ?? ""],
+    queryFn: () => listServicePods(project, service, envName ?? ""),
+    enabled: !!envName,
+    refetchInterval: (q) => {
+      const st = imageRolloutState(envState, (q.state.data?.pods ?? undefined) as RolloutPod[] | undefined);
+      return st && st.status === "active" ? 3_000 : 15_000;
+    },
+  });
+  const podList = pods.data ? ((pods.data.pods ?? []) as RolloutPod[]) : undefined;
+  const state = imageRolloutState(envState, podList);
+  const ref = image?.repository ? `${image.repository}:${image.tag || "latest"}` : undefined;
+  const deployedAt = env?.status?.lastDeployedAt;
+
+  if (!state) {
+    return pods.isError ? (
+      <QueryErrorState what="pods" error={pods.error} onRetry={() => void pods.refetch()} />
+    ) : (
+      <Skeleton className="h-36 w-full rounded-lg" />
+    );
+  }
+  const live = state.status === "done";
+  const tone =
+    state.status === "failed"
+      ? "border-[var(--danger)]/45"
+      : live
+        ? "border-[var(--success)]/35"
+        : "border-[var(--border-default)]";
+
+  return (
+    <section aria-label={`Deployment in ${group}`} className={cn("rounded-lg border bg-[var(--bg-secondary)] p-4", tone)}>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <RolloutBadge state={state} />
+        <span className="text-[var(--text-secondary)]">in {group}</span>
+        {state.total > 0 && (
+          <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[var(--text-secondary)]">
+            {state.ready}/{state.total} {state.total === 1 ? "instance" : "instances"} ready
+          </span>
+        )}
+        {live && deployedAt && (
+          <time dateTime={deployedAt} title={new Date(deployedAt).toLocaleString()} className="text-[var(--text-tertiary)]">
+            deployed {relativeTime(deployedAt)}
+          </time>
+        )}
+      </div>
+
+      <p className="mt-3 text-base font-semibold text-[var(--text-primary)]">{state.title}</p>
+      {state.detail && <p className="mt-0.5 break-words text-sm text-[var(--text-secondary)]">{state.detail}</p>}
+
+      {ref && (
+        <div className="mt-3 flex min-w-0 items-center gap-1 text-xs text-[var(--text-secondary)]">
+          <span className="shrink-0">Image</span>
+          <span className="min-w-0 truncate font-mono text-[var(--text-primary)]" title={ref}>
+            {ref}
+          </span>
+          <CopyButton value={ref} label="Copy image reference" size="xs" />
+        </div>
+      )}
+
+      {(state.status === "active" || state.status === "failed") && <RolloutSteps state={state} />}
+
+      {live && url && (
+        <div className="mt-3 flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-1 pl-2.5 pr-1">
+          <a href={url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-primary)] hover:underline">
+            {url.replace(/^https?:\/\//, "")}
+          </a>
+          <CopyButton value={url} label="Copy URL" size="xs" />
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open in new tab"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RolloutBadge({ state }: { state: RolloutState }) {
+  if (state.status === "done") {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-[var(--success)]">
+        <span className="h-2 w-2 rounded-full bg-[var(--success)]" />
+        Live
+      </span>
+    );
+  }
+  if (state.status === "failed") {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-[var(--danger)]">
+        <span className="h-2 w-2 rounded-full bg-[var(--danger)]" />
+        Rollout stuck
+      </span>
+    );
+  }
+  if (state.status === "idle") {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-primary)]">
+        <span className="h-2 w-2 rounded-full bg-[var(--text-tertiary)]" />
+        {state.title}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 font-medium text-[var(--info)]">
+      <Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden />
+      Rolling out
+    </span>
+  );
+}
+
+function RolloutSteps({ state }: { state: RolloutState }) {
+  const current = ROLLOUT_STEPS.findIndex((s) => s.step === state.step);
+  return (
+    <ol className="mt-4 grid grid-cols-4 gap-1.5 sm:gap-2" aria-label="Rollout progress">
+      {ROLLOUT_STEPS.map((s, i) => {
+        const done = i < current || (i === current && state.status === "done");
+        const failed = i === current && state.status === "failed";
+        const active = i === current && state.status === "active";
+        return (
+          <li key={s.step} className="min-w-0" aria-current={i === current ? "step" : undefined}>
+            <div
+              className={cn(
+                "h-1 rounded-full",
+                done ? "bg-[var(--success)]" : failed ? "bg-[var(--danger)]" : active ? "bg-[var(--info)]" : "bg-[var(--border-default)]",
+              )}
+            />
+            <div
+              className={cn(
+                "mt-1.5 flex items-start gap-1 text-2xs leading-tight sm:text-xs",
+                done || active || failed ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
+              )}
+            >
+              {done ? (
+                <Check className="mt-px h-3 w-3 shrink-0 text-[var(--success)]" aria-hidden />
+              ) : failed ? (
+                <X className="h-3 w-3 shrink-0 text-[var(--danger)]" aria-hidden />
+              ) : active ? (
+                <Loader2 className="h-3 w-3 shrink-0 text-[var(--info)] motion-safe:animate-spin" aria-hidden />
+              ) : null}
+              <span className="min-w-0">{s.label}</span>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }

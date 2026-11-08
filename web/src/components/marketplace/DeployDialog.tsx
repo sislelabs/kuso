@@ -8,6 +8,7 @@ import { AlertTriangle, ChevronRight, Database, ExternalLink, Globe, KeyRound, L
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
@@ -52,7 +53,16 @@ function usableInstanceDomain(host: string): string {
   return host;
 }
 
-export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: () => void }) {
+export function DeployDialog({
+  app,
+  defaultProject,
+  onClose,
+}: {
+  app: MarketplaceApp;
+  // Preselect this existing project as the deploy target.
+  defaultProject?: string;
+  onClose: () => void;
+}) {
   const router = useRouter();
   const qc = useQueryClient();
   const projects = useProjects();
@@ -60,9 +70,9 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   const instanceDomain = usableInstanceDomain(useInstanceDomain());
   const taken = useMemo(() => new Set((projects.data ?? []).map((p) => p.metadata.name)), [projects.data]);
 
-  const [target, setTarget] = useState<Target>(canCreateProject ? "new" : "existing");
+  const [target, setTarget] = useState<Target>(defaultProject || !canCreateProject ? "existing" : "new");
   const [newName, setNewName] = useState<string | null>(null);
-  const [existing, setExisting] = useState("");
+  const [existing, setExisting] = useState(defaultProject ?? "");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [submitted, setSubmitted] = useState(false);
@@ -76,6 +86,13 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   // Set once this dialog created the project, so a retry after a failed
   // apply doesn't trip over its own 409.
   const [createdProject, setCreatedProject] = useState<string | null>(null);
+
+  // A ?project= that doesn't exist (or isn't visible) falls back to the
+  // normal choice instead of a select pointing at nothing.
+  useEffect(() => {
+    if (!defaultProject || !projects.data || taken.has(defaultProject)) return;
+    setExisting((cur) => (cur === defaultProject ? "" : cur));
+  }, [defaultProject, projects.data, taken]);
 
   const suggestedName = uniqueProjectName(app.name, taken);
   const projectName = target === "new" ? (newName ?? suggestedName) : existing;
@@ -176,7 +193,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
     }
   }
 
-  const dirty = newName !== null || existing !== "" || Object.keys(answers).length > 0;
+  const dirty = newName !== null || existing !== (defaultProject ?? "") || Object.keys(answers).length > 0;
 
   const field = (p: MarketplacePrompt) => {
     const id = `mp-${p.key}`;
@@ -271,9 +288,9 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
                     resetOutcome();
                   }}
                   className={cn(
-                    "h-8 rounded text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50",
+                    "h-8 rounded text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50",
                     target === t
-                      ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
+                      ? "bg-[var(--selected)] text-[var(--text-primary)] shadow-[var(--shadow-sm)] ring-1 ring-[var(--selected-border)]"
                       : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
                   )}
                 >
@@ -297,7 +314,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
                 onBlur={() => setTouched({ ...touched, project: true })}
               />
             ) : (
-              <select
+              <Select
                 aria-label="Existing project"
                 value={existing}
                 aria-invalid={projectError && submitted ? true : undefined}
@@ -306,9 +323,10 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
                   setExisting(e.target.value);
                   resetOutcome();
                 }}
-                className="mt-2 h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 font-mono text-sm text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                wrapperClassName="mt-2"
+                className="font-mono"
+                placeholder={projects.isPending ? "Loading projects…" : "Choose a project"}
               >
-                <option value="">{projects.isPending ? "Loading projects…" : "Choose a project"}</option>
                 {[...(projects.data ?? [])]
                   .sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
                   .map((p) => (
@@ -316,7 +334,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
                       {p.metadata.name}
                     </option>
                   ))}
-              </select>
+              </Select>
             )}
             <p
               id="mp-project-hint"

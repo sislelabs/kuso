@@ -9,12 +9,21 @@ import { TimeSeriesChart } from "@/components/shared/s3-TimeSeriesChart";
 import type { ChartMarker, ChartThreshold, Point } from "@/components/shared/s3-TimeSeriesChart";
 import { TimeRange, rangeLabel, rangeToMs } from "@/components/logs/TimeRange";
 import { MEMORY_WARN_RATIO, memoryPressure, parseMemoryQuantity, useBuilds, useService } from "@/features/services";
-import { parseCpuQuantity, stepToMs, useEnvPodMetrics, useEnvTimeseries } from "@/features/service-metrics";
+import {
+  mergeSamples,
+  parseCpuQuantity,
+  stepToMs,
+  useEnvPodMetrics,
+  useEnvTimeseries,
+  useServiceUsageHistory,
+} from "@/features/service-metrics";
 import type { ResourceSample } from "@/features/service-metrics";
 import { shortSha } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
+// The server keeps CPU/memory history for this long.
+const HISTORY_MAX_MS = 24 * 3_600_000;
 
 interface Props {
   project: string;
@@ -38,6 +47,10 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
   const envName = env?.metadata.name ?? "";
   const pods = useEnvPodMetrics(envName);
   const traffic = useEnvTimeseries(envName, range);
+  const histRange = rangeToMs(range) > HISTORY_MAX_MS ? "24h" : range;
+  const history = useServiceUsageHistory(project, service, envName, histRange);
+  // null (404: older server) or an error both fall back to the tab's own polls.
+  const serverHist = history.isError ? null : (history.data ?? null);
   const svc = useService(project, service);
   const builds = useBuilds(project, service);
 
@@ -100,6 +113,15 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
   const podCount = current.length;
   const pressure = memoryPressure(current.map((p) => p.memBytes), memLimit);
   const memWarn = pressure !== undefined && pressure > MEMORY_WARN_RATIO;
+
+  const resSamples = useMemo(
+    () => (serverHist ? mergeSamples(serverHist.samples, pods.samples) : pods.samples),
+    [serverHist, pods.samples],
+  );
+  const resGapMs = serverHist ? Math.max(60_000, serverHist.stepSeconds * 1000 * 2.5) : 60_000;
+  const resNote = serverHist
+    ? `last ${rangeLabel(histRange)} · ${podCount} replica${podCount === 1 ? "" : "s"} · server-sampled every 30s`
+    : `live · ${podCount} replica${podCount === 1 ? "" : "s"} · sampled every 15s while this tab is open`;
 
   const [trafficHover, setTrafficHover] = useState<number | null>(null);
   const [resHover, setResHover] = useState<number | null>(null);
@@ -212,19 +234,16 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit }: Prop
       </section>
 
       <section aria-labelledby="m-res" className="space-y-3">
-        <SectionHeading
-          id="m-res"
-          title="Resources"
-          note={`live · ${podCount} replica${podCount === 1 ? "" : "s"} · sampled every 15s while this tab is open`}
-        />
+        <SectionHeading id="m-res" title="Resources" note={resNote} />
         {pods.isError ? (
           <QueryErrorState what="pod metrics" error={pods.error} onRetry={() => void pods.refetch()} />
         ) : (
           <ResourceCharts
-            samples={pods.samples}
+            samples={resSamples}
             now={now}
             rangeMs={rangeMs}
-            loading={pods.isPending}
+            gapMs={resGapMs}
+            loading={pods.isPending || history.isPending}
             podCount={podCount}
             cpuLimit={cpuLimit}
             cpuRequest={cpuRequest}
@@ -246,6 +265,7 @@ function ResourceCharts({
   samples,
   now,
   rangeMs,
+  gapMs,
   loading,
   podCount,
   cpuLimit,
@@ -261,6 +281,7 @@ function ResourceCharts({
   samples: ResourceSample[];
   now: number;
   rangeMs: number;
+  gapMs: number;
   loading: boolean;
   podCount: number;
   cpuLimit?: number;
@@ -315,7 +336,7 @@ function ResourceCharts({
           domain={domain}
           format={fmtCpu}
           ariaLabel={`CPU usage across ${podCount} replicas, current ${last ? fmtCpu(last.cpuMillicores) : "unknown"}.`}
-          gapMs={60_000}
+          gapMs={gapMs}
           thresholds={cpuTh}
           markers={markers}
           minYMax={10}
@@ -344,7 +365,7 @@ function ResourceCharts({
           domain={domain}
           format={fmtBytes}
           ariaLabel={`Memory usage across ${podCount} replicas, current ${last ? fmtBytes(last.memBytes) : "unknown"}.`}
-          gapMs={60_000}
+          gapMs={gapMs}
           thresholds={memTh}
           markers={markers}
           minYMax={64 * 1024 * 1024}
@@ -508,5 +529,5 @@ function fmtBytes(b: number): string {
 }
 
 function memTickUnit(maxBytes: number): number {
-  return maxBytes >= 2 * 1024 ** 3 ? 1024 ** 3 : 1024 ** 2;
+  return maxBytes >= 1024 ** 3 ? 1024 ** 3 : 1024 ** 2;
 }

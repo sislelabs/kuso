@@ -18,19 +18,21 @@ export interface CreateServiceOutcome {
   // "started": a first build is running (server- or client-triggered).
   // "failed": it should have started but didn't (buildError says why).
   // "none": nothing to build (image or worker runtime).
-  build: "started" | "failed" | "none";
+  // "skipped": the caller asked to create without deploying.
+  build: "started" | "failed" | "none" | "skipped";
   buildError?: string;
   // Variables that didn't save; the service exists without them.
   envFailed: { name: string; error: string }[];
 }
 
-function firstBuildOf(created: unknown): { triggered?: boolean; error?: string } | undefined {
+function firstBuildOf(created: unknown): { triggered?: boolean; skipped?: boolean; error?: string } | undefined {
   if (!created || typeof created !== "object") return undefined;
   const fb = (created as Record<string, unknown>).firstBuild;
   if (!fb || typeof fb !== "object") return undefined;
   const r = fb as Record<string, unknown>;
   return {
     triggered: typeof r.triggered === "boolean" ? r.triggered : undefined,
+    skipped: r.skipped === true,
     error: typeof r.error === "string" ? r.error : undefined,
   };
 }
@@ -53,7 +55,9 @@ function errMessage(e: unknown): string {
 //
 // Current servers start the first build themselves and say so in
 // `firstBuild`; for older ones (no field) the client triggers it, after
-// the variables are in place.
+// the variables are in place. With deploy: false the server is asked to
+// skip it (skipFirstBuild) and the client never starts one; a server too
+// old to know the flag builds anyway and the outcome says "started".
 export async function createServiceWithEnv(
   project: string,
   body: CreateServiceBody,
@@ -62,10 +66,13 @@ export async function createServiceWithEnv(
     // Runs after the service and its variables exist, before the client
     // build fallback (e.g. adding suggested addons).
     beforeBuild?: () => Promise<void>;
+    // false = create only; the first deploy is left to the user.
+    deploy?: boolean;
   } = {},
   deps: CreateServiceDeps = defaultDeps,
 ): Promise<CreateServiceOutcome> {
-  const created = await deps.post(project, body);
+  const deploy = opts.deploy ?? true;
+  const created = await deps.post(project, deploy ? body : { ...body, skipFirstBuild: true });
   const service = body.name;
 
   const envFailed: CreateServiceOutcome["envFailed"] = [];
@@ -84,6 +91,7 @@ export async function createServiceWithEnv(
 
   const fb = firstBuildOf(created);
   if (fb?.triggered) return { build: "started", envFailed };
+  if (!deploy || fb?.skipped) return { build: "skipped", envFailed };
   if (fb?.error) return { build: "failed", buildError: fb.error, envFailed };
   try {
     await deps.trigger(project, service, body.repo?.defaultBranch);

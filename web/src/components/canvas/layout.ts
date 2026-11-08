@@ -14,10 +14,14 @@ export function autoLayout(nodes: Node[], edges: Edge[]): Node[] {
   g.setGraph({ rankdir: "LR", nodesep: 32, ranksep: 96 });
   g.setDefaultEdgeLabel(() => ({}));
 
-  nodes.forEach((n) => {
+  // dagre orders nodes within a rank by insertion order, and the API
+  // returns services/addons in no fixed order: sort so a first load
+  // without a stored layout lands the same way every time.
+  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  [...nodes].sort(byId).forEach((n) => {
     g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   });
-  edges.forEach((e) => {
+  [...edges].sort(byId).forEach((e) => {
     g.setEdge(e.source, e.target);
   });
 

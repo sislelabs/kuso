@@ -57,6 +57,7 @@ import (
 	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/platformharden"
 	"kuso/server/internal/podsizes"
+	"kuso/server/internal/podusage"
 	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/projects"
@@ -1307,6 +1308,15 @@ func main() {
 			vulnGate.InvalidateSettings()
 		}
 	}
+	// Per-service CPU/memory history for the Metrics panel. Sampled on
+	// every replica rather than under the leader lease: the history is
+	// in-memory, so whichever replica serves the request needs its own.
+	var usageStore *podusage.Store
+	if kubeClient != nil {
+		usageStore = podusage.NewStore()
+		usageSampler := &podusage.Sampler{Kube: kubeClient, Store: usageStore, Logger: logger.With("component", "podusage")}
+		goSafe(logger, "podusage", func() { usageSampler.Run(ctx) })
+	}
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:                    database,
 		Incidents:             incidentMgr,
@@ -1332,6 +1342,7 @@ func main() {
 		Spec:                  specRecon,
 		Kube:                  kubeClient,
 		Namespace:             *namespace,
+		UsageHistory:          usageStore,
 		Updater:               updaterSvc,
 		Logger:                logger,
 		BaseCtx:               ctx,

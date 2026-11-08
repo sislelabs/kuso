@@ -68,6 +68,10 @@ type CreateServiceRequest struct {
 	// ResourceRequirements shape ({"requests":{...},"limits":{...}}).
 	// nil = the instance's default pod size; an empty map = none.
 	Resources *map[string]any `json:"resources,omitempty"`
+	// SkipFirstBuild creates the service without starting its first
+	// build, so the caller can add variables or addons first and deploy
+	// later. Request-only: it is not stored on the service.
+	SkipFirstBuild bool `json:"skipFirstBuild,omitempty"`
 }
 
 // ServiceRelease is the pre-deploy release hook (migrations etc.).

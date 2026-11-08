@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { Github, Check, Plus, Box, Rocket, GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import type { AddonSuggestion } from "@/features/github";
@@ -42,8 +43,6 @@ const RUNTIMES = [
 
 const inputClass = "h-9 text-[13px]";
 const monoInputClass = "h-9 font-mono text-[13px]";
-const selectClass =
-  "block h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[13px]";
 
 // imageRegistryHost mirrors registrycreds.NormalizeRegistry's view of
 // which registry an image reference points at.
@@ -198,7 +197,7 @@ export function AddServiceView() {
   const willBuild = source === "repo" && kind === "web";
   const showConfigure = source === "image" || !!picked;
 
-  const onAdd = async () => {
+  const onAdd = async (deploy = true) => {
     // Inline per-field errors + focus the first invalid field in visual
     // order. Toasts are for server-side failures only.
     const errs: typeof fieldErrors = {};
@@ -255,6 +254,7 @@ export function AddServiceView() {
     try {
       const out = await createServiceWithEnv(project, body, {
         envVars: env.vars,
+        deploy,
         // Addons come after the service so a rejected service POST can't
         // leave a database behind. A service with no explicit subscription
         // list mounts every project addon, so it still gets DATABASE_URL.
@@ -290,6 +290,11 @@ export function AddServiceView() {
   };
 
   const submitLabel = submitting ? "Creating…" : kind === "worker" && source === "repo" ? "Create worker" : "Create & deploy";
+  const submitDisabled =
+    submitting ||
+    (willBuild && detection.state === "detecting") ||
+    // The server hard-rejects a worker with no fromService.
+    (source === "repo" && kind === "worker" && !fromService);
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:py-8">
@@ -339,20 +344,22 @@ export function AddServiceView() {
                       <span className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
                         <GitBranch className="h-3 w-3" />
                         {picked.byUrl && picked.byUrl.branches.length > 1 ? (
-                          <select
+                          <Select
                             aria-label="Branch"
                             value={picked.repo.defaultBranch}
                             onChange={(e) =>
                               setPicked({ ...picked, repo: { ...picked.repo, defaultBranch: e.target.value } })
                             }
-                            className="h-7 max-w-40 rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 font-mono text-xs"
+                            size="sm"
+                      wrapperClassName="w-auto max-w-40"
+                      className="font-mono text-xs"
                           >
                             {picked.byUrl.branches.map((b) => (
                               <option key={b} value={b}>
                                 {b}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         ) : (
                           <span className="font-mono">{picked.repo.defaultBranch}</span>
                         )}
@@ -420,12 +427,11 @@ export function AddServiceView() {
                   }
                   htmlFor="svc-pull-secret"
                 >
-                  <select
+                  <Select
                     id="svc-pull-secret"
                     value={pullSecret}
                     onChange={(e) => setPullSecretChoice(e.target.value)}
                     disabled={(registryCreds.data ?? []).length === 0}
-                    className={selectClass}
                   >
                     <option value="">None (public image)</option>
                     {(registryCreds.data ?? []).map((c) => (
@@ -433,7 +439,7 @@ export function AddServiceView() {
                         {c.registry} · {c.username}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </FormField>
               </div>
             </div>
@@ -683,20 +689,24 @@ export function AddServiceView() {
                 >
                   Cancel
                 </Link>
-                <Button
-                  type="button"
-                  onClick={onAdd}
-                  // The server hard-rejects a worker with no fromService.
-                  disabled={
-                    submitting ||
-                    (willBuild && detection.state === "detecting") ||
-                    (source === "repo" && kind === "worker" && !fromService)
-                  }
-                  className="h-9 px-4"
-                >
-                  <Rocket className="h-4 w-4" />
-                  {submitLabel}
-                </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                  {willBuild && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void onAdd(false)}
+                      disabled={submitDisabled}
+                      title="Create the service without building it. Add variables or addons, then deploy from the Deployments tab."
+                      className="h-9 px-4"
+                    >
+                      Create without deploying
+                    </Button>
+                  )}
+                  <Button type="button" onClick={() => void onAdd()} disabled={submitDisabled} className="h-9 px-4">
+                    <Rocket className="h-4 w-4" />
+                    {submitLabel}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -855,11 +865,10 @@ function SizingFields({
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-[1fr_7rem_7rem]">
         <div className="col-span-2 sm:col-span-1">
           <FormField label="Size" hint="CPU and memory per pod." htmlFor="svc-size">
-            <select
+            <Select
               id="svc-size"
               value={value.size}
               onChange={(e) => onChange({ ...value, size: e.target.value })}
-              className={selectClass}
             >
               <option value="">Instance default</option>
               {presets.map((p) => (
@@ -869,7 +878,7 @@ function SizingFields({
                 </option>
               ))}
               <option value={SIZE_NONE}>None (no requests or limits)</option>
-            </select>
+            </Select>
           </FormField>
         </div>
         <FormField label="Replicas" hint="Minimum." htmlFor="svc-replicas">

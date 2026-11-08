@@ -969,7 +969,7 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if out != nil {
 		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
-	firstBuild := h.triggerFirstBuild(ctx, project, out)
+	firstBuild := h.triggerFirstBuild(ctx, project, out, wire.SkipFirstBuild)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	// Additive envelope: same KusoService fields as before, plus an
@@ -997,8 +997,11 @@ type createServiceResponse struct {
 }
 
 type firstBuildResult struct {
-	Triggered bool   `json:"triggered"`
-	Error     string `json:"error,omitempty"`
+	Triggered bool `json:"triggered"`
+	// Skipped is true when the caller asked for no first build
+	// (skipFirstBuild); clients must not start one on its behalf.
+	Skipped bool   `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // triggerFirstBuild kicks the initial build for a newly created
@@ -1011,14 +1014,16 @@ type firstBuildResult struct {
 //     of its own (builds.Create rejects it outright).
 //
 // Also skipped when the service has no repo at all, which is the
-// same "nothing to build from" condition expressed on the CR.
+// same "nothing to build from" condition expressed on the CR, and when
+// the caller sent skipFirstBuild (reported as Skipped so clients know
+// not to start one themselves).
 //
 // Best-effort by design: the service is already created and the 201 has
 // to reflect that. A build that fails to start is logged AND surfaced
 // on the create response's firstBuild field — the user can retry with
 // `kuso build trigger`. Returns nil when there was nothing to build.
-func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string, svc *kube.KusoService) *firstBuildResult {
-	if h.FirstBuildTrigger == nil || svc == nil {
+func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string, svc *kube.KusoService, skip bool) *firstBuildResult {
+	if svc == nil {
 		return nil
 	}
 	switch svc.Spec.Runtime {
@@ -1026,6 +1031,12 @@ func (h *ProjectsHandler) triggerFirstBuild(ctx context.Context, project string,
 		return nil
 	}
 	if svc.Spec.Repo == nil || svc.Spec.Repo.URL == "" {
+		return nil
+	}
+	if skip {
+		return &firstBuildResult{Skipped: true}
+	}
+	if h.FirstBuildTrigger == nil {
 		return nil
 	}
 	branch := svc.Spec.Repo.DefaultBranch

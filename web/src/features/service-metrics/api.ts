@@ -1,4 +1,5 @@
-import { api } from "@/lib/api-client";
+import { ApiError, api } from "@/lib/api-client";
+import type { ResourceSample } from "./history";
 
 export interface PodMetric {
   pod: string;
@@ -31,6 +32,33 @@ export function getEnvPodMetrics(env: string): Promise<EnvMetricsResponse> {
 
 export function getEnvTimeseries(env: string, range: string): Promise<TimeseriesResponse> {
   return api<TimeseriesResponse>(`/api/kubernetes/envs/${encodeURIComponent(env)}/timeseries?range=${encodeURIComponent(range)}`);
+}
+
+// Server-kept CPU/memory history (in memory, up to 24h). Since is the
+// oldest sample the server holds, null when it has none.
+export interface UsageHistoryResponse {
+  stepSeconds: number;
+  samples: ResourceSample[];
+  since: number | null;
+}
+
+// Resolves null when the server predates the endpoint (404), so the
+// caller can fall back to its own polling.
+export async function getServiceUsageHistory(
+  project: string,
+  service: string,
+  env: string,
+  range: string,
+): Promise<UsageHistoryResponse | null> {
+  const q = new URLSearchParams({ env, range });
+  try {
+    return await api<UsageHistoryResponse>(
+      `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/usage/history?${q}`,
+    );
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
 }
 
 // Parses Go-style step strings ("30s", "2m", "1h") to ms.

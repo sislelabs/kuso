@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Search, SearchX, X } from "lucide-react";
+import { Suspense, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { ArrowLeft, Search, SearchX, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useMarketplace, type MarketplaceApp } from "@/features/marketplace";
 import { DeployDialog } from "@/components/marketplace/DeployDialog";
@@ -9,7 +12,18 @@ import { AppIcon, categoryLabel } from "@/components/marketplace/AppIcon";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+// useSearchParams needs a Suspense boundary in the static export.
 export default function MarketplacePage() {
+  return (
+    <Suspense>
+      <Marketplace />
+    </Suspense>
+  );
+}
+
+function Marketplace() {
+  // ?project=<name> (linked from an empty project) preselects the target.
+  const targetProject = useSearchParams().get("project")?.trim() || undefined;
   const market = useMarketplace();
   const apps = useMemo(() => market.data ?? [], [market.data]);
   const [q, setQ] = useState("");
@@ -32,10 +46,25 @@ export default function MarketplacePage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:p-8">
       <header className="mb-6">
+        {targetProject && (
+          <Link
+            href={`/projects/${encodeURIComponent(targetProject)}`}
+            className="mb-3 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+            Back to <span className="font-mono">{targetProject}</span>
+          </Link>
+        )}
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Marketplace</h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Self-hosted apps, pre-configured for kuso. Pick one, choose a project, and it deploys with storage and
-          secrets set up.
+          {targetProject ? (
+            <>
+              Self-hosted apps, pre-configured for kuso. Pick one to deploy it into{" "}
+              <span className="font-mono text-[var(--text-primary)]">{targetProject}</span> with storage and secrets set up.
+            </>
+          ) : (
+            "Self-hosted apps, pre-configured for kuso. Pick one, choose a project, and it deploys with storage and secrets set up."
+          )}
         </p>
       </header>
 
@@ -119,16 +148,17 @@ export default function MarketplacePage() {
           <SearchX className="h-6 w-6 text-[var(--text-tertiary)]" aria-hidden />
           <p className="mt-3 text-sm font-medium text-[var(--text-primary)]">No apps match</p>
           <p className="mt-1 text-[13px] text-[var(--text-secondary)]">Try another search or category.</p>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-4"
             onClick={() => {
               setQ("");
               setCat("all");
             }}
-            className="mt-4 inline-flex h-8 items-center rounded-md border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] outline-none hover:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
           >
             Clear filters
-          </button>
+          </Button>
         </div>
       ) : (
         <ul className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -165,7 +195,7 @@ export default function MarketplacePage() {
         </ul>
       )}
 
-      {selected && <DeployDialog app={selected} onClose={() => setSelected(null)} />}
+      {selected && <DeployDialog app={selected} defaultProject={targetProject} onClose={() => setSelected(null)} />}
     </div>
   );
 }

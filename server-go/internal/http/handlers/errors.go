@@ -31,6 +31,59 @@ type ErrorsHandler struct {
 func (h *ErrorsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}/errors", h.List)
 	r.Get("/api/projects/{project}/services/{service}/errors/{fingerprint}", h.Detail)
+	r.Get("/api/projects/{project}/errors/summary", h.Summary)
+}
+
+// errorSummaryResponse keys services by SHORT name (the canvas's key).
+type errorSummaryResponse struct {
+	Since    time.Time                              `json:"since"`
+	Services map[string]errorSummaryServiceResponse `json:"services"`
+}
+
+type errorSummaryServiceResponse struct {
+	Occurrences int64     `json:"occurrences"`
+	Groups      int64     `json:"groups"`
+	LastSeen    time.Time `json:"lastSeen"`
+}
+
+// Summary returns per-service error counts for a project in one request
+// (the canvas badges). ?since= and ?env= as in List; default 24h.
+// Services with no errors in the window are absent from the map.
+func (h *ErrorsHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !requireParent(ctx, w, h.Kube, h.Namespace, project, "") {
+		return
+	}
+	window := 24 * time.Hour
+	if v := r.URL.Query().Get("since"); v != "" {
+		d, err := parseRangeDuration(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("invalid since %q: use a Go duration (30m, 6h) or days/weeks (7d, 2w), max 30d", v))
+			return
+		}
+		window = min(d, 30*24*time.Hour)
+	}
+	since := time.Now().Add(-window)
+	rows, err := h.DB.SummarizeProjectErrors(ctx, project, r.URL.Query().Get("env"), since)
+	if err != nil {
+		h.Logger.Error("errors: summary", "err", err, "project", project)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	out := errorSummaryResponse{Since: since.UTC(), Services: make(map[string]errorSummaryServiceResponse, len(rows))}
+	for _, s := range rows {
+		out.Services[strings.TrimPrefix(s.Service, project+"-")] = errorSummaryServiceResponse{
+			Occurrences: s.Occurrences,
+			Groups:      s.Groups,
+			LastSeen:    s.LastSeen,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // List returns aggregated error groups. Query params:

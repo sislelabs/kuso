@@ -44,7 +44,7 @@ export interface TimeSeriesChartProps {
   tickUnit?: number;
 }
 
-const M = { top: 10, right: 10, bottom: 22, left: 46 };
+const M = { top: 10, right: 10, bottom: 22, left: 54 };
 
 export function TimeSeriesChart({
   points,

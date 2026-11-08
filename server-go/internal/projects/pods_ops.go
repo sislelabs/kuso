@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -21,6 +22,11 @@ type PodSummary struct {
 	Containers []string `json:"containers,omitempty"`
 	// Restarts sums RestartCount across the pod's containers.
 	Restarts int32 `json:"restarts"`
+	// Reason/Message explain a pod that isn't ready yet: the first
+	// waiting container's reason (ContainerCreating, ImagePullBackOff,
+	// CrashLoopBackOff…), else the Pending pod's unschedulable condition.
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // PodList is what the handler returns. Namespace is included so callers
@@ -102,15 +108,36 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 		for _, c := range p.Spec.Containers {
 			containers = append(containers, c.Name)
 		}
+		reason, message := podWaitReason(p)
 		out.Pods = append(out.Pods, PodSummary{
 			Name:       p.Name,
 			Ready:      ready,
 			Phase:      string(p.Status.Phase),
 			Containers: containers,
 			Restarts:   restarts,
+			Reason:     reason,
+			Message:    message,
 		})
 	}
 	return out, nil
+}
+
+// podWaitReason reports why a pod isn't running yet: a waiting init or
+// app container's reason, else a PodScheduled=False condition.
+func podWaitReason(p *corev1.Pod) (string, string) {
+	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
+		for _, c := range list {
+			if w := c.State.Waiting; w != nil && w.Reason != "" {
+				return w.Reason, w.Message
+			}
+		}
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return c.Reason, c.Message
+		}
+	}
+	return "", ""
 }
 
 // Compile-time check that we depend on the GetKusoEnvironment shape we

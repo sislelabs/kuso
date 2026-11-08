@@ -251,3 +251,44 @@ func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fin
 	}
 	return out, occ.Err()
 }
+
+// ServiceErrorSummary is one service's error rollup over a window.
+type ServiceErrorSummary struct {
+	Service     string    `json:"service"`
+	Occurrences int64     `json:"occurrences"`
+	Groups      int64     `json:"groups"`
+	LastSeen    time.Time `json:"lastSeen"`
+}
+
+// SummarizeProjectErrors returns per-service error counts for a whole
+// project in one query, so the canvas doesn't fan out one ListErrorGroups
+// call per service. Service is the stored FQ `<project>-<service>` name.
+// Services with no errors in the window are absent. env, when non-empty,
+// restricts to one environment like ListErrorGroups.
+func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, since time.Time) ([]ServiceErrorSummary, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT service, COUNT(*), COUNT(DISTINCT fingerprint), MAX(ts)
+		FROM "ErrorEvent"
+		WHERE project = $1 AND ts >= $2 AND ($3 = '' OR env = $3)
+		GROUP BY service
+		ORDER BY service`,
+		project, since.UTC(), env,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SummarizeProjectErrors: %w", err)
+	}
+	defer rows.Close()
+	out := []ServiceErrorSummary{}
+	for rows.Next() {
+		var s ServiceErrorSummary
+		var last sql.NullTime
+		if err := rows.Scan(&s.Service, &s.Occurrences, &s.Groups, &last); err != nil {
+			return nil, fmt.Errorf("scan ServiceErrorSummary: %w", err)
+		}
+		if last.Valid {
+			s.LastSeen = last.Time
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

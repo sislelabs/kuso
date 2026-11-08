@@ -14,6 +14,8 @@ func TestServiceAddedSummary(t *testing.T) {
 			"service shop/web added\nhost: web.shop.example.com\n" +
 				"first build started. Find its id with: kuso build list shop web\n" +
 				"then follow it with: kuso logs shop web --build <id>\n"},
+		{"skipped", "", &serviceFirstBuild{Skipped: true},
+			"service shop/web added\nfirst build skipped (--no-build). Deploy with: kuso build trigger shop web\n"},
 		{"failed", "", &serviceFirstBuild{Error: "no github installation"},
 			"service shop/web added\nfirst build did not start: no github installation\n" +
 				"retry with: kuso build trigger shop web\n"},

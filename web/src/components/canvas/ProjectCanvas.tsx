@@ -38,9 +38,11 @@ import {
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
 import { useProjectVulns } from "@/features/vulns";
-import { errorsQueryKey, listErrors, useLatestBuilds, useProjectCrons } from "@/features/services";
+import { errorsQueryKey, listErrors, useLatestBuilds, useProjectCrons, useProjectErrorSummary } from "@/features/services";
+import { ApiError } from "@/lib/api-client";
 import { canvasVulnSummaries, summarizeErrors, type ErrorSummary } from "./badgeSummary";
-import { CanvasShortcuts, announceShortcuts } from "./CanvasShortcuts";
+import { CanvasShortcutsButton, useCanvasShortcuts } from "./CanvasShortcuts";
+import { isTypingTarget } from "@/lib/shortcuts";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { servicesQueryKey } from "@/features/projects";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
@@ -140,15 +142,18 @@ export function ProjectCanvas({
     [projectVulns.data, project, selectedEnv],
   );
 
-  // 24h error counts per service. Same query key as the overlay's Errors
-  // tab default view (all envs, 24h), so the badge and the tab agree and
-  // share a cache entry. One small request per service, polled slowly.
+  // 24h error counts per service: one project-wide summary request.
+  // Servers without the summary endpoint 404 it; only then fall back to
+  // one small request per service (sharing the Errors tab's cache key).
   const serviceShorts = useMemo(
     () => services.map((s) => serviceShortName(project, s.metadata.name)),
     [services, project],
   );
+  const errorSummary = useProjectErrorSummary(project);
+  const perServiceErrors =
+    errorSummary.error instanceof ApiError && (errorSummary.error.status === 404 || errorSummary.error.status === 405);
   const errorQueries = useQueries({
-    queries: serviceShorts.map((short) => ({
+    queries: (perServiceErrors ? serviceShorts : []).map((short) => ({
       queryKey: errorsQueryKey(project, short, "24h", ""),
       queryFn: () => listErrors(project, short, "24h"),
       staleTime: 30_000,
@@ -160,13 +165,22 @@ export function ProjectCanvas({
   const errorDataKey = errorQueries.map((q) => q.dataUpdatedAt).join(",");
   const errorSummaries = useMemo(() => {
     const out: Record<string, ErrorSummary | undefined> = {};
-    serviceShorts.forEach((short, i) => {
-      out[short] = summarizeErrors(errorQueries[i]?.data);
-    });
+    if (perServiceErrors) {
+      serviceShorts.forEach((short, i) => {
+        out[short] = summarizeErrors(errorQueries[i]?.data);
+      });
+      return out;
+    }
+    const data = errorSummary.data;
+    if (!data) return out;
+    for (const short of serviceShorts) {
+      const s = data.services[short];
+      out[short] = s ? { occurrences: s.occurrences, groups: s.groups } : { occurrences: 0, groups: 0 };
+    }
     return out;
     // errorQueries is a fresh array each render; key off the data stamps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceShorts, errorDataKey]);
+  }, [serviceShorts, errorDataKey, perServiceErrors, errorSummary.data]);
 
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
@@ -332,11 +346,11 @@ export function ProjectCanvas({
         // The `kind` field is non-standard React Flow data; we
         // stash the edge category here so the filter chips can
         // toggle visibility without re-deriving from the id.
-        // Colour: amber. Distinct from service refs (the accent
-        // colour) so the two categories read as separate at a
-        // glance.
+        // Colour: olive (chart-4), distinct from service refs (the
+        // accent blue) and not orange, which is reserved for warnings.
+        // Full opacity keeps it ≥3:1 on the light canvas.
         data: { kind: "addon" },
-        style: { stroke: "var(--chart-2)", strokeWidth: 1.5, opacity: 0.85 },
+        style: { stroke: "var(--chart-4)", strokeWidth: 1.5 },
       });
     });
     implicitUsedAddons.forEach((key) => {
@@ -348,7 +362,7 @@ export function ProjectCanvas({
         animated: false,
         data: { kind: "addon" },
         style: {
-          stroke: "var(--chart-2)",
+          stroke: "var(--chart-4)",
           strokeWidth: 1.25,
           strokeDasharray: "4 4",
           opacity: 0.4,
@@ -631,23 +645,22 @@ export function ProjectCanvas({
   //   l               : open focused service's logs tab
   //   v               : open variables tab
   //   s               : open settings tab
-  //   ?               : show the shortcuts list (CanvasShortcuts)
-  // Tab also reaches every node (React Flow makes them focusable);
-  // Enter on a focused node opens it.
+  // "?" is global (KeyboardShortcuts); the Canvas group is registered so
+  // its help dialog lists these. Tab also reaches every node (React Flow
+  // makes them focusable); Enter on a focused node opens it.
+  useCanvasShortcuts();
   const [focusIdx, setFocusIdx] = useState(-1);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const openNodeRef = useRef<(id: string) => void>(() => {});
+  // Time of the last bare "g": the next key belongs to a global g-chord
+  // (g s = settings), not to the canvas.
+  const lastG = useRef(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Don't hijack typing in inputs / textareas / contenteditables.
-      const target = e.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-        if (target.isContentEditable) return;
-        // Enter on a focused button/link activates that control.
-        if (e.key === "Enter" && (tag === "BUTTON" || tag === "A")) return;
-      }
+      if (isTypingTarget(e.target)) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      // Enter on a focused button/link activates that control.
+      if (target && e.key === "Enter" && (target.tagName === "BUTTON" || target.tagName === "A")) return;
       // An overlay, dialog or menu is open on top of the canvas: its
       // keys belong to it (r/l/v/s would otherwise switch services
       // under an overlay with unsaved edits).
@@ -655,11 +668,15 @@ export function ProjectCanvas({
       // Ignore when modifiers are held — those are reserved for
       // browser shortcuts (cmd-K opens the palette, cmd-R reloads).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "?") {
-        e.preventDefault();
-        if (announceShortcuts()) setShortcutsOpen(true);
+      if (e.key === "g") {
+        lastG.current = e.timeStamp;
         return;
       }
+      if (lastG.current && e.timeStamp - lastG.current < 1200) {
+        lastG.current = 0;
+        return;
+      }
+      lastG.current = 0;
       if (e.key === "Enter" && target) {
         const nodeEl = target.closest<HTMLElement>(".react-flow__node");
         const id = nodeEl?.dataset.id;
@@ -1218,7 +1235,7 @@ export function ProjectCanvas({
             <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
             Reset layout
           </button>
-          <CanvasShortcuts open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+          <CanvasShortcutsButton />
         </Panel>
         <AddMenuPanel
           project={project}
@@ -1512,7 +1529,7 @@ function EdgeLegend({
         <LegendToggle
           label="Addon connections"
           hint="Solid: the service references the addon in an env var. Dashed: the addon's connection secret is mounted but not referenced by name."
-          swatch="var(--chart-2)"
+          swatch="var(--chart-4)"
           on={filters.addon}
           onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
         />

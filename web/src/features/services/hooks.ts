@@ -16,6 +16,7 @@ import {
   getServiceEnvOverrides,
   listBuilds,
   listErrors,
+  getProjectErrorSummary,
   listRuns,
   listServiceCrons,
   listStorageClasses,
@@ -165,6 +166,23 @@ export function useErrors(project: string, service: string, since = "24h", env =
     enabled: !!project && !!service,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
+  });
+}
+
+export const projectErrorSummaryQueryKey = (project: string, since: string) =>
+  ["projects", project, "errors", "summary", since] as const;
+
+// One request for every service's error badge. Older servers 404 here;
+// retry is off so callers can fall back to per-service queries at once.
+export function useProjectErrorSummary(project: string, since = "24h") {
+  return useQuery({
+    queryKey: projectErrorSummaryQueryKey(project, since),
+    queryFn: () => getProjectErrorSummary(project, since),
+    enabled: !!project,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    retry: false,
   });
 }
 
