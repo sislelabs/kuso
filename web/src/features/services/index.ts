@@ -26,6 +26,7 @@ export {
   serviceEnvQueryKey,
   buildsQueryKey,
   errorsQueryKey,
+  useProjectErrorSummary,
   runsQueryKey,
   cronsQueryKey,
 } from "./hooks";

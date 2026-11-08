@@ -276,6 +276,18 @@ export async function listErrors(
   );
 }
 
+// ProjectErrorSummary is GET /api/projects/{p}/errors/summary: per-service
+// error counts keyed by short service name. Services with no errors in
+// the window are absent.
+export interface ProjectErrorSummary {
+  since: string;
+  services: Record<string, { occurrences: number; groups: number; lastSeen: string }>;
+}
+
+export async function getProjectErrorSummary(project: string, since = "24h"): Promise<ProjectErrorSummary> {
+  return api(`/api/projects/${encodeURIComponent(project)}/errors/summary?since=${encodeURIComponent(since)}`);
+}
+
 // cancelBuild stops an in-flight build. 204 on success; 400 if the
 // build is already in a terminal phase (succeeded/failed/cancelled);
 // 404 for an unknown build id.
