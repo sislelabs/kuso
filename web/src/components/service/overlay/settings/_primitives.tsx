@@ -257,10 +257,7 @@ export function isEqual(a: FormState, b: FormState): boolean {
 // hint ABOVE a full-width control, then a footer with the card's save
 // state. Hints are sans at 12px; mono is reserved for literal values.
 
-// Shared control classes so native selects/textareas match <Input>.
-// S1 is building a styled Select; these are the swap points.
-export const selectClass =
-  "h-8 w-full min-w-0 rounded-sm border border-border bg-input px-2.5 text-[13px] text-[var(--text-primary)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
+// Shared control classes so textareas match <Input>; selects use ui/select.
 export const textareaClass =
   "block w-full min-w-0 rounded-sm border border-border bg-input px-3 py-2 font-mono text-[12px] leading-5 text-[var(--text-primary)] outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
 export const inputClass = "h-8 text-[13px] md:text-[13px]";

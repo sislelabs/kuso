@@ -1,13 +1,13 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Layers3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { listPodSizes } from "@/features/cluster-config/api";
 import { matchPodSize, podSizeFields } from "@/features/services";
-import { cn } from "@/lib/utils";
-import { Section, Field, FieldGrid, WithSuffix, monoInputClass, selectClass, type SectionProps } from "./_primitives";
+import { Section, Field, FieldGrid, WithSuffix, monoInputClass, type SectionProps } from "./_primitives";
 
 const CUSTOM = "__custom";
 
@@ -131,11 +131,12 @@ export function ScaleSection({ state, setState }: SectionProps) {
           )
         }
       >
-        <select
+        <Select
+          size="sm"
           id="scale-pod-size"
           value={selectValue}
           onChange={(e) => onPick(e.target.value)}
-          className={cn(selectClass, "sm:max-w-xs")}
+          wrapperClassName="sm:max-w-xs"
         >
           <option value="">None</option>
           {presets.map((p) => (
@@ -144,7 +145,7 @@ export function ScaleSection({ state, setState }: SectionProps) {
             </option>
           ))}
           <option value={CUSTOM}>Custom…</option>
-        </select>
+        </Select>
       </Field>
       {showCustom && (
         // k8s quantity syntax: request = guaranteed floor (scheduling +

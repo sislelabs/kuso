@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
@@ -174,10 +175,12 @@ export function ServiceEnvironmentForm({
                   <span className="inline-block text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">
                     seed db from
                   </span>
-                  <select
+                  <Select
+                    size="sm"
                     value={form.seedFrom}
                     onChange={(e) => set({ seedFrom: e.target.value })}
-                    className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs"
+                    className="font-mono"
+                    wrapperClassName="w-auto"
                   >
                     <option value="">nothing (empty)</option>
                     {seedSources.map((g) => (
@@ -185,7 +188,7 @@ export function ServiceEnvironmentForm({
                         {g}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               )}
             </>

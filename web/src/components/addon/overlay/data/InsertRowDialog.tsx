@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -140,10 +141,11 @@ export function InsertRowDialog({
                     </div>
                     {!fs.omit && !fs.isNull &&
                       (kind === "bool" || kind === "enum" ? (
-                        <select
+                        <Select
+                          size="sm"
                           value={fs.raw}
                           onChange={(e) => set(c.name, { raw: e.target.value })}
-                          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs"
+                          className="font-mono"
                         >
                           <option value="">—</option>
                           {(kind === "bool" ? ["true", "false"] : c.enumValues ?? []).map((v) => (
@@ -151,7 +153,7 @@ export function InsertRowDialog({
                               {v}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       ) : kind === "json" ? (
                         <textarea
                           value={fs.raw}

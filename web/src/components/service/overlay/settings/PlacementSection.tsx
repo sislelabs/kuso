@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import { Check, MapPin, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,6 @@ import {
   Callout,
   Code,
   monoInputClass,
-  selectClass,
   type NodeSummary,
   type PlacementRow,
   type SectionProps,
@@ -126,11 +126,12 @@ export function PlacementSection({ state, setState }: SectionProps) {
                 className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_32px] items-center gap-2"
               >
                 {haveAnyLabels ? (
-                  <select
+                  <Select
+                    size="sm"
                     value={r.key}
                     onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
                     aria-label="Label key"
-                    className={cn(selectClass, "font-mono text-[12px]")}
+                    className="font-mono"
                   >
                     <option value="">Pick a label key</option>
                     {[...allLabels.keys()].sort().map((k) => (
@@ -138,7 +139,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
                         {k}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 ) : (
                   <Input
                     value={r.key}
@@ -149,11 +150,12 @@ export function PlacementSection({ state, setState }: SectionProps) {
                   />
                 )}
                 {valuesForKey && valuesForKey.size > 0 ? (
-                  <select
+                  <Select
+                    size="sm"
                     value={r.value}
                     onChange={(e) => updLabel(i, { value: e.target.value })}
                     aria-label="Label value"
-                    className={cn(selectClass, "font-mono text-[12px]")}
+                    className="font-mono"
                   >
                     <option value="">Any value</option>
                     {[...valuesForKey].sort().map((v) => (
@@ -161,7 +163,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
                         {v}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 ) : (
                   <Input
                     value={r.value}

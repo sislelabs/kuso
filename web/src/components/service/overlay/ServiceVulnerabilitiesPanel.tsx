@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
@@ -46,7 +47,8 @@ function PolicyRow({
       {canEdit ? (
         <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
           Policy
-          <select
+          <Select
+            size="sm"
             value={policy}
             disabled={setPolicy.isPending}
             onChange={(e) =>
@@ -54,17 +56,18 @@ function PolicyRow({
                 onSuccess: (r) => toast.success(`Vulnerability policy set to ${r.mode}`),
               })
             }
-            className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+            className="font-mono"
+            wrapperClassName="w-auto"
           >
             {POLICIES.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       ) : (
-        <span className="font-mono text-xs text-[var(--text-tertiary)]">policy: {policy}</span>
+        <span className="text-xs text-[var(--text-tertiary)]">Policy: <span className="font-mono">{policy}</span></span>
       )}
     </section>
   );

@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Play } from "lucide-react";
@@ -97,9 +98,10 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
         {(databases.data ?? []).length > 1 && (
           <>
             <h4 className="mb-1 text-xs font-medium text-[var(--text-tertiary)]">
-              database
+              Database
             </h4>
-            <select
+            <Select
+              size="sm"
               value={database}
               onChange={(e) => {
                 setDatabase(e.target.value);
@@ -107,8 +109,9 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 setResp(null);
                 setError(null);
               }}
-              className="mb-3 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
-              aria-label="database"
+              className="font-mono"
+              wrapperClassName="mb-3"
+              aria-label="Database"
             >
               <option value="">(default)</option>
               {databases.data!.map((d) => (
@@ -116,7 +119,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                   {d}
                 </option>
               ))}
-            </select>
+            </Select>
           </>
         )}
         <h4 className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">

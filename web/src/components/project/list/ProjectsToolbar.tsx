@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StatusFilter } from "./projectCardModel";
@@ -129,16 +130,17 @@ export function ProjectsToolbar({
 
       <label className="flex shrink-0 items-center gap-2 text-xs text-[var(--text-secondary)]">
         <span className="sr-only md:not-sr-only">Sort</span>
-        <select
+        <Select
+          size="sm"
           value={sort}
           onChange={(e) =>
             onSort(e.target.value === "deployed" ? "deployed" : "name")
           }
-          className="h-9 max-w-[9.5rem] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 text-xs text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+          wrapperClassName="max-w-[9.5rem]"
         >
           <option value="name">Name</option>
           <option value="deployed">Recently deployed</option>
-        </select>
+        </Select>
       </label>
     </div>
   );

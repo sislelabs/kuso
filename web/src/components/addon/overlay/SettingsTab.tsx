@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
@@ -350,15 +351,16 @@ function ConfigurationSection({
             <label className="text-xs font-medium text-[var(--text-tertiary)]">
               Tier <span className="text-[var(--warning)]">· immutable</span>
             </label>
-            <select
+            <Select
+              size="sm"
               value={size}
               disabled
-              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs opacity-60 outline-none focus:border-[var(--border-strong)]"
+              className="font-mono opacity-60"
             >
               <option value="small">small</option>
               <option value="medium">medium</option>
               <option value="large">large</option>
-            </select>
+            </Select>
             <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("size")?.message}
             </p>
@@ -815,10 +817,12 @@ function PlacementSection({
               className="grid grid-cols-[140px_1fr_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
               {haveAnyLabels ? (
-                <select
+                <Select
+                  size="sm"
                   value={r.key}
                   onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="font-mono"
+                  wrapperClassName="w-auto"
                 >
                   <option value="">pick label key</option>
                   {[...allLabels.keys()].sort().map((k) => (
@@ -826,7 +830,7 @@ function PlacementSection({
                       {k}
                     </option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <Input
                   value={r.key}
@@ -836,10 +840,12 @@ function PlacementSection({
                 />
               )}
               {valuesForKey && valuesForKey.size > 0 ? (
-                <select
+                <Select
+                  size="sm"
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="font-mono"
+                  wrapperClassName="w-auto"
                 >
                   <option value="">any value</option>
                   {[...valuesForKey].sort().map((v) => (
@@ -847,7 +853,7 @@ function PlacementSection({
                       {v}
                     </option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <Input
                   value={r.value}

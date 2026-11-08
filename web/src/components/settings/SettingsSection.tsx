@@ -1,6 +1,5 @@
-import type { ReactNode, SelectHTMLAttributes } from "react";
-import { forwardRef } from "react";
-import { AlertTriangle, ChevronDown, Info, XCircle } from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertTriangle, Info, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // SettingsSection is a Vercel-style settings card: title + description
@@ -152,21 +151,6 @@ export function SettingsNotice({
   );
 }
 
-// One look for every native <select> in settings until the shared
-// Select primitive lands; the integrator swaps SettingsSelect over.
-export const settingsSelectClass =
-  "h-9 w-full min-w-0 appearance-none rounded-sm border border-border bg-input pl-3 pr-8 text-sm text-[var(--text-primary)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
-
-export const SettingsSelect = forwardRef<
-  HTMLSelectElement,
-  SelectHTMLAttributes<HTMLSelectElement> & { wrapperClassName?: string }
->(function SettingsSelect({ className, wrapperClassName, children, ...props }, ref) {
-  return (
-    <div className={cn("relative w-full", wrapperClassName)}>
-      <select ref={ref} className={cn(settingsSelectClass, className)} {...props}>
-        {children}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
-    </div>
-  );
-});
+// Settings pages' select: the shared ui Select, kept under this name so
+// the settings call sites read consistently.
+export { Select as SettingsSelect } from "@/components/ui/select";

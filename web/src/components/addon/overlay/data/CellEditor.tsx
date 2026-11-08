@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import type { SQLColumn, SQLCellValue } from "@/features/projects";
 import { inputKindFor, validateCell, toCellValue } from "./cellInput";
@@ -89,28 +90,30 @@ export function CellEditor({
         {draftNull ? (
           <span className="flex-1 px-1 text-xs italic text-[var(--text-tertiary)]/60">null</span>
         ) : kind === "bool" ? (
-          <select
+          <Select
+            size="sm"
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-xs"
+            wrapperClassName="flex-1"
           >
             <option value="true">true</option>
             <option value="false">false</option>
-          </select>
+          </Select>
         ) : kind === "enum" ? (
-          <select
+          <Select
+            size="sm"
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-xs"
+            wrapperClassName="flex-1"
           >
             {(col.enumValues ?? []).map((v) => (
               <option key={v} value={v}>
                 {v}
               </option>
             ))}
-          </select>
+          </Select>
         ) : kind === "json" ? (
           <textarea
             autoFocus

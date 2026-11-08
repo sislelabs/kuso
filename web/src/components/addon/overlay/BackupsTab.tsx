@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { RotateCcw, Download } from "lucide-react";
@@ -297,12 +298,13 @@ function ConfirmRestore({
             <p>
               Loads <span className="font-mono">{tail(item.key)}</span> into:
             </p>
-            <select
+            <Select
+              size="sm"
               id="restore-target"
               aria-label="Restore into"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-xs"
+              className="font-mono"
             >
               <option value="">{sourceAddon} (overwrite)</option>
               {siblings.map((s) => (
@@ -310,7 +312,7 @@ function ConfirmRestore({
                   {s} (overwrite)
                 </option>
               ))}
-            </select>
+            </Select>
             <p className="text-[var(--error)]">Existing tables in {target || sourceAddon} are overwritten.</p>
             {!inPlace && (
               <p className="text-[var(--text-tertiary)]">

@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -328,11 +329,11 @@ export function ProjectSettingsView() {
 
           <div className="space-y-1.5">
             <Label htmlFor="installation">GitHub App installation</Label>
-            <select
+            <Select
               id="installation"
               value={installationId}
               onChange={(e) => { setInstallationId(Number(e.target.value)); setDirty(true); }}
-              className="block h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[13px]"
+              className="font-mono"
             >
               <option value={0}>none</option>
               {(installations.data ?? []).map((i) => (
@@ -343,7 +344,7 @@ export function ProjectSettingsView() {
               {installationId > 0 && !(installations.data ?? []).some((i) => i.id === installationId) && (
                 <option value={installationId}>#{installationId} (not visible to kuso)</option>
               )}
-            </select>
+            </Select>
             <p className="font-mono text-xs text-[var(--text-tertiary)]">
               The installation kuso mints clone tokens from for private repos. None = public repos only,
               unless a service sets its own.

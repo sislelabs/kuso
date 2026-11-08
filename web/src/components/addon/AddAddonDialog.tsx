@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { connectionURLKey, createAddon, type CreateAddonBody } from "@/features/addons";
@@ -473,11 +474,13 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       instance addon
                     </label>
                     {availableInstanceNames.length > 0 ? (
-                      <select
+                      <Select
+                        size="sm"
                         id="addon-inst-name"
                         value={instName}
                         onChange={(e) => setInstName(e.target.value)}
-                        className="mt-1 h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)]"
+                        className="font-mono"
+                        wrapperClassName="mt-1"
                       >
                         <option value="">(pick one)</option>
                         {availableInstanceNames.map((n) => (
@@ -485,7 +488,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             {n}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     ) : (
                       <Input
                         id="addon-inst-name"

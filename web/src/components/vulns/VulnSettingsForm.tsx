@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -25,9 +26,6 @@ const MODES: { id: VulnMode; label: string; hint: string }[] = [
 ];
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
-
-const selectCls =
-  "h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-sm text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]";
 
 function same(a: VulnScanSettings, b: VulnScanSettings): boolean {
   return (
@@ -111,30 +109,33 @@ export function VulnSettingsForm({ initial }: { initial: VulnScanSettings }) {
         </label>
         <label className="flex items-center gap-3 text-sm">
           Nightly sweep at
-          <select
+          <Select
+            size="sm"
             value={draft.nightlyHourUTC}
             onChange={(e) => set("nightlyHourUTC", Number(e.target.value))}
-            className={selectCls}
+            className="tabular-nums"
+            wrapperClassName="w-auto"
           >
             {HOURS.map((h) => (
               <option key={h} value={h}>
                 {String(h).padStart(2, "0")}:00
               </option>
             ))}
-          </select>
+          </Select>
           UTC
         </label>
         <label className="flex items-center gap-3 text-sm">
           Notify on new fixable
-          <select
+          <Select
+            size="sm"
             value={draft.notifyMinSeverity}
             onChange={(e) => set("notifyMinSeverity", e.target.value as VulnScanSettings["notifyMinSeverity"])}
-            className={selectCls}
+            wrapperClassName="w-auto"
           >
-            <option value="critical">critical only</option>
-            <option value="high">critical + high</option>
-            <option value="none">nothing (no alerts)</option>
-          </select>
+            <option value="critical">Critical only</option>
+            <option value="high">Critical and high</option>
+            <option value="none">Nothing (no alerts)</option>
+          </Select>
           vulnerabilities
         </label>
       </div>

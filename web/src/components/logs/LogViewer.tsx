@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -534,11 +535,12 @@ export function LogViewer({
             ))}
           </div>
           {!live && envOptions.length > 1 && (
-            <select
+            <Select
+              size="sm"
               value={view.env}
               onChange={(e) => setView({ env: e.target.value })}
               aria-label="Environment"
-              className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 text-xs text-[var(--text-secondary)]"
+              wrapperClassName="w-auto"
             >
               <option value="">All envs</option>
               {envOptions.map((o) => (
@@ -546,14 +548,16 @@ export function LogViewer({
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
           {multiPod && (
-            <select
+            <Select
+              size="sm"
               value={view.pod}
               onChange={(e) => setView({ pod: e.target.value })}
               aria-label="Replica"
-              className="h-7 max-w-[11rem] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-xs text-[var(--text-secondary)]"
+              className="font-mono"
+              wrapperClassName="max-w-[11rem]"
             >
               <option value="">All replicas ({pods.length})</option>
               {pods.map((p) => (
@@ -561,7 +565,7 @@ export function LogViewer({
                   {shortPod(p)}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
           <span aria-hidden className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
           <IconToggle label={view.wrap ? "Don't wrap lines" : "Wrap lines"} pressed={view.wrap} onClick={() => setView({ wrap: !view.wrap })}>

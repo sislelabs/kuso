@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -268,18 +269,20 @@ function GrantRow({
             <span className="text-xs text-[var(--text-tertiary)]">user</span>
           </span>
         )}
-        <select
+        <Select
+          size="sm"
           aria-label={`Role on this project for ${label}`}
           value={grant.roleOverride}
           onChange={(e) => onRoleChange(e.target.value as ProjectRole)}
-          className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs"
+          className="font-mono"
+          wrapperClassName="w-auto"
         >
           {OVERRIDE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
           ))}
-        </select>
+        </Select>
         <button
           type="button"
           onClick={onRemove}
