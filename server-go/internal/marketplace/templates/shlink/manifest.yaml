@@ -1,0 +1,15 @@
+name: shlink
+title: Shlink
+description: >-
+  URL shortener with an API and visit stats. Manage it from app.shlink.io
+  (or the shlink-web-client) with the generated INITIAL_API_KEY from the
+  service's variables.
+category: productivity
+website: https://shlink.io
+appVersion: "5.1.8"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The short domain links are served on.

@@ -1,0 +1,36 @@
+apiVersion: kuso/v1
+project: mealie
+services:
+  - name: mealie
+    runtime: image
+    port: 9000
+    image:
+      repository: ghcr.io/mealie-recipes/mealie
+      tag: "v3.30.0"
+    env:
+      BASE_URL: "https://${{ prompt.host }}"
+      ALLOW_SIGNUP: "false"
+      DB_ENGINE: postgres
+      POSTGRES_SERVER: "${{ mealie-db.POSTGRES_HOST }}"
+      POSTGRES_PORT: "${{ mealie-db.POSTGRES_PORT }}"
+      POSTGRES_USER: "${{ mealie-db.POSTGRES_USER }}"
+      POSTGRES_PASSWORD: "${{ mealie-db.POSTGRES_PASSWORD }}"
+      POSTGRES_DB: "${{ mealie-db.POSTGRES_DB }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /app/data
+        sizeGi: 2
+    scale: { min: 1, max: 1 }
+    # The entrypoint remaps the `abc` user, chowns /app, then drops to it
+    # via gosu.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
+addons:
+  - name: mealie-db
+    kind: postgres
+    version: "16"

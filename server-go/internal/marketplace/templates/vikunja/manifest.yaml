@@ -1,0 +1,12 @@
+name: vikunja
+title: Vikunja
+description: To-do lists, kanban boards and project planning. Sign up on first visit to create your account.
+category: productivity
+website: https://vikunja.io
+appVersion: "2.8.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Vikunja will be served on.

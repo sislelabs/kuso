@@ -1,0 +1,28 @@
+apiVersion: kuso/v1
+project: vikunja
+services:
+  - name: vikunja
+    runtime: image
+    port: 3456
+    image:
+      repository: vikunja/vikunja
+      tag: "2.8.0"
+    env:
+      VIKUNJA_SERVICE_PUBLICURL: "https://${{ prompt.host }}/"
+      VIKUNJA_SERVICE_SECRET: { generate: hex32 }
+      VIKUNJA_DATABASE_TYPE: postgres
+      VIKUNJA_DATABASE_HOST: "${{ vikunja-db.POSTGRES_HOST }}"
+      VIKUNJA_DATABASE_USER: "${{ vikunja-db.POSTGRES_USER }}"
+      VIKUNJA_DATABASE_PASSWORD: "${{ vikunja-db.POSTGRES_PASSWORD }}"
+      VIKUNJA_DATABASE_DATABASE: "${{ vikunja-db.POSTGRES_DB }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: files
+        mountPath: /app/vikunja/files
+        sizeGi: 2
+addons:
+  - name: vikunja-db
+    kind: postgres
+    version: "16"

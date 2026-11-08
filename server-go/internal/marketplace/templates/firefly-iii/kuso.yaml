@@ -1,0 +1,31 @@
+apiVersion: kuso/v1
+project: firefly-iii
+services:
+  - name: firefly-iii
+    runtime: image
+    port: 8080
+    image:
+      repository: fireflyiii/core
+      tag: "version-6.7.9"
+    env:
+      APP_URL: "https://${{ prompt.host }}"
+      # Laravel needs exactly 32 characters: hex16 is 32 hex chars.
+      APP_KEY: { generate: hex16 }
+      TRUSTED_PROXIES: "**"
+      DB_CONNECTION: pgsql
+      DB_HOST: "${{ firefly-iii-db.POSTGRES_HOST }}"
+      DB_PORT: "${{ firefly-iii-db.POSTGRES_PORT }}"
+      DB_DATABASE: "${{ firefly-iii-db.POSTGRES_DB }}"
+      DB_USERNAME: "${{ firefly-iii-db.POSTGRES_USER }}"
+      DB_PASSWORD: "${{ firefly-iii-db.POSTGRES_PASSWORD }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: uploads
+        mountPath: /var/www/html/storage/upload
+        sizeGi: 2
+addons:
+  - name: firefly-iii-db
+    kind: postgres
+    version: "16"

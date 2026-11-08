@@ -1,0 +1,17 @@
+apiVersion: kuso/v1
+project: privatebin
+services:
+  - name: privatebin
+    runtime: image
+    port: 8080
+    image:
+      repository: privatebin/nginx-fpm-alpine
+      tag: "2.1.1"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /srv/data
+        sizeGi: 1
+    scale: { min: 1, max: 1 }
