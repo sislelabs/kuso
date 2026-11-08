@@ -22,6 +22,7 @@ import {
   type PodSizeInput,
   type PodSizeRow,
 } from "@/features/instance-config";
+import { SettingsSection } from "./SettingsSection";
 
 const EMPTY: PodSizeInput = {
   Name: "",
@@ -32,7 +33,7 @@ const EMPTY: PodSizeInput = {
   Description: "",
 };
 
-const labelCls = "font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
+const labelCls = "block text-sm font-medium text-[var(--text-primary)]";
 
 // editing: null = closed, "new" = create form, otherwise the preset's ID.
 type Editing = null | "new" | string;
@@ -98,14 +99,14 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
   };
 
   const field = (k: keyof PodSizeInput, label: string, placeholder: string) => (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <label htmlFor={`podsize-${k}`} className={labelCls}>{label}</label>
       <Input
         id={`podsize-${k}`}
         value={form[k]}
         onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
         placeholder={placeholder}
-        className="h-8 font-mono text-[12px]"
+        className="font-mono"
         spellCheck={false}
         autoComplete="off"
       />
@@ -113,23 +114,23 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
   );
 
   const editor = (
-    <form onSubmit={onSubmit} className="space-y-3 bg-[var(--bg-primary)] p-4">
+    <form onSubmit={onSubmit} className="space-y-4 bg-[var(--bg-primary)] px-4 py-4 sm:px-5">
       <div className="grid gap-3 sm:grid-cols-2">
-        {field("Name", "name", "medium")}
-        {field("Description", "description", "default for most web apps")}
-        {field("CPURequest", "cpu request", "100m")}
-        {field("CPULimit", "cpu limit (blank = none)", "1")}
-        {field("MemoryRequest", "memory request", "256Mi")}
-        {field("MemoryLimit", "memory limit", "1Gi")}
+        {field("Name", "Name", "e.g. medium")}
+        {field("Description", "Description", "e.g. default for most web apps")}
+        {field("CPURequest", "CPU request", "e.g. 100m")}
+        {field("CPULimit", "CPU limit (blank for none)", "e.g. 1")}
+        {field("MemoryRequest", "Memory request", "e.g. 256Mi")}
+        {field("MemoryLimit", "Memory limit", "e.g. 1Gi")}
       </div>
       {editingRow && isDefault(editingRow) && form.Name.trim() !== editingRow.Name && (
-        <p className="font-mono text-[10px] text-[var(--warning)]">
+        <p className="text-xs text-[var(--warning)]">
           This is the default preset. The default is stored by name, so renaming it leaves new
           services with no requests or limits until you re-pick the default below.
         </p>
       )}
-      {formError && <p className="font-mono text-[10px] text-[var(--error)]">{formError}</p>}
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      {formError && <p className="text-xs text-[var(--error)]">{formError}</p>}
+      <p className="text-xs text-[var(--text-secondary)]">
         Services already using this preset keep the resources they were given.
       </p>
       <div className="flex justify-end gap-2">
@@ -146,29 +147,26 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
   const rows = sizes.data ?? [];
 
   return (
-    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-      <header className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5">
-        <div>
-          <h2 className="text-sm font-semibold tracking-tight">Pod size presets</h2>
-          <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            Named CPU/memory requests and limits services can pick (kuso service size).
-          </p>
-        </div>
-        {canEdit && editing !== "new" && (
+    <SettingsSection
+      title="Pod size presets"
+      description="Named CPU/memory requests and limits services can pick (kuso service size)."
+      flush
+      actions={
+        canEdit && editing !== "new" ? (
           <Button size="sm" variant="outline" onClick={() => open("new", EMPTY)}>
             <Plus className="h-3 w-3" /> Add preset
           </Button>
-        )}
-      </header>
-
+        ) : undefined
+      }
+    >
       {editing === "new" && <div className="border-b border-[var(--border-subtle)]">{editor}</div>}
 
       {sizes.isPending ? (
-        <Skeleton className="m-3 h-16" />
+        <Skeleton className="m-4 h-16" />
       ) : sizes.isError ? (
-        <QueryErrorState what="pod size presets" error={sizes.error} onRetry={() => void sizes.refetch()} className="m-3" />
+        <QueryErrorState what="pod size presets" error={sizes.error} onRetry={() => void sizes.refetch()} className="m-4" />
       ) : rows.length === 0 ? (
-        <p className="px-4 py-4 text-[11px] text-[var(--text-tertiary)]">
+        <p className="px-4 py-4 text-sm text-[var(--text-secondary)] sm:px-5">
           No presets. kuso re-seeds small / medium / large on the next server start when the
           table is empty.
         </p>
@@ -176,22 +174,22 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
         <ul>
           {rows.map((p) => (
             <li key={p.ID} className="border-b border-[var(--border-subtle)] last:border-b-0">
-              <div className="flex items-center gap-3 px-4 py-2.5">
+              <div className="flex items-center gap-3 px-4 py-3 sm:px-5">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] text-[var(--text-primary)]">{p.Name}</span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="font-mono text-sm text-[var(--text-primary)]">{p.Name}</span>
                     {isDefault(p) && (
-                      <span className="rounded bg-[var(--accent-subtle)] px-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-secondary)]">
-                        default
+                      <span className="rounded-sm bg-[var(--accent-subtle)] px-1.5 py-0.5 text-xs font-medium text-[var(--text-primary)]">
+                        Default
                       </span>
                     )}
                     {p.Description?.Valid && (
-                      <span className="truncate text-[11px] text-[var(--text-tertiary)]">{p.Description.String}</span>
+                      <span className="truncate text-xs text-[var(--text-secondary)]">{p.Description.String}</span>
                     )}
                   </div>
-                  <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                    req {p.CPURequest || "-"} / {p.MemoryRequest || "-"} · limit {p.CPULimit || "-"} /{" "}
-                    {p.MemoryLimit || "-"}
+                  <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                    Requests <span className="font-mono">{p.CPURequest || "–"} / {p.MemoryRequest || "–"}</span>
+                    {" · "}limits <span className="font-mono">{p.CPULimit || "–"} / {p.MemoryLimit || "–"}</span>
                   </p>
                 </div>
                 {canEdit && (
@@ -243,6 +241,6 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
         onConfirm={() => deleting && remove.mutate(deleting.ID)}
         onCancel={() => setDeleting(null)}
       />
-    </section>
+    </SettingsSection>
   );
 }

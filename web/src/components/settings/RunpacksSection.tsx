@@ -15,6 +15,7 @@ import {
   type Runpack,
   type RunpackPhase,
 } from "@/features/instance-config";
+import { SettingsSection } from "./SettingsSection";
 
 function phaseImage(p: RunpackPhase | null | undefined): string {
   if (!p) return "-";
@@ -41,39 +42,41 @@ export function RunpacksSection({ canEdit }: { canEdit: boolean }) {
   const rows = packs.data ?? [];
 
   return (
-    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-      <header className="border-b border-[var(--border-subtle)] px-4 py-2.5">
-        <h2 className="text-sm font-semibold tracking-tight">Runpacks</h2>
-        <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-          Fetch / build / run image triples stored in the control-plane DB. Read-only apart from
-          delete.
-        </p>
-      </header>
+    <SettingsSection
+      title="Runpacks"
+      description="Fetch, build and run image triples stored in the control-plane database. Read-only apart from delete."
+      flush
+    >
       {packs.isPending ? (
-        <Skeleton className="m-3 h-12" />
+        <Skeleton className="m-4 h-12" />
       ) : packs.isError ? (
-        <QueryErrorState what="runpacks" error={packs.error} onRetry={() => void packs.refetch()} className="m-3" />
+        <QueryErrorState what="runpacks" error={packs.error} onRetry={() => void packs.refetch()} className="m-4" />
       ) : rows.length === 0 ? (
-        <p className="px-4 py-4 text-[11px] text-[var(--text-tertiary)]">No runpacks on this instance.</p>
+        <p className="px-4 py-4 text-sm text-[var(--text-secondary)] sm:px-5">No runpacks on this instance.</p>
       ) : (
         <ul>
           {rows.map((r) => (
             <li
               key={r.ID}
-              className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 last:border-b-0"
+              className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3 last:border-b-0 sm:px-5"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-[12px] text-[var(--text-primary)]">{r.Name}</span>
+                  <span className="font-mono text-sm text-[var(--text-primary)]">{r.Name}</span>
                   {r.Language && (
-                    <span className="rounded bg-[var(--bg-tertiary)] px-1.5 font-mono text-[10px] text-[var(--text-secondary)]">
+                    <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]">
                       {r.Language}
                     </span>
                   )}
                 </div>
-                <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
-                  fetch {phaseImage(r.Fetch)} · build {phaseImage(r.Build)} · run {phaseImage(r.Run)}
-                </p>
+                <dl className="mt-1 grid gap-x-3 gap-y-0.5 text-xs sm:grid-cols-[auto_1fr]">
+                  {([["Fetch", r.Fetch], ["Build", r.Build], ["Run", r.Run]] as const).map(([k, ph]) => (
+                    <div key={k} className="contents">
+                      <dt className="text-[var(--text-secondary)]">{k}</dt>
+                      <dd className="min-w-0 truncate font-mono text-[var(--text-primary)]">{phaseImage(ph)}</dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
               {canEdit && (
                 <Button
@@ -95,11 +98,12 @@ export function RunpacksSection({ canEdit }: { canEdit: boolean }) {
         title={`Delete runpack ${deleting?.Name ?? ""}?`}
         body={<p>Removes the runpack and its phase rows. There is no API to recreate it.</p>}
         confirmLabel="Delete runpack"
+        typeToConfirm={deleting?.Name}
         destructive
         pending={remove.isPending}
         onConfirm={() => deleting && remove.mutate(deleting.ID)}
         onCancel={() => setDeleting(null)}
       />
-    </section>
+    </SettingsSection>
   );
 }
