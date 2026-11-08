@@ -5,6 +5,7 @@ import { Cog } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUserDirectory, type ResolvedUser } from "@/features/users";
 import { actorInitials, actorLabel, isSystemActor } from "./actor";
+import { looksLikeUserId } from "./audit-text";
 
 // UserBadge renders an audit actor as avatar + name, the same shape for
 // every kind: a directory user gets their avatar (or initials), a
@@ -36,10 +37,15 @@ export function UserBadge({ id, className }: { id: string; className?: string })
       </span>
     );
   }
+  // An opaque id the directory can't resolve (a removed user, or a
+  // viewer who can't list users): say so instead of printing the hash.
+  const opaque = looksLikeUserId(id);
   return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)} title={`Unknown user ${id}`}>
-      <UserAvatar user={{ username: id }} />
-      <span className="truncate font-mono text-xs text-[var(--text-secondary)]">{actorLabel(id)}</span>
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)} title={`User id ${id}`}>
+      <UserAvatar user={{ username: opaque ? "?" : id }} />
+      <span className={cn("truncate text-[var(--text-secondary)]", !opaque && "font-mono text-xs")}>
+        {opaque ? "Unknown user" : actorLabel(id)}
+      </span>
     </span>
   );
 }

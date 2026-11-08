@@ -344,6 +344,7 @@ function GroupEditor({
         <Button
           size="sm"
           disabled={!dirty || save.isPending}
+          disabledReason={!dirty && !save.isPending ? "No changes to save" : undefined}
           onClick={() => save.mutate(form)}
         >
           <Save className="h-3 w-3" />

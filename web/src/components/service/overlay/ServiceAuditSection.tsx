@@ -5,6 +5,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useServiceAudit } from "@/features/service-audit";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { AuditMessage } from "@/components/activity/AuditMessage";
+import { UserBadge } from "@/components/activity/UserBadge";
+import { auditActionLabel } from "@/components/activity/audit-text";
 
 // ServiceAuditSection is the per-service audit trail (`kuso audit --app`).
 // Most actions record no env (phase), so it asks for every env ("*").
@@ -44,22 +47,25 @@ export function ServiceAuditSection({
         <ul className="max-h-64 divide-y divide-[var(--border-subtle)] overflow-y-auto">
           {rows.map((e) => (
             <li key={e.id} className="space-y-0.5 px-3 py-2 text-xs">
-              <div className="flex items-center gap-2 font-mono">
+              <div className="flex min-w-0 items-center gap-2">
                 <span
+                  title={e.action}
                   className={cn(
-                    "text-[var(--text-primary)]",
+                    "shrink-0 font-medium text-[var(--text-primary)]",
                     e.severity === "warn" && "text-[var(--warning)]",
                     e.severity === "error" && "text-[var(--error)]",
                   )}
                 >
-                  {e.action}
+                  {auditActionLabel(e.action)}
                 </span>
-                <span className="text-[var(--text-tertiary)]">by {e.user || "system"}</span>
+                <span className="flex min-w-0 items-center gap-1 text-[var(--text-tertiary)]">
+                  by <UserBadge id={e.user} />
+                </span>
                 <span className="ml-auto shrink-0 text-[var(--text-tertiary)]" title={e.timestamp}>
                   {relativeTime(e.timestamp)}
                 </span>
               </div>
-              {e.message && <p className="break-words text-[var(--text-secondary)]">{e.message}</p>}
+              {e.message && <AuditMessage wrap action={e.action} message={e.message} className="text-[var(--text-secondary)]" />}
             </li>
           ))}
         </ul>

@@ -2272,7 +2272,7 @@ function Sparkline({
               y={y(t)}
               dy="0.32em"
               textAnchor="end"
-              className="fill-[var(--text-tertiary)] font-mono text-2xs"
+              className="fill-[var(--text-tertiary)] font-mono text-xs"
             >
               {t}%
             </text>
@@ -2317,7 +2317,7 @@ function Sparkline({
             x={x(p.ts)}
             y={H - 6}
             textAnchor={i === 0 ? "start" : i === xLabels.length - 1 ? "end" : "middle"}
-            className="fill-[var(--text-tertiary)] font-mono text-2xs"
+            className="fill-[var(--text-tertiary)] font-mono text-xs"
           >
             {fmtTs(p.ts)}
           </text>

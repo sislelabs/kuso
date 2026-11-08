@@ -11,7 +11,7 @@ import { X, Globe, Terminal, Box, Clock, Save, Trash2, RefreshCw, Package, KeyRo
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { nextRuns } from "@/lib/cron-next";
 import {
@@ -412,7 +412,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 {kind === "service" && (
                   <p className="mt-2 border-t border-[var(--border-subtle)] pt-2 text-xs leading-relaxed text-[var(--text-tertiary)]">
                     Image + env are inherited from{" "}
-                    <span className="font-mono text-[var(--text-secondary)]">{cron.spec.service}</span>.{" "}
+                    <span className="font-mono text-[var(--text-secondary)]">{serviceShortName(project, cron.spec.service ?? "")}</span>.{" "}
                     {pinImage ? (
                       <>
                         The image is <span className="font-medium text-[var(--text-secondary)]">pinned</span> — it stays
@@ -518,7 +518,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   />
                   <span>
                     Pin the image — stay on the current build instead of following{" "}
-                    {cron.spec.service ?? "the service"}&apos;s deploys. Use when this job must run a
+                    {cron.spec.service ? serviceShortName(project, cron.spec.service) : "the service"}&apos;s deploys. Use when this job must run a
                     known-good build rather than whatever shipped that day.
                   </span>
                 </label>

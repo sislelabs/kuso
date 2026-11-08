@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMatcher, detectLevel, parseAnsi, parseJsonLine, splitMatches, stripAnsi } from "./logParse";
+import { buildMatcher, detectLevel, parseAnsi, parseJsonLine, sortReplayedBacklog, splitMatches, stripAnsi } from "./logParse";
 
 describe("detectLevel", () => {
   it.each([
@@ -63,5 +63,32 @@ describe("matching", () => {
   it("regex matcher with leading slash; invalid regex → null", () => {
     expect(buildMatcher("/^GET")!.test("get /")).toBe(true);
     expect(buildMatcher("/(")).toBeNull();
+  });
+});
+
+describe("sortReplayedBacklog", () => {
+  const row = (ts: string, cont = false, backlog = false) => ({ ts, cont, backlog });
+  it("orders replayed entries by time, keeping continuations with their head", () => {
+    const raw = [{ backlog: true }, { backlog: true }, { backlog: true }, { backlog: false }];
+    const rows = [row("2026-01-01T00:00:05Z"), row("2026-01-01T00:00:05Z", true, true), row("2026-01-01T00:00:01Z"), row("2026-01-01T00:01:00Z")];
+    expect(sortReplayedBacklog(raw, rows).map((r) => r.ts)).toEqual([
+      "2026-01-01T00:00:01Z",
+      "2026-01-01T00:00:05Z",
+      "2026-01-01T00:00:05Z",
+      "2026-01-01T00:01:00Z",
+    ]);
+  });
+  it("leaves the replay alone when a head has no timestamp of its own", () => {
+    const raw = [{ backlog: true }, { backlog: true }];
+    const rows = [row("2026-01-01T00:00:05Z"), row("", false, true)];
+    expect(sortReplayedBacklog(raw, rows)).toBe(rows);
+  });
+});
+
+describe("detectLevel plain-text errors", () => {
+  it("flags an upper-case ERROR word after a prefix", () => {
+    expect(detectLevel("worker-1 | job 42 | 2026-01-01 12:00:00 ERROR send failed")).toBe("error");
+    expect(detectLevel("Traceback (most recent call last):")).toBe("error");
+    expect(detectLevel("no errors found")).toBe("none");
   });
 });

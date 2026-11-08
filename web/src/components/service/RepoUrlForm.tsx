@@ -118,7 +118,13 @@ export function RepoUrlForm({
           spellCheck={false}
           className="h-8 flex-1 font-mono text-xs"
         />
-        <Button type="submit" size="sm" variant="outline" disabled={checking || !url.trim()}>
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          disabled={checking || !url.trim()}
+          disabledReason={!checking && !url.trim() ? "Paste a repository URL first" : undefined}
+        >
           <Link2 className="h-3.5 w-3.5" />
           {checking ? "Checking…" : "Use this repo"}
         </Button>

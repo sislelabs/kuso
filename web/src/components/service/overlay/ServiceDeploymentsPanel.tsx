@@ -325,8 +325,14 @@ function DeployList({
     </>
   ) : visible.length > 0 ? (
     <div className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--text-secondary)]">
-      Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet. The first successful build
-      below goes live automatically.
+      Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet.{" "}
+      {newestStatus === "failed"
+        ? autoDeploy
+          ? "The latest build failed: fix the cause shown below and push, or press Redeploy to try the same commit again."
+          : "The latest build failed: fix the cause shown below, then press Redeploy. Auto-deploy is off, so pushes won't retry it."
+        : autoDeploy
+          ? "The first successful build below goes live automatically."
+          : "The first successful build goes live. Auto-deploy is off, so press Deploy to start one."}
     </div>
   ) : null;
 
@@ -424,6 +430,7 @@ function DeployList({
                   canDeploy={canDeploy}
                   pinActions={b.id === rollbackTargetId}
                   onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
+                  onNavigate={onNavigate}
                 />
               );
             })}
@@ -613,7 +620,7 @@ function RolloutSteps({ state }: { state: RolloutState }) {
             />
             <div
               className={cn(
-                "mt-1.5 flex items-start gap-1 text-2xs leading-tight sm:text-xs",
+                "mt-1.5 flex items-start gap-1 text-xs leading-tight",
                 done || active || failed ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
               )}
             >

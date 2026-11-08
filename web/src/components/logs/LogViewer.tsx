@@ -34,7 +34,7 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, stripAnsi } from "./logParse";
+import { buildMatcher, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortReplayedBacklog, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -214,7 +214,7 @@ export function LogViewer({
 
   const rows: Row[] = useMemo(() => {
     let prev: Row | null = null;
-    return rawLines.map((l) => {
+    const built = rawLines.map((l) => {
       const p = parsedOf(l.src, l.line);
       // A continuation (stack-trace line) shares its head's pod and
       // instant, carries no level of its own, and either looks like a
@@ -241,6 +241,7 @@ export function LogViewer({
       prev = row;
       return row;
     });
+    return sortReplayedBacklog(rawLines, built);
   }, [rawLines]);
 
   const liveMatcher = useMemo(() => (live ? buildMatcher(view.q) : null), [live, view.q]);

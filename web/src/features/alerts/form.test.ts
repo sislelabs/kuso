@@ -75,7 +75,7 @@ describe("describeRule", () => {
     updatedAt: "",
   };
   it("renders each kind in its unit", () => {
-    expect(describeRule({ ...base, thresholdFloat: 800, thresholdInt: 20 })).toBe("p95 ≥ 800ms over 10m (min 20 req)");
+    expect(describeRule({ ...base, thresholdFloat: 800, thresholdInt: 20 })).toBe("p95 ≥ 800 ms over 10m (min 20 req)");
     expect(describeRule({ ...base, kind: "cert_expiry", thresholdInt: 14 })).toBe("expires within 14d or not Ready");
     expect(describeRule({ ...base, kind: "dns_mismatch" })).toBe("host doesn't resolve to the cluster");
   });
@@ -92,6 +92,14 @@ describe("parseDur", () => {
 
 describe("prefillRuleForm", () => {
   const p = (q: string) => prefillRuleForm(new URLSearchParams(q));
+
+  it("prefills a log_match query", () => {
+    expect(p("new=1&kind=log_match&project=shop&service=worker&query=failed%20to%20send")).toMatchObject({
+      kind: "log_match",
+      service: "worker",
+      query: "failed to send",
+    });
+  });
 
   it("returns null without new=1", () => {
     expect(p("project=a&kind=http_5xx_rate")).toBeNull();

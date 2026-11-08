@@ -233,7 +233,7 @@ export default function NotificationsPage() {
         </Button>
       }
     >
-      <OutboxHealth />
+      <OutboxHealth channels={list.data ?? []} />
 
       {editing === "__new__" && (
         <SettingsSection title="New channel" description="Pick a destination, then choose which projects and events reach it.">
@@ -384,12 +384,12 @@ function MutedProjects() {
   );
 }
 
-// OutboxHealth banner — pings GET /api/notifications/outbox-stats and
-// renders an amber pending-backlog banner or a red dead-letter banner
-// when webhook delivery is stuck. The bell-icon feed bypasses the
-// outbox, so a red badge here only points to external-webhook
-// misconfiguration (bad URL, revoked token), not in-app event flow.
-function OutboxHealth() {
+// OutboxHealth banner: pings GET /api/notifications/outbox-stats and
+// warns when channel deliveries are backing up (pending retry) or gave
+// up (dead-lettered). The server only reports counts, not which channel
+// or why, so the copy names the enabled channels and points at Test,
+// which sends synchronously and returns the destination's real error.
+function OutboxHealth({ channels }: { channels: Notification[] }) {
   const stats = useQuery({
     queryKey: ["admin", "notifications", "outbox-stats"],
     queryFn: () => api<{ pending: number; dead: number }>("/api/notifications/outbox-stats"),
@@ -399,30 +399,46 @@ function OutboxHealth() {
   const { pending, dead } = stats.data;
   if (dead === 0 && pending === 0) return null;
 
+  const enabled = channels.filter((c) => c.enabled);
+  const names = enabled.map((c) => `${c.name} (${notifKindLabel(c.type)})`);
+  const where =
+    names.length === 0
+      ? "a channel that has since been disabled or deleted"
+      : names.length === 1
+        ? names[0]
+        : `one of: ${names.join(", ")}`;
+  const howToCheck = (
+    <>
+      {" "}
+      Press <strong className="font-medium">Test</strong> on {names.length === 1 ? "that channel" : "each channel"} to
+      see the error the destination returns (wrong URL, revoked token, host that doesn&apos;t resolve).
+    </>
+  );
+
   if (dead > 0) {
     return (
       <SettingsNotice
         tone="error"
-        title={`${dead} webhook ${dead === 1 ? "delivery" : "deliveries"} dead-lettered`}
+        title={`${dead} ${dead === 1 ? "notification" : "notifications"} couldn't be delivered`}
       >
-        Past the retry cap, typically a revoked Slack or Discord URL.
-        {pending > 0 && ` ${pending} more pending retry.`} Inspect with{" "}
-        <code className="break-all rounded-sm bg-[var(--bg-tertiary)] px-1 font-mono text-xs">
-          SELECT * FROM &quot;NotificationOutbox&quot; WHERE &quot;deliveredAt&quot; IS NULL AND
-          &quot;attempts&quot; &gt;= 10
-        </code>
-        .
+        kuso retried {dead === 1 ? "it" : "them"} with backoff and gave up. They were going to {where}.
+        {pending > 0 && ` ${pending} more ${pending === 1 ? "is" : "are"} still retrying.`}
+        {howToCheck}
       </SettingsNotice>
     );
   }
   return (
     <SettingsNotice
       tone="warning"
-      title={`${pending} webhook ${pending === 1 ? "delivery" : "deliveries"} pending retry`}
+      title={`${pending} ${pending === 1 ? "notification" : "notifications"} waiting to be delivered`}
     >
-      Usually transient: Slack throttling or a brief webhook outage clears within a few minutes.
+      The last delivery attempt to {where} failed, and kuso is retrying with backoff.{howToCheck}
     </SettingsNotice>
   );
+}
+
+function notifKindLabel(kind: NotifKind): string {
+  return NOTIF_KINDS.find((k) => k.kind === kind)?.label ?? kind;
 }
 
 function NotificationRow({

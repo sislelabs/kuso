@@ -5,7 +5,8 @@ import { relativeTime } from "@/lib/format";
 import { Activity, Clock, AlertTriangle, Info, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/ui/loading-state";
-import { ExpandableText } from "./ExpandableText";
+import { AuditMessage } from "./AuditMessage";
+import { auditActionLabel } from "./audit-text";
 import { UserBadge } from "./UserBadge";
 
 function severityIcon(s?: string) {
@@ -87,12 +88,12 @@ export function ActivityFeed({ filter }: { filter?: (e: AuditEntry) => boolean }
                   <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", colorClass)} />
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-baseline gap-1 text-sm text-[var(--text-primary)]">
-                      <span className="shrink-0">
-                        {e.action ?? "event"}
+                      <span className="shrink-0" title={e.action}>
+                        {auditActionLabel(e.action)}
                         {e.message ? ":" : null}
                       </span>
                       {e.message ? (
-                        <ExpandableText text={e.message} className="flex-1 text-[var(--text-secondary)]" />
+                        <AuditMessage action={e.action} message={e.message} className="flex-1 text-[var(--text-secondary)]" />
                       ) : null}
                     </div>
                     <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">

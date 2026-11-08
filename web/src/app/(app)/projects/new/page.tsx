@@ -543,16 +543,26 @@ export default function NewProjectPage() {
                 </p>
               )}
               <div className="flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs text-[var(--text-secondary)]">
-                  Creates the project and its first service, then starts a build from{" "}
-                  <span className="font-mono">{picked.repo.defaultBranch}</span>.
-                </p>
+                <div className="min-w-0 space-y-1 text-xs text-[var(--text-secondary)]">
+                  <p>
+                    Creates the project and its first service, then starts a build from{" "}
+                    <span className="font-mono">{picked.repo.defaultBranch}</span>.
+                  </p>
+                  <p className="break-all">
+                    It will be served at{" "}
+                    <span className="font-mono text-[var(--text-primary)]">
+                      https://
+                      {defaultServiceHost(serviceSlug || "web", projectName.trim() || "my-product", baseDomain, instanceDomain)}
+                    </span>
+                  </p>
+                </div>
                 <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
                   <Button
                     type="button"
                     variant="secondary"
                     onClick={() => void onImport(false)}
                     disabled={submitting || detection.state === "detecting"}
+                    disabledReason={!submitting && detection.state === "detecting" ? "Still reading the repository to detect how to build it" : undefined}
                     title="Create the project and service without building. Add variables first, then deploy from the Deployments tab."
                     className="h-9 px-4"
                   >
@@ -562,6 +572,7 @@ export default function NewProjectPage() {
                     type="button"
                     onClick={() => void onImport()}
                     disabled={submitting || detection.state === "detecting"}
+                    disabledReason={!submitting && detection.state === "detecting" ? "Still reading the repository to detect how to build it" : undefined}
                     className="h-9 px-4"
                   >
                     <Rocket className="h-4 w-4" />

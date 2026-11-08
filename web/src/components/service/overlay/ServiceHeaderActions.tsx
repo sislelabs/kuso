@@ -171,6 +171,11 @@ export function ServiceHeaderActions({
   };
 
   const restartBtn = showRestart && !stopped;
+  // A service that has never had an image has no pods to restart or stop.
+  const neverRan = env?.status?.state === "no_image";
+  const NEVER_RAN = "Nothing is running yet: this service has never been deployed.";
+  const restartExplain = !canWrite ? NO_ACCESS : neverRan ? NEVER_RAN : EXPLAIN.restart(group);
+  const stopExplain = !canWrite ? NO_ACCESS : neverRan ? NEVER_RAN : EXPLAIN.stop;
   const menuItem =
     "flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-[var(--bg-tertiary)] disabled:opacity-50";
 
@@ -188,12 +193,12 @@ export function ServiceHeaderActions({
       {/* ≥640px: inline secondary actions, Stop last and visually quiet. */}
       <div className="hidden items-center gap-1.5 sm:flex">
         {restartBtn && (
-          <Explained label="Restart" explain={canWrite ? EXPLAIN.restart(group) : NO_ACCESS}>
+          <Explained label="Restart" explain={restartExplain}>
             <Button
               size="sm"
               variant="secondary"
               onClick={() => setConfirm("restart")}
-              disabled={!canWrite || restart.isPending}
+              disabled={!canWrite || neverRan || restart.isPending}
               className="h-7 px-2.5 text-xs"
             >
               <RotateCw className={cn("h-3 w-3", restart.isPending && "motion-safe:animate-spin")} />
@@ -209,12 +214,12 @@ export function ServiceHeaderActions({
             </Button>
           </Explained>
         ) : (
-          <Explained label="Stop" explain={canWrite ? EXPLAIN.stop : NO_ACCESS}>
+          <Explained label="Stop" explain={stopExplain}>
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setConfirm("stop")}
-              disabled={!canWrite || stop.isPending}
+              disabled={!canWrite || neverRan || stop.isPending}
               className="h-7 px-2.5 text-xs hover:text-[var(--danger)]"
             >
               <Square className="h-3 w-3" />
@@ -249,7 +254,7 @@ export function ServiceHeaderActions({
               {restartBtn && (
                 <button
                   type="button"
-                  disabled={!canWrite}
+                  disabled={!canWrite || neverRan}
                   className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
@@ -260,7 +265,7 @@ export function ServiceHeaderActions({
                   <span className="min-w-0">
                     <span className="block text-sm text-[var(--text-primary)]">Restart</span>
                     <span className="block text-xs text-[var(--text-secondary)]">
-                      {canWrite ? EXPLAIN.restart(group) : NO_ACCESS}
+                      {restartExplain}
                     </span>
                   </span>
                 </button>
@@ -268,7 +273,7 @@ export function ServiceHeaderActions({
               {!stopped && (
                 <button
                   type="button"
-                  disabled={!canWrite}
+                  disabled={!canWrite || neverRan}
                   className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
@@ -278,7 +283,7 @@ export function ServiceHeaderActions({
                   <Square className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--danger)]" />
                   <span className="min-w-0">
                     <span className="block text-sm text-[var(--danger)]">Stop service</span>
-                    <span className="block text-xs text-[var(--text-secondary)]">{canWrite ? EXPLAIN.stop : NO_ACCESS}</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">{stopExplain}</span>
                   </span>
                 </button>
               )}

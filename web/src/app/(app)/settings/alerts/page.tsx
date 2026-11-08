@@ -14,6 +14,7 @@ import {
   enableAlert,
   disableAlert,
   ALERT_KINDS,
+  alertKindLabel,
   buildCreateBody,
   describeRule,
   emptyRuleForm,
@@ -42,8 +43,9 @@ import { SettingsSection, SettingsSelect } from "@/components/settings/SettingsS
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useSession } from "@/features/auth";
-import { useProjects, useServices } from "@/features/projects";
-import { ApiError } from "@/lib/api-client";
+import { useEnvironments, useProjects, useServices } from "@/features/projects";
+import { envGroupName } from "@/lib/env-group";
+import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 
 // /settings/alerts — manage alert rules. Engine evaluates them on a
@@ -105,6 +107,18 @@ function AlertsPageInner() {
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/settings/alerts"), { scroll: false });
   }, [search, router, pathname]);
+
+  // Delivery backlog for the channels alerts fire through. The server
+  // counts it instance-wide (not per rule) and only for admins, so a
+  // failure here just hides the hint.
+  const outbox = useQuery({
+    queryKey: ["admin", "notifications", "outbox-stats"],
+    queryFn: () => api<{ pending: number; dead: number }>("/api/notifications/outbox-stats"),
+    enabled: isAdmin,
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const deliveryFailing = (outbox.data?.pending ?? 0) + (outbox.data?.dead ?? 0) > 0;
 
   const del = useMutation({
     mutationFn: (id: string) => deleteAlert(id),
@@ -188,6 +202,7 @@ function AlertsPageInner() {
                 key={r.id}
                 rule={r}
                 manageable={canManageAlertRule(access, r)}
+                deliveryFailing={deliveryFailing}
                 deleting={del.isPending && del.variables === r.id}
                 onDelete={() => del.mutate(r.id)}
                 onToggle={(on) => toggle.mutate({ id: r.id, on })}
@@ -236,12 +251,14 @@ function AdminOnlyState({ project, service, kind }: { project: string; service: 
 function RuleRow({
   rule,
   manageable,
+  deliveryFailing,
   deleting,
   onDelete,
   onToggle,
 }: {
   rule: AlertRule;
   manageable: boolean;
+  deliveryFailing: boolean;
   deleting: boolean;
   onDelete: () => void;
   onToggle: (on: boolean) => void;
@@ -265,8 +282,11 @@ function RuleRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-sm font-medium text-[var(--text-primary)]">{rule.name}</p>
-          <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
-            {rule.kind}
+          <span
+            className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]"
+            title={rule.kind}
+          >
+            {alertKindLabel(rule.kind)}
           </span>
           {rule.project && (
             <span className="font-mono text-xs text-[var(--text-secondary)]">
@@ -287,6 +307,14 @@ function RuleRow({
         ) : rule.lastFiredAt && (
           <p className="mt-0.5 text-xs text-[var(--warning)]">
             Last fired {relativeTime(rule.lastFiredAt)}
+            {deliveryFailing && (
+              <>
+                {" · "}
+                <Link href="/settings/notifications" className="text-[var(--error)] underline underline-offset-2">
+                  notification delivery is failing
+                </Link>
+              </>
+            )}
           </p>
         )}
         {!manageable && (
@@ -383,6 +411,15 @@ function AddRuleDialog({
   const projectOptions = form.project && !projects.includes(form.project) ? [form.project, ...projects] : projects;
   const serviceOptions =
     form.service && !serviceNames.includes(form.service) ? [form.service, ...serviceNames] : serviceNames;
+  const envs = useEnvironments(form.project);
+  // Env groups (production, staging, preview-pr-N…) of the picked service,
+  // or of the whole project when the rule covers every service.
+  const envNames = useMemo(() => {
+    const fqn = form.service ? `${form.project}-${form.service}` : "";
+    const names = (envs.data ?? []).filter((e) => !fqn || e.spec.service === fqn).map((e) => envGroupName(e));
+    return [...new Set(names)].sort((a, b) => (a === "production" ? -1 : b === "production" ? 1 : a.localeCompare(b)));
+  }, [envs.data, form.project, form.service]);
+  const envOptions = form.env && !envNames.includes(form.env) ? [form.env, ...envNames] : envNames;
   const setProject = (project: string) => setForm((f) => ({ ...f, project, service: "", env: "" }));
   const noProjectReason = "Pick a project first";
 
@@ -516,15 +553,20 @@ function AddRuleDialog({
                 </SettingsSelect>
               </Field>
               {meta.scope === "env" && (
-                <Field label="Env (optional)" hint={!form.project ? noProjectReason : undefined}>
-                  <Input
+                <Field label="Environment" hint={!form.project ? noProjectReason : undefined}>
+                  <SettingsSelect
                     value={form.env}
                     onChange={(e) => set("env", e.target.value)}
-                    placeholder="All envs"
                     disabled={!form.project}
                     title={!form.project ? noProjectReason : undefined}
-                    className="font-mono"
-                  />
+                  >
+                    <option value="">{envs.isPending && form.project ? "Loading environments…" : "All environments"}</option>
+                    {envOptions.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </SettingsSelect>
                 </Field>
               )}
             </div>

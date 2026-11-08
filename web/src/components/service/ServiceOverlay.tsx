@@ -26,7 +26,8 @@ import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
-import { useCanOnProject, Perms } from "@/features/auth";
+import { useCan, useCanOnProject, Perms } from "@/features/auth";
+import Link from "next/link";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -63,7 +64,7 @@ import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
 import { ServiceHealthStrip } from "./overlay/ServiceHealthStrip";
-import { ExternalLink, X, Pencil } from "lucide-react";
+import { ExternalLink, X, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
 import { SERVICE_STATUS, serverStateCause, type ServiceStatus } from "@/lib/status";
@@ -156,14 +157,15 @@ type Tab =
 // the server gates creation on secrets:read); for everyone else they
 // only appear once the service has at least one cron / run.
 // Order is priority: when the strip is narrow the tail moves into "More".
-const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean }[] = [
+const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean; secondary?: boolean }[] = [
   { id: "deployments", label: "Deployments", chord: "d", alwaysShow: true },
   { id: "variables", label: "Variables", chord: "v", alwaysShow: true },
   { id: "logs", label: "Logs", chord: "l", alwaysShow: true },
   { id: "metrics", label: "Metrics", chord: "m", alwaysShow: true },
   { id: "errors", label: "Errors", chord: "e", alwaysShow: true },
   { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
-  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true },
+  // Always under More, so every service type shows the same strip.
+  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true, secondary: true },
   { id: "crons", label: "Crons", chord: "c" },
   { id: "runs", label: "Runs", chord: "r" },
 ];
@@ -317,6 +319,7 @@ export function ServiceOverlay({
   const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useExpandedPanel();
 
   // Per-panel dirty + save registry. Children call useOverlayDirty
   // and (optionally) supply onSave/onDiscard so the shell can render
@@ -495,6 +498,8 @@ export function ServiceOverlay({
   // AddonOverlay makes for its SQL tab: rendering a terminal that can
   // only 403 on connect is worse than not offering it.
   const canShell = useCanOnProject(project, Perms.ShellExec);
+  // Kube events live on Settings → Health, which is admin-only.
+  const canSeeEvents = useCan(Perms.SettingsAdmin);
   // Always show whichever tab the user is on so the active-tab
   // underline has something to anchor to after a deep link.
   const MAIN_TABS = useMemo(
@@ -612,6 +617,7 @@ export function ServiceOverlay({
   // rolling through StatusDot; the drift chip stays purely
   // diagnostic.
   const rollingNow = !!drift.data?.rolloutPending;
+  const rolloutSlow = useRolloutSlow(rollingNow, drift.data?.lastSpecMutation);
   // Server-derived unified rollup (env.status.state) wins when
   // present — it folds build + deployment + pod health into one
   // answer (crashloops and degraded replica counts are invisible to
@@ -619,9 +625,17 @@ export function ServiceOverlay({
   // overlay on top of a healthy state since drift is fetched here.
   const serverState = deployStatusFromServerState(env?.status?.state);
   const stateDetail = env?.status?.stateDetail;
+  // With a server rollup the header follows it exactly, like the canvas
+  // node (deriveServiceStatus); an in-flight rollout is a chip next to
+  // it, not a different status.
+  const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;
+  // Live but short of replicas reads "Degraded", the same rule as the
+  // health strip (ready < desired from the env's replica rollup).
+  const shortOfReplicas =
+    replicas?.desired !== undefined && replicas.desired > 0 && (replicas.ready ?? 0) < replicas.desired;
   const status = serverState
-    ? serverState === "active" && rollingNow
-      ? "rolling"
+    ? serverState === "active" && shortOfReplicas
+      ? "degraded"
       : serverState
     : phase === "building" || phase === "deploying"
       ? "building"
@@ -684,7 +698,10 @@ export function ServiceOverlay({
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:max-w-3xl sm:border-l sm:border-[var(--border-subtle)]"
+            className={cn(
+              "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:border-l sm:border-[var(--border-subtle)]",
+              !expanded && "sm:max-w-3xl",
+            )}
           >
             {/* Sticky header. Tighter padding on small screens so the
                 overlay's title row uses the full width of a phone. */}
@@ -718,7 +735,7 @@ export function ServiceOverlay({
                     <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
                     <span className="font-mono">{service}</span>
                     {envParam !== "production" && (
-                      <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-[11px]">{envParam}</span>
+                      <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-xs">{envParam}</span>
                     )}
                   </span>
                   {url ? (
@@ -768,6 +785,24 @@ export function ServiceOverlay({
                     // changes" badge was their save not taking). Naming
                     // the in-flight field (envVars/image/…) makes it
                     // obvious the edit was accepted and is propagating.
+                    if (rolling && rolloutSlow) {
+                      return (
+                        <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-0.5 text-xs text-[var(--warning)]">
+                          <AlertTriangle aria-hidden className="h-3 w-3" />
+                          Rollout taking longer than expected
+                          <span aria-hidden>·</span>
+                          {canSeeEvents ? (
+                            <Link href="/settings/health#kube-events" className="underline underline-offset-2">
+                              View events
+                            </Link>
+                          ) : (
+                            <button type="button" onClick={() => navigateTo("logs")} className="underline underline-offset-2">
+                              View logs
+                            </button>
+                          )}
+                        </span>
+                      );
+                    }
                     if (rolling) {
                       const fields = stale ? d.podsStale : [];
                       const what =
@@ -821,6 +856,16 @@ export function ServiceOverlay({
               </div>
               <button
                 type="button"
+                onClick={() => setExpanded(!expanded)}
+                aria-pressed={expanded}
+                aria-label={expanded ? "Narrow the panel" : "Expand the panel to full width"}
+                title={expanded ? "Narrow the panel" : "Expand to full width"}
+                className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
+              >
+                {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
                 onClick={guardedClose}
                 aria-label="Close"
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
@@ -838,6 +883,7 @@ export function ServiceOverlay({
                 detail={stateDetail}
                 env={env}
                 envGroup={envGroup}
+                onDeployments={tab === "deployments"}
                 onNavigate={navigateTo}
               />
             ) : null}
@@ -1145,11 +1191,15 @@ function HealthBanner({
   detail,
   env,
   envGroup,
+  onDeployments,
   onNavigate,
 }: {
   project: string;
   service: string;
   problem: Exclude<HealthProblem, null>;
+  // Already on Deployments: the failed build is right below, so the
+  // jump button would go nowhere.
+  onDeployments: boolean;
   serverState?: string;
   detail?: string;
   env?: KusoEnvironment;
@@ -1188,7 +1238,7 @@ function HealthBanner({
             <RollbackControl project={project} service={service} env={env} envGroup={envGroup} />
             <RestartControl project={project} service={service} envGroup={envGroup} variant="button" />
           </>
-        ) : (
+        ) : onDeployments ? null : (
           <BannerButton onClick={() => onNavigate("deployments")} icon={Rocket}>
             Deployments
           </BannerButton>
@@ -1443,4 +1493,52 @@ function UrlPill({ url }: { url: string }) {
       <CopyButton value={url} label="Copy URL" size="xs" />
     </span>
   );
+}
+
+const ROLLOUT_SLOW_MS = 10 * 60_000;
+
+// useRolloutSlow flags a rollout still pending ROLLOUT_SLOW_MS after the
+// spec write that started it (or, on servers that don't report that
+// write, after this panel first saw it pending), so a rollout that never
+// finishes stops reading as "Applying changes…" forever.
+function useRolloutSlow(rolling: boolean, specWrittenAt?: string): boolean {
+  const [seenAt, setSeenAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setSeenAt(rolling ? Date.now() : null);
+  }, [rolling]);
+  const written = specWrittenAt ? Date.parse(specWrittenAt) : NaN;
+  const since = Number.isNaN(written) ? seenAt : written;
+  useEffect(() => {
+    if (!rolling || since === null) return;
+    const left = since + ROLLOUT_SLOW_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => setNow(Date.now()), left + 50);
+    return () => clearTimeout(t);
+  }, [rolling, since]);
+  return rolling && since !== null && now - since >= ROLLOUT_SLOW_MS;
+}
+
+const EXPANDED_KEY = "kuso:service-panel-expanded";
+
+// The full-width choice is a per-viewer convenience, so it lives in
+// localStorage (which may be unavailable: then it just isn't remembered).
+function useExpandedPanel(): [boolean, (v: boolean) => void] {
+  const [expanded, setExpandedState] = useState(false);
+  useEffect(() => {
+    try {
+      setExpandedState(window.localStorage.getItem(EXPANDED_KEY) === "1");
+    } catch {
+      // storage blocked
+    }
+  }, []);
+  const setExpanded = useCallback((v: boolean) => {
+    setExpandedState(v);
+    try {
+      window.localStorage.setItem(EXPANDED_KEY, v ? "1" : "0");
+    } catch {
+      // storage blocked
+    }
+  }, []);
+  return [expanded, setExpanded];
 }

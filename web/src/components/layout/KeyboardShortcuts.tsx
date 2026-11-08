@@ -132,20 +132,23 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   // Page sections first: they're what the person was looking at.
   const sections = [
     ...registered,
-    { title: "Everywhere", items: global },
+    { title: "Everywhere (outside a panel)", items: global },
     { title: "Command palette", items: PALETTE },
-    { title: "Service panel", items: SERVICE_PANEL },
-    { title: "Database panel", items: ADDON_PANEL },
+    { title: "Inside a service panel", items: SERVICE_PANEL },
+    { title: "Inside a database panel", items: ADDON_PANEL },
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 p-0 sm:max-w-3xl">
-        <DialogHeader className="border-b border-[var(--border-subtle)] px-5 py-4">
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 p-0 sm:max-w-3xl">
+        <DialogHeader className="shrink-0 border-b border-[var(--border-subtle)] px-5 py-4">
           <DialogTitle>Keyboard shortcuts</DialogTitle>
-          <DialogDescription>Shortcuts work anywhere except while you&apos;re typing in a field.</DialogDescription>
+          <DialogDescription>
+            Shortcuts work anywhere except while you&apos;re typing in a field. While a service or database panel is open,
+            its G shortcuts (G then S is that panel&apos;s Settings) win over the global ones.
+          </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-1 gap-x-8 gap-y-6 px-5 py-5 sm:grid-cols-2">
+        <div className="grid min-h-0 grid-cols-1 gap-x-8 gap-y-6 overflow-y-auto overscroll-contain px-5 py-5 sm:grid-cols-2">
           {sections.map((g, i) => (
             <ShortcutList key={`${g.title}-${i}`} title={g.title} items={g.items} />
           ))}

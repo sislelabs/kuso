@@ -13,6 +13,7 @@ import {
   ChevronDown,
   CircleDashed,
   Clock,
+  GitBranch,
   Loader2,
   MoreHorizontal,
   RefreshCw,
@@ -49,6 +50,7 @@ import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
 import { CommitRef, CompareLink, Dot, LiveDuration, triggerLabel } from "./deployParts";
 import { CopyButton } from "@/components/ui/copy-button";
+import { Button } from "@/components/ui/button";
 
 export type { BuildRowStatus };
 export { formatDuration, triggerLabel } from "./deployParts";
@@ -99,6 +101,8 @@ export interface BuildRowProps {
   isOpen: boolean;
   canDeploy: boolean;
   onToggle: () => void;
+  // Jump to another overlay tab (Settings → Source for a missing branch).
+  onNavigate?: (tab: string, anchor?: string) => void;
   // The newest row you can roll back to keeps its actions visible, so
   // "how do I undo this deploy" is answered without hovering.
   pinActions?: boolean;
@@ -120,6 +124,7 @@ export function BuildRow({
   isOpen,
   canDeploy,
   onToggle,
+  onNavigate,
   pinActions = false,
 }: BuildRowProps) {
   const m = STATUS[s];
@@ -287,6 +292,7 @@ export function BuildRow({
             newerThanLive={newerThanLive}
             liveBuild={liveBuild}
             repoUrl={repoUrl}
+            onNavigate={onNavigate}
           />
           <RowMenu build={b} repoUrl={repoUrl} previous={previous} compareHref={compareHref} sha={sha} onToggleLog={onToggle} isOpen={isOpen} />
           <button
@@ -334,6 +340,7 @@ function PrimaryAction({
   newerThanLive,
   liveBuild,
   repoUrl,
+  onNavigate,
 }: {
   project: string;
   service: string;
@@ -345,6 +352,7 @@ function PrimaryAction({
   newerThanLive?: boolean;
   liveBuild?: DeployBuild;
   repoUrl?: string;
+  onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   if (!canDeploy) return null;
   if (s === "superseded") {
@@ -379,7 +387,19 @@ function PrimaryAction({
   if (s === "release-failed") return <RetryReleaseButton project={project} service={service} buildId={b.id} sha={sha} />;
   if (s === "running" || s === "pending" || s === "queued") return <CancelButton project={project} service={service} buildId={b.id} />;
   if (s === "failed" || s === "cancelled") {
-    return <RetryBuildButton project={project} service={service} build={b} sha={sha} />;
+    const stuck = s === "failed" ? unretryableReason(b) : undefined;
+    const missingBranch = stuck && isMissingBranch(b);
+    return (
+      <>
+        {missingBranch && onNavigate && (
+          <button type="button" onClick={() => onNavigate("settings", "source")} className={ACTION_BTN}>
+            <GitBranch className="h-3.5 w-3.5" />
+            <span>Change branch</span>
+          </button>
+        )}
+        <RetryBuildButton project={project} service={service} build={b} sha={sha} blockedReason={stuck} />
+      </>
+    );
   }
   return null;
 }
@@ -541,6 +561,30 @@ function CancelButton({ project, service, buildId }: { project: string; service:
   );
 }
 
+// Failures a retry of the same ref can't clear: the branch is gone, or
+// the commit itself is broken. Matched on the classifier kind, and on the
+// raw git message for builds classified before clone_ref_missing existed.
+function isMissingBranch(b: DeployBuild): boolean {
+  return (
+    b.failureClass?.kind === "clone_ref_missing" ||
+    /Remote branch \S+ not found|couldn't find remote ref/i.test(`${b.errorMessage ?? ""} ${b.failureClass?.lineHint ?? ""}`)
+  );
+}
+
+export function unretryableReason(b: DeployBuild): string | undefined {
+  if (isMissingBranch(b)) {
+    return `${b.branch ? `Branch ${b.branch}` : "This branch"} doesn't exist in the repository any more, so a retry fails the same way. Change the branch or push it again.`;
+  }
+  switch (b.failureClass?.kind) {
+    case "lockfile_drift":
+      return "The lockfile in this commit is out of sync with package.json; rebuilding the same commit fails the same way. Push a commit with an updated lockfile.";
+    case "dockerfile_missing_copy":
+      return "The Dockerfile copies a file this commit doesn't have; rebuilding it fails the same way. Push a fix.";
+    default:
+      return undefined;
+  }
+}
+
 // RetryBuildButton rebuilds the same commit: a failed or cancelled build,
 // or (pruned) a succeeded one whose image the retention sweep removed.
 function RetryBuildButton({
@@ -549,15 +593,27 @@ function RetryBuildButton({
   build: b,
   sha,
   pruned,
+  blockedReason,
 }: {
   project: string;
   service: string;
   build: DeployBuild;
   sha: string;
   pruned?: boolean;
+  // Set when a retry can't succeed: the button stays visible but disabled
+  // with this as its reason.
+  blockedReason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useTriggerBuild(project, service);
+  if (blockedReason) {
+    return (
+      <Button variant="outline" size="xs" disabled disabledReason={blockedReason} className="h-7 text-[var(--text-tertiary)]">
+        <RotateCcw className="h-3.5 w-3.5" />
+        Retry
+      </Button>
+    );
+  }
   const body = { branch: b.branch, ...(b.commitSha ? { ref: b.commitSha } : {}) };
   const run = async () => {
     try {

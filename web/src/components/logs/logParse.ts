@@ -47,6 +47,10 @@ const KV_LEVEL = /(?:^|[\s{,])"?(?:level|lvl|severity|loglevel)"?\s*[:=]\s*"?([A
 const BRACKET_LEVEL = /^\W{0,3}(?:\S+\s+){0,3}?[[(<]?(FATAL|PANIC|CRIT(?:ICAL)?|ERRO?R?|WARN(?:ING)?|WRN|INFO|INF|NOTICE|DEBUG|DBG|TRACE)\b[\])>:]?/;
 const ERROR_SHAPES = /(^panic:|^Traceback \(most recent call last\)|\bUncaught\b|\bunhandled(?: promise)? rejection\b|^\s*at .+\(.+:\d+:\d+\)$|^\w*(?:Error|Exception)(?::|\s*$)|^\[?Error[:\]])/i;
 
+// An upper-case ERROR / FATAL / PANIC word anywhere near the start
+// ("worker | 12:00 ERROR …"), which the leading-token match misses.
+const SHOUTED_ERROR = /\b(?:ERROR|FATAL|PANIC)\b/;
+
 // detectLevel reads a level off structured fields first (JSON / logfmt),
 // then a leading LEVEL token, then well-known error shapes. Unknown → "none"
 // rather than guessing "info" so the level filter doesn't lie.
@@ -65,7 +69,7 @@ export function detectLevel(raw: string): LogLevel {
     const hit = LEVEL_ALIASES[tok] ?? (tok.startsWith("err") ? "error" : undefined);
     if (hit) return hit;
   }
-  if (ERROR_SHAPES.test(line)) return "error";
+  if (ERROR_SHAPES.test(line) || SHOUTED_ERROR.test(line.slice(0, 200))) return "error";
   return "none";
 }
 
@@ -275,4 +279,28 @@ export function levelCountText(level: Exclude<LogLevel, "none">, n: number): { c
     default:
       return { count, noun: level };
   }
+}
+
+// The replayed backlog arrives pod by pod, so with several replicas it
+// reads out of order. When every replayed entry carries its own app
+// timestamp, put them in time order (continuation lines travel with
+// their head); otherwise leave the replay as it came.
+export function sortReplayedBacklog<T extends { ts: string; cont: boolean; backlog?: boolean }>(
+  raw: readonly { backlog?: boolean }[],
+  rows: T[],
+): T[] {
+  let end = 0;
+  while (end < raw.length && raw[end].backlog) end++;
+  if (end < 2) return rows;
+  const units: T[][] = [];
+  for (const r of rows.slice(0, end)) {
+    if (r.cont && units.length > 0) units[units.length - 1].push(r);
+    else units.push([r]);
+  }
+  // A head still flagged backlog had no app timestamp to read.
+  if (units.some((u) => u[0].backlog)) return rows;
+  const times = units.map((u) => Date.parse(u[0].ts));
+  if (times.some((t) => Number.isNaN(t))) return rows;
+  const order = units.map((u, i) => ({ u, t: times[i], i })).sort((a, b) => a.t - b.t || a.i - b.i);
+  return [...order.flatMap((o) => o.u), ...rows.slice(end)];
 }

@@ -146,7 +146,11 @@ export function VulnSettingsForm({ initial }: { initial: VulnScanSettings }) {
             Discard
           </Button>
         )}
-        <Button onClick={submit} disabled={!dirty || save.isPending}>
+        <Button
+          onClick={submit}
+          disabled={!dirty || save.isPending}
+          disabledReason={!dirty && !save.isPending ? "No changes to save" : undefined}
+        >
           {save.isPending ? "Saving…" : "Save"}
         </Button>
       </div>

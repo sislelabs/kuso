@@ -415,6 +415,7 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
             variant={st.dirty ? "default" : "outline"}
             onClick={() => ctx.save(section)}
             disabled={!st.dirty || st.saving}
+            disabledReason={!st.dirty && !st.saving ? "No changes to save in this section" : undefined}
           >
             {st.saving ? "Saving…" : "Save"}
           </Button>
@@ -550,7 +551,7 @@ export function Callout({
 // Code renders an inline literal (path, key, host) inside sans prose.
 export function Code({ children }: { children: React.ReactNode }) {
   return (
-    <code className="rounded bg-[var(--bg-tertiary)] px-1 py-px font-mono text-[11.5px] text-[var(--text-primary)]">
+    <code className="rounded bg-[var(--bg-tertiary)] px-1 py-px font-mono text-xs text-[var(--text-primary)]">
       {children}
     </code>
   );
