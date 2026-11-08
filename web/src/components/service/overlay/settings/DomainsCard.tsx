@@ -314,7 +314,10 @@ function DomainRow({
   const needsDns = kind === "custom";
   // Once DNS is confirmed pointing here the record table is noise; the
   // diagnosis explains whatever is still pending.
-  const autoOpen = needsDns && (summary ? summary.pending && resolve?.state !== "match" : forceOpen);
+  // A record that's missing or points elsewhere always shows the table,
+  // so the fix is copyable rather than just "expected 1.2.3.4".
+  const dnsWrong = resolve?.state === "elsewhere" || resolve?.state === "unresolved";
+  const autoOpen = needsDns && (dnsWrong || (summary ? summary.pending && resolve?.state !== "match" : forceOpen));
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? autoOpen;
   const url = `${hostScheme(tlsEnabled, host)}://${host}`;
