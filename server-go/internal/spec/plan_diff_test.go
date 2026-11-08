@@ -479,3 +479,32 @@ func fakeKubeWithSecrets(t *testing.T, secs []*corev1.Secret, seeds ...planSeed)
 	k.Clientset = cs
 	return k, ns
 }
+
+// branch: with no repo: (the service tracks the project's repo) was
+// dropped on create and ignored by the diff, so re-apply said "unchanged".
+func TestApply_BranchWithoutRepo(t *testing.T) {
+	create := serviceCreateReq(ServiceSpec{Name: "reports", Runtime: "dockerfile", Branch: "feature-csv-export"})
+	if create.Repo == nil || create.Repo.DefaultBranch != "feature-csv-export" || create.Repo.URL != "" {
+		t.Fatalf("create repo = %+v, want branch feature-csv-export on the project repo", create.Repo)
+	}
+
+	live := decodeService(t, seedRichService("shop", "api"))
+	live.Spec.Repo = &kube.KusoRepoRef{URL: "https://github.com/acme/shop", DefaultBranch: "main", Path: "."}
+	d := exportService("shop", *live)
+	liveURL, liveBranch := live.Spec.Repo.URL, live.Spec.Repo.DefaultBranch
+	d.Repo, d.Path = "", ""
+	d.Branch = "release-2"
+	req, fields := diffServiceSpec(live, d)
+	if req.Repo == nil || req.Repo.Branch != "release-2" || req.Repo.URL != liveURL {
+		t.Fatalf("patch repo = %+v, want branch release-2 on %s", req.Repo, liveURL)
+	}
+	if len(fields) != 1 || fields[0].Field != "branch" || fields[0].From != liveBranch || fields[0].To != "release-2" {
+		t.Fatalf("fields = %+v", fields)
+	}
+
+	d.Branch = liveBranch
+	req, fields = diffServiceSpec(live, d)
+	if req.Repo != nil || len(fields) != 0 {
+		t.Fatalf("same branch must be a no-op: %+v %+v", req.Repo, fields)
+	}
+}

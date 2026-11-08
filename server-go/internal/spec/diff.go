@@ -28,6 +28,20 @@ import (
 func diffServiceSpec(live *kube.KusoService, desired ServiceSpec) (projects.PatchServiceRequest, []FieldChange) {
 	req := servicePatchReq(desired)
 	ls := live.Spec
+	// branch: without repo: targets the repo the service already tracks.
+	// servicePatchReq can't build that request (an empty URL clears the
+	// repo), so a branch-only change was dropped and re-apply said
+	// "unchanged".
+	if req.Repo == nil && desired.Branch != "" && ls.Repo != nil && ls.Repo.URL != "" {
+		path := desired.Path
+		if path == "" {
+			path = ls.Repo.Path
+		}
+		if path == "" {
+			path = "."
+		}
+		req.Repo = &projects.PatchRepoRequest{URL: ls.Repo.URL, Branch: desired.Branch, Path: path}
+	}
 	var out []FieldChange
 	add := func(field, from, to string, destructive bool) {
 		out = append(out, FieldChange{Field: field, From: from, To: to, Destructive: destructive})

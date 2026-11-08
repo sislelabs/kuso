@@ -282,7 +282,9 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 		Port:    s.Port,
 		Command: s.Command,
 	}
-	if repoURL != "" {
+	// A branch with no repo: still means "deploy this branch" of the
+	// project's default repo, which AddService falls back to on an empty URL.
+	if repoURL != "" || s.Branch != "" {
 		req.Repo = &projects.CreateServiceRepo{URL: repoURL, Path: repoPath, DefaultBranch: s.Branch}
 	}
 	req.Internal = s.Internal
