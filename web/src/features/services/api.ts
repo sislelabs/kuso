@@ -470,6 +470,18 @@ export interface PatchServiceBody {
   publicEnv?: string[];
   static?: { builderImage?: string; runtimeImage?: string; buildCmd?: string; outputDir?: string };
   buildpacks?: { builderImage?: string; lifecycleImage?: string };
+  // healthcheck replaces spec.healthcheck wholesale; path "" turns the
+  // HTTP check off (back to the TCP port check).
+  healthcheck?: HealthcheckBody;
+}
+
+export interface HealthcheckBody {
+  path?: string;
+  port?: number;
+  initialDelaySeconds?: number;
+  periodSeconds?: number;
+  timeoutSeconds?: number;
+  failureThreshold?: number;
 }
 
 export interface PatchRepoBody {

@@ -65,6 +65,11 @@ const SERVICE_BLAST: Record<string, BlastInfo> = {
     level: "warn",
     message: "Rewrites the pod spec → rolling restart of every environment.",
   },
+  healthcheck: {
+    level: "warn",
+    message:
+      "Rewrites the probes → rolling restart of every environment. If the path doesn't answer, new pods never go ready and the old ones keep serving.",
+  },
   port: {
     level: "warn",
     message:

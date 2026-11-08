@@ -2,7 +2,8 @@ import { parseWatchPathsText } from "@/features/services/watchPaths";
 import type { FormState } from "./_primitives";
 import { releasePatch } from "./releasePatch";
 import { extraServicePatch } from "./servicePatchExtras";
-import { describeHealthcheck, healthcheckPatch, type ServicePatchBody } from "./healthcheckPatch";
+import type { PatchServiceBody } from "@/features/services";
+import { describeHealthcheck, healthcheckPatch } from "./healthcheckPatch";
 
 // buildServicePatch turns the edited form into the PATCH body, sending only
 // fields that differ from the baseline. Returns the first validation error
@@ -12,8 +13,8 @@ export function buildServicePatch(
   state: FormState,
   baseline: FormState,
   stored: { command?: string[]; releaseCommand?: string[] },
-): { body: ServicePatchBody } | { error: string } {
-  const body: ServicePatchBody = {};
+): { body: PatchServiceBody } | { error: string } {
+  const body: PatchServiceBody = {};
   if (state.displayName !== baseline.displayName) {
     const trimmed = state.displayName.trim();
     if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {

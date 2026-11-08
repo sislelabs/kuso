@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { describeError, toastError } from "@/lib/errors";
-import { usePatchService } from "@/features/services";
+import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
-import { serviceBlast, type BlastInfo } from "@/lib/blast-radius";
+import { serviceBlast } from "@/lib/blast-radius";
 import {
   Code,
   Section,
@@ -65,7 +65,6 @@ import { DeploySection } from "./settings/DeploySection";
 import { ReleaseSection } from "./settings/ReleaseSection";
 import { UptimeSection } from "./settings/UptimeSection";
 import { HealthcheckSection } from "./settings/HealthcheckSection";
-import type { ServicePatchBody } from "./settings/healthcheckPatch";
 import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
 
@@ -98,15 +97,6 @@ const SECTIONS = [
   { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
 
-// Blast radius for fields lib/blast-radius.ts doesn't list yet.
-const LOCAL_BLAST: Record<string, BlastInfo> = {
-  healthcheck: {
-    level: "warn",
-    message:
-      "Rewrites the probes → rolling restart of every environment. If the path doesn't answer, new pods never go ready and the old ones keep serving.",
-  },
-};
-
 const SECTION_LABEL: Record<string, string> = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
 const ALL_SAVEABLE = Object.keys(SECTION_FIELDS) as SaveableSection[];
 const SAVED_FLASH_MS = 3000;
@@ -114,7 +104,7 @@ const SAVED_FLASH_MS = 3000;
 interface PendingSave {
   sections: SaveableSection[];
   target: FormState;
-  body: ServicePatchBody;
+  body: PatchServiceBody;
 }
 
 // ServiceSettingsPanel orchestrates the per-service settings tab. Each
@@ -266,7 +256,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const diffEntries: DiffEntry[] = pendingSave
     ? Object.keys(pendingSave.body).map((field) => {
         const [before, after] = fieldDiffValues(field, baseline, pendingSave.target);
-        return { field, before, after, warning: serviceBlast(field) ?? LOCAL_BLAST[field] };
+        return { field, before, after, warning: serviceBlast(field) ?? undefined };
       })
     : [];
 

@@ -64,6 +64,7 @@ export type {
   TriggerBuildResult,
   ErrorGroup,
   PatchServiceBody,
+  HealthcheckBody,
   KusoCron,
   CreateCronBody,
   LogLine,

@@ -1,17 +1,5 @@
-import type { PatchServiceBody } from "@/features/services";
+import type { HealthcheckBody } from "@/features/services";
 import type { FormState } from "./_primitives";
-
-export interface HealthcheckBody {
-  path?: string;
-  port?: number;
-  initialDelaySeconds?: number;
-  periodSeconds?: number;
-  timeoutSeconds?: number;
-  failureThreshold?: number;
-}
-
-// The settings form sends spec.healthcheck alongside the shared PATCH body.
-export type ServicePatchBody = PatchServiceBody & { healthcheck?: HealthcheckBody };
 
 // Chart/CRD defaults, used for placeholders and the "what this means" line.
 export const HC_DEFAULTS = { delay: 5, period: 10, timeout: 2, threshold: 3 } as const;
