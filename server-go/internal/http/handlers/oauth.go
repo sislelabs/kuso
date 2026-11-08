@@ -154,6 +154,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		h.failLogin(w, "github login", err)
 		return
 	}
+	h.stampLogin(ctx, r, user)
 	if tok != nil {
 		// Persist the GithubUserLink so the project flow knows which
 		// installations this user can see.
@@ -214,12 +215,24 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "oauth2 exchange", err)
 		return
 	}
-	jwt, _, err := h.loginAndIssue(ctx, prof, "oauth2", "")
+	jwt, user, err := h.loginAndIssue(ctx, prof, "oauth2", "")
 	if err != nil {
 		h.failLogin(w, "oauth2 login", err)
 		return
 	}
+	h.stampLogin(ctx, r, user)
 	redirectWithJWT(w, r, jwt)
+}
+
+// stampLogin records lastLogin + lastIp like the password path does.
+// Best-effort: the session is already minted, so a failure only logs.
+func (h *OAuthHandler) stampLogin(ctx context.Context, r *http.Request, user *db.User) {
+	if user == nil {
+		return
+	}
+	if err := h.DB.UpdateUserLogin(ctx, user.ID, clientIP(r), time.Now()); err != nil {
+		h.Logger.Warn("oauth: record login", "err", err, "user", user.ID)
+	}
 }
 
 // Sentinel errors for the OAuth login flow. Wrapped with context via

@@ -196,6 +196,16 @@ func main() {
 		return perms, true
 	})
 
+	// "Last seen": sessions and CLI tokens outlive the login handlers,
+	// so bump User.lastLogin from authenticated traffic too — at most
+	// once per user per 5 min, async, never on the request's critical path.
+	issuer.SetSeenRecorder(auth.NewThrottledSeenRecorder(5*time.Minute, 10000,
+		database.TouchUserLastSeen,
+		func(userID string, err error) {
+			logger.Debug("auth: touch last seen", "user", userID, "err", err)
+		},
+	))
+
 	// Two-tier shutdown contexts (R4 audit fix):
 	//
 	//   sigCtx     — signal-driven; cancels on SIGTERM / SIGINT

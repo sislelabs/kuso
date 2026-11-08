@@ -449,6 +449,10 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	// Redemption signs the invitee in, so record it like any other login.
+	if err := h.DB.UpdateUserLogin(ctx, id, clientIP(r), time.Now()); err != nil {
+		h.Logger.Warn("invite: record login", "err", err, "user", id)
+	}
 	writeJSON(w, http.StatusOK, redeemLocalResponse{AccessToken: jwt})
 }
 

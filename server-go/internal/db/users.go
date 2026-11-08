@@ -231,6 +231,21 @@ func (d *DB) UpdateUserLogin(ctx context.Context, userID, ip string, when time.T
 	return nil
 }
 
+// TouchUserLastSeen bumps "lastLogin" for an already-authenticated
+// request (long-lived sessions / CLI tokens never hit a login handler).
+// Leaves lastIp and updatedAt alone, and never moves lastLogin
+// backwards when a slow write lands after a newer one.
+func (d *DB) TouchUserLastSeen(ctx context.Context, userID string, when time.Time) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE "User" SET "lastLogin" = $1 WHERE id = $2 AND ("lastLogin" IS NULL OR "lastLogin" < $1)`,
+		when, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("db: touch user last seen: %w", err)
+	}
+	return nil
+}
+
 // UserPermissions returns the role-scoped permissions for the given user
 // as "<resource>:<action>" strings, matching the JWT permissions[] claim
 // the TS server emits.

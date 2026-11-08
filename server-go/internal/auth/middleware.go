@@ -117,6 +117,9 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				return
 			}
 			i.ResolvePermissions(r.Context(), claims)
+			if i.seen != nil {
+				i.seen(claims)
+			}
 			ctx := context.WithValue(r.Context(), claimsCtxKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

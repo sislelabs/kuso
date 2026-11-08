@@ -39,6 +39,7 @@ type Issuer struct {
 	ttl          time.Duration
 	revoked      RevocationChecker  // optional; set via SetRevocationChecker
 	resolvePerms PermissionResolver // optional; set via SetPermissionResolver
+	seen         SeenRecorder       // optional; set via SetSeenRecorder
 }
 
 // NewIssuer constructs an Issuer with the given HMAC secret and TTL.
