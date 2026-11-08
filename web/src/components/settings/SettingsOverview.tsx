@@ -11,7 +11,7 @@ import { useDrains } from "@/features/drains";
 import { useSetupStatus } from "@/features/github";
 import { addonBackupCoverageText, addonBackupFailingText, summarizeAddonBackups } from "@/components/health/backupCoverage";
 import { useSystemVersion } from "@/features/system-version";
-import { pendingInviteCount, type InviteRow } from "@/features/users";
+import { countTeam, pendingInviteCount, type InviteRow } from "@/features/users";
 import { api } from "@/lib/api-client";
 import type { StatusMeta, StatusTone } from "@/lib/status";
 
@@ -36,6 +36,8 @@ interface BackupHealth {
 }
 interface UserRow {
   isActive: boolean;
+  lastLogin?: string | null;
+  provider?: string;
 }
 
 interface TileState {
@@ -227,13 +229,14 @@ function UsersTile() {
       query={users}
       render={() => {
         const list = users.data ?? [];
-        const active = list.filter((u) => u.isActive).length;
+        const team = countTeam(list);
         const pending = pendingInviteCount(invites.data);
         return {
           status: meta("neutral", "Team"),
-          value: plural(active, "active user"),
+          value: plural(team.active, "active user"),
           detail: [
-            list.length > active ? `${list.length - active} disabled` : null,
+            team.invited > 0 ? `${team.invited} never signed in` : null,
+            team.disabled > 0 ? `${team.disabled} disabled` : null,
             pending > 0 ? `${plural(pending, "invite")} pending` : null,
           ]
             .filter(Boolean)

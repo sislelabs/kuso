@@ -8,7 +8,7 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCan, Perms } from "@/features/auth";
+import { useCan, useSession, Perms } from "@/features/auth";
 import { resetUserPassword } from "@/features/profile/api";
 import { toast } from "sonner";
 import { Plus, Trash2, KeyRound, Copy, Check } from "lucide-react";
@@ -28,6 +28,7 @@ import {
   hasNeverSignedIn,
   inviteStatus,
   lastSeenLabel,
+  presenceLabel,
   nullStr,
   nullTime,
   pendingInviteCount,
@@ -400,6 +401,7 @@ function UserRowItem({
   onReset: () => void;
 }) {
   const qc = useQueryClient();
+  const currentUserId = useSession().data?.user.id;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   // The role the select was changed to, awaiting confirmation. The
@@ -557,9 +559,9 @@ function UserRowItem({
 
       <div role="cell" className="text-sm text-[var(--text-secondary)]">
         <span className="mb-1 block text-xs md:hidden">Last seen</span>
-        {u.lastLogin ? (
-          <span title={new Date(u.lastLogin).toLocaleString()} className="whitespace-nowrap">
-            {lastSeenLabel(u.lastLogin)}
+        {u.lastLogin || u.id === currentUserId ? (
+          <span title={u.lastLogin ? new Date(u.lastLogin).toLocaleString() : undefined} className="whitespace-nowrap">
+            {presenceLabel(u, currentUserId)}
           </span>
         ) : (
           <span className="whitespace-nowrap text-[var(--text-tertiary)]">{lastSeenLabel(u.lastLogin, Date.now(), u.provider)}</span>

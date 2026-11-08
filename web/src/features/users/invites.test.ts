@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inviteStatus, pendingInviteCount, pendingInvites, type InviteRow } from "./invites";
-import { hasNeverSignedIn, lastSeenLabel } from "./presence";
+import { countTeam, hasNeverSignedIn, lastSeenLabel, presenceLabel } from "./presence";
 
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 const iso = (offsetSec: number) => new Date(NOW + offsetSec * 1000).toISOString();
@@ -63,5 +63,24 @@ describe("hasNeverSignedIn", () => {
     expect(hasNeverSignedIn({ lastLogin: null })).toBe(true);
     expect(hasNeverSignedIn({ lastLogin: null, provider: "github" })).toBe(false);
     expect(hasNeverSignedIn({ lastLogin: "2026-11-08T00:00:00Z", provider: "local" })).toBe(false);
+  });
+});
+
+describe("presenceLabel", () => {
+  it("reads Active now for the viewer regardless of the stamp", () => {
+    expect(presenceLabel({ id: "me", lastLogin: iso(-2 * 3600) }, "me", NOW)).toBe("Active now");
+    expect(presenceLabel({ id: "other", lastLogin: iso(-2 * 3600) }, "me", NOW)).toBe("Last seen 2h ago");
+  });
+});
+
+describe("countTeam", () => {
+  it("counts only enabled accounts that have signed in as active", () => {
+    expect(
+      countTeam([
+        { isActive: true, lastLogin: iso(-60) },
+        { isActive: true, lastLogin: null, provider: "local" },
+        { isActive: false, lastLogin: iso(-60) },
+      ]),
+    ).toEqual({ active: 1, invited: 1, disabled: 1 });
   });
 });

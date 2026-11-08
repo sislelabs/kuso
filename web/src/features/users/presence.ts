@@ -28,3 +28,32 @@ export function lastSeenLabel(
 export function hasNeverSignedIn(user: { lastLogin?: string | null; provider?: string }): boolean {
   return !user.lastLogin && !isOAuth(user.provider);
 }
+
+// The viewer is using the UI right now, whatever the server last stamped.
+export function presenceLabel(
+  user: { id: string; lastLogin?: string | null; provider?: string },
+  currentUserId: string | undefined,
+  now: number = Date.now(),
+): string {
+  if (currentUserId && user.id === currentUserId) return "Active now";
+  return lastSeenLabel(user.lastLogin, now, user.provider);
+}
+
+// Team size as the settings overview counts it: enabled accounts that
+// have signed in at least once. Invited-but-never-used accounts and
+// disabled ones are counted separately.
+export function countTeam(users: ReadonlyArray<{ isActive: boolean; lastLogin?: string | null; provider?: string }>): {
+  active: number;
+  invited: number;
+  disabled: number;
+} {
+  let active = 0;
+  let invited = 0;
+  let disabled = 0;
+  for (const u of users) {
+    if (!u.isActive) disabled++;
+    else if (hasNeverSignedIn(u)) invited++;
+    else active++;
+  }
+  return { active, invited, disabled };
+}
