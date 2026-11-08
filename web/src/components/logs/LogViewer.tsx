@@ -26,7 +26,8 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { AnsiText } from "./AnsiText";
 import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
-import { TimeRange, rangeLabel, rangeToMs } from "./TimeRange";
+import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
+import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
 import { buildMatcher, detectLevel, fmtClock, linesToText, LOG_LEVELS, parseJsonLine, shortPod, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
@@ -161,7 +162,7 @@ export function LogViewer({
     queryFn: ({ pageParam }) => {
       const r = view.range;
       const since =
-        r.kind === "abs" ? r.from : r.kind === "preset" ? new Date(Date.now() - rangeToMs(r.preset)).toISOString() : undefined;
+        r.kind === "abs" ? r.from : r.kind === "preset" ? new Date(Date.now() - rangeMs(r.preset)).toISOString() : undefined;
       return searchArchive(archiveScope, {
         q: view.q || undefined,
         env: view.env || undefined,
@@ -401,7 +402,7 @@ export function LogViewer({
   const rangeValue = view.range.kind === "live" ? "live" : view.range.kind === "preset" ? view.range.preset : "";
   const customLabel =
     view.range.kind === "abs" ? `${fmtClock(view.range.from, true).slice(0, -4)} – ${fmtClock(view.range.to, false).slice(0, -4)}` : undefined;
-  const spanMs = view.range.kind === "preset" ? rangeToMs(view.range.preset) : view.range.kind === "abs" ? Date.parse(view.range.to) - Date.parse(view.range.from) : 0;
+  const spanMs = view.range.kind === "preset" ? rangeMs(view.range.preset) : view.range.kind === "abs" ? Date.parse(view.range.to) - Date.parse(view.range.from) : 0;
   const withDate = !live && spanMs > 20 * 3_600_000;
   const filtersActive = view.levels.length > 0 || !!view.pod;
   const loading = live ? stream.connection === "connecting" && rows.length === 0 : archive.isPending;
@@ -489,7 +490,7 @@ export function LogViewer({
             </div>
           )}
         </form>
-        <TimeRange
+        <TimeRangePicker
           presets={presets}
           value={rangeValue}
           onChange={setRange}
@@ -503,7 +504,7 @@ export function LogViewer({
           }}
           customLabel={customLabel}
           onClearCustom={() => setView({ range: canStream ? { kind: "live" } : { kind: "preset", preset: "1h" } })}
-          aria-label="Log time range"
+          ariaLabel="Log time range"
         />
       </div>
 
@@ -519,7 +520,7 @@ export function LogViewer({
           count={visible.length}
           total={rows.length}
           rangeText={
-            view.range.kind === "preset" ? `last ${rangeLabel(view.range.preset)}` : view.range.kind === "abs" ? "custom window" : ""
+            view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : view.range.kind === "abs" ? "custom window" : ""
           }
           query={view.q}
           refreshing={!live && archive.isFetching && !archive.isFetchingNextPage && !archive.isPending}
@@ -597,7 +598,7 @@ export function LogViewer({
                   Load older lines
                 </button>
               ) : (
-                `Start of results for the ${view.range.kind === "preset" ? `last ${rangeLabel(view.range.preset)}` : "selected window"}`
+                `Start of results for the ${view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : "selected window"}`
               )}
             </div>
           )}
@@ -615,7 +616,7 @@ export function LogViewer({
               hasRows={rows.length > 0}
               filtersActive={filtersActive || (live && !!view.q)}
               query={view.q}
-              rangeText={view.range.kind === "preset" ? rangeLabel(view.range.preset) : "the selected window"}
+              rangeText={view.range.kind === "preset" ? timeRangeSpan(view.range.preset) : "the selected window"}
               onClearFilters={() => {
                 setView({ levels: [], pod: "", ...(live ? { q: "" } : {}) });
                 if (live) setDraft("");
@@ -981,11 +982,11 @@ function EmptyLogs({
     body = query
       ? "Search is a case-insensitive substring match over the 7-day archive."
       : "The service may be sleeping, stopped, or not deployed yet — or it simply hasn't logged anything.";
-    const wider = ["24h", "7d"].filter((p) => rangeToMs(p) > rangeToMs(currentPreset));
+    const wider = ["24h", "7d"].filter((p) => rangeMs(p) > rangeMs(currentPreset));
     for (const p of wider) {
       actions.push(
         <Button key={p} size="sm" variant="outline" onClick={() => onWiden(p)}>
-          Widen to {rangeLabel(p)}
+          Widen to {timeRangeSpan(p)}
         </Button>,
       );
     }
@@ -1011,4 +1012,8 @@ function EmptyLogs({
       {actions.length > 0 && <div className="mt-2 flex flex-wrap justify-center gap-2">{actions}</div>}
     </div>
   );
+}
+
+function rangeMs(preset: string): number {
+  return timeRangeMs(preset) ?? 0;
 }

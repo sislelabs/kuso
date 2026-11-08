@@ -1,5 +1,6 @@
 "use client";
 
+import { Switch } from "@/components/ui/switch";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -452,27 +453,12 @@ function NotificationRow({
           </div>
         </div>
         <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-        <button
-          type="button"
-          onClick={() => toggle.mutate(!n.enabled)}
+        <Switch
+          on={n.enabled}
+          onChange={(v) => toggle.mutate(v)}
           disabled={toggle.isPending}
-          role="switch"
-          aria-checked={n.enabled}
-          className={cn(
-            "inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors",
-            n.enabled
-              ? "border-[var(--success)]/40 bg-[var(--success)]/25"
-              : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
-          )}
-          aria-label={n.enabled ? `Disable ${n.name}` : `Enable ${n.name}`}
-        >
-          <span
-            className={cn(
-              "inline-block h-4 w-4 rounded-full bg-white shadow transition-transform",
-              n.enabled ? "translate-x-5" : "translate-x-1"
-            )}
-          />
-        </button>
+          label={n.enabled ? `Disable ${n.name}` : `Enable ${n.name}`}
+        />
         <Button
           variant="outline"
           size="sm"
@@ -748,26 +734,7 @@ function NotificationEditor({
           label="Enabled"
           hint="Paused channels keep their config but receive nothing."
           aside={
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label="Enabled"
-            onClick={() => setEnabled((v) => !v)}
-            className={cn(
-              "inline-flex h-6 w-10 items-center rounded-full border transition-colors",
-              enabled
-                ? "border-[var(--success)]/40 bg-[var(--success)]/25"
-                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
-            )}
-          >
-            <span
-              className={cn(
-                "inline-block h-4 w-4 rounded-full bg-white shadow transition-transform",
-                enabled ? "translate-x-5" : "translate-x-1"
-              )}
-            />
-          </button>
+          <Switch on={enabled} onChange={setEnabled} label="Enabled" />
           }
         />
       </div>

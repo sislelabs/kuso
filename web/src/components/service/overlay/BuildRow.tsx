@@ -40,7 +40,7 @@ import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
 import { CommitRef, CompareLink, Dot, LiveDuration, triggerLabel } from "./deployParts";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
 
 export type { BuildRowStatus };
 export { formatDuration, triggerLabel } from "./deployParts";
@@ -341,11 +341,11 @@ function RowMenu({
         )}
         <div className={cn(item, "justify-between")}>
           <span>Copy {b.commitSha ? "commit SHA" : "ref"}</span>
-          <CopyButton value={b.commitSha || b.ref || sha} what="Commit SHA" />
+          <CopyButton value={b.commitSha || b.ref || sha} label="Copy commit SHA" />
         </div>
         <div className={cn(item, "justify-between")}>
           <span>Copy build ID</span>
-          <CopyButton value={b.id} what="Build ID" />
+          <CopyButton value={b.id} label="Copy build ID" />
         </div>
       </PopoverContent>
     </Popover>
@@ -372,7 +372,7 @@ function Remediation({ failureClass }: { failureClass?: BuildFailureClass }) {
             <div className="mt-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
               <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-2 py-1">
                 <span className="text-[11px] text-[var(--text-tertiary)]">{rem.fixLang || "Fix"}</span>
-                <CopyButton value={rem.fix} what="Fix" label="Copy" />
+                <CopyButton value={rem.fix} label="Copy" showLabel />
               </div>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs text-[var(--text-secondary)]">
                 {rem.fix}

@@ -1,5 +1,6 @@
 "use client";
 
+import { Switch } from "@/components/ui/switch";
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, AlertTriangle, Search } from "lucide-react";
@@ -188,26 +189,13 @@ function ProjectMonitorToggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={`Monitor ${label}`}
+    <Switch
+      on={on}
+      onChange={onChange}
       disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={cn(
-        "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
-        on ? "bg-[var(--success)]" : "border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
-        busy && "animate-pulse",
-      )}
-    >
-      <span
-        className={cn(
-          "inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform",
-          on ? "translate-x-[18px]" : "translate-x-[3px]",
-        )}
-      />
-    </button>
+      label={`Monitor ${label}`}
+      className={cn(busy && "animate-pulse")}
+    />
   );
 }
 

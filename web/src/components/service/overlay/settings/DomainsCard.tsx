@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, ExternalLink, Globe, Lock, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, ExternalLink, Globe, Lock, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { HostClashHint } from "@/components/shared/HostClashHint";
@@ -427,13 +428,13 @@ function DnsInstructions({ host }: { host: string }) {
                 <td className="px-3 py-1.5">
                   <span className="inline-flex items-center gap-1 font-mono text-[var(--text-primary)]">
                     {r.name}
-                    <CopyButton value={r.name} label={`Copy record name ${r.name}`} small />
+                    <CopyButton value={r.name} label={`Copy record name ${r.name}`} size="xs" />
                   </span>
                 </td>
                 <td className="px-3 py-1.5">
                   <span className="inline-flex items-center gap-1 font-mono text-[var(--text-primary)]">
                     {r.value}
-                    <CopyButton value={r.value} label={`Copy ${r.value}`} small />
+                    <CopyButton value={r.value} label={`Copy ${r.value}`} size="xs" />
                   </span>
                 </td>
               </tr>
@@ -581,32 +582,6 @@ function AddDomainForm({
 }
 
 // ----- small pieces -----
-
-function CopyButton({ value, label, small }: { value: string; label: string; small?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title="Copy"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        } catch {
-          toast.error("Couldn't copy. Select the text and copy it by hand.");
-        }
-      }}
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-sm text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
-        small ? "h-5 w-5" : "h-7 w-7",
-      )}
-    >
-      {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
-    </button>
-  );
-}
 
 const BUDGET_KEY = "kuso.domainAdds";
 

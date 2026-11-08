@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DEFAULT_TIME_RANGE_PRESETS, timeRangeLabel } from "@/lib/time-range";
 
@@ -11,10 +12,15 @@ import { DEFAULT_TIME_RANGE_PRESETS, timeRangeLabel } from "@/lib/time-range";
 //
 // A segmented radiogroup: ←/→ move and select, the group is one tab
 // stop. The strip scrolls horizontally rather than wrapping on phones.
+// A value outside `presets` (an absolute window picked elsewhere, e.g. a
+// chart drag) shows as a dismissible chip via `customLabel`.
 export function TimeRangePicker<T extends string>({
   value,
   onChange,
   presets = DEFAULT_TIME_RANGE_PRESETS as unknown as readonly T[],
+  labels,
+  customLabel,
+  onClearCustom,
   size = "default",
   ariaLabel = "Time range",
   disabled = false,
@@ -23,6 +29,10 @@ export function TimeRangePicker<T extends string>({
   value: T;
   onChange: (value: T) => void;
   presets?: readonly T[];
+  /** Custom content for a preset button (e.g. a "Live" dot). */
+  labels?: Partial<Record<T, React.ReactNode>>;
+  customLabel?: string;
+  onClearCustom?: () => void;
   size?: "sm" | "default";
   ariaLabel?: string;
   disabled?: boolean;
@@ -41,7 +51,7 @@ export function TimeRangePicker<T extends string>({
     onChange(presets[next]);
   };
   const selectedIndex = Math.max(0, presets.indexOf(value));
-  return (
+  const group = (
     <div
       role="radiogroup"
       aria-label={ariaLabel}
@@ -63,8 +73,8 @@ export function TimeRangePicker<T extends string>({
             type="button"
             role="radio"
             aria-checked={checked}
-            aria-label={timeRangeLabel(p)}
-            title={timeRangeLabel(p)}
+            aria-label={labels?.[p] ? undefined : timeRangeLabel(p)}
+            title={labels?.[p] ? undefined : timeRangeLabel(p)}
             tabIndex={i === selectedIndex ? 0 : -1}
             disabled={disabled}
             onClick={() => onChange(p)}
@@ -75,10 +85,34 @@ export function TimeRangePicker<T extends string>({
               checked && "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]",
             )}
           >
-            {p}
+            {labels?.[p] ?? p}
           </button>
         );
       })}
+    </div>
+  );
+  if (!customLabel) return group;
+  return (
+    <div className="flex min-w-0 max-w-full items-center gap-1.5">
+      <span
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-default)] bg-[var(--bg-tertiary)] pr-1 pl-2 text-xs text-[var(--text-primary)]",
+          size === "sm" ? "h-7" : "h-8",
+        )}
+      >
+        {customLabel}
+        {onClearCustom && (
+          <button
+            type="button"
+            onClick={onClearCustom}
+            aria-label="Clear custom time window"
+            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none"
+          >
+            <X aria-hidden className="size-3" />
+          </button>
+        )}
+      </span>
+      {group}
     </div>
   );
 }

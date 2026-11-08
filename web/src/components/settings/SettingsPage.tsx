@@ -1,11 +1,12 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
-import { ChevronLeft } from "lucide-react";
+import { PageContainer } from "@/components/shared/PageContainer";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { cn } from "@/lib/utils";
 
-// SettingsPage is the one header + width every /settings/* page uses.
-// Kept local to settings so the integrator can later point it at the
-// shared PageHeader/PageContainer without touching each page.
+// SettingsPage is the one header + width every /settings/* page uses:
+// the shared PageHeader inside a PageContainer. The settings layout
+// already pads the column and owns the sidebar, so the container drops
+// its own gutters and centring here.
 export function SettingsPage({
   title,
   description,
@@ -22,31 +23,13 @@ export function SettingsPage({
   className?: string;
 }) {
   return (
-    <div className={cn("w-full max-w-4xl pb-16 pt-5 lg:pt-8", className)}>
-      {back && (
-        <Link
-          href={back.href}
-          className="mb-3 inline-flex items-center gap-1 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          {back.label}
-        </Link>
-      )}
-      <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
-            {title}
-          </h1>
-          {description && (
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
-              {description}
-            </p>
-          )}
-        </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
-      </header>
+    <PageContainer
+      width="narrow"
+      className={cn("mx-0 max-w-4xl px-0 pt-5 pb-16 sm:px-0 sm:pt-5 lg:px-0 lg:pt-8", className)}
+    >
+      <PageHeader title={title} description={description} actions={actions} back={back} className="mb-6 sm:mb-6" />
       <div className="space-y-6">{children}</div>
-    </div>
+    </PageContainer>
   );
 }
 

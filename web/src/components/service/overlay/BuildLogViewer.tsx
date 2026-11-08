@@ -10,7 +10,7 @@ import {
 } from "@/features/builds";
 import { ApiError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
 
 const ERRORISH = /\b(error|fatal|panic|failed|exit code)\b|>>>/i;
 
@@ -131,7 +131,7 @@ export const BuildLogViewer = memo(function BuildLogViewer({
           >
             <WrapText className="h-3.5 w-3.5" />
           </button>
-          <CopyButton value={shown.join("\n")} what="Log" />
+          <CopyButton value={shown.join("\n")} label="Copy log" />
           <button
             type="button"
             onClick={download}

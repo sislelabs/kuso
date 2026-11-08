@@ -22,9 +22,14 @@ export function timeRangeMs(preset: string): number | null {
   return p ? p.n * UNIT_MS[p.unit] : null;
 }
 
-/** Long form for aria/tooltips: "24h" → "Last 24 hours". */
-export function timeRangeLabel(preset: string): string {
+/** The span in words, for prose: "24h" → "24 hours". */
+export function timeRangeSpan(preset: string): string {
   const p = parse(preset);
   if (!p) return preset;
-  return `Last ${p.n} ${UNIT_WORD[p.unit]}${p.n === 1 ? "" : "s"}`;
+  return `${p.n} ${UNIT_WORD[p.unit]}${p.n === 1 ? "" : "s"}`;
+}
+
+/** Long form for aria/tooltips: "24h" → "Last 24 hours". */
+export function timeRangeLabel(preset: string): string {
+  return parse(preset) ? `Last ${timeRangeSpan(preset)}` : preset;
 }

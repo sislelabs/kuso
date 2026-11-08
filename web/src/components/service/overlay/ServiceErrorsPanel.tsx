@@ -15,7 +15,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
-import { TimeRange, rangeLabel, rangeToMs } from "@/components/logs/TimeRange";
+import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
+import { Select } from "@/components/ui/select";
+import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
 import { AnsiText } from "@/components/logs/AnsiText";
 import { openLogsAt } from "@/components/logs/logViewStore";
 import { fmtClock, stripAnsi } from "@/components/logs/logParse";
@@ -37,7 +39,7 @@ const RANGES = ["1h", "24h", "7d"] as const;
 // stack trace around the latest occurrence and the newest occurrences
 // (GET …/errors/{fingerprint}).
 export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
-  const [since, setSince] = useState("24h");
+  const [since, setSince] = useState<(typeof RANGES)[number]>("24h");
   // "" = every environment. Not pre-set from the overlay's env: error
   // events only carry an env for pods labelled kuso.sislelabs.com/env.
   const [env, setEnv] = useState("");
@@ -70,17 +72,18 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Errors</h3>
           <p className="text-xs text-[var(--text-secondary)]">
             {errors.isError || errors.isPending
-              ? `Last ${rangeLabel(since)}`
-              : `${groups.length} ${groups.length === 1 ? "group" : "groups"} · ${total.toLocaleString()} occurrences · last ${rangeLabel(since)}`}
+              ? `Last ${timeRangeSpan(since)}`
+              : `${groups.length} ${groups.length === 1 ? "group" : "groups"} · ${total.toLocaleString()} occurrences · last ${timeRangeSpan(since)}`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {envOptions.length > 1 && (
-            <select
+            <Select
+              size="sm"
               value={env}
               onChange={(e) => setEnv(e.target.value)}
               aria-label="Environment"
-              className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-xs text-[var(--text-secondary)]"
+              wrapperClassName="w-auto"
             >
               <option value="">All envs</option>
               {envOptions.map((o) => (
@@ -88,9 +91,9 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
-          <TimeRange presets={RANGES} value={since} onChange={setSince} aria-label="Errors time range" />
+          <TimeRangePicker presets={RANGES} value={since} onChange={setSince} ariaLabel="Errors time range" />
         </div>
       </div>
 
@@ -104,7 +107,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
         <QueryErrorState what="errors" error={errors.error} onRetry={() => void errors.refetch()} />
       ) : groups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-10 text-center">
-          <p className="text-sm font-medium text-[var(--text-primary)]">No errors in the last {rangeLabel(since)}</p>
+          <p className="text-sm font-medium text-[var(--text-primary)]">No errors in the last {timeRangeSpan(since)}</p>
           <p className="mx-auto mt-1 max-w-md text-[13px] text-[var(--text-secondary)]">
             The scanner watches this service&apos;s logs for ERROR, Exception, panic and Traceback lines. Errors logged in
             another shape won&apos;t appear here. Logs are kept for 7 days.
@@ -264,7 +267,7 @@ function ErrorDetail({
     <div id={id} className="space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
       <section>
         <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <h4 className="text-xs font-medium text-[var(--text-secondary)]">Occurrences · last {rangeLabel(since)}</h4>
+          <h4 className="text-xs font-medium text-[var(--text-secondary)]">Occurrences · last {timeRangeSpan(since)}</h4>
           {detail.data === null && <span className="text-xs text-[var(--text-tertiary)]">history needs a newer kuso server</span>}
         </div>
         {detail.isPending ? (
@@ -361,7 +364,7 @@ function OccurrenceHistogram({ detail, since }: { detail: ErrorGroupDetail; sinc
   const [hover, setHover] = useState<number | null>(null);
   const bucketMs = detail.bucketSeconds * 1000;
   const end = Date.now();
-  const start = end - rangeToMs(since);
+  const start = end - (timeRangeMs(since) ?? 0);
   const first = Math.floor(start / bucketMs) * bucketMs;
   const byT = new Map(detail.buckets.map(([t, c]) => [t * 1000, c]));
   const cols: { t: number; c: number }[] = [];
@@ -373,7 +376,7 @@ function OccurrenceHistogram({ detail, since }: { detail: ErrorGroupDetail; sinc
       <div
         className="relative flex h-14 items-end gap-[2px]"
         role="img"
-        aria-label={`${detail.buckets.reduce((a, b) => a + b[1], 0)} events in the last ${rangeLabel(since)}, peak ${max} per bucket`}
+        aria-label={`${detail.buckets.reduce((a, b) => a + b[1], 0)} events in the last ${timeRangeSpan(since)}, peak ${max} per bucket`}
         onPointerLeave={() => setHover(null)}
       >
         {cols.map((col, i) => (

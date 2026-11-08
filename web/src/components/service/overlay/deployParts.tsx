@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { GitCompare, GitCommitHorizontal } from "lucide-react";
 import type { BuildSummary } from "@/features/services/api";
 import { buildRefLabel, githubCommitUrl, githubCompareUrl, type DeployBuild } from "@/features/builds";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
 import { cn } from "@/lib/utils";
 
 // formatDuration turns a millisecond span into "12s", "1m 04s", "1h 02m".
@@ -79,7 +79,7 @@ export function CommitRef({ build, repoUrl, className }: { build: DeployBuild; r
           {short}
         </span>
       )}
-      <CopyButton value={full} what="Commit SHA" size="xs" />
+      <CopyButton value={full} label="Copy commit SHA" size="xs" />
     </span>
   );
 }

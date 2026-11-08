@@ -1,5 +1,6 @@
 "use client";
 
+import { Switch } from "@/components/ui/switch";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -502,28 +503,14 @@ function UserRowItem({
       <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto md:order-last">
         {canWrite && (
           <>
-            <button
-              type="button"
-              onClick={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
-              disabled={toggleActive.isPending}
-              className={cn(
-                "mr-1 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-                u.isActive
-                  ? "border-[var(--success)]/40 bg-[var(--success-subtle)]"
-                  : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
-              )}
-              role="switch"
-              aria-checked={u.isActive}
-              aria-label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
-              title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}
-            >
-              <span
-                className={cn(
-                  "inline-block h-3.5 w-3.5 rounded-full shadow transition-transform",
-                  u.isActive ? "translate-x-4 bg-[var(--success)]" : "translate-x-0.5 bg-[var(--text-tertiary)]",
-                )}
+            <span className="mr-1 inline-flex" title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}>
+              <Switch
+                on={u.isActive}
+                onChange={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
+                disabled={toggleActive.isPending}
+                label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
               />
-            </button>
+            </span>
             <Button variant="ghost" size="icon-sm" onClick={onReset} aria-label={`Reset password for ${u.username}`} title="Reset password">
               <KeyRound className="h-3.5 w-3.5" />
             </Button>

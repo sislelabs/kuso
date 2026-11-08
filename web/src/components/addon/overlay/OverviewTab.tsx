@@ -14,7 +14,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { AddonPodsSection } from "./AddonPodsSection";
 import { useAddonPods } from "@/features/pods";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
 // helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
@@ -470,7 +470,7 @@ function HealthStrip({
       <div className="col-span-2 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:col-span-4">
         <span>Name</span>
         <span className="font-mono text-[var(--text-primary)]">{addon}</span>
-        <CopyButton value={addon} what="Addon name" size="xs" />
+        <CopyButton value={addon} label="Copy addon name" size="xs" />
       </div>
     </section>
   );

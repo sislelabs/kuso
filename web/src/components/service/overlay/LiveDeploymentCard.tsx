@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ExternalLink, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { CopyButton } from "@/components/shared/s2-CopyButton";
+import { CopyButton } from "@/components/ui/copy-button";
 import { buildRefLabel, useRollbackToBuild, type DeployBuild } from "@/features/builds";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -144,7 +144,7 @@ export function LiveDeploymentCard({
             >
               {url.replace(/^https?:\/\//, "")}
             </a>
-            <CopyButton value={url} what="URL" />
+            <CopyButton value={url} label="Copy URL" />
             <a
               href={url}
               target="_blank"

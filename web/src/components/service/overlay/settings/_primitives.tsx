@@ -5,6 +5,10 @@ import type React from "react";
 import { Check, CircleAlert } from "lucide-react";
 import type { KusoService, KusoVolume } from "@/types/projects";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+
+export { Switch } from "@/components/ui/switch";
+export { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 
 // ----- shape of the entire editable surface -----
@@ -490,90 +494,6 @@ export function SwitchField({
           describedBy={hint ? hintId : undefined}
         />
       </div>
-    </div>
-  );
-}
-
-export function Switch({
-  on,
-  onChange,
-  disabled,
-  label,
-  labelledBy,
-  describedBy,
-}: {
-  on: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  label?: string;
-  labelledBy?: string;
-  describedBy?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      aria-labelledby={labelledBy}
-      aria-describedby={describedBy}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
-        on ? "border-transparent bg-[var(--accent)]" : "border-[var(--text-tertiary)]/60 bg-[var(--bg-tertiary)]",
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform",
-          on ? "translate-x-[18px]" : "translate-x-[2px]",
-        )}
-      />
-    </button>
-  );
-}
-
-// Segmented: a small single-choice control for short option lists.
-export function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-  label,
-  mono,
-}: {
-  options: readonly { value: T; label: string }[];
-  // string, not T: form state keeps these as plain strings.
-  value: string;
-  onChange: (v: T) => void;
-  label: string;
-  mono?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5"
-    >
-      {options.map((o) => (
-        <button
-          key={o.value || "__none"}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "rounded px-2.5 py-1 text-xs whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-            mono && "font-mono",
-            value === o.value
-              ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
-              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
     </div>
   );
 }
