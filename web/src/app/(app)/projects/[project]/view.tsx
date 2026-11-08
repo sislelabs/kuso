@@ -77,14 +77,24 @@ export function ProjectDetailView() {
   // canvas right-click menu. Closed by AddAddonDialog on success.
   const [addAddonOpen, setAddAddonOpen] = useState(false);
 
-  // Canvas vs list, remembered per project in this browser.
-  const [viewMode, setViewMode] = useState<ProjectViewMode>("canvas");
+  // Canvas vs list: ?view= wins (shareable), else the last choice for
+  // this project in this browser.
+  // Lazy init avoids a canvas flash before the effect runs; the first
+  // render is the loading skeleton either way, so no hydration mismatch.
+  const [storedView, setStoredView] = useState<ProjectViewMode>(() => loadProjectView(projectName) ?? "canvas");
   useEffect(() => {
-    setViewMode(loadProjectView(projectName) ?? "canvas");
+    setStoredView(loadProjectView(projectName) ?? "canvas");
   }, [projectName]);
+  const urlView = search?.get("view");
+  const viewMode: ProjectViewMode = urlView === "list" || urlView === "canvas" ? urlView : storedView;
   const changeViewMode = (m: ProjectViewMode) => {
-    setViewMode(m);
+    setStoredView(m);
     saveProjectView(projectName, m);
+    const next = new URLSearchParams(search?.toString() ?? "");
+    if (m === "list") next.set("view", "list");
+    else next.delete("view");
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
   // Notification-link entry point: when the URL carries ?service= /

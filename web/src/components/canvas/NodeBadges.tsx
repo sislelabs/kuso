@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type VulnSummary } from "./badgeSummary";
 
 const badgeBase =
-  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent)]";
+  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent)]";
 
 // Security finding marker: shield + count in a neutral/warning style so
 // it never reads as a runtime error. Clicking opens the Vulnerabilities tab.
@@ -64,6 +64,7 @@ export function ErrorBadge({ summary, onOpen }: { summary?: ErrorSummary; onOpen
       >
         <AlertCircle className="h-3 w-3" aria-hidden />
         {compactCount(summary.occurrences)} {summary.occurrences === 1 ? "error" : "errors"}
+        <span className="text-[var(--error)]/70">· 24h</span>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
