@@ -606,6 +606,19 @@ func mountAuthenticatedRoutes(
 			// the cost rates the operator set in the Kuso CR.
 			// Read-only; defaults safely when rates are unset.
 			usageH := &httphandlers.UsageHandler{DB: d.DB, Cfg: d.Config, Logger: d.Logger}
+			if d.Projects != nil {
+				usageH.ProjectNames = func(ctx context.Context) ([]string, error) {
+					ps, err := d.Projects.List(ctx)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]string, 0, len(ps))
+					for _, p := range ps {
+						out = append(out, p.Name)
+					}
+					return out, nil
+				}
+			}
 			usageH.Mount(r)
 		}
 		if d.Kube != nil {

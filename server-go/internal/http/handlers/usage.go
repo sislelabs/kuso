@@ -13,6 +13,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -31,6 +32,36 @@ type UsageHandler struct {
 	DB     *db.DB
 	Cfg    *config.Service
 	Logger *slog.Logger
+	// ProjectNames lists the projects that exist right now. Optional:
+	// without it every rollup row is reported as kind "project". With
+	// it, rows for projects deleted inside the window come back as
+	// kind "deleted" so the page can match the projects list.
+	ProjectNames func(ctx context.Context) ([]string, error)
+}
+
+// Usage row kinds. Samples are keyed by the pod's project label, which
+// outlives the project itself (history from a deleted project stays in
+// the window) and includes the synthetic instance-addon project.
+const (
+	UsageKindProject  = "project"
+	UsageKindPlatform = "platform"
+	UsageKindDeleted  = "deleted"
+)
+
+// instanceAddonProject is the synthetic project instance-shared addons
+// (the cluster Postgres) run under; see internal/instancepg.
+const instanceAddonProject = "kuso-instance"
+
+// classifyUsageProject decides how a sampled project name is presented.
+// live == nil means the live project list is unknown.
+func classifyUsageProject(name string, live map[string]bool) string {
+	if name == instanceAddonProject {
+		return UsageKindPlatform
+	}
+	if live != nil && !live[name] {
+		return UsageKindDeleted
+	}
+	return UsageKindProject
 }
 
 // Mount registers routes onto an authed router. Refuses to wire up
@@ -133,6 +164,8 @@ type ProjectUsageRow struct {
 	MemGBHours    float64 `json:"memGBHours"`
 	Cost          float64 `json:"cost"`
 	SharePct      float64 `json:"sharePct"`
+	// Kind is project | platform | deleted (see classifyUsageProject).
+	Kind string `json:"kind"`
 }
 
 // ProjectUsageResponse is the wire shape /settings/usage consumes.
@@ -177,6 +210,19 @@ func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rates := readRates(h.Cfg)
+	var live map[string]bool
+	if h.ProjectNames != nil {
+		// Best-effort: a kube hiccup degrades to "everything is a
+		// project" rather than failing the whole page.
+		if names, err := h.ProjectNames(ctx); err == nil {
+			live = make(map[string]bool, len(names))
+			for _, n := range names {
+				live[n] = true
+			}
+		} else {
+			h.logErr("usage: list projects", err)
+		}
+	}
 
 	scale := 30.0 / float64(days)
 	if days <= 0 {
@@ -207,6 +253,7 @@ func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
 			MemGBHours:    projMem,
 			Cost:          cost,
 			SharePct:      share,
+			Kind:          classifyUsageProject(t.Project, live),
 		})
 	}
 
