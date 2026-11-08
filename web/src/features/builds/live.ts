@@ -128,3 +128,22 @@ export function rollForwardTarget(builds: DeployBuild[], live: DeployBuild): Dep
     return liveIdx >= 0 && i < liveIdx;
   });
 }
+
+// newerReleaseFailure is the build that should have replaced `live` but
+// whose release hook (migration) failed, so the env still serves `live`.
+// Only the newest attempt counts: a later success or failure on the branch
+// is the more current story.
+export function newerReleaseFailure(builds: DeployBuild[], live: DeployBuild): DeployBuild | undefined {
+  const liveT = buildTime(live);
+  const liveIdx = builds.indexOf(live);
+  const newer = builds.filter((b, i) => {
+    if (b.id === live.id || (b.branch ?? "") !== (live.branch ?? "")) return false;
+    const st = lower(b.status);
+    if (st !== "succeeded" && st !== "failed" && st !== "release-failed") return false;
+    const t = buildTime(b);
+    if (Number.isFinite(t) && Number.isFinite(liveT)) return t > liveT;
+    return liveIdx >= 0 && i < liveIdx;
+  });
+  const newest = newer[0];
+  return newest && lower(newest.status) === "release-failed" ? newest : undefined;
+}

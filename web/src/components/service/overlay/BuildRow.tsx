@@ -28,7 +28,10 @@ import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
   buildRefLabel,
+  failedStepFromBuild,
+  failedStepTitle,
   firstErrorLine,
+  isErrorLine,
   parseBuildLog,
   useStoredBuildLog,
   githubCommitUrl,
@@ -124,8 +127,16 @@ export function BuildRow({
   const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
   const logId = `build-log-${b.id}`;
   const rowRef = useRef<HTMLLIElement>(null);
-  const errorLine = useFirstErrorLine(project, service, b.id, failed && !!peekLog);
-  const failureTitle = b.failureClass?.summary || (isGenericFailure(b.errorMessage) ? "" : b.errorMessage);
+  const peek = useLogPeek(project, service, b.id, failed && !!peekLog);
+  const failedStep = peek.step ?? failedStepFromBuild(b);
+  const errorLine = b.failureClass?.lineHint || peek.errorLine;
+  // The classifier's "generic" summary says less than the step and error line.
+  const classSummary = b.failureClass?.kind === "generic" && (failedStep || errorLine) ? "" : b.failureClass?.summary;
+  const failureTitle = classSummary || (isGenericFailure(b.errorMessage) ? "" : b.errorMessage);
+  const releaseErrorLine = s === "release-failed" ? firstReleaseError(b) : undefined;
+  // Settled rows keep their actions out of the way until hovered or
+  // focused; touch screens have no hover, so they always show them there.
+  const quietActions = s === "superseded" || s === "active" || s === "cancelled" || s === "unknown";
   const viewFailure = () => {
     if (!isOpen) onToggle();
     requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
@@ -134,8 +145,10 @@ export function BuildRow({
   return (
     <li
       ref={rowRef}
+      id={`build-row-${b.id}`}
+      data-build-row
       className={cn(
-        "scroll-mt-2 overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
+        "group scroll-mt-2 overflow-hidden rounded-lg border bg-[var(--bg-secondary)] transition-colors",
         failed ? "border-[var(--error)]/35" : s === "running" ? "border-[var(--building)]/35" : "border-[var(--border-subtle)]",
       )}
     >
@@ -197,13 +210,34 @@ export function BuildRow({
             <p className="mt-1 text-xs text-[var(--warning)]">Promotion held: {b.promoteHold}</p>
           )}
           {s === "release-failed" && (
-            <p className="mt-1 text-xs text-[var(--warning)]">
-              The image built, but its release command failed. The previous version is still live.
-            </p>
-          )}
-          {failed && (failureTitle || errorLine || b.errorMessage) && (
             <div className="mt-1.5 min-w-0 space-y-1">
-              {failureTitle && <p className="break-words text-xs font-medium text-[var(--error)]">{failureTitle}</p>}
+              <p className="text-xs text-[var(--warning)]">
+                <span className="font-medium">Failed at release command</span>
+                <span className="text-[var(--text-secondary)]"> · the image built, the previous version is still live</span>
+              </p>
+              {releaseErrorLine && (
+                <p
+                  className="rounded border-l-2 border-[var(--warning)] bg-[var(--warning-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]"
+                  title={releaseErrorLine}
+                >
+                  <span className="line-clamp-2 break-words">{releaseErrorLine}</span>
+                </p>
+              )}
+            </div>
+          )}
+          {failed && (failedStep || failureTitle || errorLine || b.errorMessage) && (
+            <div className="mt-1.5 min-w-0 space-y-1">
+              {(failedStep || failureTitle) && (
+                <p className="break-words text-xs text-[var(--error)]">
+                  {failedStep && (
+                    <span className="font-medium">
+                      Failed at <span className="text-[var(--text-primary)]">{failedStep}</span>
+                    </span>
+                  )}
+                  {failedStep && failureTitle && <span aria-hidden> · </span>}
+                  {failureTitle && <span className={failedStep ? undefined : "font-medium"}>{failureTitle}</span>}
+                </p>
+              )}
               {errorLine ? (
                 <p
                   className="rounded border-l-2 border-[var(--error)] bg-[var(--error-subtle)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]"
@@ -212,7 +246,7 @@ export function BuildRow({
                   <span className="line-clamp-2 break-words">{errorLine}</span>
                 </p>
               ) : (
-                !failureTitle && b.errorMessage && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
+                !failureTitle && b.errorMessage && !(failedStep && isGenericFailure(b.errorMessage)) && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
               )}
               {!isOpen && (
                 <button
@@ -228,7 +262,14 @@ export function BuildRow({
           )}
           {note && <p className="mt-1 break-words text-xs text-[var(--text-tertiary)]">{note}</p>}
         </div>
-        <div className="col-start-2 flex items-center gap-1 sm:col-start-3 sm:row-start-1 sm:self-start">
+        <div
+          className={cn(
+            "col-start-2 flex items-center gap-1 sm:col-start-3 sm:row-start-1 sm:self-start",
+            quietActions &&
+              !isOpen &&
+              "opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-popup-open]]:opacity-100 [@media(hover:none)]:opacity-100",
+          )}
+        >
           <PrimaryAction
             project={project}
             service={service}
@@ -757,10 +798,23 @@ function isGenericFailure(msg?: string): boolean {
   return !msg || /^container exited with code \d+|backoff limit|^Job has reached/i.test(msg);
 }
 
-function useFirstErrorLine(project: string, service: string, buildId: string, enabled: boolean): string | undefined {
+// useLogPeek reads a failed build's stored log for the step it died in and
+// its first descriptive error line.
+function useLogPeek(
+  project: string,
+  service: string,
+  buildId: string,
+  enabled: boolean,
+): { step?: string; errorLine?: string } {
   const log = useStoredBuildLog(project, service, buildId, enabled);
   return useMemo(() => {
-    if (!log.data || log.data.length === 0) return undefined;
-    return firstErrorLine(parseBuildLog(log.data.map((l) => l.line), { failed: true }));
+    if (!log.data || log.data.length === 0) return {};
+    const parsed = parseBuildLog(log.data.map((l) => l.line), { failed: true });
+    return { step: failedStepTitle(parsed), errorLine: firstErrorLine(parsed) };
   }, [log.data]);
+}
+
+function firstReleaseError(b: DeployBuild): string | undefined {
+  const lines = (b.releaseLogTail ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.find(isErrorLine) ?? (isGenericFailure(b.errorMessage) ? undefined : b.errorMessage);
 }

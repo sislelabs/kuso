@@ -335,6 +335,34 @@ export function firstErrorLine(parsed: ParsedBuildLog): string | undefined {
   return solve?.text.trim() ?? candidates[0];
 }
 
+// failedStepTitle names the step a failed build died in, from its log:
+// "Clone repository", "RUN npm ci · build · 4/7".
+export function failedStepTitle(parsed: ParsedBuildLog): string | undefined {
+  const step = parsed.steps.find((s) => s.id === parsed.failedStepId);
+  if (!step || step.kind === "summary") return undefined;
+  return step.detail && step.detail !== "internal" ? `${step.title} · ${step.detail}` : step.title;
+}
+
+// The server names the container that exited ("… (clone)") and classifies
+// some failures; either names the step without fetching the log.
+const KIND_STEPS: Record<string, string> = {
+  clone_ref_missing: "Clone repository",
+  dockerfile_not_found: "Run the build",
+  dockerfile_missing_copy: "Run the build",
+  lockfile_drift: "Install dependencies",
+  dependency_resolution: "Install dependencies",
+  build_command_failed: "Run the build",
+  build_oom: "Run the build",
+  missing_build_arg: "Run the build",
+};
+
+export function failedStepFromBuild(b: { errorMessage?: string; failureClass?: { kind?: string } }): string | undefined {
+  const ctr = /\(([a-z0-9-]+)\)\s*$/i.exec(b.errorMessage ?? "")?.[1];
+  // The buildctl client container is where the whole solve runs.
+  if (ctr) return ctr === "buildkit" ? "Run the build" : (CONTAINER_TITLES[ctr] ?? `Run ${ctr}`);
+  return KIND_STEPS[b.failureClass?.kind ?? ""];
+}
+
 export type DeployStage = "clone" | "build" | "push";
 
 // deployStage says how far a running build has got, for the first-deploy
