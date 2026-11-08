@@ -1,0 +1,20 @@
+apiVersion: kuso/v1
+project: navidrome
+services:
+  - name: navidrome
+    runtime: image
+    port: 4533
+    image:
+      repository: deluan/navidrome
+      tag: "0.64.2"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 2
+      - name: music
+        mountPath: /music
+        sizeGi: 50
+    scale: { min: 1, max: 1 }

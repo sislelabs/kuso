@@ -1,0 +1,27 @@
+apiVersion: kuso/v1
+project: audiobookshelf
+services:
+  - name: audiobookshelf
+    runtime: image
+    port: 13378
+    image:
+      repository: ghcr.io/advplyr/audiobookshelf
+      tag: "2.37.2"
+    # Audiobookshelf listens on $PORT, which kuso sets from `port`.
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: config
+        mountPath: /config
+        sizeGi: 1
+      - name: metadata
+        mountPath: /metadata
+        sizeGi: 5
+      - name: audiobooks
+        mountPath: /audiobooks
+        sizeGi: 50
+      - name: podcasts
+        mountPath: /podcasts
+        sizeGi: 20
+    scale: { min: 1, max: 1 }

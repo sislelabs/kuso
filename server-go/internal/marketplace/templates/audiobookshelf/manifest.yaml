@@ -1,0 +1,14 @@
+name: audiobookshelf
+title: Audiobookshelf
+description: >-
+  Audiobook and podcast server with mobile apps and progress sync. The
+  first visitor creates the root user.
+category: media
+website: https://www.audiobookshelf.org
+appVersion: "2.37.2"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Audiobookshelf will be served on.

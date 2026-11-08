@@ -1,0 +1,13 @@
+name: flowise
+title: Flowise
+description: Drag-and-drop builder for LLM apps, chatbots and agents. Create the admin account on first visit.
+category: ai
+website: https://flowiseai.com
+appVersion: "3.1.4"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Flowise will be served on.
