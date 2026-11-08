@@ -1,5 +1,7 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
+import { lastDeployedAt } from "@/features/projects/facts";
 import { useEffect, useMemo, useState } from "react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
@@ -268,6 +270,11 @@ function DeployList({
   const timeline = groupRevisionRuns(interleaveTimeline(history, filter === "builds" ? [] : revisions));
   const liveIdx = live ? builds.indexOf(live) : -1;
   const shownTimeline = timeline.slice(0, limit);
+  // Newest older build that can still go live again: its Rollback stays
+  // visible. Builds newer than live are roll-forwards, not rollbacks.
+  const rollbackTargetId = history.find(
+    (b) => classifyBuild(b, liveId) === "superseded" && !!b.imageTag && (liveIdx < 0 || builds.indexOf(b) > liveIdx),
+  )?.id;
   // Peek at the stored log of every failed build on screen for the step it
   // failed in and its first error line (paged, so at most HISTORY_PAGE).
   const peekIds = new Set(
@@ -278,7 +285,7 @@ function DeployList({
   const showBuild = (id: string) => {
     setExpanded(id);
     requestAnimationFrame(() =>
-      document.getElementById(`build-row-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }),
+      document.getElementById(`build-row-${id}`)?.scrollIntoView({ block: "start", behavior: smoothScroll() }),
     );
   };
 
@@ -308,7 +315,7 @@ function DeployList({
       rolledBackFrom={rolledBackFrom}
       repoUrl={repoUrl}
       url={url}
-      deployedAt={env?.status?.lastDeployedAt}
+      deployedAt={lastDeployedAt(env)}
       health={health}
       serving={!["stopped", "sleeping"].includes(env?.status?.state ?? "")}
       canDeploy={canDeploy}
@@ -415,6 +422,7 @@ function DeployList({
                   runningSince={s === "running" ? b.startedAt : undefined}
                   isOpen={expanded === b.id}
                   canDeploy={canDeploy}
+                  pinActions={b.id === rollbackTargetId}
                   onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
                 />
               );

@@ -110,7 +110,12 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
           className="h-8 font-mono text-xs"
           autoComplete="new-password"
         />
-        <Button size="sm" type="submit" disabled={!canSave}>
+        <Button
+          size="sm"
+          type="submit"
+          disabled={!canSave}
+          disabledReason={login.isPending ? undefined : "Fill in the registry, username and password"}
+        >
           <Plus className="h-3.5 w-3.5" />
           {login.isPending ? "Saving…" : "Save"}
         </Button>

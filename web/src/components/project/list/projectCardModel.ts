@@ -1,6 +1,6 @@
 import { stripRepoCredentials } from "@/lib/format";
 import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
-import { hostScheme } from "@/lib/host-scheme";
+import { projectLastDeployedAt, projectPrimaryDomain } from "@/features/projects/facts";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
 
@@ -17,7 +17,6 @@ export type ProjectStatus =
 
 export type ServiceHealth = Exclude<ProjectStatus, "empty">;
 
-export const PROMOTED_AT_ANNOTATION = "kuso.sislelabs.com/promoted-at";
 const SERVICE_LABEL = "kuso.sislelabs.com/service";
 
 export interface ProjectCardModel {
@@ -96,21 +95,6 @@ function prodEnvFor(svc: KusoService, envs: ReadonlyArray<KusoEnvironment>): Kus
   return envs.find((e) => e.spec.service === svc.metadata.name && isProductionGroup(e));
 }
 
-function latestTimestamp(values: ReadonlyArray<string | undefined>): string | undefined {
-  let best: string | undefined;
-  let bestMs = -Infinity;
-  for (const v of values) {
-    if (!v) continue;
-    const ms = Date.parse(v);
-    if (Number.isNaN(ms)) continue;
-    if (ms > bestMs) {
-      bestMs = ms;
-      best = v;
-    }
-  }
-  return best;
-}
-
 export function serviceShortName(s: KusoService): string {
   return s.metadata.labels?.[SERVICE_LABEL] ?? s.metadata.name;
 }
@@ -124,36 +108,6 @@ export function distinctServiceRepo(services: ReadonlyArray<KusoService>): strin
     if (u) urls.add(u);
   }
   return urls.size === 1 ? [...urls][0] : undefined;
-}
-
-export function distinctServiceDomain(services: ReadonlyArray<KusoService>): string | undefined {
-  const hosts = new Set<string>();
-  for (const s of services) {
-    const h = s.spec.domains?.[0]?.host;
-    if (h) hosts.add(h);
-  }
-  return hosts.size === 1 ? [...hosts][0] : undefined;
-}
-
-// Fallback display host: the kuso-default host of the first web-facing
-// service's production env (a declared port means it serves HTTP), or of
-// the first service when none has a port.
-export function defaultProjectHost(
-  services: ReadonlyArray<KusoService>,
-  environments: ReadonlyArray<KusoEnvironment>,
-): string | undefined {
-  if (services.length === 0) return undefined;
-  const pick = services.find((s) => (s.spec.port ?? 0) > 0) ?? services[0];
-  const want = pick.metadata?.labels?.[SERVICE_LABEL];
-  let lone: string | undefined;
-  let count = 0;
-  for (const e of environments) {
-    if (!isProductionGroup(e) || !e.spec?.host) continue;
-    count++;
-    lone = e.spec.host;
-    if (want && e.metadata?.labels?.[SERVICE_LABEL] === want) return e.spec.host;
-  }
-  return count === 1 ? lone : undefined;
 }
 
 // repoWebURL turns a stored clone URL (https, scp-style ssh, or bare
@@ -197,29 +151,13 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
   const attention = perService.find((p) => p.health === "failing") ?? perService.find((p) => p.health === "building");
   const detailText = attention?.env?.status?.stateDetail;
 
-  const prodEnvs = envs.filter(isProductionGroup);
-  const lastDeployAt = latestTimestamp(
-    prodEnvs.flatMap((e) => [e.metadata.annotations?.[PROMOTED_AT_ANNOTATION], e.status?.lastDeployedAt]),
-  );
+  // Same definitions as the canvas and the service overlay (facts.ts).
+  const lastDeployAt = projectLastDeployedAt(envs);
+  const primary = projectPrimaryDomain(project, services, envs);
 
-  const domain =
-    project.spec.baseDomain ?? distinctServiceDomain(services) ?? defaultProjectHost(services, envs);
-
-  // First live service with a custom domain, else any service with one.
-  const hostURL = (s: KusoService | undefined) => {
-    const d = s?.spec.domains?.[0];
-    if (!d?.host) return undefined;
-    return `${d.tls === false ? "http" : "https"}://${d.host}`;
-  };
-  const liveWithDomain = perService.find((p) => p.health === "live" && p.svc.spec.domains?.[0]?.host);
-  const publicURL =
-    hostURL(liveWithDomain?.svc) ?? hostURL(services.find((s) => s.spec.domains?.[0]?.host));
-
-  // Link must match the text: a base domain links to itself, not to the
-  // first service host under it.
-  const domainHref = project.spec.baseDomain
-    ? `https://${project.spec.baseDomain}`
-    : publicURL ?? (domain ? `${hostScheme(true, domain)}://${domain}` : undefined);
+  const domain = primary?.host;
+  const domainHref = primary?.href;
+  const publicURL = primary?.href;
 
   const repoRaw = project.spec.defaultRepo?.url ?? distinctServiceRepo(services);
   // Strip userinfo BEFORE display: deploy-token clone URLs carry a

@@ -137,6 +137,10 @@
   --shadow-sm: 0 1px 2px rgba(26, 29, 46, 0.06);
   --shadow-md: 0 4px 12px rgba(26, 29, 46, 0.08);
   --shadow-lg: 0 12px 40px rgba(26, 29, 46, 0.14);
+  /* Slide-over backdrops. Wide screens keep the canvas readable behind
+     the panel; narrow ones dim harder since the panel covers most of it. */
+  --scrim: rgba(8, 8, 11, 0.45);
+  --scrim-wide: rgba(8, 8, 11, 0.18);
 
   --background: #FBFBF7;
   --foreground: #1A1D2E;
@@ -249,6 +253,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --scrim: rgba(4, 5, 10, 0.55);
+  --scrim-wide: rgba(4, 5, 10, 0.32);
 
   --background: #0A0C15;
   --foreground: #ECEAE0;
@@ -330,6 +336,20 @@
 [tabindex="-1"]:focus-visible,
 .react-flow__node:focus-visible {
   outline-style: none;
+}
+/* A combobox search input holds focus for as long as its popover or
+   palette is open, so the surface itself is the focus cue: a ring there
+   only gets clipped by the rounded container. The switcher wrappers mark
+   it with their divider instead. Other fields inside a popover draw the
+   ring over their own border so the popover edge can't clip it. */
+[cmdk-input]:focus-visible {
+  outline-style: none;
+}
+[cmdk-input-wrapper]:has(:focus-visible) {
+  border-bottom-color: var(--focus);
+}
+[data-slot="popover-content"] :is(input, textarea, select):focus-visible {
+  outline-offset: -1px;
 }
 
 /* Unlayered on purpose: beats every placeholder:text-… utility (those

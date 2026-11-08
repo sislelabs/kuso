@@ -88,3 +88,85 @@ export function collapseUpdates<T extends { type: string }>(events: T[], needsUp
     return true;
   });
 }
+
+// Per-row read state. The server only tracks a read watermark per user
+// (read-all), so a row opened from the bell is remembered here until the
+// next "Mark all read" moves the watermark past it. Browser-local on
+// purpose: losing it only means the row shows as new again.
+export interface LocalRead {
+  id: number;
+  attention: boolean;
+}
+
+const READ_KEY = "kuso.bell.read";
+const READ_CAP = 200;
+const readListeners = new Set<() => void>();
+const EMPTY_READS: readonly LocalRead[] = [];
+let readCache: readonly LocalRead[] | null = null;
+
+function readLocal(): readonly LocalRead[] {
+  if (readCache) return readCache;
+  try {
+    const raw = window.localStorage.getItem(READ_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) {
+      readCache = parsed.flatMap((v: unknown): LocalRead[] => {
+        if (!v || typeof v !== "object") return [];
+        const r = v as Record<string, unknown>;
+        return typeof r.id === "number" ? [{ id: r.id, attention: r.attention === true }] : [];
+      });
+      return readCache;
+    }
+  } catch {
+    /* storage blocked or corrupt */
+  }
+  readCache = EMPTY_READS;
+  return readCache;
+}
+
+function writeLocal(next: readonly LocalRead[]) {
+  readCache = next.slice(-READ_CAP);
+  try {
+    window.localStorage.setItem(READ_KEY, JSON.stringify(readCache));
+  } catch {
+    /* per-tab only */
+  }
+  readListeners.forEach((l) => l());
+}
+
+export function markLocallyRead(e: { id: number; type: string; severity?: string }) {
+  const cur = readLocal();
+  if (cur.some((r) => r.id === e.id)) return;
+  writeLocal([...cur, { id: e.id, attention: needsAttention(e) }]);
+}
+
+// Drop ids the server now reports read (or every id, after read-all).
+export function forgetLocalReads(ids?: ReadonlySet<number>) {
+  const cur = readLocal();
+  const next = ids ? cur.filter((r) => !ids.has(r.id)) : EMPTY_READS;
+  if (next.length !== cur.length) writeLocal(next);
+}
+
+function subscribeReads(l: () => void) {
+  readListeners.add(l);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === READ_KEY) {
+      readCache = null;
+      l();
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    readListeners.delete(l);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+export function useLocalReads(): readonly LocalRead[] {
+  return useSyncExternalStore(subscribeReads, readLocal, () => EMPTY_READS);
+}
+
+// Badge text: the count is capped so it stays a corner dot, not a pill.
+export function badgeCount(n: number): string {
+  return n > 9 ? "9+" : String(n);
+}

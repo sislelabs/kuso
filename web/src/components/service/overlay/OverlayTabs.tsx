@@ -1,7 +1,8 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
@@ -62,6 +63,12 @@ export function OverlayTabs<T extends string>({
     setFade({ left: strip.scrollLeft > 2, right: max - strip.scrollLeft > 2 });
   }, []);
 
+  const scrollByPage = (dir: 1 | -1) => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    strip.scrollBy({ left: dir * strip.clientWidth * 0.7, behavior: smoothScroll() });
+  };
+
   const measure = useCallback(() => {
     const strip = stripRef.current;
     const m = measureRef.current;
@@ -97,6 +104,8 @@ export function OverlayTabs<T extends string>({
     if (!strip || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
     ro.observe(strip);
+    // Badges and web fonts change tab widths without resizing the strip.
+    Array.from(strip.children).forEach((c) => ro.observe(c));
     return () => ro.disconnect();
   }, [measure, tabs]);
 
@@ -108,8 +117,10 @@ export function OverlayTabs<T extends string>({
     const el = strip?.querySelector<HTMLElement>(`#${CSS.escape(`${idPrefix}-tab-${active}`)}`);
     if (!strip || !el) return;
     const left = el.offsetLeft - strip.offsetLeft;
-    if (left < strip.scrollLeft || left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) {
-      strip.scrollTo({ left: Math.max(0, left - 24), behavior: "smooth" });
+    // 48px = the edge fade; a tab under it doesn't count as visible.
+    const lo = strip.scrollLeft > 0 ? strip.scrollLeft + 48 : 0;
+    if (left < lo || left + el.offsetWidth > strip.scrollLeft + strip.clientWidth - 48) {
+      strip.scrollTo({ left: Math.max(0, left - 48), behavior: smoothScroll() });
     }
   }, [scrollMode, active, idPrefix]);
 
@@ -186,11 +197,29 @@ export function OverlayTabs<T extends string>({
       className="relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3"
     >
       <div className="relative flex min-w-0 flex-1">
+        {/* Edge fades say "more this way"; the chevron scrolls a page.
+            Pointer-only: keyboard users arrow through the tabs. */}
         {scrollMode && fade.left && (
-          <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--bg-primary)] to-transparent" />
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => scrollByPage(-1)}
+            className="absolute inset-y-0 left-0 z-10 flex w-12 items-center justify-start bg-gradient-to-r from-[var(--bg-primary)] from-40% to-transparent text-[var(--text-tertiary)]"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
         )}
         {scrollMode && fade.right && (
-          <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-[var(--bg-primary)] to-transparent" />
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => scrollByPage(1)}
+            className="absolute inset-y-0 right-0 z-10 flex w-12 items-center justify-end bg-gradient-to-l from-[var(--bg-primary)] from-40% to-transparent text-[var(--text-tertiary)]"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         )}
         <div
           ref={stripRef}

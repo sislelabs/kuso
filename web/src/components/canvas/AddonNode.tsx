@@ -33,6 +33,7 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
     <div
       data-node-context
       data-canvas-node={id}
+      data-focus-key={`addon:${data.addon.metadata.name}`}
       tabIndex={data.__tabIndex ?? -1}
       role="group"
       aria-roledescription="addon"

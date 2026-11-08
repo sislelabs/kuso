@@ -3,6 +3,7 @@
 // One deploy-history row: status, commit, meta, the row's actions, and the
 // expandable build log (failure summary first for failed builds).
 
+import { smoothScroll } from "@/lib/reduced-motion";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -98,6 +99,9 @@ export interface BuildRowProps {
   isOpen: boolean;
   canDeploy: boolean;
   onToggle: () => void;
+  // The newest row you can roll back to keeps its actions visible, so
+  // "how do I undo this deploy" is answered without hovering.
+  pinActions?: boolean;
 }
 
 export function BuildRow({
@@ -116,6 +120,7 @@ export function BuildRow({
   isOpen,
   canDeploy,
   onToggle,
+  pinActions = false,
 }: BuildRowProps) {
   const m = STATUS[s];
   const Icon = m.icon;
@@ -137,10 +142,10 @@ export function BuildRow({
   const releaseErrorLine = s === "release-failed" ? firstReleaseError(b) : undefined;
   // Settled rows keep their actions out of the way until hovered or
   // focused; touch screens have no hover, so they always show them there.
-  const quietActions = s === "superseded" || s === "active" || s === "cancelled" || s === "unknown";
+  const quietActions = !pinActions && (s === "superseded" || s === "active" || s === "cancelled" || s === "unknown");
   const viewFailure = () => {
     if (!isOpen) onToggle();
-    requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: smoothScroll() }));
   };
 
   return (

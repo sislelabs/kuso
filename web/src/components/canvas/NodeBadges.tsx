@@ -7,7 +7,7 @@ import { errorCountLabel } from "@/features/errors";
 import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type VulnSummary } from "./badgeSummary";
 
 const badgeBase =
-  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]";
+  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]";
 
 // Security finding marker: shield + count in a neutral/warning style so
 // it never reads as a runtime error. Clicking opens the Vulnerabilities tab.
@@ -42,7 +42,7 @@ export function VulnBadge({
         }
       >
         <ShieldAlert className="h-3 w-3 text-[var(--warning)]" aria-hidden />
-        {compactCount(summary.fixableCritical)}
+        {compactCount(summary.fixableCritical)} {summary.fixableCritical === 1 ? "CVE" : "CVEs"}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
@@ -55,10 +55,13 @@ export function ErrorBadge({
   summary,
   onOpen,
   tabIndex,
+  compact = false,
 }: {
   summary?: ErrorSummary;
   onOpen?: () => void;
   tabIndex?: number;
+  // Canvas cards drop the "· 24h" (it's in the tooltip) so the name keeps room.
+  compact?: boolean;
 }) {
   if (!summary || summary.occurrences <= 0) return null;
   const label = errorBadgeLabel(summary);
@@ -82,7 +85,9 @@ export function ErrorBadge({
         }
       >
         <AlertCircle className="h-3 w-3" aria-hidden />
-        {errorCountLabel(summary.occurrences)}
+        {compact
+          ? `${compactCount(summary.occurrences)} ${summary.occurrences === 1 ? "error" : "errors"}`
+          : errorCountLabel(summary.occurrences)}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

@@ -1494,7 +1494,7 @@ function AddMenuPanel({
   const [open, setOpen] = useState(false);
   const itemCls =
     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
-  const needsEditor = "Needs editor access on this project";
+  const needsEditor = "You need editor access on this project";
   return (
     <Panel position="top-left" className="!m-3">
       <Popover open={open} onOpenChange={setOpen}>
@@ -1503,6 +1503,11 @@ function AddMenuPanel({
           Add
         </PopoverTrigger>
         <PopoverContent align="start" className="w-48 gap-0.5 p-1">
+          {(!canServicesWrite || !canAddonsWrite) && (
+            <p className="border-b border-[var(--border-subtle)] px-2 pt-1 pb-2 text-xs text-[var(--text-tertiary)]">
+              {needsEditor} to add here.
+            </p>
+          )}
           {canServicesWrite ? (
             <a href={`/projects/${encodeURIComponent(project)}/services/new`} className={itemCls}>
               <Plus className="h-3.5 w-3.5" />

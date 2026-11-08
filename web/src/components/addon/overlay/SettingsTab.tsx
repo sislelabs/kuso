@@ -14,6 +14,7 @@ import {
   type UpdateAddonBody,
 } from "@/features/projects";
 import { Button } from "@/components/ui/button";
+import { SaveButton } from "@/components/shared/SaveButton";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api-client";
@@ -488,9 +489,7 @@ function ConfigurationSection({
         >
           Reset
         </Button>
-        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? "Saving…" : "Save configuration"}
-        </Button>
+        <SaveButton dirty={dirty} saving={save.isPending} onClick={() => save.mutate()} label="Save configuration" />
       </footer>
     </section>
   );
@@ -613,16 +612,12 @@ function ExternalSummarySection({
               />
             </div>
           )}
-          {dirty && (
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setForm(base)} disabled={save.isPending}>
-                Reset
-              </Button>
-              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
-                {save.isPending ? "Saving…" : "Save pooler"}
-              </Button>
-            </div>
-          )}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setForm(base)} disabled={!dirty || save.isPending}>
+              Reset
+            </Button>
+            <SaveButton dirty={dirty} saving={save.isPending} onClick={() => save.mutate()} label="Save pooler" />
+          </div>
         </div>
       )}
 
@@ -954,9 +949,7 @@ function PlacementSection({
         >
           Reset
         </Button>
-        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? "Saving…" : "Save placement"}
-        </Button>
+        <SaveButton dirty={dirty} saving={save.isPending} onClick={() => save.mutate()} label="Save placement" />
       </footer>
     </section>
   );

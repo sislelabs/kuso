@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Cpu, MemoryStick, ScrollText } from "lucide-react";
+import { Activity, Boxes, Cpu, MemoryStick, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatBytes, formatMillicores, useProjectMetrics } from "@/features/project-overview";
+import { useProjectMetrics } from "@/features/project-overview";
+import { envScopeLabel, projectStatsLabel } from "@/features/projects/facts";
 import { summarizeUptime, useProjectUptime } from "@/features/uptime";
 import { uptimeTitle } from "@/components/uptime/UptimeBadge";
 import { cn } from "@/lib/utils";
@@ -58,7 +59,7 @@ export function ProjectStatusStrip({
 }
 
 function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjectMetrics>; env: string }) {
-  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">{env}: …</span>;
+  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">{envScopeLabel(env)}: …</span>;
   if (metrics.isError) {
     return (
       <span className="text-[var(--error)]" title={metrics.error instanceof Error ? metrics.error.message : undefined}>
@@ -67,31 +68,34 @@ function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjec
     );
   }
   const m = metrics.data;
-  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">{env}: nothing deployed</span>;
+  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">{envScopeLabel(env)}: nothing deployed</span>;
   if (m.pods === 0) {
     return (
       <span
         className="text-[var(--text-tertiary)]"
         title={`No pod metrics: ${env} is scaled to zero/asleep, or metrics-server isn't reporting.`}
       >
-        {env}: no pod metrics
+        {envScopeLabel(env)}: no pod metrics
       </span>
     );
   }
+  const stats = projectStatsLabel({ env, cpuMillicores: m.cpuMillicores, memBytes: m.memBytes, pods: m.pods });
+  const ICON = { cpu: Cpu, mem: MemoryStick, pods: Boxes, uptime: Activity } as const;
   return (
-    <span className="inline-flex items-center gap-3" title={`Summed across ${m.envs} ${env} env${m.envs === 1 ? "" : "s"}`}>
-      <span className="text-[var(--text-tertiary)]">{env}</span>
-      <span className="inline-flex items-center gap-1">
-        <Cpu className="h-3 w-3 text-[var(--text-tertiary)]" />
-        {formatMillicores(m.cpuMillicores)}
+    <span className="inline-flex items-center gap-3" aria-label={stats.text}>
+      <span className="font-medium text-[var(--text-secondary)]" title={`Live usage of the ${stats.scope} environment`}>
+        {stats.scope}
       </span>
-      <span className="inline-flex items-center gap-1">
-        <MemoryStick className="h-3 w-3 text-[var(--text-tertiary)]" />
-        {formatBytes(m.memBytes)}
-      </span>
-      <span>
-        {m.pods} pod{m.pods === 1 ? "" : "s"}
-      </span>
+      {stats.parts.map((p) => {
+        const Icon = ICON[p.key];
+        return (
+          <span key={p.key} className="inline-flex items-center gap-1" title={p.title}>
+            <Icon aria-hidden className="h-3 w-3 text-[var(--text-tertiary)]" />
+            {p.label && <span className="text-[var(--text-tertiary)]">{p.label}</span>}
+            <span className="tabular-nums">{p.value}</span>
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -121,8 +125,8 @@ function UptimeSummary({ uptime }: { uptime: ReturnType<typeof useProjectUptime>
           s.down > 0 ? "text-[var(--error)]" : s.failing > 0 ? "text-[var(--warning)]" : "text-[var(--success)]",
         )}
       />
-      <span>
-        {s.up}/{services.length} up
+      <span className="tabular-nums">
+        {s.up}/{services.length} uptime {services.length === 1 ? "check" : "checks"} up
       </span>
       {bad.length > 0 && (
         <span className={s.down > 0 ? "text-[var(--error)]" : "text-[var(--warning)]"}>

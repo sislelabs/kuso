@@ -1,5 +1,6 @@
 "use client";
 
+import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { KusoAddon, KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
@@ -8,7 +9,6 @@ import {
   buildTriggerMessage,
   deriveAddonStatus,
   deriveServiceStatus,
-  lastDeployAt,
   serviceUrl,
   STATUS_TONE,
   useLatestBuilds,
@@ -297,7 +297,7 @@ function MobileServiceCard({
 
   const url = serviceUrl(service, env);
   const stopped = service.spec.stopped === true;
-  const deployed = lastDeployAt(env, latest);
+  const deployed = lastDeployedAt(env);
   const latestFailed = ["failed", "error", "release-failed"].includes((latest?.status ?? "").toLowerCase());
 
   const redeploy = () => {
@@ -363,7 +363,7 @@ function MobileServiceCard({
           Redeploy, Restart and Stop live in the overflow so a mutating
           button is never one stray tap away. */}
       <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2 [&_button]:h-10">
-        <Button type="button" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
+        <Button type="button" variant="secondary" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
           <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
         </Button>
         <Button
@@ -411,7 +411,7 @@ function MobileServiceCard({
             >
               <RotateCw className="h-4 w-4 text-[var(--text-tertiary)]" />
               Restart
-              <span className="ml-auto text-xs text-[var(--text-tertiary)]">same image</span>
+              <span className="ml-auto text-xs text-[var(--text-tertiary)]">{stopped ? "start it first" : "same image"}</span>
             </button>
             <button
               type="button"
