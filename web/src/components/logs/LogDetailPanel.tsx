@@ -226,7 +226,7 @@ export function LogDetailPanel({
                   This line isn&apos;t in the archive yet — lines are shipped every few seconds. Try again shortly.
                 </p>
               ) : (
-                <div ref={ctxBoxRef} className="relative max-h-[22rem] overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-1 font-mono text-[11.5px] leading-relaxed">
+                <div ref={ctxBoxRef} className="relative max-h-[22rem] overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-1 font-mono text-xs leading-relaxed">
                   {ctx.data.lines.map((l, i) => {
                     const isAnchor = i === ctx.data.anchorIndex;
                     return (

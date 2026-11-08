@@ -718,7 +718,7 @@ export function ServiceOverlay({
                     <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
                     <span className="font-mono">{service}</span>
                     {envParam !== "production" && (
-                      <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-[11px]">{envParam}</span>
+                      <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-xs">{envParam}</span>
                     )}
                   </span>
                   {url ? (

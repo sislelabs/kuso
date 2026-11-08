@@ -207,14 +207,14 @@ export function TimeSeriesChart({
           {yTicks.map((v) => (
             <g key={v}>
               <line x1={left} x2={left + plotW} y1={y(v)} y2={y(v)} stroke="var(--border-subtle)" strokeWidth={1} shapeRendering="crispEdges" />
-              <text x={left - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--text-tertiary)] text-[11px] tabular-nums">
+              <text x={left - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--text-tertiary)] text-xs tabular-nums">
                 {format(v)}
               </text>
             </g>
           ))}
           {/* x labels */}
           {xTicks.map((t) => (
-            <text key={t} x={x(t)} y={height - 6} textAnchor="middle" className="fill-[var(--text-tertiary)] text-[11px] tabular-nums">
+            <text key={t} x={x(t)} y={height - 6} textAnchor="middle" className="fill-[var(--text-tertiary)] text-xs tabular-nums">
               {fmtTick(t, t1 - t0)}
             </text>
           ))}
@@ -258,7 +258,7 @@ export function TimeSeriesChart({
                   strokeDasharray="4 3"
                   shapeRendering="crispEdges"
                 />
-                <text x={left + plotW - 4} y={y(th.value) - 4} textAnchor="end" className="fill-[var(--text-secondary)] text-[11px]">
+                <text x={left + plotW - 4} y={y(th.value) - 4} textAnchor="end" className="fill-[var(--text-secondary)] text-xs">
                   {th.label}
                 </text>
               </g>

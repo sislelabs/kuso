@@ -2,7 +2,7 @@
 
 import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 import { deriveCronStatus, STATUS_TONE } from "@/features/services";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
@@ -109,14 +109,14 @@ export function describeSchedule(cron: string): string {
 // summary returns a one-line "what does this cron actually do" hint
 // to render below the schedule row. Truncates aggressively so the
 // 200px-wide tile doesn't grow.
-function summary(spec: CronNodeData["cron"]["spec"]): string {
+function summary(project: string, spec: CronNodeData["cron"]["spec"]): string {
   switch ((spec.kind || "service").toLowerCase()) {
     case "http":
       return spec.url ? spec.url.replace(/^https?:\/\//, "") : "(no url)";
     case "command":
       return (spec.command ?? []).join(" ") || "(no command)";
     case "service":
-      return spec.service ? `→ ${spec.service}` : "(no service)";
+      return spec.service ? `→ ${serviceShortName(project, spec.service)}` : "(no service)";
     default:
       return "";
   }
@@ -129,7 +129,7 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
     data.cron.spec.displayName?.trim() || shortName(data.project, data.cron.metadata.name);
   const schedule = data.cron.spec.schedule ?? "";
   const suspended = !!data.cron.spec.suspend;
-  const detail = summary(data.cron.spec);
+  const detail = summary(data.project, data.cron.spec);
 
   const status = deriveCronStatus(data.cron.spec);
   const tone = STATUS_TONE[status.tone];

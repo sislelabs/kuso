@@ -613,7 +613,7 @@ function RolloutSteps({ state }: { state: RolloutState }) {
             />
             <div
               className={cn(
-                "mt-1.5 flex items-start gap-1 text-2xs leading-tight sm:text-xs",
+                "mt-1.5 flex items-start gap-1 text-xs leading-tight",
                 done || active || failed ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
               )}
             >
