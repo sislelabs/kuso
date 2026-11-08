@@ -280,7 +280,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="absolute inset-0 bg-[rgba(8,8,11,0.55)] backdrop-blur-[2px]"
+            className="absolute inset-0 bg-[var(--scrim)] backdrop-blur-[2px]"
           />
           <motion.div
             initial={{ x: "100%" }}
