@@ -101,6 +101,9 @@ var inviteListCmd = &cobra.Command{
 		}
 		switch outputFormat {
 		case "json":
+			for _, inv := range invites {
+				unwrapSQLNulls(inv)
+			}
 			return jsonOut(invites)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
@@ -202,6 +205,32 @@ func inviteExpiry(v any) string {
 		return "never"
 	}
 	return asString(m["Time"])
+}
+
+// unwrapSQLNulls replaces the server's raw sql.Null* objects
+// ({"String": "x", "Valid": true}, {"Time": …, "Valid": false}) with
+// the plain value, or null when not Valid, so `-o json` is scriptable.
+func unwrapSQLNulls(m map[string]any) {
+	for k, v := range m {
+		w, ok := v.(map[string]any)
+		if !ok || len(w) != 2 {
+			continue
+		}
+		valid, ok := w["Valid"].(bool)
+		if !ok {
+			continue
+		}
+		for _, inner := range []string{"String", "Time", "Int64", "Int32", "Int16", "Bool", "Float64", "Byte"} {
+			if iv, has := w[inner]; has {
+				if valid {
+					m[k] = iv
+				} else {
+					m[k] = nil
+				}
+				break
+			}
+		}
+	}
 }
 
 var inviteAccept struct {
