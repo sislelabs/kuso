@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canvasVulnBadges, filterFindings, parseExpiryDays, safeHttpUrl, shouldPollScan, sortFindings } from "./logic";
-import type { Severity, VulnFinding, VulnImageReport, VulnScanStatus } from "./types";
+import { filterFindings, parseExpiryDays, safeHttpUrl, shouldPollScan, sortFindings } from "./logic";
+import type { Severity, VulnFinding, VulnScanStatus } from "./types";
 
 const f = (vulnId: string, severity: Severity, extra: Partial<VulnFinding> = {}): VulnFinding => ({
   vulnId,
@@ -90,53 +90,5 @@ describe("safeHttpUrl", () => {
     expect(safeHttpUrl("data:text/html,hi")).toBeUndefined();
     expect(safeHttpUrl("/relative")).toBeUndefined();
     expect(safeHttpUrl(undefined)).toBeUndefined();
-  });
-});
-
-describe("canvasVulnBadges", () => {
-  const img = (
-    over: Partial<VulnImageReport>,
-    fixableCritical: number,
-    status: VulnScanStatus = "succeeded",
-  ): VulnImageReport => ({
-    ownerKind: "service",
-    imageRef: "r",
-    digest: "sha256:x",
-    ...over,
-    scan: {
-      id: 1,
-      digest: "sha256:x",
-      imageRef: "r",
-      status,
-      reason: "nightly",
-      createdAt: "2026-11-04T00:00:00Z",
-      counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, fixableCritical, fixableHigh: 0 },
-      ignoredCount: 0,
-    },
-  });
-
-  it("keys by short name, scopes services to the selected env, takes the max", () => {
-    const images = [
-      img({ service: "shop-web", env: "production" }, 2),
-      img({ service: "web", env: "production" }, 3),
-      img({ service: "web", env: "staging" }, 9),
-      img({ service: "api" }, 1),
-      img({ ownerKind: "addon", addon: "shop-db" }, 4),
-      img({ service: "worker", env: "production" }, 0),
-    ];
-    expect(canvasVulnBadges(images, "shop", "production")).toEqual({
-      services: { web: 3, api: 1 },
-      addons: { db: 4 },
-    });
-    expect(canvasVulnBadges(images, "shop", "staging").services).toEqual({ web: 9 });
-  });
-
-  it("ignores scans that have not succeeded and platform images", () => {
-    const images = [
-      img({ service: "web" }, 5, "running"),
-      img({ service: "web" }, 5, "failed"),
-      img({ ownerKind: "platform", workload: "traefik" }, 7),
-    ];
-    expect(canvasVulnBadges(images, "shop", "production")).toEqual({ services: {}, addons: {} });
   });
 });

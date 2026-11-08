@@ -1,5 +1,4 @@
-import { serviceShortName } from "@/lib/utils";
-import { SEVERITIES, type Severity, type VulnFinding, type VulnImageReport, type VulnScanSummary } from "./types";
+import { SEVERITIES, type Severity, type VulnFinding, type VulnScanSummary } from "./types";
 
 export function severityRank(s: Severity): number {
   const i = SEVERITIES.indexOf(s);
@@ -86,39 +85,4 @@ export function safeHttpUrl(raw: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function liveFixableCritical(img: VulnImageReport): number {
-  return img.scan?.status === "succeeded" ? img.scan.counts.fixableCritical : 0;
-}
-
-export type CanvasVulnBadges = {
-  services: Record<string, number>;
-  addons: Record<string, number>;
-};
-
-// Badge data for the project canvas, keyed by short service/addon name.
-// Service images are scoped to the selected env group (a report without
-// env is treated as production). Several images per owner (init
-// containers, sidecars) take the max rather than the sum: the same CVE
-// commonly appears in each, and summing would overstate it.
-export function canvasVulnBadges(
-  images: readonly VulnImageReport[],
-  project: string,
-  selectedEnv: string,
-): CanvasVulnBadges {
-  const out: CanvasVulnBadges = { services: {}, addons: {} };
-  const bump = (m: Record<string, number>, key: string, n: number) => {
-    if (n > 0) m[key] = Math.max(m[key] ?? 0, n);
-  };
-  for (const img of images) {
-    const n = liveFixableCritical(img);
-    if (img.ownerKind === "service" && img.service) {
-      if ((img.env || "production") !== selectedEnv) continue;
-      bump(out.services, serviceShortName(project, img.service), n);
-    } else if (img.ownerKind === "addon" && img.addon) {
-      bump(out.addons, serviceShortName(project, img.addon), n);
-    }
-  }
-  return out;
 }

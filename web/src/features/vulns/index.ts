@@ -25,10 +25,9 @@ export {
   isScanActive,
   shouldPollScan,
   safeHttpUrl,
-  canvasVulnBadges,
   MAX_IGNORE_DAYS,
 } from "./logic";
-export type { FindingFilter, ExpiryParse, CanvasVulnBadges } from "./logic";
+export type { FindingFilter, ExpiryParse } from "./logic";
 export {
   vulnKeys,
   useProjectVulns,
