@@ -5,6 +5,7 @@ import { relativeTime } from "@/lib/format";
 import { Activity, Clock, AlertTriangle, Info, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/ui/loading-state";
+import { ExpandableText } from "./ExpandableText";
 import { UserBadge } from "./UserBadge";
 
 function severityIcon(s?: string) {
@@ -85,15 +86,20 @@ export function ActivityFeed({ filter }: { filter?: (e: AuditEntry) => boolean }
                 >
                   <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", colorClass)} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-[var(--text-primary)]">
-                      {e.action ?? "event"}
-                      {e.message ? <span className="text-[var(--text-secondary)]">: {e.message}</span> : null}
-                    </p>
-                    <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+                    <div className="flex min-w-0 items-baseline gap-1 text-sm text-[var(--text-primary)]">
+                      <span className="shrink-0">
+                        {e.action ?? "event"}
+                        {e.message ? ":" : null}
+                      </span>
+                      {e.message ? (
+                        <ExpandableText text={e.message} className="flex-1 text-[var(--text-secondary)]" />
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+                      <UserBadge id={e.user ?? ""} />
                       <span className="font-mono">
                         {[e.pipelineName, e.phaseName, e.appName].filter(Boolean).join(" / ")}
                       </span>
-                      {e.user && <UserBadge id={e.user} />}
                     </p>
                   </div>
                   <span className="whitespace-nowrap text-xs text-[var(--text-secondary)]">

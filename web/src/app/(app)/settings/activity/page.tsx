@@ -12,6 +12,7 @@ import { useUserDirectory } from "@/features/users";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { UserBadge } from "@/components/activity/UserBadge";
+import { ExpandableText } from "@/components/activity/ExpandableText";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { collapseRuns } from "@/lib/collapse-runs";
@@ -174,8 +175,8 @@ export default function ActivityPage() {
                   <span role="cell" className="col-span-2 min-w-0 truncate text-xs text-[var(--text-secondary)] md:col-span-1 md:text-sm" title={r.resource ? `${target} (${r.resource})` : target}>
                     {target ? <span className="font-mono text-xs">{target}</span> : <span className="text-[var(--text-tertiary)]">—</span>}
                   </span>
-                  <span role="cell" className="col-span-2 min-w-0 truncate text-xs text-[var(--text-secondary)] md:col-span-1 md:text-sm" title={r.message}>
-                    {r.message || "—"}
+                  <span role="cell" className="col-span-2 min-w-0 text-xs text-[var(--text-secondary)] md:col-span-1 md:text-sm">
+                    {r.message ? <ExpandableText text={r.message} /> : <span className="text-[var(--text-tertiary)]">—</span>}
                   </span>
                 </div>
               );
