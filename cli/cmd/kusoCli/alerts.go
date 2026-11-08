@@ -87,25 +87,55 @@ var alertListCmd = &cobra.Command{
 	},
 }
 
-// alertDetail renders a rule's threshold in the unit its kind uses.
+// alertDetail renders a rule's threshold in the unit its kind uses. An
+// unset threshold means the server's per-kind default (alerts/episodic.go,
+// alerts/engine.go), so show that instead of "<nil>".
 func alertDetail(r map[string]any) string {
-	ti, tf := r["thresholdInt"], r["thresholdFloat"]
+	ti := func(def int64) any {
+		if v := r["thresholdInt"]; v != nil {
+			return v
+		}
+		return def
+	}
+	tf := func(def float64) any {
+		if v := r["thresholdFloat"]; v != nil {
+			return v
+		}
+		return def
+	}
 	switch asString(r["kind"]) {
 	case "log_match":
-		return fmt.Sprintf("%s ≥ %v", asString(r["query"]), ti)
+		return fmt.Sprintf("%q ≥ %v in %s", asString(r["query"]), ti(1), alertWindow(r))
 	case "http_5xx_rate":
-		return fmt.Sprintf("5xx ≥ %v%% (min %v req)", tf, ti)
+		return fmt.Sprintf("5xx ≥ %v%% (min %v req)", tf(5), ti(20))
 	case "http_p95_latency":
-		return fmt.Sprintf("p95 ≥ %vms (min %v req)", tf, ti)
+		return fmt.Sprintf("p95 ≥ %vms (min %v req)", tf(1000), ti(20))
 	case "cert_expiry":
-		return fmt.Sprintf("expires < %vd or not Ready", ti)
+		return fmt.Sprintf("expires < %vd or not Ready", ti(14))
 	case "dns_mismatch":
 		return "resolves off-cluster"
 	}
-	if tf != nil {
-		return fmt.Sprintf("%v%%", tf)
+	if v := r["thresholdFloat"]; v != nil {
+		return fmt.Sprintf("%v%%", v)
 	}
 	return ""
+}
+
+// alertWindow is the rule's evaluation window ("5m" when unset, the
+// engine's default).
+func alertWindow(r map[string]any) string {
+	sec, _ := r["windowSeconds"].(float64)
+	n := int64(sec)
+	if n <= 0 {
+		n = 300
+	}
+	switch {
+	case n%3600 == 0:
+		return fmt.Sprintf("%dh", n/3600)
+	case n%60 == 0:
+		return fmt.Sprintf("%dm", n/60)
+	}
+	return fmt.Sprintf("%ds", n)
 }
 
 // alertCreateOpts is the flag set of `kuso alert create`; *Set records

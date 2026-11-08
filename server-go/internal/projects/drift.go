@@ -139,6 +139,7 @@ func extractHelmStatus(status map[string]any) (phase, lastError string) {
 	if status == nil {
 		return "", ""
 	}
+	var deployed, failed, initialized bool
 	condsRaw, _ := status["conditions"].([]any)
 	for _, c := range condsRaw {
 		cm, _ := c.(map[string]any)
@@ -148,25 +149,33 @@ func extractHelmStatus(status map[string]any) (phase, lastError string) {
 		ctype, _ := cm["type"].(string)
 		cstatus, _ := cm["status"].(string)
 		msg, _ := cm["message"].(string)
+		if cstatus != "True" {
+			continue
+		}
 		switch ctype {
 		case "Deployed":
-			if cstatus == "True" && phase == "" {
-				phase = "Deployed"
-			}
+			deployed = true
 		case "ReleaseFailed", "Irreconcilable":
-			if cstatus == "True" {
-				phase = "Failed"
-				if msg != "" {
-					lastError = msg
-				}
+			failed = true
+			if msg != "" {
+				lastError = msg
 			}
 		case "Initialized":
-			if cstatus == "True" && phase == "" {
-				phase = "Pending"
-			}
+			initialized = true
 		}
 	}
-	return phase, lastError
+	// Precedence is fixed rather than condition order: helm-operator lists
+	// Initialized before Deployed, so a first-match read reported every
+	// healthy release as Pending.
+	switch {
+	case failed:
+		return "Failed", lastError
+	case deployed:
+		return "Deployed", ""
+	case initialized:
+		return "Pending", ""
+	}
+	return "", ""
 }
 
 // GetDrift returns the drift summary for (project, service)'s
@@ -265,7 +274,13 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if svc.Spec.Internal != env.Spec.Internal {
 		out.SpecPending = append(out.SpecPending, "internal")
 	}
-	if int(svc.Spec.Port) != int(env.Spec.Port) {
+	// A service saved without a port (workers) gets the chart default on
+	// its env, so compare against that or the gap reads as permanent drift.
+	wantPort := int(svc.Spec.Port)
+	if wantPort == 0 {
+		wantPort = defaultServicePort
+	}
+	if wantPort != int(env.Spec.Port) {
 		out.SpecPending = append(out.SpecPending, "port")
 	}
 	// The remaining fields are the rest of what propagateChangedToEnvs
@@ -598,9 +613,7 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 	// shows "rolling out…" rather than the scary "restart needed"
 	// chip. Without this gate the moment between save and
 	// reconcile-fire produced a fake "stale && !rolling" window.
-	lastEdit := lastSpecMutation(env)
-	lastReconcile := lastHelmOperatorMutation(env)
-	if !lastEdit.IsZero() && lastEdit.After(lastReconcile) {
+	if reconcilePending(env, time.Now()) {
 		return true
 	}
 	dep, err := s.driftGetDeployment(ctx, ns, env.Name)
@@ -623,6 +636,25 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 		return true
 	}
 	return false
+}
+
+// reconcileGrace bounds how long a kuso-server edit with no later
+// helm-operator write counts as "reconcile pending". helm-operator only
+// writes the env CR when the release changes, so an edit that renders
+// identical manifests (e.g. sleep settings, which never reach the pod
+// template) leaves no trace; without a bound such an edit pinned
+// rolloutPending=true forever.
+const reconcileGrace = 2 * time.Minute
+
+// reconcilePending reports whether kuso-server wrote the env CR after
+// helm-operator last touched it, recently enough that the operator may
+// still be about to re-render the chart.
+func reconcilePending(env kube.KusoEnvironment, now time.Time) bool {
+	lastEdit := lastSpecMutation(env)
+	if lastEdit.IsZero() || !lastEdit.After(lastHelmOperatorMutation(env)) {
+		return false
+	}
+	return now.Sub(lastEdit) < reconcileGrace
 }
 
 // lastHelmOperatorMutation returns when helm-operator last wrote to

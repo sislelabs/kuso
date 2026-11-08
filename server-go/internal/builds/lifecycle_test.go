@@ -291,3 +291,38 @@ func TestRollback_RefusesHoldExpiredBuildWhenEnvHasReleaseHook(t *testing.T) {
 		t.Errorf("env patched to the un-migrated image: %+v", env.Spec.Image)
 	}
 }
+
+// A worker reusing web's image (fromService) stayed on the bad build
+// after web was rolled back.
+func TestRollback_MovesFromServiceWorkers(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedService("alpha", "web"),
+		seedProductionEnv("alpha", "web"),
+		seedWorkerService("alpha", "jobs", "web"),
+		seedProductionEnv("alpha", "jobs"),
+		seedService("alpha", "other"),
+		seedProductionEnv("alpha", "other"),
+		seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
+	)
+	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-oldsha", RollbackOptions{}); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	worker, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-jobs-production")
+	if err != nil {
+		t.Fatalf("get worker env: %v", err)
+	}
+	if worker.Spec.Image == nil || worker.Spec.Image.Tag != "oldsha123456" {
+		t.Errorf("worker image = %+v, want tag oldsha123456", worker.Spec.Image)
+	}
+	if worker.Annotations[annPromotedBuild] != "alpha-web-oldsha" {
+		t.Errorf("worker promoted-build = %q, want alpha-web-oldsha", worker.Annotations[annPromotedBuild])
+	}
+	other, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-other-production")
+	if err != nil {
+		t.Fatalf("get other env: %v", err)
+	}
+	if other.Spec.Image != nil && other.Spec.Image.Tag == "oldsha123456" {
+		t.Error("unrelated service was moved onto the rolled-back image")
+	}
+}

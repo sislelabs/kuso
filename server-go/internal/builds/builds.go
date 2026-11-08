@@ -1509,10 +1509,7 @@ func (p *Poller) tailBuildLogLines(ctx context.Context, ns string, b *kube.KusoB
 		}
 	}
 	tail := int64(lines)
-	// We try the main container first (kaniko output), then init
-	// containers (clone failures land here). First non-empty wins.
-	tryNames := append([]string{}, containerNames(pod.Spec.Containers)...)
-	tryNames = append(tryNames, containerNames(pod.Spec.InitContainers)...)
+	tryNames := buildLogContainerOrder(pod)
 	for _, c := range tryNames {
 		req := p.Svc.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
 			Container: c,
@@ -1544,6 +1541,30 @@ func (p *Poller) tailBuildLogLines(ctx context.Context, ns string, b *kube.KusoB
 		}
 	}
 	return nil
+}
+
+// buildLogContainerOrder lists the build pod's containers in the order
+// their logs are worth reading: any that exited non-zero first (the one
+// that actually failed), then the main container (build output), then
+// init containers. Without the first group a clone failure was read off
+// cache-init, which prints disk-usage lines and always succeeds, so the
+// classifier never saw the git error.
+func buildLogContainerOrder(pod *corev1.Pod) []string {
+	failed := map[string]bool{}
+	var out []string
+	statuses := append(append([]corev1.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
+	for _, cs := range statuses {
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && !failed[cs.Name] {
+			failed[cs.Name] = true
+			out = append(out, cs.Name)
+		}
+	}
+	for _, n := range append(containerNames(pod.Spec.Containers), containerNames(pod.Spec.InitContainers)...) {
+		if !failed[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // joinLastN joins the last n lines (or all of them if fewer) with
@@ -3300,8 +3321,8 @@ func (p *Poller) deleteCloneTokenSecret(ns, buildName string) {
 // annotations gives last-trigger-wins semantics regardless of which
 // finishes first.
 const (
-	annPromotedBuild = "kuso.sislelabs.com/promoted-build"
-	annPromotedAt    = "kuso.sislelabs.com/promoted-at"
+	annPromotedBuild = kube.AnnPromotedBuild
+	annPromotedAt    = kube.AnnPromotedAt
 )
 
 // buildTriggerTimestamp returns the wall-clock the build was created

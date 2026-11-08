@@ -563,6 +563,9 @@ func main() {
 		// created before the cron CR carried them would otherwise render
 		// with public egress even when the service is private.
 		goSafe(logger, "heal-cron-egress", func() { projSvc.HealCronEgress(ctx, logger) })
+		// Give runtime=image envs created before they stamped promoted-at a
+		// deploy time, so "deployed N ago" isn't blank for them.
+		goSafe(logger, "heal-image-promoted-at", func() { projSvc.HealImagePromotedAt(ctx, logger) })
 		secSvc = secrets.New(kc, *namespace)
 		secSvc.NSResolver = nsResolver
 		// Wire the per-env Secret cleanup hook so DeleteEnvironment in

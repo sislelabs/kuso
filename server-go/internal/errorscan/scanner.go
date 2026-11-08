@@ -280,14 +280,21 @@ func matchesAnyPattern(line string) bool {
 // or a field value (a request path, a counter name), not the severity.
 var quietLevelRe = regexp.MustCompile(`(?i)(?:\blevel=|"level"\s*:\s*")(?:info|debug|trace)\b`)
 
-// normalize: lowercase, strip numbers, hex blobs, UUIDs, IP-like
-// segments, and quoted strings. Used for fingerprinting so noisy
-// variants (request IDs, timestamps embedded in messages) collapse
-// to the same hash.
+// normalize: lowercase, then replace the volatile tokens (UUIDs, hex
+// ids, numbers) and quoted strings with placeholders, so variants that
+// differ only in request ids, timestamps, durations, IPs or ports
+// collapse to one hash.
+//
+// Numbers are matched without word boundaries: a lowercased ISO
+// timestamp ("2026-11-08t19:40:05z"), a duration ("250ms", "5m0s") or a
+// pointer ("0xc0001a2") glues digits to letters, and a \b-anchored match
+// left those in, giving every occurrence its own group. Hex ids and
+// numbers share one placeholder so an id that happens to be all digits
+// (or crosses the 8-char hex threshold) still lands in the same group.
 var (
-	hexRe   = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
-	uuidRe  = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
-	numRe   = regexp.MustCompile(`\b\d+\b`)
+	hexRe   = regexp.MustCompile(`\b(?:0x[0-9a-f]+|[0-9a-f]{8,})\b`)
+	uuidRe  = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	numRe   = regexp.MustCompile(`\d+`)
 	quoteRe = regexp.MustCompile(`"[^"]*"|'[^']*'`)
 )
 
@@ -300,8 +307,8 @@ func fingerprintFor(line string) string {
 		line = line[:256]
 	}
 	n := strings.ToLower(line)
-	n = uuidRe.ReplaceAllString(n, "<uuid>")
-	n = hexRe.ReplaceAllString(n, "<hex>")
+	n = uuidRe.ReplaceAllString(n, "<id>")
+	n = hexRe.ReplaceAllString(n, "<n>")
 	n = numRe.ReplaceAllString(n, "<n>")
 	n = quoteRe.ReplaceAllString(n, "<str>")
 	sum := sha256.Sum256([]byte(n))

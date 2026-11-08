@@ -31,8 +31,10 @@ var (
 	contShapeRe = regexp.MustCompile(`^(?:\s+\S|at\s|File "|Caused by|\.\.\. \d+ more|goroutine \d+ \[|created by |\[signal |exit status \d+)`)
 	// Go panic frames: "main.main()", "net/http.(*conn).serve(0xc0001)".
 	goFrameRe = regexp.MustCompile(`^[\w./*()\[\]-]+\(.*\)(?:\s.*)?$`)
-	// The exception line that closes a Python traceback.
-	pyFinalRe   = regexp.MustCompile(`^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)\b`)
+	// The exception line that closes a Python traceback: a (dotted) class
+	// name, then ": message" or nothing. Not every exception class ends in
+	// Error ("smtplib.SMTPServerDisconnected: …").
+	pyFinalRe   = regexp.MustCompile(`^[A-Za-z_][\w.]*(?::\s|:?$)`)
 	pyChainedRe = regexp.MustCompile(`^(?:During handling of the above exception|The above exception was the direct cause)`)
 	tracebackRe = regexp.MustCompile(`(?i)Traceback \(most recent call last\)`)
 )
@@ -117,6 +119,13 @@ func (c *errorChain) continues(line string, isErr bool, gap time.Duration) bool 
 	if strings.TrimSpace(line) == "" {
 		// Blank separators inside Go panics and chained Python tracebacks.
 		return c.goPanic || c.python
+	}
+	// logging.exception writes "ERROR <msg>" and then the traceback; the
+	// traceback belongs to that error, named after its final exception.
+	if !c.python && tracebackRe.MatchString(line) {
+		c.python = true
+		c.pyDone = false
+		return true
 	}
 	if c.python {
 		if tracebackRe.MatchString(line) || pyChainedRe.MatchString(line) {

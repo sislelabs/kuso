@@ -266,6 +266,7 @@ func (w *Watcher) promote(ctx context.Context, ns, envName string, img *kube.Kus
 		}
 		env.Spec.Image = img
 		env.Spec.PendingImage = nil
+		kube.StampPromotedAt(env, time.Now())
 		delete(env.Annotations, AnnFailedImage)
 		delete(env.Annotations, AnnFailedAttempts)
 		delete(env.Annotations, AnnFailedAt)

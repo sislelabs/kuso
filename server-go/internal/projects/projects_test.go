@@ -473,6 +473,9 @@ func TestAddService_ImageRuntimeSkipsHold(t *testing.T) {
 	if env.Spec.ReplicaCountValue() != 1 {
 		t.Errorf("runtime=image must skip the pre-build hold: replicas=%d, want 1", env.Spec.ReplicaCountValue())
 	}
+	if env.Annotations[kube.AnnPromotedAt] == "" {
+		t.Error("runtime=image env was born serving its image but has no promoted-at stamp")
+	}
 }
 
 func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
