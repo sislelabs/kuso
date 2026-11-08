@@ -52,6 +52,8 @@ import {
   Shield,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
+import { isMac } from "@/lib/shortcuts";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { getProjectsSummary, projectsSummaryQueryKey, useAddons } from "@/features/projects";
 import { useProjectPrefs } from "@/features/userprefs";
@@ -105,14 +107,6 @@ function StatusBadge({ status, text }: { status: PaletteStatus; text?: string })
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
       {text ?? s.label}
     </span>
-  );
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1 font-sans text-[11px] text-[var(--text-secondary)]">
-      {children}
-    </kbd>
   );
 }
 
@@ -1003,20 +997,26 @@ export function CommandPalette() {
 }
 
 export function CommandTrigger() {
+  // Server render and first paint say "Ctrl K"; swap to ⌘ after mount so
+  // the static export doesn't hydrate-mismatch on Macs.
+  const [mod, setMod] = useState("Ctrl");
+  useEffect(() => setMod(isMac() ? "⌘" : "Ctrl"), []);
   return (
     <button
       type="button"
       onClick={() => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
       }}
-      className="inline-flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]"
+      className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]"
       aria-label="Open command palette"
+      aria-keyshortcuts="Meta+K Control+K"
     >
       <Search className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Search</span>
-      <kbd className="ml-2 hidden rounded border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-sans text-[11px] text-[var(--text-tertiary)] sm:inline">
-        ⌘K
-      </kbd>
+      <span className="ml-2 hidden items-center gap-0.5 sm:inline-flex">
+        <Kbd>{mod}</Kbd>
+        <Kbd>K</Kbd>
+      </span>
     </button>
   );
 }

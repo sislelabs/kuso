@@ -69,10 +69,71 @@ export function KeyboardShortcuts() {
   return <ShortcutsDialog open={open} onOpenChange={setShortcutsHelpOpen} />;
 }
 
+// Panel-level chords live in their own components, but they're listed
+// here too so "?" answers "what can I press" on any page.
+const SERVICE_PANEL: Shortcut[] = [
+  { keys: ["G", "D"], sequence: true, description: "Deployments" },
+  { keys: ["G", "V"], sequence: true, description: "Variables" },
+  { keys: ["G", "L"], sequence: true, description: "Logs" },
+  { keys: ["G", "M"], sequence: true, description: "Metrics" },
+  { keys: ["G", "E"], sequence: true, description: "Errors" },
+  { keys: ["G", "U"], sequence: true, description: "Vulnerabilities" },
+  { keys: ["G", "T"], sequence: true, description: "Shell" },
+  { keys: ["G", "C"], sequence: true, description: "Crons" },
+  { keys: ["G", "R"], sequence: true, description: "Runs" },
+  { keys: ["G", "S"], sequence: true, description: "Settings" },
+  { keys: ["Esc"], description: "Close the panel" },
+];
+const ADDON_PANEL: Shortcut[] = [
+  { keys: ["G", "O"], sequence: true, description: "Overview" },
+  { keys: ["G", "B"], sequence: true, description: "Backups" },
+  { keys: ["G", "Q"], sequence: true, description: "SQL" },
+  { keys: ["G", "U"], sequence: true, description: "Vulnerabilities" },
+  { keys: ["G", "S"], sequence: true, description: "Settings" },
+];
+const PALETTE: Shortcut[] = [
+  { keys: ["↑", "↓"], description: "Move through results" },
+  { keys: ["↵"], description: "Open or run the selected item" },
+  { keys: ["⌫"], description: "Up a level (when the search is empty)" },
+  { keys: ["Esc"], description: "Back, or close the palette" },
+];
+
+type AnnouncedShortcut = { keys: string[]; label: string };
+type Announced = { title: string; items: Shortcut[] };
+
+// A page that owns its own help (the canvas) fires a cancelable
+// `kuso:shortcuts` event; claiming it opens this dialog with the page's
+// section first instead of the page's local popover.
+function parseAnnounced(detail: unknown): Announced | null {
+  if (typeof detail !== "object" || detail === null) return null;
+  const { scope, shortcuts } = detail as { scope?: unknown; shortcuts?: unknown };
+  if (!Array.isArray(shortcuts)) return null;
+  const items: Shortcut[] = [];
+  for (const raw of shortcuts as unknown[]) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { keys, label } = raw as Partial<AnnouncedShortcut>;
+    if (!Array.isArray(keys) || typeof label !== "string") continue;
+    items.push({ keys: keys.filter((k): k is string => typeof k === "string"), description: label });
+  }
+  const title = typeof scope === "string" && scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "This page";
+  return items.length > 0 ? { title, items } : null;
+}
+
 function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const groups = useShortcutGroups();
+  const registered = useShortcutGroups();
   const [mod, setMod] = useState("Ctrl");
+  const [announced, setAnnounced] = useState<Announced | null>(null);
   useEffect(() => setMod(isMac() ? "⌘" : "Ctrl"), []);
+
+  useEffect(() => {
+    const onAnnounce = (e: Event) => {
+      e.preventDefault();
+      setAnnounced(parseAnnounced((e as CustomEvent<unknown>).detail));
+      setShortcutsHelpOpen(true);
+    };
+    window.addEventListener("kuso:shortcuts", onAnnounce);
+    return () => window.removeEventListener("kuso:shortcuts", onAnnounce);
+  }, []);
 
   const global: Shortcut[] = [
     { keys: [mod, "K"], description: "Search and run commands" },
@@ -82,17 +143,35 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
     { keys: ["Esc"], description: "Close dialog, panel or overlay" },
   ];
 
+  // Page sections first: they're what the person was looking at.
+  const pageGroups: { title: string; items: readonly Shortcut[] }[] = [...registered];
+  if (announced && !pageGroups.some((g) => g.title.toLowerCase() === announced.title.toLowerCase())) {
+    pageGroups.unshift(announced);
+  }
+  const sections = [
+    ...pageGroups,
+    { title: "Everywhere", items: global },
+    { title: "Command palette", items: PALETTE },
+    { title: "Service panel", items: SERVICE_PANEL },
+    { title: "Database panel", items: ADDON_PANEL },
+  ];
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={groups.length > 0 ? "gap-0 p-0 sm:max-w-2xl" : "gap-0 p-0 sm:max-w-md"}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) setAnnounced(null);
+        onOpenChange(o);
+      }}
+    >
+      <DialogContent className="gap-0 p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-[var(--border-subtle)] px-5 py-4">
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>Shortcuts work anywhere except while you&apos;re typing in a field.</DialogDescription>
         </DialogHeader>
-        <div className={groups.length > 0 ? "grid gap-x-8 gap-y-6 px-5 py-5 sm:grid-cols-2" : "px-5 py-5"}>
-          <ShortcutList title="Everywhere" items={global} />
-          {groups.map((g) => (
-            <ShortcutList key={g.id} title={g.title} items={g.items} />
+        <div className="grid gap-x-8 gap-y-6 px-5 py-5 sm:grid-cols-2">
+          {sections.map((g, i) => (
+            <ShortcutList key={`${g.title}-${i}`} title={g.title} items={g.items} />
           ))}
         </div>
       </DialogContent>
