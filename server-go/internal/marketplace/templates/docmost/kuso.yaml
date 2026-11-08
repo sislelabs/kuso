@@ -1,0 +1,27 @@
+apiVersion: kuso/v1
+project: docmost
+services:
+  - name: docmost
+    runtime: image
+    port: 3000
+    image:
+      repository: docmost/docmost
+      tag: "0.97.0"
+    env:
+      APP_URL: "https://${{ prompt.host }}"
+      APP_SECRET: { generate: hex32 }
+      DATABASE_URL: "${{ docmost-db.DATABASE_URL }}"
+      REDIS_URL: "${{ docmost-cache.REDIS_URL }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: storage
+        mountPath: /app/data/storage
+        sizeGi: 5
+addons:
+  - name: docmost-db
+    kind: postgres
+    version: "16"
+  - name: docmost-cache
+    kind: redis

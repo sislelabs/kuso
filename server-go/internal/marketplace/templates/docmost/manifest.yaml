@@ -1,0 +1,12 @@
+name: docmost
+title: Docmost
+description: Collaborative wiki and documentation, an open-source Notion/Confluence alternative.
+category: content
+website: https://docmost.com
+appVersion: "0.97.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Docmost will be served on. The first visitor creates the workspace and its owner.

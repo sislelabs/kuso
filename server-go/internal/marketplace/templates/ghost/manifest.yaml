@@ -1,0 +1,13 @@
+name: ghost
+title: Ghost
+description: Publishing platform for blogs, newsletters and paid memberships.
+category: content
+website: https://ghost.org
+appVersion: "6.75.0"
+size: medium
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Ghost will be served on. Open /ghost on it to create the owner account.

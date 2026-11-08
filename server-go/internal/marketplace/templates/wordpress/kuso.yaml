@@ -1,0 +1,35 @@
+apiVersion: kuso/v1
+project: wordpress
+services:
+  - name: wordpress
+    runtime: image
+    port: 80
+    image:
+      repository: wordpress
+      tag: "7.1.4-apache"
+    env:
+      WORDPRESS_DB_HOST: "${{ wordpress-db.MYSQL_HOST }}"
+      WORDPRESS_DB_USER: "${{ wordpress-db.MYSQL_USER }}"
+      WORDPRESS_DB_PASSWORD: "${{ wordpress-db.MYSQL_PASSWORD }}"
+      WORDPRESS_DB_NAME: "${{ wordpress-db.MYSQL_DB }}"
+      # TLS ends at the ingress; without this WordPress sees plain HTTP and
+      # redirect-loops once the site URL is https.
+      WORDPRESS_CONFIG_EXTRA: "if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { $_SERVER['HTTPS'] = 'on'; }"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: html
+        mountPath: /var/www/html
+        sizeGi: 5
+    scale: { min: 1, max: 1 }
+    # The entrypoint copies WordPress into the volume and chowns it; Apache
+    # binds :80 as root, then switches to www-data.
+    securityContext:
+      capabilities:
+        add: ["NET_BIND_SERVICE", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
+addons:
+  - name: wordpress-db
+    kind: mysql
+    version: "8.0"
