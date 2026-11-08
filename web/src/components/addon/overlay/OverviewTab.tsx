@@ -10,6 +10,10 @@ import {
   useAddonHealth,
   useSubscribedAddonsForServices,
   useToggleAddonSubscription,
+  useAddonBackups,
+  backupSummary,
+  backupsApplicable,
+  backupsListState,
   type AddonConnection,
 } from "@/features/addons";
 import { copyText } from "@/lib/clipboard";
@@ -462,16 +466,9 @@ function HealthStrip({
   tier: string;
 }) {
   const health = useAddonHealth(project, addon, cr);
-  const schedule = cr?.spec.backup?.schedule;
-  const backups =
-    kind !== "postgres"
-      ? { label: "Not available", detail: `No managed backups for ${kind || "this kind"}` }
-      : schedule
-        ? {
-            label: describeCron(schedule),
-            detail: cr?.spec.backup?.retentionDays ? `Kept ${cr.spec.backup.retentionDays} days` : "Kept forever",
-          }
-        : { label: "Off", detail: "No backup schedule" };
+  const hasBackups = backupsApplicable(cr);
+  const list = useAddonBackups(project, addon, hasBackups);
+  const summary = hasBackups ? backupSummary(cr, backupsListState(list)) : null;
   const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode }[] = [
     {
       k: "Status",
@@ -489,10 +486,9 @@ function HealthStrip({
       v: <span className="capitalize">{tier}</span>,
       d: `${storageSize} disk${cr?.spec.ha ? " · HA" : ""}`,
     },
-    { k: "Backups", v: backups.label, d: backups.detail },
   ];
   return (
-    <section aria-label="Addon health" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] sm:grid-cols-4">
+    <section aria-label="Addon health" className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)]">
       {tiles.map((t) => (
         <div key={t.k} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
           <div className="text-xs text-[var(--text-secondary)]">{t.k}</div>
@@ -500,27 +496,24 @@ function HealthStrip({
           {t.d && <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{t.d}</div>}
         </div>
       ))}
-      <div className="col-span-2 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:col-span-4">
+      {/* Full width so the whole sentence fits: it's the same backupSummary
+          wording the Backups tab shows. */}
+      <div className="col-span-3 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+        <span>Backups</span>
+        {summary ? (
+          <span>
+            <span className="text-sm font-medium text-[var(--text-primary)]">{summary.headline}</span>
+            <span className="text-[var(--text-tertiary)]">{summary.sentence.slice(summary.headline.length)}</span>
+          </span>
+        ) : (
+          <span className="text-[var(--text-tertiary)]">Not available for {kind || "this kind"} addons</span>
+        )}
+      </div>
+      <div className="col-span-3 flex items-center gap-2 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
         <span>Name</span>
         <span className="font-mono text-[var(--text-primary)]">{addon}</span>
         <CopyButton value={addon} label="Copy addon name" size="xs" />
       </div>
     </section>
   );
-}
-
-// describeCron turns the common backup schedules into words; anything
-// unusual falls back to the raw expression.
-function describeCron(expr: string): string {
-  const f = expr.trim().split(/\s+/);
-  if (f.length !== 5) return expr;
-  const [min, hour, dom, mon, dow] = f;
-  const at = /^\d+$/.test(min) && /^\d+$/.test(hour) ? ` at ${hour.padStart(2, "0")}:${min.padStart(2, "0")}` : "";
-  if (dom === "*" && mon === "*" && dow === "*" && at) return `Daily${at}`;
-  if (dom === "*" && mon === "*" && /^\d$/.test(dow) && at) {
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    return `Weekly, ${days[Number(dow) % 7]}${at}`;
-  }
-  if (/^\*\/\d+$/.test(hour) && dom === "*" && /^\d+$/.test(min)) return `Every ${hour.slice(2)}h`;
-  return expr;
 }
