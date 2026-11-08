@@ -189,7 +189,7 @@ function Marketplace() {
       {isAdmin && market.isSuccess && apps.length > 0 && apps.length < SMALL_CATALOG && (
         <p className="mt-6 text-center text-[13px] text-[var(--text-secondary)]">
           More apps arrive with kuso updates.{" "}
-          <Link href="/settings/updates" className="text-[var(--link)] underline-offset-4 hover:underline">
+          <Link href="/settings/updates" className="text-[var(--link)] underline underline-offset-4 hover:text-[var(--text-primary)]">
             Check for updates
           </Link>
         </p>
