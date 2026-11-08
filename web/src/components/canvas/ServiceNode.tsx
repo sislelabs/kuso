@@ -77,7 +77,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         .filter(Boolean)
         .join(", ")}
       onContextMenu={data.__onContext}
-      title={status.detail || undefined}
+      title={[status.detail, url ? buildRefText(data.latestBuild)?.title : ""].filter(Boolean).join("\n") || undefined}
       className={cn(
         "group relative flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         tone.border,
@@ -114,13 +114,17 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>
 
+      {/* The URL gets the whole row; the commit moves to the tooltip
+          then, and only takes this row when there's no URL to show. */}
       <div className="mt-2 flex min-w-0 items-center gap-2">
         {url ? (
           <UrlPill url={url} />
         ) : (
-          <span className="text-xs text-[var(--text-tertiary)]">{internal ? "Internal only" : "No public URL"}</span>
+          <>
+            <span className="shrink-0 text-xs text-[var(--text-tertiary)]">{internal ? "Internal only" : "No public URL"}</span>
+            <BuildRef build={data.latestBuild} />
+          </>
         )}
-        <BuildRef build={data.latestBuild} />
       </div>
 
       <div className="flex-1" />
@@ -139,7 +143,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           )}
           {deployedAt && (
             <span className="truncate text-[var(--text-tertiary)]" title={`Deployed ${new Date(deployedAt).toLocaleString()}`}>
-              · deployed {relativeTime(deployedAt)}
+              · {live?.rolledBack ? "" : "deployed "}{relativeTime(deployedAt)}
             </span>
           )}
         </span>
@@ -178,12 +182,11 @@ function liveBuildOf(build?: BuildSummary): LiveBuildRef | undefined {
   return { id: o.id, branch: str("branch"), commitSha: str("commitSha"), ref: str("ref"), rolledBack: o.rolledBack === true };
 }
 
-// BuildRef shows the commit that's serving: the live build when the
-// server reports one, else the latest build. A failed latest build on a
-// still-live service is flagged here, next to the commit, so the status
-// line can stay about what's serving traffic.
-function BuildRef({ build }: { build?: BuildSummary }) {
-  if (!build) return null;
+// The commit that's serving: the live build when the server reports one,
+// else the latest build. Shown inline only on cards without a URL (a
+// failed latest build turns it red); otherwise it's in the card tooltip.
+function buildRefText(build?: BuildSummary) {
+  if (!build) return undefined;
   const live = liveBuildOf(build);
   const latestSha = buildRefLabel(build, 7);
   const st = (build.status ?? "").toLowerCase();
@@ -194,17 +197,23 @@ function BuildRef({ build }: { build?: BuildSummary }) {
   const title = live
     ? `Running ${label}. Latest build: ${latestLabel} (${st || "unknown"})`
     : `Latest build: ${label} (${st || "unknown"})`;
+  return { label, title, failed, live };
+}
+
+function BuildRef({ build }: { build?: BuildSummary }) {
+  const t = buildRefText(build);
+  if (!t) return null;
   return (
     <span
       className={cn(
         "ml-auto min-w-[3.5rem] shrink-[4] truncate font-mono text-xs",
-        failed && !live ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
+        t.failed && !t.live ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
       )}
-      title={title}
+      title={t.title}
     >
-      {failed && !live && <span className="sr-only">Latest build failed: </span>}
-      {live && <span className="sr-only">Running </span>}
-      {label}
+      {t.failed && !t.live && <span className="sr-only">Latest build failed: </span>}
+      {t.live && <span className="sr-only">Running </span>}
+      {t.label}
     </span>
   );
 }
@@ -230,7 +239,7 @@ function UrlPill({ url }: { url: string }) {
     <span
       // The pill is its own target; don't let the click open the overlay.
       onClick={(e) => e.stopPropagation()}
-      className="nodrag inline-flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-1 font-mono text-xs text-[var(--text-secondary)]"
+      className="nodrag inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-1 font-mono text-xs text-[var(--text-secondary)]"
     >
       <a
         tabIndex={-1}
