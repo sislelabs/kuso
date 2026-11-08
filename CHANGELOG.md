@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.37.0] — 2026-11-08
+
+### Other
+- Pull the sandbox's Docker Hub images through mirror.gcr.io ([89aa324](https://github.com/sislelabs/kuso/commit/89aa324649e4cd1ef57d086667c818e001675388))
+- Upgrade Prometheus to v3.16.0 ([4b3c31d](https://github.com/sislelabs/kuso/commit/4b3c31d980d314a018f750123372c55804e9ff68))
+- Upgrade buildkit to v0.34.2 and the registry to 3.1.2 ([f70521b](https://github.com/sislelabs/kuso/commit/f70521ba96d26bb49cbb0cfdf0c0609304036452))
+- Build new static services with node:22 ([c26b108](https://github.com/sislelabs/kuso/commit/c26b108616af47e5cf706bbb4d183f55be9e3870))
+- Pull S3 addon images from pgsty/minio and pgsty/mc ([49fcd84](https://github.com/sislelabs/kuso/commit/49fcd84cde80305acd9ab7c830fcd2dfbeb33a07))
+
 ## [0.36.0] — 2026-11-08
 
 ### Other
@@ -616,11 +625,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
-
-## [0.25.26] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
 
 
 ---

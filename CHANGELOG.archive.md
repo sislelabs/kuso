@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.26] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
+
 ## [0.25.25] — 2026-09-02
 
 ### 🐛 Bug Fixes
