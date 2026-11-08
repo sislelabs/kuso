@@ -181,3 +181,18 @@ func TestTruncateForMessage_ShortLineUnchanged(t *testing.T) {
 		t.Errorf("truncateForMessage(%q) = %q, want trimmed %q", line, got, line)
 	}
 }
+
+func TestFingerprintFor_IgnoresVolatileTokens(t *testing.T) {
+	t.Parallel()
+	pairs := [][2]string{
+		{"2026-11-08T19:40:05Z ERROR x order_id=1006", "2026-11-08T21:02:59Z ERROR x order_id=99999999"},
+		{"ERROR redis: slow reply (250ms) from 10.0.0.12:6379", "ERROR redis: slow reply (1520ms) from 10.42.1.7:6380"},
+		{"ERROR job 5m0s over budget at 0xc0001a2b30", "ERROR job 12m30s over budget at 0xc00ff00"},
+		{"ERROR lost req 3f2c9a1e-7b6d-4c1a-9e2f-0a1b2c3d4e5f", "ERROR lost req 00000000-1111-2222-3333-444444444444"},
+	}
+	for _, p := range pairs {
+		if fingerprintFor(p[0]) != fingerprintFor(p[1]) {
+			t.Errorf("split into two groups:\n  %s\n  %s", p[0], p[1])
+		}
+	}
+}
