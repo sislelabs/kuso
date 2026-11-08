@@ -10,13 +10,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { resetUserPassword } from "@/features/profile/api";
 import { toast } from "sonner";
-import { Users as UsersIcon, Plus, Trash2, KeyRound, Link2, Copy, Check } from "lucide-react";
+import { Plus, Trash2, KeyRound, Copy, Check } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { toGoDuration } from "./duration";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice, SettingsSection, SettingsSelect } from "@/components/settings/SettingsSection";
+import { UserAvatar, UserBadge } from "@/components/activity/UserBadge";
 
 interface UserRow {
   id: string;
@@ -51,54 +54,60 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [resetting, setResetting] = useState<string | null>(null);
 
+  const users = list.data ?? [];
+
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      <header className="mb-6 flex items-center gap-3">
-        <UsersIcon className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Users</h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Local accounts + OAuth-created users. Roles + group memberships set the perms.
-          </p>
-        </div>
-      </header>
-
-      {!canWrite && (
-        <p className="mb-4 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 font-mono text-[10px] text-[var(--warning)]">
-          You don&apos;t have <span className="text-[var(--text-secondary)]">user:write</span>.
-          The page is read-only.
-        </p>
-      )}
-
-      <div className="mb-3 flex items-center justify-end">
-        {canWrite && (
+    <SettingsPage
+      title="Users"
+      description="Local accounts and OAuth-created users. Instance roles and group memberships set what they can do."
+      actions={
+        canWrite ? (
           <Button size="sm" onClick={() => setShowCreate(true)}>
             <Plus className="h-3 w-3" />
             New user
           </Button>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
+      {!canWrite && (
+        <SettingsNotice tone="warning" title="Read-only">
+          Managing users needs the <code className="font-mono text-xs">user:write</code> permission.
+        </SettingsNotice>
+      )}
 
       {list.isPending ? (
-        <Skeleton className="h-32 rounded-md" />
+        <Skeleton className="h-48 rounded-md" />
       ) : list.isError ? (
         <QueryErrorState what="users" error={list.error} onRetry={() => void list.refetch()} />
-      ) : (list.data ?? []).length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-8 text-center text-sm text-[var(--text-tertiary)]">
-          No users.
-        </p>
+      ) : users.length === 0 ? (
+        <EmptyState title="No users" description="Create a local user or send an invite link." className="p-8" />
       ) : (
-        <ul className="space-y-2">
-          {(list.data ?? []).map((u) => (
-            <li key={u.id}>
-              <UserRowItem
-                u={u}
-                canWrite={canWrite}
-                onReset={() => setResetting(u.id)}
-              />
-            </li>
-          ))}
-        </ul>
+        <div
+          role="table"
+          aria-label="Users"
+          className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
+        >
+          <div
+            role="row"
+            className={cn(
+              "hidden border-b border-[var(--border-subtle)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] md:grid",
+              USER_GRID,
+            )}
+          >
+            <span role="columnheader">User</span>
+            <span role="columnheader">Instance role</span>
+            <span role="columnheader">Groups</span>
+            <span role="columnheader">Last login</span>
+            <span role="columnheader" className="text-right">
+              <span className="sr-only">Actions</span>
+            </span>
+          </div>
+          <div role="rowgroup" className="divide-y divide-[var(--border-subtle)]">
+            {users.map((u) => (
+              <UserRowItem key={u.id} u={u} canWrite={canWrite} onReset={() => setResetting(u.id)} />
+            ))}
+          </div>
+        </div>
       )}
 
       {canWrite && <InvitesSection />}
@@ -107,13 +116,15 @@ export default function UsersPage() {
       {resetting && (
         <ResetPasswordDialog
           userId={resetting}
-          username={(list.data ?? []).find((u) => u.id === resetting)?.username ?? ""}
+          username={users.find((u) => u.id === resetting)?.username ?? ""}
           onClose={() => setResetting(null)}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 }
+
+const USER_GRID = "md:grid-cols-[minmax(0,1.6fr)_176px_minmax(0,1fr)_96px_auto] md:items-center md:gap-4";
 
 // ---------- Invitations ----------
 
@@ -159,32 +170,29 @@ function InvitesSection() {
   const items = list.data ?? [];
 
   return (
-    <section className="mt-10">
-      <header className="mb-3 flex items-center justify-between">
-        <div>
-          <h2 className="font-heading text-base font-semibold tracking-tight">Invitations</h2>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Generate links that let people sign up directly into a group.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setShowNew(true)}>
+    <SettingsSection
+      title="Invitations"
+      description="Links that let people sign up directly into a group."
+      flush
+      actions={
+        <Button size="sm" variant="outline" onClick={() => setShowNew(true)}>
           <Plus className="h-3 w-3" />
           New invite
         </Button>
-      </header>
-
+      }
+    >
       {list.isPending ? (
-        <Skeleton className="h-24 rounded-md" />
+        <Skeleton className="m-4 h-24 rounded-md" />
       ) : list.isError ? (
-        <QueryErrorState what="invites" error={list.error} onRetry={() => void list.refetch()} />
+        <QueryErrorState what="invites" error={list.error} onRetry={() => void list.refetch()} className="m-4" />
       ) : items.length === 0 ? (
         <EmptyState
           title="No invites yet"
           description="Mint an invite link to bring a teammate onto this instance."
-          className="p-6"
+          className="border-0 p-6"
         />
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-[var(--border-subtle)]">
           {items.map((inv) => (
             <li key={inv.id}>
               <InviteRowItem inv={inv} onRevoke={() => setPendingRevoke(inv)} />
@@ -206,7 +214,7 @@ function InvitesSection() {
         }}
         onCancel={() => setPendingRevoke(null)}
       />
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -243,60 +251,51 @@ function InviteRowItem({ inv, onRevoke }: { inv: InviteRow; onRevoke: () => void
     }
   };
 
+  const expiresAt = nullTime(inv.expiresAt);
+  const statusTone =
+    status === "active"
+      ? "bg-[var(--success-subtle)] text-[var(--success)]"
+      : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]";
+
   return (
-    <div
-      className={cn(
-        "rounded-md border bg-[var(--bg-secondary)] p-3",
-        dead ? "border-[var(--border-subtle)] opacity-60" : "border-[var(--border-subtle)]"
-      )}
-    >
-      <div className="flex items-start gap-3">
-        <Link2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <code className="truncate rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
-              {inv.url}
-            </code>
-            <button
-              type="button"
-              onClick={copy}
-              aria-label="Copy"
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-            >
-              {copied ? (
-                <Check className="h-3 w-3 text-[var(--success)]" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-            </button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-            <span className={cn(
-              "rounded px-1.5 py-0.5",
-              dead ? "bg-[var(--bg-tertiary)]" : "bg-emerald-500/10 text-[var(--success)]"
-            )}>
-              {status}
-            </span>
-            <span>· uses {inv.usedCount}/{inv.maxUses}</span>
-            {role && <span>· role {role}</span>}
-            {nullTime(inv.expiresAt) && (
-              <span title={nullTime(inv.expiresAt)}>
-                · {expired ? "expired" : "expires"}{" "}
-                {new Date(nullTime(inv.expiresAt)).toLocaleString()}
-              </span>
-            )}
-            <span title={inv.createdAt}>· created {relativeTime(inv.createdAt)}</span>
-          </div>
-          {note && (
-            <p className="text-[11px] italic text-[var(--text-secondary)]">&ldquo;{note}&rdquo;</p>
-          )}
+    <div className={cn("flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:px-5", dead && "opacity-70")}>
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <code className="min-w-0 truncate rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-primary)]">
+            {inv.url}
+          </code>
+          <button
+            type="button"
+            onClick={copy}
+            aria-label="Copy invite link"
+            title="Copy invite link"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
         </div>
-        {!dead && (
-          <Button variant="outline" size="sm" onClick={onRevoke}>
-            <Trash2 className="h-3 w-3" /> Revoke
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+          <span className={cn("rounded-sm px-1.5 py-0.5 font-medium capitalize", statusTone)}>{status}</span>
+          <span>
+            {inv.usedCount} of {inv.maxUses} {inv.maxUses === 1 ? "use" : "uses"}
+          </span>
+          {role && <span>Role {role}</span>}
+          {expiresAt && (
+            <span title={new Date(expiresAt).toLocaleString()}>
+              {expired ? "Expired" : "Expires"} {relativeTime(expiresAt)}
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1" title={inv.createdAt}>
+            Created {relativeTime(inv.createdAt)} by <UserBadge id={inv.createdBy} />
+          </span>
+        </div>
+        {note && <p className="text-xs italic text-[var(--text-secondary)]">&ldquo;{note}&rdquo;</p>}
       </div>
+      {!dead && (
+        <Button variant="outline" size="sm" onClick={onRevoke} className="self-start">
+          <Trash2 className="h-3 w-3" /> Revoke
+        </Button>
+      )}
     </div>
   );
 }
@@ -340,56 +339,47 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="New invitation" onClose={onClose} busy={create.isPending}>
-      <div className="space-y-3">
-        <Field label="group" hint="invitee joins this group on signup; empty = pending">
-          <select
-            value={groupId}
-            onChange={(e) => setGroupId(e.target.value)}
-            className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
-          >
-            <option value="">— pending (admin approves later) —</option>
+      <div className="space-y-4">
+        <Field label="Group" hint="The invitee joins this group on sign-up. Leave pending to approve them later.">
+          <SettingsSelect value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+            <option value="">Pending (an admin approves later)</option>
             {(groups.data ?? []).map((g) => (
               <option key={g.id} value={g.id}>
                 {g.name}
               </option>
             ))}
-          </select>
+          </SettingsSelect>
         </Field>
-        <Field label="instance role" hint="override the group's default; empty = use group">
-          <select
-            value={instanceRole}
-            onChange={(e) => setInstanceRole(e.target.value)}
-            className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
-          >
-            <option value="">— use group default —</option>
-            <option value="admin">admin</option>
-            <option value="editor">editor</option>
-            <option value="viewer">viewer</option>
-          </select>
+        <Field label="Instance role" hint="Overrides the group's default role.">
+          <SettingsSelect value={instanceRole} onChange={(e) => setInstanceRole(e.target.value)}>
+            <option value="">Use the group default</option>
+            <option value="admin">Admin</option>
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+          </SettingsSelect>
         </Field>
-        <Field label="expires in" hint="duration like 24h, 7d, 30d. empty = never">
+        <Field label="Expires in" hint="A duration like 24h, 7d or 30d. Leave empty for no expiry.">
           <Input
             value={expiresIn}
             onChange={(e) => setExpiresIn(e.target.value)}
-            className="h-8 font-mono text-[12px]"
-            placeholder="168h"
+            className="font-mono"
+            placeholder="e.g. 168h"
           />
         </Field>
-        <Field label="max uses" hint="multi-use links require an expiry">
+        <Field label="Max uses" hint="Multi-use links need an expiry.">
           <Input
             type="number"
             min={1}
             max={1000}
             value={maxUses}
             onChange={(e) => setMaxUses(Number(e.target.value) || 1)}
-            className="h-8 font-mono text-[12px]"
+            className="font-mono"
           />
         </Field>
-        <Field label="note" hint="optional; shown to invitee on the signup page">
+        <Field label="Note" hint="Optional. Shown to the invitee on the sign-up page.">
           <Input
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            className="h-8 text-[12px]"
             placeholder="e.g. team onboarding"
           />
         </Field>
@@ -466,100 +456,139 @@ function UserRowItem({
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Role change failed"),
   });
+  const groups = u.groups ?? [];
+  const visibleGroups = groups.filter((g) => g !== "kuso-pending");
   return (
-    <div className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-      <span
-        className={cn(
-          "inline-block h-2 w-2 shrink-0 rounded-full",
-          u.isActive ? "bg-emerald-400" : "bg-[var(--text-tertiary)]/40"
-        )}
-        title={u.isActive ? "Active" : "Disabled"}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 truncate text-sm font-medium">
-          {u.username}
-          {u.provider && u.provider !== "local" && (
-            <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              {u.provider}
+    <div role="row" className={cn("grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-3 px-4 py-3", USER_GRID)}>
+      <div role="cell" className="flex min-w-0 items-center gap-3">
+        <span className="relative shrink-0">
+          <UserAvatar user={{ username: u.username }} size={32} />
+          <span
+            className={cn(
+              "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-secondary)]",
+              u.isActive ? "bg-[var(--success)]" : "bg-[var(--text-tertiary)]",
+            )}
+            title={u.isActive ? "Active" : "Disabled"}
+          />
+        </span>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={cn("truncate text-sm font-medium", u.isActive ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]")}>
+              {u.username}
             </span>
-          )}
-          {pending && (
-            <span
-              className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--warning)]"
-              title="Joined through an invite with no group. Add them to a group or set an instance role to give them access."
-            >
-              pending
-            </span>
-          )}
-          {u.role && u.role !== "none" && (
-            <span className="rounded bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--accent)]">
-              {u.role}
-            </span>
-          )}
-        </div>
-        <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-          {u.email && <span className="truncate">{u.email}</span>}
-          {u.lastLogin && (
-            <span title={u.lastLogin}>· last login {relativeTime(u.lastLogin)}</span>
-          )}
-          {(u.groups ?? []).length > 0 && (
-            <span className="truncate">· groups: {u.groups!.join(", ")}</span>
-          )}
+            {!u.isActive && <Tag>Disabled</Tag>}
+            {u.provider && u.provider !== "local" && (
+              <Tag className="capitalize">{u.provider === "github" ? "GitHub" : u.provider}</Tag>
+            )}
+            {pending && (
+              <Tag
+                tone="warning"
+                title="Joined through an invite with no group. Add them to a group or set an instance role to give them access."
+              >
+                Pending
+              </Tag>
+            )}
+            {u.role && u.role !== "none" && (
+              <Tag tone="accent" className="capitalize" title="Legacy role">
+                {u.role}
+              </Tag>
+            )}
+          </div>
+          {u.email && <div className="truncate text-xs text-[var(--text-secondary)]">{u.email}</div>}
         </div>
       </div>
+
+      {/* Mobile: actions sit top-right; desktop: they're the last column. */}
+      <div role="cell" className="col-start-2 row-start-1 flex items-center justify-end gap-1 md:col-start-auto md:row-start-auto md:order-last">
+        {canWrite && (
+          <>
+            <button
+              type="button"
+              onClick={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
+              disabled={toggleActive.isPending}
+              className={cn(
+                "mr-1 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+                u.isActive
+                  ? "border-[var(--success)]/40 bg-[var(--success-subtle)]"
+                  : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
+              )}
+              role="switch"
+              aria-checked={u.isActive}
+              aria-label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
+              title={u.isActive ? "Active — click to disable" : "Disabled — click to enable"}
+            >
+              <span
+                className={cn(
+                  "inline-block h-3.5 w-3.5 rounded-full shadow transition-transform",
+                  u.isActive ? "translate-x-4 bg-[var(--success)]" : "translate-x-0.5 bg-[var(--text-tertiary)]",
+                )}
+              />
+            </button>
+            <Button variant="ghost" size="icon-sm" onClick={onReset} aria-label={`Reset password for ${u.username}`} title="Reset password">
+              <KeyRound className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Delete ${u.username}`}
+              title="Delete user"
+              onClick={() => setConfirmOpen(true)}
+              className="hover:text-[var(--error)]"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
+      </div>
+
+      <div role="cell" className="col-span-2 md:col-span-1">
+        <span className="mb-1 block text-xs text-[var(--text-secondary)] md:hidden">Instance role</span>
+        {canWrite ? (
+          <SettingsSelect
+            aria-label={`Instance role for ${u.username}`}
+            title="Admin sees every project; editor/viewer set the default on granted projects; inherit uses the user's groups."
+            value={u.instanceRole ?? ""}
+            disabled={setInstanceRole.isPending}
+            onChange={(e) => setInstanceRole.mutate(e.target.value)}
+            className="h-8"
+          >
+            <option value="">Inherit from groups</option>
+            <option value="admin">Admin</option>
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+          </SettingsSelect>
+        ) : (
+          <span className="text-sm capitalize text-[var(--text-primary)]">{u.instanceRole || "Inherit"}</span>
+        )}
+      </div>
+
+      <div role="cell" className="min-w-0 text-sm text-[var(--text-secondary)]">
+        <span className="mb-1 block text-xs md:hidden">Groups</span>
+        {visibleGroups.length === 0 ? (
+          <span className="text-[var(--text-tertiary)]">None</span>
+        ) : (
+          <span className="flex flex-wrap gap-1" title={visibleGroups.join(", ")}>
+            {visibleGroups.slice(0, 3).map((g) => (
+              <Tag key={g}>{g}</Tag>
+            ))}
+            {visibleGroups.length > 3 && <Tag>+{visibleGroups.length - 3}</Tag>}
+          </span>
+        )}
+      </div>
+
+      <div role="cell" className="text-sm text-[var(--text-secondary)]">
+        <span className="mb-1 block text-xs md:hidden">Last login</span>
+        {u.lastLogin ? (
+          <span title={new Date(u.lastLogin).toLocaleString()} className="whitespace-nowrap">
+            {relativeTime(u.lastLogin)}
+          </span>
+        ) : (
+          <span className="text-[var(--text-tertiary)]">Never</span>
+        )}
+      </div>
+
       {canWrite && (
         <>
-          <label className="flex shrink-0 items-center gap-1.5" title="Instance role — admin sees every project; editor/viewer set the default on granted projects; inherit uses the user's groups.">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              role
-            </span>
-            <select
-              aria-label={`Instance role for ${u.username}`}
-              value={u.instanceRole ?? ""}
-              disabled={setInstanceRole.isPending}
-              onChange={(e) => setInstanceRole.mutate(e.target.value)}
-              className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)]"
-            >
-              <option value="">inherit (groups)</option>
-              <option value="admin">admin</option>
-              <option value="editor">editor</option>
-              <option value="viewer">viewer</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => (u.isActive ? setConfirmDisable(true) : toggleActive.mutate(true))}
-            disabled={toggleActive.isPending}
-            className={cn(
-              "inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors",
-              u.isActive
-                ? "border-emerald-500/30 bg-emerald-500/20"
-                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
-            )}
-            role="switch"
-            aria-checked={u.isActive}
-            aria-label={u.isActive ? `Disable ${u.username}` : `Enable ${u.username}`}
-            title={u.isActive ? "Disable user" : "Enable user"}
-          >
-            <span
-              className={cn(
-                "inline-block h-4 w-4 rounded-full bg-white shadow transition-transform",
-                u.isActive ? "translate-x-5" : "translate-x-1"
-              )}
-            />
-          </button>
-          <Button variant="outline" size="sm" onClick={onReset}>
-            <KeyRound className="h-3 w-3" />
-            Reset password
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Delete ${u.username}`}
-            onClick={() => setConfirmOpen(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
           <ConfirmDialog
             open={confirmDisable}
             title={`Disable ${u.username}?`}
@@ -598,6 +627,35 @@ function UserRowItem({
   );
 }
 
+function Tag({
+  children,
+  tone = "neutral",
+  className,
+  title,
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "warning" | "accent";
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-xs leading-none",
+        tone === "warning"
+          ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
+          : tone === "accent"
+            ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+            : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 function CreateUserDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [username, setUsername] = useState("");
@@ -618,15 +676,15 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
   });
   return (
     <Modal title="New user" onClose={onClose} busy={create.isPending}>
-      <div className="space-y-3">
-        <Field label="username">
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} className="h-8 font-mono text-[12px]" autoFocus />
+      <div className="space-y-4">
+        <Field label="Username">
+          <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" autoFocus />
         </Field>
-        <Field label="email">
-          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-8 font-mono text-[12px]" />
+        <Field label="Email">
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
         </Field>
-        <Field label="password" hint="≥ 8 chars">
-          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-8 font-mono text-[12px]" />
+        <Field label="Password" hint="At least 8 characters.">
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
         </Field>
       </div>
       <footer className="mt-4 flex justify-end gap-2">
@@ -659,12 +717,12 @@ function ResetPasswordDialog({
   });
   return (
     <Modal title={`Reset password for ${username}`} onClose={onClose} busy={reset.isPending}>
-      <Field label="new password" hint="≥ 8 chars; user receives no email — share manually">
+      <Field label="New password" hint="At least 8 characters. The user gets no email, so share it with them yourself.">
         <Input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="h-8 font-mono text-[12px]"
+          autoComplete="new-password"
           autoFocus
         />
       </Field>
@@ -701,7 +759,7 @@ function Modal({
     >
       <DialogContent className="block gap-0 rounded-md p-0 sm:max-w-md" showCloseButton={!busy}>
         <DialogHeader className="border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
-          <DialogTitle className="text-sm">{title}</DialogTitle>
+          <DialogTitle className="text-base">{title}</DialogTitle>
         </DialogHeader>
         <div className="p-4">{children}</div>
       </DialogContent>
@@ -712,10 +770,10 @@ function Modal({
 // A <label> wrapper so the control inside is named by the label text.
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <label className="block space-y-1">
-      <span className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">{label}</span>
+    <label className="block space-y-1.5">
+      <span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>
+      {hint && <span className="block text-xs leading-relaxed text-[var(--text-secondary)]">{hint}</span>}
       {children}
-      {hint && <span className="block text-[10px] text-[var(--text-tertiary)]/70">{hint}</span>}
     </label>
   );
 }
