@@ -43,16 +43,16 @@ export function KubeEventsSection() {
           <Input
             value={nsInput}
             onChange={(e) => setNsInput(e.target.value)}
-            placeholder="namespace (default kuso)"
+            placeholder="kuso"
             aria-label="Namespace"
-            className="h-8 w-52 font-mono text-[12px]"
+            className="h-8 w-40 font-mono text-[13px]"
           />
           <Button type="submit" size="sm" variant="outline">
             Show
           </Button>
-          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-secondary)]">
             <input type="checkbox" checked={warningsOnly} onChange={(e) => setWarningsOnly(e.target.checked)} />
-            warnings only
+            Warnings only
           </label>
         </form>
       </header>
@@ -67,14 +67,14 @@ export function KubeEventsSection() {
         </p>
       ) : (
         <div className="overflow-x-auto rounded-md border border-[var(--border-subtle)]">
-          <table className="w-full text-left font-mono text-[11px]">
-            <thead className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          <table className="w-full text-left text-xs">
+            <thead className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-xs text-[var(--text-tertiary)]">
               <tr>
-                <th className="px-3 py-2 font-normal">When</th>
-                <th className="px-3 py-2 font-normal">Type</th>
-                <th className="px-3 py-2 font-normal">Reason</th>
-                <th className="px-3 py-2 font-normal">Object</th>
-                <th className="px-3 py-2 font-normal">Message</th>
+                <th className="px-3 py-2 font-medium">When</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium">Reason</th>
+                <th className="px-3 py-2 font-medium">Object</th>
+                <th className="px-3 py-2 font-medium">Message</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border-subtle)]">
@@ -87,19 +87,23 @@ export function KubeEventsSection() {
                       {relativeTime(ts)}
                       {(e.count ?? 0) > 1 && <span className="ml-1">×{e.count}</span>}
                     </td>
-                    <td
-                      className={cn(
-                        "px-3 py-1.5",
-                        e.type === "Warning" ? "text-[var(--warning)]" : "text-[var(--text-secondary)]",
-                      )}
-                    >
-                      {e.type ?? "—"}
+                    <td className="px-3 py-1.5">
+                      <span
+                        className={cn(
+                          "inline-flex rounded border px-1.5 py-px text-[11px]",
+                          e.type === "Warning"
+                            ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)] text-[var(--warning)]"
+                            : "border-transparent px-0 text-[var(--text-tertiary)]",
+                        )}
+                      >
+                        {e.type ?? "—"}
+                      </span>
                     </td>
                     <td className="px-3 py-1.5 text-[var(--text-primary)]">{e.reason ?? "—"}</td>
-                    <td className="max-w-[16rem] truncate px-3 py-1.5 text-[var(--text-secondary)]" title={obj?.name}>
+                    <td className="max-w-[14rem] truncate px-3 py-1.5 font-mono text-[var(--text-secondary)]" title={obj?.name}>
                       {obj ? `${obj.kind ?? ""}/${obj.name ?? ""}` : "—"}
                     </td>
-                    <td className="break-words px-3 py-1.5 text-[var(--text-secondary)]">{e.message}</td>
+                    <td className="min-w-[16rem] px-3 py-1.5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">{e.message}</td>
                   </tr>
                 );
               })}
