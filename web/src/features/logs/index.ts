@@ -1,2 +1,13 @@
-export { useLogStream } from "./hooks";
-export type { LogFrame, LogLine, UseLogStreamResult } from "./hooks";
+export { useLogStream, createReplayFilter } from "./hooks";
+export type { LogFrame, LogLine, UseLogStreamResult, StreamConnection } from "./hooks";
+export { searchArchive, fetchLogContext, getErrorDetail, fetchErrorTrace } from "./api";
+export type {
+  ArchiveLine,
+  ArchivePage,
+  ArchiveParams,
+  LogScope,
+  LogAnchor,
+  LogContext,
+  ErrorGroupDetail,
+  ErrorOccurrence,
+} from "./api";
