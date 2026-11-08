@@ -1,0 +1,17 @@
+apiVersion: kuso/v1
+project: redisinsight
+services:
+  - name: redisinsight
+    runtime: image
+    port: 5540
+    image:
+      repository: redis/redisinsight
+      tag: "3.8.0"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 1
+    scale: { min: 1, max: 1 }

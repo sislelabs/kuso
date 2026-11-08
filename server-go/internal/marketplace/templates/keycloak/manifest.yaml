@@ -1,0 +1,22 @@
+name: keycloak
+title: Keycloak
+description: Identity and access management with SSO, OpenID Connect, OAuth 2.0 and SAML.
+category: dev-tools
+website: https://www.keycloak.org
+appVersion: "26.8.2"
+size: large
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Keycloak will be served on.
+  - key: admin_username
+    title: Admin username
+    kind: string
+    default: admin
+    help: Temporary bootstrap admin for the master realm, created on first boot.
+  - key: admin_password
+    title: Admin password
+    kind: password
+    required: true
