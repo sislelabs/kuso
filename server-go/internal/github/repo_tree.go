@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -24,16 +26,20 @@ func (c *Client) ListRepoTree(ctx context.Context, installationID int64, owner, 
 	if err != nil {
 		return nil, err
 	}
-	br, _, err := cli.Repositories.GetBranch(ctx, owner, repo, branch, 1)
+	return listRepoTree(ctx, cli, owner, repo, branch, pathPrefix)
+}
+
+func listRepoTree(ctx context.Context, cli *gogithub.Client, owner, repo, branch, pathPrefix string) ([]RepoTreeEntry, error) {
+	br, resp, err := cli.Repositories.GetBranch(ctx, owner, repo, branch, 1)
 	if err != nil {
-		return nil, fmt.Errorf("get branch: %w", err)
+		return nil, classifyAPIError("get branch", resp, err)
 	}
 	if br == nil || br.Commit == nil || br.Commit.Commit == nil || br.Commit.Commit.Tree == nil || br.Commit.Commit.Tree.SHA == nil {
 		return nil, nil
 	}
-	tree, _, err := cli.Git.GetTree(ctx, owner, repo, *br.Commit.Commit.Tree.SHA, true)
+	tree, resp, err := cli.Git.GetTree(ctx, owner, repo, *br.Commit.Commit.Tree.SHA, true)
 	if err != nil {
-		return nil, fmt.Errorf("get tree: %w", err)
+		return nil, classifyAPIError("get tree", resp, err)
 	}
 	out := make([]RepoTreeEntry, 0, len(tree.Entries))
 	for _, e := range tree.Entries {
@@ -82,6 +88,50 @@ func (c *Client) ReadFile(ctx context.Context, installationID int64, owner, repo
 		return "", fmt.Errorf("decode content: %w", err)
 	}
 	return content, nil
+}
+
+// ErrRateLimited is GitHub's primary or secondary API rate limit.
+var ErrRateLimited = errors.New("github: api rate limit exceeded")
+
+// classifyAPIError tags a go-github error with the sentinel for GitHub's
+// answer (ErrRepoNotFound, ErrRepoForbidden, ErrRateLimited) so handlers
+// can return the real status via errors.Is instead of a bare 500.
+// GetBranch (redirect-following) reports a non-200 as a plain error, so
+// the status comes from resp when there's no typed go-github error.
+func classifyAPIError(op string, resp *gogithub.Response, err error) error {
+	var rl *gogithub.RateLimitError
+	var abuse *gogithub.AbuseRateLimitError
+	if errors.As(err, &rl) || errors.As(err, &abuse) {
+		return fmt.Errorf("%w: %s: %w", ErrRateLimited, op, err)
+	}
+	status, msg := 0, ""
+	var er *gogithub.ErrorResponse
+	if errors.As(err, &er) && er.Response != nil {
+		status, msg = er.Response.StatusCode, er.Message
+	} else if resp != nil && resp.Response != nil {
+		status = resp.StatusCode
+	}
+	switch status {
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: %s: %w", ErrRepoNotFound, op, err)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("%w: %s: %w", ErrRateLimited, op, err)
+	case http.StatusForbidden:
+		if strings.Contains(strings.ToLower(msg), "rate limit") || rateLimitHeaders(resp) {
+			return fmt.Errorf("%w: %s: %w", ErrRateLimited, op, err)
+		}
+		return fmt.Errorf("%w: %s: %w", ErrRepoForbidden, op, err)
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// rateLimitHeaders: GitHub marks a rate-limit 403 with an exhausted
+// X-RateLimit-Remaining (primary) or a Retry-After (secondary).
+func rateLimitHeaders(resp *gogithub.Response) bool {
+	if resp == nil || resp.Response == nil {
+		return false
+	}
+	return resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != ""
 }
 
 // asErrorResponse is a small wrapper around errors.As to keep the

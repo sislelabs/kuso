@@ -730,8 +730,23 @@ func (h *GithubHandler) DetectRuntime(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Client.DetectRuntime(ctx, body.InstallationID, body.Owner, body.Repo, body.Branch, body.Path)
 	if err != nil {
 		h.Logger.Error("github: detect runtime", "err", err)
-		writeErr(w, http.StatusInternalServerError, "internal")
+		writeDetectRuntimeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// writeDetectRuntimeErr passes GitHub's answer through (404 / 403 / 429)
+// so the add-service flow can say why the repo couldn't be read.
+func writeDetectRuntimeErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, github.ErrRateLimited):
+		writeErr(w, http.StatusTooManyRequests, "GitHub API rate limit exceeded; retry in a few minutes")
+	case errors.Is(err, github.ErrRepoNotFound):
+		writeErr(w, http.StatusNotFound, "repository or branch not found, or app has no access to it")
+	case errors.Is(err, github.ErrRepoForbidden):
+		writeErr(w, http.StatusForbidden, "GitHub forbidden: the App installation may be suspended or lack the Contents permission")
+	default:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	}
 }
