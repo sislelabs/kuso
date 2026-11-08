@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Plus, Trash2, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -16,11 +17,14 @@ import {
   buildCreateBody,
   describeRule,
   emptyRuleForm,
+  prefillRuleForm,
   type AlertKind,
   type AlertRule,
   type RuleFormState,
 } from "@/features/alerts";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
+import { Switch } from "@/components/ui/switch";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -37,20 +41,48 @@ import { SettingsSection, SettingsSelect } from "@/components/settings/SettingsS
 // add/delete/enable-disable + a tiny lastFired timestamp so the
 // user can see "this rule has been firing".
 export default function AlertsPage() {
+  return (
+    <Suspense fallback={null}>
+      <AlertsPageInner />
+    </Suspense>
+  );
+}
+
+function AlertsPageInner() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["alerts"], queryFn: listAlerts });
-  const [adding, setAdding] = useState(false);
+  // null = closed; a form = open with that starting state.
+  const [adding, setAdding] = useState<RuleFormState | null>(null);
+  const search = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Deep link: ?new=1&project=&service=&kind=&env= opens a prefilled
+  // create form. `new` is stripped so a reload doesn't reopen it.
+  useEffect(() => {
+    if (!search) return;
+    const prefill = prefillRuleForm(new URLSearchParams(search.toString()));
+    if (!prefill) return;
+    setAdding(prefill);
+    const next = new URLSearchParams(search.toString());
+    for (const k of ["new", "kind", "project", "service", "env"]) next.delete(k);
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/settings/alerts"), { scroll: false });
+  }, [search, router, pathname]);
 
   const del = useMutation({
     mutationFn: (id: string) => deleteAlert(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e, id) => toastError(e, "Couldn't delete the alert rule", { retry: () => del.mutate(id) }),
   });
   const toggle = useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? enableAlert(id) : disableAlert(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Toggle failed"),
+    onError: (e, vars) =>
+      toastError(e, vars.on ? "Couldn't enable the alert rule" : "Couldn't disable the alert rule", {
+        retry: () => toggle.mutate(vars),
+      }),
   });
 
   return (
@@ -66,7 +98,7 @@ export default function AlertsPage() {
         </>
       }
       actions={
-        <Button size="sm" onClick={() => setAdding(true)}>
+        <Button size="sm" onClick={() => setAdding(emptyRuleForm("http_5xx_rate"))}>
           <Plus className="h-3.5 w-3.5" /> New rule
         </Button>
       }
@@ -104,9 +136,10 @@ export default function AlertsPage() {
 
       {adding && (
         <AddRuleDialog
-          onClose={() => setAdding(false)}
+          initial={adding}
+          onClose={() => setAdding(null)}
           onCreated={() => {
-            setAdding(false);
+            setAdding(null);
             qc.invalidateQueries({ queryKey: ["alerts"] });
           }}
         />
@@ -171,15 +204,10 @@ function RuleRow({
         )}
       </div>
       <div className="flex w-full items-center justify-end gap-3 sm:w-auto">
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-          <input
-            type="checkbox"
-            checked={rule.enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="accent-[var(--accent)]"
-          />
-          Enabled
-        </label>
+        <span className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <span aria-hidden>{rule.enabled ? "Enabled" : "Disabled"}</span>
+          <Switch on={rule.enabled} onChange={onToggle} size="sm" label={`Evaluate ${rule.name}`} />
+        </span>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -210,8 +238,16 @@ function RuleRow({
 
 const KIND_GROUPS = ["Service", "Edge", "Logs", "Nodes"] as const;
 
-function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [initialForm] = useState<RuleFormState>(() => emptyRuleForm("http_5xx_rate"));
+function AddRuleDialog({
+  initial,
+  onClose,
+  onCreated,
+}: {
+  initial: RuleFormState;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [initialForm] = useState<RuleFormState>(initial);
   const [form, setForm] = useState<RuleFormState>(initialForm);
   const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
   const meta = ALERT_KINDS[form.kind];
@@ -227,7 +263,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
       toast.success(`Alert ${form.name.trim()} created`);
       onCreated();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
+    onError: (e) => toastError(e, "Couldn't create the alert rule"),
   });
 
   const changeKind = (kind: AlertKind) =>
