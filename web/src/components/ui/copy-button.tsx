@@ -57,7 +57,7 @@ function CopyButton({
       aria-label={showLabel ? undefined : label}
       title={label}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none",
+        "relative inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-[var(--text-tertiary)] pointer-coarse:after:absolute pointer-coarse:after:top-1/2 pointer-coarse:after:left-1/2 pointer-coarse:after:size-10 pointer-coarse:after:-translate-x-1/2 pointer-coarse:after:-translate-y-1/2 pointer-coarse:after:content-[''] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none",
         size === "xs" ? "h-6 min-w-6 px-1 text-xs" : "h-7 min-w-7 px-1.5 text-xs",
         copied && "text-[var(--success)] hover:text-[var(--success)]",
         className
