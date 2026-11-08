@@ -141,7 +141,7 @@ export function ConfirmDialog({
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(8,8,11,0.7)] p-4"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-[2px] dark:bg-black/60"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -158,9 +158,7 @@ export function ConfirmDialog({
             exit={{ scale: 0.96, y: 6 }}
             transition={{ type: "spring", stiffness: 360, damping: 32 }}
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md rounded-md border bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)] ${
-              destructive ? "border-[var(--error)]/40" : "border-[var(--border-subtle)]"
-            }`}
+            className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--popover)] shadow-[var(--shadow-lg)]"
           >
             <form
               onSubmit={(e) => {
@@ -168,52 +166,59 @@ export function ConfirmDialog({
                 if (allow()) onConfirm();
               }}
             >
-            <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-              <div className="flex items-center gap-2">
-                {destructive && <AlertTriangle aria-hidden className="h-4 w-4 text-[var(--error)]" />}
-                <h2 id={titleId} className="text-sm font-semibold tracking-tight">{title}</h2>
+            <header className="flex items-start justify-between gap-3 px-5 pt-5 pb-1">
+              <div className="flex items-center gap-2.5">
+                {destructive && (
+                  <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--danger-subtle)]">
+                    <AlertTriangle className="size-4 text-[var(--danger)]" />
+                  </span>
+                )}
+                <h2 id={titleId} className="text-base font-semibold tracking-tight text-[var(--text-primary)]">{title}</h2>
               </div>
               <button
                 type="button"
                 onClick={onCancel}
                 aria-label="Cancel"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                className="-mt-1 -mr-1 inline-flex size-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
-                <X className="h-3 w-3" />
+                <X className="size-4" />
               </button>
             </header>
 
-            <div className="space-y-3 px-4 py-3 text-sm text-[var(--text-secondary)]">
+            <div className="space-y-4 px-5 pt-2 pb-5 text-sm text-[var(--text-secondary)]">
               <div>{body}</div>
               {typeToConfirm && (
-                <div className="space-y-1">
-                  <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                    type{" "}
-                    <span className="text-[var(--text-primary)]">{typeToConfirm}</span>{" "}
+                <div className="space-y-1.5">
+                  <label htmlFor={`${titleId}-confirm`} className="block text-[13px] text-[var(--text-secondary)]">
+                    Type{" "}
+                    <span className="font-mono font-medium text-[var(--text-primary)]">{typeToConfirm}</span>{" "}
                     to confirm
-                  </div>
+                  </label>
                   <Input
                     ref={inputRef}
+                    id={`${titleId}-confirm`}
+                    autoComplete="off"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     spellCheck={false}
-                    className="h-8 font-mono text-[12px]"
+                    className="h-9 font-mono text-[13px]"
                   />
                 </div>
               )}
             </div>
 
-            <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
-              <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
+            <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-3">
+              <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={pending}>
                 Cancel
               </Button>
               <Button
                 type="submit"
-                variant={destructive ? "destructive" : "default"}
+                variant={destructive ? "destructive" : "primary"}
                 size="sm"
                 disabled={!allow()}
+                loading={pending}
               >
-                {pending ? "Working…" : confirmLabel}
+                {confirmLabel}
               </Button>
             </footer>
             </form>

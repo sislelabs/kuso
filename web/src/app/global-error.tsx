@@ -23,8 +23,8 @@ export default function GlobalError({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#0a0a0a",
-          color: "#e5e5e5",
+          background: "#0A0C15",
+          color: "#ECEAE0",
           fontFamily:
             "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         }}
@@ -33,23 +33,20 @@ export default function GlobalError({
           <p
             style={{
               margin: 0,
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-              fontSize: 11,
-              textTransform: "uppercase",
-              letterSpacing: "0.15em",
-              color: "#a1a1aa",
+              fontSize: 13,
+              color: "#8C91A3",
             }}
           >
-            fatal error
+            Something broke
           </p>
           <h1 style={{ margin: "8px 0 0", fontSize: 18, fontWeight: 600 }}>
-            kuso hit an unrecoverable error
+            kuso couldn&apos;t render this page
           </h1>
           <p
             style={{
               margin: "12px 0 0",
-              fontSize: 12,
-              color: "#a1a1aa",
+              fontSize: 13,
+              color: "#B4B8C6",
               wordBreak: "break-word",
             }}
           >
@@ -60,8 +57,8 @@ export default function GlobalError({
               style={{
                 margin: "6px 0 0",
                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 10,
-                color: "#71717a",
+                fontSize: 12,
+                color: "#8C91A3",
               }}
             >
               digest: {error.digest}
@@ -81,9 +78,10 @@ export default function GlobalError({
               style={{
                 cursor: "pointer",
                 borderRadius: 6,
-                border: "1px solid #3f3f46",
-                background: "#18181b",
-                color: "#e5e5e5",
+                border: "1px solid #ACBEA3",
+                background: "#ACBEA3",
+                color: "#0A0C15",
+                fontWeight: 500,
                 padding: "6px 14px",
                 fontSize: 13,
               }}
@@ -91,19 +89,19 @@ export default function GlobalError({
               Try again
             </button>
             <a
-              href="/"
+              href="/projects"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 borderRadius: 6,
                 border: "1px solid transparent",
-                color: "#a1a1aa",
+                color: "#B4B8C6",
                 padding: "6px 14px",
                 fontSize: 13,
                 textDecoration: "none",
               }}
             >
-              Back home
+              Go to projects
             </a>
           </div>
         </div>

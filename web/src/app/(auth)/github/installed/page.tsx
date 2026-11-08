@@ -12,13 +12,13 @@ export default function GithubInstalledPage() {
   return (
     <div className="space-y-3 text-center">
       <CheckCircle2 className="mx-auto h-8 w-8 text-[var(--success)]" />
-      <h1 className="font-heading text-xl font-semibold tracking-tight">GitHub App installed</h1>
+      <h1 className="text-xl font-semibold tracking-tight">GitHub App installed</h1>
       <p className="text-sm text-[var(--text-secondary)]">You can close this tab.</p>
       <Link
         href="/projects"
-        className="inline-block font-mono text-[11px] text-[var(--text-tertiary)] underline hover:text-[var(--text-secondary)]"
+        className="inline-block text-sm text-[var(--link)] underline-offset-4 hover:underline"
       >
-        go to projects
+        Go to projects
       </Link>
     </div>
   );

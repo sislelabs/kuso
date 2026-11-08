@@ -12,7 +12,7 @@ export function HostClashHint({ hosts }: { hosts: string[] }) {
   const clashes = clashingHosts(hosts, domains.data);
   if (clashes.length === 0) return null;
   return (
-    <p role="status" className="flex items-start gap-1.5 text-[11px] text-[var(--warning)]">
+    <p role="status" className="flex items-start gap-1.5 text-xs text-[var(--warning)]">
       <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
       <span>
         Already served by another ingress in this cluster:{" "}

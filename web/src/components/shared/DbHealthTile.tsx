@@ -92,7 +92,7 @@ export function DbHealthTile() {
 function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
     <div>
-      <dt className="text-xs uppercase tracking-wide text-[var(--text-tertiary)]">
+      <dt className="text-xs text-[var(--text-tertiary)]">
         {label}
       </dt>
       <dd

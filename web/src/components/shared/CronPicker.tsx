@@ -244,7 +244,7 @@ export function CronPicker({
               }
             }}
             className={
-              "rounded px-2 py-1 font-mono text-[11px] transition-colors " +
+              "rounded px-2 py-1 font-mono text-xs transition-colors " +
               (mode === t.key
                 ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                 : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]")
@@ -256,7 +256,7 @@ export function CronPicker({
       </div>
 
       {mode === "hourly" && (
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+        <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-secondary)]">
           <span>at</span>
           {numberInput(minute, setMinute, 0, 59, "w-16")}
           <span>minutes past every hour</span>
@@ -264,7 +264,7 @@ export function CronPicker({
       )}
 
       {mode === "daily" && (
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+        <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-secondary)]">
           <span>every day at</span>
           {numberInput(hour, setHour, 0, 23, "w-14")}
           <span>:</span>
@@ -286,7 +286,7 @@ export function CronPicker({
                   emit({ mode: "weekly", dow: i });
                 }}
                 className={
-                  "rounded border px-2 py-0.5 font-mono text-[10px] " +
+                  "rounded border px-2 py-0.5 font-mono text-xs " +
                   (dow === i
                     ? "border-[var(--accent)]/60 bg-[var(--accent)]/10 text-[var(--accent)]"
                     : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]")
@@ -296,7 +296,7 @@ export function CronPicker({
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+          <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-secondary)]">
             <span>at</span>
             {numberInput(hour, setHour, 0, 23, "w-14")}
             <span>:</span>
@@ -307,7 +307,7 @@ export function CronPicker({
       )}
 
       {mode === "monthly" && (
-        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+        <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs text-[var(--text-secondary)]">
           <span>day</span>
           {numberInput(dom, setDom, 1, 28, "w-14")}
           <span>at</span>
@@ -332,7 +332,7 @@ export function CronPicker({
             spellCheck={false}
             className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] text-[var(--text-primary)] disabled:opacity-50"
           />
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="font-mono text-xs text-[var(--text-tertiary)]">
             Five fields: minute hour day-of-month month day-of-week. UTC.
           </p>
         </div>
@@ -341,7 +341,7 @@ export function CronPicker({
       {/* Resolved cron preview — power users like to confirm what
           the picker actually emits. Kept tiny so it doesn't compete
           with the picker for attention. */}
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="font-mono text-xs text-[var(--text-tertiary)]">
         cron: <span className="text-[var(--text-secondary)]">{value || "(empty)"}</span>
       </p>
     </div>

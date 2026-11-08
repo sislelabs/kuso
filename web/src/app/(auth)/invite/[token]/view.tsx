@@ -16,7 +16,7 @@ import { useRouteParams } from "@/lib/dynamic-params";
 import { sessionQueryKey } from "@/features/auth/hooks";
 import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Github } from "lucide-react";
 import { toast } from "sonner";
@@ -122,7 +122,7 @@ export function InviteRedeemView() {
   if (error) {
     return (
       <div className="space-y-3 text-center">
-        <h1 className="font-heading text-lg font-semibold">Invitation invalid</h1>
+        <h1 className="text-lg font-semibold">Invitation invalid</h1>
         <p className="text-sm text-[var(--text-secondary)]">{error}</p>
         <p className="text-xs text-[var(--text-tertiary)]">
           Ask the admin who sent it to mint a new link.
@@ -142,7 +142,7 @@ export function InviteRedeemView() {
   return (
     <div className="space-y-5">
       <div className="space-y-1.5 text-center">
-        <h1 className="font-heading text-lg font-semibold tracking-tight">
+        <h1 className="text-lg font-semibold tracking-tight">
           You&apos;re invited to kuso
         </h1>
         <p className="text-xs text-[var(--text-secondary)]">
@@ -165,7 +165,7 @@ export function InviteRedeemView() {
             "Awaiting admin approval after signup"
           )}
         </p>
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <p className="text-xs text-[var(--text-tertiary)]">
           {summary.usesLeft} use{summary.usesLeft === 1 ? "" : "s"} left · expires {expiresIn}
         </p>
         {summary.note && (
@@ -178,7 +178,7 @@ export function InviteRedeemView() {
       {methods?.github && (
         <a
           href={`/api/invites/redeem/oauth/start?token=${encodeURIComponent(token)}`}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm font-medium hover:bg-[var(--bg-tertiary)]"
+          className={`${buttonVariants({ variant: "secondary" })} w-full`}
         >
           <Github className="h-4 w-4" />
           Sign up with GitHub
@@ -187,39 +187,39 @@ export function InviteRedeemView() {
 
       {methods?.local && (
         <>
-          <div className="flex items-center gap-2 text-[10px] text-[var(--text-tertiary)]">
+          <div className="flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
             <span className="h-px flex-1 bg-[var(--border-subtle)]" />
             <span>or</span>
             <span className="h-px flex-1 bg-[var(--border-subtle)]" />
           </div>
           {showLocal ? (
             <form onSubmit={onLocalSubmit} className="space-y-3">
-              <Field label="username" hint="lowercase letters/digits/dash, ≤32">
+              <Field label="Username" hint="Lowercase letters, digits and dashes; up to 32 characters.">
                 <Input
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="h-9 font-mono text-sm"
+                  className="h-9 text-sm"
                   required
                   autoFocus
                   spellCheck={false}
                 />
               </Field>
-              <Field label="email">
+              <Field label="Email">
                 <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="h-9 font-mono text-sm"
+                  className="h-9 text-sm"
                   required
                   spellCheck={false}
                 />
               </Field>
-              <Field label="password" hint="≥ 8 characters">
+              <Field label="Password" hint="At least 8 characters.">
                 <Input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="h-9 font-mono text-sm"
+                  className="h-9 text-sm"
                   required
                   minLength={8}
                 />
@@ -254,14 +254,10 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {label}
-      </div>
+    <label className="block space-y-1.5">
+      <span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>
       {children}
-      {hint && (
-        <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>
-      )}
-    </div>
+      {hint && <span className="block text-hint">{hint}</span>}
+    </label>
   );
 }

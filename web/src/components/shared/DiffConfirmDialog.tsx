@@ -99,7 +99,7 @@ export function DiffConfirmDialog({
           return (
             <div
               className={
-                "flex items-start gap-2 border-b border-[var(--border-subtle)] px-5 py-2.5 text-[11px] " +
+                "flex items-start gap-2 border-b border-[var(--border-subtle)] px-5 py-2.5 text-xs " +
                 blastChipClass(level)
               }
             >
@@ -120,10 +120,10 @@ export function DiffConfirmDialog({
                   key={i}
                   className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2"
                 >
-                  <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <div className="font-mono text-xs text-[var(--text-tertiary)]">
                     {d.field}
                   </div>
-                  <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-2 font-mono text-[11px]">
+                  <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-2 font-mono text-xs">
                     <span
                       className={
                         d.before
@@ -147,7 +147,7 @@ export function DiffConfirmDialog({
                   {d.warning && (
                     <div
                       className={
-                        "mt-1.5 flex items-start gap-1.5 rounded px-1.5 py-1 text-[10px] " +
+                        "mt-1.5 flex items-start gap-1.5 rounded px-1.5 py-1 text-xs " +
                         blastChipClass(d.warning.level)
                       }
                     >

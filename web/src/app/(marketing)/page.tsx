@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/features/auth";
 import { Logo } from "@/components/shared/Logo";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import NotFound from "@/app/not-found";
 import { ArrowRight, Github, Zap, Database, Rocket, GitBranch } from "lucide-react";
@@ -39,24 +40,18 @@ export default function LandingPage() {
         <Logo />
         <div className="flex items-center gap-3">
           <ThemeToggle />
-          <Link
-            href="/login"
-            className="inline-flex h-9 items-center gap-1.5 rounded-sm bg-primary px-5 text-sm font-medium text-primary-foreground transition-all hover:scale-[1.02]"
-          >
+          <Button size="sm" render={<Link href="/login" />} nativeButton={false}>
             Sign in
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
+          </Button>
         </div>
       </header>
 
       <main>
         <section className="mx-auto max-w-4xl px-6 pb-12 pt-16 text-center lg:px-12 lg:pt-24">
-          <p className="mb-4 inline-block rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-secondary)]">
-            self-hosted · agent-native PaaS
+          <p className="mb-5 inline-block rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]">
+            A self-hosted, agent-native PaaS
           </p>
-          <h1 className="text-hero font-heading">
-            Connect a repo. <span className="text-[var(--accent)]">Deploy.</span>
-          </h1>
+          <h1 className="text-hero">Connect a repo. Deploy.</h1>
           <p className="mx-auto mt-6 max-w-2xl text-base text-[var(--text-secondary)] sm:text-lg">
             kuso runs on your own Kubernetes cluster. Push to <span className="font-mono">main</span> and
             it builds + rolls a new image. Open a PR and you get a preview URL. Add a Postgres with one
@@ -64,22 +59,19 @@ export default function LandingPage() {
             service you subscribe (all, by default).
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href="/login"
-              className="inline-flex h-10 items-center gap-1.5 rounded-sm bg-primary px-6 text-sm font-medium text-primary-foreground transition-all hover:scale-[1.02]"
-            >
+            <Button size="lg" render={<Link href="/login" />} nativeButton={false}>
               Sign in to your instance
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-            <a
-              href="https://github.com/sislelabs/kuso"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-10 items-center gap-1.5 rounded-sm border border-[var(--border-default)] bg-transparent px-6 text-sm font-medium hover:bg-[var(--bg-tertiary)]"
+              <ArrowRight aria-hidden />
+            </Button>
+            <Button
+              size="lg"
+              variant="secondary"
+              render={<a href="https://github.com/sislelabs/kuso" target="_blank" rel="noreferrer" />}
+              nativeButton={false}
             >
-              <Github className="h-4 w-4" />
+              <Github aria-hidden />
               View on GitHub
-            </a>
+            </Button>
           </div>
         </section>
 
@@ -138,11 +130,11 @@ function Feature({
   copy: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
-      <div className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
+    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
+      <div className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
         <Icon className="h-4 w-4" />
       </div>
-      <h3 className="mb-1 font-heading text-base font-semibold tracking-tight">{title}</h3>
+      <h3 className="mb-1 text-base font-semibold tracking-tight">{title}</h3>
       <p className="text-sm text-[var(--text-secondary)]">{copy}</p>
     </div>
   );

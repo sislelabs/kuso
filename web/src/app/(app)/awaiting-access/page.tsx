@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useSession, useSignOut } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { ShieldAlert, LogOut, RefreshCw } from "lucide-react";
+import { PageContainer } from "@/components/shared/PageContainer";
 
 // Awaiting-access page. Authenticated users with no perms land here
 // instead of bouncing off every guarded route. We deliberately keep
@@ -25,40 +26,39 @@ export default function AwaitingAccessPage() {
   }, [refetch]);
 
   return (
-    <div className="mx-auto max-w-lg p-8 lg:p-12">
-      <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-6">
-        <div className="flex items-start gap-3">
-          <ShieldAlert className="h-5 w-5 shrink-0 text-[var(--warning)]" />
-          <div>
-            <h1 className="font-heading text-base font-semibold tracking-tight">
-              Awaiting access
-            </h1>
-            <p className="mt-2 text-sm text-[var(--text-secondary)]">
-              Your account exists, but no admin has granted it a group yet. Ask the operator
-              of this kuso instance to add you to a project group with the access you need.
-            </p>
-            <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-[11px]">
-              <div className="text-[var(--text-tertiary)]">signed in as</div>
-              <div className="mt-0.5 text-[var(--text-primary)]">
-                {data?.user.name || data?.user.email || "unknown"}
-              </div>
-              {data?.user.email && data?.user.name && (
-                <div className="mt-0.5 text-[var(--text-tertiary)]">{data.user.email}</div>
-              )}
-            </div>
-          </div>
+    <PageContainer width="narrow">
+      <div className="mx-auto max-w-md pt-10 text-center">
+        <div
+          aria-hidden
+          className="mx-auto mb-4 flex size-11 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-[var(--shadow-sm)]"
+        >
+          <ShieldAlert className="size-5" />
         </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
-            <RefreshCw className="h-3 w-3" />
+        <h1 className="text-xl font-semibold tracking-tight">You&apos;re signed in, but have no access yet</h1>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          Ask the admin of this kuso instance to add you to a group. This page checks again every
+          30 seconds and moves you on once access is granted.
+        </p>
+        <div className="mt-6 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-left text-sm">
+          <p className="text-xs text-[var(--text-tertiary)]">Signed in as</p>
+          <p className="mt-0.5 font-medium text-[var(--text-primary)]">
+            {data?.user.name || data?.user.email || "unknown"}
+          </p>
+          {data?.user.email && data?.user.name && (
+            <p className="text-[13px] text-[var(--text-secondary)]">{data.user.email}</p>
+          )}
+        </div>
+        <div className="mt-6 flex justify-center gap-2">
+          <Button variant="primary" size="sm" onClick={() => void refetch()} loading={isFetching}>
+            {!isFetching && <RefreshCw aria-hidden />}
             {isFetching ? "Checking…" : "Check again"}
           </Button>
-          <Button variant="outline" size="sm" onClick={signOut}>
-            <LogOut className="h-3 w-3" />
+          <Button variant="secondary" size="sm" onClick={signOut}>
+            <LogOut aria-hidden />
             Sign out
           </Button>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }
