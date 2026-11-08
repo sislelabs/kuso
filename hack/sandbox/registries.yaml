@@ -2,6 +2,12 @@
 # from the in-cluster registry over plain HTTP. The hostname resolves through
 # the /etc/hosts line up.sh stamps into the node.
 mirrors:
+  # Docker Hub rate-limits shared IPs hard enough to stall a bring-up.
+  # mirror.gcr.io caches popular images; containerd falls back to
+  # Docker Hub itself for anything the mirror doesn't have.
+  docker.io:
+    endpoint:
+      - "https://mirror.gcr.io"
   "kuso-registry.kuso.svc.cluster.local:5000":
     endpoint:
       - "http://kuso-registry.kuso.svc.cluster.local:5000"
