@@ -200,7 +200,7 @@ export function NodesView() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Nodes">
-        <SettingsNotice tone="warning">Cluster nodes are admin-only. Ask a team admin to enable it for you.</SettingsNotice>
+        <SettingsNotice tone="neutral">Cluster nodes are admin-only. Ask a team admin to enable it for you.</SettingsNotice>
       </SettingsPage>
     );
   }
@@ -507,12 +507,12 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
-        <Package className="h-4 w-4 shrink-0 text-[var(--warning)]" aria-hidden />
+        <Package className="h-4 w-4 shrink-0 text-[var(--info)]" aria-hidden />
         <span className="text-[13px] font-medium text-[var(--text-primary)]">
           {advisory.count} host package update{advisory.count === 1 ? "" : "s"}
         </span>
         {advisory.rebootRequired && (
-          <Badge variant="warning" title="A host reboot is required to fully apply these updates.">
+          <Badge variant="neutral" title="A host reboot is required to fully apply these updates.">
             <RotateCcw aria-hidden /> Reboot needed
           </Badge>
         )}

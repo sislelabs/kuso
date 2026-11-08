@@ -75,7 +75,7 @@ export default function DrainsPage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Log & metrics drains">
-        <SettingsNotice tone="warning" title="Admin only">
+        <SettingsNotice tone="neutral" title="Admin only">
           Log drains need <span className="font-mono">settings:admin</span>: a drain ships every
           matching log line off-cluster, along with the credentials to do it.
         </SettingsNotice>

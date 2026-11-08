@@ -134,7 +134,7 @@ export default function ImportComposePage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Import docker-compose">
-        <SettingsNotice tone="warning">The docker-compose import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
+        <SettingsNotice tone="neutral">The docker-compose import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
       </SettingsPage>
     );
   }

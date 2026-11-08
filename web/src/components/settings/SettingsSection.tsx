@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Info, XCircle } from "lucide-react";
+import { Callout, type CalloutTone } from "@/components/ui/callout";
 import { cn } from "@/lib/utils";
 
 // SettingsSection is a Vercel-style settings card: title + description
@@ -117,37 +117,25 @@ export function SettingsField({
   );
 }
 
-// SettingsNotice replaces the old 10px mono banners: sans, readable,
-// tone-coloured with an icon.
+// SettingsNotice is the settings pages' name for the shared Callout.
+// "error" is kept as an alias of "danger" for existing call sites.
 export function SettingsNotice({
-  tone = "info",
+  tone = "neutral",
   title,
   children,
   action,
   className,
 }: {
-  tone?: "info" | "warning" | "error";
+  tone?: CalloutTone | "error";
   title?: ReactNode;
   children?: ReactNode;
   action?: ReactNode;
   className?: string;
 }) {
-  const Icon = tone === "error" ? XCircle : tone === "warning" ? AlertTriangle : Info;
-  const color =
-    tone === "error"
-      ? "border-[var(--error)]/35 bg-[var(--error-subtle)] [&_svg]:text-[var(--error)]"
-      : tone === "warning"
-        ? "border-[var(--warning)]/35 bg-[var(--warning-subtle)] [&_svg]:text-[var(--warning)]"
-        : "border-[var(--border-subtle)] bg-[var(--bg-secondary)] [&_svg]:text-[var(--text-tertiary)]";
   return (
-    <div className={cn("flex items-start gap-3 rounded-md border px-4 py-3 text-sm", color, className)}>
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1 text-[var(--text-secondary)]">
-        {title && <div className="font-medium text-[var(--text-primary)]">{title}</div>}
-        {children && <div className={cn(title && "mt-0.5")}>{children}</div>}
-      </div>
-      {action && <div className="shrink-0">{action}</div>}
-    </div>
+    <Callout tone={tone === "error" ? "danger" : tone} title={title} action={action} className={className}>
+      {children}
+    </Callout>
   );
 }
 

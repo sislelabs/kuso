@@ -109,7 +109,7 @@ export default function ClusterConfigPage() {
       description="Cluster-wide knobs stored on the Kuso CR. The server re-reads them on every reload."
     >
       {!canEdit && (
-        <SettingsNotice tone="warning" title="Read-only">
+        <SettingsNotice tone="neutral" title="Read-only">
           Changing cluster config needs the <code className="font-mono text-xs">settings:admin</code> permission.
         </SettingsNotice>
       )}

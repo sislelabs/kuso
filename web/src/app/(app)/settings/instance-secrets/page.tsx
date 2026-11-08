@@ -65,7 +65,7 @@ export default function InstanceSecretsPage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Instance secrets">
-        <SettingsNotice tone="warning">Instance-wide secrets are admin-only (settings:admin).</SettingsNotice>
+        <SettingsNotice tone="neutral">Instance-wide secrets are admin-only (settings:admin).</SettingsNotice>
       </SettingsPage>
     );
   }

@@ -97,7 +97,7 @@ export default function DatabasePage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Database">
-        <SettingsNotice tone="warning">Cluster database configuration is admin-only.</SettingsNotice>
+        <SettingsNotice tone="neutral">Cluster database configuration is admin-only.</SettingsNotice>
       </SettingsPage>
     );
   }

@@ -69,7 +69,7 @@ export default function VulnerabilityScanningPage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Vulnerability scanning">
-        <SettingsNotice tone="warning">Vulnerability scanning settings are admin-only.</SettingsNotice>
+        <SettingsNotice tone="neutral">Vulnerability scanning settings are admin-only.</SettingsNotice>
       </SettingsPage>
     );
   }

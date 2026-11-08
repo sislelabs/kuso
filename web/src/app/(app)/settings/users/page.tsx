@@ -71,7 +71,7 @@ export default function UsersPage() {
       }
     >
       {!canWrite && (
-        <SettingsNotice tone="warning" title="Read-only">
+        <SettingsNotice tone="neutral" title="Read-only">
           Managing users needs the <code className="font-mono text-xs">user:write</code> permission.
         </SettingsNotice>
       )}

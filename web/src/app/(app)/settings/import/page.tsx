@@ -144,7 +144,7 @@ export default function ImportPage() {
   if (!isAdmin) {
     return (
       <SettingsPage title="Import from Coolify">
-        <SettingsNotice tone="warning">The Coolify import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
+        <SettingsNotice tone="neutral">The Coolify import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
       </SettingsPage>
     );
   }

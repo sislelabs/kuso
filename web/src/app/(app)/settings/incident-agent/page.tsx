@@ -51,7 +51,7 @@ export default function IncidentAgentPage() {
   return (
     <SettingsPage title="Incident agent" description={DESCRIPTION}>
       {readOnly && (
-        <SettingsNotice tone="warning">
+        <SettingsNotice tone="neutral">
           You don&apos;t have <span className="font-mono">settings:admin</span>. This page is read-only.
         </SettingsNotice>
       )}
@@ -116,7 +116,7 @@ function MonitoredProjectsSection({
       }
     >
       {!agentEnabled && (
-        <SettingsNotice tone="warning">
+        <SettingsNotice tone="info">
           The agent is disabled above, so nothing fires regardless of these toggles.
         </SettingsNotice>
       )}
