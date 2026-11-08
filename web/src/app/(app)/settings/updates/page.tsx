@@ -4,11 +4,13 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
-import { CheckCircle2, AlertTriangle, RefreshCw, Clock, Package } from "lucide-react";
+import { CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
+import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
+import { SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { Markdown } from "@/components/settings/Markdown";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
@@ -93,219 +95,194 @@ export default function UpdatesPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Refresh failed"),
   });
 
+  const checkButton = (
+    // Bypasses the 6h ticker so an admin who just shipped a release can
+    // pull it forward without waiting or restarting the pod.
+    <Button variant="outline" size="sm" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+      <RefreshCw className={cn("h-3 w-3", refresh.isPending && "animate-spin")} />
+      {refresh.isPending ? "Checking…" : "Check for updates"}
+    </Button>
+  );
+  const description = "kuso checks for new releases every 6 hours. Nothing installs until you press Update.";
+
   if (version.isPending) {
-    return (
-      <div className="mx-auto max-w-2xl p-6 lg:p-8">
-        <Skeleton className="h-32 w-full rounded-md" />
-      </div>
-    );
+    return <SettingsPageLoading title="Updates" rows={1} />;
   }
   if (version.isError) {
     return (
-      <div className="mx-auto max-w-2xl p-6 lg:p-8">
-        <QueryErrorState
-          what="version status"
-          error={version.error}
-          onRetry={() => void version.refetch()}
-        />
-      </div>
+      <SettingsPage title="Updates" description={description}>
+        <QueryErrorState what="version status" error={version.error} onRetry={() => void version.refetch()} />
+      </SettingsPage>
     );
   }
   const v = version.data;
   const pollFailed = !!v.lastCheckError;
   const inFlight = isUpdateInFlight(status.data?.phase);
+  const checked = v.lastChecked && !isZeroTime(v.lastChecked) ? v.lastChecked : null;
+
+  const headline = v.needsUpdate
+    ? v.canAutoUpgrade
+      ? `Update available: ${v.latest}`
+      : `Update available: ${v.latest} (manual upgrade required)`
+    : pollFailed
+      ? "Couldn't check for updates"
+      : "You're up to date";
+  const StatusIcon = v.needsUpdate || pollFailed ? AlertTriangle : CheckCircle2;
+  const iconColor = pollFailed && !v.needsUpdate
+    ? "text-[var(--error)]"
+    : v.needsUpdate
+      ? v.canAutoUpgrade
+        ? "text-[var(--accent)]"
+        : "text-[var(--warning)]"
+      : "text-[var(--success)]";
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 p-6 lg:p-8">
-      <header className="flex items-start gap-3">
-        <Package className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
-        <div className="min-w-0 flex-1">
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Updates</h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Checks for new releases every 6h. Nothing installs until you press Update.
-          </p>
-        </div>
-        {/* Manual poll trigger: bypasses the 6h ticker so an admin who
-            just shipped a new release can pull it forward immediately
-            instead of waiting (or restarting the pod). */}
-        <Button
-          variant="neutral"
-          size="sm"
-          onClick={() => refresh.mutate()}
-          disabled={refresh.isPending}
-        >
-          <RefreshCw className={cn("h-3 w-3", refresh.isPending && "animate-spin")} />
-          {refresh.isPending ? "Checking…" : "Check for updates"}
-        </Button>
-      </header>
-
-      {/* Status card */}
-      <section
-        className={cn(
-          "rounded-md border p-4",
-          v.needsUpdate
-            ? v.canAutoUpgrade
-              ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
-              : "border-[var(--warning)]/30 bg-[var(--warning-subtle)]"
-            : pollFailed
-              ? "border-[var(--error)]/30 bg-[var(--error-subtle)]"
-              : "border-emerald-500/30 bg-emerald-500/5"
-        )}
-      >
-        <div className="flex items-start gap-3">
-          {pollFailed && !v.needsUpdate ? (
-            <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--error)]" />
-          ) : v.needsUpdate ? (
-            <AlertTriangle className={cn("h-5 w-5 shrink-0", v.canAutoUpgrade ? "text-[var(--accent)]" : "text-[var(--warning)]")} />
-          ) : (
-            <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--success)]" />
-          )}
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold">
-              {v.needsUpdate
-                ? v.canAutoUpgrade
-                  ? `Update available: ${v.latest}`
-                  : `Update available: ${v.latest} — manual upgrade required`
-                : pollFailed
-                  ? "Couldn't check for updates"
-                  : "Up to date"}
-            </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-3 font-mono text-[10px] text-[var(--text-tertiary)]">
-              <span>current {v.current || "—"}</span>
-              {v.latest && <span>latest {v.latest}</span>}
-              {v.lastChecked && !isZeroTime(v.lastChecked) && (
-                <span title={v.lastChecked}>
-                  <Clock className="mr-1 inline h-2.5 w-2.5" />
-                  checked {relativeTime(v.lastChecked)}
-                </span>
-              )}
-            </div>
-            {v.blockedReason && (
-              <p className="mt-2 text-[11px] text-[var(--warning)]">{v.blockedReason}</p>
+    <SettingsPage title="Updates" description={description} actions={checkButton}>
+      <SettingsSection
+        footerHint={
+          <>
+            {checked ? (
+              <span title={new Date(checked).toLocaleString()}>Last checked {relativeTime(checked)}</span>
+            ) : (
+              "Not checked yet"
             )}
-            {v.lastCheckError && (
-              <p className="mt-2 text-[11px] text-[var(--error)]">poll error: {v.lastCheckError}</p>
+            {status.data?.phase === "done" && status.data.updated && (
+              <span title={status.data.updated}> · last upgrade finished {relativeTime(status.data.updated)}</span>
             )}
-          </div>
-          {v.needsUpdate && v.canAutoUpgrade && canUpdate && (
+          </>
+        }
+        footer={
+          v.needsUpdate && v.canAutoUpgrade && canUpdate ? (
             <Button size="sm" onClick={() => setConfirmOpen(true)} disabled={start.isPending || inFlight}>
               <RefreshCw className={cn("h-3 w-3", (start.isPending || inFlight) && "animate-spin")} />
-              {inFlight ? "Updating…" : start.isPending ? "Starting…" : "Update"}
+              {inFlight ? "Updating…" : start.isPending ? "Starting…" : `Update to ${v.latest}`}
             </Button>
-          )}
+          ) : undefined
+        }
+      >
+        <div className="flex items-start gap-3">
+          <StatusIcon className={cn("mt-0.5 h-5 w-5 shrink-0", iconColor)} />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{headline}</h2>
+            <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="text-xs text-[var(--text-secondary)]">Running</dt>
+                <dd className="mt-0.5 font-mono text-[var(--text-primary)]">{v.current || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-[var(--text-secondary)]">Latest</dt>
+                <dd className="mt-0.5 font-mono text-[var(--text-primary)]">{v.latest || "—"}</dd>
+              </div>
+              {v.manifest?.publishedAt && (
+                <div>
+                  <dt className="text-xs text-[var(--text-secondary)]">Released</dt>
+                  <dd className="mt-0.5 text-[var(--text-primary)]" title={v.manifest.publishedAt}>
+                    {relativeTime(v.manifest.publishedAt)}
+                  </dd>
+                </div>
+              )}
+              {v.manifest?.breaking && (
+                <div>
+                  <dt className="text-xs text-[var(--text-secondary)]">Compatibility</dt>
+                  <dd className="mt-0.5 font-medium text-[var(--warning)]">Breaking changes</dd>
+                </div>
+              )}
+            </dl>
+            {v.blockedReason && <p className="mt-3 text-sm text-[var(--warning)]">{v.blockedReason}</p>}
+            {v.lastCheckError && (
+              <p className="mt-3 text-sm text-[var(--error)]">
+                Poll error: <span className="font-mono text-xs">{v.lastCheckError}</span>
+              </p>
+            )}
+            {!canUpdate && v.needsUpdate && (
+              <p className="mt-3 text-sm text-[var(--text-secondary)]">
+                Applying updates needs the <code className="font-mono text-xs">system:update</code> permission. Ask an
+                instance admin.
+              </p>
+            )}
+          </div>
         </div>
 
-        <ConfirmDialog
-          open={confirmOpen}
-          title={`Update kuso to ${v.latest}?`}
-          body={
-            <div className="space-y-2">
-              <p>
-                <span className="font-mono">{v.current || "—"}</span> →{" "}
-                <span className="font-mono">{v.latest}</span>
-                {v.manifest?.breaking && (
-                  <span className="ml-2 rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-[var(--warning)]">
-                    breaking
-                  </span>
-                )}
-              </p>
-              <p>The UI disconnects briefly while kuso restarts.</p>
-            </div>
-          }
-          confirmLabel="Update"
-          destructive={!!v.manifest?.breaking}
-          pending={start.isPending}
-          onConfirm={() => start.mutate()}
-          onCancel={() => setConfirmOpen(false)}
-        />
-
-        {/* Components table when we have a manifest. */}
         {v.manifest?.components && (
-          <div className="mt-4 grid grid-cols-2 gap-2 border-t border-[var(--border-subtle)] pt-3 text-[11px]">
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                server
-              </div>
-              <div className="mt-0.5 truncate font-mono">
+          <dl className="grid gap-3 border-t border-[var(--border-subtle)] pt-4 text-sm sm:grid-cols-2">
+            <div className="min-w-0">
+              <dt className="text-xs text-[var(--text-secondary)]">Server image</dt>
+              <dd className="mt-0.5 truncate font-mono text-xs text-[var(--text-primary)]" title={v.manifest.components.server?.image}>
                 {v.manifest.components.server?.image ?? "—"}
-              </div>
+              </dd>
             </div>
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                operator
-              </div>
-              <div className="mt-0.5 truncate font-mono">
+            <div className="min-w-0">
+              <dt className="text-xs text-[var(--text-secondary)]">Operator image</dt>
+              <dd className="mt-0.5 truncate font-mono text-xs text-[var(--text-primary)]" title={v.manifest.components.operator?.image}>
                 {v.manifest.components.operator?.image ?? "—"}
-              </div>
+              </dd>
             </div>
-          </div>
+          </dl>
         )}
-      </section>
+      </SettingsSection>
 
-      {/* In-flight update phase indicator */}
-      {inFlight && status.data && (
-        <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-          <h3 className="text-sm font-semibold">Update in progress</h3>
-          <div className="mt-2 font-mono text-[11px]">
-            <div>
-              <span className="text-[var(--text-tertiary)]">phase</span>{" "}
-              <span className="text-[var(--accent)]">{status.data.phase}</span>
-            </div>
-            {status.data.message && (
-              <div className="mt-0.5 truncate text-[var(--text-secondary)]">{status.data.message}</div>
-            )}
-            {status.data.started && (
-              <div className="mt-0.5 text-[var(--text-tertiary)]">
-                started {relativeTime(status.data.started)}
-              </div>
-            )}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Update kuso to ${v.latest}?`}
+        body={
+          <div className="space-y-2">
+            <p>
+              <span className="font-mono">{v.current || "—"}</span> → <span className="font-mono">{v.latest}</span>
+              {v.manifest?.breaking && (
+                <span className="ml-2 rounded-sm bg-[var(--warning-subtle)] px-1.5 py-0.5 text-xs font-medium text-[var(--warning)]">
+                  Breaking
+                </span>
+              )}
+            </p>
+            <p>The UI disconnects briefly while kuso restarts.</p>
           </div>
-          <p className="mt-2 text-[10px] text-[var(--text-tertiary)]">
-            The kuso server pod will be replaced mid-update. Your session may briefly drop —
-            refresh once it reconnects.
+        }
+        confirmLabel="Update"
+        destructive={!!v.manifest?.breaking}
+        pending={start.isPending}
+        onConfirm={() => start.mutate()}
+        onCancel={() => setConfirmOpen(false)}
+      />
+
+      {inFlight && status.data && (
+        <SettingsNotice
+          tone="info"
+          title={
+            <>
+              Update in progress · <span className="font-mono text-xs">{status.data.phase}</span>
+            </>
+          }
+        >
+          {status.data.message && <p className="truncate">{status.data.message}</p>}
+          {status.data.started && <p>Started {relativeTime(status.data.started)}.</p>}
+          <p className="mt-1 text-xs">
+            The kuso server pod is replaced mid-update, so your session may drop briefly. Refresh once it reconnects.
           </p>
-        </section>
+        </SettingsNotice>
       )}
 
-      {status.data?.phase === "done" && !v.needsUpdate && (
-        <section className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-[11px]">
-          Last upgrade completed{" "}
-          {status.data.updated ? <span className="font-mono">{relativeTime(status.data.updated)}</span> : ""}.
-        </section>
-      )}
       {status.data?.phase === "failed" && (
-        <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 text-[11px] text-[var(--error)]">
-          Last upgrade failed: {status.data.message || "(no message)"}
-        </section>
+        <SettingsNotice tone="error" title="Last upgrade failed">
+          {status.data.message || "No message from the updater."}
+        </SettingsNotice>
       )}
       {status.data?.phase === "rolled-back" && (
-        <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[11px] text-[var(--warning)]">
-          Last upgrade was rolled back: {status.data.message || "(no message)"}
-        </section>
+        <SettingsNotice tone="warning" title="Last upgrade was rolled back">
+          {status.data.message || "No message from the updater."}
+        </SettingsNotice>
       )}
       {status.data?.phase === "rollback-failed" && (
-        <section className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 text-[11px] text-[var(--error)]">
-          Last upgrade failed and its rollback failed too: {status.data.message || "(no message)"}
-        </section>
+        <SettingsNotice tone="error" title="Last upgrade failed and its rollback failed too">
+          {status.data.message || "No message from the updater."}
+        </SettingsNotice>
       )}
 
-      {/* Release notes */}
       {v.manifest?.notes && (
-        <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-          <h3 className="text-sm font-semibold">Release notes ({v.manifest.version})</h3>
-          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-[var(--text-secondary)]">
-            {v.manifest.notes}
-          </pre>
-        </section>
+        <SettingsSection title={`Release notes · ${v.manifest.version}`}>
+          <Markdown source={v.manifest.notes} />
+        </SettingsSection>
       )}
-
-      {!canUpdate && v.needsUpdate && (
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          You don&apos;t have <span className="text-[var(--text-secondary)]">system:update</span>{" "}
-          permission. Ask an instance admin to apply this upgrade.
-        </p>
-      )}
-    </div>
+    </SettingsPage>
   );
 }
 
