@@ -1,14 +1,17 @@
 "use client";
 
-import { useMemo, useState, type Ref } from "react";
+import { useEffect, useMemo, useState, type Ref } from "react";
 import Link from "next/link";
-import { ArrowRight, Github, Lock } from "lucide-react";
+import { ArrowRight, Github, KeyRound, Link2, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGithubRepos, useInstallations, useInstallURL } from "@/features/github";
 import { Perms, useCan, useSession } from "@/features/auth";
 import { ApiError } from "@/lib/api-client";
-import { RepoUrlForm } from "@/components/service/RepoUrlForm";
+import { RepoUrlForm, type RepoByUrl } from "@/components/service/RepoUrlForm";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
+
+type SourceTab = "app" | "url" | "token";
 
 // A repo pick, normalised across the admin (installations) and
 // non-admin (flat /api/github/repos) sources.
@@ -85,6 +88,20 @@ export function RepoPicker({
 }) {
   const src = useRepoSources();
   const [query, setQuery] = useState("");
+  // Start on the GitHub App list when it has repos, else on a URL form.
+  const hasAppRepos = src.appConfigured && src.allRepos.length > 0;
+  const [tab, setTab] = useState<SourceTab | null>(null);
+  const [handoffUrl, setHandoffUrl] = useState("");
+  useEffect(() => {
+    if (tab === null && !src.loading) setTab(hasAppRepos ? "app" : "url");
+  }, [tab, src.loading, hasAppRepos]);
+  const activeTab: SourceTab = tab ?? "app";
+  const pickByUrl = (r: RepoByUrl) =>
+    onPick({
+      installationId: 0,
+      repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
+      byUrl: { url: r.url, token: r.token, branches: r.branches },
+    });
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return src.allRepos;
@@ -105,7 +122,7 @@ export function RepoPicker({
           <>
             <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
               Connect the kuso GitHub App to browse your repositories, deploy on every push and get a
-              preview URL for each pull request. Public repos work without it: paste the URL below.
+              preview URL for each pull request. Public repos work without it: use the Public URL tab.
             </p>
             <Link
               href="/settings/github"
@@ -118,7 +135,7 @@ export function RepoPicker({
         ) : (
           <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
             An admin needs to connect the kuso GitHub App before repositories can be listed here. You
-            can still paste a repository URL below.
+            can still deploy from a repository URL.
           </p>
         )}
       </div>
@@ -126,7 +143,7 @@ export function RepoPicker({
   } else if (src.forbidden) {
     appPanel = (
       <p className="text-sm text-[var(--text-secondary)]">
-        You can&apos;t browse repositories. Ask an admin for project-create access, or paste a URL below.
+        You can&apos;t browse repositories. Ask an admin for project-create access, or use a repository URL.
       </p>
     );
   } else if (src.isError) {
@@ -159,7 +176,7 @@ export function RepoPicker({
       </div>
     ) : (
       <p className="text-sm text-[var(--text-secondary)]">
-        No repositories are connected. Ask an admin to install the GitHub App, or paste a URL below.
+        No repositories are connected. Ask an admin to install the GitHub App, or use a repository URL.
       </p>
     );
   } else {
@@ -186,8 +203,8 @@ export function RepoPicker({
         >
           {filtered.length === 0 ? (
             <li className="px-3 py-3 text-xs text-[var(--text-secondary)]">
-              No repositories match &ldquo;{query}&rdquo;. Not listed? Paste its URL below, or add it to
-              the GitHub App&apos;s repository access.
+              No repositories match &ldquo;{query}&rdquo;. Not listed? Use the URL or token tab, or add it
+              to the GitHub App&apos;s repository access.
             </li>
           ) : (
             filtered.map(({ installationId, repo }) => (
@@ -217,6 +234,7 @@ export function RepoPicker({
     );
   }
 
+  const idBase = "repo-source";
   return (
     <div className="space-y-4">
       {error && (
@@ -224,21 +242,44 @@ export function RepoPicker({
           {error}
         </p>
       )}
-      {appPanel}
-      {src.sessionReady && (
-        <div className="space-y-2 border-t border-[var(--border-subtle)] pt-4">
-          <p className="text-[13px] font-medium">Or paste a repository URL</p>
+      <Tabs
+        ariaLabel="Repository source"
+        idBase={idBase}
+        size="sm"
+        value={activeTab}
+        onValueChange={(v) => setTab(v as SourceTab)}
+        items={[
+          { value: "app", label: "GitHub App", icon: <Github /> },
+          { value: "url", label: "Public URL", icon: <Link2 /> },
+          { value: "token", label: "Access token", icon: <KeyRound /> },
+        ]}
+      />
+      <TabPanel idBase={idBase} value="app" active={activeTab === "app"}>
+        {appPanel}
+      </TabPanel>
+      <TabPanel idBase={idBase} value="url" active={activeTab === "url"} className="space-y-2">
+        <p className="text-xs text-[var(--text-secondary)]">
+          Any public repository on GitHub, GitLab, Gitea or another https git host.
+        </p>
+        {src.sessionReady && (
           <RepoUrlForm
-            onPicked={(r) =>
-              onPick({
-                installationId: 0,
-                repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
-                byUrl: { url: r.url, token: r.token, branches: r.branches },
-              })
-            }
+            mode="public"
+            onPicked={pickByUrl}
+            onNeedToken={(url) => {
+              setHandoffUrl(url);
+              setTab("token");
+            }}
           />
-        </div>
-      )}
+        )}
+      </TabPanel>
+      <TabPanel idBase={idBase} value="token" active={activeTab === "token"} className="space-y-2">
+        <p className="text-xs text-[var(--text-secondary)]">
+          A private repository the GitHub App can&apos;t see, or one on another git host.
+        </p>
+        {src.sessionReady && (
+          <RepoUrlForm key={handoffUrl} mode="token" initialUrl={handoffUrl} onPicked={pickByUrl} />
+        )}
+      </TabPanel>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/shared/PageHeader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -7,7 +8,7 @@ import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { Github, Check, Plus, Box, Rocket, GitBranch } from "lucide-react";
+import { Github, Check, Plus, Box, Rocket, GitBranch, Loader2, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import type { AddonSuggestion } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
@@ -106,6 +107,9 @@ export function AddServiceView() {
   const [envText, setEnvText] = useState("");
   const env = useDotenv(envText);
   const [submitting, setSubmitting] = useState(false);
+  // Repo services start on the one-card "deploy with detected settings"
+  // path; the full form opens on Edit (or on a validation error).
+  const [advanced, setAdvanced] = useState(false);
 
   const detection = useRepoDetection(picked, path, (rt, p) => {
     setRuntime(rt);
@@ -174,6 +178,7 @@ export function AddServiceView() {
 
   const unpick = () => {
     setPicked(null);
+    setAdvanced(false);
     setName("");
     setPath("");
     setRuntime("");
@@ -196,6 +201,7 @@ export function AddServiceView() {
   const effectiveRuntime = kind === "worker" ? "worker" : runtime;
   const willBuild = source === "repo" && kind === "web";
   const showConfigure = source === "image" || !!picked;
+  const fastPath = source === "repo" && !!picked && kind === "web" && !advanced;
 
   const onAdd = async (deploy = true) => {
     // Inline per-field errors + focus the first invalid field in visual
@@ -219,10 +225,14 @@ export function AddServiceView() {
     }
     setFieldErrors(errs);
     if (Object.values(errs).some(Boolean)) {
-      if (errs.repo) repoSearchRef.current?.focus();
-      else if (errs.name) nameInputRef.current?.focus();
-      else if (errs.image) imageInputRef.current?.focus();
-      else if (errs.env) envRef.current?.querySelector("textarea")?.focus();
+      // The quick path hides the fields; open them so the error is visible.
+      if (!errs.repo) setAdvanced(true);
+      requestAnimationFrame(() => {
+        if (errs.repo) repoSearchRef.current?.focus();
+        else if (errs.name) nameInputRef.current?.focus();
+        else if (errs.image) imageInputRef.current?.focus();
+        else if (errs.env) envRef.current?.querySelector("textarea")?.focus();
+      });
       return;
     }
     if ("error" in sized) return;
@@ -298,13 +308,16 @@ export function AddServiceView() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:py-8">
-      <header className="mb-6">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Add service</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          New service in <span className="font-mono text-[var(--text-primary)]">{project}</span>. kuso detects
-          how to build it, you check the settings, then it deploys.
-        </p>
-      </header>
+      <PageHeader
+        className="mb-6 sm:mb-6"
+        breadcrumb={[
+          { label: "Projects", href: "/projects" },
+          { label: project, href: `/projects/${encodeURIComponent(project)}` },
+          { label: "Add service" },
+        ]}
+        title="Add service"
+        description="kuso detects how to build it, you check the settings, then it deploys."
+      />
 
       <ol className="space-y-0">
         <Step n={1} title="Source" description="Where the code or image comes from." done={showConfigure}>
@@ -446,271 +459,322 @@ export function AddServiceView() {
           )}
         </Step>
 
-        <Step
-          n={2}
-          title="Configure"
-          description={showConfigure ? "Name, build and size. Detected values are prefilled." : "Pick a source first."}
-          disabled={!showConfigure}
-        >
-          {showConfigure && (
-            <div className="space-y-5">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_9rem]">
-                <FormField
-                  label="Service name"
-                  hint={slug ? <>URL slug: <span className="font-mono">{slug}</span></> : "Letters, digits, spaces and dashes."}
-                  error={fieldErrors.name}
-                  htmlFor="svc-name"
+        {fastPath ? (
+          <Step
+            n={2}
+            title="Review and deploy"
+            description="kuso read the repository and filled these in. Deploy as is, or edit anything first."
+            last
+          >
+            <DetectedSettings
+              project={project}
+              name={name}
+              slug={slug}
+              runtime={runtime}
+              port={port}
+              path={path}
+              branch={picked.repo.defaultBranch}
+              detection={detection}
+              addonSuggestions={addonSuggestions}
+              addonPicks={addonPicks}
+              onToggleAddon={toggleAddonPick}
+            />
+            <div className="mt-4 flex flex-col-reverse gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setAdvanced(true)} className="self-start sm:self-auto">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Edit settings
+              </Button>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void onAdd(false)}
+                  disabled={submitDisabled}
+                  title="Create the service without building it. Add variables or addons, then deploy from the Deployments tab."
+                  className="h-9 px-4"
                 >
-                  <Input
-                    id="svc-name"
-                    ref={nameInputRef}
-                    value={name}
-                    onChange={(e) => {
-                      setName(e.target.value);
-                      clearFieldError("name");
-                    }}
-                    placeholder="e.g. Todo API"
-                    aria-invalid={fieldErrors.name ? true : undefined}
-                    className={inputClass}
-                  />
-                </FormField>
-                {(source === "image" || kind === "web") && (
-                  <FormField
-                    label="Port"
-                    hint={source === "image" ? "Defaults to 8080." : "Detected, or 8080."}
-                    htmlFor="svc-port"
-                  >
-                    <Input
-                      id="svc-port"
-                      type="number"
-                      inputMode="numeric"
-                      value={port}
-                      onChange={(e) => setPort(e.target.value)}
-                      placeholder="e.g. 3000"
-                      className={monoInputClass}
-                    />
-                  </FormField>
-                )}
-              </div>
-
-              {source === "repo" && (
-                <>
-                  <FormField
-                    label="Root directory"
-                    hint="For monorepos: the folder this service lives in. Leave empty for the repo root."
-                    optional
-                    htmlFor="svc-path"
-                  >
-                    <Input
-                      id="svc-path"
-                      value={path}
-                      onChange={(e) => setPath(e.target.value)}
-                      placeholder="e.g. apps/api"
-                      spellCheck={false}
-                      className={monoInputClass}
-                    />
-                  </FormField>
-                  <FormField
-                    label="Service type"
-                    hint={
-                      kind === "web"
-                        ? "Serves HTTP on a public URL."
-                        : "Runs a sibling service's image with its own command. No port, URL or health checks."
-                    }
-                  >
-                    <SegmentedControl
-                      label="Service type"
-                      value={kind}
-                      options={[
-                        { value: "web", label: "Web service" },
-                        { value: "worker", label: "Worker" },
-                      ]}
-                      onChange={(k) => {
-                        setKind(k);
-                        clearFieldError("fromService");
-                        clearFieldError("runtime");
-                      }}
-                    />
-                  </FormField>
-                  {kind === "web" && (
-                    <FormField label="Runtime" hint="How kuso builds the image." error={fieldErrors.runtime}>
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <RuntimeIcon runtime={runtime || "dockerfile"} />
-                          <SegmentedControl
-                            label="Runtime"
-                            value={runtime}
-                            options={RUNTIMES}
-                            onChange={(r) => {
-                              setRuntime(r);
-                              clearFieldError("runtime");
-                            }}
-                          />
-                        </div>
-                        <RuntimeExplainer detection={detection} path={path} runtime={runtime} />
-                      </div>
-                    </FormField>
+                  Create without deploying
+                </Button>
+                <Button type="button" onClick={() => void onAdd()} disabled={submitDisabled} className="h-9 px-4">
+                  {detection.state === "detecting" ? (
+                    <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
+                  ) : (
+                    <Rocket className="h-4 w-4" />
                   )}
-                  {kind === "web" && runtime === "dockerfile" && (
+                  {submitting ? "Creating…" : detection.state === "detecting" ? "Detecting…" : "Deploy now"}
+                </Button>
+              </div>
+            </div>
+          </Step>
+        ) : (
+          <>
+        <Step
+            n={2}
+            title="Configure"
+            description={showConfigure ? "Name, build and size. Detected values are prefilled." : "Pick a source first."}
+            disabled={!showConfigure}
+          >
+            {showConfigure && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_9rem]">
+                  <FormField
+                    label="Service name"
+                    hint={slug ? <>URL slug: <span className="font-mono">{slug}</span></> : "Letters, digits, spaces and dashes."}
+                    error={fieldErrors.name}
+                    htmlFor="svc-name"
+                  >
+                    <Input
+                      id="svc-name"
+                      ref={nameInputRef}
+                      value={name}
+                      onChange={(e) => {
+                        setName(e.target.value);
+                        clearFieldError("name");
+                      }}
+                      placeholder="e.g. Todo API"
+                      aria-invalid={fieldErrors.name ? true : undefined}
+                      className={inputClass}
+                    />
+                  </FormField>
+                  {(source === "image" || kind === "web") && (
                     <FormField
-                      label="Dockerfile path"
-                      hint="Relative to the root directory. Only for a non-standard name."
-                      optional
-                      htmlFor="svc-dockerfile"
+                      label="Port"
+                      hint={source === "image" ? "Defaults to 8080." : "Detected, or 8080."}
+                      htmlFor="svc-port"
                     >
                       <Input
-                        id="svc-dockerfile"
-                        value={dockerfile}
-                        onChange={(e) => setDockerfile(e.target.value)}
-                        placeholder="e.g. docker/Dockerfile.prod"
-                        spellCheck={false}
+                        id="svc-port"
+                        type="number"
+                        inputMode="numeric"
+                        value={port}
+                        onChange={(e) => setPort(e.target.value)}
+                        placeholder="e.g. 3000"
                         className={monoInputClass}
                       />
                     </FormField>
                   )}
-                  {kind === "worker" && (
-                    <>
-                      <FormField
-                        label="Runs the image of"
-                        hint="The sibling service whose built image this worker reuses."
-                        error={fieldErrors.fromService}
-                      >
-                        {workerSources.length === 0 ? (
-                          <p className="text-xs text-[var(--text-secondary)]">
-                            No buildable services in this project yet. Add a web service first, then come back for
-                            its worker.
-                          </p>
-                        ) : (
-                          <SegmentedControl
-                            label="Image source"
-                            value={fromService}
-                            options={workerSources.map((s) => ({ value: s, label: s }))}
-                            onChange={(s) => {
-                              setFromService(s);
-                              clearFieldError("fromService");
-                            }}
-                          />
-                        )}
+                </div>
+  
+                {source === "repo" && (
+                  <>
+                    <FormField
+                      label="Root directory"
+                      hint="For monorepos: the folder this service lives in. Leave empty for the repo root."
+                      optional
+                      htmlFor="svc-path"
+                    >
+                      <Input
+                        id="svc-path"
+                        value={path}
+                        onChange={(e) => setPath(e.target.value)}
+                        placeholder="e.g. apps/api"
+                        spellCheck={false}
+                        className={monoInputClass}
+                      />
+                    </FormField>
+                    <FormField
+                      label="Service type"
+                      hint={
+                        kind === "web"
+                          ? "Serves HTTP on a public URL."
+                          : "Runs a sibling service's image with its own command. No port, URL or health checks."
+                      }
+                    >
+                      <SegmentedControl
+                        label="Service type"
+                        value={kind}
+                        options={[
+                          { value: "web", label: "Web service" },
+                          { value: "worker", label: "Worker" },
+                        ]}
+                        onChange={(k) => {
+                          setKind(k);
+                          clearFieldError("fromService");
+                          clearFieldError("runtime");
+                        }}
+                      />
+                    </FormField>
+                    {kind === "web" && (
+                      <FormField label="Runtime" hint="How kuso builds the image." error={fieldErrors.runtime}>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <RuntimeIcon runtime={runtime || "dockerfile"} />
+                            <SegmentedControl
+                              label="Runtime"
+                              value={runtime}
+                              options={RUNTIMES}
+                              onChange={(r) => {
+                                setRuntime(r);
+                                clearFieldError("runtime");
+                              }}
+                            />
+                          </div>
+                          <RuntimeExplainer detection={detection} path={path} runtime={runtime} />
+                        </div>
                       </FormField>
-                      <FormField label="Command" hint="The process to run instead of the image's default." htmlFor="svc-command">
+                    )}
+                    {kind === "web" && runtime === "dockerfile" && (
+                      <FormField
+                        label="Dockerfile path"
+                        hint="Relative to the root directory. Only for a non-standard name."
+                        optional
+                        htmlFor="svc-dockerfile"
+                      >
                         <Input
-                          id="svc-command"
-                          value={command}
-                          onChange={(e) => setCommand(e.target.value)}
-                          placeholder="e.g. bundle exec sidekiq"
+                          id="svc-dockerfile"
+                          value={dockerfile}
+                          onChange={(e) => setDockerfile(e.target.value)}
+                          placeholder="e.g. docker/Dockerfile.prod"
                           spellCheck={false}
                           className={monoInputClass}
                         />
                       </FormField>
-                    </>
-                  )}
-                </>
-              )}
-
-              <SizingFields value={sizing} onChange={setSizing} presets={podSizes.data ?? []} error={fieldErrors.sizing} />
-
-              {source === "repo" && addonSuggestions.length > 0 && (
-                <FormField
-                  label="Suggested addons"
-                  hint="Found in the repo's .env.example or docker-compose. Selected ones are created with the service."
-                >
-                  <div className="flex flex-wrap gap-1.5">
-                    {addonSuggestions.map((sug) => {
-                      const on = addonPicks.has(sug.kind);
-                      return (
-                        <button
-                          key={sug.kind}
-                          type="button"
-                          aria-pressed={on}
-                          title={sug.reason}
-                          onClick={() => toggleAddonPick(sug.kind)}
-                          className={
-                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs " +
-                            (on
-                              ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--text-primary)]"
-                              : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]")
-                          }
+                    )}
+                    {kind === "worker" && (
+                      <>
+                        <FormField
+                          label="Runs the image of"
+                          hint="The sibling service whose built image this worker reuses."
+                          error={fieldErrors.fromService}
                         >
-                          {on ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-                          {addonLabel(sug.kind)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </FormField>
-              )}
-            </div>
-          )}
-        </Step>
-
-        <Step
-          n={3}
-          title="Variables"
-          optional
-          description="Paste or upload a .env so the first deploy starts with its config."
-          disabled={!showConfigure}
-        >
-          {showConfigure && (
-            <div ref={envRef} className="space-y-2">
-              {fieldErrors.env && (
-                <p role="alert" className="text-xs text-[var(--error)]">
-                  {fieldErrors.env}
-                </p>
-              )}
-              <EnvPastePanel
-                text={envText}
-                onChange={(t) => {
-                  setEnvText(t);
-                  clearFieldError("env");
-                }}
-                parsed={env}
-              />
-            </div>
-          )}
-        </Step>
-
-        <Step n={4} title="Deploy" last disabled={!showConfigure}>
-          {showConfigure && (
-            <div className="space-y-4">
-              <DeploySummary
-                project={project}
-                slug={slug}
-                runtime={source === "image" ? "image" : effectiveRuntime}
-                branch={source === "repo" && kind === "web" ? picked?.repo.defaultBranch : undefined}
-                image={source === "image" ? `${imageRepo.trim() || "…"}:${imageTag.trim() || "latest"}` : undefined}
-                envCount={env.vars.length}
-                addons={source === "repo" ? [...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k)) : []}
-                worker={source === "repo" && kind === "worker" ? fromService : undefined}
-              />
-              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <Link
-                  href={`/projects/${encodeURIComponent(project)}`}
-                  className="text-center text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  Cancel
-                </Link>
-                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
-                  {willBuild && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => void onAdd(false)}
-                      disabled={submitDisabled}
-                      title="Create the service without building it. Add variables or addons, then deploy from the Deployments tab."
-                      className="h-9 px-4"
-                    >
-                      Create without deploying
+                          {workerSources.length === 0 ? (
+                            <p className="text-xs text-[var(--text-secondary)]">
+                              No buildable services in this project yet. Add a web service first, then come back for
+                              its worker.
+                            </p>
+                          ) : (
+                            <SegmentedControl
+                              label="Image source"
+                              value={fromService}
+                              options={workerSources.map((s) => ({ value: s, label: s }))}
+                              onChange={(s) => {
+                                setFromService(s);
+                                clearFieldError("fromService");
+                              }}
+                            />
+                          )}
+                        </FormField>
+                        <FormField label="Command" hint="The process to run instead of the image's default." htmlFor="svc-command">
+                          <Input
+                            id="svc-command"
+                            value={command}
+                            onChange={(e) => setCommand(e.target.value)}
+                            placeholder="e.g. bundle exec sidekiq"
+                            spellCheck={false}
+                            className={monoInputClass}
+                          />
+                        </FormField>
+                      </>
+                    )}
+                  </>
+                )}
+  
+                <SizingFields value={sizing} onChange={setSizing} presets={podSizes.data ?? []} error={fieldErrors.sizing} />
+  
+                {source === "repo" && addonSuggestions.length > 0 && (
+                  <FormField
+                    label="Suggested addons"
+                    hint="Found in the repo's .env.example or docker-compose. Selected ones are created with the service."
+                  >
+                    <div className="flex flex-wrap gap-1.5">
+                      {addonSuggestions.map((sug) => {
+                        const on = addonPicks.has(sug.kind);
+                        return (
+                          <button
+                            key={sug.kind}
+                            type="button"
+                            aria-pressed={on}
+                            title={sug.reason}
+                            onClick={() => toggleAddonPick(sug.kind)}
+                            className={
+                              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs " +
+                              (on
+                                ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                                : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]")
+                            }
+                          >
+                            {on ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                            {addonLabel(sug.kind)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </FormField>
+                )}
+              </div>
+            )}
+          </Step>
+  
+          <Step
+            n={3}
+            title="Variables"
+            optional
+            description="Paste or upload a .env so the first deploy starts with its config."
+            disabled={!showConfigure}
+          >
+            {showConfigure && (
+              <div ref={envRef} className="space-y-2">
+                {fieldErrors.env && (
+                  <p role="alert" className="text-xs text-[var(--error)]">
+                    {fieldErrors.env}
+                  </p>
+                )}
+                <EnvPastePanel
+                  text={envText}
+                  onChange={(t) => {
+                    setEnvText(t);
+                    clearFieldError("env");
+                  }}
+                  parsed={env}
+                />
+              </div>
+            )}
+          </Step>
+  
+          <Step n={4} title="Deploy" last disabled={!showConfigure}>
+            {showConfigure && (
+              <div className="space-y-4">
+                <DeploySummary
+                  project={project}
+                  slug={slug}
+                  runtime={source === "image" ? "image" : effectiveRuntime}
+                  branch={source === "repo" && kind === "web" ? picked?.repo.defaultBranch : undefined}
+                  image={source === "image" ? `${imageRepo.trim() || "…"}:${imageTag.trim() || "latest"}` : undefined}
+                  envCount={env.vars.length}
+                  addons={source === "repo" ? [...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k)) : []}
+                  worker={source === "repo" && kind === "worker" ? fromService : undefined}
+                />
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <Link
+                    href={`/projects/${encodeURIComponent(project)}`}
+                    className="text-center text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  >
+                    Cancel
+                  </Link>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                    {willBuild && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => void onAdd(false)}
+                        disabled={submitDisabled}
+                        title="Create the service without building it. Add variables or addons, then deploy from the Deployments tab."
+                        className="h-9 px-4"
+                      >
+                        Create without deploying
+                      </Button>
+                    )}
+                    <Button type="button" onClick={() => void onAdd()} disabled={submitDisabled} className="h-9 px-4">
+                      <Rocket className="h-4 w-4" />
+                      {submitLabel}
                     </Button>
-                  )}
-                  <Button type="button" onClick={() => void onAdd()} disabled={submitDisabled} className="h-9 px-4">
-                    <Rocket className="h-4 w-4" />
-                    {submitLabel}
-                  </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </Step>
+            )}
+          </Step>
+          </>
+        )}
       </ol>
     </div>
   );
@@ -798,6 +862,125 @@ function SourceCard({
       </span>
       <span className="text-xs text-[var(--text-secondary)]">{hint}</span>
     </button>
+  );
+}
+
+// DetectedSettings is the quick path's summary: each detected value with
+// where it came from, so "Deploy now" is an informed click.
+function DetectedSettings({
+  project,
+  name,
+  slug,
+  runtime,
+  port,
+  path,
+  branch,
+  detection,
+  addonSuggestions,
+  addonPicks,
+  onToggleAddon,
+}: {
+  project: string;
+  name: string;
+  slug: string;
+  runtime: string;
+  port: string;
+  path: string;
+  branch: string;
+  detection: ReturnType<typeof useRepoDetection>;
+  addonSuggestions: AddonSuggestion[];
+  addonPicks: Set<string>;
+  onToggleAddon: (kind: string) => void;
+}) {
+  const detecting = detection.state === "detecting";
+  const result = detection.result;
+  const found = detection.state === "done" && result && result.reason !== "fallback";
+  const where = path.trim() ? `${path.trim().replace(/^\/+|\/+$/g, "")}/` : "the repo root";
+  const runtimeWhy = detecting
+    ? "Detecting…"
+    : found
+      ? `${result.reason.replace(/ detected$/, "")} found in ${where}`
+      : detection.state === "failed"
+        ? "Couldn't read the repo; nixpacks inspects the code at build time"
+        : `No Dockerfile or app manifest in ${where}; nixpacks inspects the code at build time`;
+  const portWhy = detecting
+    ? "Detecting…"
+    : result?.port
+      ? `From ${result.reason.replace(/ detected$/, "")}`
+      : detection.state === "failed"
+        ? "Couldn't read the repo, so kuso uses 8080 and sets $PORT to match"
+        : "None declared in the repo; kuso uses 8080 and sets $PORT to match";
+  const rows: { label: string; value: React.ReactNode; why?: string }[] = [
+    {
+      label: "Service",
+      value: (
+        <>
+          {name.trim() || "…"}
+          {slug && slug !== name.trim() && <span className="text-[var(--text-tertiary)]"> · {slug}</span>}
+        </>
+      ),
+      why: `In ${project}`,
+    },
+    {
+      label: "Runtime",
+      value: (
+        <span className="inline-flex items-center gap-1.5">
+          {runtime && <RuntimeIcon runtime={runtime} />}
+          {runtime || "…"}
+        </span>
+      ),
+      why: runtimeWhy,
+    },
+    { label: "Port", value: port || "8080", why: portWhy },
+    { label: "Root directory", value: path.trim() || "/", why: path.trim() ? undefined : "Repo root. Set one for a monorepo." },
+    { label: "Branch", value: branch, why: "Every push builds and deploys" },
+  ];
+  return (
+    <div className="space-y-4">
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+        {rows.map((r) => (
+          <div key={r.label} className="min-w-0">
+            <dt className="text-xs text-[var(--text-secondary)]">{r.label}</dt>
+            <dd className="mt-0.5 truncate font-mono text-[13px] text-[var(--text-primary)]">{r.value}</dd>
+            {r.why && (
+              <dd className={"mt-0.5 text-xs " + (detecting ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]")}>
+                {r.why}
+              </dd>
+            )}
+          </div>
+        ))}
+      </dl>
+      {addonSuggestions.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-[var(--text-secondary)]">
+            The repo looks like it uses these. Selected ones are created with the service.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {addonSuggestions.map((sug) => {
+              const on = addonPicks.has(sug.kind);
+              return (
+                <button
+                  key={sug.kind}
+                  type="button"
+                  aria-pressed={on}
+                  title={sug.reason}
+                  onClick={() => onToggleAddon(sug.kind)}
+                  className={
+                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs " +
+                    (on
+                      ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                      : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]")
+                  }
+                >
+                  {on ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                  {addonLabel(sug.kind)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

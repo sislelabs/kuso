@@ -29,10 +29,24 @@ export function repoFullName(url: string): string {
 // RepoUrlForm adds a service from a repo URL with no GitHub App: the
 // server reads the repo's branches straight from the git host. A private
 // repo needs an access token, which is stored with the service.
-export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void }) {
-  const [url, setUrl] = useState("");
+//
+// mode "public" has no token field (onNeedToken lets the host switch to
+// a token form on a 404); "token" always asks for one; omitted keeps the
+// original reveal-on-demand behaviour.
+export function RepoUrlForm({
+  onPicked,
+  mode,
+  initialUrl = "",
+  onNeedToken,
+}: {
+  onPicked: (repo: RepoByUrl) => void;
+  mode?: "public" | "token";
+  initialUrl?: string;
+  onNeedToken?: (url: string) => void;
+}) {
+  const [url, setUrl] = useState(initialUrl);
   const [token, setToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
+  const [showToken, setShowToken] = useState(mode === "token");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +54,10 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
     const repoURL = url.trim();
     if (!/^https?:\/\//i.test(repoURL)) {
       setError("Enter the repository's https URL, e.g. https://github.com/owner/repo.");
+      return;
+    }
+    if (mode === "token" && !token.trim()) {
+      setError("Paste an access token with read access to the repository.");
       return;
     }
     setChecking(true);
@@ -60,8 +78,15 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
     } catch (e) {
       // A 404 is the common case (typo, or a private repo): offer the
       // token field instead of making the user hunt for it.
-      if (e instanceof ApiError && e.status === 404) setShowToken(true);
-      setError(e instanceof Error ? e.message : "Couldn't read that repository.");
+      const notFound = e instanceof ApiError && e.status === 404;
+      if (notFound && mode !== "public") setShowToken(true);
+      setError(
+        notFound && mode === "public"
+          ? "Couldn't find a public repository at that URL. If it's private, use an access token."
+          : e instanceof Error
+            ? e.message
+            : "Couldn't read that repository.",
+      );
     } finally {
       setChecking(false);
     }
@@ -93,7 +118,7 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
           {checking ? "Checking…" : "Use this repo"}
         </Button>
       </div>
-      {showToken ? (
+      {mode === "public" ? null : showToken ? (
         <Input
           type="password"
           value={token}
@@ -118,11 +143,20 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
       {error && (
         <p role="alert" className="text-xs text-[var(--error)]">
           {error}
+          {mode === "public" && onNeedToken && /private/.test(error) && (
+            <>
+              {" "}
+              <button type="button" className="font-medium underline underline-offset-2" onClick={() => onNeedToken(url.trim())}>
+                Use an access token
+              </button>
+            </>
+          )}
         </p>
       )}
       <p className="text-hint">
-        No GitHub App needed. To deploy on push, enable the deploy hook in the service&apos;s
-        settings afterwards.
+        {mode === "token"
+          ? "A fine-grained token with read-only Contents access is enough (GitHub github_pat_…, GitLab glpat-…). It's stored with the service and used only to clone."
+          : "No GitHub App needed. To deploy on push, enable the deploy hook in the service's settings afterwards."}
       </p>
     </form>
   );
