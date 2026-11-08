@@ -34,3 +34,4 @@ export type {
 } from "./api";
 export { classifyRepoReadFailure } from "./repoReadFailure";
 export type { RepoReadFailure, RepoReadFailureKind, RepoReadAction } from "./repoReadFailure";
+export { repoOwner, repoOwners, sortReposByPush } from "./repoList";
