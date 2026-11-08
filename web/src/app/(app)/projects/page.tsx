@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/shared/PageHeader";
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -51,26 +52,25 @@ export default function ProjectsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:p-8">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Projects</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Each project is one product. Connect a repo and kuso builds it on every push.
-          </p>
-        </div>
-        {canCreate && count > 0 && (
-          <div className="flex items-center gap-2">
-            <Link href="/marketplace" className={secondaryLink} aria-label="Marketplace">
-              <Store className="h-4 w-4" aria-hidden />
-              <span className="hidden sm:inline">Marketplace</span>
-            </Link>
-            <Link href="/projects/new" className={primaryLink}>
-              <Plus className="h-4 w-4" aria-hidden />
-              New project
-            </Link>
-          </div>
-        )}
-      </header>
+      <PageHeader
+        className="mb-6 sm:mb-6"
+        title="Projects"
+        description="Each project is one product. Connect a repo and kuso builds it on every push."
+        actions={
+          canCreate && count > 0 ? (
+            <div className="flex items-center gap-2">
+              <Link href="/marketplace" className={secondaryLink} aria-label="Marketplace">
+                <Store className="h-4 w-4" aria-hidden />
+                <span className="hidden sm:inline">Marketplace</span>
+              </Link>
+              <Link href="/projects/new" className={primaryLink}>
+                <Plus className="h-4 w-4" aria-hidden />
+                New project
+              </Link>
+            </div>
+          ) : undefined
+        }
+      />
 
       {showGettingStarted && <GettingStartedCard onDismiss={dismissGettingStarted} />}
 

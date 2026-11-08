@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/shared/PageHeader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -317,13 +318,12 @@ export default function NewProjectPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 lg:py-10">
-      <header className="mb-6">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">New project</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Import a Git repository and kuso builds and deploys it. A project can hold more services and
-          databases later.
-        </p>
-      </header>
+      <PageHeader
+        className="mb-6 sm:mb-6"
+        breadcrumb={[{ label: "Projects", href: "/projects" }, { label: "New project" }]}
+        title="New project"
+        description="Import a Git repository and kuso builds and deploys it. A project can hold more services and databases later."
+      />
 
       {/* Primary path: import a repo. */}
       <section

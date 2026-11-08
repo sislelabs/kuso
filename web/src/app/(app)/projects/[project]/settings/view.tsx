@@ -246,7 +246,7 @@ export function ProjectSettingsView() {
         breadcrumb={[
           { label: "Projects", href: "/projects" },
           { label: projectName, href: `/projects/${encodeURIComponent(projectName)}` },
-          { label: "Settings" },
+          { label: "Project settings" },
         ]}
         title="Project settings"
         description="Domains, repository, preview environments, access and the danger zone for this project."
