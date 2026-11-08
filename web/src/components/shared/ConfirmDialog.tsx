@@ -154,6 +154,7 @@ export function ConfirmDialog({
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
+            aria-describedby={`${titleId}-body`}
             initial={{ scale: 0.96, y: 6 }}
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.96, y: 6 }}
@@ -199,7 +200,7 @@ export function ConfirmDialog({
             </header>
 
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pt-2 pb-5 text-sm text-[var(--text-secondary)]">
-              <div>{body}</div>
+              <div id={`${titleId}-body`}>{body}</div>
               {typeToConfirm && (
                 <div className="space-y-1.5">
                   <label htmlFor={`${titleId}-confirm`} className="block text-[13px] font-medium text-[var(--text-secondary)]">
@@ -209,6 +210,7 @@ export function ConfirmDialog({
                   </label>
                   <Input
                     ref={inputRef}
+                    aria-describedby={`${titleId}-body`}
                     id={`${titleId}-confirm`}
                     autoComplete="off"
                     value={text}
