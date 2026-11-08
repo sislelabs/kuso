@@ -1,5 +1,7 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
+import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAddons } from "@/features/projects";
@@ -18,6 +20,7 @@ import {
 } from "@/features/addons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KusoAddon } from "@/types/projects";
+import { serviceShortName } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -233,6 +236,7 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
   useOverlayKeyboard({
     open,
     panelRef,
+    restoreKey: addon ? `addon:${addon}` : undefined,
     chords: Object.fromEntries(visibleTabs.map((t) => [t.chord as string, () => guardedSetTab(t.id)])),
   });
 
@@ -248,7 +252,7 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="absolute inset-0 bg-[rgba(8,8,11,0.55)] backdrop-blur-[2px]"
+            className="absolute inset-0 bg-[var(--scrim)] backdrop-blur-[2px] lg:bg-[var(--scrim-wide)] lg:backdrop-blur-none"
           />
           <motion.div
             ref={panelRef}
@@ -269,10 +273,11 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
                 // The overview mounts on the next frame after a tab switch.
                 requestAnimationFrame(() =>
                   requestAnimationFrame(() =>
-                    document.getElementById("addon-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+                    document.getElementById("addon-connection")?.scrollIntoView({ behavior: smoothScroll(), block: "start" }),
                   ),
                 );
               }}
+              onOpenBackups={() => guardedSetTab("backups")}
               onClose={guardedClose}
             />
 
@@ -404,6 +409,7 @@ function AddonHeader({
   kind,
   cr,
   onConnect,
+  onOpenBackups,
   onClose,
 }: {
   project: string;
@@ -411,11 +417,15 @@ function AddonHeader({
   kind: string;
   cr?: KusoAddon;
   onConnect: () => void;
+  onOpenBackups: () => void;
   onClose: () => void;
 }) {
   const health = useAddonHealth(project, addon, cr);
   const version = cr?.spec.version;
   const publicPort = cr?.spec.publicTCP?.enabled ? cr.spec.publicTCP.port : undefined;
+  // Same naming as the canvas and the service overlay: the short name is
+  // the title, the real resource name sits underneath.
+  const displayName = serviceShortName(project, addon);
   return (
     <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
       <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
@@ -423,13 +433,17 @@ function AddonHeader({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <h2 className="truncate font-heading text-lg font-semibold tracking-tight">{addon}</h2>
+          <h2 className="truncate font-heading text-lg font-semibold tracking-tight" title={addon}>
+            {displayName}
+          </h2>
           {cr && <StatusPill status={health.status} detail={health.detail} />}
         </div>
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
           <span className="min-w-0 truncate">
             {project}
             <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+            <span className="font-mono">{addon}</span>
+            <span aria-hidden className="px-1 text-[var(--text-tertiary)]">·</span>
             <span>
               {addonLabel(kind)}
               {version ? ` ${version}` : ""}
@@ -446,7 +460,9 @@ function AddonHeader({
             <Plug className="h-3 w-3" aria-hidden />
             Connect
           </button>
-          {backupsApplicable(cr) && <BackupNowButton project={project} addon={addon} cr={cr} />}
+          {backupsApplicable(cr) && (
+            <BackupNowButton project={project} addon={addon} cr={cr} onOpenBackups={onOpenBackups} />
+          )}
           {/* Only addons whose spec.webUI is on (mailpit/nats today); the
               proxy requires the dashboard session. */}
           {cr?.spec.webUI?.enabled && (
@@ -478,37 +494,74 @@ function AddonHeader({
 // BackupNowButton is the overlay's only "Back up now". backupNowState
 // holds the rules; a blocked button stays focusable (aria-disabled) so
 // hover and keyboard users can still read why.
-function BackupNowButton({ project, addon, cr }: { project: string; addon: string; cr?: KusoAddon }) {
+function BackupNowButton({
+  project,
+  addon,
+  cr,
+  onOpenBackups,
+}: {
+  project: string;
+  addon: string;
+  cr?: KusoAddon;
+  onOpenBackups: () => void;
+}) {
   const canWrite = useCanOnProject(project, Perms.AddonsWrite);
   const list = useAddonBackups(project, addon);
   const run = useBackupNow(project, addon);
-  const state = backupNowState(cr, { canWrite, list: backupsListState(list) });
+  const listState = backupsListState(list);
+  const state = backupNowState(cr, { canWrite, list: listState });
   const blocked = !state.enabled || run.isPending;
   const reasonId = `backup-now-reason-${addon}`;
+  // The two blockers you can fix from here get the fix inline.
+  const fixable = !state.enabled && canWrite && cr?.spec.kind === "postgres" && !cr.spec.external && !cr.spec.useInstanceAddon;
+  const fix = !fixable
+    ? null
+    : !cr?.spec.backup?.schedule?.trim()
+      ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
+      : listState.kind === "no-s3"
+        ? { text: "S3 isn't set up", action: "Configure", href: "/settings/backups" }
+        : null;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-disabled={blocked || undefined}
-            aria-describedby={reasonId}
-            onClick={() => {
-              if (!blocked) run.mutate();
-            }}
-            className={headerButtonClass}
-          >
-            <DatabaseBackup className="h-3 w-3" aria-hidden />
-            {run.isPending ? "Starting…" : "Back up now"}
-            <span id={reasonId} className="sr-only">
-              {state.reason}
-            </span>
-          </button>
-        }
-      />
-      <TooltipContent side="bottom" className="block max-w-64 text-left">
-        {state.reason}
-      </TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-disabled={blocked || undefined}
+              aria-describedby={reasonId}
+              onClick={() => {
+                if (!blocked) run.mutate();
+              }}
+              className={headerButtonClass}
+            >
+              <DatabaseBackup className="h-3 w-3" aria-hidden />
+              {run.isPending ? "Starting…" : "Back up now"}
+              <span id={reasonId} className="sr-only">
+                {state.reason}
+              </span>
+            </button>
+          }
+        />
+        <TooltipContent side="bottom" className="block max-w-64 text-left">
+          {state.reason}
+        </TooltipContent>
+      </Tooltip>
+      {fix && (
+        <span className="inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
+          {fix.text}
+          <span aria-hidden>·</span>
+          {fix.href ? (
+            <Link href={fix.href} className="font-medium text-[var(--link)] hover:underline">
+              {fix.action}
+            </Link>
+          ) : (
+            <button type="button" onClick={fix.onClick} className="font-medium text-[var(--link)] hover:underline">
+              {fix.action}
+            </button>
+          )}
+        </span>
+      )}
+    </>
   );
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
+import { ReasonTooltip } from "@/components/ui/tooltip";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -363,12 +365,12 @@ export function ServiceOverlay({
     onTabChangeRef.current?.(next);
     if (anchor) {
       window.setTimeout(() => {
-        document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById(anchor)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
       }, 250);
       // Cards above the target (domains, pods) can still be loading and
       // push it down after the first scroll; settle it once more.
       window.setTimeout(() => {
-        document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById(anchor)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
       }, 1200);
     }
   }, []);
@@ -519,6 +521,7 @@ export function ServiceOverlay({
   useOverlayKeyboard({
     open,
     panelRef,
+    restoreKey: service ? `service:${service}` : undefined,
     chords: Object.fromEntries(
       [...MAIN_TABS, PINNED_TAB].filter((t) => t.chord).map((t) => [t.chord as string, () => guardedSetTab(t.id)]),
     ),
@@ -667,7 +670,7 @@ export function ServiceOverlay({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="absolute inset-0 bg-[rgba(8,8,11,0.55)] backdrop-blur-[2px]"
+            className="absolute inset-0 bg-[var(--scrim)] backdrop-blur-[2px] lg:bg-[var(--scrim-wide)] lg:backdrop-blur-none"
           />
           {/* Panel — slides from the right. `relative z-10` lifts it
               above the absolutely-positioned backdrop, otherwise the
@@ -1192,7 +1195,7 @@ function HealthBanner({
 }
 
 const headerButtonClass =
-  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] h-7 px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50 disabled:hover:brightness-100";
+  "inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] h-7 px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50 disabled:hover:brightness-100 aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 
 function BannerButton({
   onClick,
@@ -1242,20 +1245,25 @@ function RestartControl({
 
   return (
     <>
-      <button
-        type="button"
-        disabled={restart.isPending || !canWrite}
-        onClick={() => setConfirming(true)}
-        title={canWrite ? (title ?? `Restart the ${envGroup} pods`) : "Requires editor access on this project"}
-        className={
-          variant === "chip"
-            ? "inline-flex items-center gap-1 rounded-md border border-[var(--info)]/45 bg-[var(--info-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--info)] hover:brightness-110 disabled:opacity-50"
-            : headerButtonClass
-        }
-      >
-        <RotateCw className={cn("h-3 w-3", restart.isPending && "animate-spin")} />
-        {variant === "chip" ? "Restart to apply" : "Restart"}
-      </button>
+      <ReasonTooltip reason={canWrite ? undefined : "Requires editor access on this project"}>
+        <button
+          type="button"
+          disabled={restart.isPending}
+          aria-disabled={!canWrite || undefined}
+          onClick={() => {
+            if (canWrite) setConfirming(true);
+          }}
+          title={canWrite ? (title ?? `Restart the ${envGroup} pods`) : undefined}
+          className={
+            variant === "chip"
+              ? "inline-flex items-center gap-1 rounded-md border border-[var(--info)]/45 bg-[var(--info-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--info)] hover:brightness-110 disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              : headerButtonClass
+          }
+        >
+          <RotateCw className={cn("h-3 w-3", restart.isPending && "animate-spin")} />
+          {variant === "chip" ? "Restart to apply" : "Restart"}
+        </button>
+      </ReasonTooltip>
       <ConfirmDialog
         open={confirming}
         title={`Restart ${service}`}
@@ -1284,16 +1292,21 @@ function WakeControl({ project, service, env }: { project: string; service: stri
     }
   };
   return (
-    <button
-      type="button"
-      disabled={wake.isPending || !canWrite}
-      onClick={onWake}
-      title={canWrite ? "Start a pod now instead of on the next request" : "Requires editor access on this project"}
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--success)]/45 bg-[var(--success-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--success)] hover:brightness-110 disabled:opacity-50"
-    >
-      <Sun className="h-3 w-3" />
-      {wake.isPending ? "Waking…" : "Wake"}
-    </button>
+    <ReasonTooltip reason={canWrite ? undefined : "Requires editor access on this project"}>
+      <button
+        type="button"
+        disabled={wake.isPending}
+        aria-disabled={!canWrite || undefined}
+        onClick={() => {
+          if (canWrite) void onWake();
+        }}
+        title={canWrite ? "Start a pod now instead of on the next request" : undefined}
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--success)]/45 bg-[var(--success-subtle)] h-7 px-2.5 text-xs font-medium text-[var(--success)] hover:brightness-110 disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+      >
+        <Sun className="h-3 w-3" />
+        {wake.isPending ? "Waking…" : "Wake"}
+      </button>
+    </ReasonTooltip>
   );
 }
 
