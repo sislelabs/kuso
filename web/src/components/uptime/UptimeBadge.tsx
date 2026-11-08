@@ -11,7 +11,7 @@ const TONE: Record<string, string> = {
 };
 
 export function uptimeTitle(s: UptimeServiceStatus): string {
-  const parts = [`uptime: ${s.state}${s.stale ? " (stale)" : ""}`];
+  const parts = [`Uptime: ${s.state}${s.stale ? " (stale)" : ""}`];
   if (s.url) parts.push(s.url);
   if (s.lastCheckedAt) parts.push(`checked ${relativeTime(s.lastCheckedAt)}`);
   if (s.statusCode) parts.push(`HTTP ${s.statusCode}`);
@@ -27,13 +27,13 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
     <span
       title={uptimeTitle(status)}
       className={cn(
-        "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
+        "inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs font-medium",
         TONE[status.state] ?? "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
         status.stale && "opacity-60",
       )}
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", status.state === "up" ? "bg-[var(--success)]" : status.state === "down" ? "bg-[var(--error)]" : "bg-[var(--warning)]")} />
-      Uptime {status.state}
+      {status.state === "up" ? "Uptime OK" : status.state === "down" ? "Down" : status.state === "failing" ? "Failing checks" : "Uptime unknown"}
       {status.state === "up" && status.latencyMs ? ` · ${status.latencyMs}ms` : ""}
     </span>
   );

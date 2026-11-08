@@ -158,15 +158,16 @@ export function ConfirmDialog({
             exit={{ scale: 0.96, y: 6 }}
             transition={{ type: "spring", stiffness: 360, damping: 32 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--popover)] shadow-[var(--shadow-lg)]"
+            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--popover)] shadow-[var(--shadow-lg)]"
           >
             <form
+              className="flex min-h-0 flex-1 flex-col"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (allow()) onConfirm();
               }}
             >
-            <header className="flex items-start justify-between gap-3 px-5 pt-5 pb-1">
+            <header className="flex shrink-0 items-start justify-between gap-3 px-5 pt-5 pb-1">
               <div className="flex items-center gap-2.5">
                 {destructive && (
                   <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--danger-subtle)]">
@@ -179,17 +180,17 @@ export function ConfirmDialog({
                 type="button"
                 onClick={onCancel}
                 aria-label="Cancel"
-                className="-mt-1 -mr-1 inline-flex size-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                className="-mt-1 -mr-1 inline-flex size-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
                 <X className="size-4" />
               </button>
             </header>
 
-            <div className="space-y-4 px-5 pt-2 pb-5 text-sm text-[var(--text-secondary)]">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pt-2 pb-5 text-sm text-[var(--text-secondary)]">
               <div>{body}</div>
               {typeToConfirm && (
                 <div className="space-y-1.5">
-                  <label htmlFor={`${titleId}-confirm`} className="block text-[13px] text-[var(--text-secondary)]">
+                  <label htmlFor={`${titleId}-confirm`} className="block text-[13px] font-medium text-[var(--text-secondary)]">
                     Type{" "}
                     <span className="font-mono font-medium text-[var(--text-primary)]">{typeToConfirm}</span>{" "}
                     to confirm
@@ -207,7 +208,7 @@ export function ConfirmDialog({
               )}
             </div>
 
-            <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-3">
+            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-3">
               <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={pending}>
                 Cancel
               </Button>
