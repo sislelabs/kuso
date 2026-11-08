@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { niceTicks, timeTicks } from "./s3-TimeSeriesChart";
+import { niceTicks, timeTicks, yAxisWidth } from "./s3-TimeSeriesChart";
 
 describe("niceTicks", () => {
   it("lands on 1/2/5 steps and covers the max", () => {
@@ -17,5 +17,13 @@ describe("timeTicks", () => {
     expect(ticks.length).toBeGreaterThan(1);
     expect(ticks.every((t) => t >= t0 && t <= t0 + 3_600_000)).toBe(true);
     expect(ticks[1] - ticks[0]).toBe(15 * 60_000);
+  });
+});
+
+describe("yAxisWidth", () => {
+  it("grows the gutter with the widest tick label", () => {
+    expect(yAxisWidth(["0", "5"])).toBe(30);
+    expect(yAxisWidth(["0", "512 MiB"])).toBeGreaterThan(yAxisWidth(["0", "5m"]));
+    expect(yAxisWidth(["a".repeat(40)])).toBe(84);
   });
 });

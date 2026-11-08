@@ -42,9 +42,20 @@ export interface TimeSeriesChartProps {
   color?: string;
   // Ticks land on round multiples of this unit (e.g. 1 MiB for bytes).
   tickUnit?: number;
+  // Click / Enter on a time: the caller opens something scoped to it
+  // (the metrics tab opens Logs around that moment).
+  onPick?: (t: number) => void;
+  pickHint?: string;
 }
 
-const M = { top: 10, right: 10, bottom: 22, left: 54 };
+const M = { top: 10, right: 10, bottom: 22 };
+
+// yAxisWidth sizes the left gutter to the widest tick label (11px
+// tabular digits ≈ 6.4px each) so "512 MiB" or "0.15/s" never clips.
+export function yAxisWidth(labels: string[]): number {
+  const longest = labels.reduce((m, l) => Math.max(m, l.length), 0);
+  return Math.min(84, Math.max(30, Math.ceil(longest * 6.4) + 12));
+}
 
 export function TimeSeriesChart({
   points,
@@ -61,10 +72,14 @@ export function TimeSeriesChart({
   dim,
   color = "var(--chart-1)",
   tickUnit = 1,
+  onPick,
+  pickHint,
 }: TimeSeriesChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [localHover, setLocalHover] = useState<number | null>(null);
+  // This chart (not a synced sibling) has the pointer or focus.
+  const [owner, setOwner] = useState(false);
   const clipId = useId();
 
   useEffect(() => {
@@ -77,7 +92,6 @@ export function TimeSeriesChart({
   }, []);
 
   const [t0, t1] = domain;
-  const plotW = Math.max(0, width - M.left - M.right);
   const plotH = height - M.top - M.bottom;
   const valid = useMemo(() => points.filter((p): p is [number, number] => p[1] !== null && Number.isFinite(p[1])), [points]);
 
@@ -89,8 +103,10 @@ export function TimeSeriesChart({
   }, [valid, thresholds, minYMax]);
   const yTicks = useMemo(() => niceTicks(yMax / tickUnit, 4).map((v) => v * tickUnit), [yMax, tickUnit]);
   const yTop = yTicks[yTicks.length - 1];
+  const left = useMemo(() => yAxisWidth(yTicks.map((v) => format(v))), [yTicks, format]);
+  const plotW = Math.max(0, width - left - M.right);
 
-  const x = (t: number) => M.left + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
+  const x = (t: number) => left + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (v: number) => M.top + plotH - (v / yTop) * plotH;
 
   const segments = useMemo(() => {
@@ -110,7 +126,7 @@ export function TimeSeriesChart({
     return segs;
   }, [points, gapMs]);
 
-  const xTicks = useMemo(() => timeTicks(t0, t1, Math.max(2, Math.floor(plotW / 90))), [t0, t1, plotW]);
+  const xTicks = useMemo(() => timeTicks(t0, t1, Math.max(3, Math.floor(plotW / 80))), [t0, t1, plotW]);
 
   const activeT = hoverT !== undefined && onHoverT ? hoverT : localHover;
   const setHover = (t: number | null) => (onHoverT ? onHoverT(t) : setLocalHover(t));
@@ -131,13 +147,18 @@ export function TimeSeriesChart({
   const onMove = (e: PointerEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - rect.left;
-    if (px < M.left || px > M.left + plotW) return setHover(null);
-    setHover(t0 + ((px - M.left) / plotW) * (t1 - t0));
+    if (px < left || px > left + plotW) return setHover(null);
+    setOwner(true);
+    setHover(t0 + ((px - left) / plotW) * (t1 - t0));
   };
 
   const onKey = (e: KeyboardEvent<SVGSVGElement>) => {
     if (valid.length === 0) return;
     if (e.key === "Escape") return setHover(null);
+    if (e.key === "Enter" && onPick && nearest) {
+      e.preventDefault();
+      return onPick(nearest[0]);
+    }
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     const idx = nearest ? valid.indexOf(nearest) : e.key === "ArrowLeft" ? valid.length : -1;
@@ -149,7 +170,11 @@ export function TimeSeriesChart({
   const area = (seg: [number, number][]) =>
     `${line(seg)}L${x(seg[seg.length - 1][0]).toFixed(1)},${y(0)}L${x(seg[0][0]).toFixed(1)},${y(0)}Z`;
 
-  const tipLeft = nearest ? x(nearest[0]) : nearMarker ? x(nearMarker.t) : null;
+  const hairT = nearest ? nearest[0] : activeT !== null && activeT >= t0 && activeT <= t1 ? activeT : null;
+  // The pointer's own chart always explains itself, even over a gap;
+  // synced siblings only show a readout when they have a value there.
+  const showTip = nearest !== null || nearMarker !== null || (owner && hairT !== null);
+  const tipLeft = nearest ? x(nearest[0]) : nearMarker ? x(nearMarker.t) : hairT !== null ? x(hairT) : null;
 
   return (
     <div ref={wrapRef} className={cn("relative w-full select-none transition-opacity", dim && "opacity-60")} style={{ height }}>
@@ -161,21 +186,38 @@ export function TimeSeriesChart({
           aria-label={ariaLabel}
           tabIndex={0}
           onPointerMove={onMove}
-          onPointerLeave={() => setHover(null)}
+          onPointerLeave={() => {
+            setOwner(false);
+            setHover(null);
+          }}
+          onClick={(e) => {
+            if (!onPick) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            if (px < left || px > left + plotW) return;
+            onPick(nearest ? nearest[0] : t0 + ((px - left) / plotW) * (t1 - t0));
+          }}
           onKeyDown={onKey}
-          onBlur={() => setHover(null)}
-          className="block touch-pan-y outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40"
+          onFocus={() => setOwner(true)}
+          onBlur={() => {
+            setOwner(false);
+            setHover(null);
+          }}
+          className={cn(
+            "block touch-pan-y outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40",
+            onPick && "cursor-pointer",
+          )}
         >
           <defs>
             <clipPath id={clipId}>
-              <rect x={M.left} y={M.top - 2} width={plotW} height={plotH + 4} />
+              <rect x={left} y={M.top - 2} width={plotW} height={plotH + 4} />
             </clipPath>
           </defs>
           {/* grid + y labels */}
           {yTicks.map((v) => (
             <g key={v}>
-              <line x1={M.left} x2={M.left + plotW} y1={y(v)} y2={y(v)} stroke="var(--border-subtle)" strokeWidth={1} shapeRendering="crispEdges" />
-              <text x={M.left - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--text-tertiary)] text-[11px] tabular-nums">
+              <line x1={left} x2={left + plotW} y1={y(v)} y2={y(v)} stroke="var(--border-subtle)" strokeWidth={1} shapeRendering="crispEdges" />
+              <text x={left - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--text-tertiary)] text-[11px] tabular-nums">
                 {format(v)}
               </text>
             </g>
@@ -200,8 +242,8 @@ export function TimeSeriesChart({
             {thresholds.map((th) => (
               <g key={th.label}>
                 <line
-                  x1={M.left}
-                  x2={M.left + plotW}
+                  x1={left}
+                  x2={left + plotW}
                   y1={y(th.value)}
                   y2={y(th.value)}
                   stroke="var(--text-tertiary)"
@@ -209,7 +251,7 @@ export function TimeSeriesChart({
                   strokeDasharray="4 3"
                   shapeRendering="crispEdges"
                 />
-                <text x={M.left + plotW - 4} y={y(th.value) - 4} textAnchor="end" className="fill-[var(--text-secondary)] text-[11px]">
+                <text x={left + plotW - 4} y={y(th.value) - 4} textAnchor="end" className="fill-[var(--text-secondary)] text-[11px]">
                   {th.label}
                 </text>
               </g>
@@ -218,30 +260,47 @@ export function TimeSeriesChart({
               .filter((m) => m.t >= t0 && m.t <= t1)
               .map((m) => (
                 <g key={`${m.t}-${m.label}`}>
-                  <line x1={x(m.t)} x2={x(m.t)} y1={M.top} y2={M.top + plotH} stroke="var(--text-tertiary)" strokeWidth={1} opacity={0.7} shapeRendering="crispEdges" />
-                  <path d={`M${x(m.t)},${M.top - 1} l4,4 l-4,4 l-4,-4 z`} fill="var(--text-secondary)" stroke="var(--bg-secondary)" strokeWidth={1.5} />
+                  <line x1={x(m.t)} x2={x(m.t)} y1={M.top + 4} y2={M.top + plotH} stroke="var(--text-tertiary)" strokeWidth={1} strokeDasharray="3 3" shapeRendering="crispEdges" />
+                  <path d={`M${x(m.t)},${M.top - 2} l5,5 l-5,5 l-5,-5 z`} fill="var(--text-primary)" stroke="var(--bg-secondary)" strokeWidth={1.5} />
                 </g>
               ))}
           </g>
-          {nearest && (
+          {hairT !== null && (
             <g pointerEvents="none">
-              <line x1={x(nearest[0])} x2={x(nearest[0])} y1={M.top} y2={M.top + plotH} stroke="var(--text-secondary)" strokeWidth={1} shapeRendering="crispEdges" />
-              <circle cx={x(nearest[0])} cy={y(nearest[1])} r={4} fill={color} stroke="var(--bg-secondary)" strokeWidth={2} />
+              <line
+                x1={x(hairT)}
+                x2={x(hairT)}
+                y1={M.top}
+                y2={M.top + plotH}
+                stroke="var(--text-secondary)"
+                strokeWidth={1}
+                opacity={nearest ? 1 : 0.5}
+                shapeRendering="crispEdges"
+              />
+              {nearest && <circle cx={x(nearest[0])} cy={y(nearest[1])} r={4} fill={color} stroke="var(--bg-secondary)" strokeWidth={2} />}
             </g>
           )}
         </svg>
       )}
-      {tipLeft !== null && (nearest || nearMarker) && (
+      {tipLeft !== null && showTip && (
         <div
           role="status"
           className="pointer-events-none absolute top-0 z-10 min-w-[8rem] max-w-[16rem] rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-md)]"
           style={tipLeft > width / 2 ? { right: width - tipLeft + 10 } : { left: tipLeft + 10 }}
         >
-          {nearest && (
+          {nearest ? (
             <>
               <div className="font-semibold tabular-nums text-[var(--text-primary)]">{format(nearest[1])}</div>
               <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearest[0])}</div>
             </>
+          ) : (
+            !nearMarker &&
+            hairT !== null && (
+              <>
+                <div className="text-[var(--text-secondary)]">No data</div>
+                <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(hairT)}</div>
+              </>
+            )
           )}
           {nearMarker && (
             <div className={cn("text-[var(--text-secondary)]", nearest && "mt-1 border-t border-[var(--border-subtle)] pt-1")}>
@@ -250,6 +309,7 @@ export function TimeSeriesChart({
               {!nearest && <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearMarker.t)}</div>}
             </div>
           )}
+          {onPick && pickHint && owner && <div className="mt-1 border-t border-[var(--border-subtle)] pt-1 text-[var(--text-tertiary)]">{pickHint}</div>}
         </div>
       )}
     </div>
