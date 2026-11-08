@@ -1,6 +1,6 @@
 import type { VulnImageReport } from "@/features/vulns/types";
-import type { ErrorGroup } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
+import { errorCountLabel, type ServiceErrorCount } from "@/features/errors";
 
 export interface VulnSummary {
   fixableCritical: number;
@@ -54,19 +54,10 @@ export function vulnBadgeLabel(s: VulnSummary): string {
   return `${head} in the live image (${s.critical} critical, ${s.high} high in total)`;
 }
 
-export interface ErrorSummary {
-  occurrences: number;
-  groups: number;
-}
+export type { ServiceErrorCount as ErrorSummary } from "@/features/errors";
 
-export function summarizeErrors(groups: readonly ErrorGroup[] | undefined): ErrorSummary | undefined {
-  if (!groups) return undefined;
-  return { occurrences: groups.reduce((n, g) => n + (g.count || 0), 0), groups: groups.length };
-}
-
-export function errorBadgeLabel(s: ErrorSummary): string {
-  const kinds = `${s.groups} distinct`;
-  return `${s.occurrences} ${s.occurrences === 1 ? "error" : "errors"} logged in the last 24h (${kinds}). Open the Errors tab.`;
+export function errorBadgeLabel(s: ServiceErrorCount): string {
+  return `${errorCountLabel(s.occurrences)}: logged in the last 24 hours (${s.groups} distinct). Open the Errors tab.`;
 }
 
 // Compact count for a badge: 1234 → "1.2k".

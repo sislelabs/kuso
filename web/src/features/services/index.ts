@@ -26,7 +26,6 @@ export {
   serviceEnvQueryKey,
   buildsQueryKey,
   errorsQueryKey,
-  useProjectErrorSummary,
   projectErrorSummaryQueryKey,
   runsQueryKey,
   cronsQueryKey,

@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { getProjectErrorSummary, projectErrorSummaryQueryKey } from "@/features/services";
+import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { Skeleton } from "@/components/ui/skeleton";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -50,25 +49,19 @@ function ExternalRow({ icon: Icon, text, href, label }: {
   );
 }
 
+const NO_SERVICES: readonly string[] = [];
+
 // Log errors over 24h, from the same per-project summary the canvas
 // badges read (shared cache key). Separate from the Failing status, which
 // is rollout health: a live service can still log errors. Servers without
 // the summary endpoint 404 once and the chip stays hidden.
 function ErrorsChip({ project }: { project: string }) {
-  const q = useQuery({
-    queryKey: projectErrorSummaryQueryKey(project, "24h"),
-    queryFn: () => getProjectErrorSummary(project, "24h"),
-    staleTime: 30_000,
-    refetchInterval: (query) => (query.state.status === "error" ? false : 60_000),
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
-  const total = Object.values(q.data?.services ?? {}).reduce((n, s) => n + (s.occurrences || 0), 0);
-  if (total <= 0) return null;
-  const label = `${total} ${total === 1 ? "error" : "errors"} · 24h`;
+  const { total } = useProjectErrorCounts(project, NO_SERVICES);
+  if (!total) return null;
+  const label = errorCountLabel(total);
   return (
     <span
-      title={`${label.replace(" · 24h", "")} logged in the last 24 hours`}
+      title={`${label}: logged in the last 24 hours`}
       className="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-[var(--error)]/35 bg-[var(--error-subtle)] px-1.5 text-2xs font-medium tabular-nums text-[var(--error)]"
     >
       <AlertCircle className="h-3 w-3" aria-hidden />

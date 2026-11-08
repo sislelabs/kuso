@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VulnImageReport } from "@/features/vulns/types";
-import { canvasVulnSummaries, compactCount, summarizeErrors } from "./badgeSummary";
+import { canvasVulnSummaries, compactCount } from "./badgeSummary";
 
 const img = (extra: Partial<VulnImageReport>, counts: { fc: number; c: number; h: number }, status = "succeeded"): VulnImageReport => ({
   ownerKind: "service",
@@ -34,14 +34,6 @@ describe("canvasVulnSummaries", () => {
     );
     expect(out.services).toEqual({ web: { fixableCritical: 5, critical: 3, high: 9 } });
     expect(out.addons).toEqual({ db: { fixableCritical: 1, critical: 2, high: 3 } });
-  });
-});
-
-describe("summarizeErrors", () => {
-  it("sums occurrences across groups", () => {
-    expect(summarizeErrors(undefined)).toBeUndefined();
-    const g = (count: number) => ({ fingerprint: "f", message: "m", count, firstSeen: "", lastSeen: "", sampleLine: "" });
-    expect(summarizeErrors([g(3), g(4)])).toEqual({ occurrences: 7, groups: 2 });
   });
 });
 

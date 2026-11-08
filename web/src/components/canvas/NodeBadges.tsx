@@ -3,6 +3,7 @@
 import { AlertCircle, ShieldAlert } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { errorCountLabel } from "@/features/errors";
 import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type VulnSummary } from "./badgeSummary";
 
 const badgeBase =
@@ -81,8 +82,7 @@ export function ErrorBadge({
         }
       >
         <AlertCircle className="h-3 w-3" aria-hidden />
-        {compactCount(summary.occurrences)} {summary.occurrences === 1 ? "error" : "errors"}
-        <span className="text-[var(--error)]/70">· 24h</span>
+        {errorCountLabel(summary.occurrences)}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
