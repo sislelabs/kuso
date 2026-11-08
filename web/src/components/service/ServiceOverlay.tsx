@@ -12,12 +12,12 @@ import {
   usePatchService,
   useRestartService,
   useWakeService,
-  useErrors,
   pickRollbackTarget,
   healthProblem,
   needsRestart,
   type HealthProblem,
 } from "@/features/services";
+import { useServiceErrorCount } from "@/features/errors";
 import { useEnvironments } from "@/features/projects";
 import { buildRefLabel } from "@/features/builds";
 import { envGroupName, wakeEnvParam } from "@/lib/env-group";
@@ -505,10 +505,8 @@ export function ServiceOverlay({
     [showCrons, showRuns, tab, canShell],
   );
 
-  // Errors seen in the last 24h across envs, as a tab badge. Shares its
-  // cache entry with the Errors panel's default range.
-  const errors = useErrors(project, service ?? "", "24h");
-  const errorCount = (errors.data ?? []).reduce((n, g) => n + g.count, 0);
+  // Same count the canvas badge, project card and Errors tab headline show.
+  const errorCount = useServiceErrorCount(project, service ?? "").data?.occurrences ?? 0;
   const tabItems = useMemo<OverlayTabItem<Tab>[]>(
     () =>
       MAIN_TABS.map((t) =>
