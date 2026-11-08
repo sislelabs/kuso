@@ -15,14 +15,14 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
-import { LoadingState } from "@/components/ui/loading-state";
+import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   Github,
   RotateCw,
   ExternalLink,
-  ShieldCheck,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -33,7 +33,6 @@ import {
   Globe,
   Building2,
   User as UserIcon,
-  Sparkles,
   Loader2,
 } from "lucide-react";
 
@@ -83,21 +82,19 @@ export default function GithubSettingsPageWithBoundary() {
   return (
     <ErrorBoundary
       fallback={
-        <div className="mx-auto max-w-3xl p-6 lg:p-8">
-          <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm">
-            <p className="font-medium text-[var(--text-primary)]">
-              Something broke on the GitHub setup page
-            </p>
-            <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
-              An unexpected error happened while rendering. Try reloading.
-            </p>
-            <div className="mt-3">
+        <SettingsPage title="GitHub App">
+          <SettingsNotice
+            tone="error"
+            title="Something broke on the GitHub setup page"
+            action={
               <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
                 Reload
               </Button>
-            </div>
-          </div>
-        </div>
+            }
+          >
+            An unexpected error happened while rendering. Try reloading.
+          </SettingsNotice>
+        </SettingsPage>
       }
     >
       <GithubSettingsPage />
@@ -232,25 +229,14 @@ function GithubSettingsPage() {
   };
 
   if (status.isPending) {
-    return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <LoadingState kind="list" />
-      </div>
-    );
+    return <SettingsPageLoading title="GitHub App" />;
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      <header className="mb-6 flex items-center gap-3">
-        <Github className="h-5 w-5 text-[var(--text-secondary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">GitHub App</h1>
-          <p className="text-sm text-[var(--text-secondary)]">
-            Connect a GitHub App so kuso can list repos, trigger builds on push, and post
-            preview URLs on PRs.
-          </p>
-        </div>
-      </header>
+    <SettingsPage
+      title="GitHub App"
+      description="Connect a GitHub App so kuso can list repos, trigger builds on push, and post preview URLs on PRs."
+    >
 
       {restartPolling ? (
         <RestartingPanel />
@@ -261,7 +247,7 @@ function GithubSettingsPage() {
           onReconfigure={() => setShowReconfigure(true)}
         />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <CreateAppPanel />
 
           {/* Manual paste path, demoted behind a toggle. Still the
@@ -271,10 +257,16 @@ function GithubSettingsPage() {
             <button
               type="button"
               onClick={() => setShowManual((v) => !v)}
-              className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+              aria-expanded={showManual}
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left sm:px-5"
             >
-              <span className="text-sm font-medium text-[var(--text-secondary)]">
-                or set up manually
+              <span>
+                <span className="block text-sm font-medium text-[var(--text-primary)]">
+                  Set up manually
+                </span>
+                <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">
+                  Paste credentials of an existing App. For air-gapped setups or reusing an App.
+                </span>
               </span>
               {showManual ? (
                 <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -283,7 +275,7 @@ function GithubSettingsPage() {
               )}
             </button>
             {showManual && (
-              <div className="border-t border-[var(--border-subtle)] px-4 py-4">
+              <div className="border-t border-[var(--border-subtle)] p-4 sm:p-5">
                 <WizardForm
                   appId={appId}
                   setAppId={setAppId}
@@ -310,7 +302,7 @@ function GithubSettingsPage() {
           </section>
         </div>
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -340,57 +332,47 @@ function CreateAppPanel() {
   };
 
   return (
-    <section className="rounded-md border border-[var(--accent)]/30 bg-[var(--accent-subtle)]/40 p-5">
-      <div className="flex items-start gap-3">
-        <Sparkles className="mt-0.5 h-5 w-5 flex-shrink-0 text-[var(--accent)]" />
-        <div className="flex-1">
-          <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
-            Create a GitHub App in one click
-          </h2>
-          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
-            kuso pre-fills every permission, webhook, and redirect for you. You&apos;ll be sent
-            to GitHub to confirm and create the App, then bounced back here — kuso saves the
-            credentials and restarts automatically (~30s). No copy-pasting.
-          </p>
-
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="space-y-1">
-              <label
-                htmlFor="manifest-org"
-                className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-              >
-                Org (leave blank for personal)
-              </label>
-              <Input
-                id="manifest-org"
-                value={org}
-                onChange={(e) => setOrg(e.target.value)}
-                placeholder="my-github-org"
-                disabled={loading}
-                className="h-9 w-full text-[13px] sm:w-64"
-              />
-            </div>
-            <Button type="button" onClick={onCreate} disabled={loading} className="h-9">
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Redirecting to GitHub…
-                </>
-              ) : (
-                <>
-                  <Github className="h-4 w-4" />
-                  Create GitHub App
-                </>
-              )}
-            </Button>
-          </div>
-          <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
-            An org value creates the App under that organization (you must be an org owner);
-            blank creates it under your personal account.
-          </p>
-        </div>
-      </div>
-    </section>
+    <SettingsSection
+      title="Create a GitHub App in one click"
+      description={
+        <>
+          kuso pre-fills every permission, webhook and redirect. You&apos;ll confirm on GitHub,
+          get bounced back here, and kuso saves the credentials and restarts (~30s). No
+          copy-pasting.
+        </>
+      }
+      footerHint="The UI disconnects briefly while kuso restarts."
+      footer={
+        <Button type="button" onClick={onCreate} disabled={loading}>
+          {loading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Redirecting to GitHub…
+            </>
+          ) : (
+            <>
+              <Github className="h-4 w-4" />
+              Create GitHub App
+            </>
+          )}
+        </Button>
+      }
+    >
+      <SettingsField
+        label="Organization"
+        htmlFor="manifest-org"
+        hint="Creates the App under this organization (you must be an owner). Leave blank to create it under your personal account."
+      >
+        <Input
+          id="manifest-org"
+          value={org}
+          onChange={(e) => setOrg(e.target.value)}
+          placeholder="e.g. my-github-org"
+          disabled={loading}
+          className="font-mono sm:max-w-sm"
+        />
+      </SettingsField>
+    </SettingsSection>
   );
 }
 
@@ -433,72 +415,23 @@ function ConfiguredPanel({
   );
 
   return (
-    <section className="space-y-4">
-      {/* Top status banner — keep the green-checkmark frame from before
-          but pack the identity row tighter and put the action chips
-          inline with it so the eye lands on "what is this" + "what
-          can I do" without scrolling. */}
-      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--success)]" />
-            <div className="flex-1">
-              <p className="text-sm font-medium text-[var(--text-primary)]">
-                GitHub App is configured
-              </p>
-              <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[12px] text-[var(--text-secondary)]">
-                {appSlug && (
-                  <>
-                    <dt className="text-[var(--text-tertiary)]">slug</dt>
-                    <dd className="flex items-center gap-1.5">
-                      <a
-                        href={`https://github.com/apps/${appSlug}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[var(--accent)] hover:underline"
-                      >
-                        {appSlug}
-                      </a>
-                      <CopyChip value={appSlug} />
-                    </dd>
-                  </>
-                )}
-                {appId && (
-                  <>
-                    <dt className="text-[var(--text-tertiary)]">id</dt>
-                    <dd className="flex items-center gap-1.5 text-[var(--text-primary)]">
-                      {appId}
-                      <CopyChip value={appId} />
-                    </dd>
-                  </>
-                )}
-                <dt className="text-[var(--text-tertiary)]">webhook</dt>
-                <dd className="flex items-center gap-1.5 text-[var(--text-primary)]">
-                  <span className="truncate">{webhookURL()}</span>
-                  <CopyChip value={webhookURL()} />
-                </dd>
-              </dl>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {installURL && (
-              <a
-                href={installURL}
-                target="_blank"
-                rel="noreferrer"
-                title="Opens GitHub's account picker — install kuso on any org or user account you administer"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Add org / repo
-              </a>
-            )}
+    <section className="space-y-6">
+      <SettingsSection
+        title={
+          <span className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-[var(--success)]" aria-hidden />
+            Connected
+          </span>
+        }
+        description="kuso is authenticated as this GitHub App."
+        actions={
+          <>
             {adminURL && (
               <a
                 href={adminURL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+                className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--border-subtle)] px-3 text-[0.8rem] font-medium hover:bg-[var(--bg-tertiary)]"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 Manage on GitHub
@@ -507,18 +440,51 @@ function ConfiguredPanel({
             <Button size="sm" variant="outline" onClick={onReconfigure}>
               Reconfigure
             </Button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      >
+        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+          {appSlug && (
+            <>
+              <dt className="text-[var(--text-secondary)]">App</dt>
+              <dd className="flex min-w-0 items-center gap-1.5 font-mono">
+                <a
+                  href={`https://github.com/apps/${appSlug}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="truncate text-[var(--text-primary)] hover:underline"
+                >
+                  {appSlug}
+                </a>
+                <CopyChip value={appSlug} />
+              </dd>
+            </>
+          )}
+          {appId && (
+            <>
+              <dt className="text-[var(--text-secondary)]">App ID</dt>
+              <dd className="flex items-center gap-1.5 font-mono text-[var(--text-primary)]">
+                {appId}
+                <CopyChip value={appId} />
+              </dd>
+            </>
+          )}
+          <dt className="text-[var(--text-secondary)]">Webhook URL</dt>
+          <dd className="flex min-w-0 items-center gap-1.5 font-mono text-[var(--text-primary)]">
+            <span className="truncate">{webhookURL()}</span>
+            <CopyChip value={webhookURL()} />
+          </dd>
+        </dl>
+      </SettingsSection>
 
       {installations.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-          <p className="text-[12px] text-[var(--text-secondary)]">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 sm:px-5">
+          <p className="text-sm text-[var(--text-secondary)]">
             kuso can see your repos. Next, create a project and add a service from one of them.
           </p>
           <Link
             href="/projects/new"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+            className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-[0.8rem] font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)]"
           >
             Create a project
           </Link>
@@ -530,26 +496,24 @@ function ConfiguredPanel({
           actually has access to without leaving for github.com. The
           per-installation list mirrors the new-service repo picker
           so the source of truth is visible in settings too. */}
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <div>
-            <h2 className="text-sm font-semibold tracking-tight">Installations</h2>
-            <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-              {installs.isPending
-                ? "loading…"
-                : installations.length === 0
-                  ? "No orgs connected yet — click Add org to connect one."
-                  : `${installations.length} ${installations.length === 1 ? "installation" : "installations"} · ${totalRepos} ${totalRepos === 1 ? "repo" : "repos"} accessible (${totalPrivate} private)`}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
+      <SettingsSection
+        title="Installations"
+        description={
+          installs.isPending
+            ? "Loading…"
+            : installations.length === 0
+              ? "No orgs connected yet."
+              : `${installations.length} ${installations.length === 1 ? "installation" : "installations"} · ${totalRepos} ${totalRepos === 1 ? "repo" : "repos"} accessible (${totalPrivate} private)`
+        }
+        actions={
+          <>
             {installURL && (
               <a
                 href={installURL}
                 target="_blank"
                 rel="noreferrer"
                 title="Install kuso on another org or user account, then Refresh"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-subtle)]/70"
+                className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--border-subtle)] px-3 text-[0.8rem] font-medium hover:bg-[var(--bg-tertiary)]"
               >
                 <Plus className="h-3.5 w-3.5" />
                 Add org
@@ -564,10 +528,12 @@ function ConfiguredPanel({
               <RefreshCw className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")} />
               Refresh
             </Button>
-          </div>
-        </div>
+          </>
+        }
+        flush
+      >
         {installations.length === 0 && !installs.isPending ? (
-          <div className="px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+          <div className="px-4 py-6 text-center text-sm text-[var(--text-secondary)]">
             kuso can&apos;t see any repos yet. Click{" "}
             <strong className="text-[var(--text-secondary)]">Add org</strong> to grant access to an
             organization or user account. Refresh after installing if the row doesn&apos;t appear
@@ -587,48 +553,53 @@ function ConfiguredPanel({
             ))}
           </ul>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Webhook health — surfaced in-product from the last verified
           delivery kuso stamped (Setting github.lastDeliveryAt), so an
           operator can confirm pushes/PRs are actually reaching kuso
           without leaving for GitHub. The deliveries link stays as the
           source of truth for per-delivery detail. */}
-      <div className="space-y-1.5 text-[12px] text-[var(--text-secondary)]">
+      <SettingsSection
+        title="Webhook deliveries"
+        description="Confirms pushes and PR events are reaching kuso."
+        footerHint={
+          appSlug ? (
+            <>
+              Per-delivery detail (including failures) lives on the App&apos;s{" "}
+              <a
+                href={`https://github.com/settings/apps/${appSlug}/advanced`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--text-primary)] underline underline-offset-2"
+              >
+                Recent Deliveries
+              </a>{" "}
+              tab.
+            </>
+          ) : undefined
+        }
+      >
         {webhookHealth.data?.lastDeliveryAt ? (
-          <p>
-            <span className="text-[var(--text-tertiary)]">Last webhook received:</span>{" "}
-            <span className="font-mono">
+          <p className="text-sm text-[var(--text-secondary)]">
+            Last webhook received{" "}
+            <span className="font-mono text-[var(--text-primary)]">
               {new Date(webhookHealth.data.lastDeliveryAt).toLocaleString()}
             </span>
             {webhookHealth.data.lastDeliveryEvent && (
-              <span className="text-[var(--text-tertiary)]">
-                {" "}({webhookHealth.data.lastDeliveryEvent})
-              </span>
+              <>
+                {" "}
+                <span className="font-mono">({webhookHealth.data.lastDeliveryEvent})</span>
+              </>
             )}
           </p>
         ) : (
-          <p className="text-[var(--warning)]">
-            No webhook delivery has reached kuso yet. Push to a connected repo (or check the
-            deliveries tab below) — if pushes never arrive, kuso&apos;s public URL may be
+          <SettingsNotice tone="warning" title="No webhook delivery has reached kuso yet">
+            Push to a connected repo. If pushes never arrive, kuso&apos;s public URL may be
             unreachable from GitHub or the webhook secret drifted.
-          </p>
+          </SettingsNotice>
         )}
-        {appSlug && (
-          <p className="text-[var(--text-tertiary)]">
-            Per-delivery detail (incl. failures) lives on the App&apos;s{" "}
-            <a
-              href={`https://github.com/settings/apps/${appSlug}/advanced`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[var(--accent)] hover:underline"
-            >
-              Recent Deliveries
-            </a>{" "}
-            tab.
-          </p>
-        )}
-      </div>
+      </SettingsSection>
     </section>
   );
 }
@@ -647,11 +618,12 @@ function InstallationRow({
   const isOrg = inst.accountType?.toLowerCase() === "organization";
   const ownerURL = `https://github.com/${inst.accountLogin}`;
   return (
-    <li className="px-4 py-2.5">
+    <li className="px-4 py-2.5 sm:px-5">
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 text-left hover:bg-[var(--bg-tertiary)]/30 -mx-4 px-4 py-1 rounded"
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-3 rounded py-1 text-left"
       >
         <div className="flex min-w-0 items-center gap-3">
           {isOrg ? (
@@ -669,10 +641,8 @@ function InstallationRow({
             >
               {inst.accountLogin}
             </a>
-            <span className="ml-2 text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              {inst.accountType}
-            </span>
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="ml-2 text-xs text-[var(--text-tertiary)]">{inst.accountType}</span>
+            <p className="text-xs text-[var(--text-secondary)]">
               installation #{inst.id} · {repos.length} {repos.length === 1 ? "repo" : "repos"}
               {privateCount > 0 ? ` · ${privateCount} private` : ""}
             </p>
@@ -684,7 +654,7 @@ function InstallationRow({
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex h-7 items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 text-[11px] hover:bg-[var(--accent-subtle)]"
+            className="inline-flex h-7 items-center gap-1 rounded-sm border border-[var(--border-subtle)] px-2 text-xs hover:bg-[var(--bg-tertiary)]"
           >
             <ExternalLink className="h-3 w-3" />
             Configure
@@ -697,9 +667,9 @@ function InstallationRow({
         </div>
       </button>
       {expanded && (
-        <ul className="mt-2 ml-7 space-y-1">
+        <ul className="mt-2 space-y-1 sm:ml-7">
           {repos.length === 0 ? (
-            <li className="text-[11px] text-[var(--text-tertiary)]">
+            <li className="text-xs text-[var(--text-secondary)]">
               No repos selected. Use{" "}
               <strong>Configure</strong> on the right to grant access.
             </li>
@@ -713,7 +683,7 @@ function InstallationRow({
                   href={`https://github.com/${r.fullName}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] hover:underline"
+                  className="flex min-w-0 items-center gap-1.5 font-mono text-xs hover:underline"
                 >
                   {r.private ? (
                     <Lock className="h-3 w-3 flex-shrink-0 text-[var(--text-tertiary)]" />
@@ -721,7 +691,7 @@ function InstallationRow({
                     <Globe className="h-3 w-3 flex-shrink-0 text-[var(--text-tertiary)]" />
                   )}
                   <span className="truncate">{r.fullName}</span>
-                  <span className="text-[10px] text-[var(--text-tertiary)]">@{r.defaultBranch}</span>
+                  <span className="shrink-0 text-[var(--text-tertiary)]">@{r.defaultBranch}</span>
                 </a>
               </li>
             ))
@@ -746,31 +716,26 @@ function CopyChip({ value }: { value: string }) {
           /* ignore */
         }
       }}
-      className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-      aria-label="Copy"
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      aria-label={copied ? "Copied" : "Copy"}
     >
-      {copied ? <Check className="h-2.5 w-2.5 text-[var(--success)]" /> : <Copy className="h-2.5 w-2.5" />}
+      {copied ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
     </button>
   );
 }
 
 function RestartingPanel() {
   return (
-    <section className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4">
-      <div className="flex items-start gap-3">
-        <RotateCw className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-[var(--warning)]" />
-        <div className="flex-1">
-          <p className="text-sm font-medium text-[var(--text-primary)]">
-            kuso-server is restarting…
-          </p>
-          <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
-            The new GitHub App credentials are saved. The kuso server pod is rolling so it
-            picks up the new env. This page will refresh automatically when the server is
-            back online (~30s typically).
-          </p>
-        </div>
+    <div className="flex items-start gap-3 rounded-md border border-[var(--warning)]/35 bg-[var(--warning-subtle)] px-4 py-3">
+      <RotateCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[var(--warning)]" />
+      <div className="min-w-0 text-sm">
+        <p className="font-medium text-[var(--text-primary)]">kuso-server is restarting…</p>
+        <p className="mt-0.5 text-[var(--text-secondary)]">
+          The new GitHub App credentials are saved. The kuso server pod is rolling so it picks
+          up the new env. This page refreshes automatically when the server is back (~30s).
+        </p>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -796,84 +761,77 @@ interface WizardFormProps {
 
 function WizardForm(props: WizardFormProps) {
   return (
-    <form onSubmit={props.onSubmit} className="space-y-4">
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <h2 className="text-sm font-semibold tracking-tight">Step 1 — Create a GitHub App</h2>
-        </div>
-        <div className="space-y-3 px-4 py-3 text-sm text-[var(--text-secondary)]">
-          <ol className="list-decimal space-y-1 pl-5">
-            <li>
-              Open{" "}
-              <a
-                href="https://github.com/settings/apps/new"
-                target="_blank"
-                rel="noreferrer"
-                className="underline hover:text-[var(--text-primary)]"
-              >
-                github.com/settings/apps/new
-              </a>{" "}
-              (or your org's <code className="font-mono text-[12px]">/organizations/&lt;org&gt;/settings/apps/new</code>).
-            </li>
-            <li>
-              Set <strong>Webhook URL</strong> to{" "}
-              <code className="font-mono text-[12px]">{webhookURL()}</code> and copy any random
-              secret into <strong>Webhook secret</strong>. Save the same secret below.
-            </li>
-            <li>
-              Set <strong>Setup URL</strong> to{" "}
-              <code className="font-mono text-[12px]">{setupURL()}</code> (this is what makes
-              the install redirect back into kuso).
-            </li>
-            <li>
-              Permissions:{" "}
-              <span className="font-mono text-[12px]">
-                Contents: Read · Metadata: Read · Pull requests: Read &amp; Write · Commit statuses: Read &amp; Write · Checks: Read · Webhooks: Read
-                &amp; Write · Deployments: Read &amp; Write
-              </span>
-              . Subscribe to events: <span className="font-mono text-[12px]">push, pull_request, installation, installation_repositories</span>.
-            </li>
-            <li>After creating the App, generate + download a private key (.pem).</li>
-          </ol>
-        </div>
-      </section>
+    <form onSubmit={props.onSubmit} className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold text-[var(--text-primary)]">1. Create a GitHub App</h3>
+        <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-[var(--text-secondary)] marker:text-[var(--text-tertiary)]">
+          <li>
+            Open{" "}
+            <a
+              href="https://github.com/settings/apps/new"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--text-primary)] underline underline-offset-2"
+            >
+              github.com/settings/apps/new
+            </a>{" "}
+            (or your org&apos;s{" "}
+            <code className="break-all font-mono text-xs">/organizations/&lt;org&gt;/settings/apps/new</code>).
+          </li>
+          <li>
+            Set <strong>Webhook URL</strong> to{" "}
+            <code className="break-all font-mono text-xs text-[var(--text-primary)]">{webhookURL()}</code> and
+            put any random secret into <strong>Webhook secret</strong>. Save the same secret below.
+          </li>
+          <li>
+            Set <strong>Setup URL</strong> to{" "}
+            <code className="break-all font-mono text-xs text-[var(--text-primary)]">{setupURL()}</code> (this
+            makes the install redirect back into kuso).
+          </li>
+          <li>
+            Permissions: Contents read · Metadata read · Pull requests read &amp; write · Commit
+            statuses read &amp; write · Checks read · Webhooks read &amp; write · Deployments read
+            &amp; write. Subscribe to events:{" "}
+            <span className="font-mono text-xs">push, pull_request, installation, installation_repositories</span>.
+          </li>
+          <li>After creating the App, generate and download a private key (.pem).</li>
+        </ol>
+      </div>
 
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <h2 className="text-sm font-semibold tracking-tight">Step 2 — Paste credentials</h2>
-        </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-3">
-          <Field label="App ID" htmlFor="appId" hint="numeric, top of the App settings page">
+      <div>
+        <h3 className="text-sm font-semibold text-[var(--text-primary)]">2. Paste credentials</h3>
+        <div className="mt-3 grid gap-5 sm:grid-cols-2">
+          <SettingsField label="App ID" htmlFor="appId" hint="Numeric, top of the App settings page.">
             <Input
               id="appId"
               value={props.appId}
               onChange={(e) => props.setAppId(e.target.value)}
               required
-              placeholder="123456"
-              className="h-8 text-[13px]"
+              placeholder="e.g. 123456"
+              className="font-mono"
             />
-          </Field>
-          <Field label="App slug" htmlFor="appSlug" hint="github.com/apps/<this>">
+          </SettingsField>
+          <SettingsField label="App slug" htmlFor="appSlug" hint="The <slug> in github.com/apps/<slug>.">
             <Input
               id="appSlug"
               value={props.appSlug}
               onChange={(e) => props.setAppSlug(e.target.value)}
               required
-              placeholder="my-kuso"
-              className="h-8 text-[13px]"
+              placeholder="e.g. my-kuso"
+              className="font-mono"
             />
-          </Field>
-          <Field label="Client ID" htmlFor="clientId" hint="App settings → Identifying & authorizing users">
+          </SettingsField>
+          <SettingsField label="Client ID" htmlFor="clientId" hint="App settings → Identifying and authorizing users.">
             <Input
               id="clientId"
               value={props.clientId}
               onChange={(e) => props.setClientId(e.target.value)}
               required
-              placeholder="Iv23li…"
-              className="h-8 text-[13px]"
+              placeholder="e.g. Iv23li…"
+              className="font-mono"
             />
-          </Field>
-          <Field label="Client secret" htmlFor="clientSecret" hint="generate one on the App settings page">
+          </SettingsField>
+          <SettingsField label="Client secret" htmlFor="clientSecret" hint="Generate one on the App settings page.">
             <Input
               id="clientSecret"
               type="password"
@@ -881,10 +839,10 @@ function WizardForm(props: WizardFormProps) {
               onChange={(e) => props.setClientSecret(e.target.value)}
               required
               placeholder="••••••••"
-              className="h-8 text-[13px]"
+              className="font-mono"
             />
-          </Field>
-          <Field label="Webhook secret" htmlFor="webhookSecret" hint="same value you set on the App page" colSpan={2}>
+          </SettingsField>
+          <SettingsField label="Webhook secret" htmlFor="webhookSecret" hint="The same value you set on the App page.">
             <Input
               id="webhookSecret"
               type="password"
@@ -892,23 +850,23 @@ function WizardForm(props: WizardFormProps) {
               onChange={(e) => props.setWebhookSecret(e.target.value)}
               required
               placeholder="••••••••"
-              className="h-8 text-[13px]"
+              className="font-mono"
             />
-          </Field>
-          <Field label="Org (optional)" htmlFor="org" hint="informational, defaults to App owner" colSpan={2}>
+          </SettingsField>
+          <SettingsField label="Organization" htmlFor="org" hint="Optional, informational. Defaults to the App owner.">
             <Input
               id="org"
               value={props.org}
               onChange={(e) => props.setOrg(e.target.value)}
-              placeholder="my-github-org"
-              className="h-8 text-[13px]"
+              placeholder="e.g. my-github-org"
+              className="font-mono"
             />
-          </Field>
-          <Field
+          </SettingsField>
+          <SettingsField
             label="Private key (.pem)"
             htmlFor="privateKey"
-            hint="paste the entire file contents — multiline OK"
-            colSpan={2}
+            hint="Paste the entire file contents. Multiline is fine."
+            className="sm:col-span-2"
           >
             <textarea
               id="privateKey"
@@ -918,55 +876,30 @@ function WizardForm(props: WizardFormProps) {
               required
               placeholder={`-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA…\n-----END RSA PRIVATE KEY-----`}
               rows={8}
-              className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[11px] outline-none focus:border-[var(--accent)]"
+              className="block w-full rounded-sm border border-border bg-input px-3 py-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             />
-          </Field>
+          </SettingsField>
         </div>
-      </section>
-
-      <div className="flex justify-end gap-2">
-        {props.onCancel && (
-          <Button type="button" variant="outline" size="sm" onClick={props.onCancel}>
-            Cancel
-          </Button>
-        )}
-        <Button type="submit" size="sm" disabled={props.submitting}>
-          {props.submitting ? "Saving…" : "Save and restart"}
-        </Button>
       </div>
-      <p className="text-[12px] text-[var(--text-tertiary)]">
-        Saving writes the credentials into the <code>kuso-github-app</code> Kubernetes Secret
-        and restarts <code>deploy/kuso-server</code> so the new env loads. Brief
-        (~30s) downtime — the page polls until the server is back.
-      </p>
-    </form>
-  );
-}
 
-function Field({
-  label,
-  htmlFor,
-  colSpan,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  colSpan?: 2;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={colSpan === 2 ? "col-span-2 space-y-1" : "space-y-1"}>
-      <label
-        htmlFor={htmlFor}
-        className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
-      >
-        {label}
-      </label>
-      {children}
-      {hint && <p className="text-[11px] text-[var(--text-tertiary)]">{hint}</p>}
-    </div>
+      <div className="flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+          Saving writes the <code className="font-mono">kuso-github-app</code> Secret and restarts{" "}
+          <code className="font-mono">deploy/kuso-server</code> (~30s downtime). The page polls
+          until it&apos;s back.
+        </p>
+        <div className="flex shrink-0 justify-end gap-2">
+          {props.onCancel && (
+            <Button type="button" variant="outline" size="sm" onClick={props.onCancel}>
+              Cancel
+            </Button>
+          )}
+          <Button type="submit" size="sm" disabled={props.submitting}>
+            {props.submitting ? "Saving…" : "Save and restart"}
+          </Button>
+        </div>
+      </div>
+    </form>
   );
 }
 

@@ -17,9 +17,17 @@ import {
   type Drain,
   type DrainType,
 } from "@/features/drains";
-import { Pencil, Plus, Send, Trash2, Waves } from "lucide-react";
+import { Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { DrainEditForm } from "@/components/settings/DrainEditForm";
 import { toast } from "sonner";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import {
+  SettingsField,
+  SettingsNotice,
+  SettingsSection,
+  SettingsSelect,
+} from "@/components/settings/SettingsSection";
 
 // /settings/drains — forward app logs to external sinks, plus the
 // scrape endpoint for metrics. Admin-only: a drain ships every matching
@@ -47,8 +55,6 @@ const TYPE_LABELS = Object.fromEntries(
   (Object.keys(TYPE_HINTS) as DrainType[]).map((t) => [t, TYPE_HINTS[t].label])
 ) as Record<DrainType, string>;
 
-const labelCls = "mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
-
 export default function DrainsPage() {
   const isAdmin = useCan(Perms.SettingsAdmin);
   const list = useDrains(isAdmin);
@@ -68,11 +74,12 @@ export default function DrainsPage() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          Log drains are admin-only.
-        </p>
-      </div>
+      <SettingsPage title="Log & metrics drains">
+        <SettingsNotice tone="warning" title="Admin only">
+          Log drains need <span className="font-mono">settings:admin</span>: a drain ships every
+          matching log line off-cluster, along with the credentials to do it.
+        </SettingsNotice>
+      </SettingsPage>
     );
   }
 
@@ -110,78 +117,91 @@ export default function DrainsPage() {
   const drains = list.data ?? [];
 
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      <header className="mb-6 flex items-start gap-3">
-        <Waves className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Log & metrics drains</h1>
-          <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
-            Forward every app log line kuso collects to Grafana, an OpenTelemetry collector, Loki or your own endpoint —
-            for all projects or just one. Lines are batched and retried; if a sink falls behind, kuso drops lines for
-            that sink rather than slowing log collection (<code className="font-mono text-[11px]">kuso_drain_lines_dropped_total</code>).
-            Config changes apply within ~30s.
-          </p>
-        </div>
-      </header>
-
-      <section className="space-y-3">
-        <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          log drains ({drains.length})
-        </h2>
+    <SettingsPage
+      title="Log & metrics drains"
+      description={
+        <>
+          Forward every app log line to Grafana, an OpenTelemetry collector, Loki or your own
+          endpoint, for all projects or just one. Lines are batched and retried; a sink that falls
+          behind has lines dropped rather than slowing collection (
+          <code className="font-mono text-xs">kuso_drain_lines_dropped_total</code>). Changes apply
+          within ~30s.
+        </>
+      }
+    >
+      <SettingsSection
+        title="Log drains"
+        description={
+          list.isSuccess
+            ? `${drains.length} ${drains.length === 1 ? "drain" : "drains"} configured.`
+            : undefined
+        }
+        flush={list.isSuccess && drains.length > 0}
+      >
         {list.isPending ? (
           <Skeleton className="h-16 w-full" />
         ) : list.isError ? (
-          <p className="font-mono text-[11px] text-[var(--error)]">
-            {list.error instanceof Error ? list.error.message : "Failed to load drains"}
-          </p>
+          <QueryErrorState what="drains" error={list.error} onRetry={() => void list.refetch()} />
         ) : drains.length === 0 ? (
           <EmptyState title="No drains yet" description="Add one below." className="px-3 py-8" />
         ) : (
-          <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
+          <ul className="divide-y divide-[var(--border-subtle)]">
             {drains.map((d) => (
-              <li
-                key={d.id}
-                className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 last:border-b-0"
-              >
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
+              <li key={d.id}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
+                  <div className="min-w-0 flex-1 basis-full sm:basis-auto">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-[13px] text-[var(--text-primary)]">{d.name}</span>
-                      <span className="rounded bg-[var(--bg-tertiary)] px-1.5 font-mono text-[10px] text-[var(--text-secondary)]">
+                      <span className="truncate text-sm font-medium text-[var(--text-primary)]">{d.name}</span>
+                      <span className="shrink-0 rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]">
                         {TYPE_HINTS[d.type]?.label ?? d.type}
                       </span>
                       {!d.enabled && (
-                        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">paused</span>
+                        <span className="shrink-0 text-xs text-[var(--text-tertiary)]">Paused</span>
                       )}
                     </div>
-                    <p className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
-                      {d.project ? `project ${d.project}` : "all projects"} · {redactUrlCredentials(d.url)}
-                      {d.headers && Object.keys(d.headers).length > 0 && ` · headers: ${Object.keys(d.headers).join(", ")}`}
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-secondary)]">
+                      {d.project ? (
+                        <>
+                          Project <span className="font-mono">{d.project}</span>
+                        </>
+                      ) : (
+                        "All projects"
+                      )}{" "}
+                      · <span className="font-mono">{redactUrlCredentials(d.url)}</span>
+                      {d.headers && Object.keys(d.headers).length > 0 && (
+                        <>
+                          {" "}
+                          · headers <span className="font-mono">{Object.keys(d.headers).join(", ")}</span>
+                        </>
+                      )}
                       {d.secret && " · signed"}
                     </p>
                   </div>
-                  <Button size="sm" variant="outline" disabled={testingId !== null} onClick={() => onTest(d)}>
-                    <Send className="h-3.5 w-3.5" />
-                    {testingId === d.id ? "Sending…" : "Test"}
-                  </Button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(editingId === d.id ? null : d.id)}
-                    className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                    aria-label={`Edit ${d.name}`}
-                    aria-expanded={editingId === d.id}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingDelete(d)}
-                    disabled={remove.isPending}
-                    className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
-                    aria-label={`Delete ${d.name}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                    <Button size="sm" variant="outline" disabled={testingId !== null} onClick={() => onTest(d)}>
+                      <Send className="h-3.5 w-3.5" />
+                      {testingId === d.id ? "Sending…" : "Test"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setEditingId(editingId === d.id ? null : d.id)}
+                      aria-label={`Edit ${d.name}`}
+                      aria-expanded={editingId === d.id}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setPendingDelete(d)}
+                      disabled={remove.isPending}
+                      className="hover:text-[var(--error)]"
+                      aria-label={`Delete ${d.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
                 {editingId === d.id && (
                   <DrainEditForm
@@ -194,64 +214,64 @@ export default function DrainsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </SettingsSection>
 
-      <section className="mt-8 space-y-3">
-        <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">add log drain</h2>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSubmit();
-          }}
-          className="flex flex-col gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3"
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
+        <SettingsSection
+          title="Add log drain"
+          description="Send a test line after adding to confirm the sink accepts it."
+          footer={
+            <Button size="sm" type="submit" disabled={!url.trim() || create.isPending}>
+              <Plus className="h-3.5 w-3.5" />
+              {create.isPending ? "Saving…" : "Add drain"}
+            </Button>
+          }
         >
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="sm:w-40">
-              <label htmlFor="drain-type" className={labelCls}>type</label>
-              <select
+          <div className="grid gap-5 sm:grid-cols-[12rem_1fr]">
+            <SettingsField label="Type" htmlFor="drain-type">
+              <SettingsSelect
                 id="drain-type"
                 value={type}
                 onChange={(e) => setType(e.target.value as DrainType)}
-                className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
               >
                 {(Object.keys(TYPE_HINTS) as DrainType[]).map((t) => (
                   <option key={t} value={t}>{TYPE_HINTS[t].label}</option>
                 ))}
-              </select>
-            </div>
-            <div className="flex-1">
-              <label htmlFor="drain-url" className={labelCls}>url</label>
+              </SettingsSelect>
+            </SettingsField>
+            <SettingsField label="URL" htmlFor="drain-url" hint={TYPE_HINTS[type].hint}>
               <Input
                 id="drain-url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder={TYPE_HINTS[type].placeholder}
-                className="h-8 font-mono text-[12px]"
+                className="font-mono"
                 spellCheck={false}
                 autoComplete="off"
               />
-            </div>
+            </SettingsField>
           </div>
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">{TYPE_HINTS[type].hint}</p>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="flex-1">
-              <label htmlFor="drain-name" className={labelCls}>name (optional)</label>
-              <Input id="drain-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="grafana cloud" className="h-8 text-[12px]" />
-            </div>
-            <div className="flex-1">
-              <label htmlFor="drain-project" className={labelCls}>project (blank = all)</label>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <SettingsField label="Name" htmlFor="drain-name" hint="Optional. Defaults to the host.">
+              <Input id="drain-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. grafana cloud" />
+            </SettingsField>
+            <SettingsField label="Project" htmlFor="drain-project" hint="Leave blank to drain every project.">
               <Input
                 id="drain-project"
                 value={project}
                 onChange={(e) => setProject(e.target.value)}
-                placeholder="all projects"
-                className="h-8 font-mono text-[12px]"
+                placeholder="All projects"
+                className="font-mono"
                 spellCheck={false}
               />
-            </div>
+            </SettingsField>
           </div>
-          <div>
-            <label htmlFor="drain-headers" className={labelCls}>headers (one per line)</label>
+          <SettingsField label="Headers" htmlFor="drain-headers" hint="One per line, as Name: value.">
             <textarea
               id="drain-headers"
               value={headersText}
@@ -259,39 +279,36 @@ export default function DrainsPage() {
               rows={2}
               spellCheck={false}
               placeholder={"Authorization: Bearer …\nX-Scope-OrgID: tenant-1"}
-              className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+              className="w-full resize-y rounded-sm border border-border bg-input px-3 py-2 font-mono text-xs text-[var(--text-primary)] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             />
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1">
-              <label htmlFor="drain-secret" className={labelCls}>hmac secret (optional)</label>
-              <Input
-                id="drain-secret"
-                type="password"
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                className="h-8 font-mono text-[12px]"
-                autoComplete="new-password"
-              />
-            </div>
-            <Button size="sm" type="submit" disabled={!url.trim() || create.isPending}>
-              <Plus className="h-3.5 w-3.5" />
-              {create.isPending ? "Saving…" : "Add drain"}
-            </Button>
-          </div>
-        </form>
-      </section>
+          </SettingsField>
+          <SettingsField label="HMAC secret" htmlFor="drain-secret" hint="Optional. Signs each batch with X-Kuso-Signature.">
+            <Input
+              id="drain-secret"
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              className="font-mono"
+              autoComplete="new-password"
+            />
+          </SettingsField>
+        </SettingsSection>
+      </form>
 
-      <section className="mt-8 space-y-2">
-        <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">metrics</h2>
-        <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
-          Metrics are pulled, not pushed. Point Grafana Alloy, Prometheus or Grafana Cloud&apos;s Metrics Endpoint
-          integration at{" "}
-          <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">/api/metrics/export</code> with an
-          admin API token (or <code className="font-mono text-[11px]">KUSO_METRICS_SCRAPE_TOKEN</code>) as a bearer token.
-          It serves per-env request rate, 5xx rate, p95 latency, CPU, memory and pod count, labelled project / service / env.
-        </p>
-        <pre className="overflow-x-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-[11px] text-[var(--text-secondary)]">
+      <SettingsSection
+        title="Metrics"
+        description={
+          <>
+            Metrics are pulled, not pushed. Point Grafana Alloy, Prometheus or Grafana Cloud&apos;s
+            Metrics Endpoint at{" "}
+            <code className="rounded-sm bg-[var(--bg-tertiary)] px-1 font-mono text-xs">/api/metrics/export</code>{" "}
+            with an admin API token (or <code className="font-mono text-xs">KUSO_METRICS_SCRAPE_TOKEN</code>)
+            as a bearer token. It serves per-env request rate, 5xx rate, p95 latency, CPU, memory
+            and pod count, labelled project / service / env.
+          </>
+        }
+      >
+        <pre className="overflow-x-auto rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-secondary)]">
 {`scrape_configs:
   - job_name: kuso
     scheme: https
@@ -299,11 +316,11 @@ export default function DrainsPage() {
     authorization: { credentials: <token> }
     static_configs: [{ targets: ["<your-kuso-host>"] }]`}
         </pre>
-      </section>
+      </SettingsSection>
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="Delete log drain?"
+        title={`Delete log drain ${pendingDelete?.name ?? ""}?`}
         body={
           <p>
             <span className="font-mono text-[var(--text-primary)]">{pendingDelete?.name}</span> stops receiving logs
@@ -311,6 +328,7 @@ export default function DrainsPage() {
           </p>
         }
         confirmLabel="Delete drain"
+        typeToConfirm={pendingDelete?.name}
         destructive
         pending={remove.isPending}
         onConfirm={() => {
@@ -323,6 +341,6 @@ export default function DrainsPage() {
         }}
         onCancel={() => setPendingDelete(null)}
       />
-    </div>
+    </SettingsPage>
   );
 }

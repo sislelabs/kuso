@@ -14,8 +14,7 @@ import {
   type DrainEditForm as DrainEditFormState,
   type DrainType,
 } from "@/features/drains";
-
-const labelCls = "mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]";
+import { SettingsField, SettingsSelect } from "./SettingsSection";
 
 // DrainEditForm edits one drain in place. Stored header values and the
 // HMAC secret come back masked; leaving them alone keeps the originals.
@@ -54,96 +53,98 @@ export function DrainEditForm({
   };
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="sm:w-40">
-          <label htmlFor={id("type")} className={labelCls}>type</label>
-          <select
+    <form
+      onSubmit={onSubmit}
+      className="space-y-5 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 p-4 sm:p-5"
+    >
+      <div className="grid gap-5 sm:grid-cols-[12rem_1fr]">
+        <SettingsField label="Type" htmlFor={id("type")}>
+          <SettingsSelect
             id={id("type")}
             value={f.type}
             onChange={(e) => set("type", e.target.value as DrainType)}
-            className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
           >
             {(Object.keys(typeLabels) as DrainType[]).map((t) => (
               <option key={t} value={t}>{typeLabels[t]}</option>
             ))}
-          </select>
-        </div>
-        <div className="flex-1">
-          <label htmlFor={id("url")} className={labelCls}>url</label>
+          </SettingsSelect>
+        </SettingsField>
+        <SettingsField label="URL" htmlFor={id("url")}>
           <Input
             id={id("url")}
             // Stored URL carries a token in its userinfo: keep it hidden.
             type={urlHasCredentials(drain.url) ? "password" : "text"}
             value={f.url}
             onChange={(e) => set("url", e.target.value)}
-            className="h-8 font-mono text-[12px]"
+            className="font-mono"
             spellCheck={false}
             autoComplete="off"
           />
-        </div>
+        </SettingsField>
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="flex-1">
-          <label htmlFor={id("name")} className={labelCls}>name</label>
-          <Input id={id("name")} value={f.name} onChange={(e) => set("name", e.target.value)} className="h-8 text-[12px]" />
-        </div>
-        <div className="flex-1">
-          <label htmlFor={id("project")} className={labelCls}>project (blank = all)</label>
+      <div className="grid gap-5 sm:grid-cols-2">
+        <SettingsField label="Name" htmlFor={id("name")}>
+          <Input id={id("name")} value={f.name} onChange={(e) => set("name", e.target.value)} />
+        </SettingsField>
+        <SettingsField label="Project" htmlFor={id("project")} hint="Leave blank to drain every project.">
           <Input
             id={id("project")}
             value={f.project}
             onChange={(e) => set("project", e.target.value)}
-            placeholder="all projects"
-            className="h-8 font-mono text-[12px]"
+            placeholder="All projects"
+            className="font-mono"
             spellCheck={false}
           />
-        </div>
+        </SettingsField>
       </div>
-      <div>
-        <label htmlFor={id("headers")} className={labelCls}>headers (one per line)</label>
+      <SettingsField
+        label="Headers"
+        htmlFor={id("headers")}
+        hint={
+          <>
+            One per line. <span className="font-mono">{DRAIN_MASK}</span> keeps the stored value;
+            delete a line to remove that header.
+          </>
+        }
+      >
         <textarea
           id={id("headers")}
           value={f.headersText}
           onChange={(e) => set("headersText", e.target.value)}
           rows={2}
           spellCheck={false}
-          className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+          className="w-full resize-y rounded-sm border border-border bg-input px-3 py-2 font-mono text-xs text-[var(--text-primary)] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         />
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {DRAIN_MASK} keeps the stored value; delete a line to remove that header.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="flex-1">
-          <label htmlFor={id("secret")} className={labelCls}>hmac secret</label>
-          <Input
-            id={id("secret")}
-            type="password"
-            value={f.secret}
-            onChange={(e) => set("secret", e.target.value)}
-            placeholder={drain.secret ? "unchanged" : "none"}
-            disabled={f.clearSecret}
-            className="h-8 font-mono text-[12px]"
-            autoComplete="new-password"
-          />
-        </div>
+      </SettingsField>
+      <SettingsField label="HMAC secret" htmlFor={id("secret")}>
+        <Input
+          id={id("secret")}
+          type="password"
+          value={f.secret}
+          onChange={(e) => set("secret", e.target.value)}
+          placeholder={drain.secret ? "Unchanged" : "None"}
+          disabled={f.clearSecret}
+          className="font-mono"
+          autoComplete="new-password"
+        />
+      </SettingsField>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         {drain.secret && (
-          <label className="flex h-8 items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+          <label className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={f.clearSecret}
               onChange={(e) => set("clearSecret", e.target.checked)}
             />
-            remove secret
+            Remove secret
           </label>
         )}
-        <label className="flex h-8 items-center gap-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+        <label className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)]">
           <input type="checkbox" checked={f.enabled} onChange={(e) => set("enabled", e.target.checked)} />
-          enabled
+          Enabled
         </label>
       </div>
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] pt-4">
         <Button size="sm" variant="ghost" type="button" onClick={onDone} disabled={update.isPending}>
           Cancel
         </Button>
