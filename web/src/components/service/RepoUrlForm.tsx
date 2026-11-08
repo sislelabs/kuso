@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { inspectRepo } from "@/features/github";
+import { classifyRepoReadFailure, inspectRepo } from "@/features/github";
 import { ApiError } from "@/lib/api-client";
 
 export interface RepoByUrl {
@@ -80,13 +80,18 @@ export function RepoUrlForm({
       // token field instead of making the user hunt for it.
       const notFound = e instanceof ApiError && e.status === 404;
       if (notFound && mode !== "public") setShowToken(true);
-      setError(
-        notFound && mode === "public"
-          ? "Couldn't find a public repository at that URL. If it's private, use an access token."
-          : e instanceof Error
-            ? e.message
-            : "Couldn't read that repository.",
-      );
+      if (notFound && mode === "public") {
+        setError("Couldn't find a public repository at that URL. If it's private, use an access token.");
+      } else {
+        const f = classifyRepoReadFailure({
+          via: "url",
+          repo: repoFullName(repoURL),
+          branch: "",
+          hasToken: !!token.trim(),
+          error: e,
+        });
+        setError(`${f.title}. ${f.detail}`);
+      }
     } finally {
       setChecking(false);
     }
