@@ -19,7 +19,7 @@ const secondary =
   "border-[var(--btn-secondary-border)] bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] hover:bg-[var(--btn-secondary-bg-hover)] aria-expanded:bg-[var(--btn-secondary-bg-hover)]"
 
 const buttonVariants = cva(
-  touchTarget + " " + "group/button relative inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none select-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-primary)] active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  touchTarget + " " + "group/button relative inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none select-none active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -32,9 +32,9 @@ const buttonVariants = cva(
         ghost:
           "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] aria-expanded:bg-[var(--bg-tertiary)] aria-expanded:text-[var(--text-primary)]",
         destructive:
-          "border-transparent bg-[var(--danger)] text-[var(--bg-primary)] shadow-[var(--shadow-sm)] hover:brightness-110 focus-visible:ring-[var(--danger)]",
+          "border-transparent bg-[var(--danger)] text-[var(--bg-primary)] shadow-[var(--shadow-sm)] hover:brightness-110",
         "destructive-subtle":
-          "border-[var(--danger)]/30 bg-[var(--danger-subtle)] text-[var(--danger)] hover:border-[var(--danger)]/60 focus-visible:ring-[var(--danger)]",
+          "border-[var(--danger)]/30 bg-[var(--danger-subtle)] text-[var(--danger)] hover:border-[var(--danger)]/60",
         link: "h-auto! border-0 px-0! text-[var(--link)] underline-offset-4 hover:underline",
       },
       size: {
