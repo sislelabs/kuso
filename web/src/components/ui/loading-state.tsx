@@ -30,7 +30,7 @@ export function LoadingState({
       <div className={cn("flex items-center gap-2", className)}>
         <Skeleton className="h-3 w-24" />
         {label && (
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{label}</span>
+          <span className="text-xs text-[var(--text-tertiary)]">{label}</span>
         )}
       </div>
     );
