@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -23,10 +23,14 @@ const BADGE_TONE = {
 } as const;
 
 const MORE_WIDTH = 84;
+// Below this the strip scrolls sideways instead of folding into "More":
+// on a phone a swipe is cheaper than a popover.
+const SCROLL_QUERY = "(max-width: 639px)";
 
-// OverlayTabs is an ARIA tablist for the service/addon overlays. Tabs that
-// don't fit move into a "More" popover (the active tab always stays in the
-// strip), and `pinned` sits at the right edge at every width. Arrow keys,
+// OverlayTabs is an ARIA tablist for the service/addon overlays. On desktop
+// tabs that don't fit move into a "More" popover (the active tab always
+// stays in the strip); on phones the strip scrolls horizontally with a fade
+// hint instead. `pinned` sits at the right edge at every width. Arrow keys,
 // Home and End move focus; Enter/Space activates (manual activation, so
 // arrowing past Logs doesn't open a log stream on the way).
 export function OverlayTabs<T extends string>({
@@ -48,11 +52,28 @@ export function OverlayTabs<T extends string>({
   const measureRef = useRef<HTMLDivElement>(null);
   const [fitCount, setFitCount] = useState(tabs.length);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [scrollMode, setScrollMode] = useState(false);
+  const [fade, setFade] = useState({ left: false, right: false });
+
+  const updateFade = useCallback(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    setFade({ left: strip.scrollLeft > 2, right: max - strip.scrollLeft > 2 });
+  }, []);
 
   const measure = useCallback(() => {
     const strip = stripRef.current;
     const m = measureRef.current;
     if (!strip || !m) return;
+    if (window.matchMedia(SCROLL_QUERY).matches) {
+      setScrollMode(true);
+      setFitCount(tabs.length);
+      updateFade();
+      return;
+    }
+    setScrollMode(false);
+    setFade({ left: false, right: false });
     const avail = strip.clientWidth;
     const widths = Array.from(m.children).map((c) => (c as HTMLElement).offsetWidth);
     const total = widths.reduce((a, b) => a + b, 0);
@@ -68,7 +89,7 @@ export function OverlayTabs<T extends string>({
       n++;
     }
     setFitCount(Math.max(1, n));
-  }, [tabs.length]);
+  }, [tabs.length, updateFade]);
 
   useLayoutEffect(() => {
     measure();
@@ -78,6 +99,19 @@ export function OverlayTabs<T extends string>({
     ro.observe(strip);
     return () => ro.disconnect();
   }, [measure, tabs]);
+
+  // Phones: keep the active tab scrolled into view (deep links to Shell,
+  // g-chords, Back/Forward).
+  useEffect(() => {
+    if (!scrollMode) return;
+    const strip = stripRef.current;
+    const el = strip?.querySelector<HTMLElement>(`#${CSS.escape(`${idPrefix}-tab-${active}`)}`);
+    if (!strip || !el) return;
+    const left = el.offsetLeft - strip.offsetLeft;
+    if (left < strip.scrollLeft || left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+      strip.scrollTo({ left: Math.max(0, left - 24), behavior: "smooth" });
+    }
+  }, [scrollMode, active, idPrefix]);
 
   // The active tab must stay visible: if it would overflow, it takes the
   // last visible slot.
@@ -151,49 +185,66 @@ export function OverlayTabs<T extends string>({
       onKeyDown={onKeyDown}
       className="relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3"
     >
-      <div ref={stripRef} className="flex min-w-0 flex-1 items-center overflow-hidden">
-        {visible.map((t) => tabButton(t))}
-        {overflow.length > 0 && (
-          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger
-              data-more-trigger=""
-              tabIndex={-1}
-              aria-label={`More tabs: ${overflow.map((t) => t.label).join(", ")}`}
-              className="relative inline-flex h-10 shrink-0 items-center gap-1 px-3 text-sm font-medium text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)] focus-visible:text-[var(--text-primary)] focus-visible:underline"
-            >
-              More
-              {overflowBadge && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />}
-              <ChevronDown aria-hidden className="h-3.5 w-3.5" />
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-52 gap-0.5 rounded-lg p-1">
-              {overflow.map((t) => {
-                const Icon = t.icon;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onChange(t.id);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                  >
-                    {Icon && <Icon aria-hidden className="h-3.5 w-3.5" />}
-                    <span className="flex-1">{t.label}</span>
-                    {!!t.badge && (
-                      <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums", BADGE_TONE[t.badgeTone ?? "neutral"])}>
-                        {t.badge}
-                      </span>
-                    )}
-                    {t.chord && (
-                      <kbd className="font-sans text-xs text-[var(--text-tertiary)]">G {t.chord.toUpperCase()}</kbd>
-                    )}
-                  </button>
-                );
-              })}
-            </PopoverContent>
-          </Popover>
+      <div className="relative flex min-w-0 flex-1">
+        {scrollMode && fade.left && (
+          <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--bg-primary)] to-transparent" />
         )}
+        {scrollMode && fade.right && (
+          <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-[var(--bg-primary)] to-transparent" />
+        )}
+        <div
+          ref={stripRef}
+          onScroll={scrollMode ? updateFade : undefined}
+          className={cn(
+            "relative flex min-w-0 flex-1 items-center",
+            scrollMode
+              ? "overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              : "overflow-hidden",
+          )}
+        >
+          {visible.map((t) => tabButton(t))}
+          {overflow.length > 0 && (
+            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+              <PopoverTrigger
+                data-more-trigger=""
+                tabIndex={-1}
+                aria-label={`More tabs: ${overflow.map((t) => t.label).join(", ")}`}
+                className="relative inline-flex h-10 shrink-0 items-center gap-1 px-3 text-sm font-medium text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)] focus-visible:text-[var(--text-primary)] focus-visible:underline"
+              >
+                More
+                {overflowBadge && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />}
+                <ChevronDown aria-hidden className="h-3.5 w-3.5" />
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-52 gap-0.5 rounded-lg p-1">
+                {overflow.map((t) => {
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        onChange(t.id);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                    >
+                      {Icon && <Icon aria-hidden className="h-3.5 w-3.5" />}
+                      <span className="flex-1">{t.label}</span>
+                      {!!t.badge && (
+                        <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums", BADGE_TONE[t.badgeTone ?? "neutral"])}>
+                          {t.badge}
+                        </span>
+                      )}
+                      {t.chord && (
+                        <kbd className="font-sans text-xs text-[var(--text-tertiary)]">G {t.chord.toUpperCase()}</kbd>
+                      )}
+                    </button>
+                  );
+                })}
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
       </div>
       {pinned && tabButton(pinned, true)}
       {/* Off-screen copy of every tab at natural width, for measuring. */}
