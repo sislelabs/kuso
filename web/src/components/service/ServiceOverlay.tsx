@@ -334,24 +334,39 @@ export function ServiceOverlay({
     []
   );
 
-  // Close + tab-switch unconditionally drop dirty state. The previous
-  // window.confirm("Discard unsaved changes?") was annoying enough
-  // that users asked for it gone — closing an overlay or switching
-  // tabs is fast, and the floating Save bar's pip already signals
-  // unsaved state. If a user really loses an edit they didn't mean
-  // to discard, the inline dirty-pip + Save bar should have been the
-  // signal, not a browser-modal interrupt.
+  // Clicking the backdrop / X closes and drops unsaved edits; the Save
+  // bar's dirty pip is the signal there. Switching tabs with unsaved
+  // edits asks first: the panel unmounts, so a stray tab click would
+  // otherwise lose Variables edits silently.
   const guardedClose = useCallback(() => {
     dirtyMap.current = {};
     setPanels({});
     onClose();
   }, [onClose]);
 
-  const guardedSetTab = useCallback((next: Tab) => {
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const [pendingTab, setPendingTab] = useState<{ tab: Tab; anchor?: string } | null>(null);
+  const switchTab = useCallback((next: Tab, anchor?: string) => {
     dirtyMap.current = {};
     setPanels({});
     setTab(next);
+    if (anchor) {
+      window.setTimeout(() => {
+        document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 250);
+    }
   }, []);
+  const guardedSetTab = useCallback(
+    (next: Tab, anchor?: string) => {
+      if (next !== tabRef.current && Object.keys(dirtyMap.current).length > 0) {
+        setPendingTab({ tab: next, anchor });
+        return;
+      }
+      switchTab(next, anchor);
+    },
+    [switchTab],
+  );
 
   // When a service opens, land on the requested tab (right-click "View
   // logs" → Logs, etc.) or fall back to the user's last-used tab in
@@ -624,12 +639,7 @@ export function ServiceOverlay({
     (slug: string, anchor?: string) => {
       const next = resolveTab(slug);
       if (!next) return;
-      guardedSetTab(next);
-      if (anchor) {
-        window.setTimeout(() => {
-          document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }, 250);
-      }
+      guardedSetTab(next, anchor);
     },
     [guardedSetTab],
   );
@@ -932,6 +942,7 @@ export function ServiceOverlay({
                           key={env?.metadata.name ?? "none"}
                           project={project}
                           service={service ?? ""}
+                          onOpenDeployments={() => guardedSetTab("deployments")}
                           defaultEnv={env ? envGroupName(env) : ""}
                           streamEnv={env?.metadata.name}
                         />
@@ -1082,6 +1093,18 @@ export function ServiceOverlay({
             onConfirm={() => {
               setConfirmDiscard(false);
               guardedClose();
+            }}
+          />
+          <ConfirmDialog
+            open={!!pendingTab}
+            title="Discard unsaved changes?"
+            body={`Your edits in ${Object.keys(panels).filter((k) => panels[k]?.dirty).join(", ") || "this tab"} haven't been saved. Switching tabs drops them.`}
+            confirmLabel="Discard and switch"
+            onCancel={() => setPendingTab(null)}
+            onConfirm={() => {
+              const p = pendingTab;
+              setPendingTab(null);
+              if (p) switchTab(p.tab, p.anchor);
             }}
           />
         </div>
