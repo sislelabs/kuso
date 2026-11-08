@@ -50,15 +50,41 @@ export function deployStatusFromServerState(
   }
 }
 
+// The canonical service status words (R2-4's lib/status.ts replaces this
+// at merge). Internal states map onto them; the specific cause goes in
+// the detail, never the label.
+export const DEPLOY_STATUS_LABEL: Record<DeployStatus | "rolling", string> = {
+  active: "Live",
+  rolling: "Deploying",
+  building: "Building",
+  deploying: "Deploying",
+  degraded: "Degraded",
+  failed: "Failing",
+  crashed: "Failing",
+  sleeping: "Sleeping",
+  stopped: "Stopped",
+  awaiting: "Not deployed",
+  unknown: "Unknown",
+};
+
+// Default detail for states whose label hides the cause.
+export const DEPLOY_STATUS_DETAIL: Partial<Record<DeployStatus | "rolling", string>> = {
+  rolling: "Rolling out new pods",
+  failed: "Build failed",
+  crashed: "Crashlooping",
+  awaiting: "Waiting for the first build",
+  sleeping: "Asleep until the next request",
+};
+
 const styles: Record<DeployStatus, string> = {
   // Building/deploying ride the dedicated --building hue (yellow)
   // so they're distinct from the orange accent used for hover and
   // primary highlights. Same hue as the canvas service node's
   // animated border in the same state.
   building:
-    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
+    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 motion-safe:animate-pulse",
   deploying:
-    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
+    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 motion-safe:animate-pulse",
   active:
     "bg-[var(--success-subtle)] text-[var(--success)] border-[var(--success)]/30",
   // Awaiting the first build — neutral/informational, NOT red. A
@@ -86,13 +112,18 @@ const styles: Record<DeployStatus, string> = {
 
 export function DeployStatusPill({
   status,
+  detail,
   className,
 }: {
   status: DeployStatus;
+  // Specific cause ("Crashlooping", "Build failed"), shown as a tooltip.
+  detail?: string;
   className?: string;
 }) {
+  const label = DEPLOY_STATUS_LABEL[status];
   return (
     <span
+      title={detail || DEPLOY_STATUS_DETAIL[status] || label}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium",
         styles[status],
@@ -100,7 +131,7 @@ export function DeployStatusPill({
       )}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+      {label}
     </span>
   );
 }
