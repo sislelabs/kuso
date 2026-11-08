@@ -119,8 +119,14 @@ export function emptyRuleForm(kind: AlertKind): RuleFormState {
 
 export type BuildResult = { ok: true; body: CreateAlertBody } | { ok: false; error: string };
 
-export function buildCreateBody(s: RuleFormState): BuildResult {
+// projectRequired: non-admin callers may only add rules scoped to a
+// project they edit (server-go alerts.go), so an unscoped rule is
+// invalid for them rather than a 403 after submit.
+export function buildCreateBody(s: RuleFormState, opts: { projectRequired?: boolean } = {}): BuildResult {
   const meta = ALERT_KINDS[s.kind];
+  if (opts.projectRequired && meta.scope === "none") {
+    return { ok: false, error: "Node rules need an instance admin" };
+  }
   const name = s.name.trim();
   if (!name) return { ok: false, error: "Name is required" };
   const body: CreateAlertBody = {
@@ -134,6 +140,9 @@ export function buildCreateBody(s: RuleFormState): BuildResult {
     const project = s.project.trim();
     const service = s.service.trim();
     const env = meta.scope === "env" ? s.env.trim() : "";
+    if (opts.projectRequired && !project) {
+      return { ok: false, error: "Pick a project" };
+    }
     if ((service || env) && !project && meta.scope === "env") {
       return { ok: false, error: "Service and env scoping need a project" };
     }
