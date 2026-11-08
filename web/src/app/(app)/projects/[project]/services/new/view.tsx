@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Github, Check, Plus, Box, Rocket, GitBranch, Loader2, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +28,7 @@ import { slugifyServiceName } from "@/features/services/slug";
 import { FormField, SegmentedControl } from "./FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "./RepoPicker";
 import { useRepoDetection } from "./useRepoDetection";
+import { detectionCopy, type DetectionCopy, type Provenance } from "./detectionCopy";
 import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "./RepoInsights";
 import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
 import { reportCreateOutcome } from "./reportCreateOutcome";
@@ -203,6 +205,14 @@ export function AddServiceView() {
   const willBuild = source === "repo" && kind === "web";
   const showConfigure = source === "image" || !!picked;
   const fastPath = source === "repo" && !!picked && kind === "web" && !advanced;
+  const quickCopy = detectionCopy({
+    state: detection.state,
+    result: detection.result,
+    failure: detection.failure,
+    runtime,
+    port,
+    where: repoWhere(path),
+  });
 
   // Detection failed: open the full form and land on the runtime picker.
   const chooseRuntimeManually = () => {
@@ -482,8 +492,8 @@ export function AddServiceView() {
         {fastPath ? (
           <Step
             n={2}
-            title="Review and deploy"
-            description="kuso read the repository and filled these in. Deploy as is, or edit anything first."
+            title={quickCopy.title}
+            description={quickCopy.description}
             last
           >
             <DetectedSettings
@@ -495,6 +505,7 @@ export function AddServiceView() {
               path={path}
               branch={picked.repo.defaultBranch}
               detection={detection}
+              copy={quickCopy}
               addonSuggestions={addonSuggestions}
               addonPicks={addonPicks}
               onToggleAddon={toggleAddonPick}
@@ -531,7 +542,15 @@ export function AddServiceView() {
         <Step
             n={2}
             title="Configure"
-            description={showConfigure ? "Name, build and size. Detected values are prefilled." : "Pick a source first."}
+            description={
+              !showConfigure
+                ? "Pick a source first."
+                : source === "repo" && kind === "web" && quickCopy.runtime === "default"
+                  ? "Name, build and size. Detection didn't find a runtime, so check the build settings."
+                  : source === "repo" && kind === "web"
+                    ? "Name, build and size. Detected values are prefilled."
+                    : "Name, build and size."
+            }
             disabled={!showConfigure}
           >
             {showConfigure && (
@@ -905,6 +924,7 @@ function DetectedSettings({
   path,
   branch,
   detection,
+  copy,
   addonSuggestions,
   addonPicks,
   onToggleAddon,
@@ -917,6 +937,7 @@ function DetectedSettings({
   path: string;
   branch: string;
   detection: ReturnType<typeof useRepoDetection>;
+  copy: DetectionCopy;
   addonSuggestions: AddonSuggestion[];
   addonPicks: Set<string>;
   onToggleAddon: (kind: string) => void;
@@ -924,7 +945,7 @@ function DetectedSettings({
   const detecting = detection.state === "detecting";
   const result = detection.result;
   const found = detection.state === "done" && result && result.reason !== "fallback";
-  const where = path.trim() ? `${path.trim().replace(/^\/+|\/+$/g, "")}/` : "the repo root";
+  const where = repoWhere(path);
   const runtimeWhy = detecting
     ? "Detecting…"
     : found
@@ -939,7 +960,7 @@ function DetectedSettings({
       : detection.state === "failed"
         ? "Not detected, so kuso uses 8080 and sets $PORT to match"
         : "None declared in the repo; kuso uses 8080 and sets $PORT to match";
-  const rows: { label: string; value: React.ReactNode; why?: string }[] = [
+  const rows: { label: string; value: React.ReactNode; why?: string; marker?: Provenance | null }[] = [
     {
       label: "Service",
       value: (
@@ -959,8 +980,9 @@ function DetectedSettings({
         </span>
       ),
       why: runtimeWhy,
+      marker: copy.runtime,
     },
-    { label: "Port", value: port || "8080", why: portWhy },
+    { label: "Port", value: port || "8080", why: portWhy, marker: copy.port },
     { label: "Root directory", value: path.trim() || "/", why: path.trim() ? undefined : "Repo root. Set one for a monorepo." },
     { label: "Branch", value: branch, why: "Every push builds and deploys" },
   ];
@@ -969,7 +991,10 @@ function DetectedSettings({
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
         {rows.map((r) => (
           <div key={r.label} className="min-w-0">
-            <dt className="text-xs text-[var(--text-secondary)]">{r.label}</dt>
+            <dt className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+              {r.label}
+              {r.marker && <ProvenanceMarker kind={r.marker} />}
+            </dt>
             <dd className="mt-0.5 truncate font-mono text-[13px] text-[var(--text-primary)]">{r.value}</dd>
             {r.why && (
               <dd className={"mt-0.5 text-xs " + (detecting ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]")}>
@@ -1010,6 +1035,22 @@ function DetectedSettings({
         </div>
       )}
     </div>
+  );
+}
+
+function repoWhere(path: string): string {
+  const p = path.trim().replace(/^\/+|\/+$/g, "");
+  return p ? `${p}/` : "the repo root";
+}
+
+function ProvenanceMarker({ kind }: { kind: Provenance }) {
+  return (
+    <Badge
+      variant={kind === "detected" ? "success" : "neutral"}
+      title={kind === "detected" ? "Read from the repository" : "kuso's default; detection didn't supply it"}
+    >
+      {kind}
+    </Badge>
   );
 }
 
