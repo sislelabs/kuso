@@ -50,3 +50,41 @@ func TestErrorsList_ShortServiceNameFindsFQNEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorsDetail_ReturnsOccurrences(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := d.InsertErrorEvent(ctx, db.ErrorEvent{
+		Project: "tickero", Service: "tickero-api", Env: "production", Pod: "p",
+		Fingerprint: "fp-detail", Message: "ERROR boom", RawLine: "ERROR boom raw",
+		Ts: time.Now().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	h := &ErrorsHandler{DB: d, Logger: slog.Default()}
+	r := chi.NewRouter()
+	h.Mount(r)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/tickero/services/api/errors/fp-detail?since=1h", nil)
+	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
+		&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+	var det db.ErrorGroupDetail
+	if err := json.Unmarshal(rr.Body.Bytes(), &det); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(det.Occurrences) != 1 || det.Occurrences[0].RawLine != "ERROR boom raw" || len(det.Buckets) != 1 {
+		t.Errorf("detail = %+v", det)
+	}
+
+	bad := httptest.NewRequest(http.MethodGet, "/api/projects/tickero/services/api/errors/fp-detail?since=nope", nil)
+	bad = bad.WithContext(req.Context())
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, bad)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("bad since: status=%d", rr.Code)
+	}
+}

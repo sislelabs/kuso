@@ -34,4 +34,8 @@ type SearchLogsRequest struct {
 	// at the head — with OFFSET, every new line shifts the window and
 	// the reader sees duplicated or skipped lines as they scroll back.
 	BeforeID int64
+	// AfterID is the forward cursor: return only rows newer than this id,
+	// oldest-first, so a reader can fetch the lines right after an anchor
+	// ("view in context"). Ignored when BeforeID is set.
+	AfterID int64
 }

@@ -1,11 +1,12 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { useLogStream, type LogLine } from "@/features/logs";
+import { useLogStream, type LogLine, type StreamConnection } from "@/features/logs";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, Copy, RotateCcw, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { AnsiText } from "./AnsiText";
 
 interface Props {
   project: string;
@@ -15,7 +16,7 @@ interface Props {
 }
 
 export function LogStream({ project, service, env = "production", height = "40vh" }: Props) {
-  const { lines, phase, status, error, notice, clear } = useLogStream(project, service, env, 200);
+  const { lines, phase, connection, error, notice, clear, reconnect } = useLogStream(project, service, env, 200);
   const [follow, setFollow] = useState(true);
   const [wrap, setWrap] = useState(false);
   const [filter, setFilter] = useState("");
@@ -57,15 +58,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
     if (atBottom !== follow) setFollow(atBottom);
   };
 
-  const statusColor =
-    status === "open"
-      ? "bg-emerald-500"
-      : status === "connecting"
-        ? "bg-amber-500 animate-pulse"
-        : status === "error"
-          ? "bg-red-500"
-          : "bg-[var(--text-tertiary)]";
-
+  const conn = CONNECTION_META[connection];
   return (
     // flex column + min-h-0 so a parent that gives us a fixed height
     // (h-72 in BuildLogs) can shrink the scroller properly. Without
@@ -74,18 +67,25 @@ export function LogStream({ project, service, env = "production", height = "40vh
     <div className="flex h-full min-h-0 flex-col rounded-md border border-[var(--border-subtle)] overflow-hidden">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-xs">
         <div className="flex items-center gap-2">
-          <span aria-hidden className={cn("h-2 w-2 rounded-full", statusColor)} />
+          <span aria-hidden className={cn("h-2 w-2 rounded-full", conn.dot)} />
           <span className="sr-only">Stream status:</span>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            {status}
-          </span>
+          <span className="text-xs font-medium text-[var(--text-primary)]">{conn.label}</span>
           {phase && (
             <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--accent)]">
               · {phase}
             </span>
           )}
-          {error && (
-            <span className="font-mono text-[10px] text-red-500">· {error}</span>
+          {(connection === "reconnecting" || connection === "failed") && (
+            <button
+              type="button"
+              onClick={reconnect}
+              className="text-xs text-[var(--text-primary)] underline underline-offset-2"
+            >
+              {connection === "failed" ? "Reconnect" : "Retry now"}
+            </button>
+          )}
+          {connection === "failed" && error && (
+            <span className="text-xs text-[var(--error)]">· {error}</span>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -199,17 +199,21 @@ export function LogStream({ project, service, env = "production", height = "40vh
         // ad-hoc embed with no flex parent), maxHeight caps us at the
         // requested viewport unit so we don't push the page.
         style={height === "100%" ? undefined : { maxHeight: height }}
-        className="h-full min-h-0 overflow-auto bg-[var(--console-bg)] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
+        className="dark h-full min-h-0 overflow-auto bg-[var(--console-bg)] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
       >
         {lines.length === 0 && (
           <p className="text-[var(--text-tertiary)]">
             {notice
               ? notice
-              : status === "connecting"
-              ? "connecting…"
-              : status === "open"
+              : connection === "live"
                 ? "waiting for logs…"
-                : "disconnected"}
+                : connection === "ended"
+                  ? "stream ended"
+                  : connection === "reconnecting"
+                    ? "reconnecting…"
+                    : connection === "failed"
+                      ? "couldn't connect to the log stream"
+                      : "connecting…"}
           </p>
         )}
         {lines.length > 0 && visibleLines.length === 0 && filter && (
@@ -226,6 +230,14 @@ export function LogStream({ project, service, env = "production", height = "40vh
     </div>
   );
 }
+
+const CONNECTION_META: Record<StreamConnection, { dot: string; label: string }> = {
+  connecting: { dot: "bg-[var(--text-tertiary)] animate-pulse motion-reduce:animate-none", label: "Connecting…" },
+  live: { dot: "bg-[var(--success)]", label: "Live" },
+  reconnecting: { dot: "bg-[var(--building)] animate-pulse motion-reduce:animate-none", label: "Reconnecting…" },
+  ended: { dot: "bg-[var(--text-tertiary)]", label: "Ended" },
+  failed: { dot: "bg-[var(--error)]", label: "Disconnected" },
+};
 
 // Memoized per row: a new batch of lines re-renders only the rows it
 // added, not all 10k. content-visibility lets the browser skip layout
@@ -252,7 +264,9 @@ const LogRow = memo(function LogRow({ line: l, wrap }: { line: LogLine; wrap: bo
       >
         {podShort}
       </span>
-      <span className="select-text">{l.line}</span>
+      <span className="select-text">
+        <AnsiText text={l.line} />
+      </span>
     </div>
   );
 });

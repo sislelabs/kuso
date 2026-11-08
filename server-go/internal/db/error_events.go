@@ -173,3 +173,81 @@ func (d *DB) PruneErrorEvents(ctx context.Context, before time.Time) (int, error
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// ErrorOccurrence is one captured event of a fingerprint.
+type ErrorOccurrence struct {
+	Ts      time.Time `json:"ts"`
+	Env     string    `json:"env,omitempty"`
+	Pod     string    `json:"pod,omitempty"`
+	RawLine string    `json:"rawLine"`
+}
+
+// ErrorGroupDetail backs the expanded row in the Errors tab: a count
+// histogram over the window plus the newest occurrences.
+type ErrorGroupDetail struct {
+	Fingerprint   string            `json:"fingerprint"`
+	BucketSeconds int64             `json:"bucketSeconds"`
+	Buckets       [][2]int64        `json:"buckets"` // [unixSeconds, count], only non-empty buckets
+	Occurrences   []ErrorOccurrence `json:"occurrences"`
+}
+
+// GetErrorGroupDetail returns the histogram + latest `limit` occurrences
+// of one fingerprint since `since`. bucket is clamped to >= 60s. Uses
+// the (project, service, fingerprint) index.
+func (d *DB) GetErrorGroupDetail(ctx context.Context, project, service, env, fingerprint string, since time.Time, bucket time.Duration, limit int) (*ErrorGroupDetail, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	b := int64(bucket / time.Second)
+	if b < 60 {
+		b = 60
+	}
+	out := &ErrorGroupDetail{Fingerprint: fingerprint, BucketSeconds: b, Buckets: [][2]int64{}, Occurrences: []ErrorOccurrence{}}
+
+	rows, err := d.QueryContext(ctx, `
+		SELECT (floor(extract(epoch FROM ts) / $6) * $6)::bigint AS bucket, COUNT(*)
+		FROM "ErrorEvent"
+		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
+		  AND ($5 = '' OR env = $5)
+		GROUP BY bucket
+		ORDER BY bucket`,
+		project, service, fingerprint, since.UTC(), env, b,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("GetErrorGroupDetail buckets: %w", err)
+	}
+	for rows.Next() {
+		var p [2]int64
+		if err := rows.Scan(&p[0], &p[1]); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("GetErrorGroupDetail scan bucket: %w", err)
+		}
+		out.Buckets = append(out.Buckets, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetErrorGroupDetail buckets: %w", err)
+	}
+
+	occ, err := d.QueryContext(ctx, `
+		SELECT ts, env, pod, "rawLine"
+		FROM "ErrorEvent"
+		WHERE project = $1 AND service = $2 AND fingerprint = $3 AND ts >= $4
+		  AND ($5 = '' OR env = $5)
+		ORDER BY ts DESC
+		LIMIT $6`,
+		project, service, fingerprint, since.UTC(), env, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("GetErrorGroupDetail occurrences: %w", err)
+	}
+	defer occ.Close()
+	for occ.Next() {
+		var o ErrorOccurrence
+		if err := occ.Scan(&o.Ts, &o.Env, &o.Pod, &o.RawLine); err != nil {
+			return nil, fmt.Errorf("GetErrorGroupDetail scan occurrence: %w", err)
+		}
+		out.Occurrences = append(out.Occurrences, o)
+	}
+	return out, occ.Err()
+}

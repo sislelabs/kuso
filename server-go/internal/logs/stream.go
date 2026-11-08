@@ -497,6 +497,9 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 		Container: container,
 		Follow:    !isInit,
 		TailLines: &tail,
+		// Kubelet's own timestamps: the backlog replayed on (re)connect
+		// keeps the time each line was written, not when we read it.
+		Timestamps: true,
 	}
 	// Retry briefly for "container is waiting" / "container not found"
 	// — those are the *normal* lifecycle states for an init container
@@ -545,7 +548,7 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 	read := 0
 	for scanner.Scan() {
 		read++
-		text := scanner.Text()
+		ts, text := frameTimestamp(scanner.Text(), time.Now())
 		if text == "" {
 			continue
 		}
@@ -562,7 +565,7 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 			Pod:     podName,
 			Line:    line,
 			Stream:  "stdout",
-			Ts:      time.Now().UTC().Format(time.RFC3339),
+			Ts:      ts,
 			backlog: isInit || read <= tailLines,
 		}:
 		case <-ctx.Done():
@@ -731,4 +734,14 @@ func (s *Service) runBelongsToProject(ctx context.Context, ns, runName, project 
 		return false
 	}
 	return r.Spec.Project == project
+}
+
+// frameTimestamp splits kubelet's RFC3339Nano prefix off a raw log line.
+// A line without one (older kubelets, fake clients) is stamped `now`.
+func frameTimestamp(raw string, now time.Time) (string, string) {
+	t, text := splitTimestamp(raw)
+	if t.IsZero() {
+		return now.UTC().Format(time.RFC3339Nano), raw
+	}
+	return t.UTC().Format(time.RFC3339Nano), text
 }

@@ -64,6 +64,8 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 	// beforeId is the keyset cursor for scrolling back past the first
 	// page. Garbage parses to 0, which just means "newest page".
 	beforeID, _ := strconv.ParseInt(q.Get("beforeId"), 10, 64)
+	// afterId pages forward from an anchor line (log context view).
+	afterID, _ := strconv.ParseInt(q.Get("afterId"), 10, 64)
 	since := parseTs(q.Get("since"))
 	until := parseTs(q.Get("until"))
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -84,6 +86,7 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		Until:    until,
 		Limit:    limit,
 		BeforeID: beforeID,
+		AfterID:  afterID,
 	})
 	if err != nil {
 		// Don't leak FTS5 grammar errors back to the caller — those are
@@ -103,7 +106,11 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		"q":       q.Get("q"),
 		"lines":   rows,
 	}
-	if len(rows) > 0 && len(rows) == db.ClampLogLimit(limit) {
+	if afterID > 0 && beforeID <= 0 {
+		// Echoed so a client can tell this server honoured the forward
+		// cursor (older servers ignore the param and return newest-first).
+		resp["afterId"] = afterID
+	} else if len(rows) > 0 && len(rows) == db.ClampLogLimit(limit) {
 		resp["nextBeforeId"] = rows[len(rows)-1].ID
 	}
 	writeJSON(w, http.StatusOK, resp)

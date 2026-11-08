@@ -27,13 +27,21 @@ export interface LogLine {
   stream?: string;
 }
 
+// connection is the reader-facing state of the stream: "reconnecting"
+// while the socket backs off after a drop, "ended" after a clean
+// end-of-stream, "failed" once retries gave up.
+export type StreamConnection = "connecting" | "live" | "reconnecting" | "ended" | "failed";
+
 export interface UseLogStreamResult {
   lines: LogLine[];
   phase: string | null;
   status: WSStatus;
+  connection: StreamConnection;
   error: string | null;
   notice: string | null;
   clear: () => void;
+  // Tears the socket down and opens a fresh one immediately.
+  reconnect: () => void;
 }
 
 const MAX_LINES = 10_000;
@@ -74,6 +82,8 @@ export function useLogStream(
   const [lines, setLines] = useState<LogLine[]>([]);
   const [phase, setPhase] = useState<string | null>(null);
   const [status, setStatus] = useState<WSStatus>("connecting");
+  const [connection, setConnection] = useState<StreamConnection>("connecting");
+  const [nonce, setNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
   // notice is an informational end-of-stream message (e.g. an expired
   // build log), shown in place of the log body rather than as an error.
@@ -96,7 +106,9 @@ export function useLogStream(
     setError(null);
     setNotice(null);
     setStatus("connecting");
+    setConnection("connecting");
     completedRef.current = false;
+    let everOpened = false;
 
     const accept = createReplayFilter();
     let nextId = 0;
@@ -124,20 +136,37 @@ export function useLogStream(
       onStatus: (s, info) => {
         setStatus(s);
         if (s === "open") {
+          everOpened = true;
           setError(null);
+          setConnection("live");
           return;
         }
         // Suppress error chrome once the server has signalled
         // end-of-stream — a 1000 close after phase=completed is the
         // expected exit, and even a 1006 (no Close frame) is fine if
         // we already saw the completed phase.
-        if (completedRef.current) return;
-        if (info?.gaveUp) {
-          setError("can't connect to the log stream — reload to retry");
+        if (completedRef.current) {
+          if (s === "closed") setConnection("ended");
           return;
         }
-        if (s === "error") setError("connection error");
-        if (s === "closed" && info?.code === 1006) setError("connection lost");
+        if (info?.gaveUp) {
+          setError("can't connect to the log stream");
+          setConnection("failed");
+          return;
+        }
+        if (s === "closed" && (info?.code === 1000 || info?.code === 1001)) {
+          // Clean server close: ReconnectingWS won't retry these.
+          setConnection("ended");
+          return;
+        }
+        if (s === "connecting") {
+          setConnection(everOpened ? "reconnecting" : "connecting");
+          return;
+        }
+        // error / abnormal close: the wrapper is backing off and will
+        // retry on its own.
+        setConnection("reconnecting");
+        setError(null);
       },
       // A refused upgrade looks like any other drop. Ask the API whether
       // the session is still good: if not, stop retrying and let the
@@ -190,14 +219,16 @@ export function useLogStream(
       if (timer !== null) clearTimeout(timer);
       wsRef.current = null;
     };
-  }, [project, service, env, tail, qc]);
+  }, [project, service, env, tail, qc, nonce]);
 
   return {
     lines,
     phase,
     status,
+    connection,
     error,
     notice,
     clear: () => setLines([]),
+    reconnect: () => setNonce((n) => n + 1),
   };
 }
