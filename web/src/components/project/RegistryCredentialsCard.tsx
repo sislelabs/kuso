@@ -47,14 +47,14 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
     <section className="space-y-4">
       <header>
         <h3 className="font-heading text-sm font-semibold tracking-tight">Registry credentials</h3>
-        <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
           Logins for private registries (GHCR, ECR, Docker Hub). Attach one to a pre-built image
           service under its Image settings. Passwords are never shown again.
         </p>
       </header>
 
       {creds.length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
           No registry credentials yet.
         </p>
       ) : (
@@ -65,8 +65,8 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
               className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2 last:border-b-0"
             >
               <Container className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-              <span className="font-mono text-[12px] text-[var(--text-primary)]">{c.registry}</span>
-              <span className="flex-1 truncate font-mono text-[11px] text-[var(--text-tertiary)]">
+              <span className="font-mono text-xs text-[var(--text-primary)]">{c.registry}</span>
+              <span className="flex-1 truncate font-mono text-xs text-[var(--text-tertiary)]">
                 {c.username}
               </span>
               <button
@@ -95,7 +95,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
           onChange={(e) => setRegistry(e.target.value)}
           placeholder="ghcr.io"
           aria-label="Registry host"
-          className="h-8 font-mono text-[12px]"
+          className="h-8 font-mono text-xs"
           spellCheck={false}
         />
         <Input
@@ -103,7 +103,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
           onChange={(e) => setUsername(e.target.value)}
           placeholder="username"
           aria-label="Registry username"
-          className="h-8 font-mono text-[12px]"
+          className="h-8 font-mono text-xs"
           spellCheck={false}
           autoComplete="off"
         />
@@ -113,7 +113,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
           type="password"
           placeholder="password or token"
           aria-label="Registry password or token"
-          className="h-8 font-mono text-[12px]"
+          className="h-8 font-mono text-xs"
           autoComplete="new-password"
         />
         <Button size="sm" type="submit" disabled={!canSave}>

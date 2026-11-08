@@ -102,13 +102,13 @@ export function ConfigTab({ project }: { project: string }) {
     <section className="space-y-4">
       <header className="flex items-center gap-2">
         <FileCode className="h-4 w-4 text-[var(--text-tertiary)]" />
-        <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          config as code
+        <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+          Config as code
         </h2>
       </header>
 
       <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-        <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
+        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
           The project&apos;s services, addons, and crons as a single{" "}
           <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono">kuso.yaml</code>{" "}
           document. Edit it, run a <span className="font-medium">dry run</span> to
@@ -119,7 +119,7 @@ export function ConfigTab({ project }: { project: string }) {
         </p>
 
         {loadError ? (
-          <p className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-[12px] text-red-400">
+          <p className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-400">
             {loadError}
           </p>
         ) : (
@@ -130,7 +130,7 @@ export function ConfigTab({ project }: { project: string }) {
             spellCheck={false}
             rows={22}
             placeholder={loading ? "loading…" : ""}
-            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-[12px] leading-relaxed text-[var(--text-secondary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
+            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--text-secondary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
           />
         )}
 
@@ -165,7 +165,7 @@ export function ConfigTab({ project }: { project: string }) {
             Reset to live
           </Button>
           {dirty && !loading && (
-            <span className="font-mono text-[10px] text-amber-400">edited</span>
+            <span className="font-mono text-xs text-amber-400">edited</span>
           )}
         </div>
       </div>
@@ -186,7 +186,7 @@ function ResultView({ result }: { result: ConfigApplyResult }) {
       {errs.length > 0 && (
         <section className="rounded-md border border-red-500/30 bg-red-500/5">
           <header className="border-b border-red-500/30 px-3 py-2">
-            <h3 className="font-mono text-[10px] uppercase tracking-widest text-red-400">
+            <h3 className="text-xs text-red-400 font-medium">
               {errs.length} error{errs.length > 1 ? "s" : ""}
             </h3>
           </header>
@@ -195,11 +195,11 @@ function ResultView({ result }: { result: ConfigApplyResult }) {
               <li
                 key={`${e.resource}-${e.op}-${i}`}
                 className={
-                  "px-3 py-2 text-[12px]" +
+                  "px-3 py-2 text-xs" +
                   (i < errs.length - 1 ? " border-b border-[var(--error)]/20" : "")
                 }
               >
-                <span className="font-mono text-[11px] text-[var(--error)]">
+                <span className="font-mono text-xs text-[var(--error)]">
                   {e.op} {e.resource}
                 </span>
                 <span className="ml-2 text-[var(--text-secondary)]">{e.message}</span>
@@ -252,12 +252,12 @@ function PlanView({ plan, title }: { plan: ConfigPlan; title: string }) {
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="border-b border-[var(--border-subtle)] px-3 py-2">
-        <h3 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        <h3 className="text-xs text-[var(--text-secondary)] font-medium">
           {title}
         </h3>
       </header>
       {empty ? (
-        <p className="px-3 py-3 font-mono text-[11px] text-[var(--text-tertiary)]">
+        <p className="px-3 py-3 font-mono text-xs text-[var(--text-tertiary)]">
           no changes — config matches live state
         </p>
       ) : (
@@ -266,14 +266,14 @@ function PlanView({ plan, title }: { plan: ConfigPlan; title: string }) {
             .filter((g) => g.items.length > 0)
             .map((g) => (
               <div key={g.label} className="px-3 py-2">
-                <p className={`font-mono text-[10px] uppercase tracking-widest ${g.tone}`}>
+                <p className={`text-xs font-medium ${g.tone}`}>
                   {g.label} · {g.items.length}
                 </p>
                 <ul className="mt-1 space-y-0.5">
                   {g.items.map((it) => (
                     <li
                       key={it}
-                      className="font-mono text-[11px] text-[var(--text-secondary)]"
+                      className="font-mono text-xs text-[var(--text-secondary)]"
                     >
                       {it}
                     </li>

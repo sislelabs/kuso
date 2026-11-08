@@ -46,7 +46,7 @@ export function UserAvatar({ user, size = 20 }: { user: Pick<ResolvedUser, "user
   return (
     <span
       aria-hidden
-      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--bg-tertiary)] text-[10px] font-semibold text-[var(--text-secondary)]"
+      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--bg-tertiary)] text-xs font-semibold text-[var(--text-secondary)]"
       style={{ width: size, height: size }}
     >
       {initials}

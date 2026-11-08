@@ -27,7 +27,7 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
     <span
       title={uptimeTitle(status)}
       className={cn(
-        "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]",
+        "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
         TONE[status.state] ?? "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
         status.stale && "opacity-60",
       )}

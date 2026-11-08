@@ -408,7 +408,7 @@ function MobileEnvReadout({ project, service }: { project: string; service: stri
             </li>
           )}
           {vars.map((v) => (
-            <li key={v.name} className="min-w-0 font-mono text-[11px] leading-relaxed">
+            <li key={v.name} className="min-w-0 font-mono text-xs leading-relaxed">
               <span className="text-[var(--text-secondary)]">{v.name}</span>
               <span className="text-[var(--text-tertiary)]">=</span>
               <span className="break-all text-[var(--text-primary)]">

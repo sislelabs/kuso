@@ -71,7 +71,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
           <span className="sr-only">Stream status:</span>
           <span className="text-xs font-medium text-[var(--text-primary)]">{conn.label}</span>
           {phase && (
-            <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--accent)]">
+            <span className="text-xs text-[var(--accent)] font-medium">
               · {phase}
             </span>
           )}
@@ -89,7 +89,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
           )}
         </div>
         <div className="flex items-center gap-1">
-          <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-secondary)]">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={follow}
@@ -98,7 +98,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
             />
             follow
           </label>
-          <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-secondary)]">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={wrap}
@@ -159,10 +159,10 @@ export function LogStream({ project, service, env = "production", height = "40vh
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="filter — type a substring, or /regex"
-          className="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-0.5 pl-6 pr-16 font-mono text-[11px] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--border-strong)] focus:outline-none"
+          className="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-0.5 pl-6 pr-16 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--border-strong)] focus:outline-none"
           spellCheck={false}
         />
-        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-xs text-[var(--text-tertiary)]">
           {filter
             ? `${visibleLines.length}/${lines.length}`
             : `${lines.length}`}
@@ -184,7 +184,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
               const el = scrollerRef.current;
               if (el) el.scrollTop = el.scrollHeight;
             }}
-            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-amber-500/40 bg-[var(--console-bg)]/95 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 shadow-md backdrop-blur hover:bg-[var(--console-bg-hover)]"
+            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-amber-500/40 bg-[var(--console-bg)]/95 px-3 py-1 text-xs text-amber-200 shadow-md backdrop-blur hover:bg-[var(--console-bg-hover)] font-medium"
             aria-label="scroll paused — jump to live tail"
           >
             paused · jump to live ↓
@@ -199,7 +199,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
         // ad-hoc embed with no flex parent), maxHeight caps us at the
         // requested viewport unit so we don't push the page.
         style={height === "100%" ? undefined : { maxHeight: height }}
-        className="dark h-full min-h-0 overflow-auto bg-[var(--console-bg)] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
+        className="dark h-full min-h-0 overflow-auto bg-[var(--console-bg)] p-3 font-mono text-xs leading-relaxed text-zinc-200"
       >
         {lines.length === 0 && (
           <p className="text-[var(--text-tertiary)]">
@@ -275,7 +275,7 @@ export function PhaseStepper({ phase }: { phase?: string | null }) {
   const steps = ["CLONING", "INSTALLING", "BUILDING", "PUSHING", "DEPLOYING", "ACTIVE"];
   const currentIdx = steps.indexOf((phase ?? "").toUpperCase());
   return (
-    <div className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest">
+    <div className="flex items-center gap-1 text-xs font-medium">
       {steps.map((s, i) => {
         const done = i < currentIdx;
         const active = i === currentIdx;
@@ -284,12 +284,12 @@ export function PhaseStepper({ phase }: { phase?: string | null }) {
             key={s}
             className={cn(
               "rounded border px-1.5 py-0.5",
-              done && "border-emerald-500/30 bg-emerald-500/10 text-emerald-500",
+              done && "border-[var(--success)]/30 bg-[var(--success-subtle)] text-[var(--success)]",
               active && "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--accent)] animate-pulse",
               !done && !active && "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
             )}
           >
-            {s}
+            {s.charAt(0) + s.slice(1).toLowerCase()}
             {i < steps.length - 1 && <span className="mx-1 opacity-50">→</span>}
           </span>
         );

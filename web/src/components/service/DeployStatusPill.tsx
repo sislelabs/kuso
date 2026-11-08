@@ -94,13 +94,13 @@ export function DeployStatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] uppercase tracking-wider",
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium",
         styles[status],
         className
       )}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {status}
+      {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   );
 }

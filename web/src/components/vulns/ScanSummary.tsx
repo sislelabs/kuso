@@ -16,7 +16,7 @@ function CountTile({ severity, count, fixable }: { severity: Severity; count: nu
   const tone = SEVERITY_TONE[severity];
   return (
     <div className={cn("min-w-[72px] rounded-md border px-2.5 py-1.5", tone.border, count > 0 ? tone.bg : "")}>
-      <div className={cn("font-mono text-xs font-semibold uppercase tracking-wide", tone.text)}>{severity}</div>
+      <div className={cn("text-xs font-semibold", tone.text)}>{severity.charAt(0) + severity.slice(1).toLowerCase()}</div>
       <div className="flex items-baseline gap-1.5">
         <span className="font-mono text-lg font-semibold text-[var(--text-primary)]">{count}</span>
         {fixable !== undefined && (
@@ -43,7 +43,7 @@ export function ScanSummary({ image, actions }: { image: VulnImageReport; action
           <p className="truncate font-mono text-xs text-[var(--text-primary)]" title={image.imageRef}>
             {image.imageRef}
           </p>
-          <p className="font-mono text-[11px] text-[var(--text-tertiary)]" title={image.digest}>
+          <p className="font-mono text-xs text-[var(--text-tertiary)]" title={image.digest}>
             {shortDigest(image.digest)}
           </p>
         </div>
@@ -55,7 +55,7 @@ export function ScanSummary({ image, actions }: { image: VulnImageReport; action
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
             <span
               className={cn(
-                "inline-flex items-center gap-1 rounded px-1.5 py-px font-mono text-[11px]",
+                "inline-flex items-center gap-1 rounded px-1.5 py-px font-mono text-xs",
                 STATUS_TONE[scan.status],
               )}
             >

@@ -105,7 +105,7 @@ export function ServiceEnvironmentForm({
               value={form.name}
               onChange={(e) => set({ name: e.target.value })}
               placeholder="staging"
-              className="h-8 font-mono text-[12px]"
+              className="h-8 font-mono text-xs"
               spellCheck={false}
               autoFocus
             />
@@ -116,7 +116,7 @@ export function ServiceEnvironmentForm({
               value={form.branch}
               onChange={(e) => set({ branch: e.target.value })}
               placeholder={defaultBranch}
-              className="h-8 font-mono text-[12px]"
+              className="h-8 font-mono text-xs"
               spellCheck={false}
             />
           </Label>
@@ -127,7 +127,7 @@ export function ServiceEnvironmentForm({
             value={form.host}
             onChange={(e) => set({ host: e.target.value })}
             placeholder="staging.example.com"
-            className="h-8 font-mono text-[12px]"
+            className="h-8 font-mono text-xs"
             spellCheck={false}
           />
         </Label>

@@ -90,7 +90,7 @@ export function KubeEventsSection() {
                     <td className="px-3 py-1.5">
                       <span
                         className={cn(
-                          "inline-flex rounded border px-1.5 py-px text-[11px]",
+                          "inline-flex rounded border px-1.5 py-px text-xs",
                           e.type === "Warning"
                             ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)] text-[var(--warning)]"
                             : "border-transparent px-0 text-[var(--text-tertiary)]",

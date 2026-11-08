@@ -257,7 +257,7 @@ export function AddOauthAppDialog({
 function CopyRow({ value, onCopy }: { value: string; onCopy: () => void }) {
   return (
     <div className="flex items-center gap-2">
-      <code className="flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
+      <code className="flex-1 truncate font-mono text-xs text-[var(--text-primary)]">
         {value}
       </code>
       <button

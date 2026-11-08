@@ -295,7 +295,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   <h2 className="truncate font-heading text-base font-semibold tracking-tight">
                     {displayName.trim() || cronTail}
                   </h2>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-tertiary)]">
+                  <p className="mt-0.5 truncate font-mono text-xs text-[var(--text-tertiary)]">
                     {project} · {cronTail} · {kind}
                   </p>
                 </div>
@@ -319,7 +319,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder={cronTail}
-                  className="mt-1 h-7 text-[12px]"
+                  className="mt-1 h-7 text-xs"
                   spellCheck={false}
                 />
               </div>
@@ -366,7 +366,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                   )}
                 </div>
 
-                <dl className="space-y-1.5 text-[11px]">
+                <dl className="space-y-1.5 text-xs">
                   <div className="flex items-start gap-2">
                     <Package className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
                     <dt className="w-16 shrink-0 text-[var(--text-tertiary)]">image</dt>
@@ -438,7 +438,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://api.example.com/cron/cleanup"
-                    className="mt-1 h-7 font-mono text-[11px]"
+                    className="mt-1 h-7 font-mono text-xs"
                     spellCheck={false}
                   />
                 </div>
@@ -455,7 +455,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                         value={imageRepo}
                         onChange={(e) => setImageRepo(e.target.value)}
                         placeholder="ghcr.io/owner/repo"
-                        className="mt-1 h-7 font-mono text-[11px]"
+                        className="mt-1 h-7 font-mono text-xs"
                         spellCheck={false}
                       />
                     </div>
@@ -467,7 +467,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                         value={imageTag}
                         onChange={(e) => setImageTag(e.target.value)}
                         placeholder="latest"
-                        className="mt-1 h-7 font-mono text-[11px]"
+                        className="mt-1 h-7 font-mono text-xs"
                         spellCheck={false}
                       />
                     </div>
@@ -480,7 +480,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                       value={cmd}
                       onChange={(e) => setCmd(e.target.value)}
                       placeholder='sh -c "rake cleanup"'
-                      className="mt-1 h-7 font-mono text-[11px]"
+                      className="mt-1 h-7 font-mono text-xs"
                       spellCheck={false}
                     />
                   </div>
@@ -496,7 +496,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                     value={cmd}
                     onChange={(e) => setCmd(e.target.value)}
                     placeholder="rails runner Cleanup.run"
-                    className="mt-1 h-7 font-mono text-[11px]"
+                    className="mt-1 h-7 font-mono text-xs"
                     spellCheck={false}
                   />
                 </div>
@@ -504,7 +504,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
 
               {kind === "service" && (
                 <label className={cn(
-                  "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px]",
+                  "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs",
                   pinImage
                     ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)]"
                     : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
@@ -524,7 +524,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
               )}
 
               <label className={cn(
-                "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px]",
+                "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs",
                 suspend
                   ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)]"
                   : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
@@ -588,7 +588,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
             confirmLabel={del.isPending ? "Deleting…" : "Delete"}
             pending={del.isPending}
             body={
-              <p className="text-[12px] text-[var(--text-secondary)]">
+              <p className="text-xs text-[var(--text-secondary)]">
                 Removes the KusoCron and its kube CronJob.{" "}
                 {kind === "http" ? "Probe" : kind === "command" ? "Job" : "Cron"} runs stop
                 immediately.

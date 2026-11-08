@@ -63,7 +63,7 @@ function phaseBadge(p: RunPhase) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-xs font-semibold tracking-widest border",
+        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-xs font-semibold border",
         m.cls,
       )}
     >
@@ -96,7 +96,7 @@ export function ServiceRunsPanel({ project, service }: Props) {
       {canRun ? (
         <NewRunComposer project={project} service={service} />
       ) : (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-3 font-mono text-[11px] text-[var(--text-tertiary)]">
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-3 font-mono text-xs text-[var(--text-tertiary)]">
           Starting a run requires the admin role.
         </p>
       )}
@@ -189,7 +189,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
           onChange={(e) => setCmd(e.target.value)}
           placeholder={`python manage.py migrate\n\n# or, with shell:\nsh -c "rake db:seed && echo done"`}
           rows={3}
-          className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[12px] text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
+          className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           spellCheck={false}
         />
         <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
@@ -206,7 +206,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
           onChange={(e) => setEnvText(e.target.value)}
           placeholder="MIGRATE_VERSION=20260518"
           rows={2}
-          className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[12px] text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
+          className="mt-1 w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           spellCheck={false}
         />
       </div>
@@ -230,7 +230,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
               placeholder={`${label} · ${ph}`}
               aria-label={label}
               spellCheck={false}
-              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs"
             />
           ))}
         </div>
@@ -244,7 +244,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
             onChange={(e) => setTimeoutSec(Number(e.target.value) || 1800)}
             min={1}
             max={86400}
-            className="w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]"
+            className="w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs"
           />
           seconds
         </label>
@@ -339,7 +339,7 @@ function RunRow({
         >
           {phaseBadge(phase)}
           <div className="min-w-0 flex-1">
-            <div className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={cmd}>
+            <div className="truncate font-mono text-xs text-[var(--text-primary)]" title={cmd}>
               {cmd || <span className="text-[var(--text-tertiary)]">(no command)</span>}
             </div>
             <div className="mt-0.5 font-mono text-xs text-[var(--text-tertiary)]">
@@ -366,7 +366,7 @@ function RunRow({
               )}
             </div>
             {phase === "failed" && msg && (
-              <div className="mt-1 flex items-start gap-1 font-mono text-[11px] text-[var(--error)]" title={msg}>
+              <div className="mt-1 flex items-start gap-1 font-mono text-xs text-[var(--error)]" title={msg}>
                 <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
                 <span className="truncate">{msg}</span>
               </div>
@@ -463,7 +463,7 @@ function RunDetail({ project, runName }: { project: string; runName: string }) {
   if (q.isPending) return <Skeleton className="m-3 h-12" />;
   if (q.isError) {
     return (
-      <p className="px-3 py-2 font-mono text-[11px] text-[var(--error)]">
+      <p className="px-3 py-2 font-mono text-xs text-[var(--error)]">
         {q.error instanceof Error ? q.error.message : "Couldn't load run"}
       </p>
     );
@@ -484,7 +484,7 @@ function RunDetail({ project, runName }: { project: string; runName: string }) {
   const msg = runMessage(r);
   if (msg) rows.push(["message", msg]);
   return (
-    <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-[var(--border-subtle)] px-3 py-2 font-mono text-[11px]">
+    <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-[var(--border-subtle)] px-3 py-2 font-mono text-xs">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-[var(--text-tertiary)]">{k}</dt>

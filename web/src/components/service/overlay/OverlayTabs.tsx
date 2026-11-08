@@ -132,7 +132,7 @@ export function OverlayTabs<T extends string>({
         {Icon && <Icon aria-hidden className="h-3.5 w-3.5" />}
         {t.label}
         {!!t.badge && (
-          <span className={cn("rounded-full px-1.5 text-[11px] font-semibold tabular-nums leading-[18px]", BADGE_TONE[t.badgeTone ?? "neutral"])}>
+          <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums leading-[18px]", BADGE_TONE[t.badgeTone ?? "neutral"])}>
             {t.badge > 99 ? "99+" : t.badge}
             <span className="sr-only"> {t.badgeTone === "error" ? "errors" : "items"}</span>
           </span>
@@ -181,12 +181,12 @@ export function OverlayTabs<T extends string>({
                     {Icon && <Icon aria-hidden className="h-3.5 w-3.5" />}
                     <span className="flex-1">{t.label}</span>
                     {!!t.badge && (
-                      <span className={cn("rounded-full px-1.5 text-[11px] font-semibold tabular-nums", BADGE_TONE[t.badgeTone ?? "neutral"])}>
+                      <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums", BADGE_TONE[t.badgeTone ?? "neutral"])}>
                         {t.badge}
                       </span>
                     )}
                     {t.chord && (
-                      <kbd className="font-sans text-[11px] text-[var(--text-tertiary)]">G {t.chord.toUpperCase()}</kbd>
+                      <kbd className="font-sans text-xs text-[var(--text-tertiary)]">G {t.chord.toUpperCase()}</kbd>
                     )}
                   </button>
                 );
@@ -202,7 +202,7 @@ export function OverlayTabs<T extends string>({
           <span key={t.id} className="inline-flex shrink-0 items-center gap-1.5 px-3 text-sm font-medium">
             {t.icon && <span className="inline-block h-3.5 w-3.5" />}
             {t.label}
-            {!!t.badge && <span className="px-1.5 text-[11px] font-semibold">{t.badge > 99 ? "99+" : t.badge}</span>}
+            {!!t.badge && <span className="px-1.5 text-xs font-semibold">{t.badge > 99 ? "99+" : t.badge}</span>}
           </span>
         ))}
       </div>

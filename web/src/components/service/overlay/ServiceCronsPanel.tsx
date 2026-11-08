@@ -52,7 +52,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
       <header className="flex items-center justify-between">
         <div>
           <h3 className="font-mono text-sm font-medium">Crons</h3>
-          <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
+          <p className="font-mono text-xs text-[var(--text-tertiary)]">
             Recurring jobs that run the parent service&apos;s image with a custom command.
           </p>
         </div>
@@ -83,7 +83,7 @@ export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
         <QueryErrorState what="crons" error={list.error} onRetry={() => void list.refetch()} />
       ) : (list.data ?? []).length === 0 ? (
         adding ? null : (
-          <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+          <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-6 text-center text-xs text-[var(--text-tertiary)]">
             No crons yet.
             {canCreate ? (
               <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
@@ -150,7 +150,7 @@ function CronRow({
     <li className="flex items-center gap-3 px-3 py-2">
       <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-mono text-[12px] font-medium">{short}</p>
+        <p className="truncate font-mono text-xs font-medium">{short}</p>
         <p className="truncate font-mono text-xs text-[var(--text-tertiary)]">
           <span className="text-[var(--text-secondary)]">{cron.spec.schedule}</span>
           {" · "}
@@ -263,14 +263,14 @@ function CronCreateForm({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="cron name (e.g. nightly-cleanup)"
-        className="h-7 font-mono text-[12px]"
+        className="h-7 font-mono text-xs"
       />
       <CronPicker value={schedule} onChange={setSchedule} />
       <Input
         value={cmd}
         onChange={(e) => setCmd(e.target.value)}
         placeholder="rails runner Cleanup.run    OR    sh -c &quot;curl … &amp;&amp; …&quot;"
-        className="h-7 font-mono text-[12px]"
+        className="h-7 font-mono text-xs"
       />
       <button
         type="button"
@@ -283,7 +283,7 @@ function CronCreateForm({
       {showOptions && (
         <div className="space-y-2">
           <CronPolicyFields value={policy} onChange={setPolicy} />
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={pinImage}
@@ -292,7 +292,7 @@ function CronCreateForm({
             />
             Pin the image — stay on the current build instead of following {service}&apos;s deploys
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={suspend}

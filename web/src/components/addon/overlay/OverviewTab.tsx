@@ -161,7 +161,7 @@ function UsedBy({ project, addon, group }: { project: string; addon: string; gro
                     setConfirm({ svc, on: !on });
                   }}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors",
+                    "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-xs transition-colors",
                     on
                       ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
                       : "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
@@ -304,7 +304,7 @@ function ConnectionRows({
             <span
               className={cn(
                 "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs",
-                visible ? "text-[var(--text-primary)]" : "tracking-widest text-[var(--text-tertiary)]",
+                visible ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
               )}
               title={visible ? v : "Hidden. Use the eye button to reveal."}
             >

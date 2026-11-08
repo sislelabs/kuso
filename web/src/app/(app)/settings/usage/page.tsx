@@ -234,7 +234,7 @@ function ProjectTable({
                 {r.project}
               </span>
               <ShareBar pct={r.sharePct} />
-              <div className="flex w-full shrink-0 items-center sm:w-[280px] justify-end gap-4 font-mono text-[11px] text-[var(--text-secondary)]">
+              <div className="flex w-full shrink-0 items-center sm:w-[280px] justify-end gap-4 font-mono text-xs text-[var(--text-secondary)]">
                 <span title="CPU consumed (projected)">
                   {(r.cpuMilliHours / 1000).toFixed(1)} cpu·hr
                 </span>
@@ -359,7 +359,7 @@ function NodeBreakdown({ windowDays }: { windowDays: number }) {
                       <Server className="h-4 w-4 text-[var(--text-tertiary)]" />
                       <span className="font-mono text-sm font-medium">{t.node}</span>
                     </div>
-                    <div className="flex items-center gap-4 font-mono text-[11px] text-[var(--text-secondary)]">
+                    <div className="flex items-center gap-4 font-mono text-xs text-[var(--text-secondary)]">
                       <span>{(t.cpuMilliHours / 1000).toFixed(1)} cpu·hr</span>
                       <span>{t.memGBHours.toFixed(1)} GB·hr</span>
                       {!ratesUnset && (

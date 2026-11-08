@@ -259,7 +259,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                   href={`/api/projects/${project}/addons/${addon}/webui/`}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                   title="Open the addon's built-in web console"
                 >
                   Open Web UI

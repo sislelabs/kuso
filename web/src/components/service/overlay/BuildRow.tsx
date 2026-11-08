@@ -64,7 +64,7 @@ export function StatusBadge({ s, queuePos }: { s: BuildRowStatus; queuePos?: num
   const m = STATUS[s];
   if (!m.badge) return null;
   return (
-    <span className={cn("inline-flex shrink-0 items-center rounded border px-1.5 py-px text-[11px] font-medium", m.badge)}>
+    <span className={cn("inline-flex shrink-0 items-center rounded border px-1.5 py-px text-xs font-medium", m.badge)}>
       {s === "queued" && queuePos ? `Queued · #${queuePos}` : m.label}
     </span>
   );
@@ -371,7 +371,7 @@ function Remediation({ failureClass }: { failureClass?: BuildFailureClass }) {
           {rem.fix && (
             <div className="mt-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
               <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-2 py-1">
-                <span className="text-[11px] text-[var(--text-tertiary)]">{rem.fixLang || "Fix"}</span>
+                <span className="text-xs text-[var(--text-tertiary)]">{rem.fixLang || "Fix"}</span>
                 <CopyButton value={rem.fix} label="Copy" showLabel />
               </div>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs text-[var(--text-secondary)]">

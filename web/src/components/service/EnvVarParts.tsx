@@ -30,7 +30,7 @@ export function VarBadge({
     <span
       title={title}
       className={cn(
-        "shrink-0 rounded border px-1.5 py-px text-[11px] leading-4",
+        "shrink-0 rounded border px-1.5 py-px text-xs leading-4",
         tone === "neutral" && "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
         tone === "accent" && "border-[var(--accent)]/40 text-[var(--accent)]",
         tone === "warn" && "border-[var(--warning)]/40 text-[var(--warning)]",
@@ -69,7 +69,7 @@ export function RowMenu({ label, items }: { label: string; items: MenuItem[] }) 
             <Link
               key={item.label}
               href={item.href}
-              className="rounded-md px-2 py-1.5 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              className="rounded-md px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               {item.label}
             </Link>
@@ -82,7 +82,7 @@ export function RowMenu({ label, items }: { label: string; items: MenuItem[] }) 
                 item.onSelect?.();
               }}
               className={cn(
-                "rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[var(--bg-tertiary)]",
+                "rounded-md px-2 py-1.5 text-left text-xs hover:bg-[var(--bg-tertiary)]",
                 item.destructive
                   ? "text-[var(--error)]"
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
@@ -203,7 +203,7 @@ export function SharedPickerDialog({
           <DialogTitle>Project secrets</DialogTitle>
         </DialogHeader>
         {sources.length === 0 ? (
-          <p className="text-[12px] text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]">
             None yet.{" "}
             <Link
               href={`/projects/${encodeURIComponent(project)}/settings`}
@@ -222,7 +222,7 @@ export function SharedPickerDialog({
                 {[...src.keys].sort().map((k) => (
                   <label
                     key={k}
-                    className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-[12px] hover:bg-[var(--bg-tertiary)]"
+                    className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-xs hover:bg-[var(--bg-tertiary)]"
                   >
                     <input
                       type="checkbox"
@@ -240,7 +240,7 @@ export function SharedPickerDialog({
         <DialogFooter>
           <Link
             href={`/projects/${encodeURIComponent(project)}/settings`}
-            className="mr-auto self-center text-[12px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            className="mr-auto self-center text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
           >
             Manage →
           </Link>

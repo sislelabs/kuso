@@ -86,7 +86,7 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
           aria-label="Repository URL"
           aria-invalid={error ? true : undefined}
           spellCheck={false}
-          className="h-8 flex-1 font-mono text-[12px]"
+          className="h-8 flex-1 font-mono text-xs"
         />
         <Button type="submit" size="sm" variant="outline" disabled={checking || !url.trim()}>
           <Link2 className="h-3.5 w-3.5" />
@@ -98,29 +98,29 @@ export function RepoUrlForm({ onPicked }: { onPicked: (repo: RepoByUrl) => void 
           type="password"
           value={token}
           onChange={(e) => setToken(e.target.value)}
-          placeholder="access token for a private repo (github_pat_… / glpat-…)"
+          placeholder="Access token, e.g. github_pat_… or glpat-…"
           aria-label="Repository access token"
           autoComplete="off"
           spellCheck={false}
           data-1p-ignore
           data-lpignore="true"
-          className="h-8 font-mono text-[12px]"
+          className="h-8 font-mono text-xs"
         />
       ) : (
         <button
           type="button"
           onClick={() => setShowToken(true)}
-          className="font-mono text-xs text-[var(--text-secondary)] underline"
+          className="text-xs text-[var(--link)] underline-offset-4 hover:underline"
         >
-          private repo? add an access token
+          Private repo? Add an access token
         </button>
       )}
       {error && (
-        <p role="alert" className="text-[11px] text-[var(--error)]">
+        <p role="alert" className="text-xs text-[var(--error)]">
           {error}
         </p>
       )}
-      <p className="font-mono text-xs text-[var(--text-tertiary)]">
+      <p className="text-hint">
         No GitHub App needed. To deploy on push, enable the deploy hook in the service&apos;s
         settings afterwards.
       </p>

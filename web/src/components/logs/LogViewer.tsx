@@ -461,7 +461,7 @@ export function LogViewer({
               <button
                 type="submit"
                 title={live ? "Search the 7-day archive" : "Search"}
-                className="inline-flex items-center gap-0.5 rounded border border-[var(--border-subtle)] px-1 py-0.5 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                className="inline-flex items-center gap-0.5 rounded border border-[var(--border-subtle)] px-1 py-0.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
                 <CornerDownLeft className="h-3 w-3" />
                 <span className="sr-only">{live ? "Search history" : "Search"}</span>
@@ -586,7 +586,7 @@ export function LogViewer({
           role="log"
           aria-live="off"
           aria-label="Log lines"
-          className="h-full overflow-y-auto overflow-x-auto py-1 font-mono text-[12px] leading-[1.55] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/40"
+          className="h-full overflow-y-auto overflow-x-auto py-1 font-mono text-xs leading-[1.55] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/40"
         >
           <div ref={contentRef}>
           {!live && rows.length > 0 && (
@@ -731,7 +731,7 @@ const LogRow = memo(function LogRow({
       >
         {r.cont ? "" : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
       </span>
-      <span className={cn("w-7 shrink-0 select-none text-[11px] font-semibold leading-[1.85]", meta.text, r.cont && "max-sm:hidden")} aria-label={r.level === "none" ? undefined : `level ${r.level}`}>
+      <span className={cn("w-7 shrink-0 select-none text-xs font-semibold leading-[1.85]", meta.text, r.cont && "max-sm:hidden")} aria-label={r.level === "none" ? undefined : `level ${r.level}`}>
         {r.cont ? "" : meta.label}
       </span>
       {serviceLabel && r.service !== undefined && (

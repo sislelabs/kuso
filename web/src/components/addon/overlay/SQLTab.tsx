@@ -107,7 +107,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 setResp(null);
                 setError(null);
               }}
-              className="mb-3 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+              className="mb-3 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
               aria-label="database"
             >
               <option value="">(default)</option>
@@ -169,7 +169,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 <button
                   type="button"
                   onClick={() => pickTable(t.schema, t.name)}
-                  className={`block w-full truncate rounded px-2 py-1 text-left font-mono text-[11px] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] ${
+                  className={`block w-full truncate rounded px-2 py-1 text-left font-mono text-xs hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] ${
                     selected?.schema === t.schema && selected?.name === t.name
                       ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                       : "text-[var(--text-secondary)]"
@@ -192,7 +192,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
               key={m}
               type="button"
               onClick={() => setMode(m)}
-              className={`rounded px-2 py-1 font-mono text-xs uppercase tracking-wider ${
+              className={`rounded px-2 py-1 text-xs font-medium ${
                 mode === m
                   ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                   : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -228,7 +228,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 spellCheck={false}
                 rows={4}
                 placeholder="SELECT * FROM users LIMIT 100"
-                className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 onKeyDown={(e) => {
                   // ⌘/Ctrl+Enter runs the query — same shortcut every other
                   // SQL UI uses, so muscle memory carries over from psql,
@@ -251,7 +251,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
               {error ? (
-                <pre className="whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] text-[var(--error)]">
+                <pre className="whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-xs text-[var(--error)]">
                   {error}
                 </pre>
               ) : resp ? (
@@ -320,7 +320,7 @@ function SQLResults({
   }
   return (
     <div className="overflow-auto rounded-md border border-[var(--border-subtle)]">
-      <table className="w-full text-left font-mono text-[11px]">
+      <table className="w-full text-left font-mono text-xs">
         <thead className="bg-[var(--bg-secondary)] text-[var(--text-tertiary)]">
           <tr>
             {resp.columns.map((c) => (

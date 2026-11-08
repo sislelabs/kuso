@@ -107,7 +107,7 @@ export function InsertRowDialog({
               const kind = inputKindFor(c);
               return (
                 <div key={c.name} className="grid grid-cols-[140px_1fr] items-start gap-2">
-                  <label className="pt-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
+                  <label className="pt-1.5 font-mono text-xs text-[var(--text-secondary)]">
                     {c.name}
                     <span className="block text-xs text-[var(--text-tertiary)]">
                       {c.dataType}
@@ -143,7 +143,7 @@ export function InsertRowDialog({
                         <select
                           value={fs.raw}
                           onChange={(e) => set(c.name, { raw: e.target.value })}
-                          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-[11px]"
+                          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs"
                         >
                           <option value="">—</option>
                           {(kind === "bool" ? ["true", "false"] : c.enumValues ?? []).map((v) => (
@@ -159,14 +159,14 @@ export function InsertRowDialog({
                           rows={2}
                           spellCheck={false}
                           placeholder="{}"
-                          className="w-full resize-y rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-[11px]"
+                          className="w-full resize-y rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs"
                         />
                       ) : (
                         <input
                           value={fs.raw}
                           onChange={(e) => set(c.name, { raw: e.target.value })}
                           inputMode={kind === "number" ? "decimal" : undefined}
-                          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-[11px]"
+                          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-xs"
                         />
                       ))}
                     {errs[c.name] && (

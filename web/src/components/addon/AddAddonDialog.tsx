@@ -69,7 +69,7 @@ interface FieldErrors {
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
   return (
-    <p role="alert" className="text-[11px] text-[var(--error)]">
+    <p role="alert" className="text-xs text-[var(--error)]">
       {msg}
     </p>
   );
@@ -217,7 +217,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       <DialogContent className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-lg" showCloseButton={!create.isPending}>
             <DialogHeader className="gap-0.5 border-b border-[var(--border-subtle)] px-4 py-3 pr-10">
               <DialogTitle className="font-heading">Add addon</DialogTitle>
-              <DialogDescription className="text-[11px] text-[var(--text-tertiary)]">
+              <DialogDescription className="text-xs text-[var(--text-tertiary)]">
                 Add a database or service to{" "}
                 <span className="font-mono text-[var(--text-secondary)]">{project}</span>.
               </DialogDescription>
@@ -248,7 +248,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                     )}
                   >
                     <AddonIcon kind={k} />
-                    <span className="text-[12px] font-medium">{addonLabel(k)}</span>
+                    <span className="text-xs font-medium">{addonLabel(k)}</span>
                   </button>
                 );
               })}
@@ -279,7 +279,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                   if (e.key === "Enter") onSubmit();
                 }}
                 aria-invalid={fieldErrors.name ? true : undefined}
-                className="h-8 font-mono text-[12px]"
+                className="h-8 font-mono text-xs"
                 spellCheck={false}
                 autoFocus={!!kind}
               />
@@ -336,7 +336,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         disabled && "cursor-not-allowed opacity-40 hover:bg-transparent"
                       )}
                     >
-                      <span className="text-[12px] font-medium">{labelMap[m]}</span>
+                      <span className="text-xs font-medium">{labelMap[m]}</span>
                       <span className="font-mono text-xs text-[var(--text-tertiary)]">{subMap[m]}</span>
                     </button>
                   );
@@ -362,7 +362,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                     }}
                     placeholder={kind === "redpanda" ? "broker-1:9092" : "postgres://user:pass@host:5432/db"}
                     aria-invalid={fieldErrors.extURL ? true : undefined}
-                    className="h-7 font-mono text-[11px]"
+                    className="h-7 font-mono text-xs"
                     spellCheck={false}
                   />
                   {fieldErrors.extURL ? (
@@ -404,7 +404,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             value={version}
                             onChange={(e) => setVersion(e.target.value)}
                             placeholder="(chart default)"
-                            className="mt-1 h-7 font-mono text-[11px]"
+                            className="mt-1 h-7 font-mono text-xs"
                             spellCheck={false}
                           />
                         </div>
@@ -420,12 +420,12 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             value={storageSize}
                             onChange={(e) => setStorageSize(e.target.value)}
                             placeholder="10Gi"
-                            className="mt-1 h-7 font-mono text-[11px]"
+                            className="mt-1 h-7 font-mono text-xs"
                             spellCheck={false}
                           />
                         </div>
                       </div>
-                      <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+                      <label className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
                         <input
                           type="checkbox"
                           checked={ha}
@@ -436,7 +436,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       </label>
                       {kind === "postgres" && (
                         <div>
-                          <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+                          <label className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
                             <input
                               type="checkbox"
                               checked={requireTLS}
@@ -460,7 +460,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
 
               {mode === "instance" && (
                 <div className="space-y-2">
-                  <p className="text-[11px] leading-snug text-[var(--text-tertiary)]">
+                  <p className="text-xs leading-snug text-[var(--text-tertiary)]">
                     Creates a separate database for this project on a
                     Postgres server an admin registered in Settings →
                     Cluster database. Postgres only.
@@ -477,7 +477,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         id="addon-inst-name"
                         value={instName}
                         onChange={(e) => setInstName(e.target.value)}
-                        className="mt-1 h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)]"
+                        className="mt-1 h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)]"
                       >
                         <option value="">(pick one)</option>
                         {availableInstanceNames.map((n) => (
@@ -492,7 +492,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         value={instName}
                         onChange={(e) => setInstName(e.target.value)}
                         placeholder="pg"
-                        className="mt-1 h-7 font-mono text-[11px]"
+                        className="mt-1 h-7 font-mono text-xs"
                         spellCheck={false}
                       />
                     )}

@@ -56,7 +56,7 @@ export function CronPolicyFields({
             value={value.activeDeadlineSeconds}
             onChange={(e) => onChange({ ...value, activeDeadlineSeconds: e.target.value })}
             placeholder="none"
-            className="mt-1 h-7 font-mono text-[11px]"
+            className="mt-1 h-7 font-mono text-xs"
           />
         </label>
         <label className="block">
@@ -67,7 +67,7 @@ export function CronPolicyFields({
             value={value.startingDeadlineSeconds}
             onChange={(e) => onChange({ ...value, startingDeadlineSeconds: e.target.value })}
             placeholder="300"
-            className="mt-1 h-7 font-mono text-[11px]"
+            className="mt-1 h-7 font-mono text-xs"
           />
         </label>
       </div>
@@ -97,7 +97,7 @@ export function CronOnFailureFields({
           value={value.webhookURL}
           onChange={(e) => onChange({ ...value, webhookURL: e.target.value })}
           placeholder="https://hooks.example.com/cron-failed"
-          className="mt-1 h-7 font-mono text-[11px]"
+          className="mt-1 h-7 font-mono text-xs"
           spellCheck={false}
         />
       </label>
@@ -109,7 +109,7 @@ export function CronOnFailureFields({
               value={value.secretName}
               onChange={(e) => onChange({ ...value, secretName: e.target.value })}
               placeholder={`${project}-shared`}
-              className="mt-1 h-7 font-mono text-[11px]"
+              className="mt-1 h-7 font-mono text-xs"
               spellCheck={false}
             />
           </label>
@@ -119,7 +119,7 @@ export function CronOnFailureFields({
               value={value.secretKey}
               onChange={(e) => onChange({ ...value, secretKey: e.target.value })}
               placeholder="CRON_WEBHOOK_SECRET"
-              className="mt-1 h-7 font-mono text-[11px]"
+              className="mt-1 h-7 font-mono text-xs"
               spellCheck={false}
             />
           </label>

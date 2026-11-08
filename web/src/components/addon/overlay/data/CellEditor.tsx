@@ -87,13 +87,13 @@ export function CellEditor({
           </button>
         )}
         {draftNull ? (
-          <span className="flex-1 px-1 text-[11px] italic text-[var(--text-tertiary)]/60">null</span>
+          <span className="flex-1 px-1 text-xs italic text-[var(--text-tertiary)]/60">null</span>
         ) : kind === "bool" ? (
           <select
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-[11px]"
+            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-xs"
           >
             <option value="true">true</option>
             <option value="false">false</option>
@@ -103,7 +103,7 @@ export function CellEditor({
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-[11px]"
+            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 text-xs"
           >
             {(col.enumValues ?? []).map((v) => (
               <option key={v} value={v}>
@@ -121,7 +121,7 @@ export function CellEditor({
             onKeyDown={(e) => {
               if (e.key === "Escape") cancel();
             }}
-            className="flex-1 resize-y rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 font-mono text-[11px]"
+            className="flex-1 resize-y rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 font-mono text-xs"
           />
         ) : (
           <input
@@ -134,7 +134,7 @@ export function CellEditor({
               if (e.key === "Enter") commit();
               if (e.key === "Escape") cancel();
             }}
-            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 font-mono text-[11px]"
+            className="flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg-primary)] px-1 py-0.5 font-mono text-xs"
           />
         )}
       </div>

@@ -155,7 +155,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                 <DialogTitle className="font-heading text-base font-semibold tracking-tight">
                   Add cron
                 </DialogTitle>
-                <DialogDescription className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
+                <DialogDescription className="mt-0.5 text-xs text-[var(--text-secondary)]">
                   A recurring job in <span className="font-mono">{project}</span>.
                 </DialogDescription>
               </div>
@@ -198,7 +198,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="nightly-cleanup"
-                    className="mt-1 h-7 font-mono text-[11px]"
+                    className="mt-1 h-7 font-mono text-xs"
                     spellCheck={false}
                   />
                 </div>
@@ -210,7 +210,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
                     placeholder="Nightly Cleanup"
-                    className="mt-1 h-7 text-[11px]"
+                    className="mt-1 h-7 text-xs"
                     spellCheck={false}
                   />
                 </div>
@@ -234,7 +234,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://api.example.com/cron/cleanup"
-                    className="mt-1 h-7 font-mono text-[11px]"
+                    className="mt-1 h-7 font-mono text-xs"
                     spellCheck={false}
                   />
                   <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
@@ -256,7 +256,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                         value={imageRepo}
                         onChange={(e) => setImageRepo(e.target.value)}
                         placeholder="ghcr.io/owner/repo"
-                        className="mt-1 h-7 font-mono text-[11px]"
+                        className="mt-1 h-7 font-mono text-xs"
                         spellCheck={false}
                       />
                     </div>
@@ -268,7 +268,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                         value={imageTag}
                         onChange={(e) => setImageTag(e.target.value)}
                         placeholder="latest"
-                        className="mt-1 h-7 font-mono text-[11px]"
+                        className="mt-1 h-7 font-mono text-xs"
                         spellCheck={false}
                       />
                     </div>
@@ -281,7 +281,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
                       value={cmd}
                       onChange={(e) => setCmd(e.target.value)}
                       placeholder='sh -c "rake cleanup"'
-                      className="mt-1 h-7 font-mono text-[11px]"
+                      className="mt-1 h-7 font-mono text-xs"
                       spellCheck={false}
                     />
                     <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
@@ -293,7 +293,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
 
               <CronPolicyFields value={policy} onChange={setPolicy} />
               <CronOnFailureFields value={onFailure} onChange={setOnFailure} project={project} />
-              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
                 <input
                   type="checkbox"
                   checked={suspend}
@@ -343,7 +343,7 @@ function KindTile({
       )}
     >
       <Icon className={cn("h-4 w-4", selected ? "text-[var(--accent)]" : "text-[var(--text-tertiary)]")} />
-      <span className="text-[12px] font-medium">{label}</span>
+      <span className="text-xs font-medium">{label}</span>
       <span className="font-mono text-xs text-[var(--text-tertiary)]">{hint}</span>
     </button>
   );

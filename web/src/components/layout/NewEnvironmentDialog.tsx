@@ -214,7 +214,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
 
             {scope === "service" ? (
               services.length === 0 ? (
-                <p className="p-4 text-[12px] text-[var(--text-secondary)]">Add a service to the project first.</p>
+                <p className="p-4 text-xs text-[var(--text-secondary)]">Add a service to the project first.</p>
               ) : (
                 <ServiceEnvironmentForm
                   project={project}
@@ -236,7 +236,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="staging"
-                    className="h-8 font-mono text-[12px]"
+                    className="h-8 font-mono text-xs"
                     spellCheck={false}
                     autoFocus
                     onKeyDown={(e) => {
@@ -291,7 +291,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                         <div className="flex min-w-0 items-center gap-2">
                           <Database className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                           <div className="min-w-0">
-                            <div className="truncate font-mono text-[12px] text-[var(--text-primary)]">
+                            <div className="truncate font-mono text-xs text-[var(--text-primary)]">
                               {a.short}
                             </div>
                             <div className="text-xs font-medium text-[var(--text-secondary)] first-letter:uppercase">

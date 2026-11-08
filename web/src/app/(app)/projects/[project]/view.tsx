@@ -383,7 +383,7 @@ export function ProjectDetailView() {
         {addons.isError && (
           <div
             role="alert"
-            className="shrink-0 border-b border-[var(--error)]/30 bg-[var(--error-subtle)] px-6 py-2 text-[12px] text-[var(--error)]"
+            className="shrink-0 border-b border-[var(--error)]/30 bg-[var(--error-subtle)] px-6 py-2 text-xs text-[var(--error)]"
           >
             Couldn&apos;t load addons, so databases are missing from this canvas: {addons.error?.message}{" "}
             <button type="button" className="underline underline-offset-2" onClick={() => void addons.refetch()}>
@@ -468,8 +468,8 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
           label vertically aligned with the (single-line) text on
           wide screens; on narrow screens the text wraps under and
           the label keeps its position. */}
-      <div className="flex items-center gap-3 px-6 py-2 text-[12px]">
-        <span className="shrink-0 inline-flex h-5 items-center rounded border border-current px-1.5 text-[11px] font-medium">
+      <div className="flex items-center gap-3 px-6 py-2 text-xs">
+        <span className="shrink-0 inline-flex h-5 items-center rounded border border-current px-1.5 text-xs font-medium">
           {label}
         </span>
         <p className="flex-1 leading-snug text-[var(--text-secondary)]">

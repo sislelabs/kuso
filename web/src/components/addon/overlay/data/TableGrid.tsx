@@ -170,7 +170,7 @@ export function TableGrid({
   }
   if (rows.isError) {
     return (
-      <pre className="m-3 whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] text-[var(--error)]">
+      <pre className="m-3 whitespace-pre-wrap rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-xs text-[var(--error)]">
         {rows.error instanceof Error ? rows.error.message : "load failed"}
       </pre>
     );
@@ -184,7 +184,7 @@ export function TableGrid({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* toolbar */}
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-        <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+        <div className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
           <span className="text-[var(--text-primary)]">
             {schema === "public" ? table : `${schema}.${table}`}
           </span>
@@ -208,7 +208,7 @@ export function TableGrid({
 
       {/* grid */}
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full text-left font-mono text-[11px]">
+        <table className="w-full text-left font-mono text-xs">
           <thead className="sticky top-0 bg-[var(--bg-secondary)] text-[var(--text-tertiary)]">
             <tr>
               {editable && <th className="w-8 border-b border-[var(--border-subtle)] px-2 py-1.5" />}
@@ -339,7 +339,7 @@ export function TableGrid({
         title={`Delete this row from ${schema === "public" ? table : `${schema}.${table}`}?`}
         body={
           pendingDelete && (
-            <p className="font-mono text-[11px]">
+            <p className="font-mono text-xs">
               {Object.entries(pendingDelete)
                 .map(([k, v]) => `${k} = ${v.isNull ? "NULL" : String(v.value)}`)
                 .join(", ")}

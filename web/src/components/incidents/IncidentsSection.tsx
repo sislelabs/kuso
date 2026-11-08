@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, ExternalLink, Siren } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -37,13 +38,18 @@ function StatePill({ state }: { state: string }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 font-mono text-[10px]",
+        "inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium",
         STATE_TONE[state] ?? "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
       )}
     >
-      {state.replace(/_/g, " ")}
+      {stateLabel(state)}
     </span>
   );
+}
+
+function stateLabel(state: string): string {
+  const s = state.replace(/_/g, " ");
+  return s === "pr open" ? "PR open" : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // IncidentsSection is the operator view of the incident agent's work:
@@ -67,40 +73,41 @@ export function IncidentsSection({ canAdmin }: { canAdmin: boolean }) {
           Incidents
         </CardTitle>
         {canAdmin && (
-          <select
+          <Select
+            size="sm"
             value={filter}
             onChange={(e) => {
               setFilter(e.target.value as Filter);
               setSelected(null);
             }}
             aria-label="Filter incidents by state"
-            className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+            wrapperClassName="w-auto"
           >
-            <option value="open">open</option>
-            <option value="">all states</option>
+            <option value="open">Open</option>
+            <option value="">All states</option>
             {INCIDENT_STATES.map((s) => (
               <option key={s} value={s}>
-                {s.replace(/_/g, " ")}
+                {stateLabel(s)}
               </option>
             ))}
-          </select>
+          </Select>
         )}
       </CardHeader>
       <CardContent className="space-y-3 text-[13px]">
         {!canAdmin ? (
-          <p className="text-[11px] text-[var(--text-tertiary)]">Only instance admins can view incidents.</p>
+          <p className="text-xs text-[var(--text-tertiary)]">Only instance admins can view incidents.</p>
         ) : list.isPending ? (
           <Skeleton className="h-24" />
         ) : list.isError ? (
           <QueryErrorState what="incidents" error={list.error} onRetry={() => void list.refetch()} />
         ) : rows.length === 0 ? (
-          <p className="py-4 text-center text-[12px] text-[var(--text-tertiary)]">
+          <p className="py-4 text-center text-xs text-[var(--text-tertiary)]">
             {filter === "open"
               ? "No open incidents."
               : filter
                 ? `No ${filter.replace(/_/g, " ")} incidents.`
                 : "No incidents recorded yet."}
-            {filter === "open" && list.hasNextPage ? " Older pages may hold more; switch to “all states”." : ""}
+            {filter === "open" && list.hasNextPage ? " Older pages may hold more; switch to “All states”." : ""}
           </p>
         ) : (
           <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-md border border-[var(--border-subtle)]">
@@ -155,9 +162,9 @@ function IncidentRow({
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[12px] text-[var(--text-primary)]">{incident.title || incident.eventType}</p>
-          <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
-            {target} · {incident.eventType}
+          <p className="truncate text-xs text-[var(--text-primary)]">{incident.title || incident.eventType}</p>
+          <p className="truncate text-xs text-[var(--text-tertiary)]">
+            <span className="font-mono">{target}</span> · {incident.eventType}
             {incident.severity ? ` · ${incident.severity}` : ""} · {relativeTime(incident.createdAt)}
           </p>
         </div>
@@ -205,21 +212,21 @@ function IncidentDetail({ id }: { id: string }) {
   const contextJSON = inc.contextPack == null ? "" : JSON.stringify(inc.contextPack, null, 2);
 
   return (
-    <div className="space-y-3 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-3 text-[12px]">
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[11px]">
-        <dt className="text-[var(--text-tertiary)]">id</dt>
-        <dd className="break-all text-[var(--text-secondary)]">{inc.id}</dd>
-        <dt className="text-[var(--text-tertiary)]">opened</dt>
+    <div className="space-y-3 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-3 text-xs">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs">
+        <dt className="text-[var(--text-tertiary)]">ID</dt>
+        <dd className="break-all font-mono text-[var(--text-secondary)]">{inc.id}</dd>
+        <dt className="text-[var(--text-tertiary)]">Opened</dt>
         <dd className="text-[var(--text-secondary)]">{new Date(inc.createdAt).toLocaleString()}</dd>
         {inc.closedAt && (
           <>
-            <dt className="text-[var(--text-tertiary)]">closed</dt>
+            <dt className="text-[var(--text-tertiary)]">Closed</dt>
             <dd className="text-[var(--text-secondary)]">{new Date(inc.closedAt).toLocaleString()}</dd>
           </>
         )}
         {githubHttpsUrl(inc.prUrl) && (
           <>
-            <dt className="text-[var(--text-tertiary)]">pull request</dt>
+            <dt className="text-[var(--text-tertiary)]">Pull request</dt>
             <dd>
               <a
                 href={githubHttpsUrl(inc.prUrl)}
@@ -234,8 +241,8 @@ function IncidentDetail({ id }: { id: string }) {
         )}
         {(inc.investigateJob || inc.implementJob) && (
           <>
-            <dt className="text-[var(--text-tertiary)]">jobs</dt>
-            <dd className="break-all text-[var(--text-secondary)]">
+            <dt className="text-[var(--text-tertiary)]">Jobs</dt>
+            <dd className="break-all font-mono text-[var(--text-secondary)]">
               {[inc.investigateJob, inc.implementJob].filter(Boolean).join(", ")}
             </dd>
           </>
@@ -243,13 +250,13 @@ function IncidentDetail({ id }: { id: string }) {
       </dl>
 
       <div>
-        <h4 className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">Findings</h4>
+        <h4 className="mb-1 text-xs text-[var(--text-secondary)] font-medium">Findings</h4>
         {inc.findings ? (
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs text-[var(--text-secondary)]">
             {inc.findings}
           </pre>
         ) : (
-          <p className="text-[11px] text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]">
             {inc.state === "investigating" ? "The agent is still investigating." : "No findings were posted."}
           </p>
         )}
@@ -257,12 +264,12 @@ function IncidentDetail({ id }: { id: string }) {
 
       {(inc.feedback ?? []).length > 0 && (
         <div>
-          <h4 className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">Feedback</h4>
+          <h4 className="mb-1 text-xs text-[var(--text-secondary)] font-medium">Feedback</h4>
           <ul className="space-y-1">
             {(inc.feedback ?? []).map((f, idx) => (
-              <li key={`${f.at}-${idx}`} className="text-[11px] text-[var(--text-secondary)]">
-                <span className="font-mono text-[var(--text-tertiary)]">{relativeTime(f.at)} · </span>
-                {f.decision ? <span className="font-mono">decision: {f.decision}</span> : f.text}
+              <li key={`${f.at}-${idx}`} className="text-xs text-[var(--text-secondary)]">
+                <span className="text-[var(--text-tertiary)]">{relativeTime(f.at)} · </span>
+                {f.decision ? <>Decision: <span className="font-mono">{f.decision}</span></> : f.text}
               </li>
             ))}
           </ul>
@@ -271,10 +278,10 @@ function IncidentDetail({ id }: { id: string }) {
 
       {contextJSON && (
         <details>
-          <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          <summary className="cursor-pointer text-xs text-[var(--text-secondary)] font-medium">
             Context pack
           </summary>
-          <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[10px] text-[var(--text-secondary)]">
+          <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-xs text-[var(--text-secondary)]">
             {contextJSON}
           </pre>
         </details>
@@ -288,7 +295,7 @@ function IncidentDetail({ id }: { id: string }) {
             rows={2}
             aria-label="Feedback for the agent"
             placeholder="Reply to the agent (recorded on the incident)…"
-            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-[12px] outline-none focus:border-[var(--border-strong)]"
+            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-xs outline-none focus:border-[var(--border-strong)]"
           />
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button

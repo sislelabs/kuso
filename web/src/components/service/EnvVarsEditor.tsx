@@ -736,7 +736,7 @@ export function EnvVarsEditor({
   const settingsHref = (source: "project" | "instance") =>
     source === "instance" ? "/settings/instance-secrets" : `/projects/${encodeURIComponent(project)}/settings`;
 
-  const MASK = <span className="tracking-wider text-[var(--text-tertiary)]">••••••••</span>;
+  const MASK = <span className="text-[var(--text-tertiary)]">••••••••</span>;
   const valueText = (key: string, value: string | undefined, sensitive: boolean) => {
     if (masked || value === undefined) return MASK;
     if (!isVisible(key, sensitive)) return MASK;

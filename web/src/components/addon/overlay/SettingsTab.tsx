@@ -144,7 +144,7 @@ export function SettingsTab({
             ) : (
               <div className="space-y-2">
                 <p>Services in this project lose the connection immediately.</p>
-                <label className="flex items-center gap-2 text-[12px]">
+                <label className="flex items-center gap-2 text-xs">
                   <input
                     type="checkbox"
                     checked={purgeData}
@@ -153,7 +153,7 @@ export function SettingsTab({
                   />
                   Also delete data
                 </label>
-                <p className="text-[11px] text-[var(--text-tertiary)]">
+                <p className="text-xs text-[var(--text-tertiary)]">
                   {purgeData
                     ? "Data and credentials are deleted. No undo."
                     : `Data is kept. The name ${addon} can't be reused until it's deleted.`}
@@ -340,7 +340,7 @@ function ConfigurationSection({
               value={version}
               placeholder="leave empty for chart default"
               disabled
-              className="h-7 font-mono text-[12px] opacity-60"
+              className="h-7 font-mono text-xs opacity-60"
             />
             <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("version")?.message}
@@ -353,7 +353,7 @@ function ConfigurationSection({
             <select
               value={size}
               disabled
-              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] opacity-60 outline-none focus:border-[var(--border-strong)]"
+              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs opacity-60 outline-none focus:border-[var(--border-strong)]"
             >
               <option value="small">small</option>
               <option value="medium">medium</option>
@@ -373,7 +373,7 @@ function ConfigurationSection({
               value={storageSize}
               placeholder="e.g. 10Gi"
               disabled
-              className="h-7 font-mono text-[12px] opacity-60"
+              className="h-7 font-mono text-xs opacity-60"
             />
             <p className="font-mono text-xs text-[var(--warning)]">
               Cannot be changed after addon create. To resize, take a backup,
@@ -388,7 +388,7 @@ function ConfigurationSection({
               value={database}
               placeholder="defaults to project name"
               disabled
-              className="h-7 font-mono text-[12px] opacity-60"
+              className="h-7 font-mono text-xs opacity-60"
             />
             <p className="font-mono text-xs text-[var(--warning)]">
               {addonBlast("database")?.message}
@@ -403,7 +403,7 @@ function ConfigurationSection({
               disabled
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
-            <span className="text-[12px] font-medium">High availability</span>
+            <span className="text-xs font-medium">High availability</span>
             <span className="ml-auto font-mono text-xs text-[var(--warning)]">
               · immutable
             </span>
@@ -420,7 +420,7 @@ function ConfigurationSection({
               onChange={(e) => setPooler(e.target.checked)}
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
-            <span className="text-[12px] font-medium">
+            <span className="text-xs font-medium">
               Connection pooling (PgBouncer)
             </span>
             <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
@@ -430,7 +430,7 @@ function ConfigurationSection({
         )}
         {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && pooler && (
           <label className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
-            <span className="text-[12px] font-medium">Pool size</span>
+            <span className="text-xs font-medium">Pool size</span>
             <Input
               type="number"
               min={1}
@@ -438,7 +438,7 @@ function ConfigurationSection({
               onChange={(e) => setPoolSize(e.target.value)}
               placeholder="25"
               aria-label="Pool size"
-              className="ml-auto h-7 w-24 font-mono text-[12px]"
+              className="ml-auto h-7 w-24 font-mono text-xs"
             />
             <span className="font-mono text-xs text-[var(--text-tertiary)]">server connections per db/user</span>
           </label>
@@ -452,7 +452,7 @@ function ConfigurationSection({
                 onChange={(e) => setRequireTLS(e.target.checked)}
                 className="h-3.5 w-3.5 accent-[var(--accent)]"
               />
-              <span className="text-[12px] font-medium">
+              <span className="text-xs font-medium">
                 Require TLS on the wire
               </span>
               <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
@@ -561,7 +561,7 @@ function ExternalSummarySection({
         </p>
       </div>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 font-mono text-[11px]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 font-mono text-xs">
         <dt className="text-[var(--text-tertiary)]">credentials</dt>
         <dd className="truncate">{secretName || "—"}</dd>
       </dl>
@@ -575,7 +575,7 @@ function ExternalSummarySection({
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
               className="h-3.5 w-3.5 accent-[var(--accent)]"
             />
-            <span className="text-[12px] font-medium">Connection pooling (PgBouncer)</span>
+            <span className="text-xs font-medium">Connection pooling (PgBouncer)</span>
             <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
               point apps at {"${{ <addon>.POOLER_URL }}"}
             </span>
@@ -588,7 +588,7 @@ function ExternalSummarySection({
                 placeholder="db.provider.com"
                 aria-label="Provider host"
                 spellCheck={false}
-                className="h-7 min-w-0 flex-1 font-mono text-[12px]"
+                className="h-7 min-w-0 flex-1 font-mono text-xs"
               />
               <Input
                 type="number"
@@ -596,7 +596,7 @@ function ExternalSummarySection({
                 onChange={(e) => setForm({ ...form, port: e.target.value })}
                 placeholder="5432"
                 aria-label="Provider port"
-                className="h-7 w-20 font-mono text-[12px]"
+                className="h-7 w-20 font-mono text-xs"
               />
               <Input
                 type="number"
@@ -605,7 +605,7 @@ function ExternalSummarySection({
                 placeholder="25"
                 aria-label="Pool size"
                 title="Pool size (server connections per db/user)"
-                className="h-7 w-20 font-mono text-[12px]"
+                className="h-7 w-20 font-mono text-xs"
               />
             </div>
           )}
@@ -794,7 +794,7 @@ function PlacementSection({
               : `${matching.length}/${totalNodes} match`}
         </span>
       </header>
-      <p className="border-b border-[var(--border-subtle)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+      <p className="border-b border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-secondary)]">
         Pin this addon to a subset of cluster nodes. Use{" "}
         <span className="font-mono text-[var(--text-tertiary)]">key=value</span> rules
         (e.g. <span className="font-mono">region=eu</span> or{" "}
@@ -802,7 +802,7 @@ function PlacementSection({
         specific hostnames below. Empty rules schedule anywhere.
       </p>
       {labels.length === 0 ? (
-        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
+        <p className="px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
           No label rules.
         </p>
       ) : (
@@ -818,7 +818,7 @@ function PlacementSection({
                 <select
                   value={r.key}
                   onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
                   <option value="">pick label key</option>
                   {[...allLabels.keys()].sort().map((k) => (
@@ -832,14 +832,14 @@ function PlacementSection({
                   value={r.key}
                   onChange={(e) => updLabel(i, { key: e.target.value })}
                   placeholder="region"
-                  className="h-7 font-mono text-[11px]"
+                  className="h-7 font-mono text-xs"
                 />
               )}
               {valuesForKey && valuesForKey.size > 0 ? (
                 <select
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
                   <option value="">any value</option>
                   {[...valuesForKey].sort().map((v) => (
@@ -853,7 +853,7 @@ function PlacementSection({
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
                   placeholder={r.key.trim() ? "value (blank = any)" : "eu"}
-                  className="h-7 font-mono text-[11px]"
+                  className="h-7 font-mono text-xs"
                   disabled={haveAnyLabels && !r.key.trim()}
                 />
               )}
@@ -872,7 +872,7 @@ function PlacementSection({
       <button
         type="button"
         onClick={addLabel}
-        className="flex w-full items-center gap-1.5 border-y border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]/40"
+        className="flex w-full items-center gap-1.5 border-y border-[var(--border-subtle)] px-3 py-2 text-left text-xs text-[var(--accent)] hover:bg-[var(--bg-tertiary)]/40"
       >
         <Plus className="h-3 w-3" />
         add label rule
@@ -880,7 +880,7 @@ function PlacementSection({
 
       <div className="px-3 py-2">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[12px] text-[var(--text-secondary)]">
+          <span className="text-xs text-[var(--text-secondary)]">
             specific nodes
           </span>
           <span className="font-mono text-xs text-[var(--text-tertiary)]">
@@ -890,7 +890,7 @@ function PlacementSection({
           </span>
         </div>
         {allHostnames.length === 0 ? (
-          <p className="text-[11px] text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]">
             No nodes visible yet.
           </p>
         ) : (
@@ -1100,7 +1100,7 @@ function PublicTCPSection({
         </span>
       </header>
       <div className="space-y-3 p-3">
-        <p className="text-[11px] text-[var(--text-secondary)]">
+        <p className="text-xs text-[var(--text-secondary)]">
           Expose this addon on a raw TCP port reachable from the public
           internet. The addon&apos;s own protocol auth (Postgres SCRAM,
           Redis ACL, etc.) is the only access gate — kuso adds none.
@@ -1111,11 +1111,11 @@ function PublicTCPSection({
             <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />
-                <span className="text-[11px] font-medium text-[var(--warning)]">
+                <span className="text-xs font-medium text-[var(--warning)]">
                   Reachable from the public internet
                 </span>
               </div>
-              <div className="mt-2 font-mono text-[12px] text-[var(--text-primary)]">
+              <div className="mt-2 font-mono text-xs text-[var(--text-primary)]">
                 {host}:{port}
               </div>
               <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">

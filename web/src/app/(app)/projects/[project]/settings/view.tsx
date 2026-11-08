@@ -40,7 +40,7 @@ function clampPreviewTtl(raw: string): number {
 }
 
 // Project settings — flat layout, sections separated by horizontal
-// rules + small uppercase headers. Mirrors the polish of /settings
+// rules + small section headers. Mirrors the polish of /settings
 // instead of stacking Card components which created visual noise.
 export function ProjectSettingsView() {
   const params = useRouteParams<{ project: string }>(["project"]);
@@ -257,15 +257,15 @@ export function ProjectSettingsView() {
         <SettingsIcon className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
         <div>
           <h1 className="font-heading text-xl font-semibold tracking-tight">Project settings</h1>
-          <p className="mt-1 font-mono text-[12px] text-[var(--text-secondary)]">{projectName}</p>
+          <p className="mt-1 font-mono text-xs text-[var(--text-secondary)]">{projectName}</p>
         </div>
       </header>
 
       {/* General */}
       <section className="space-y-4">
         <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            general
+          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+            General
           </h2>
         </header>
         <div className="space-y-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
@@ -287,14 +287,14 @@ export function ProjectSettingsView() {
               placeholder="myproject.example.com"
               className="font-mono"
             />
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="font-mono text-xs text-[var(--text-tertiary)]">
               Services in this project default to{" "}
               <code className="rounded bg-[var(--bg-tertiary)] px-1">
                 &lt;service&gt;.{baseDomain || "<base>"}
               </code>
               ; a service named {projectName} gets the bare domain.
             </p>
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="font-mono text-xs text-[var(--text-tertiary)]">
               DNS: add an A record for{" "}
               <code className="rounded bg-[var(--bg-tertiary)] px-1">*.{baseDomain || "<base>"}</code>{" "}
               (and one for the bare domain) pointing at your cluster&apos;s public IP.
@@ -320,7 +320,7 @@ export function ProjectSettingsView() {
                 aria-label="Default branch"
               />
             </div>
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="font-mono text-xs text-[var(--text-tertiary)]">
               Services without their own repository inherit this one. Pushes and PRs on it
               trigger builds and preview envs. Leave blank if every service sets its own repo.
             </p>
@@ -344,7 +344,7 @@ export function ProjectSettingsView() {
                 <option value={installationId}>#{installationId} (not visible to kuso)</option>
               )}
             </select>
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="font-mono text-xs text-[var(--text-tertiary)]">
               The installation kuso mints clone tokens from for private repos. None = public repos only,
               unless a service sets its own.
             </p>
@@ -355,8 +355,8 @@ export function ProjectSettingsView() {
       {/* Preview environments */}
       <section className="space-y-4">
         <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            preview environments
+          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+            Preview environments
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
@@ -364,7 +364,7 @@ export function ProjectSettingsView() {
               cases this feature was built for, so users don't enable it
               for a single-service Express backend and then wonder why
               their cluster is full of 1-pod previews. */}
-          <div className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-[11px] text-[var(--text-secondary)]">
+          <div className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-xs text-[var(--text-secondary)]">
             <p className="font-medium text-[var(--text-primary)]">
               Recommended for monorepos and full-stack apps
             </p>
@@ -387,7 +387,7 @@ export function ProjectSettingsView() {
             />
             <span className="flex-1">
               <span className="text-[13px] font-medium">Spawn a preview env on every PR</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
                 Requires the GitHub App installed on the repo and the default repository
                 set above. Each preview clones every service and runs them at{" "}
                 <span className="font-mono">
@@ -419,12 +419,12 @@ export function ProjectSettingsView() {
                 placeholder={baseDomain || "same as base domain"}
                 className="font-mono"
               />
-              <p className="text-[10px] text-[var(--text-tertiary)]">
+              <p className="text-xs text-[var(--text-tertiary)]">
                 Previews are served at{" "}
                 <span className="font-mono">&lt;svc&gt;-pr-&lt;N&gt;.{previewsDomain.trim() || baseDomain || "<base>"}</span>
                 . Needs a wildcard DNS record for that domain. Blank = the base domain.
               </p>
-              <p className="text-[10px] text-[var(--text-tertiary)]">
+              <p className="text-xs text-[var(--text-tertiary)]">
                 Each preview gets its own Postgres and Redis addons (Postgres starts as a
                 copy of production data), so reviewers never write to production. This is on
                 by default; a server started with{" "}
@@ -439,8 +439,8 @@ export function ProjectSettingsView() {
       {/* Notifications */}
       <section className="space-y-4">
         <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            notifications
+          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+            Notifications
           </h2>
         </header>
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
@@ -471,7 +471,7 @@ export function ProjectSettingsView() {
             />
             <span className="flex-1">
               <span className="text-[13px] font-medium">Mute external notifications</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
                 Stops this project&rsquo;s events (builds, deploys, crashes, info/warn alerts)
                 from reaching Discord, Slack, webhooks, email, Telegram, and Pushover.
                 Error-severity alerts still page through — a mute silences chatter, not
@@ -481,7 +481,7 @@ export function ProjectSettingsView() {
             </span>
           </label>
           {muteLoadError && (
-            <p role="alert" className="mt-2 text-[11px] text-[var(--error)]">
+            <p role="alert" className="mt-2 text-xs text-[var(--error)]">
               Couldn&apos;t load the current mute state: {muteLoadError}
             </p>
           )}
@@ -491,8 +491,8 @@ export function ProjectSettingsView() {
       {/* Monitoring */}
       <section className="space-y-4">
         <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            monitoring
+          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+            Monitoring
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
@@ -505,7 +505,7 @@ export function ProjectSettingsView() {
             />
             <span className="flex-1">
               <span className="text-[13px] font-medium">Uptime checks</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
                 Ping every production service once a minute and notify when one stops answering.
               </span>
             </span>
@@ -516,8 +516,8 @@ export function ProjectSettingsView() {
       {/* Scaling */}
       <section className="space-y-4">
         <header>
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            scaling
+          <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+            Scaling
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
@@ -530,7 +530,7 @@ export function ProjectSettingsView() {
             />
             <span className="flex-1">
               <span className="text-[13px] font-medium">Always-on services (disable scale-to-zero)</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+              <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">
                 Overrides every service&apos;s own sleep setting. With this on, services in
                 this project never scale below their minimum replica count, however long
                 they sit idle. Useful for low-traffic but cold-start-
@@ -540,7 +540,7 @@ export function ProjectSettingsView() {
           </label>
           <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3">
             <span className="text-[13px] font-medium">Ingress limits (default for every service)</span>
-            <p className="text-[11px] text-[var(--text-tertiary)]">
+            <p className="text-xs text-[var(--text-tertiary)]">
               All projects share one ingress. Past these limits a service answers 429 and the
               other services keep being served. Counted per ingress replica. Leave a field blank
               for the platform default (1000 concurrent requests, no rate limit); -1 removes the
@@ -626,8 +626,8 @@ export function ProjectSettingsView() {
         <section className="space-y-3">
           <header className="flex items-center gap-2">
             <UsersIcon className="h-4 w-4 text-[var(--text-tertiary)]" />
-            <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              access
+            <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+              Access
             </h2>
           </header>
           <ProjectAccessPanel project={projectName} />
@@ -641,12 +641,12 @@ export function ProjectSettingsView() {
       {isProjectAdmin && (
         <section className="space-y-3">
           <header>
-            <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              archive
+            <h2 className="text-xs text-[var(--text-secondary)] font-medium">
+              Archive
             </h2>
           </header>
           <div className="flex items-start gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
-            <p className="flex-1 text-[11px] text-[var(--text-secondary)]">
+            <p className="flex-1 text-xs text-[var(--text-secondary)]">
               Download a tarball of this project&apos;s services, environments, addons and{" "}
               <span className="text-[var(--text-primary)]">secret values</span> to move it to another kuso
               instance (import it from New project). Addon data isn&apos;t included; use addon backups
@@ -690,19 +690,19 @@ export function ProjectSettingsView() {
       <section className="space-y-3">
         <header className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-[var(--error)]" />
-          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--error)]">
-            danger zone
+          <h2 className="text-xs text-[var(--error)] font-medium">
+            Danger zone
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4">
-          <ul className="space-y-0.5 text-[12px] text-[var(--text-secondary)]">
+          <ul className="space-y-0.5 text-xs text-[var(--text-secondary)]">
             <li>Deleted: services, environments, addons, builds, secrets.</li>
             <li>
               {purgeData ? "Also deleted" : "Kept"}: addon data and database credentials
               {purgeData ? " — cannot be undone." : " (reusable or removable later)."}
             </li>
           </ul>
-          <label className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+          <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
             <input
               type="checkbox"
               checked={purgeData}
@@ -712,7 +712,7 @@ export function ProjectSettingsView() {
             Also delete data
           </label>
           <div className="space-y-1.5">
-            <Label htmlFor="confirmDelete" className="text-[12px]">
+            <Label htmlFor="confirmDelete" className="text-xs">
               Type{" "}
               <span className="font-mono text-[var(--text-primary)]">{projectName}</span> to
               confirm

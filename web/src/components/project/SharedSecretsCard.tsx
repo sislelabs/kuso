@@ -114,7 +114,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
     <section className="space-y-4">
       <header>
         <h3 className="font-heading text-sm font-semibold tracking-tight">Project secrets</h3>
-        <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
           Set a value once, then pick it from any service&apos;s Variables tab under Add → Project
           secret.
         </p>
@@ -150,7 +150,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
         >
           <div className="flex items-center gap-2">
             <KeyRound className="h-3 w-3 text-[var(--text-tertiary)]" />
-            <span className="font-mono text-[12px] font-medium">{editingKey}</span>
+            <span className="font-mono text-xs font-medium">{editingKey}</span>
             <button
               type="button"
               onClick={onCancel}
@@ -165,7 +165,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
             onChange={(e) => setEditingValue(e.target.value)}
             type="password"
             placeholder="paste secret value"
-            className="h-8 font-mono text-[12px]"
+            className="h-8 font-mono text-xs"
             spellCheck={false}
             autoComplete="new-password"
             autoFocus
@@ -182,8 +182,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
       {/* Stored list */}
       <section className="space-y-2">
         <header>
-          <h4 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            stored ({stored.length})
+          <h4 className="text-xs text-[var(--text-secondary)] font-medium">
+            Stored ({stored.length})
           </h4>
         </header>
         {list.isPending ? (
@@ -191,7 +191,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
         ) : list.isError ? (
           <QueryErrorState what="project secrets" error={list.error} onRetry={() => void list.refetch()} />
         ) : stored.length === 0 ? (
-          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
             No project secrets yet. Pick an integration above or add manually below.
           </p>
         ) : (
@@ -202,7 +202,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
                 className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2 last:border-b-0 hover:bg-[var(--bg-secondary)]/70"
               >
                 <KeyRound className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-                <span className="flex-1 truncate font-mono text-[12px] text-[var(--text-secondary)]">
+                <span className="flex-1 truncate font-mono text-xs text-[var(--text-secondary)]">
                   {k}
                 </span>
                 <button
@@ -223,8 +223,8 @@ export function SharedSecretsCard({ project }: { project: string }) {
       {/* Manual add */}
       <section className="space-y-2">
         <header>
-          <h4 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            add manually
+          <h4 className="text-xs text-[var(--text-secondary)] font-medium">
+            Add manually
           </h4>
         </header>
         <ManualAddRow
@@ -346,11 +346,11 @@ function IntegrationTile({
       )}
     >
       <div className="flex w-full items-center gap-1.5">
-        <span className="text-[12px] font-medium">{name}</span>
+        <span className="text-xs font-medium">{name}</span>
         {existing && <Check className="ml-auto h-3 w-3 text-emerald-400" />}
       </div>
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">{envVar}</p>
-      <p className="text-[10px] text-[var(--text-tertiary)]">{description}</p>
+      <p className="font-mono text-xs text-[var(--text-tertiary)]">{envVar}</p>
+      <p className="text-xs text-[var(--text-tertiary)]">{description}</p>
     </button>
   );
 }
@@ -387,7 +387,7 @@ function ManualAddRow({
         value={k}
         onChange={(e) => setK(e.target.value)}
         placeholder="ENV_VAR_NAME"
-        className="h-8 flex-1 font-mono text-[12px]"
+        className="h-8 flex-1 font-mono text-xs"
         spellCheck={false}
         autoComplete="off"
       />
@@ -396,7 +396,7 @@ function ManualAddRow({
         onChange={(e) => setV(e.target.value)}
         type="password"
         placeholder="value"
-        className="h-8 flex-1 font-mono text-[12px]"
+        className="h-8 flex-1 font-mono text-xs"
         spellCheck={false}
         autoComplete="new-password"
       />

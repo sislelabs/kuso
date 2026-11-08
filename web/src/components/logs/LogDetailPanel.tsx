@@ -126,7 +126,7 @@ export function LogDetailPanel({
       className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)] outline-none sm:w-[min(30rem,92%)]"
     >
       <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2.5">
-        <span className={cn("rounded border px-1.5 py-0.5 text-[11px] font-semibold uppercase", LEVEL_PILL[level])}>
+        <span className={cn("rounded border px-1.5 py-0.5 text-xs font-semibold capitalize", LEVEL_PILL[level])}>
           {level === "none" ? "log" : level}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-secondary)]">{fmtClock(line.ts, true)}</span>
@@ -147,7 +147,7 @@ export function LogDetailPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         <section className="px-4 py-3">
           <h4 className="mb-1.5 text-xs font-medium text-[var(--text-secondary)]">Message</h4>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-[12px] leading-relaxed text-[var(--text-primary)] [overflow-wrap:anywhere]">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--text-primary)] [overflow-wrap:anywhere]">
             <AnsiText text={line.line} />
           </pre>
         </section>

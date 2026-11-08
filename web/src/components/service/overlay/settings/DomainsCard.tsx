@@ -355,7 +355,7 @@ function KindBadge({ kind }: { kind: DomainKind }) {
   const label = kind === "auto" ? "Default" : kind === "wildcard" ? "Wildcard" : null;
   if (!label) return null;
   return (
-    <span className="shrink-0 rounded border border-[var(--border-subtle)] px-1.5 py-px text-[11px] text-[var(--text-secondary)]">
+    <span className="shrink-0 rounded border border-[var(--border-subtle)] px-1.5 py-px text-xs text-[var(--text-secondary)]">
       {label}
     </span>
   );

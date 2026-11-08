@@ -28,8 +28,8 @@ export default function AppError({
       <div className="w-full max-w-md rounded-md border border-[var(--error)]/40 bg-[var(--bg-elevated)] p-6 text-center shadow-[var(--shadow-lg)]">
         <div className="mb-3 flex items-center justify-center gap-2">
           <AlertTriangle className="h-4 w-4 text-[var(--error)]" />
-          <p className="font-mono text-[11px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            something broke
+          <p className="text-xs text-[var(--text-secondary)] font-medium">
+            Something broke
           </p>
         </div>
         <h1 className="text-section-heading">This view failed to render</h1>
@@ -37,7 +37,7 @@ export default function AppError({
           {error?.message || "An unexpected error occurred."}
         </p>
         {error?.digest && (
-          <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
             digest: {error.digest}
           </p>
         )}

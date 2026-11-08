@@ -120,7 +120,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
   // simply failed to read it.
   if (grants.isError) {
     return (
-      <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-[12px]">
+      <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-xs">
         <p className="text-red-400">
           Couldn&apos;t load project access:{" "}
           {grants.error instanceof Error ? grants.error.message : "request failed"}
@@ -128,7 +128,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
         <button
           type="button"
           onClick={() => grants.refetch()}
-          className="mt-2 font-mono text-[11px] text-[var(--accent)] hover:underline"
+          className="mt-2 font-mono text-xs text-[var(--accent)] hover:underline"
         >
           Retry
         </button>
@@ -143,13 +143,13 @@ export function ProjectAccessPanel({ project }: { project: string }) {
       <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
           <h3 className="text-sm font-semibold tracking-tight">Access</h3>
-          <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+          <span className="ml-auto font-mono text-xs text-[var(--text-tertiary)]">
             {rows.length} {rows.length === 1 ? "grant" : "grants"}
           </span>
         </header>
 
         {rows.length === 0 ? (
-          <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
+          <p className="px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
             No grants. This project is visible only to admins until you add a user or group
             below.
           </p>
@@ -195,7 +195,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
         onConfirm={() => confirmRemove && remove.mutate(confirmRemove.id)}
         onCancel={() => setConfirmRemove(null)}
       />
-      <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+      <p className="text-xs leading-relaxed text-[var(--text-tertiary)]">
         Override sets the role on <span className="text-[var(--text-secondary)]">this</span>{" "}
         project. &ldquo;inherit&rdquo; uses the grantee&apos;s instance role (viewer if they
         have none). Reading env values, opening a pod shell, the SQL browser, project export,
@@ -248,7 +248,7 @@ function GrantRow({
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
-            className="flex items-center gap-1.5 truncate text-left text-[12px]"
+            className="flex items-center gap-1.5 truncate text-left text-xs"
             title={open ? "Hide members" : "Show members"}
           >
             <ChevronRight
@@ -259,20 +259,20 @@ function GrantRow({
             />
             <UsersIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
             <span className="truncate font-mono">{label}</span>
-            <span className="text-[10px] text-[var(--text-tertiary)]">group</span>
+            <span className="text-xs text-[var(--text-tertiary)]">group</span>
           </button>
         ) : (
-          <span className="flex items-center gap-1.5 truncate pl-[18px] text-[12px]">
+          <span className="flex items-center gap-1.5 truncate pl-[18px] text-xs">
             <UserIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
             <span className="truncate font-mono">{label}</span>
-            <span className="text-[10px] text-[var(--text-tertiary)]">user</span>
+            <span className="text-xs text-[var(--text-tertiary)]">user</span>
           </span>
         )}
         <select
           aria-label={`Role on this project for ${label}`}
           value={grant.roleOverride}
           onChange={(e) => onRoleChange(e.target.value as ProjectRole)}
-          className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+          className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs"
         >
           {OVERRIDE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -292,7 +292,7 @@ function GrantRow({
       {isGroup && open && (
         <div className="border-t border-[var(--border-subtle)]/50 bg-[var(--bg-primary)]/40 px-3 py-1.5 pl-[34px]">
           {members.isPending ? (
-            <p className="text-[10px] text-[var(--text-tertiary)]">Loading members…</p>
+            <p className="text-xs text-[var(--text-tertiary)]">Loading members…</p>
           ) : members.isError ? (
             <QueryErrorState
               what="group members"
@@ -301,7 +301,7 @@ function GrantRow({
               className="p-2 text-xs"
             />
           ) : (members.data ?? []).length === 0 ? (
-            <p className="text-[10px] text-[var(--text-tertiary)]">
+            <p className="text-xs text-[var(--text-tertiary)]">
               No members. Add users to this group in Settings → Groups.
             </p>
           ) : (
@@ -309,12 +309,12 @@ function GrantRow({
               {(members.data ?? []).map((m) => (
                 <li
                   key={m.id}
-                  className="flex items-center gap-1.5 truncate text-[11px] text-[var(--text-secondary)]"
+                  className="flex items-center gap-1.5 truncate text-xs text-[var(--text-secondary)]"
                 >
                   <UserIcon className="h-2.5 w-2.5 shrink-0 text-[var(--text-tertiary)]" />
                   <span className="truncate font-mono">{m.username}</span>
                   {m.email && (
-                    <span className="truncate text-[10px] text-[var(--text-tertiary)]">
+                    <span className="truncate text-xs text-[var(--text-tertiary)]">
                       {m.email}
                     </span>
                   )}
@@ -359,7 +359,7 @@ function AddGrantRow({
         <PopoverTrigger
           disabled={pending || nothingToAdd}
           className={cn(
-            "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[11px] text-[var(--text-secondary)]",
+            "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-xs text-[var(--text-secondary)]",
             "hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] data-[popup-open]:border-[var(--border-strong)]",
             (pending || nothingToAdd) && "pointer-events-none opacity-40"
           )}
@@ -373,8 +373,8 @@ function AddGrantRow({
           className="max-h-72 w-64 gap-0.5 overflow-y-auto rounded-md p-1"
         >
           {availGroups.length > 0 && (
-            <div className="px-1.5 pb-0.5 pt-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              groups
+            <div className="px-1.5 pb-0.5 pt-1 text-2xs text-[var(--text-secondary)] font-medium">
+              Groups
             </div>
           )}
           {availGroups.map((g) => (
@@ -383,15 +383,15 @@ function AddGrantRow({
               type="button"
               onClick={() => onAdd({ groupId: g.id, role: "" })}
               disabled={pending}
-              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               <UsersIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
               <span className="truncate font-mono">{g.name}</span>
             </button>
           ))}
           {availUsers.length > 0 && (
-            <div className="px-1.5 pb-0.5 pt-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              users
+            <div className="px-1.5 pb-0.5 pt-1 text-2xs text-[var(--text-secondary)] font-medium">
+              Users
             </div>
           )}
           {availUsers.map((u) => (
@@ -400,7 +400,7 @@ function AddGrantRow({
               type="button"
               onClick={() => onAdd({ userId: u.id, role: "" })}
               disabled={pending}
-              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               <UserIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
               <span className="truncate font-mono">{u.username}</span>

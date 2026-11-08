@@ -207,7 +207,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
         </div>
       </header>
       {lastRestore && (
-        <div role="status" className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
+        <div role="status" className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-xs text-[var(--text-secondary)]">
           Restore job <span className="text-[var(--text-primary)]">{lastRestore.job}</span> started{" "}
           {relativeTime(lastRestore.at.toISOString())} from {lastRestore.key}
           {lastRestore.into ? ` into ${lastRestore.into}` : ""}. Progress isn&apos;t tracked here yet; check the
@@ -226,7 +226,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
             className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2 last:border-b-0"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-[12px] text-[var(--text-secondary)]">
+              <div className="truncate font-mono text-xs text-[var(--text-secondary)]">
                 {tail(b.key)}
               </div>
               <div className="mt-0.5 flex items-center gap-3 font-mono text-xs text-[var(--text-tertiary)]">
@@ -302,7 +302,7 @@ function ConfirmRestore({
               aria-label="Restore into"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px]"
+              className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-xs"
             >
               <option value="">{sourceAddon} (overwrite)</option>
               {siblings.map((s) => (
@@ -412,7 +412,7 @@ function BackupScheduleEditor({
 
       <div className="space-y-3">
         <div className="space-y-2">
-          <label className="flex items-center gap-2 text-[12px]">
+          <label className="flex items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={trimmed !== ""}
@@ -451,7 +451,7 @@ function BackupScheduleEditor({
             value={retention}
             onChange={(e) => setRetention(e.target.value)}
             className={cn(
-              "h-8 w-24 font-mono text-[12px]",
+              "h-8 w-24 font-mono text-xs",
               !retentionValid && "border-[var(--error)]/60",
             )}
           />

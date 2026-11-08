@@ -256,11 +256,11 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
         </p>
       )}
       {(status.phase === "failed" || status.phase === "unhealthy") && status.lastError && (
-        <p className="mt-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-[11px] leading-snug text-[var(--error)]">
+        <p className="mt-3 rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-3 font-mono text-xs leading-snug text-[var(--error)]">
           {status.lastError}
         </p>
       )}
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
         {status.host && <Field name="Host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
         {status.user && <Field name="User" value={status.user} />}
         {status.version && <Field name="Version" value={status.version} />}
@@ -292,7 +292,7 @@ function ExternalCard({ status, onDisable }: { status: Status; onDisable: () => 
           connected
         </span>
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
         {status.host && <Field name="Host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
         {status.user && <Field name="User" value={status.user} />}
         <Field name="Projects connected" value={String(status.projectsUsing)} />
@@ -350,13 +350,13 @@ function ProvisionDialog({
           <Picker label="Size" value={size} onChange={setSize} options={["small", "medium", "large"]} />
           <div>
             <label className="text-xs font-medium text-[var(--text-secondary)]">Version</label>
-            <Input value={version} onChange={(e) => setVersion(e.target.value)} className="mt-1 h-7 font-mono text-[11px]" placeholder="16" />
+            <Input value={version} onChange={(e) => setVersion(e.target.value)} className="mt-1 h-7 font-mono text-xs" placeholder="16" />
           </div>
           <div>
             <label className="text-xs font-medium text-[var(--text-secondary)]">Storage size</label>
-            <Input value={storageSize} onChange={(e) => setStorageSize(e.target.value)} className="mt-1 h-7 font-mono text-[11px]" placeholder="20Gi" />
+            <Input value={storageSize} onChange={(e) => setStorageSize(e.target.value)} className="mt-1 h-7 font-mono text-xs" placeholder="20Gi" />
           </div>
-          <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+          <label className="flex items-center gap-2 font-mono text-xs text-[var(--text-secondary)]">
             <input type="checkbox" checked={ha} onChange={(e) => setHa(e.target.checked)} className="h-3.5 w-3.5" />
             High availability (CNPG, 3 replicas — requires the CNPG operator installed cluster-wide)
           </label>
@@ -410,7 +410,7 @@ function ExternalDialog({
             autoComplete="off"
             value={dsn}
             onChange={(e) => setDsn(e.target.value)}
-            className="mt-1 h-7 font-mono text-[11px]"
+            className="mt-1 h-7 font-mono text-xs"
             placeholder="postgres://admin:pw@host.example.com:5432/postgres?sslmode=disable"
             spellCheck={false}
             autoFocus
@@ -457,7 +457,7 @@ function Picker({
             key={o}
             type="button"
             onClick={() => onChange(o)}
-            className={`flex-1 rounded-md border px-2 py-1 font-mono text-[11px] transition-colors ${
+            className={`flex-1 rounded-md border px-2 py-1 font-mono text-xs transition-colors ${
               value === o
                 ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
                 : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
@@ -564,7 +564,7 @@ function AdditionalServers() {
           <p className="mt-1 text-sm leading-relaxed text-[var(--text-secondary)]">
             Register extra Postgres servers — a second on-cluster instance, or an external
             Neon / RDS / Supabase — by superuser DSN. Projects opt into one by name via{" "}
-            <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
+            <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-xs">
               + addon → Instance
             </code>{" "}
             on the canvas; kuso carves an isolated database + role per project.

@@ -192,7 +192,7 @@ function ErrorRow({
         <div className="flex shrink-0 items-center gap-2">
           <span className="text-right">
             <span className="block text-sm font-semibold tabular-nums text-[var(--text-primary)]">{group.count.toLocaleString()}</span>
-            <span className="block text-[11px] text-[var(--text-tertiary)]">{group.count === 1 ? "event" : "events"}</span>
+            <span className="block text-xs text-[var(--text-tertiary)]">{group.count === 1 ? "event" : "events"}</span>
           </span>
           {isOpen ? (
             <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -401,7 +401,7 @@ function OccurrenceHistogram({ detail, since }: { detail: ErrorGroupDetail; sinc
           </div>
         )}
       </div>
-      <div className="mt-1 flex justify-between text-[11px] tabular-nums text-[var(--text-tertiary)]">
+      <div className="mt-1 flex justify-between text-xs tabular-nums text-[var(--text-tertiary)]">
         <span>{fmtFull(first).replace(/:\d\d$/, "")}</span>
         <span>now</span>
       </div>

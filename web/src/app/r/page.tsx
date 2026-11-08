@@ -130,7 +130,7 @@ export default function ReviewerPage() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         {/* Header */}
         <div className="mb-8 border-b border-neutral-800 pb-6">
-          <p className="mb-2 font-mono text-xs uppercase tracking-widest text-neutral-500">
+          <p className="mb-2 text-xs text-neutral-500 font-medium">
             {view.project} · PR #{view.prNumber}
           </p>
           <h1 className="text-2xl font-semibold">{view.prTitle || `PR #${view.prNumber}`}</h1>

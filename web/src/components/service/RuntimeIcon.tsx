@@ -35,7 +35,7 @@ export function RuntimeIcon({
       )}
     >
       <Icon className="h-3.5 w-3.5" />
-      {withLabel && <span className="font-mono text-[11px]">{label}</span>}
+      {withLabel && <span className="font-mono text-xs">{label}</span>}
     </span>
   );
 }
