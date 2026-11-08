@@ -265,6 +265,10 @@ func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 // Plaintext — gate at the router with secrets:read. Used by the addon
 // overview's "Connection" panel so the user can copy DATABASE_URL etc.
 // to connect from psql / their app / a tunnel.
+//
+// Modes: no params = every plaintext value (audited; the CLI relies on
+// this); ?masked=1 = credentials masked, not audited; ?key=NAME = one
+// plaintext value, audited naming the key.
 func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
@@ -285,9 +289,45 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAddonOwned(ctx, w, project, addon) {
 		return
 	}
+	q := r.URL.Query()
+	if q.Has("key") && q.Get("masked") != "" {
+		writeErr(w, http.StatusBadRequest, "masked and key are mutually exclusive")
+		return
+	}
+	if q.Has("key") && q.Get("key") == "" {
+		writeErr(w, http.StatusBadRequest, "key must not be empty")
+		return
+	}
 	values, err := h.Svc.SecretValues(ctx, project, addon)
 	if err != nil {
 		h.fail(w, "addon secret", err)
+		return
+	}
+	// ?masked=1 discloses no credential (only coordinates like host/port
+	// and redacted URLs), so it is not audited — the overview polls it.
+	if q.Get("masked") == "1" || q.Get("masked") == "true" {
+		display, masked := maskConnValues(values)
+		writeJSON(w, http.StatusOK, map[string]any{"values": display, "masked": masked})
+		return
+	}
+	if key := q.Get("key"); key != "" {
+		v, ok := values[key]
+		if !ok {
+			writeErr(w, http.StatusNotFound, "key not found")
+			return
+		}
+		if h.Audit != nil {
+			h.Audit.Log(ctx, audit.Entry{
+				User:     auditUser(ctx),
+				Severity: "warn",
+				Action:   "addon.secret_read",
+				Pipeline: project,
+				App:      addon,
+				Resource: "kusoaddon",
+				Message:  fmt.Sprintf("connection credential %s read for addon %s/%s", key, project, addon),
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"values": map[string]string{key: v}})
 		return
 	}
 	// Audit the plaintext-credential read. The mutating addon actions are
