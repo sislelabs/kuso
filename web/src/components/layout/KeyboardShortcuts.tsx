@@ -87,7 +87,7 @@ const SERVICE_PANEL: Shortcut[] = [
 const ADDON_PANEL: Shortcut[] = [
   { keys: ["G", "O"], sequence: true, description: "Overview" },
   { keys: ["G", "B"], sequence: true, description: "Backups" },
-  { keys: ["G", "Q"], sequence: true, description: "SQL" },
+  { keys: ["G", "Q"], sequence: true, description: "Data (browse and query)" },
   { keys: ["G", "U"], sequence: true, description: "Vulnerabilities" },
   { keys: ["G", "S"], sequence: true, description: "Settings" },
 ];

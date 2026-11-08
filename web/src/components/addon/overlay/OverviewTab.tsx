@@ -3,8 +3,17 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, Check } from "lucide-react";
-import { addonSecret, useServices } from "@/features/projects";
-import { useSubscribedAddonsForServices, useToggleAddonSubscription } from "@/features/addons";
+import { useServices } from "@/features/projects";
+import {
+  getAddonConnection,
+  revealAddonSecret,
+  useAddonHealth,
+  useSubscribedAddonsForServices,
+  useToggleAddonSubscription,
+  type AddonConnection,
+} from "@/features/addons";
+import { copyText } from "@/lib/clipboard";
+import { StatusDot } from "@/components/ui/status-pill";
 import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { cn, serviceShortName } from "@/lib/utils";
@@ -13,7 +22,6 @@ import { toast } from "sonner";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { AddonPodsSection } from "./AddonPodsSection";
-import { useAddonPods } from "@/features/pods";
 import { CopyButton } from "@/components/ui/copy-button";
 
 // storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
@@ -48,8 +56,8 @@ export function OverviewTab({
   // take a few seconds after the addon is created. Refetch slowly when
   // it isn't ready yet so the panel auto-fills.
   const conn = useQuery({
-    queryKey: ["addons", project, addon, "secret"],
-    queryFn: () => addonSecret(project, addon),
+    queryKey: ["addons", project, addon, "connection"],
+    queryFn: () => getAddonConnection(project, addon),
     enabled: canReadSecrets,
     // An empty {values:{}} is "not generated yet" too: keep polling.
     refetchInterval: (q) => (Object.keys(q.state.data?.values ?? {}).length > 0 ? false : 5_000),
@@ -71,9 +79,13 @@ export function OverviewTab({
         <AddonPodsSection project={project} addon={addon} />
       )}
 
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <section
+        id="addon-connection"
+        aria-labelledby="addon-connection-title"
+        className="scroll-mt-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
+      >
         <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-          <h3 className="text-sm font-medium text-[var(--text-primary)]">Connection</h3>
+          <h3 id="addon-connection-title" className="text-sm font-medium text-[var(--text-primary)]">Connection</h3>
           <PublicAccessBadge publicTCP={cr?.spec.publicTCP} />
         </header>
         {!canReadSecrets ? (
@@ -91,7 +103,7 @@ export function OverviewTab({
             Connection details are still being generated…
           </p>
         ) : (
-          <ConnectionRows values={conn.data!.values} publicTCP={cr?.spec.publicTCP} />
+          <ConnectionRows project={project} addon={addon} conn={conn.data!} publicTCP={cr?.spec.publicTCP} />
         )}
       </section>
     </div>
@@ -195,59 +207,66 @@ function UsedBy({ project, addon, group }: { project: string; addon: string; gro
   );
 }
 
-// ConnectionRows renders the addon's connection secret as a list of
-// key/value rows with copy + show/hide. Sensitive values (password,
-// secret-looking keys, the URL) are masked by default; the user has to
-// reveal explicitly. Sort: URL-style keys first, password last, the
-// rest alphabetical — matches what people scan for when they want to
-// connect.
+// ConnectionRows renders the addon's connection info: plain values (host,
+// port, user, database) in the clear; credentials masked until the user
+// reveals or copies one. Each reveal/copy fetches that single value, and
+// the server audits it per key — merely opening the overview no longer
+// discloses (or logs) anything.
 //
-// When the addon's publicTCP is enabled, a SINGLE masked "public URL" row is
-// rendered at the top of the list (the credentialed DSN rewritten to
-// <cluster-host>:<public-port>). It's masked + copy-only like the password —
-// never shown in plaintext — instead of repeating a verbose "also reachable
-// publicly at postgres://user:password@…" note under every host/port/url row.
+// Sort: URL-style keys first, password last, the rest alphabetical.
+// When publicTCP is on, one masked PUBLIC_URL row (the primary DSN
+// pointed at <cluster-host>:<public-port>) sits on top.
 function ConnectionRows({
-  values,
+  project,
+  addon,
+  conn,
   publicTCP,
 }: {
-  values: Record<string, string>;
+  project: string;
+  addon: string;
+  conn: AddonConnection;
   publicTCP?: { enabled?: boolean; port?: number };
 }) {
+  const { values, masked } = conn;
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [shown, setShown] = useState<Record<string, boolean>>({});
-  const [copied, setCopied] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const keys = Object.keys(values).sort((a, b) => {
-    const score = (k: string) =>
-      /url$/i.test(k) ? 0 : /password|secret|token/i.test(k) ? 2 : 1;
+    const score = (k: string) => (/url$|uri$/i.test(k) ? 0 : /password|secret|token/i.test(k) ? 2 : 1);
     const sa = score(a);
     const sb = score(b);
     return sa !== sb ? sa - sb : a.localeCompare(b);
   });
-  // Mask by default; only plainly non-secret keys show in the clear. A
-  // denylist missed MONGODB_URI, MEILI_MASTER_KEY and external *_DSN/*_KEY.
-  const isSensitive = (k: string) =>
-    !/(^|_)(HOST|HOSTNAME|PORT|DATABASE|DB|USER|USERNAME|REGION|BUCKET|SSLMODE)$/i.test(k) ||
-    /:\/\/[^/\s]*@/.test(values[k] ?? "");
+  const isMasked = (k: string) => masked.includes(k);
 
-  // The single public DSN: rewrite the primary connection URL's host:port →
-  // <cluster-host>:<public-port>, keeping scheme / user:password / path / query.
-  const publicEnabled =
-    !!publicTCP?.enabled && typeof publicTCP?.port === "number" && publicTCP.port > 0;
-  const publicHost =
-    typeof window !== "undefined" ? window.location.hostname : "<your-cluster-host>";
-  const publicUrl = (() => {
-    if (!publicEnabled) return null;
-    const src =
-      values.DATABASE_URL || values.DIRECT_URL || values.POOLER_URL || values.REDIS_URL || "";
-    if (!src) return null;
+  // plaintext returns a key's real value, fetching (and so auditing) it
+  // the first time when the server withheld it.
+  const plaintext = async (k: string): Promise<string> => {
+    if (!isMasked(k)) return values[k] ?? "";
+    if (!conn.serverMasked) return values[k] ?? "";
+    if (k in revealed) return revealed[k];
+    setBusy(k);
     try {
-      const u = new URL(src);
+      const v = await revealAddonSecret(project, addon, k);
+      setRevealed((r) => ({ ...r, [k]: v }));
+      return v;
+    } finally {
+      setBusy((b) => (b === k ? null : b));
+    }
+  };
+
+  const publicEnabled = !!publicTCP?.enabled && typeof publicTCP?.port === "number" && publicTCP.port > 0;
+  const publicHost = typeof window !== "undefined" ? window.location.hostname : "<your-cluster-host>";
+  const publicSource = ["DATABASE_URL", "DIRECT_URL", "POOLER_URL", "REDIS_URL"].find((k) => (values[k] ?? "") !== "");
+  const toPublic = (dsn: string): string | null => {
+    try {
+      const u = new URL(dsn);
       u.host = `${publicHost}:${publicTCP!.port}`;
       return u.toString();
     } catch {
       return null;
     }
-  })();
+  };
 
   // The chart always emits POOLER_* keys; with the pooler off they are
   // empty, which read as broken values. Fold them into one explanatory row.
@@ -255,108 +274,58 @@ function ConnectionRows({
   const poolerOff = poolerKeys.length > 0 && poolerKeys.every((k) => (values[k] ?? "").trim() === "");
   const shownKeys = poolerOff ? keys.filter((k) => !poolerKeys.includes(k)) : keys;
 
-  const onCopy = async (k: string, v: string) => {
+  const reveal = async (k: string, source = k, transform?: (v: string) => string | null) => {
+    if (shown[k]) {
+      setShown((s) => ({ ...s, [k]: false }));
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(v);
-      setCopied(k);
-      setTimeout(() => setCopied((c) => (c === k ? null : c)), 1200);
-    } catch {
-      toast.error("clipboard unavailable");
+      const v = await plaintext(source);
+      if (transform && transform(v) === null) throw new Error("Couldn't build the public URL");
+      setShown((s) => ({ ...s, [k]: true }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't reveal the value");
+    }
+  };
+  const copy = async (k: string, source = k, transform?: (v: string) => string | null) => {
+    try {
+      const raw = await plaintext(source);
+      const v = transform ? transform(raw) : raw;
+      if (v === null) throw new Error("Couldn't build the public URL");
+      if (!(await copyText(v))) throw new Error("Clipboard unavailable");
+      toast.success(`Copied ${k}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Copy failed");
     }
   };
 
-  // A field row: monospace key, masked-or-revealed value, optional eye, copy.
-  const FieldRow = ({
-    k,
-    v,
-    sensitive,
-    last,
-    accent,
-  }: {
-    k: string;
-    v: string;
-    sensitive: boolean;
-    last?: boolean;
-    accent?: boolean;
-  }) => {
-    const empty = v.trim() === "";
-    const visible = !sensitive || !!shown[k];
-    return (
-      <li
-        className={cn(
-          "px-3 py-2",
-          !last && "border-b border-[var(--border-subtle)]",
-          accent && "bg-[var(--warning-subtle)]",
-        )}
-      >
-        <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
-          <span
-            className={cn("truncate font-mono text-xs", accent ? "text-[var(--warning)]" : "text-[var(--text-secondary)]")}
-            title={k}
-          >
-            {k}
-          </span>
-          {empty ? (
-            <span className="truncate px-2 py-1 text-xs italic text-[var(--text-tertiary)]">
-              Not set
-            </span>
-          ) : (
-            <span
-              className={cn(
-                "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs",
-                visible ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
-              )}
-              title={visible ? v : "Hidden. Use the eye button to reveal."}
-            >
-              {visible ? v : "•".repeat(Math.min(v.length, 24))}
-            </span>
-          )}
-          <div className={cn("flex items-center gap-0.5", empty && "invisible")}>
-            {sensitive && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={visible ? "Hide" : "Show"}
-                onClick={() => setShown((s) => ({ ...s, [k]: !s[k] }))}
-              >
-                {visible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Copy"
-              onClick={() => onCopy(k, v)}
-            >
-              {copied === k ? (
-                <Check className="h-3 w-3 text-[var(--success)]" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-            </Button>
-          </div>
-        </div>
-      </li>
-    );
-  };
+  const rows: { k: string; source: string; transform?: (v: string) => string | null; accent?: boolean }[] = [];
+  if (publicEnabled && publicSource) rows.push({ k: "PUBLIC_URL", source: publicSource, transform: toPublic, accent: true });
+  for (const k of shownKeys) rows.push({ k, source: k });
 
   return (
     <ul>
-      {/* Single public-URL row, masked + copy-only, at the top when exposed. */}
-      {publicUrl && (
-        <FieldRow k="PUBLIC_URL" v={publicUrl} sensitive accent />
-      )}
-      {shownKeys.map((k, i) => (
-        <FieldRow
-          key={k}
-          k={k}
-          v={values[k]}
-          sensitive={isSensitive(k)}
-          last={i === shownKeys.length - 1 && !poolerOff}
-        />
-      ))}
+      {rows.map((r, i) => {
+        const secret = isMasked(r.source);
+        const raw = !secret ? (values[r.source] ?? "") : revealed[r.source] ?? (conn.serverMasked ? undefined : values[r.source]);
+        const value = raw !== undefined && r.transform ? (r.transform(raw) ?? "") : raw;
+        return (
+          <ConnectionRow
+            key={r.k}
+            k={r.k}
+            preview={secret ? (r.transform ? "" : values[r.source] ?? "") : (values[r.source] ?? "")}
+            value={value}
+            secret={secret}
+            empty={(values[r.source] ?? "").trim() === "" && !secret}
+            visible={!secret || !!shown[r.k]}
+            busy={busy === r.source}
+            accent={r.accent}
+            last={i === rows.length - 1 && !poolerOff}
+            onToggle={() => void reveal(r.k, r.source, r.transform)}
+            onCopy={() => void copy(r.k, r.source, r.transform)}
+          />
+        );
+      })}
       {poolerOff && (
         <li className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] items-center gap-2 px-3 py-2 sm:grid-cols-[180px_minmax(0,1fr)]">
           <span className="font-mono text-xs text-[var(--text-secondary)]">POOLER_*</span>
@@ -366,6 +335,85 @@ function ConnectionRows({
         </li>
       )}
     </ul>
+  );
+}
+
+function ConnectionRow({
+  k,
+  preview,
+  value,
+  secret,
+  empty,
+  visible,
+  busy,
+  accent,
+  last,
+  onToggle,
+  onCopy,
+}: {
+  k: string;
+  // What's shown while masked: a server-redacted DSN, or "" for dots.
+  preview: string;
+  value: string | undefined;
+  secret: boolean;
+  empty: boolean;
+  visible: boolean;
+  busy: boolean;
+  accent?: boolean;
+  last?: boolean;
+  onToggle: () => void;
+  onCopy: () => void;
+}) {
+  return (
+    <li className={cn("px-3 py-2", !last && "border-b border-[var(--border-subtle)]", accent && "bg-[var(--warning-subtle)]")}>
+      <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
+        <span
+          className={cn("truncate font-mono text-xs", accent ? "text-[var(--warning)]" : "text-[var(--text-secondary)]")}
+          title={k}
+        >
+          {k}
+        </span>
+        {empty ? (
+          <span className="truncate px-2 py-1 text-xs italic text-[var(--text-tertiary)]">Not set</span>
+        ) : (
+          <span
+            className={cn(
+              "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs",
+              visible ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]",
+            )}
+            title={visible ? value : "Hidden. Reveal or copy it; both are recorded in the audit log."}
+          >
+            {visible && value !== undefined ? value : preview || "••••••••••••••••"}
+          </span>
+        )}
+        <div className={cn("flex items-center gap-0.5", empty && "invisible")}>
+          {secret && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={visible ? `Hide ${k}` : `Reveal ${k}`}
+              title={visible ? "Hide" : "Reveal (recorded in the audit log)"}
+              disabled={busy}
+              onClick={onToggle}
+            >
+              {visible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Copy ${k}`}
+            title={secret ? "Copy (recorded in the audit log)" : "Copy"}
+            disabled={busy}
+            onClick={onCopy}
+          >
+            <Copy className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -413,22 +461,7 @@ function HealthStrip({
   storageSize: string;
   tier: string;
 }) {
-  const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
-  const pods = useAddonPods(project, external ? "" : addon);
-  const list = pods.data?.pods ?? [];
-  const ready = list.filter((p) => p.ready).length;
-  const restarts = list.reduce((n, p) => n + (p.restarts ?? 0), 0);
-  const status: { label: string; detail?: string; tone: string } = external
-    ? { label: "External", detail: "Managed outside kuso", tone: "bg-[var(--info)]" }
-    : pods.isPending
-      ? { label: "Checking…", tone: "bg-[var(--text-tertiary)]" }
-      : pods.isError
-        ? { label: "Unknown", detail: "Couldn't read pods", tone: "bg-[var(--text-tertiary)]" }
-        : list.length === 0
-          ? { label: "Down", detail: "No pods running", tone: "bg-[var(--error)]" }
-          : ready === list.length
-            ? { label: "Healthy", detail: `${ready}/${list.length} pods ready${restarts ? ` · ${restarts} restarts` : ""}`, tone: "bg-[var(--success)]" }
-            : { label: "Degraded", detail: `${ready}/${list.length} pods ready`, tone: "bg-[var(--warning)]" };
+  const health = useAddonHealth(project, addon, cr);
   const schedule = cr?.spec.backup?.schedule;
   const backups =
     kind !== "postgres"
@@ -444,11 +477,11 @@ function HealthStrip({
       k: "Status",
       v: (
         <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className={cn("h-2 w-2 rounded-full", status.tone)} />
-          {status.label}
+          <StatusDot status={health.status} />
+          {health.status.label}
         </span>
       ),
-      d: status.detail,
+      d: health.detail,
     },
     { k: "Version", v: cr?.spec.version || "Chart default", d: kind },
     {

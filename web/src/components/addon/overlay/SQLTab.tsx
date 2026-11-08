@@ -1,7 +1,8 @@
 "use client";
 
 import { Select } from "@/components/ui/select";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Segmented } from "@/components/ui/segmented";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import {
@@ -40,6 +41,13 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
     retry: 2,
     retryDelay: (i) => 1000 * (i + 1),
   });
+  // Open the first table on load (and after a database switch) so the
+  // tab lands on data, not an empty pane.
+  useEffect(() => {
+    if (selected || !tables.data || tables.data.length === 0) return;
+    const first = tables.data.find((t) => t.schema === "public") ?? tables.data[0];
+    setSelected({ schema: first.schema, name: first.name });
+  }, [tables.data, selected]);
   const [query, setQuery] = useState("SELECT 1");
   const [resp, setResp] = useState<{
     columns: string[];
@@ -55,18 +63,18 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
       setError(null);
     },
     onError: (e) => {
-      setError(e instanceof Error ? e.message : "query failed");
+      setError(e instanceof Error ? e.message : "Query failed");
       setResp(null);
     },
   });
   const repair = useMutation({
     mutationFn: () => repairAddonPassword(project, addon),
     onSuccess: () => {
-      toast.success("password resynced — retrying");
+      toast.success("Password resynced. Retrying…");
       tables.refetch();
       setError(null);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "repair failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Repair failed"),
   });
 
   // The drift bug surfaces as Postgres SQLSTATE 28P01. Detect both
@@ -135,9 +143,8 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             {showRepair ? (
               <>
                 <p className="text-[var(--text-tertiary)]">
-                  Looks like password drift — the chart&apos;s conn secret no longer
-                  matches the password baked into pgdata. Repair resyncs the user via
-                  ALTER USER inside the pod.
+                  The stored password no longer matches the one inside the
+                  database. Repair resets the database user to the stored password.
                 </p>
                 <Button size="xs" variant="secondary" onClick={() => repair.mutate()} loading={repair.isPending}>
                   Repair password
@@ -180,21 +187,28 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
 
       <section className="flex min-h-0 min-w-0 flex-col">
         {/* Browse / SQL mode toggle */}
-        <div className="flex items-center gap-1 border-b border-[var(--border-subtle)] px-3 py-1.5">
-          {(["browse", "sql"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className={`rounded px-2 py-1 text-xs font-medium ${
-                mode === m
-                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              }`}
-            >
-              {m === "browse" ? "Browse" : "SQL"}
-            </button>
-          ))}
+        <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2">
+          <Segmented
+            size="sm"
+            label="Data view"
+            value={mode}
+            onChange={(m) => {
+              setMode(m);
+              if (m === "sql" && selected && query === "SELECT 1") {
+                const safe = selected.schema === "public" ? `"${selected.name}"` : `"${selected.schema}"."${selected.name}"`;
+                setQuery(`SELECT * FROM ${safe} LIMIT 100`);
+              }
+            }}
+            options={[
+              { value: "browse", label: "Browse", title: "Browse and edit rows" },
+              { value: "sql", label: "Query", title: "Run read-only SQL" },
+            ]}
+          />
+          {mode === "browse" && selected && (
+            <span className="min-w-0 truncate font-mono text-xs text-[var(--text-secondary)]">
+              {selected.schema === "public" ? selected.name : `${selected.schema}.${selected.name}`}
+            </span>
+          )}
         </div>
 
         {mode === "browse" ? (
@@ -234,8 +248,8 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 }}
               />
               <div className="mt-2 flex items-center justify-between">
-                <span className="font-mono text-xs text-[var(--text-tertiary)]">
-                  this runner is read-only (Browse edits live data) · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
+                <span className="text-xs text-[var(--text-tertiary)]">
+                  Read-only · 5s timeout · up to 100 rows · ⌘/Ctrl + ↵ to run. Edit rows in Browse.
                 </span>
                 <Button size="sm" onClick={() => run.mutate(query)} disabled={run.isPending}>
                   <Play className="h-3 w-3" />
@@ -251,8 +265,8 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
               ) : resp ? (
                 <SQLResults resp={resp} />
               ) : (
-                <p className="font-mono text-xs text-[var(--text-tertiary)]">
-                  no results yet — write a query and hit Run.
+                <p className="text-xs text-[var(--text-tertiary)]">
+                  Write a query and press Run to see results here.
                 </p>
               )}
             </div>
@@ -307,8 +321,8 @@ function SQLResults({
 }) {
   if (resp.columns.length === 0) {
     return (
-      <p className="font-mono text-xs text-[var(--text-tertiary)]">
-        query returned no columns ({resp.elapsed})
+      <p className="text-xs text-[var(--text-tertiary)]">
+        The query returned no columns ({resp.elapsed}).
       </p>
     );
   }
@@ -345,11 +359,11 @@ function SQLResults({
           ))}
         </tbody>
       </table>
-      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-xs text-[var(--text-tertiary)]">
+      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 text-xs text-[var(--text-tertiary)]">
         <span>
           {resp.rows.length} row{resp.rows.length === 1 ? "" : "s"}
           {resp.truncated && (
-            <span className="ml-2 text-[var(--warning)]">· truncated at 100</span>
+            <span className="ml-2 text-[var(--text-secondary)]">· capped at 100</span>
           )}
         </span>
         <span>{resp.elapsed}</span>

@@ -6,7 +6,12 @@ import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { X, Database, HardDrive, Settings, Info, ExternalLink, ShieldAlert } from "lucide-react";
+import { X, ExternalLink, Plug, DatabaseBackup } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { StatusPill } from "@/components/ui/status-pill";
+import { useAddonHealth, runBackupNow } from "@/features/addons";
+import type { KusoAddon } from "@/types/projects";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -80,12 +85,13 @@ export function useAddonOverlayDirty(
 }
 
 type Tab = "overview" | "backups" | "sql" | "vulnerabilities" | "settings";
+// No icons: same tab language as the service overlay.
 const TABS: OverlayTabItem<Tab>[] = [
-  { id: "overview", label: "Overview", icon: Info, chord: "o" },
-  { id: "backups", label: "Backups", icon: HardDrive, chord: "b" },
-  { id: "sql", label: "SQL", icon: Database, chord: "q" },
-  { id: "vulnerabilities", label: "Vulnerabilities", icon: ShieldAlert, chord: "u" },
-  { id: "settings", label: "Settings", icon: Settings, chord: "s" },
+  { id: "overview", label: "Overview", chord: "o" },
+  { id: "backups", label: "Backups", chord: "b" },
+  { id: "sql", label: "Data", chord: "q" },
+  { id: "vulnerabilities", label: "Vulnerabilities", chord: "u" },
+  { id: "settings", label: "Settings", chord: "s" },
 ];
 
 interface Props {
@@ -234,47 +240,23 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
             className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:max-w-3xl sm:border-l sm:border-[var(--border-subtle)]"
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:px-5 sm:py-4">
-              <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
-                <AddonIcon kind={kind} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h2 className="font-heading text-lg font-semibold tracking-tight truncate">
-                  {addon ?? ""}
-                </h2>
-                <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
-                  <span>{addonLabel(kind)}</span>
-                  <span aria-hidden className="text-[var(--text-tertiary)]">·</span>
-                  <span>{project}</span>
-                </div>
-              </div>
-              {/* Open Web UI: only renders when the addon's spec.webUI
-                  is enabled (the kuso server only proxies kinds with
-                  a known UI port, mailpit/nats today). The endpoint
-                  itself requires an authenticated kuso session, so
-                  the new-tab open inherits whatever cookie/session
-                  the dashboard is already using. */}
-              {data?.spec.webUI?.enabled && (
-                <a
-                  href={`/api/projects/${project}/addons/${addon}/webui/`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                  title="Open the addon's built-in web console"
-                >
-                  Open Web UI
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              )}
-              <button
-                type="button"
-                onClick={guardedClose}
-                aria-label="Close"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </header>
+            <AddonHeader
+              project={project}
+              addon={addon ?? ""}
+              kind={kind}
+              cr={data}
+              canBackup={isPostgres && canWriteAddon}
+              onConnect={() => {
+                guardedSetTab("overview");
+                // The overview mounts on the next frame after a tab switch.
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() =>
+                    document.getElementById("addon-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+                  ),
+                );
+              }}
+              onClose={guardedClose}
+            />
 
             <OverlayTabs
               tabs={visibleTabs.filter((t) => t.id !== "settings")}
@@ -390,5 +372,114 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
         </div>
       )}
     </AnimatePresence>
+  );
+}
+
+const headerButtonClass =
+  "inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:opacity-50";
+
+// AddonHeader matches the service overlay's header: icon, name + status
+// pill, a context line, then the actions you reach for on a datastore.
+function AddonHeader({
+  project,
+  addon,
+  kind,
+  cr,
+  canBackup,
+  onConnect,
+  onClose,
+}: {
+  project: string;
+  addon: string;
+  kind: string;
+  cr?: KusoAddon;
+  canBackup: boolean;
+  onConnect: () => void;
+  onClose: () => void;
+}) {
+  const health = useAddonHealth(project, addon, cr);
+  const qc = useQueryClient();
+  const hasSchedule = !!cr?.spec.backup?.schedule;
+  const backup = useMutation({
+    mutationFn: () => runBackupNow(project, addon),
+    onSuccess: (res) => {
+      toast.success("Backup started", { description: `Job ${res.job}. It shows up under Backups when the upload finishes.` });
+      void qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
+  });
+  const version = cr?.spec.version;
+  const publicPort = cr?.spec.publicTCP?.enabled ? cr.spec.publicTCP.port : undefined;
+  return (
+    <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
+      <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
+        <AddonIcon kind={kind} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <h2 className="truncate font-heading text-lg font-semibold tracking-tight">{addon}</h2>
+          {cr && <StatusPill status={health.status} detail={health.detail} />}
+        </div>
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
+          <span className="min-w-0 truncate">
+            {project}
+            <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+            <span>
+              {addonLabel(kind)}
+              {version ? ` ${version}` : ""}
+            </span>
+          </span>
+          {publicPort ? (
+            <span className="rounded border border-[var(--warning)]/40 px-1.5 py-px text-[var(--warning)]">Public · port {publicPort}</span>
+          ) : cr && !cr.spec.external ? (
+            <span className="text-[var(--text-tertiary)]">Private network only</span>
+          ) : null}
+        </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <button type="button" onClick={onConnect} className={headerButtonClass}>
+            <Plug className="h-3 w-3" aria-hidden />
+            Connect
+          </button>
+          {canBackup && (
+            <button
+              type="button"
+              onClick={() => backup.mutate()}
+              disabled={!hasSchedule || backup.isPending}
+              title={
+                hasSchedule
+                  ? "Run the scheduled backup job now: dump, upload to S3, prune"
+                  : "Turn on scheduled backups (Backups tab) to back up to S3 on demand"
+              }
+              className={headerButtonClass}
+            >
+              <DatabaseBackup className="h-3 w-3" aria-hidden />
+              {backup.isPending ? "Starting…" : "Back up now"}
+            </button>
+          )}
+          {/* Only addons whose spec.webUI is on (mailpit/nats today); the
+              proxy requires the dashboard session. */}
+          {cr?.spec.webUI?.enabled && (
+            <a
+              href={`/api/projects/${project}/addons/${addon}/webui/`}
+              target="_blank"
+              rel="noreferrer"
+              title="Open the addon's built-in web console"
+              className={headerButtonClass}
+            >
+              Open web UI
+              <ExternalLink className="h-3 w-3" aria-hidden />
+            </a>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </header>
   );
 }

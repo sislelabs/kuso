@@ -3,7 +3,9 @@
 import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { RotateCcw, Download } from "lucide-react";
+import { RotateCcw, Download, DatabaseBackup } from "lucide-react";
+import { Callout } from "@/components/ui/callout";
+import { runBackupNow, downloadStoredBackup } from "@/features/addons";
 import {
   useAddons,
   listBackups,
@@ -16,6 +18,8 @@ import type { KusoAddon } from "@/types/projects";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
@@ -73,6 +77,7 @@ function DownloadBackupButton({
       size="sm"
       variant="outline"
       disabled={busy}
+      title="Dump the database right now and save it to this computer. Doesn't need S3."
       onClick={async () => {
         setBusy(true);
         try {
@@ -85,8 +90,81 @@ function DownloadBackupButton({
       }}
     >
       <Download className="h-3 w-3" />
-      {busy ? "Preparing…" : "Download backup now"}
+      {busy ? "Preparing…" : "Download fresh dump"}
     </Button>
+  );
+}
+
+// BackupNowButton runs the scheduled backup job once, on demand: same
+// dump, S3 upload and prune as the CronJob. Needs a schedule, since the
+// job only exists while one is set.
+function BackupNowButton({
+  project,
+  addon,
+  hasSchedule,
+  canWrite,
+}: {
+  project: string;
+  addon: string;
+  hasSchedule: boolean;
+  canWrite: boolean;
+}) {
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: () => runBackupNow(project, addon),
+    onSuccess: (res) => {
+      toast.success("Backup started", { description: `Job ${res.job}. It appears below once the upload finishes.` });
+      void qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
+  });
+  return (
+    <Button
+      size="sm"
+      onClick={() => run.mutate()}
+      disabled={!canWrite || !hasSchedule || run.isPending}
+      title={
+        !canWrite
+          ? "Requires editor access on this project"
+          : hasSchedule
+            ? "Back up to S3 now"
+            : "Turn on scheduled backups above first"
+      }
+    >
+      <DatabaseBackup className="h-3 w-3" />
+      {run.isPending ? "Starting…" : "Back up now"}
+    </Button>
+  );
+}
+
+function BackupsHeader({
+  project,
+  addon,
+  kind,
+  hasSchedule,
+  canWrite,
+  meta,
+}: {
+  project: string;
+  addon: string;
+  kind?: string;
+  hasSchedule: boolean;
+  canWrite: boolean;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <div className="min-w-0">
+        <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
+        {meta && <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{meta}</p>}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <DownloadBackupButton project={project} addon={addon} kind={kind} />
+        {kind === "postgres" && (
+          <BackupNowButton project={project} addon={addon} hasSchedule={hasSchedule} canWrite={canWrite} />
+        )}
+      </div>
+    </header>
   );
 }
 
@@ -130,6 +208,19 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
   });
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const hasSchedule = !!thisAddon?.spec.backup?.schedule;
+  const canDownload = useCanOnProject(project, Perms.SecretsRead);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const download = async (key: string) => {
+    setDownloading(key);
+    try {
+      await downloadStoredBackup(project, addon, key);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloading(null);
+    }
+  };
   // Sibling postgres addons in the project — used as cross-restore
   // targets (non-destructive path). Postgres-only because the
   // existing restore Job assumes pg_dump format.
@@ -150,29 +241,20 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     return (
       <div className="space-y-4 p-5">
         <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
-        <div className="flex items-center justify-between">
-          <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
-          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
-        </div>
-        <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
-          <p className="mt-2 font-mono text-xs text-[var(--text-tertiary)]">
-            {noS3 ? (
-              <>
-                S3 credentials live in{" "}
-                <a href="/settings/backups" className="text-[var(--accent)] underline">
-                  Settings → Backups
-                </a>{" "}
-                (admin). Once they are set, pick a schedule above.
-              </>
-            ) : (
-              <>
-                Detail:{" "}
-                <span className="font-mono text-[var(--text-secondary)]">{msg}</span>
-              </>
-            )}
-          </p>
-        </div>
+        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} hasSchedule={hasSchedule} canWrite={canWrite} />
+        {noS3 ? (
+          <Callout tone="info" title="Off-site backups aren't set up yet">
+            Add S3 credentials in{" "}
+            <a href="/settings/backups" className="text-[var(--link)] underline underline-offset-2">
+              Settings → Backups
+            </a>{" "}
+            (admin), then turn on a schedule above. You can still download a fresh dump any time.
+          </Callout>
+        ) : (
+          <Callout tone="warning" title="Couldn't list backups">
+            <span className="font-mono text-xs">{msg}</span>
+          </Callout>
+        )}
       </div>
     );
   }
@@ -182,12 +264,11 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     return (
       <div className="space-y-4 p-5">
         <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
-        <div className="flex items-center justify-between">
-          <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
-          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
-        </div>
+        <BackupsHeader project={project} addon={addon} kind={thisAddon?.spec.kind} hasSchedule={hasSchedule} canWrite={canWrite} />
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-          No backups yet. The CronJob will drop one once its schedule fires.
+          {hasSchedule
+            ? "No backups yet. The first one lands when the schedule fires, or press Back up now."
+            : "No backups yet. Turn on a schedule above to back up to S3 automatically."}
         </p>
       </div>
     );
@@ -198,22 +279,21 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   return (
     <div className="space-y-4 p-5">
       <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
-      <header className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-xs text-[var(--text-tertiary)]">
-            {items.length} {items.length === 1 ? "object" : "objects"} · auto-refresh 30s
-          </span>
-          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
-        </div>
-      </header>
+      <BackupsHeader
+        project={project}
+        addon={addon}
+        kind={thisAddon?.spec.kind}
+        hasSchedule={hasSchedule}
+        canWrite={canWrite}
+        meta={`${items.length} ${items.length === 1 ? "backup" : "backups"} in S3, newest first`}
+      />
       {lastRestore && (
-        <div role="status" className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-xs text-[var(--text-secondary)]">
-          Restore job <span className="text-[var(--text-primary)]">{lastRestore.job}</span> started{" "}
-          {relativeTime(lastRestore.at.toISOString())} from {lastRestore.key}
+        <Callout tone="info" role="status" title={`Restore started ${relativeTime(lastRestore.at.toISOString())}`}>
+          Job <span className="font-mono text-xs">{lastRestore.job}</span> is loading{" "}
+          <span className="font-mono text-xs">{tail(lastRestore.key)}</span>
           {lastRestore.into ? ` into ${lastRestore.into}` : ""}. Progress isn&apos;t tracked here yet; check the
           job&apos;s logs before relying on the data.
-        </div>
+        </Callout>
       )}
       {items.length >= BACKUP_LIST_CAP && (
         <p className="text-xs text-[var(--text-tertiary)]">
@@ -227,15 +307,26 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
             className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2 last:border-b-0"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-xs text-[var(--text-secondary)]">
+              <div className="text-sm text-[var(--text-primary)]" title={b.when}>
+                {b.when ? relativeTime(b.when) : "Unknown time"}
+                <span className="ml-2 text-xs text-[var(--text-tertiary)]">{formatBytes(b.size)}</span>
+              </div>
+              <div className="mt-0.5 truncate font-mono text-xs text-[var(--text-tertiary)]" title={b.key}>
                 {tail(b.key)}
               </div>
-              <div className="mt-0.5 flex items-center gap-3 font-mono text-xs text-[var(--text-tertiary)]">
-                <span>{formatBytes(b.size)}</span>
-                <span>·</span>
-                <span title={b.when}>{b.when ? relativeTime(b.when) : "—"}</span>
-              </div>
             </div>
+            {canDownload && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={downloading !== null}
+                title="Save this backup to your computer (recorded in the audit log)"
+                onClick={() => void download(b.key)}
+              >
+                <Download className="h-3 w-3" />
+                {downloading === b.key ? "Downloading…" : "Download"}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -407,19 +498,18 @@ function BackupScheduleEditor({
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
       <header className="mb-3 flex items-center justify-between">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Schedule</h3>
-        <span className="font-mono text-xs text-[var(--text-tertiary)]">
-          {enabled ? "active" : "disabled"}
-        </span>
+        <Badge variant={enabled ? "success" : "neutral"}>{enabled ? "On" : "Off"}</Badge>
       </header>
 
       <div className="space-y-3">
         <div className="space-y-2">
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={trimmed !== ""}
-              onChange={(e) => {
-                if (e.target.checked) {
+          <div className="flex items-center gap-2 text-sm">
+            <Switch
+              on={trimmed !== ""}
+              labelledBy="backup-schedule-label"
+              disabled={!canWrite}
+              onChange={(on) => {
+                if (on) {
                   // Re-enabling: hand back the user's last good
                   // schedule, or fall back to a sensible daily-3am
                   // default if they're enabling for the first time.
@@ -428,10 +518,9 @@ function BackupScheduleEditor({
                   setSchedule("");
                 }
               }}
-              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
             />
-            <span>Run backups on a schedule</span>
-          </label>
+            <span id="backup-schedule-label">Back up to S3 on a schedule</span>
+          </div>
           {trimmed !== "" && (
             <CronPicker value={schedule} onChange={setSchedule} />
           )}
@@ -442,11 +531,13 @@ function BackupScheduleEditor({
           )}
         </div>
 
+        {enabled && (
         <div className="space-y-1">
-          <label className="block text-xs font-medium text-[var(--text-tertiary)]">
-            Retention (days)
+          <label htmlFor="backup-retention" className="block text-xs font-medium text-[var(--text-secondary)]">
+            Keep backups for (days)
           </label>
           <Input
+            id="backup-retention"
             type="number"
             min={0}
             max={3650}
@@ -457,12 +548,13 @@ function BackupScheduleEditor({
               !retentionValid && "border-[var(--error)]/60",
             )}
           />
-          <p className="font-mono text-xs text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]">
             {retentionNum === 0
-              ? "Keep forever (no automatic prune)."
-              : `Backups older than ${retentionNum}d are deleted from S3.`}
+              ? "0 keeps every backup forever."
+              : `Each run deletes backups older than ${retentionNum} day${retentionNum === 1 ? "" : "s"} from S3. 0 keeps them forever.`}
           </p>
         </div>
+        )}
 
         <div className="flex items-center justify-end gap-2 pt-1">
           {dirty && (
