@@ -1,0 +1,244 @@
+"use client";
+
+import { useMemo, useState, type Ref } from "react";
+import Link from "next/link";
+import { ArrowRight, Github, Lock } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useGithubRepos, useInstallations, useInstallURL } from "@/features/github";
+import { Perms, useCan, useSession } from "@/features/auth";
+import { ApiError } from "@/lib/api-client";
+import { RepoUrlForm } from "@/components/service/RepoUrlForm";
+
+// A repo pick, normalised across the admin (installations) and
+// non-admin (flat /api/github/repos) sources.
+export interface PickableRepo {
+  fullName: string;
+  defaultBranch: string;
+  private?: boolean;
+}
+
+// PickedRepo is the repo a service builds from. byUrl is set when the
+// user pasted a URL instead of picking through the GitHub App: there is
+// no installation (installationId 0) and the clone is anonymous or uses
+// the access token.
+export interface PickedRepo {
+  installationId: number;
+  repo: PickableRepo;
+  byUrl?: { url: string; token: string; branches: string[] };
+}
+
+export function pickedRepoURL(p: PickedRepo): string {
+  return p.byUrl?.url ?? `https://github.com/${p.repo.fullName}`;
+}
+
+// useRepoSources loads the repos the GitHub App can see. Admins read
+// installations (carries the private flag); everyone else gets the
+// projects:create-gated flat list.
+export function useRepoSources() {
+  const installURL = useInstallURL();
+  const session = useSession();
+  const isAdmin = useCan(Perms.SettingsAdmin);
+  const sessionReady = !!session.data;
+  const installs = useInstallations({ enabled: sessionReady && isAdmin });
+  const flatRepos = useGithubRepos({ enabled: sessionReady && !isAdmin });
+  const reposQuery = isAdmin ? installs : flatRepos;
+  const allRepos = useMemo((): { installationId: number; repo: PickableRepo }[] => {
+    if (isAdmin) {
+      return (installs.data ?? []).flatMap((inst) =>
+        inst.repositories.map((r) => ({ installationId: inst.id, repo: r })),
+      );
+    }
+    return (flatRepos.data ?? []).map((r) => ({
+      installationId: r.installationId,
+      repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
+    }));
+  }, [isAdmin, installs.data, flatRepos.data]);
+  return {
+    isAdmin,
+    sessionReady,
+    appConfigured: !!installURL.data?.configured,
+    installURL: installURL.data?.url ?? "",
+    loading: !sessionReady || installURL.isPending || reposQuery.isLoading,
+    forbidden: reposQuery.error instanceof ApiError && reposQuery.error.status === 403,
+    isError: reposQuery.isError,
+    refetch: () => void reposQuery.refetch(),
+    allRepos,
+  };
+}
+
+// RepoPicker lists the App's repos with a filter, and always offers
+// paste-a-URL underneath so an install without the App (or a repo the
+// App can't see) still has a way in.
+export function RepoPicker({
+  onPick,
+  searchRef,
+  error,
+  autoFocus,
+  listClassName = "max-h-72",
+}: {
+  onPick: (p: PickedRepo) => void;
+  searchRef?: Ref<HTMLInputElement>;
+  error?: string;
+  autoFocus?: boolean;
+  listClassName?: string;
+}) {
+  const src = useRepoSources();
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return src.allRepos;
+    return src.allRepos.filter(({ repo }) => repo.fullName.toLowerCase().includes(q));
+  }, [src.allRepos, query]);
+
+  let appPanel: React.ReactNode;
+  if (src.loading) {
+    appPanel = <Skeleton className="h-40 w-full" />;
+  } else if (!src.appConfigured) {
+    appPanel = (
+      <div className="rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-4">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Github className="h-4 w-4" />
+          GitHub isn&apos;t connected yet
+        </p>
+        {src.isAdmin ? (
+          <>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+              Connect the kuso GitHub App to browse your repositories, deploy on every push and get a
+              preview URL for each pull request. Public repos work without it: paste the URL below.
+            </p>
+            <Link
+              href="/settings/github"
+              className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+            >
+              <Github className="h-3.5 w-3.5" />
+              Connect GitHub
+            </Link>
+          </>
+        ) : (
+          <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+            An admin needs to connect the kuso GitHub App before repositories can be listed here. You
+            can still paste a repository URL below.
+          </p>
+        )}
+      </div>
+    );
+  } else if (src.forbidden) {
+    appPanel = (
+      <p className="text-sm text-[var(--text-secondary)]">
+        You can&apos;t browse repositories. Ask an admin for project-create access, or paste a URL below.
+      </p>
+    );
+  } else if (src.isError) {
+    appPanel = (
+      <p role="alert" className="text-sm text-[var(--error)]">
+        Couldn&apos;t load repositories.{" "}
+        <button type="button" className="underline" onClick={src.refetch}>
+          Retry
+        </button>
+      </p>
+    );
+  } else if (src.allRepos.length === 0) {
+    appPanel = src.isAdmin ? (
+      <div className="rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-4">
+        <p className="text-sm text-[var(--text-secondary)]">
+          The GitHub App isn&apos;t installed on any account yet. Install it and pick the repositories
+          kuso may read.
+        </p>
+        {src.installURL && (
+          <a
+            href={src.installURL}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+          >
+            <Github className="h-3.5 w-3.5" />
+            Install the GitHub App
+          </a>
+        )}
+      </div>
+    ) : (
+      <p className="text-sm text-[var(--text-secondary)]">
+        No repositories are connected. Ask an admin to install the GitHub App, or paste a URL below.
+      </p>
+    );
+  } else {
+    appPanel = (
+      <div className="space-y-2">
+        <Input
+          ref={searchRef}
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`Search ${src.allRepos.length} ${src.allRepos.length === 1 ? "repository" : "repositories"}…`}
+          aria-label="Search repositories"
+          aria-invalid={error ? true : undefined}
+          data-primary-search
+          data-no-draft
+          className="h-9 text-[13px]"
+          autoFocus={autoFocus}
+        />
+        <ul
+          className={
+            "divide-y divide-[var(--border-subtle)] overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] " +
+            listClassName
+          }
+        >
+          {filtered.length === 0 ? (
+            <li className="px-3 py-3 text-xs text-[var(--text-secondary)]">
+              No repositories match &ldquo;{query}&rdquo;. Not listed? Paste its URL below, or add it to
+              the GitHub App&apos;s repository access.
+            </li>
+          ) : (
+            filtered.map(({ installationId, repo }) => (
+              <li key={`${installationId}/${repo.fullName}`}>
+                <button
+                  type="button"
+                  onClick={() => onPick({ installationId, repo })}
+                  className="group flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Github className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                    <span className="truncate font-mono text-[13px]">{repo.fullName}</span>
+                    {repo.private && (
+                      <Lock className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="private" />
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1 text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)]">
+                    Import
+                    <ArrowRight className="h-3 w-3" />
+                  </span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <p role="alert" className="text-xs text-[var(--error)]">
+          {error}
+        </p>
+      )}
+      {appPanel}
+      {src.sessionReady && (
+        <div className="space-y-2 border-t border-[var(--border-subtle)] pt-4">
+          <p className="text-[13px] font-medium">Or paste a repository URL</p>
+          <RepoUrlForm
+            onPicked={(r) =>
+              onPick({
+                installationId: 0,
+                repo: { fullName: r.fullName, defaultBranch: r.defaultBranch },
+                byUrl: { url: r.url, token: r.token, branches: r.branches },
+              })
+            }
+          />
+        </div>
+      )}
+    </div>
+  );
+}
