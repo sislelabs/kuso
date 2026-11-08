@@ -75,7 +75,7 @@ describe("describeRule", () => {
     updatedAt: "",
   };
   it("renders each kind in its unit", () => {
-    expect(describeRule({ ...base, thresholdFloat: 800, thresholdInt: 20 })).toBe("p95 ≥ 800ms over 10m (min 20 req)");
+    expect(describeRule({ ...base, thresholdFloat: 800, thresholdInt: 20 })).toBe("p95 ≥ 800 ms over 10m (min 20 req)");
     expect(describeRule({ ...base, kind: "cert_expiry", thresholdInt: 14 })).toBe("expires within 14d or not Ready");
     expect(describeRule({ ...base, kind: "dns_mismatch" })).toBe("host doesn't resolve to the cluster");
   });

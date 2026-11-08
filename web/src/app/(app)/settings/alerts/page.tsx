@@ -14,6 +14,7 @@ import {
   enableAlert,
   disableAlert,
   ALERT_KINDS,
+  alertKindLabel,
   buildCreateBody,
   describeRule,
   emptyRuleForm,
@@ -43,7 +44,7 @@ import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useSession } from "@/features/auth";
 import { useProjects, useServices } from "@/features/projects";
-import { ApiError } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 
 // /settings/alerts — manage alert rules. Engine evaluates them on a
@@ -105,6 +106,18 @@ function AlertsPageInner() {
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/settings/alerts"), { scroll: false });
   }, [search, router, pathname]);
+
+  // Delivery backlog for the channels alerts fire through. The server
+  // counts it instance-wide (not per rule) and only for admins, so a
+  // failure here just hides the hint.
+  const outbox = useQuery({
+    queryKey: ["admin", "notifications", "outbox-stats"],
+    queryFn: () => api<{ pending: number; dead: number }>("/api/notifications/outbox-stats"),
+    enabled: isAdmin,
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const deliveryFailing = (outbox.data?.pending ?? 0) + (outbox.data?.dead ?? 0) > 0;
 
   const del = useMutation({
     mutationFn: (id: string) => deleteAlert(id),
@@ -188,6 +201,7 @@ function AlertsPageInner() {
                 key={r.id}
                 rule={r}
                 manageable={canManageAlertRule(access, r)}
+                deliveryFailing={deliveryFailing}
                 deleting={del.isPending && del.variables === r.id}
                 onDelete={() => del.mutate(r.id)}
                 onToggle={(on) => toggle.mutate({ id: r.id, on })}
@@ -236,12 +250,14 @@ function AdminOnlyState({ project, service, kind }: { project: string; service: 
 function RuleRow({
   rule,
   manageable,
+  deliveryFailing,
   deleting,
   onDelete,
   onToggle,
 }: {
   rule: AlertRule;
   manageable: boolean;
+  deliveryFailing: boolean;
   deleting: boolean;
   onDelete: () => void;
   onToggle: (on: boolean) => void;
@@ -265,8 +281,11 @@ function RuleRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-sm font-medium text-[var(--text-primary)]">{rule.name}</p>
-          <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
-            {rule.kind}
+          <span
+            className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]"
+            title={rule.kind}
+          >
+            {alertKindLabel(rule.kind)}
           </span>
           {rule.project && (
             <span className="font-mono text-xs text-[var(--text-secondary)]">
@@ -287,6 +306,14 @@ function RuleRow({
         ) : rule.lastFiredAt && (
           <p className="mt-0.5 text-xs text-[var(--warning)]">
             Last fired {relativeTime(rule.lastFiredAt)}
+            {deliveryFailing && (
+              <>
+                {" · "}
+                <Link href="/settings/notifications" className="text-[var(--error)] underline underline-offset-2">
+                  notification delivery is failing
+                </Link>
+              </>
+            )}
           </p>
         )}
         {!manageable && (

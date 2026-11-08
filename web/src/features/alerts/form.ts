@@ -173,15 +173,24 @@ export function buildCreateBody(s: RuleFormState, opts: { projectRequired?: bool
   return { ok: true, body };
 }
 
+// alertKindLabel names a rule kind for people; kinds this UI doesn't
+// know yet read as words instead of an identifier.
+export function alertKindLabel(kind: string): string {
+  const meta = (ALERT_KINDS as Record<string, KindMeta | undefined>)[kind];
+  if (meta) return meta.label;
+  const words = kind.replace(/[._-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function describeRule(rule: AlertRule): string {
   const win = formatSec(rule.windowSeconds);
   switch (rule.kind) {
     case "log_match":
-      return `${rule.query ?? ""} ≥ ${rule.thresholdInt ?? 1} in ${win}`;
+      return `"${rule.query ?? ""}" in the logs ≥ ${rule.thresholdInt ?? 1} times in ${win}`;
     case "http_5xx_rate":
       return `5xx ≥ ${rule.thresholdFloat ?? 5}% over ${win} (min ${rule.thresholdInt ?? 20} req)`;
     case "http_p95_latency":
-      return `p95 ≥ ${rule.thresholdFloat ?? 1000}ms over ${win} (min ${rule.thresholdInt ?? 20} req)`;
+      return `p95 ≥ ${rule.thresholdFloat ?? 1000} ms over ${win} (min ${rule.thresholdInt ?? 20} req)`;
     case "cert_expiry":
       return `expires within ${rule.thresholdInt ?? 14}d or not Ready`;
     case "dns_mismatch":
