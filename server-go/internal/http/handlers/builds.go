@@ -50,6 +50,7 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 	// status without N round-trips. Returns a map keyed by short
 	// service name.
 	r.Get("/api/projects/{project}/builds/latest", h.LatestPerService)
+	r.Get("/api/projects/{project}/services/{service}/env-example", h.EnvExample)
 }
 
 // LatestPerService returns {<serviceShortName>: buildSummary} for the
