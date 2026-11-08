@@ -10,6 +10,10 @@ import {
   useAddonHealth,
   useSubscribedAddonsForServices,
   useToggleAddonSubscription,
+  useAddonBackups,
+  backupSummary,
+  backupsApplicable,
+  backupsListState,
   type AddonConnection,
 } from "@/features/addons";
 import { copyText } from "@/lib/clipboard";
@@ -462,17 +466,10 @@ function HealthStrip({
   tier: string;
 }) {
   const health = useAddonHealth(project, addon, cr);
-  const schedule = cr?.spec.backup?.schedule;
-  const backups =
-    kind !== "postgres"
-      ? { label: "Not available", detail: `No managed backups for ${kind || "this kind"}` }
-      : schedule
-        ? {
-            label: describeCron(schedule),
-            detail: cr?.spec.backup?.retentionDays ? `Kept ${cr.spec.backup.retentionDays} days` : "Kept forever",
-          }
-        : { label: "Off", detail: "No backup schedule" };
-  const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode }[] = [
+  const hasBackups = backupsApplicable(cr);
+  const list = useAddonBackups(project, addon, hasBackups);
+  const summary = hasBackups ? backupSummary(cr, backupsListState(list)) : null;
+  const tiles: { k: string; v: React.ReactNode; d?: React.ReactNode; title?: string }[] = [
     {
       k: "Status",
       v: (
@@ -489,12 +486,14 @@ function HealthStrip({
       v: <span className="capitalize">{tier}</span>,
       d: `${storageSize} disk${cr?.spec.ha ? " · HA" : ""}`,
     },
-    { k: "Backups", v: backups.label, d: backups.detail },
+    summary
+      ? { k: "Backups", v: summary.headline, d: summary.detail || undefined, title: summary.sentence }
+      : { k: "Backups", v: "Not available", d: `No managed backups for ${kind || "this kind"}` },
   ];
   return (
     <section aria-label="Addon health" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] sm:grid-cols-4">
       {tiles.map((t) => (
-        <div key={t.k} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
+        <div key={t.k} title={t.title} className="min-w-0 bg-[var(--bg-secondary)] px-3 py-2.5">
           <div className="text-xs text-[var(--text-secondary)]">{t.k}</div>
           <div className="mt-0.5 truncate text-sm font-medium text-[var(--text-primary)]">{t.v}</div>
           {t.d && <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{t.d}</div>}
@@ -507,20 +506,4 @@ function HealthStrip({
       </div>
     </section>
   );
-}
-
-// describeCron turns the common backup schedules into words; anything
-// unusual falls back to the raw expression.
-function describeCron(expr: string): string {
-  const f = expr.trim().split(/\s+/);
-  if (f.length !== 5) return expr;
-  const [min, hour, dom, mon, dow] = f;
-  const at = /^\d+$/.test(min) && /^\d+$/.test(hour) ? ` at ${hour.padStart(2, "0")}:${min.padStart(2, "0")}` : "";
-  if (dom === "*" && mon === "*" && dow === "*" && at) return `Daily${at}`;
-  if (dom === "*" && mon === "*" && /^\d$/.test(dow) && at) {
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    return `Weekly, ${days[Number(dow) % 7]}${at}`;
-  }
-  if (/^\*\/\d+$/.test(hour) && dom === "*" && /^\d+$/.test(min)) return `Every ${hour.slice(2)}h`;
-  return expr;
 }
