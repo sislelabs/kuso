@@ -43,7 +43,8 @@ import { SettingsSection, SettingsSelect } from "@/components/settings/SettingsS
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useSession } from "@/features/auth";
-import { useProjects, useServices } from "@/features/projects";
+import { useEnvironments, useProjects, useServices } from "@/features/projects";
+import { envGroupName } from "@/lib/env-group";
 import { api, ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 
@@ -410,6 +411,15 @@ function AddRuleDialog({
   const projectOptions = form.project && !projects.includes(form.project) ? [form.project, ...projects] : projects;
   const serviceOptions =
     form.service && !serviceNames.includes(form.service) ? [form.service, ...serviceNames] : serviceNames;
+  const envs = useEnvironments(form.project);
+  // Env groups (production, staging, preview-pr-N…) of the picked service,
+  // or of the whole project when the rule covers every service.
+  const envNames = useMemo(() => {
+    const fqn = form.service ? `${form.project}-${form.service}` : "";
+    const names = (envs.data ?? []).filter((e) => !fqn || e.spec.service === fqn).map((e) => envGroupName(e));
+    return [...new Set(names)].sort((a, b) => (a === "production" ? -1 : b === "production" ? 1 : a.localeCompare(b)));
+  }, [envs.data, form.project, form.service]);
+  const envOptions = form.env && !envNames.includes(form.env) ? [form.env, ...envNames] : envNames;
   const setProject = (project: string) => setForm((f) => ({ ...f, project, service: "", env: "" }));
   const noProjectReason = "Pick a project first";
 
@@ -543,15 +553,20 @@ function AddRuleDialog({
                 </SettingsSelect>
               </Field>
               {meta.scope === "env" && (
-                <Field label="Env (optional)" hint={!form.project ? noProjectReason : undefined}>
-                  <Input
+                <Field label="Environment" hint={!form.project ? noProjectReason : undefined}>
+                  <SettingsSelect
                     value={form.env}
                     onChange={(e) => set("env", e.target.value)}
-                    placeholder="All envs"
                     disabled={!form.project}
                     title={!form.project ? noProjectReason : undefined}
-                    className="font-mono"
-                  />
+                  >
+                    <option value="">{envs.isPending && form.project ? "Loading environments…" : "All environments"}</option>
+                    {envOptions.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </SettingsSelect>
                 </Field>
               )}
             </div>
