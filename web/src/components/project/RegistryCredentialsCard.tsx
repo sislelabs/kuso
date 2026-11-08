@@ -73,7 +73,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
                 type="button"
                 onClick={() => setPendingDelete(c.registry)}
                 disabled={logout.isPending}
-                className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--danger-subtle)] hover:text-[var(--danger)] disabled:opacity-40"
                 aria-label={`Remove ${c.registry} credential`}
               >
                 <Trash2 className="h-3.5 w-3.5" />

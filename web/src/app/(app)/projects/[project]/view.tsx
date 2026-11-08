@@ -458,7 +458,7 @@ export function ProjectDetailView() {
 function NonProdBanner({ project, env }: { project: string; env: string }) {
   const isPreview = env.startsWith("pr-") || env.startsWith("preview-");
   const cls = isPreview
-    ? "border-blue-500/30 bg-blue-500/5 text-blue-200"
+    ? "border-[var(--info)]/30 bg-[var(--info-subtle)] text-[var(--info)]"
     : "border-[var(--warning)]/30 bg-[var(--warning-subtle)] text-[var(--warning)]";
   const label = isPreview ? "Preview" : "Non-production";
   return (

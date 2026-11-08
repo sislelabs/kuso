@@ -270,7 +270,7 @@ function ShareBar({ pct }: { pct: number }) {
     <div className="flex w-[160px] shrink-0 items-center gap-2">
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
         <div
-          className="h-full bg-emerald-500/60"
+          className="h-full bg-[var(--success)]/60"
           style={{ width: `${w}%` }}
         />
       </div>
@@ -298,7 +298,7 @@ function DailySpark({ days }: { days: ProjectCostDay[] }) {
           return (
             <div
               key={d.day}
-              className="flex-1 rounded-sm bg-emerald-500/40"
+              className="flex-1 rounded-sm bg-[var(--success)]/40"
               style={{ height: `${h}%`, minWidth: 4 }}
               title={`${date.toISOString().slice(0, 10)} · ${(d.cpuMilliHours / 1000).toFixed(2)} cpu·hr`}
             />

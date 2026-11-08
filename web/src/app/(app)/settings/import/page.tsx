@@ -294,7 +294,7 @@ function PreviewTable({
                     <span
                       className={
                         action === "migrate"
-                          ? "rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-xs text-[var(--success)]"
+                          ? "rounded bg-[var(--success-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--success)]"
                           : action === "flag"
                             ? "rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--warning)]"
                             : "rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]"
@@ -340,7 +340,7 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
     <section
       className={
         ok
-          ? "mt-4 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-4"
+          ? "mt-4 rounded-md border border-[var(--success)]/40 bg-[var(--success-subtle)] p-4"
           : "mt-4 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-4"
       }
     >

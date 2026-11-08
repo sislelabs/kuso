@@ -47,7 +47,7 @@ export function DbHealthTile() {
   // 0; any nonzero value is worth a glance.
   const tone =
     writeErrors > 0
-      ? "border-amber-500/40 bg-amber-500/5"
+      ? "border-[var(--warning)]/40 bg-[var(--warning-subtle)]"
       : "border-[var(--border)] bg-[var(--surface)]";
 
   return (

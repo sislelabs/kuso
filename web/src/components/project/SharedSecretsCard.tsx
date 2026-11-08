@@ -209,7 +209,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
                   type="button"
                   onClick={() => setPendingDelete(k)}
                   disabled={unset.isPending}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--danger-subtle)] hover:text-[var(--danger)] disabled:opacity-40"
                   aria-label={`Delete ${k}`}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -341,13 +341,13 @@ function IntegrationTile({
       className={cn(
         "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors disabled:opacity-50",
         existing
-          ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
+          ? "border-[var(--success)]/30 bg-[var(--success-subtle)] hover:bg-[var(--success)]/15"
           : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"
       )}
     >
       <div className="flex w-full items-center gap-1.5">
         <span className="text-xs font-medium">{name}</span>
-        {existing && <Check className="ml-auto h-3 w-3 text-emerald-400" />}
+        {existing && <Check className="ml-auto h-3 w-3 text-[var(--success)]" />}
       </div>
       <p className="font-mono text-xs text-[var(--text-tertiary)]">{envVar}</p>
       <p className="text-xs text-[var(--text-tertiary)]">{description}</p>

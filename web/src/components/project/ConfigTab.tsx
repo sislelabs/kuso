@@ -119,7 +119,7 @@ export function ConfigTab({ project }: { project: string }) {
         </p>
 
         {loadError ? (
-          <p className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-400">
+          <p className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger-subtle)] p-3 text-xs text-[var(--danger)]">
             {loadError}
           </p>
         ) : (
@@ -165,7 +165,7 @@ export function ConfigTab({ project }: { project: string }) {
             Reset to live
           </Button>
           {dirty && !loading && (
-            <span className="font-mono text-xs text-amber-400">edited</span>
+            <span className="text-xs text-[var(--warning)]">Edited</span>
           )}
         </div>
       </div>
@@ -184,9 +184,9 @@ function ResultView({ result }: { result: ConfigApplyResult }) {
     <div className="space-y-3">
       <PlanView plan={result.plan} title="Apply — executed changes" />
       {errs.length > 0 && (
-        <section className="rounded-md border border-red-500/30 bg-red-500/5">
-          <header className="border-b border-red-500/30 px-3 py-2">
-            <h3 className="text-xs text-red-400 font-medium">
+        <section className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger-subtle)]">
+          <header className="border-b border-[var(--danger)]/30 px-3 py-2">
+            <h3 className="text-xs font-medium text-[var(--danger)]">
               {errs.length} error{errs.length > 1 ? "s" : ""}
             </h3>
           </header>
@@ -217,7 +217,7 @@ function PlanView({ plan, title }: { plan: ConfigPlan; title: string }) {
   const groups: { label: string; tone: string; items: string[] }[] = [
     {
       label: "create",
-      tone: "text-emerald-400",
+      tone: "text-[var(--success)]",
       items: [
         ...plan.servicesToCreate.map((n) => `service:${n}`),
         ...plan.addonsToCreate.map((n) => `addon:${n}`),
@@ -226,7 +226,7 @@ function PlanView({ plan, title }: { plan: ConfigPlan; title: string }) {
     },
     {
       label: "update",
-      tone: "text-amber-400",
+      tone: "text-[var(--warning)]",
       items: [
         ...plan.servicesToUpdate.map((n) => `service:${n}`),
         ...plan.addonsToUpdate.map((n) => `addon:${n}`),
@@ -235,7 +235,7 @@ function PlanView({ plan, title }: { plan: ConfigPlan; title: string }) {
     },
     {
       label: "delete",
-      tone: "text-red-400",
+      tone: "text-[var(--danger)]",
       items: [
         ...plan.servicesToDelete.map((n) => `service:${n}`),
         ...plan.addonsToDelete.map((n) => `addon:${n}`),

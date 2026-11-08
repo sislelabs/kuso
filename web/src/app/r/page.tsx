@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { normalizeReviewerView, type ReviewerView } from "./reviewerView";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
@@ -102,16 +104,16 @@ export default function ReviewerPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)] text-[var(--text-secondary)]">
         Loading…
       </div>
     );
   }
   if (!token || error || !view) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--console-bg)] text-neutral-400">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)] text-[var(--text-secondary)]">
         <div className="max-w-md text-center">
-          <h1 className="mb-2 text-xl font-semibold text-neutral-200">Link not found</h1>
+          <h1 className="mb-2 text-xl font-semibold text-[var(--text-primary)]">Link not found</h1>
           <p className="text-sm">
             This reviewer URL doesn&apos;t exist or has expired. Ask the developer
             for a fresh link.
@@ -126,21 +128,21 @@ export default function ReviewerPage() {
   const seedRunning = view.seedPhase === "running" || view.seedPhase === "pending";
 
   return (
-    <div className="min-h-screen bg-[var(--console-bg)] text-neutral-200">
+    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="mx-auto max-w-3xl px-6 py-12">
         {/* Header */}
-        <div className="mb-8 border-b border-neutral-800 pb-6">
-          <p className="mb-2 text-xs text-neutral-500 font-medium">
+        <div className="mb-8 border-b border-[var(--border-subtle)] pb-6">
+          <p className="mb-2 text-xs font-medium text-[var(--text-secondary)]">
             {view.project} · PR #{view.prNumber}
           </p>
-          <h1 className="text-2xl font-semibold">{view.prTitle || `PR #${view.prNumber}`}</h1>
+          <h1 className="text-title text-2xl">{view.prTitle || `PR #${view.prNumber}`}</h1>
           {view.prAuthor && (
-            <p className="mt-2 text-sm text-neutral-500">
-              Submitted by {view.prAuthor} ({view.headRef} → {view.baseRef})
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">
+              Submitted by {view.prAuthor} (<span className="font-mono">{view.headRef}</span> → <span className="font-mono">{view.baseRef}</span>)
             </p>
           )}
           {view.prBody && (
-            <pre className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-800 bg-neutral-900 p-3 font-mono text-xs text-neutral-400">
+            <pre className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-xs text-[var(--text-secondary)]">
               {view.prBody}
             </pre>
           )}
@@ -148,17 +150,17 @@ export default function ReviewerPage() {
 
         {/* Seed status banner */}
         {seedRunning && (
-          <div className="mb-6 rounded-md border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-sm text-blue-200">
+          <div className="mb-6 rounded-md border border-[var(--info)]/30 bg-[var(--info-subtle)] px-4 py-3 text-sm text-[var(--info)]">
             Setting up the preview…
             {view.seedPhase === "running" && " (running seed script)"}
           </div>
         )}
         {seedFailed && (
-          <div className="mb-6 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="mb-6 rounded-md border border-[var(--danger)]/30 bg-[var(--danger-subtle)] px-4 py-3 text-sm text-[var(--danger)]">
             <strong>Preview seed failed.</strong> The app may not show realistic
             data until the developer fixes it.
             {view.seedError && (
-              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs text-red-300/80">
+              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">
                 {view.seedError}
               </pre>
             )}
@@ -169,7 +171,7 @@ export default function ReviewerPage() {
         <section className="mb-8">
           <h2 className="mb-3 font-semibold">Open the preview</h2>
           {view.services.length === 0 ? (
-            <p className="text-sm text-neutral-500">
+            <p className="text-sm text-[var(--text-secondary)]">
               No preview URLs are ready yet. Refresh in a moment.
             </p>
           ) : (
@@ -180,10 +182,10 @@ export default function ReviewerPage() {
                   href={svc.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center justify-between rounded-md border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm transition hover:border-neutral-500 hover:bg-neutral-800"
+                  className="flex items-center justify-between min-h-11 rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] px-4 py-3 text-sm transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none"
                 >
-                  <span className="font-mono">{svc.url}</span>
-                  <ExternalLink className="h-4 w-4 text-neutral-400" />
+                  <span className="min-w-0 truncate font-mono text-[var(--link)]">{svc.url}</span>
+                  <ExternalLink className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
                 </a>
               ))}
             </div>
@@ -192,27 +194,27 @@ export default function ReviewerPage() {
 
         {/* Decision */}
         {decided ? (
-          <section className="rounded-md border border-neutral-700 bg-neutral-900 px-4 py-5">
+          <section className="rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] px-4 py-5">
             <div className="mb-2 flex items-center gap-2 font-semibold">
-              {view.decision === "approved" && <Check className="h-4 w-4 text-green-400" />}
-              {view.decision === "changes_requested" && <AlertCircle className="h-4 w-4 text-amber-400" />}
-              {view.decision === "denied" && <XIcon className="h-4 w-4 text-red-400" />}
+              {view.decision === "approved" && <Check className="h-4 w-4 text-[var(--success)]" />}
+              {view.decision === "changes_requested" && <AlertCircle className="h-4 w-4 text-[var(--warning)]" />}
+              {view.decision === "denied" && <XIcon className="h-4 w-4 text-[var(--danger)]" />}
               {view.decision === "approved" && "Approved"}
               {view.decision === "changes_requested" && "Changes requested"}
               {view.decision === "denied" && "Denied"}
             </div>
             {view.decisionComment && (
-              <p className="whitespace-pre-wrap text-sm text-neutral-300">
+              <p className="whitespace-pre-wrap text-sm text-[var(--text-secondary)]">
                 {view.decisionComment}
               </p>
             )}
-            <p className="mt-3 text-xs text-neutral-500">
-              by {view.decidedBy || "anonymous"}{" "}
+            <p className="mt-3 text-xs text-[var(--text-tertiary)]">
+              By {view.decidedBy || "anonymous"}{" "}
               {view.decidedAt && (
                 <>· {new Date(view.decidedAt).toLocaleString()}</>
               )}
             </p>
-            <p className="mt-4 text-xs text-neutral-500">
+            <p className="mt-4 text-xs text-[var(--text-tertiary)]">
               You can resubmit by reloading and choosing again.
             </p>
           </section>
@@ -220,12 +222,12 @@ export default function ReviewerPage() {
           <section>
             <h2 className="mb-3 font-semibold">Leave a decision</h2>
             <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input
+              <Input
                 type="email"
                 placeholder="Your email (optional)"
                 value={reviewerEmail}
                 onChange={(e) => setReviewerEmail(e.target.value)}
-                className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
+                aria-label="Your email"
               />
             </div>
             <textarea
@@ -233,38 +235,36 @@ export default function ReviewerPage() {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={5}
-              className="mb-3 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
+              aria-label="Comment"
+              className="mb-3 w-full rounded-md border border-[var(--border-default)] bg-input px-3 py-2 text-sm text-[var(--text-primary)] outline-none hover:border-[var(--border-strong)] focus-visible:border-[var(--focus)] focus-visible:ring-3 focus-visible:ring-[var(--focus)]/25"
             />
             <div className="flex flex-col gap-2 sm:flex-row">
-              <button
-                type="button"
-                onClick={() => submit("approved")}
-                disabled={submitting}
-                className="flex-1 rounded-md bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-500 disabled:opacity-60"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
+              <Button size="lg" className="flex-1" onClick={() => submit("approved")} disabled={submitting}>
+                <Check aria-hidden /> Approve
+              </Button>
+              <Button
+                size="lg"
+                variant="secondary"
+                className="flex-1"
                 onClick={() => submit("changes_requested")}
                 disabled={submitting}
-                className="flex-1 rounded-md bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-60"
               >
-                Request changes
-              </button>
-              <button
-                type="button"
+                <AlertCircle aria-hidden /> Request changes
+              </Button>
+              <Button
+                size="lg"
+                variant="destructive-subtle"
+                className="flex-1"
                 onClick={() => submit("denied")}
                 disabled={submitting}
-                className="flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-neutral-300 hover:bg-neutral-800 disabled:opacity-60"
               >
-                Deny
-              </button>
+                <XIcon aria-hidden /> Deny
+              </Button>
             </div>
           </section>
         )}
 
-        <p className="mt-12 text-center text-xs text-neutral-600">
+        <p className="mt-12 text-center text-xs text-[var(--text-tertiary)]">
           Powered by kuso · auto-generated reviewer page
         </p>
       </div>

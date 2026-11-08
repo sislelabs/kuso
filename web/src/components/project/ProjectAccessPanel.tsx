@@ -121,8 +121,8 @@ export function ProjectAccessPanel({ project }: { project: string }) {
   // simply failed to read it.
   if (grants.isError) {
     return (
-      <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-xs">
-        <p className="text-red-400">
+      <div className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger-subtle)] p-4 text-xs">
+        <p className="text-[var(--danger)]">
           Couldn&apos;t load project access:{" "}
           {grants.error instanceof Error ? grants.error.message : "request failed"}
         </p>
@@ -287,7 +287,7 @@ function GrantRow({
           type="button"
           onClick={onRemove}
           aria-label={`Remove access for ${label}`}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--danger)]"
         >
           <X className="h-3 w-3" />
         </button>
