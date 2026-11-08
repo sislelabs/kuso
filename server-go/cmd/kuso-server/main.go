@@ -357,6 +357,10 @@ func main() {
 	// reads and enqueues; the cluster-singletons leader runs the scans.
 	// nil under the KUSO_VULNSCAN_DISABLED kill switch.
 	var vulnGate *vulnscan.Gate
+	// Shared by logship (writes pod kinds) and errorscan (skips build and
+	// release-hook lines). They hold different leases; on separate
+	// replicas the scanner falls back to its heuristic.
+	podKinds := errorscan.NewPodKinds()
 	if !vulnscan.Disabled() {
 		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate")}
 	}
@@ -1078,6 +1082,7 @@ func main() {
 						Logger:    logger,
 						Interval:  errorscan.HeartbeatInterval,
 						BatchSize: 500,
+						Pods:      podKinds,
 					}).Run(workCtx)
 				})
 			}
@@ -1583,6 +1588,7 @@ func main() {
 			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
 				serverstate.RegisterLoop(serverstate.LoopLogship, logship.HeartbeatInterval)
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
+				ls.PodKinds = podKinds
 				// Log drains ride the same lease so each line ships once
 				// cluster-wide. Not heartbeat-registered: its loop only
 				// reloads config and has no per-tick beat.

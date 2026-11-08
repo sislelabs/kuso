@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/errorscan"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/linescan"
 	"kuso/server/internal/safego"
@@ -179,6 +180,10 @@ type Shipper struct {
 	// cap), so external drains ship exactly what LogLine stores. Must
 	// not block: it runs on the per-container stream goroutine.
 	Tap LineTap
+
+	// PodKinds, when set, records each listed pod as runtime or not
+	// (build, release hook, …) for the error scanner. Optional.
+	PodKinds *errorscan.PodKinds
 
 	// runCtx is the lifecycle context set by Run. Detached out-of-band
 	// flushes (kicked from append() when the buffer exceeds the batch
@@ -372,6 +377,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 		p := &pods.Items[i]
 		podKey := ns + "/" + string(p.UID)
 		seen[podKey] = struct{}{}
+		s.PodKinds.Observe(p.Name, p.Labels)
 		switch p.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 		default:
@@ -401,6 +407,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 			s.streamContainer(streamCtx, ns, pod, container, st, terminated, restarts)
 		})
 	}
+	s.PodKinds.Sweep()
 	// Drop state (and any stream) for vanished pods.
 	s.mu.Lock()
 	for key, st := range s.containers {
