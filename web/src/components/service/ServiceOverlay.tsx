@@ -297,8 +297,9 @@ interface Props {
 
 // ServiceOverlay is the in-page inspector shown when a service is
 // clicked on the canvas/list. The page mirrors the open service and tab
-// into the URL (?service=&tab=); clicking outside or pressing ESC closes it. Slides in from the right with a spring; the dimmed
-// backdrop is its own click target so peripheral clicks dismiss the
+// into the URL (?service=&tab=); clicking outside or pressing ESC closes
+// it. Slides in from the right with a spring; the dimmed backdrop is its
+// own click target so peripheral clicks dismiss the
 // panel without bubbling into canvas pan/drag.
 export function ServiceOverlay({
   project,
@@ -363,6 +364,11 @@ export function ServiceOverlay({
       window.setTimeout(() => {
         document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 250);
+      // Cards above the target (domains, pods) can still be loading and
+      // push it down after the first scroll; settle it once more.
+      window.setTimeout(() => {
+        document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 1200);
     }
   }, []);
   const guardedSetTab = useCallback(
