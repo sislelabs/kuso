@@ -33,6 +33,7 @@ import { projectNameError } from "@/features/projects/names";
 import { useCan } from "@/features/auth";
 import { AppIcon } from "./AppIcon";
 import { renderMarkdown } from "./InlineMarkdown";
+import { describeError } from "@/lib/errors";
 
 type Target = "new" | "existing";
 
@@ -196,7 +197,7 @@ export function DeployDialog({
       ]);
       router.push(landingPath(project, result.plan));
     } catch (e) {
-      setFormError(e instanceof Error && e.message ? e.message : "Deploy failed.");
+      setFormError(describeError(e, "Deploy failed."));
     } finally {
       setDeploying(false);
     }
