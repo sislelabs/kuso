@@ -244,6 +244,9 @@ type ProjectsHandler struct {
 	// agent uses — still dead-ended silently. Triggering here fixes all
 	// three at once.
 	FirstBuildTrigger FirstBuildTrigger
+
+	// domainStatus caches GetEnvDomainsStatus responses for 30s.
+	domainStatus domainStatusCache
 }
 
 // AddonReverter is the slice of addons.Service the revisions revert
@@ -322,6 +325,8 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Put("/api/projects/{project}/services/{service}/envs/{env}/domains", h.SetEnvDomains)
 	r.Post("/api/projects/{project}/services/{service}/envs/{env}/domains", h.AddEnvDomain)
 	r.Delete("/api/projects/{project}/services/{service}/envs/{env}/domains/{host}", h.RemoveEnvDomain)
+	// Read-only DNS + TLS status per env host (cached 30s).
+	r.Get("/api/projects/{project}/services/{service}/envs/{env}/domains/status", h.GetEnvDomainsStatus)
 	// Per-env env-var overrides — write a value onto ONE env CR's envVars
 	// that wins over the service-level value for that key (e.g. staging's
 	// NEXT_PUBLIC_ENVIRONMENT=staging vs production's =production).

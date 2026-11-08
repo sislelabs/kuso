@@ -48,7 +48,12 @@ type Cert struct {
 
 // ListCertificates lists every Certificate in the cluster.
 func ListCertificates(ctx context.Context, dyn dynamic.Interface) ([]Cert, error) {
-	list, err := dyn.Resource(GVRCertificates).Namespace("").List(ctx, metav1.ListOptions{})
+	return ListCertificatesIn(ctx, dyn, "")
+}
+
+// ListCertificatesIn lists the Certificates in one namespace ("" = all).
+func ListCertificatesIn(ctx context.Context, dyn dynamic.Interface, ns string) ([]Cert, error) {
+	list, err := dyn.Resource(GVRCertificates).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list certificates: %w", err)
 	}
