@@ -15,7 +15,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
-  AlertTriangle,
   Bell,
   BellRing,
   Check,
@@ -39,6 +38,10 @@ import {
 } from "@/features/notifications";
 import { cleanMentionRules } from "./mentions";
 import { useProjects } from "@/features/projects";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { UserBadge } from "@/components/activity/UserBadge";
+import { relativeTime } from "@/lib/format";
 
 type NotifKind =
   | "discord"
@@ -60,106 +63,106 @@ const NOTIF_KINDS: {
 }[] = [
   {
     kind: "discord",
-    label: "discord",
+    label: "Discord",
     fields: [
       {
         key: "url",
-        label: "discord webhook url",
+        label: "Discord webhook URL",
         placeholder: "https://discord.com/api/webhooks/...",
-        hint: "Server Settings → Integrations → Webhooks → New Webhook",
+        hint: "Server Settings → Integrations → Webhooks → New Webhook.",
       },
     ],
   },
   {
     kind: "slack",
-    label: "slack",
+    label: "Slack",
     fields: [
       {
         key: "url",
-        label: "slack incoming webhook url",
+        label: "Slack incoming webhook URL",
         placeholder: "https://hooks.slack.com/services/...",
-        hint: "Slack app → Incoming Webhooks → Add New Webhook",
+        hint: "Slack app → Incoming Webhooks → Add New Webhook.",
       },
     ],
   },
   {
     kind: "mattermost",
-    label: "mattermost",
+    label: "Mattermost",
     fields: [
       {
         key: "url",
-        label: "mattermost incoming webhook url",
+        label: "Mattermost incoming webhook URL",
         placeholder: "https://mattermost.example.com/hooks/...",
-        hint: "Integrations → Incoming Webhooks",
+        hint: "Integrations → Incoming Webhooks.",
       },
     ],
   },
   {
     kind: "webhook",
-    label: "webhook",
+    label: "Webhook",
     fields: [
       {
         key: "url",
-        label: "webhook url",
+        label: "Webhook URL",
         placeholder: "https://example.com/hooks/kuso",
-        hint: "any URL that accepts a JSON POST",
+        hint: "Any URL that accepts a JSON POST.",
       },
       {
         key: "secret",
-        label: "signing secret",
-        placeholder: "(optional)",
-        hint: "HMAC-SHA256 signs each delivery when set",
+        label: "Signing secret",
+        placeholder: "Optional",
+        hint: "When set, each delivery is signed with HMAC-SHA256.",
       },
     ],
   },
   {
     kind: "telegram",
-    label: "telegram",
+    label: "Telegram",
     fields: [
       {
         key: "botToken",
-        label: "bot token",
+        label: "Bot token",
         placeholder: "123456:ABC-DEF...",
-        hint: "from @BotFather",
+        hint: "From @BotFather.",
       },
       {
         key: "chatId",
-        label: "chat id",
+        label: "Chat ID",
         placeholder: "-1001234567890",
-        hint: "the chat/channel to post to",
+        hint: "The chat or channel to post to.",
       },
     ],
   },
   {
     kind: "pushover",
-    label: "pushover",
+    label: "Pushover",
     fields: [
       {
         key: "token",
-        label: "application token",
+        label: "Application token",
         placeholder: "azGDORePK8gMaC0QOYAMyEEuzJnyUi",
       },
       {
         key: "user",
-        label: "user/group key",
+        label: "User or group key",
         placeholder: "uQiRzpo4DXghDmr9QzzfQu27cmVRsG",
       },
     ],
   },
   {
     kind: "email",
-    label: "email",
+    label: "Email",
     fields: [
-      { key: "host", label: "smtp host", placeholder: "smtp.example.com" },
-      { key: "port", label: "smtp port", placeholder: "587", hint: "default 587" },
-      { key: "username", label: "smtp username", placeholder: "(optional)" },
-      { key: "password", label: "smtp password", placeholder: "(optional)" },
-      { key: "from", label: "from address", placeholder: "kuso@example.com" },
+      { key: "host", label: "SMTP host", placeholder: "smtp.example.com" },
+      { key: "port", label: "SMTP port", placeholder: "587", hint: "Defaults to 587." },
+      { key: "username", label: "SMTP username", placeholder: "Optional" },
+      { key: "password", label: "SMTP password", placeholder: "Optional" },
+      { key: "from", label: "From address", placeholder: "kuso@example.com" },
       {
         key: "to",
-        label: "to address(es)",
+        label: "To addresses",
         placeholder: "ops@example.com, oncall@example.com",
-        hint: "comma-separated",
+        hint: "Comma-separated.",
       },
     ],
   },
@@ -187,12 +190,12 @@ interface ListResp {
 }
 
 const EVENT_GROUPS: { group: NotificationEventGroup; label: string }[] = [
-  { group: "build", label: "build" },
-  { group: "runtime", label: "runtime" },
-  { group: "jobs", label: "jobs" },
-  { group: "nodes", label: "nodes" },
-  { group: "backups", label: "backups" },
-  { group: "other", label: "other" },
+  { group: "build", label: "Build" },
+  { group: "runtime", label: "Runtime" },
+  { group: "jobs", label: "Jobs" },
+  { group: "nodes", label: "Nodes" },
+  { group: "backups", label: "Backups" },
+  { group: "other", label: "Other" },
 ];
 
 export default function NotificationsPage() {
@@ -206,64 +209,70 @@ export default function NotificationsPage() {
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <div className="mx-auto max-w-3xl p-4 sm:p-6 lg:p-8">
-      <header className="mb-6 flex items-center gap-3">
-        <Bell className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Notifications</h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Channels for kuso events: Discord, Slack, Mattermost, Telegram, Pushover, email or a
-            generic webhook. Channels are instance-wide; each one gets the events and projects
-            you pick for it. Rules for when to alert live in{" "}
-            <Link href="/settings/alerts" className="text-[var(--accent)] hover:underline">
-              Alert rules
-            </Link>
-            .
-          </p>
-        </div>
-      </header>
-
-      <OutboxHealth />
-
-      <div className="mb-3 flex items-center justify-end">
-        <Button size="sm" onClick={() => setEditing("__new__")}>
-          <Plus className="h-3 w-3" />
+    <SettingsPage
+      title="Notifications"
+      description={
+        <>
+          Channels for kuso events: Discord, Slack, Mattermost, Telegram, Pushover, email or a
+          generic webhook. Channels are instance-wide; each gets the events and projects you pick.
+          Rules for when to alert live in{" "}
+          <Link href="/settings/alerts" className="text-[var(--text-primary)] underline underline-offset-2">
+            Alert rules
+          </Link>
+          .
+        </>
+      }
+      actions={
+        <Button size="sm" onClick={() => setEditing("__new__")} disabled={editing === "__new__"}>
+          <Plus className="h-3.5 w-3.5" />
           New channel
         </Button>
-      </div>
+      }
+    >
+      <OutboxHealth />
+
+      {editing === "__new__" && (
+        <SettingsSection title="New channel" description="Pick a destination, then choose which projects and events reach it.">
+          <NotificationEditor notification={null} onClose={() => setEditing(null)} />
+        </SettingsSection>
+      )}
 
       {list.isPending ? (
         <Skeleton className="h-32 w-full rounded-md" />
       ) : list.isError ? (
         <QueryErrorState what="notification channels" error={list.error} onRetry={() => void list.refetch()} />
       ) : (list.data ?? []).length === 0 ? (
-        <EmptyState
-          icon={<Bell className="h-5 w-5" />}
-          title="No notification channels yet"
-          description="Click New channel to send kuso events to Discord, Slack, email or another destination."
-          className="p-8"
-        />
+        editing !== "__new__" && (
+          <EmptyState
+            icon={<Bell className="h-5 w-5" />}
+            title="No notification channels yet"
+            description="Click New channel to send kuso events to Discord, Slack, email or another destination."
+            className="p-8"
+          />
+        )
       ) : (
-        <ul className="space-y-2">
-          {(list.data ?? []).map((n) => (
-            <li key={n.id}>
-              <NotificationRow
-                n={n}
-                isEditing={editing === n.id}
-                onEdit={() => setEditing(n.id)}
-                onClose={() => setEditing(null)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {editing === "__new__" && (
-        <NotificationEditor notification={null} onClose={() => setEditing(null)} />
+        <SettingsSection
+          title="Channels"
+          description={`${(list.data ?? []).length} ${(list.data ?? []).length === 1 ? "channel" : "channels"}. Toggle to pause delivery without losing the config.`}
+          flush
+        >
+          <ul className="divide-y divide-[var(--border-subtle)]">
+            {(list.data ?? []).map((n) => (
+              <li key={n.id}>
+                <NotificationRow
+                  n={n}
+                  isEditing={editing === n.id}
+                  onEdit={() => setEditing(n.id)}
+                  onClose={() => setEditing(null)}
+                />
+              </li>
+            ))}
+          </ul>
+        </SettingsSection>
       )}
 
       <MutedProjects />
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -282,26 +291,34 @@ function MutedProjects() {
   });
   if (mutes.isPending || !mutes.data || mutes.data.length === 0) return null;
   return (
-    <section className="mt-8 space-y-2">
-      <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        muted projects
-      </h2>
-      <p className="text-[11px] text-[var(--text-tertiary)]">
-        These projects&rsquo; events skip every channel above but keep landing in the bell
-        feed. Unmute here or from the project&rsquo;s settings page.
-      </p>
-      <ul className="space-y-1.5">
+    <SettingsSection
+      title="Muted projects"
+      description="These projects' events skip every channel above but still land in the bell feed. Unmute here or from the project's settings page."
+      flush
+    >
+      <ul className="divide-y divide-[var(--border-subtle)]">
         {mutes.data.map((m) => (
           <li
             key={m.project}
-            className="flex items-center justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2"
+            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-3 sm:px-5"
           >
             <div className="min-w-0">
-              <span className="font-mono text-[12px]">{m.project}</span>
-              <span className="ml-2 text-[10px] text-[var(--text-tertiary)]">
-                since {new Date(m.createdAt).toLocaleString()}
-                {m.createdBy ? ` · by ${m.createdBy}` : ""}
-              </span>
+              <Link
+                href={`/projects/${encodeURIComponent(m.project)}`}
+                className="font-mono text-sm text-[var(--text-primary)] hover:underline"
+              >
+                {m.project}
+              </Link>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+                {m.createdBy ? (
+                  <>
+                    Muted by <UserBadge id={m.createdBy} className="text-xs" /> ·
+                  </>
+                ) : (
+                  "Muted"
+                )}
+                <span title={new Date(m.createdAt).toLocaleString()}>{relativeTime(m.createdAt)}</span>
+              </div>
             </div>
             <Button
               size="sm"
@@ -326,7 +343,7 @@ function MutedProjects() {
           </li>
         ))}
       </ul>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -347,34 +364,27 @@ function OutboxHealth() {
 
   if (dead > 0) {
     return (
-      <div className="mb-3 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] px-3 py-2 text-[12px] text-[var(--error)]">
-        <div className="flex items-start gap-2">
-          <AlertTriangle className="mt-[1px] h-4 w-4 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--error)]">
-              webhook delivery: dead-letter
-            </div>
-            <div className="mt-0.5 font-mono text-[11px] leading-snug">
-              {dead} delivery{dead === 1 ? "" : "ies"} past retry cap.
-              Inspect the rows with{" "}
-              <code className="rounded bg-[var(--bg-tertiary)] px-1">
-                SELECT * FROM &quot;NotificationOutbox&quot; WHERE &quot;deliveredAt&quot;
-                IS NULL AND &quot;attempts&quot; &gt;= 10
-              </code>{" "}
-              — typically a revoked Slack/Discord URL.
-              {pending > 0 && ` (${pending} also pending retry.)`}
-            </div>
-          </div>
-        </div>
-      </div>
+      <SettingsNotice
+        tone="error"
+        title={`${dead} webhook ${dead === 1 ? "delivery" : "deliveries"} dead-lettered`}
+      >
+        Past the retry cap, typically a revoked Slack or Discord URL.
+        {pending > 0 && ` ${pending} more pending retry.`} Inspect with{" "}
+        <code className="break-all rounded-sm bg-[var(--bg-tertiary)] px-1 font-mono text-xs">
+          SELECT * FROM &quot;NotificationOutbox&quot; WHERE &quot;deliveredAt&quot; IS NULL AND
+          &quot;attempts&quot; &gt;= 10
+        </code>
+        .
+      </SettingsNotice>
     );
   }
   return (
-    <div className="mb-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-3 py-2 font-mono text-[11px] text-[var(--warning)]">
-      {pending} webhook deliver{pending === 1 ? "y" : "ies"} pending retry.
-      Transient — Slack throttling or a brief webhook outage usually clears
-      within a few minutes.
-    </div>
+    <SettingsNotice
+      tone="warning"
+      title={`${pending} webhook ${pending === 1 ? "delivery" : "deliveries"} pending retry`}
+    >
+      Usually transient: Slack throttling or a brief webhook outage clears within a few minutes.
+    </SettingsNotice>
   );
 }
 
@@ -421,25 +431,27 @@ function NotificationRow({
   });
 
   return (
-    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-      <div className="flex items-center gap-3 px-4 py-3">
+    <div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
         <KindIcon kind={n.type} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 truncate text-sm font-medium">
-            {n.name}
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+            <span className="truncate">{n.name}</span>
             {!n.enabled && (
-              <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                disabled
+              <span className="shrink-0 rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs font-normal text-[var(--text-secondary)]">
+                Paused
               </span>
             )}
           </div>
-          <div className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            {n.type} · {n.events.length === 0 ? "all events" : `${n.events.length} events`} ·{" "}
+          <div className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            {NOTIF_KINDS.find((k) => k.kind === n.type)?.label ?? n.type} ·{" "}
+            {n.events.length === 0 ? "all events" : `${n.events.length} events`} ·{" "}
             {(n.pipelines ?? []).length === 0
               ? "all projects"
               : `${n.pipelines.length} project${n.pipelines.length === 1 ? "" : "s"}`}
           </div>
         </div>
+        <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
         <button
           type="button"
           onClick={() => toggle.mutate(!n.enabled)}
@@ -449,7 +461,7 @@ function NotificationRow({
           className={cn(
             "inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors",
             n.enabled
-              ? "border-emerald-500/30 bg-emerald-500/20"
+              ? "border-[var(--success)]/40 bg-[var(--success)]/25"
               : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
           )}
           aria-label={n.enabled ? `Disable ${n.name}` : `Enable ${n.name}`}
@@ -476,13 +488,18 @@ function NotificationRow({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Delete"
+          aria-label={`Delete ${n.name}`}
           onClick={() => setConfirmOpen(true)}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
+        </div>
       </div>
-      {isEditing && <NotificationEditor notification={n} onClose={onClose} />}
+      {isEditing && (
+        <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 p-4 sm:p-5">
+          <NotificationEditor notification={n} onClose={onClose} />
+        </div>
+      )}
       <ConfirmDialog
         open={confirmOpen}
         title={`Delete ${n.name}?`}
@@ -493,6 +510,7 @@ function NotificationRow({
           </p>
         }
         confirmLabel="Delete channel"
+        typeToConfirm={n.name}
         destructive
         pending={remove.isPending}
         onConfirm={() => remove.mutate()}
@@ -658,32 +676,25 @@ function NotificationEditor({
   });
 
   return (
-    <div
-      className={cn(
-        "border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3",
-        !isNew && "border-t",
-        isNew && "mt-3 rounded-md border bg-[var(--bg-secondary)]"
-      )}
-    >
-      <div className="space-y-3">
-        <Field label="name" hint="memo">
+    <div>
+      <div className="space-y-5">
+        <SettingsField label="Name" hint="Only shown to you, in this list and in test messages.">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="kuso-team-discord"
-            className="h-8 font-mono text-[12px]"
+            placeholder="e.g. team-discord"
             autoFocus={isNew}
           />
-        </Field>
-        <Field label="type">
-          <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+        </SettingsField>
+        <SettingsField label="Destination">
+          <div className="inline-flex flex-wrap gap-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
             {NOTIF_KINDS.map(({ kind: k, label }) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setType(k)}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded px-2 font-mono text-[11px] transition-colors",
+                  "inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-sm transition-colors [&_svg]:h-4 [&_svg]:w-4",
                   type === k
                     ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                     : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -694,36 +705,33 @@ function NotificationEditor({
               </button>
             ))}
           </div>
-        </Field>
+        </SettingsField>
         {kindFields(type).map((f) => (
-          <Field key={f.key} label={f.label} hint={f.hint}>
+          <SettingsField key={f.key} label={f.label} hint={f.hint}>
             <Input
               value={cfg[f.key] ?? ""}
               onChange={(e) => setCfg((c) => ({ ...c, [f.key]: e.target.value }))}
               placeholder={f.placeholder}
               type={f.key === "password" ? "password" : "text"}
-              className="h-8 font-mono text-[12px]"
+              className="font-mono"
               spellCheck={false}
             />
-          </Field>
+          </SettingsField>
         ))}
-        <Field
-          label="projects"
-          hint="which projects' events reach this channel"
-        >
+        <SettingsField label="Projects" hint="Which projects' events reach this channel.">
           <ProjectFilter
             mode={projectsMode}
             onModeChange={setProjectsMode}
             selected={pipelines}
             onChange={setPipelines}
           />
-        </Field>
-        <Field
-          label="events"
+        </SettingsField>
+        <SettingsField
+          label="Events"
           hint={
             type === "discord"
-              ? "all events, or a custom subset; per-event Discord mentions on the right"
-              : "all events, or a custom subset"
+              ? "All events, or a custom subset. Set per-event Discord mentions on each row."
+              : "All events, or a custom subset."
           }
         >
           <EventPicker
@@ -735,15 +743,21 @@ function NotificationEditor({
             mentions={type === "discord" ? mentions : null}
             onMentionChange={(id, v) => setMentions((cur) => ({ ...cur, [id]: v }))}
           />
-        </Field>
-        <Field label="enabled">
+        </SettingsField>
+        <SettingsField
+          label="Enabled"
+          hint="Paused channels keep their config but receive nothing."
+          aside={
           <button
             type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-label="Enabled"
             onClick={() => setEnabled((v) => !v)}
             className={cn(
               "inline-flex h-6 w-10 items-center rounded-full border transition-colors",
               enabled
-                ? "border-emerald-500/30 bg-emerald-500/20"
+                ? "border-[var(--success)]/40 bg-[var(--success)]/25"
                 : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
             )}
           >
@@ -754,9 +768,10 @@ function NotificationEditor({
               )}
             />
           </button>
-        </Field>
+          }
+        />
       </div>
-      <footer className="mt-4 flex items-center justify-end gap-2">
+      <footer className="mt-5 flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] pt-4">
         <Button variant="ghost" size="sm" onClick={onClose} disabled={save.isPending}>
           Cancel
         </Button>
@@ -774,33 +789,6 @@ function NotificationEditor({
   );
 }
 
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    // Stack label-then-control on phones (the 140px label column was
-    // clipping the controls to ~150px wide on a 320–360px viewport,
-    // which is why the channel form looked broken on mobile). Side-
-    // by-side returns at sm where there's room for the legend
-    // column without crushing the input.
-    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[140px_1fr] sm:gap-3">
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          {label}
-        </div>
-        {hint && <div className="mt-0.5 text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
-      </div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  );
-}
-
 function SegmentedToggle<T extends string>({
   options,
   value,
@@ -811,7 +799,7 @@ function SegmentedToggle<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="inline-flex gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+    <div className="inline-flex gap-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
       {options.map((o) => (
         <button
           key={o.v}
@@ -819,7 +807,7 @@ function SegmentedToggle<T extends string>({
           onClick={() => onChange(o.v)}
           aria-pressed={value === o.v}
           className={cn(
-            "inline-flex h-7 items-center rounded px-2 font-mono text-[11px] transition-colors",
+            "inline-flex h-8 items-center rounded-sm px-2.5 text-sm transition-colors",
             value === o.v
               ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
               : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -868,7 +856,7 @@ function ProjectFilter({
           {selected.map((name) => (
             <span
               key={name}
-              className="inline-flex h-6 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] pl-1.5 pr-0.5 font-mono text-[11px]"
+              className="inline-flex h-7 items-center gap-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-secondary)] pl-2 pr-0.5 font-mono text-xs"
             >
               {name}
               {projects.isSuccess && !existing.has(name) && (
@@ -887,12 +875,12 @@ function ProjectFilter({
           <Popover>
             <PopoverTrigger
               className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[11px] text-[var(--text-secondary)]",
+                "inline-flex h-7 items-center gap-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-xs text-[var(--text-secondary)]",
                 "hover:border-[var(--border-strong)] data-[popup-open]:border-[var(--border-strong)]"
               )}
             >
               <Plus className="h-3 w-3" />
-              {selected.length === 0 ? "choose projects" : "edit"}
+              {selected.length === 0 ? "Choose projects" : "Edit"}
               <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
             </PopoverTrigger>
             <PopoverContent
@@ -901,15 +889,15 @@ function ProjectFilter({
               className="max-h-72 w-56 gap-0.5 overflow-y-auto rounded-md p-1"
             >
               {projects.isPending ? (
-                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+                <div className="px-1.5 py-1 text-xs text-[var(--text-secondary)]">
                   loading projects…
                 </div>
               ) : projects.isError ? (
-                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--error)]">
+                <div className="px-1.5 py-1 text-xs text-[var(--error)]">
                   couldn&rsquo;t load projects
                 </div>
               ) : names.length === 0 ? (
-                <div className="px-1.5 py-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+                <div className="px-1.5 py-1 text-xs text-[var(--text-secondary)]">
                   no projects
                 </div>
               ) : (
@@ -921,7 +909,7 @@ function ProjectFilter({
                       type="button"
                       onClick={() => toggle(name)}
                       className={cn(
-                        "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-[11px]",
+                        "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-xs",
                         "hover:bg-[var(--bg-tertiary)]",
                         on ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
                       )}
@@ -936,7 +924,7 @@ function ProjectFilter({
           </Popover>
         </div>
       )}
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="text-xs text-[var(--text-secondary)]">
         {mode === "all"
           ? "Events from every project, including projects created later."
           : selected.length === 0
@@ -992,7 +980,7 @@ function EventPicker({
         value={mode}
         onChange={onModeChange}
       />
-      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+      <p className="text-xs text-[var(--text-secondary)]">
         {mode === "all"
           ? "Every event type, including ones added in future kuso releases."
           : events.length === 0
@@ -1015,9 +1003,7 @@ function EventPicker({
               if (rows.length === 0) return null;
               return (
                 <div key={group} className="space-y-1.5">
-                  <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                    {label}
-                  </div>
+                  <div className="text-xs font-medium text-[var(--text-secondary)]">{label}</div>
                   {rows.map((t) => (
                     <EventRow
                       key={t.type}
@@ -1036,8 +1022,8 @@ function EventPicker({
             })}
             {mode === "custom" && stale.length > 0 && (
               <div className="space-y-1.5">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                  not emitted by this server
+                <div className="text-xs font-medium text-[var(--text-secondary)]">
+                  Not emitted by this server
                 </div>
                 {stale.map((id) => (
                   <EventRow
@@ -1087,7 +1073,7 @@ function EventRow({
         // same x-axis spot whether or not the event is picked. On
         // phones the picker column wraps below the rest (the 180px
         // column would force a ~640px-wide row otherwise).
-        "grid grid-cols-[44px_1fr] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px] sm:grid-cols-[44px_180px_1fr_180px]"
+        "grid grid-cols-[44px_1fr] items-center gap-x-2 gap-y-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs sm:grid-cols-[44px_180px_1fr_160px]"
       )}
     >
       <button
@@ -1098,7 +1084,7 @@ function EventRow({
         className={cn(
           "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
           picked
-            ? "border-emerald-500/30 bg-emerald-500/20"
+            ? "border-[var(--success)]/40 bg-[var(--success)]/25"
             : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
           !toggleable && "cursor-default opacity-50"
         )}
@@ -1120,19 +1106,21 @@ function EventRow({
       </span>
       <span
         className={cn(
-          "truncate",
+          "col-start-2 truncate sm:col-start-auto",
           picked ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]"
         )}
       >
         {label}
       </span>
       {mention !== null ? (
+        <div className="col-start-2 sm:col-start-auto">
         <MentionPicker
           value={mention}
           onChange={onMentionChange}
           defaultMention={defaultMention}
           disabled={!picked}
         />
+        </div>
       ) : (
         <span />
       )}
@@ -1190,7 +1178,7 @@ function MentionPicker({
       <PopoverTrigger
         disabled={disabled}
         className={cn(
-          "inline-flex h-6 w-full items-center justify-between gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px] text-[var(--text-primary)]",
+          "inline-flex h-7 w-full items-center justify-between gap-1 rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs text-[var(--text-primary)]",
           "hover:border-[var(--border-strong)] data-[popup-open]:border-[var(--border-strong)]",
           disabled && "pointer-events-none opacity-40"
         )}
@@ -1209,7 +1197,7 @@ function MentionPicker({
             type="button"
             onClick={() => onChange(o.v === "role:" ? "role:" + roleID : o.v)}
             className={cn(
-              "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-[11px]",
+              "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-xs",
               "hover:bg-[var(--bg-tertiary)]",
               o.v === selectedV ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
             )}
@@ -1228,7 +1216,7 @@ function MentionPicker({
             value={roleID}
             onChange={(e) => onChange("role:" + e.target.value)}
             placeholder="role ID"
-            className="mt-1 h-6 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
+            className="mt-1 h-7 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-xs"
             spellCheck={false}
             // Keep clicks/keystrokes in the input from bubbling to the
             // option buttons; the popover itself stays open regardless.

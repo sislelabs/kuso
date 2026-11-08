@@ -9,8 +9,10 @@ import { VulnSettingsForm } from "@/components/vulns/VulnSettingsForm";
 import { PlatformImages } from "@/components/vulns/PlatformImages";
 import { useCan, Perms } from "@/features/auth";
 import { useScanAllVulns, useVulnScanSettings } from "@/features/vulns";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice } from "@/components/settings/SettingsSection";
 
-function SettingsSection() {
+function ScanSettings() {
   const settings = useVulnScanSettings();
   if (settings.isError) {
     return (
@@ -28,15 +30,10 @@ function SettingsSection() {
 function VulnScanningAdmin() {
   const scanAll = useScanAllVulns();
   return (
-    <div className="mx-auto max-w-5xl space-y-8 p-6 lg:p-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Vulnerability scanning</h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--text-secondary)]">
-            kuso scans every image it runs for known CVEs with Trivy: service images after each build and nightly, addon
-            and platform images nightly.
-          </p>
-        </div>
+    <SettingsPage
+      title="Vulnerability scanning"
+      description="kuso scans every image it runs for known CVEs with Trivy: service images after each build and nightly, addon and platform images nightly."
+      actions={
         <Button
           variant="neutral"
           disabled={scanAll.isPending}
@@ -49,21 +46,21 @@ function VulnScanningAdmin() {
           <ScanSearch />
           {scanAll.isPending ? "Queueing…" : "Scan everything now"}
         </Button>
-      </header>
-
-      <SettingsSection />
+      }
+    >
+      <ScanSettings />
 
       <section className="space-y-3">
         <div>
-          <h2 className="text-sm font-semibold">Platform images</h2>
-          <p className="text-xs text-[var(--text-secondary)]">
+          <h2 className="text-base font-semibold tracking-tight">Platform images</h2>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">
             kuso-server, operator, registry, buildkitd, traefik and the rest of the control plane. Click a row for its
             findings.
           </p>
         </div>
         <PlatformImages />
       </section>
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -71,11 +68,9 @@ export default function VulnerabilityScanningPage() {
   const isAdmin = useCan(Perms.SettingsAdmin);
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          Vulnerability scanning settings are admin-only.
-        </p>
-      </div>
+      <SettingsPage title="Vulnerability scanning">
+        <SettingsNotice tone="warning">Vulnerability scanning settings are admin-only.</SettingsNotice>
+      </SettingsPage>
     );
   }
   return <VulnScanningAdmin />;

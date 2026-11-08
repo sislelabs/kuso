@@ -1,5 +1,7 @@
 "use client";
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice, SettingsSelect } from "@/components/settings/SettingsSection";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
@@ -8,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Server, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
+import { Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
 // X is already imported above; the modal close button reuses it.
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
@@ -197,27 +199,25 @@ export function NodesView() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-4xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          Cluster nodes are admin-only. Ask a team admin to enable it for you.
-        </p>
-      </div>
+      <SettingsPage title="Nodes">
+        <SettingsNotice tone="warning">Cluster nodes are admin-only. Ask a team admin to enable it for you.</SettingsNotice>
+      </SettingsPage>
     );
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-6 lg:p-8 pb-24">
-      <header className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Cluster nodes</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Tag nodes with labels (e.g. <span className="font-mono">region=eu</span>,{" "}
-            <span className="font-mono">tier=premium</span>) and projects can pin to them.
-            Bare keys without a value work too — useful for capability flags like{" "}
-            <span className="font-mono">gpu</span>.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <SettingsPage
+      className="pb-24"
+      title="Nodes"
+      description={
+        <>
+          Tag nodes with labels (e.g. <span className="font-mono">region=eu</span>,{" "}
+          <span className="font-mono">tier=premium</span>) and projects can pin to them. Bare keys without a value
+          work too, for capability flags like <span className="font-mono">gpu</span>.
+        </>
+      }
+      actions={
+        <>
           <Button
             size="sm"
             variant="outline"
@@ -238,9 +238,9 @@ export function NodesView() {
             <Plus className="h-3.5 w-3.5" />
             Add node
           </Button>
-          <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
-        </div>
-      </header>
+        </>
+      }
+    >
       <ConfirmDialog
         open={cleanupOpen}
         title="Clean up finished pods and jobs?"
@@ -274,9 +274,9 @@ export function NodesView() {
           <Skeleton className="h-32 w-full" />
         </div>
       ) : nodes.isError ? (
-        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
-          Failed to load nodes: {nodes.error?.message}
-        </p>
+        <SettingsNotice tone="error" title="Failed to load nodes">
+          {nodes.error?.message}
+        </SettingsNotice>
       ) : (
         <ul className="space-y-3">
           {(nodes.data ?? []).map((n) => (
@@ -308,7 +308,7 @@ export function NodesView() {
         onSave={saveAll}
         onReset={() => setEdits({})}
       />
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -1290,22 +1290,22 @@ function AddNodeModal({
             {keys.isPending ? (
               <Skeleton className="h-8 w-full" />
             ) : (
-              <select
+              <SettingsSelect
                 value={keyId}
                 onChange={(e) => {
                   setKeyId(e.target.value);
                   setValidation(null);
                   setConfirmKeyDelete(false);
                 }}
-                className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[12px]"
+                className="font-mono text-xs"
               >
-                <option value="">pick a key</option>
+                <option value="">Pick a key</option>
                 {(keys.data ?? []).map((k) => (
                   <option key={k.id} value={k.id}>
                     {k.name} ({k.fingerprint.slice(0, 24)}…)
                   </option>
                 ))}
-              </select>
+              </SettingsSelect>
             )}
             {selectedKey && (
               <div className="mt-2 space-y-1.5">

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Plus, Trash2, X } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +25,11 @@ import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import Link from "next/link";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsSection, SettingsSelect } from "@/components/settings/SettingsSection";
 
 // /settings/alerts — manage alert rules. Engine evaluates them on a
 // 1-min ticker server-side and fires through the existing notify
@@ -50,54 +54,53 @@ export default function AlertsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Alert rules</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Evaluated every minute. Fires through your configured notification channels
-            (Discord, webhook, Slack — set up in <span className="font-mono">/settings/notifications</span>).
-          </p>
-        </div>
-        <Bell className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
-      </header>
-
-      {/* Rule list */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Rules</CardTitle>
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="h-3.5 w-3.5" /> New rule
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {list.isPending ? (
-            <Skeleton className="h-24 w-full" />
-          ) : list.isError ? (
-            <p className="font-mono text-[11px] text-[var(--error)]">
-              Failed to load: {list.error instanceof Error ? list.error.message : "unknown"}
-            </p>
-          ) : (list.data ?? []).length === 0 ? (
-            <EmptyState
-              icon={<Bell className="h-5 w-5" />}
-              title="No rules yet"
-              description="Click + New rule to watch 5xx rates, latency, certificates, DNS, logs or nodes."
-              className="px-3 py-6"
-            />
-          ) : (
-            <ul className="divide-y divide-[var(--border-subtle)]">
-              {(list.data ?? []).map((r) => (
-                <RuleRow
-                  key={r.id}
-                  rule={r}
-                  onDelete={() => del.mutate(r.id)}
-                  onToggle={(on) => toggle.mutate({ id: r.id, on })}
-                />
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+    <SettingsPage
+      title="Alert rules"
+      description={
+        <>
+          Evaluated every minute. Fires through your{" "}
+          <Link href="/settings/notifications" className="text-[var(--text-primary)] underline underline-offset-2">
+            notification channels
+          </Link>
+          .
+        </>
+      }
+      actions={
+        <Button size="sm" onClick={() => setAdding(true)}>
+          <Plus className="h-3.5 w-3.5" /> New rule
+        </Button>
+      }
+    >
+      {list.isPending ? (
+        <Skeleton className="h-32 w-full rounded-md" />
+      ) : list.isError ? (
+        <QueryErrorState what="alert rules" error={list.error} onRetry={() => void list.refetch()} />
+      ) : (list.data ?? []).length === 0 ? (
+        <EmptyState
+          icon={<Bell className="h-5 w-5" />}
+          title="No rules yet"
+          description="Click New rule to watch 5xx rates, latency, certificates, DNS, logs or nodes."
+          className="p-8"
+        />
+      ) : (
+        <SettingsSection
+          title="Rules"
+          description={`${(list.data ?? []).length} ${(list.data ?? []).length === 1 ? "rule" : "rules"}. Disabled rules aren't evaluated.`}
+          flush
+        >
+          <ul className="divide-y divide-[var(--border-subtle)]">
+            {(list.data ?? []).map((r) => (
+              <RuleRow
+                key={r.id}
+                rule={r}
+                deleting={del.isPending && del.variables === r.id}
+                onDelete={() => del.mutate(r.id)}
+                onToggle={(on) => toggle.mutate({ id: r.id, on })}
+              />
+            ))}
+          </ul>
+        </SettingsSection>
+      )}
 
       {adding && (
         <AddRuleDialog
@@ -108,89 +111,99 @@ export default function AlertsPage() {
           }}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
 function RuleRow({
   rule,
+  deleting,
   onDelete,
   onToggle,
 }: {
   rule: AlertRule;
+  deleting: boolean;
   onDelete: () => void;
   onToggle: (on: boolean) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const detail = describeRule(rule);
   return (
-    <li className="flex items-center gap-3 px-1 py-2">
+    <li className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
       <span
         aria-hidden
         className={cn(
-          "mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-          rule.severity === "error" ? "bg-red-400" : rule.severity === "warn" ? "bg-amber-400" : "bg-emerald-400"
+          "mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full",
+          rule.severity === "error"
+            ? "bg-[var(--error)]"
+            : rule.severity === "warn"
+              ? "bg-[var(--warning)]"
+              : "bg-[var(--success)]"
         )}
+        title={`Severity: ${rule.severity}`}
       />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium">{rule.name}</p>
-          <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="truncate text-sm font-medium text-[var(--text-primary)]">{rule.name}</p>
+          <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
             {rule.kind}
           </span>
           {rule.project && (
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="font-mono text-xs text-[var(--text-secondary)]">
               {rule.project}
               {rule.service && `/${rule.service}`}
               {rule.env && ` → ${rule.env}`}
             </span>
           )}
         </div>
-        <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">{detail}</p>
+        <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{detail}</p>
         {rule.firingSince ? (
-          <p className="truncate font-mono text-[10px] text-[var(--error)]">
-            firing since {relativeTime(rule.firingSince)}
-            {rule.firingTargets && rule.firingTargets.length > 0 && ` · ${rule.firingTargets.join(", ")}`}
+          <p className="mt-0.5 text-xs text-[var(--error)]">
+            Firing since {relativeTime(rule.firingSince)}
+            {rule.firingTargets && rule.firingTargets.length > 0 && (
+              <span className="font-mono"> · {rule.firingTargets.join(", ")}</span>
+            )}
           </p>
         ) : rule.lastFiredAt && (
-          <p className="font-mono text-[10px] text-[var(--warning)]">
-            last fired {relativeTime(rule.lastFiredAt)}
+          <p className="mt-0.5 text-xs text-[var(--warning)]">
+            Last fired {relativeTime(rule.lastFiredAt)}
           </p>
         )}
       </div>
-      <label className="flex cursor-pointer items-center gap-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-        <input
-          type="checkbox"
-          checked={rule.enabled}
-          onChange={(e) => onToggle(e.target.checked)}
-          className="accent-[var(--accent)]"
-        />
-        enabled
-      </label>
-      {confirming ? (
-        <div className="inline-flex items-center gap-1 rounded border border-[var(--error)]/30 bg-[var(--error-subtle)] px-1.5 py-0.5">
-          <Button size="sm" variant="ghost" onClick={onDelete} className="h-5 px-1 text-[10px] text-[var(--error)]">
-            yes
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setConfirming(false)}
-            className="h-5 px-1 text-[10px]"
-          >
-            no
-          </Button>
-        </div>
-      ) : (
-        <button
-          type="button"
+      <div className="flex w-full items-center justify-end gap-3 sm:w-auto">
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+          <input
+            type="checkbox"
+            checked={rule.enabled}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="accent-[var(--accent)]"
+          />
+          Enabled
+        </label>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           onClick={() => setConfirming(true)}
           aria-label={`Delete ${rule.name}`}
-          className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)]"
+          className="text-[var(--text-tertiary)] hover:text-[var(--error)]"
         >
           <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      )}
+        </Button>
+      </div>
+      <ConfirmDialog
+        open={confirming}
+        title={`Delete alert rule ${rule.name}?`}
+        body={<p>The rule stops being evaluated and its firing state is discarded.</p>}
+        confirmLabel="Delete rule"
+        typeToConfirm={rule.name}
+        destructive
+        pending={deleting}
+        onConfirm={() => {
+          onDelete();
+          setConfirming(false);
+        }}
+        onCancel={() => setConfirming(false)}
+      />
     </li>
   );
 }
@@ -236,9 +249,9 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <DialogTitle className="font-mono text-sm font-medium">New alert rule</DialogTitle>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              evaluated every 1 min · fires through configured channels
+            <DialogTitle className="text-base font-semibold">New alert rule</DialogTitle>
+            <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+              Evaluated every minute. Fires through your notification channels.
             </p>
           </div>
           <button
@@ -250,13 +263,12 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
             <X className="h-4 w-4" />
           </button>
         </header>
-        <div className="space-y-3 p-4">
+        <div className="space-y-4 p-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Kind">
-              <select
+              <SettingsSelect
                 value={form.kind}
                 onChange={(e) => changeKind(e.target.value as AlertKind)}
-                className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
               >
                 {KIND_GROUPS.map((g) => (
                   <optgroup key={g} label={g}>
@@ -269,18 +281,17 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                       ))}
                   </optgroup>
                 ))}
-              </select>
+              </SettingsSelect>
             </Field>
             <Field label="Name">
               <Input
                 value={form.name}
                 onChange={(e) => set("name", e.target.value)}
                 placeholder={meta.label}
-                className="h-8 text-[13px]"
               />
             </Field>
           </div>
-          <p className="text-[12px] text-[var(--text-secondary)]">{meta.help}</p>
+          <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{meta.help}</p>
 
           {form.kind === "log_match" && (
             <Field label="Query (substring)">
@@ -288,7 +299,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                 value={form.query}
                 onChange={(e) => set("query", e.target.value)}
                 placeholder="OOMKilled"
-                className="h-8 font-mono text-[12px]"
+                className="font-mono"
               />
             </Field>
           )}
@@ -299,16 +310,16 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                 <Input
                   value={form.project}
                   onChange={(e) => set("project", e.target.value)}
-                  placeholder="all projects"
-                  className="h-8 font-mono text-[12px]"
+                  placeholder="All projects"
+                  className="font-mono"
                 />
               </Field>
               <Field label="Service (optional)">
                 <Input
                   value={form.service}
                   onChange={(e) => set("service", e.target.value)}
-                  placeholder="all services"
-                  className="h-8 font-mono text-[12px]"
+                  placeholder="All services"
+                  className="font-mono"
                 />
               </Field>
               {meta.scope === "env" && (
@@ -316,8 +327,8 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                   <Input
                     value={form.env}
                     onChange={(e) => set("env", e.target.value)}
-                    placeholder="all envs"
-                    className="h-8 font-mono text-[12px]"
+                    placeholder="All envs"
+                    className="font-mono"
                   />
                 </Field>
               )}
@@ -333,7 +344,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                     value={form.threshold}
                     onChange={(e) => set("threshold", e.target.value)}
                     placeholder={meta.threshold.placeholder}
-                    className="h-8 font-mono text-[12px]"
+                    className="font-mono"
                   />
                 </Field>
               )}
@@ -344,7 +355,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                     value={form.minRequests}
                     onChange={(e) => set("minRequests", e.target.value)}
                     placeholder="20"
-                    className="h-8 font-mono text-[12px]"
+                    className="font-mono"
                   />
                 </Field>
               )}
@@ -358,7 +369,7 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                   value={form.window}
                   onChange={(e) => set("window", e.target.value)}
                   placeholder="5m"
-                  className="h-8 font-mono text-[12px]"
+                  className="font-mono"
                 />
               </Field>
             )}
@@ -367,23 +378,22 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
                 value={form.throttle}
                 onChange={(e) => set("throttle", e.target.value)}
                 placeholder="10m"
-                className="h-8 font-mono text-[12px]"
+                className="font-mono"
               />
             </Field>
             <Field label="Severity">
-              <select
+              <SettingsSelect
                 value={form.severity}
                 onChange={(e) => set("severity", e.target.value as RuleFormState["severity"])}
-                className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
               >
-                <option value="info">info</option>
-                <option value="warn">warn</option>
-                <option value="error">error</option>
-              </select>
+                <option value="info">Info</option>
+                <option value="warn">Warning</option>
+                <option value="error">Error</option>
+              </SettingsSelect>
             </Field>
           </div>
           {!built.ok && form.name.trim() !== "" && (
-            <p className="font-mono text-[11px] text-[var(--error)]">{built.error}</p>
+            <p className="text-xs text-[var(--error)]">{built.error}</p>
           )}
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
@@ -401,10 +411,8 @@ function AddRuleDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="space-y-1 block">
-      <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {label}
-      </span>
+    <label className="block space-y-1.5">
+      <span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>
       {children}
     </label>
   );

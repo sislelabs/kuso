@@ -13,7 +13,7 @@ export default function RolesRedirect() {
     router.replace("/settings/groups");
   }, [router]);
   return (
-    <div className="p-6 text-sm text-[var(--text-tertiary)]">
+    <div className="pt-8 text-sm text-[var(--text-tertiary)]">
       Redirecting to Groups…
     </div>
   );

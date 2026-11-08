@@ -1,5 +1,7 @@
 "use client";
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { projectsQueryKey } from "@/features/projects";
@@ -7,7 +9,7 @@ import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowDown, Database, Globe, Package, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Database, Globe, Package, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useCan, Perms } from "@/features/auth";
 import { toast } from "sonner";
 
@@ -141,69 +143,54 @@ export default function ImportPage() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-2xl p-6 lg:p-8">
-        <p className="text-sm text-[var(--text-secondary)]">
-          The Coolify import is admin-only. Ask a team admin to run it for you.
-        </p>
-      </div>
+      <SettingsPage title="Import from Coolify">
+        <SettingsNotice tone="warning">The Coolify import is admin-only. Ask a team admin to run it for you.</SettingsNotice>
+      </SettingsPage>
     );
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-6 lg:p-8">
-      <header className="mb-6 flex items-start gap-3">
-        <ArrowDown className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Import from Coolify</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Connect to a Coolify v4 instance, preview which resources can be
-            imported, then commit the migration. Preview is read-only — no
-            writes to either Coolify or kuso until you confirm.
-          </p>
-        </div>
-      </header>
-
+    <SettingsPage
+      title="Import from Coolify"
+      description="Connect to a Coolify v4 instance, preview which resources can be imported, then commit the migration. Preview is read-only: nothing is written to Coolify or kuso until you confirm."
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
           preview.mutate();
         }}
-        className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4"
       >
-        <label className="block">
-          <span className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            Coolify URL
-          </span>
-          <Input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://coolify.example.com"
-            className="mt-1 h-8 font-mono text-[13px]"
-            required
-          />
-        </label>
-        <label className="block">
-          <span className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            API token (read-only is fine)
-          </span>
-          <Input
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            type="password"
-            className="mt-1 h-8 font-mono text-[13px]"
-            required
-          />
-        </label>
-        <div className="flex justify-end">
-          <Button type="submit" size="sm" disabled={preview.isPending}>
-            {preview.isPending ? "Snapshotting…" : "Preview import"}
-          </Button>
-        </div>
-        {preview.isError && (
-          <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
-            {preview.error.message}
-          </p>
-        )}
+        <SettingsSection
+          title="Coolify connection"
+          footerHint="Preview takes a read-only snapshot."
+          footer={
+            <Button type="submit" size="sm" disabled={preview.isPending}>
+              {preview.isPending ? "Snapshotting…" : "Preview import"}
+            </Button>
+          }
+        >
+          <SettingsField label="Coolify URL" htmlFor="coolify-url">
+            <Input
+              id="coolify-url"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://coolify.example.com"
+              className="font-mono"
+              required
+            />
+          </SettingsField>
+          <SettingsField label="API token" hint="A read-only token is enough." htmlFor="coolify-token">
+            <Input
+              id="coolify-token"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              type="password"
+              className="font-mono"
+              required
+            />
+          </SettingsField>
+          {preview.isError && <SettingsNotice tone="error">{preview.error.message}</SettingsNotice>}
+        </SettingsSection>
       </form>
 
       {preview.isPending && (
@@ -230,7 +217,7 @@ export default function ImportPage() {
           commitResult={commitResult}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -257,18 +244,18 @@ function PreviewTable({
     [picked]
   );
   return (
-    <section className="mt-6">
-      <header className="mb-3 flex flex-wrap items-center gap-3 text-[12px]">
+    <section>
+      <header className="mb-3 flex flex-wrap items-center gap-3 text-xs">
         <StatChip icon={<Package className="h-3 w-3" />} label="apps" value={stats.numApps} />
         <StatChip icon={<Database className="h-3 w-3" />} label="dbs" value={stats.numDBs} />
         <StatChip icon={<Globe className="h-3 w-3" />} label="services" value={stats.numServices} />
-        <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="ml-auto text-xs text-[var(--text-secondary)]">
           Coolify {data.coolifyVersion || "v4"} · migrate {stats.numMigrate} · flag {stats.numFlag} · skip {stats.numSkipped}
         </span>
       </header>
 
       <div className="overflow-x-auto rounded-md border border-[var(--border-subtle)]">
-        <table className="w-full text-[12px]">
+        <table className="w-full text-xs">
           <thead className="bg-[var(--bg-secondary)] text-[var(--text-tertiary)]">
             <tr>
               <Th>
@@ -297,20 +284,20 @@ function PreviewTable({
                       aria-label={`include ${it.name}`}
                     />
                   </Td>
-                  <Td className="font-mono text-[11px]">{itemKind(it)}</Td>
-                  <Td className="font-mono text-[11px] text-[var(--text-secondary)]">
+                  <Td className="font-mono text-xs">{itemKind(it)}</Td>
+                  <Td className="font-mono text-xs text-[var(--text-secondary)]">
                     {it.projectName}
                     {it.envName ? <span className="text-[var(--text-tertiary)]"> · {it.envName}</span> : null}
                   </Td>
-                  <Td className="font-mono text-[11px]">{it.name}</Td>
+                  <Td className="font-mono text-xs">{it.name}</Td>
                   <Td>
                     <span
                       className={
                         action === "migrate"
-                          ? "rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-[var(--success)]"
+                          ? "rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-xs text-[var(--success)]"
                           : action === "flag"
-                            ? "rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--warning)]"
-                            : "rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]"
+                            ? "rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--warning)]"
+                            : "rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]"
                       }
                     >
                       {action}
@@ -330,13 +317,13 @@ function PreviewTable({
             ? `Importing ${pickedCount}…`
             : `Import ${pickedCount} resource${pickedCount === 1 ? "" : "s"}`}
         </Button>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="text-xs text-[var(--text-secondary)]">
           The server re-runs the classifier on commit; only migrate-verdict rows are sent.
         </span>
       </div>
 
       {commitError && (
-        <p className="mt-3 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-[12px] text-[var(--error)]">
+        <p className="mt-3 rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] p-2 text-xs text-[var(--error)]">
           {commitError}
         </p>
       )}
@@ -364,16 +351,16 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
           <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--warning)]" />
         )}
         <div>
-          <div className="text-[12px] font-semibold">
+          <div className="text-xs font-semibold">
             Imported {total} resource{total === 1 ? "" : "s"}
           </div>
-          <div className="font-mono text-[11px] text-[var(--text-secondary)]">
+          <div className="font-mono text-xs text-[var(--text-secondary)]">
             projects {result.projectsCreated} · services {result.servicesCreated} · addons {result.addonsCreated} · env vars {result.envVarsCreated}
           </div>
         </div>
       </header>
       {(result.skipped.length > 0 || result.errors.length > 0) && (
-        <ul className="mt-3 space-y-1 font-mono text-[11px]">
+        <ul className="mt-3 space-y-1 font-mono text-xs">
           {result.errors.map((d, i) => (
             <li key={`e-${i}`} className="text-[var(--error)]">
               ✗ {d.kind} {d.name} — {d.reason}
@@ -392,7 +379,7 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
 
 function StatChip({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-1 font-mono text-[11px]">
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-1 font-mono text-xs">
       {icon}
       <span className="text-[var(--text-primary)]">{value}</span>
       <span className="text-[var(--text-tertiary)]">{label}</span>
@@ -401,7 +388,7 @@ function StatChip({ icon, label, value }: { icon: React.ReactNode; label: string
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-widest font-normal">{children}</th>;
+  return <th className="px-3 py-2 text-left text-xs font-medium">{children}</th>;
 }
 
 function Td({ children, className }: { children: React.ReactNode; className?: string }) {

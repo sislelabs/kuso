@@ -5,6 +5,7 @@ import { relativeTime } from "@/lib/format";
 import { Activity, Clock, AlertTriangle, Info, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/ui/loading-state";
+import { UserBadge } from "./UserBadge";
 
 function severityIcon(s?: string) {
   const x = (s ?? "").toLowerCase();
@@ -16,9 +17,9 @@ function severityIcon(s?: string) {
 
 function severityColor(s?: string) {
   const x = (s ?? "").toLowerCase();
-  if (x === "error" || x === "fatal") return "text-red-500";
-  if (x === "warning" || x === "warn") return "text-amber-500";
-  if (x === "ok" || x === "success") return "text-emerald-500";
+  if (x === "error" || x === "fatal") return "text-[var(--error)]";
+  if (x === "warning" || x === "warn") return "text-[var(--warning)]";
+  if (x === "ok" || x === "success") return "text-[var(--success)]";
   return "text-[var(--text-tertiary)]";
 }
 
@@ -69,7 +70,7 @@ export function ActivityFeed({ filter }: { filter?: (e: AuditEntry) => boolean }
     <div className="space-y-6">
       {keys.map((day) => (
         <div key={day}>
-          <h3 className="mb-2 flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
+          <h3 className="mb-2 flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
             <Clock className="h-3 w-3" />
             {day}
           </h3>
@@ -88,14 +89,14 @@ export function ActivityFeed({ filter }: { filter?: (e: AuditEntry) => boolean }
                       {e.action ?? "event"}
                       {e.message ? <span className="text-[var(--text-secondary)]">: {e.message}</span> : null}
                     </p>
-                    <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                      {[e.pipelineName, e.phaseName, e.appName]
-                        .filter(Boolean)
-                        .join(" / ")}
-                      {e.user ? ` · ${e.user}` : ""}
+                    <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
+                      <span className="font-mono">
+                        {[e.pipelineName, e.phaseName, e.appName].filter(Boolean).join(" / ")}
+                      </span>
+                      {e.user && <UserBadge id={e.user} />}
                     </p>
                   </div>
-                  <span className="font-mono text-[10px] text-[var(--text-tertiary)] whitespace-nowrap">
+                  <span className="whitespace-nowrap text-xs text-[var(--text-secondary)]">
                     {relativeTime(e.timestamp)}
                   </span>
                 </li>

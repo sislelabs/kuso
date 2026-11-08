@@ -13,11 +13,13 @@
 // configured rates. Per-node breakdown is still available below for
 // folks who care about node attribution.
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
-import { Cpu, MemoryStick, Server, AlertCircle, Folder, ChevronDown, ChevronRight } from "lucide-react";
+import { Cpu, MemoryStick, Server, Folder, ChevronDown, ChevronRight } from "lucide-react";
 import Link from "next/link";
 
 interface ProjectUsageRow {
@@ -80,47 +82,42 @@ export default function UsagePage() {
   });
 
   return (
-    <div className="mx-auto max-w-5xl p-6 lg:p-8">
-      <header className="mb-6">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Cluster usage</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Per-project CPU + memory attribution over the last {windowDays} days.
-          Cost figures use the rates configured on the Kuso CR — see the hint
-          below if they&apos;re unset.
-        </p>
-      </header>
-
-      <div className="mb-6 flex items-center gap-2">
-        {WINDOWS.map((w) => (
-          <button
-            key={w.days}
-            type="button"
-            onClick={() => setWindowDays(w.days)}
-            className={`rounded-md border px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase ${
-              w.days === windowDays
-                ? "border-[var(--border-strong)] bg-[var(--bg-secondary)] text-[var(--text-primary)]"
-                : "border-[var(--border-subtle)] bg-transparent text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)]/40"
-            }`}
-          >
-            {w.label}
-          </button>
-        ))}
-      </div>
-
+    <SettingsPage
+      title="Usage & cost"
+      description={`Per-project CPU and memory attribution over the last ${windowDays} days. Cost figures use the rates configured on the Kuso CR.`}
+      actions={
+        <div role="group" aria-label="Time window" className="inline-flex rounded-sm border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">
+          {WINDOWS.map((w) => (
+            <button
+              key={w.days}
+              type="button"
+              aria-pressed={w.days === windowDays}
+              onClick={() => setWindowDays(w.days)}
+              className={`rounded-[3px] px-3 py-1 text-xs font-medium transition-colors ${
+                w.days === windowDays
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
       {byProject.isPending ? (
         <div className="space-y-3">
           <Skeleton className="h-28 w-full" />
           <Skeleton className="h-72 w-full" />
         </div>
       ) : byProject.isError ? (
-        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
-          Couldn&apos;t load usage:{" "}
+        <SettingsNotice tone="error" title="Couldn't load usage">
           {byProject.error instanceof Error ? byProject.error.message : "unknown error"}
-        </p>
+        </SettingsNotice>
       ) : !byProject.data ? null : (
         <UsageBody data={byProject.data} windowDays={windowDays} />
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -129,11 +126,8 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
   return (
     <div className="space-y-6">
       {ratesUnset && (
-        <div className="flex items-start gap-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <div className="font-semibold">Cost rates not configured</div>
-            <div className="mt-1 text-[12px] text-[var(--warning)]">
+        <SettingsNotice tone="warning" title="Cost rates not configured">
+            <div>
               Usage curves and share-of-cluster render, but no dollar figures.
               Set <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
               <code className="font-mono">spec.cost.memGBPerHour</code> on the
@@ -143,14 +137,13 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
               </Link>{" "}
               to enable projection.
             </div>
-          </div>
-        </div>
+        </SettingsNotice>
       )}
 
       {/* Cluster headline cards. */}
       <section className="grid gap-3 sm:grid-cols-3">
         <Card
-          label={`projected ${data.days === 30 ? "this month" : "next 30 days"}`}
+          label={`Projected ${data.days === 30 ? "this month" : "next 30 days"}`}
           big={
             ratesUnset
               ? "—"
@@ -179,8 +172,8 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
       {/* Per-project table — the headline section. */}
       <section>
         <header className="mb-3 flex items-baseline justify-between">
-          <h2 className="font-heading text-sm font-semibold tracking-tight">By project</h2>
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <h2 className="text-base font-semibold tracking-tight">By project</h2>
+          <span className="text-xs text-[var(--text-tertiary)]">
             window: {data.days} days · {data.projects.length} project
             {data.projects.length === 1 ? "" : "s"}
           </span>
@@ -281,7 +274,7 @@ function ShareBar({ pct }: { pct: number }) {
           style={{ width: `${w}%` }}
         />
       </div>
-      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-[var(--text-tertiary)]">
+      <span className="w-9 shrink-0 text-right font-mono text-xs text-[var(--text-tertiary)]">
         {pct.toFixed(0)}%
       </span>
     </div>
@@ -295,8 +288,8 @@ function DailySpark({ days }: { days: ProjectCostDay[] }) {
   const max = Math.max(1, ...days.map((d) => d.cpuMilliHours));
   return (
     <div>
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        cpu·hr per day · last {days.length} sample{days.length === 1 ? "" : "s"}
+      <div className="mb-1 text-xs text-[var(--text-tertiary)]">
+        CPU·hr per day · last {days.length} sample{days.length === 1 ? "" : "s"}
       </div>
       <div className="flex h-12 items-end gap-1">
         {days.map((d) => {
@@ -335,10 +328,10 @@ function NodeBreakdown({ windowDays }: { windowDays: number }) {
         ) : (
           <ChevronRight className="h-3.5 w-3.5" />
         )}
-        <h2 className="font-heading text-sm font-semibold tracking-tight">
+        <h2 className="text-base font-semibold tracking-tight">
           By node
         </h2>
-        <span className="font-mono text-[10px]">
+        <span className="text-xs">
           {open ? "(hide)" : "(show)"} — same data, node attribution
         </span>
       </button>
@@ -360,7 +353,7 @@ function NodeBreakdown({ windowDays }: { windowDays: number }) {
                 return (
                   <li
                     key={t.node}
-                    className="flex items-center justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3"
                   >
                     <div className="flex items-center gap-3">
                       <Server className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -399,12 +392,12 @@ function Card({
 }) {
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+      <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
         {icon}
         <span>{label}</span>
       </div>
       <div className="mt-2 font-heading text-2xl font-semibold tracking-tight">{big}</div>
-      {hint && <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">{hint}</div>}
+      {hint && <div className="mt-1 text-xs text-[var(--text-tertiary)]">{hint}</div>}
     </div>
   );
 }

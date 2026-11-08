@@ -1,5 +1,7 @@
 "use client";
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { UserAvatar } from "@/components/activity/UserBadge";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
-import { Users, Plus, X, Save, ShieldCheck, Check, UserPlus, Trash2 } from "lucide-react";
+import { Plus, X, Save, ShieldCheck, Check, UserPlus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -72,21 +74,11 @@ export default function GroupsSettingsPage() {
   });
 
   return (
-    <div className="mx-auto max-w-5xl p-6 lg:p-8">
-      <header className="mb-6 flex items-center gap-3">
-        <Users className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
-          <h1 className="font-heading text-xl font-semibold tracking-tight">Groups</h1>
-          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Instance-wide groups. Each group carries a kuso-wide instance role plus
-            per-project memberships; a user&apos;s effective perms are the union across
-            every group they&apos;re in. Use this to grant access to specific projects or
-            promote someone to admin.
-          </p>
-        </div>
-      </header>
-
-      <div className="grid gap-4 md:grid-cols-[280px_1fr]">
+    <SettingsPage
+      title="Groups"
+      description="Each group carries an instance role; project access is granted on each project. A user's effective permissions are the union across every group they're in."
+    >
+      <div className="grid gap-4 md:grid-cols-[240px_1fr]">
         {/* Left: group list */}
         <aside className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
           <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
@@ -94,9 +86,9 @@ export default function GroupsSettingsPage() {
             <button
               type="button"
               onClick={() => setCreating(true)}
-              className="inline-flex items-center gap-1 text-[11px] text-[var(--accent)] hover:underline"
+              className="inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
-              <Plus className="h-3 w-3" /> new
+              <Plus className="h-3 w-3" /> New
             </button>
           </div>
           {creating && (
@@ -111,7 +103,7 @@ export default function GroupsSettingsPage() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="group name"
-                className="h-7 flex-1 text-[12px]"
+                className="h-7 flex-1 text-xs"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
@@ -152,7 +144,7 @@ export default function GroupsSettingsPage() {
           ) : groups.isError ? (
             <QueryErrorState what="groups" error={groups.error} onRetry={() => void groups.refetch()} className="m-3" />
           ) : (groups.data ?? []).length === 0 ? (
-            <p className="px-3 py-4 text-[11px] text-[var(--text-tertiary)]">No groups yet.</p>
+            <p className="px-3 py-4 text-sm text-[var(--text-tertiary)]">No groups yet.</p>
           ) : (
             <ul>
               {(groups.data ?? []).map((g) => {
@@ -163,7 +155,7 @@ export default function GroupsSettingsPage() {
                       type="button"
                       onClick={() => setSelected(g.id)}
                       className={cn(
-                        "block w-full truncate border-b border-[var(--border-subtle)] px-3 py-2 text-left text-[12px] last:border-b-0",
+                        "block w-full truncate border-b border-[var(--border-subtle)] px-3 py-2 text-left text-sm last:border-b-0",
                         active
                           ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
                           : "hover:bg-[var(--bg-tertiary)]"
@@ -171,7 +163,7 @@ export default function GroupsSettingsPage() {
                     >
                       <div className="font-medium">{g.name}</div>
                       {g.description && (
-                        <div className="mt-0.5 truncate text-[10px] text-[var(--text-tertiary)]">
+                        <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">
                           {g.description}
                         </div>
                       )}
@@ -194,12 +186,12 @@ export default function GroupsSettingsPage() {
             />
           ) : (
             <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-8 text-center text-sm text-[var(--text-tertiary)]">
-              Pick a group on the left, or click <span className="font-mono">+ new</span> to create one.
+              Pick a group on the left, or click <span className="font-medium text-[var(--text-secondary)]">New</span> to create one.
             </p>
           )}
         </main>
       </div>
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -299,14 +291,14 @@ function GroupEditor({
                 type="button"
                 onClick={() => setForm({ ...form, instanceRole: r.value })}
                 className={cn(
-                  "flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-left text-[12px] transition-colors",
+                  "flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-0.5 rounded-md px-3 py-1.5 text-left text-sm transition-colors",
                   active
                     ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
                     : "hover:bg-[var(--bg-tertiary)]/50"
                 )}
               >
-                <span className="font-mono">{r.label}</span>
-                <span className="ml-auto truncate text-[10px] text-[var(--text-tertiary)]">
+                <span className="font-medium">{r.label}</span>
+                <span className="ml-auto text-xs text-[var(--text-tertiary)]">
                   {r.hint}
                 </span>
               </button>
@@ -320,7 +312,7 @@ function GroupEditor({
         <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
           <h3 className="text-sm font-semibold tracking-tight">Project access</h3>
         </header>
-        <p className="px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+        <p className="px-3 py-2.5 text-sm leading-relaxed text-[var(--text-secondary)]">
           Projects are invisible to non-admins until this group is granted access on the
           project itself. Open a project, then use its{" "}
           <span className="text-[var(--text-secondary)]">Access</span> panel to add this group
@@ -345,8 +337,8 @@ function GroupEditor({
           <Trash2 className="h-3 w-3" />
           Delete group
         </Button>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {dirty ? "unsaved changes" : "saved"}
+        <span className="text-xs text-[var(--text-secondary)]">
+          {dirty ? "Unsaved changes" : "Saved"}
         </span>
         <Button
           size="sm"
@@ -433,7 +425,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
         <h3 className="text-sm font-semibold tracking-tight">Members</h3>
-        <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+        <span className="ml-auto text-xs text-[var(--text-secondary)]">
           {roster.length} {roster.length === 1 ? "member" : "members"}
         </span>
       </header>
@@ -449,7 +441,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
           className="m-3"
         />
       ) : roster.length === 0 ? (
-        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
+        <p className="px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
           No members yet. Add a user below.
         </p>
       ) : (
@@ -459,10 +451,10 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
               key={m.id}
               className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
-              <Users className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-              <span className="truncate font-mono text-[12px]">{m.username}</span>
+              <UserAvatar user={{ username: m.username }} />
+              <span className="truncate text-sm">{m.username}</span>
               {m.email && (
-                <span className="truncate text-[10px] text-[var(--text-tertiary)]">{m.email}</span>
+                <span className="truncate text-xs text-[var(--text-tertiary)]">{m.email}</span>
               )}
               <button
                 type="button"
@@ -487,7 +479,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
           <PopoverTrigger
             disabled={addable.length === 0}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[11px] text-[var(--text-secondary)]",
+              "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-xs text-[var(--text-secondary)]",
               "hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] data-[popup-open]:border-[var(--border-strong)]",
               addable.length === 0 && "pointer-events-none opacity-40"
             )}
@@ -502,12 +494,12 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
                 type="button"
                 onClick={() => add.mutate(u.id)}
                 disabled={add.isPending}
-                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
                 <Plus className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
                 <span className="truncate font-mono">{u.username}</span>
                 {u.email && (
-                  <span className="truncate text-[10px] text-[var(--text-tertiary)]">{u.email}</span>
+                  <span className="truncate text-xs text-[var(--text-tertiary)]">{u.email}</span>
                 )}
               </button>
             ))}

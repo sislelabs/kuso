@@ -40,6 +40,8 @@ import {
 } from "@/features/health";
 import { cn } from "@/lib/utils";
 import { KubeEventsSection } from "@/components/health/KubeEventsSection";
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 
 type Severity = ReconcileIssue["severity"];
 
@@ -83,7 +85,7 @@ function SeverityPill({ severity, count }: { severity: Severity; count?: number 
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-widest",
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
         m.pill
       )}
     >
@@ -98,32 +100,25 @@ export default function HealthPage() {
   const { data, isPending, isError, error } = useReconcileHealth();
 
   return (
-    <div className="mx-auto max-w-5xl p-6 lg:p-8">
-      <header className="mb-6">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Reconcile health</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Every Kuso resource and its rendered helm release, scanned for anything that isn&apos;t
-          reconciling cleanly. Safe fixes apply with one click; the rest hand you a runbook command.
-        </p>
-      </header>
-
+    <SettingsPage
+      title="Health"
+      description="Every Kuso resource and its rendered helm release, scanned for anything that isn't reconciling cleanly. Safe fixes apply with one click; the rest hand you a runbook command."
+    >
       {isPending ? (
         <div className="space-y-3">
           <Skeleton className="h-20 w-full" />
           <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
         </div>
       ) : isError ? (
-        <p className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
-          Couldn&apos;t load reconcile health:{" "}
-          {error instanceof Error ? error.message : "unknown error"}
-        </p>
+        <SettingsNotice tone="error" title="Couldn't load reconcile health">
+          {error instanceof Error ? error.message : "Unknown error"}
+        </SettingsNotice>
       ) : !data ? null : (
         <HealthBody report={data} />
       )}
 
       <KubeEventsSection />
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -148,8 +143,14 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
 
   return (
     <div className="space-y-6">
-      {/* Summary header. */}
-      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+      <section
+        className={cn(
+          "rounded-md border p-4 sm:p-5",
+          hasIssues
+            ? "border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
+            : "border-[var(--success)]/30 bg-[var(--success-subtle)]",
+        )}
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span
@@ -157,20 +158,19 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
                 "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
                 hasIssues
                   ? "bg-[var(--warning-subtle)] text-[var(--warning)]"
-                  : "bg-emerald-500/10 text-[var(--success)]"
+                  : "bg-[var(--success)]/15 text-[var(--success)]",
               )}
             >
               <ShieldCheck className="h-5 w-5" />
             </span>
             <div>
-              <div className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
-                {report.healthy} healthy{" "}
-                <span className="text-[var(--text-tertiary)]">/ {report.scanned} scanned</span>
-              </div>
-              <div className="mt-0.5 font-mono text-[11px] text-[var(--text-tertiary)]">
+              <div className="text-sm font-semibold text-[var(--text-primary)]">
                 {hasIssues
                   ? `${issues.length} issue${issues.length === 1 ? "" : "s"} need attention`
-                  : "all resources reconciling cleanly"}
+                  : "Everything is reconciling cleanly"}
+              </div>
+              <div className="mt-0.5 text-sm text-[var(--text-secondary)]">
+                {report.healthy} of {report.scanned} resources healthy
               </div>
             </div>
           </div>
@@ -185,22 +185,13 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
       </section>
 
       {(report.skippedNamespaces ?? []).length > 0 && (
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[12px] text-[var(--warning)]">
-          Couldn&apos;t scan {report.skippedNamespaces!.length} namespace
-          {report.skippedNamespaces!.length === 1 ? "" : "s"}:{" "}
-          <span className="font-mono">{report.skippedNamespaces!.join(", ")}</span>. Resources there
+        <SettingsNotice tone="warning" title={`Couldn't scan ${report.skippedNamespaces!.length} namespace${report.skippedNamespaces!.length === 1 ? "" : "s"}`}>
+          <span className="font-mono text-xs">{report.skippedNamespaces!.join(", ")}</span>. Resources there
           aren&apos;t counted above, so this report may be missing problems.
-        </p>
+        </SettingsNotice>
       )}
 
-      {!hasIssues ? (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-8 text-center">
-          <ShieldCheck className="mx-auto h-8 w-8 text-[var(--success)]" />
-          <p className="mt-3 text-sm font-medium text-[var(--success)]">
-            ✓ All {report.scanned} resources reconciling cleanly.
-          </p>
-        </div>
-      ) : (
+      {hasIssues && (
         <div className="space-y-5">
           {SEVERITY_ORDER.map((sev) => {
             const issues = grouped[sev];
@@ -209,7 +200,7 @@ function HealthBody({ report }: { report: NonNullable<ReturnType<typeof useRecon
               <section key={sev}>
                 <header className="mb-2 flex items-center gap-2">
                   <SeverityPill severity={sev} />
-                  <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  <span className="text-xs text-[var(--text-secondary)]">
                     {issues.length} issue{issues.length === 1 ? "" : "s"}
                   </span>
                 </header>
@@ -255,21 +246,15 @@ function OrphansSection({ orphans }: { orphans: ReconcileIssue[] }) {
   const visible = orphans.filter((o) => !deleted.has(keyOf(o)));
   if (visible.length === 0) return null;
   return (
-    <section>
-      <header className="mb-2 flex items-center gap-2">
-        <h2 className="text-sm font-semibold">Orphans</h2>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          left over from deleted addons
-        </span>
-      </header>
-      <ul className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+    <SettingsSection title="Orphans" description="Credentials and volumes left over from deleted addons." flush>
+      <ul className="divide-y divide-[var(--border-subtle)]">
         {visible.map((o) => (
-          <li key={keyOf(o)} className="flex items-center gap-2 px-3 py-2 text-[12px]" title={o.summary}>
+          <li key={keyOf(o)} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm sm:px-5" title={o.summary}>
             <span className="min-w-0 flex-1 truncate font-mono">{o.resource}</span>
             {o.project && (
-              <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{o.project}</span>
+              <span className="text-xs text-[var(--text-secondary)]">{o.project}</span>
             )}
-            <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]">
               {ORPHAN_KINDS[o.kind ?? ""]}
             </span>
             <Button
@@ -300,7 +285,7 @@ function OrphansSection({ orphans }: { orphans: ReconcileIssue[] }) {
         onConfirm={() => target && del.mutate(target)}
         onCancel={() => setTarget(null)}
       />
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -351,22 +336,20 @@ function IssueRow({ issue }: { issue: ReconcileIssue }) {
           )}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="truncate font-mono text-[12px] font-medium text-[var(--text-primary)]">
+              <span className="truncate font-mono text-sm font-medium text-[var(--text-primary)]">
                 {issue.resource}
               </span>
               {issue.kind && (
-                <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <span className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
                   {issue.kind}
                   {issue.addonKind ? ` · ${issue.addonKind}` : ""}
                 </span>
               )}
               {issue.project && (
-                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                  {issue.project}
-                </span>
+                <span className="text-xs text-[var(--text-secondary)]">{issue.project}</span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-[12px] text-[var(--text-secondary)]">
+            <div className="mt-0.5 text-sm text-[var(--text-secondary)] sm:truncate">
               {issue.summary}
             </div>
           </div>
@@ -389,26 +372,26 @@ function IssueRow({ issue }: { issue: ReconcileIssue }) {
         <div className="space-y-3 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-3">
           {issue.detail && (
             <div>
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                detail
+              <div className="mb-1 text-xs font-medium text-[var(--text-secondary)]">
+                Detail
               </div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-xs leading-snug text-[var(--text-secondary)]">
                 {issue.detail}
               </pre>
             </div>
           )}
           {issue.fix && (
             <div>
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                {canAutoFix ? "what the fix does" : "fix"}
+              <div className="mb-1 text-xs font-medium text-[var(--text-secondary)]">
+                {canAutoFix ? "What the fix does" : "Fix"}
               </div>
-              <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">{issue.fix}</p>
+              <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{issue.fix}</p>
             </div>
           )}
           {!canAutoFix && issue.runbookCmd && (
             <div>
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                runbook — needs human judgment
+              <div className="mb-1 text-xs font-medium text-[var(--text-secondary)]">
+                Runbook (needs human judgment)
               </div>
               <CopyableCommand command={issue.runbookCmd} />
             </div>
@@ -430,7 +413,7 @@ function IssueRow({ issue }: { issue: ReconcileIssue }) {
               Run <span className="font-mono text-[var(--text-primary)]">{issue.action}</span> on{" "}
               <span className="font-mono text-[var(--text-primary)]">{issue.resource}</span>?
             </p>
-            {issue.fix && <p className="text-[12px] text-[var(--text-tertiary)]">{issue.fix}</p>}
+            {issue.fix && <p className="text-sm text-[var(--text-secondary)]">{issue.fix}</p>}
           </div>
         }
       />
@@ -454,7 +437,7 @@ function CopyableCommand({ command }: { command: string }) {
   };
   return (
     <div className="flex items-stretch gap-2">
-      <pre className="min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+      <pre className="min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-xs leading-snug text-[var(--text-secondary)]">
         {command}
       </pre>
       <button

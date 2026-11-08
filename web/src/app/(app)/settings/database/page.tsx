@@ -1,5 +1,7 @@
 "use client";
 
+import { SettingsPage } from "@/components/settings/SettingsPage";
+import { SettingsNotice } from "@/components/settings/SettingsSection";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
@@ -94,28 +96,23 @@ export default function DatabasePage() {
 
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-4 text-sm text-[var(--warning)]">
-          Cluster database configuration is admin-only.
-        </p>
-      </div>
+      <SettingsPage title="Database">
+        <SettingsNotice tone="warning">Cluster database configuration is admin-only.</SettingsNotice>
+      </SettingsPage>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      <header className="mb-6">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Cluster database</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          One Postgres serves every project that opts in. Each project gets its own logical database + user inside it; no project sees another&apos;s data.
-        </p>
-      </header>
+    <SettingsPage
+      title="Database"
+      description="One Postgres serves every project that opts in. Each project gets its own logical database and user inside it; no project sees another's data."
+    >
 
       {status.isPending && <Skeleton className="h-40 w-full rounded-md" />}
       {status.isError && (
-        <div className="rounded-md border border-[var(--error)]/30 bg-[var(--error-subtle)] p-4 text-sm text-[var(--error)]">
+        <SettingsNotice tone="error">
           {(status.error as Error)?.message ?? "Failed to load cluster database status."}
-        </div>
+        </SettingsNotice>
       )}
       {status.data && status.data.mode === "none" && (
         <NotConfiguredCard
@@ -181,7 +178,7 @@ export default function DatabasePage() {
           setShowDisableConfirm(false);
         }}
       />
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -203,11 +200,11 @@ function NotConfiguredCard({
       >
         <Server className="h-5 w-5 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--accent)]" />
         <h3 className="mt-2 text-sm font-semibold tracking-tight">Run on this cluster</h3>
-        <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
           Kuso provisions a Postgres StatefulSet in this cluster. One-click; uses cluster storage.
         </p>
-        <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          recommended for self-hosted
+        <p className="mt-3 text-xs font-medium text-[var(--text-secondary)]">
+          Recommended for self-hosted
         </p>
       </button>
       <button
@@ -217,11 +214,11 @@ function NotConfiguredCard({
       >
         <Cloud className="h-5 w-5 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--accent)]" />
         <h3 className="mt-2 text-sm font-semibold tracking-tight">Point at an external Postgres</h3>
-        <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
           Use Neon, RDS, Supabase, an EC2 box — anything reachable from this cluster. Paste a DSN.
         </p>
-        <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          managed providers / shared infra
+        <p className="mt-3 text-xs font-medium text-[var(--text-secondary)]">
+          Managed providers, shared infra
         </p>
       </button>
     </div>
@@ -248,13 +245,13 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
           <Server className="h-4 w-4 text-[var(--text-secondary)]" />
           <h2 className="text-sm font-semibold tracking-tight">On-cluster Postgres</h2>
         </div>
-        <span className={`inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest ${phaseColor}`}>
+        <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${phaseColor}`}>
           <PhaseIcon className={`h-3 w-3 ${status.phase === "provisioning" ? "animate-spin" : ""}`} />
           {status.phase ?? "unknown"}
         </span>
       </div>
       {status.phase === "provisioning" && (
-        <p className="mt-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-[12px] text-[var(--warning)]">
+        <p className="mt-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] p-3 text-xs text-[var(--warning)]">
           Helm-installing the Postgres chart. Usually ready in 30–90 seconds — this page polls every 5s.
         </p>
       )}
@@ -264,13 +261,13 @@ function ManagedCard({ status, onDisable }: { status: Status; onDisable: () => v
         </p>
       )}
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
-        {status.host && <Field name="host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
-        {status.user && <Field name="user" value={status.user} />}
-        {status.version && <Field name="version" value={status.version} />}
-        {status.size && <Field name="size" value={status.size} />}
-        {status.storageSize && <Field name="storage" value={status.storageSize} />}
-        <Field name="ha" value={status.ha ? "yes (CNPG, 3 replicas)" : "no (single-node)"} />
-        <Field name="projects connected" value={String(status.projectsUsing)} />
+        {status.host && <Field name="Host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
+        {status.user && <Field name="User" value={status.user} />}
+        {status.version && <Field name="Version" value={status.version} />}
+        {status.size && <Field name="Size" value={status.size} />}
+        {status.storageSize && <Field name="Storage" value={status.storageSize} />}
+        <Field name="HA" value={status.ha ? "yes (CNPG, 3 replicas)" : "no (single-node)"} />
+        <Field name="Projects connected" value={String(status.projectsUsing)} />
       </dl>
       <div className="mt-4 flex justify-end">
         <Button variant="outline" size="sm" onClick={onDisable} className="gap-1.5 text-[var(--error)]">
@@ -290,15 +287,15 @@ function ExternalCard({ status, onDisable }: { status: Status; onDisable: () => 
           <Cloud className="h-4 w-4 text-[var(--text-secondary)]" />
           <h2 className="text-sm font-semibold tracking-tight">External Postgres</h2>
         </div>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--success)]">
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--success)]">
           <CheckCircle2 className="h-3 w-3" />
           connected
         </span>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
-        {status.host && <Field name="host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
-        {status.user && <Field name="user" value={status.user} />}
-        <Field name="projects connected" value={String(status.projectsUsing)} />
+        {status.host && <Field name="Host" value={`${status.host}${status.port ? `:${status.port}` : ""}`} />}
+        {status.user && <Field name="User" value={status.user} />}
+        <Field name="Projects connected" value={String(status.projectsUsing)} />
       </dl>
       <div className="mt-4 flex justify-end">
         <Button variant="outline" size="sm" onClick={onDisable} className="gap-1.5">
@@ -313,7 +310,7 @@ function ExternalCard({ status, onDisable }: { status: Status; onDisable: () => 
 function Field({ name, value }: { name: string; value: string }) {
   return (
     <div className="contents">
-      <dt className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">{name}</dt>
+      <dt className="text-xs font-medium text-[var(--text-secondary)]">{name}</dt>
       <dd className="truncate font-mono text-[var(--text-secondary)]">{value}</dd>
     </div>
   );
@@ -346,17 +343,17 @@ function ProvisionDialog({
     >
       <DialogContent className="max-w-md gap-0 bg-[var(--bg-secondary)] p-5 sm:max-w-md">
         <DialogTitle className="text-sm font-semibold tracking-tight">Provision on-cluster Postgres</DialogTitle>
-        <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
           Kuso installs a Postgres StatefulSet in the cluster namespace. Projects opt in later via the Add Addon dialog.
         </p>
         <div className="mt-4 space-y-3">
-          <Picker label="size" value={size} onChange={setSize} options={["small", "medium", "large"]} />
+          <Picker label="Size" value={size} onChange={setSize} options={["small", "medium", "large"]} />
           <div>
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">version</label>
+            <label className="text-xs font-medium text-[var(--text-secondary)]">Version</label>
             <Input value={version} onChange={(e) => setVersion(e.target.value)} className="mt-1 h-7 font-mono text-[11px]" placeholder="16" />
           </div>
           <div>
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">storage size</label>
+            <label className="text-xs font-medium text-[var(--text-secondary)]">Storage size</label>
             <Input value={storageSize} onChange={(e) => setStorageSize(e.target.value)} className="mt-1 h-7 font-mono text-[11px]" placeholder="20Gi" />
           </div>
           <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
@@ -403,11 +400,11 @@ function ExternalDialog({
     >
       <DialogContent className="max-w-md gap-0 bg-[var(--bg-secondary)] p-5 sm:max-w-md">
         <DialogTitle className="text-sm font-semibold tracking-tight">Connect external Postgres</DialogTitle>
-        <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
           Paste a superuser DSN. Kuso will test the connection (SELECT 1) before saving. The password never leaves this server.
         </p>
         <div className="mt-4">
-          <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">DSN</label>
+          <label className="text-xs font-medium text-[var(--text-secondary)]">DSN</label>
           <Input
             type="password"
             autoComplete="off"
@@ -418,7 +415,7 @@ function ExternalDialog({
             spellCheck={false}
             autoFocus
           />
-          <p className="mt-2 text-[10px] text-[var(--text-tertiary)]">
+          <p className="mt-2 text-xs text-[var(--text-tertiary)]">
             Needs CREATEDB + CREATEROLE so kuso can carve per-project databases.
           </p>
         </div>
@@ -453,7 +450,7 @@ function Picker({
 }) {
   return (
     <div>
-      <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">{label}</label>
+      <label className="text-xs font-medium text-[var(--text-secondary)]">{label}</label>
       <div className="mt-1 flex gap-1">
         {options.map((o) => (
           <button
@@ -560,11 +557,11 @@ function AdditionalServers() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <section className="mt-8 space-y-3">
+    <section className="space-y-3 pt-2">
       <header className="flex items-baseline justify-between">
         <div>
-          <h2 className="text-sm font-semibold tracking-tight">Additional shared servers</h2>
-          <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+          <h2 className="text-base font-semibold tracking-tight">Additional shared servers</h2>
+          <p className="mt-1 text-sm leading-relaxed text-[var(--text-secondary)]">
             Register extra Postgres servers — a second on-cluster instance, or an external
             Neon / RDS / Supabase — by superuser DSN. Projects opt into one by name via{" "}
             <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
@@ -586,7 +583,7 @@ function AdditionalServers() {
       ) : list.isError ? (
         <QueryErrorState what="shared servers" error={list.error} onRetry={() => void list.refetch()} />
       ) : addons.length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
           No additional servers. The primary cluster database above covers most setups; register
           more only if you need separate instances or an external provider.
         </p>
@@ -601,11 +598,11 @@ function AdditionalServers() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="font-mono text-[13px] font-medium text-[var(--text-primary)]">{a.name}</span>
-                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                  <span className="text-xs text-[var(--text-tertiary)]">
                     {a.kind}
                   </span>
                 </div>
-                <p className="mt-0.5 truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+                <p className="mt-0.5 truncate font-mono text-xs text-[var(--text-secondary)]">
                   {a.user ? `${a.user}@` : ""}
                   {a.host || "<unparseable host>"}
                   {a.port ? `:${a.port}` : ""}
@@ -636,29 +633,29 @@ function AdditionalServers() {
           <div>
             <label
               htmlFor="add-server-name"
-              className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+              className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
             >
-              name
+              Name
             </label>
             <Input
               id="add-server-name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="analytics-pg"
-              className="h-8 font-mono text-[12px]"
+              className="h-8 font-mono text-xs"
               spellCheck={false}
               autoComplete="off"
             />
-            <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
               Lowercase, dashes, ≤32 chars. Projects reference this name when opting in.
             </p>
           </div>
           <div>
             <label
               htmlFor="add-server-dsn"
-              className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+              className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
             >
-              superuser dsn
+              Superuser DSN
             </label>
             <Input
               id="add-server-dsn"
@@ -666,11 +663,11 @@ function AdditionalServers() {
               onChange={(e) => setNewDSN(e.target.value)}
               type="password"
               placeholder="postgres://admin:pw@db.example.com:5432/postgres?sslmode=require"
-              className="h-8 font-mono text-[12px]"
+              className="h-8 font-mono text-xs"
               spellCheck={false}
               autoComplete="off"
             />
-            <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
               Needs CREATE DATABASE + CREATE ROLE. The password never round-trips back to the browser.
             </p>
           </div>
