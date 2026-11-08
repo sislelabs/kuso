@@ -10,12 +10,21 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { ApiError } from "@/lib/api-client";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
 import { AddonOverlay } from "@/components/addon/AddonOverlay";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { MobileIncidentView } from "@/components/project/MobileIncidentView";
 import { ProjectStatusStrip } from "@/components/project/ProjectStatusStrip";
-import { Package, Database } from "lucide-react";
+import { EmptyProjectState } from "@/components/project/EmptyProjectState";
+import { ProjectNotFound } from "@/components/project/ProjectNotFound";
+import { ProjectListView } from "@/components/project/ProjectListView";
+import {
+  loadProjectView,
+  saveProjectView,
+  type ProjectViewMode,
+} from "@/components/project/projectViewPref";
+import { Package } from "lucide-react";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
 // blew up the static export build. ssr:false skips the prerender pass
@@ -67,6 +76,16 @@ export function ProjectDetailView() {
   // wants to start with a managed DB doesn't need to discover the
   // canvas right-click menu. Closed by AddAddonDialog on success.
   const [addAddonOpen, setAddAddonOpen] = useState(false);
+
+  // Canvas vs list, remembered per project in this browser.
+  const [viewMode, setViewMode] = useState<ProjectViewMode>("canvas");
+  useEffect(() => {
+    setViewMode(loadProjectView(projectName) ?? "canvas");
+  }, [projectName]);
+  const changeViewMode = (m: ProjectViewMode) => {
+    setViewMode(m);
+    saveProjectView(projectName, m);
+  };
 
   // Notification-link entry point: when the URL carries ?service= /
   // ?addon=, open the matching overlay on mount. Lets bell-icon
@@ -132,6 +151,10 @@ export function ProjectDetailView() {
         <Skeleton className="h-64 w-full" />
       </div>
     );
+  }
+
+  if (project.isError && project.error instanceof ApiError && project.error.status === 404) {
+    return <ProjectNotFound project={projectName} />;
   }
 
   if (project.isError) {
@@ -316,51 +339,36 @@ export function ProjectDetailView() {
 
   if (services.length === 0 && addonsList.length === 0) {
     return (
-      <div className="p-6 lg:p-8">
-        <EmptyState
-          icon={<Package className="h-5 w-5" />}
-          title="Empty project"
-          description="A project is a container for services and addons. Wire your first GitHub repo or provision a managed database to get this canvas lit up."
-          action={
-            <div className="flex items-center gap-2">
-              <Link
-                href={`/projects/${encodeURIComponent(projectName)}/services/new`}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
-              >
-                + Add service
-              </Link>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAddAddonOpen(true)}
-                className="h-8 rounded-md text-xs"
-              >
-                <Database className="h-3.5 w-3.5" />
-                Add addon
-              </Button>
-            </div>
-          }
-        />
+      <>
+        <EmptyProjectState project={projectName} onAddDatabase={() => setAddAddonOpen(true)} />
         <AddAddonDialog
           project={projectName}
           open={addAddonOpen}
           onClose={() => setAddAddonOpen(false)}
         />
-      </div>
+      </>
     );
   }
+
+  const selectService = (shortName: string, tab?: string) => {
+    setSelectedService(shortName);
+    setSelectedServiceTab(tab);
+  };
+  const selectAddon = (name: string, tab?: string) => {
+    setSelectedAddon(name);
+    setSelectedAddonTab(tab);
+  };
 
   return (
     <>
       <MobileIncidentView
         project={projectName}
+        selectedEnv={selectedEnv}
         services={services}
+        addons={addonsList}
         envs={envs}
-        onSelectService={(shortName, tab) => {
-          setSelectedService(shortName);
-          setSelectedServiceTab(tab);
-        }}
+        onSelectService={selectService}
+        onSelectAddon={selectAddon}
       />
       <div className="hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
         {!onProduction && (
@@ -383,22 +391,33 @@ export function ProjectDetailView() {
             </button>
           </div>
         )}
-        <ProjectStatusStrip project={projectName} selectedEnv={selectedEnv} />
-        <ProjectCanvas
+        <ProjectStatusStrip
           project={projectName}
           selectedEnv={selectedEnv}
-          services={services}
-          addons={addonsList}
-          envs={envs}
-          onSelectService={(shortName, tab) => {
-            setSelectedService(shortName);
-            setSelectedServiceTab(tab);
-          }}
-          onSelectAddon={(name, tab) => {
-            setSelectedAddon(name);
-            setSelectedAddonTab(tab);
-          }}
+          view={viewMode}
+          onViewChange={changeViewMode}
         />
+        {viewMode === "list" ? (
+          <ProjectListView
+            project={projectName}
+            selectedEnv={selectedEnv}
+            services={services}
+            addons={addonsList}
+            envs={envs}
+            onSelectService={selectService}
+            onSelectAddon={selectAddon}
+          />
+        ) : (
+          <ProjectCanvas
+            project={projectName}
+            selectedEnv={selectedEnv}
+            services={services}
+            addons={addonsList}
+            envs={envs}
+            onSelectService={selectService}
+            onSelectAddon={selectAddon}
+          />
+        )}
       </div>
 
       <ServiceOverlay
@@ -441,7 +460,7 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
   const cls = isPreview
     ? "border-blue-500/30 bg-blue-500/5 text-blue-200"
     : "border-[var(--warning)]/30 bg-[var(--warning-subtle)] text-[var(--warning)]";
-  const label = isPreview ? "preview env" : "non-production env";
+  const label = isPreview ? "Preview" : "Non-production";
   return (
     <div className={`shrink-0 border-b ${cls}`}>
       {/* Outer padding matches the canvas header (px-6) so the pill
@@ -450,7 +469,7 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
           wide screens; on narrow screens the text wraps under and
           the label keeps its position. */}
       <div className="flex items-center gap-3 px-6 py-2 text-[12px]">
-        <span className="shrink-0 inline-flex h-4 items-center rounded border border-current px-1.5 font-mono text-[9px] uppercase tracking-widest">
+        <span className="shrink-0 inline-flex h-5 items-center rounded border border-current px-1.5 text-[11px] font-medium">
           {label}
         </span>
         <p className="flex-1 leading-snug text-[var(--text-secondary)]">
@@ -468,10 +487,10 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
                   default re-flowed the banner and broke the layout). */}
               <span className="relative inline-block align-baseline ml-1">
                 <details className="group">
-                  <summary className="cursor-pointer list-none font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+                  <summary className="cursor-pointer list-none text-xs text-[var(--text-tertiary)] underline decoration-dotted underline-offset-2 hover:text-[var(--text-secondary)]">
                     what&apos;s a &quot;fresh&quot; addon?
                   </summary>
-                  <div className="absolute left-0 top-full z-20 mt-1 w-[28rem] max-w-[80vw] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)] shadow-lg">
+                  <div className="absolute left-0 top-full z-20 mt-1 w-[28rem] max-w-[80vw] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 text-xs leading-relaxed text-[var(--text-secondary)] shadow-lg">
                     When you cloned production, any addons that already lived in
                     this env are <em>fresh</em>: their conn-secrets point at the
                     cloned env&apos;s own databases. Addons the new env <em>didn&apos;t</em>{" "}

@@ -2,18 +2,26 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
-import { serviceShortName } from "@/lib/utils";
+import type { KusoAddon, KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
+import { cn, serviceShortName } from "@/lib/utils";
 import {
   buildTriggerMessage,
+  deriveAddonStatus,
+  deriveServiceStatus,
+  lastDeployAt,
+  serviceUrl,
+  STATUS_TONE,
+  useLatestBuilds,
   useTriggerBuild,
   useStopService,
   useStartService,
   useServiceEnv,
   type BuildSummary,
+  type NodeStatus,
 } from "@/features/services";
 import { api } from "@/lib/api-client";
-import { envGroupName } from "@/lib/env-group";
+import { isProductionGroup } from "@/lib/env-group";
+import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +31,7 @@ import {
   Play,
   Square,
   ChevronDown,
+  ChevronRight,
   KeyRound,
   Lock,
   AlertTriangle,
@@ -31,13 +40,20 @@ import {
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
-import { hostScheme } from "@/lib/host-scheme";
 
 interface Props {
   project: string;
+  selectedEnv: string;
   services: KusoService[];
+  addons: KusoAddon[];
   envs: KusoEnvironment[];
   onSelectService?: (svcName: string, tab?: string) => void;
+  onSelectAddon?: (addonName: string, tab?: string) => void;
+}
+
+function envFor(envs: KusoEnvironment[], svc: KusoService): KusoEnvironment | undefined {
+  const all = envs.filter((e) => e.spec.service === svc.metadata.name);
+  return all.find((e) => isProductionGroup(e)) ?? all[0];
 }
 
 // MobileIncidentView is the phone-shaped surface for kuso: the app is
@@ -47,34 +63,100 @@ interface Props {
 // four actions you actually reach for at 2am — open the site, read
 // logs, stop/start, and redeploy. Authoring stays on desktop behind the
 // interstitial; this is triage, not configuration.
-export function MobileIncidentView({ project, services, envs, onSelectService }: Props) {
+export function MobileIncidentView({
+  project,
+  selectedEnv,
+  services,
+  addons,
+  envs,
+  onSelectService,
+  onSelectAddon,
+}: Props) {
+  // Same latest-builds query (and key) as the canvas, so the status
+  // shown here matches the desktop node for the same service.
+  const latestBuilds = useLatestBuilds(project, selectedEnv);
+  const rows = services.map((svc) => {
+    const env = envFor(envs, svc);
+    const short = serviceShortName(project, svc.metadata.name);
+    const build = latestBuilds.data?.[short];
+    return { svc, env, short, build, status: deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: build }) };
+  });
+  const live = rows.filter((r) => r.status.kind === "live").length;
+  const failing = rows.filter((r) => r.status.tone === "error").length;
+
   return (
-    <div className="space-y-3 p-3 sm:hidden">
-      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
-        <h2 className="font-heading text-base font-semibold tracking-tight">Incident mode</h2>
-        <p className="mt-1 text-xs text-[var(--text-secondary)]">
-          The controls you need during an outage: what fired, per-service status, logs, stop/start,
-          and redeploy. Full configuration lives on desktop.
-        </p>
-      </div>
+    <div className="space-y-3 p-4 sm:hidden">
+      <header className="flex items-end justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <h1 className="truncate font-heading text-lg font-semibold tracking-tight">{project}</h1>
+          <p className="mt-0.5 text-sm text-[var(--text-secondary)]">
+            {live} of {rows.length} {rows.length === 1 ? "service" : "services"} live
+            {failing > 0 && <span className="text-[var(--error)]"> · {failing} failing</span>}
+          </p>
+        </div>
+        <span className="shrink-0 font-mono text-xs text-[var(--text-tertiary)]">{selectedEnv}</span>
+      </header>
 
       <ProjectAlerts project={project} onSelectService={onSelectService} />
 
-      {services.map((svc) => (
+      {rows.map((r) => (
         <MobileServiceCard
-          key={svc.metadata.name}
+          key={r.svc.metadata.name}
           project={project}
-          service={svc}
-          // The parent view already filtered `envs` to the selected
-          // env-group (production / staging / preview-pr-N), so the
-          // service's env in THAT group is a plain find. The old
-          // `kind === "production"` re-filter meant any non-production
-          // selection matched nothing and every card lost its env.
-          env={envs.find((e) => e.spec.service === svc.metadata.name)}
+          service={r.svc}
+          env={r.env}
+          latest={r.build}
+          status={r.status}
           onSelectService={onSelectService}
         />
       ))}
+
+      {addons.length > 0 && (
+        <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+          <h2 className="px-4 pb-1 pt-3 text-sm font-medium text-[var(--text-secondary)]">Addons</h2>
+          <ul>
+            {addons.map((a) => {
+              const st = deriveAddonStatus(a);
+              return (
+                <li key={a.metadata.name} className="border-t border-[var(--border-subtle)] first:border-t-0">
+                  <button
+                    type="button"
+                    onClick={() => onSelectAddon?.(a.metadata.name)}
+                    className="flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left"
+                  >
+                    <AddonIcon kind={a.spec.kind} className="h-5 w-5 shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{serviceShortName(project, a.metadata.name)}</span>
+                      <span className="block truncate text-xs text-[var(--text-tertiary)]">
+                        {addonLabel(a.spec.kind)}
+                        {a.spec.version ? ` ${a.spec.version}` : ""}
+                      </span>
+                    </span>
+                    <StatusLabel status={st} />
+                    <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      <p className="px-1 pb-2 text-xs text-[var(--text-tertiary)]">
+        This is the on-call view: status, logs, stop/start and redeploy. Open kuso on a larger screen for the canvas and
+        full configuration.
+      </p>
     </div>
+  );
+}
+
+function StatusLabel({ status }: { status: NodeStatus }) {
+  const tone = STATUS_TONE[status.tone];
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs" title={status.detail}>
+      <span aria-hidden className={cn("h-2 w-2 rounded-full", tone.dot)} />
+      <span className={status.tone === "muted" ? "text-[var(--text-secondary)]" : tone.text}>{status.label}</span>
+    </span>
   );
 }
 
@@ -120,14 +202,12 @@ function ProjectAlerts({
   return (
     <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
       <div className="flex items-center gap-2">
-        <AlertTriangle className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
-        <h3 className="font-heading text-xs font-semibold uppercase tracking-widest text-[var(--text-tertiary)]">
-          Recent alerts
-        </h3>
+        <AlertTriangle className="h-4 w-4 text-[var(--text-tertiary)]" aria-hidden />
+        <h2 className="text-sm font-medium text-[var(--text-secondary)]">Recent alerts</h2>
       </div>
       {shown.length === 0 ? (
-        <div className="mt-3 flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
-          <BellOff className="h-3.5 w-3.5" />
+        <div className="mt-2 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
+          <BellOff className="h-4 w-4" aria-hidden />
           {feed.isLoading ? "Loading…" : "Nothing recent for this project."}
         </div>
       ) : (
@@ -148,13 +228,11 @@ function ProjectAlerts({
                 onClick={() => e.service && onSelectService?.(serviceShortName(project, e.service), "logs")}
                 className="min-w-0 flex-1 text-left"
               >
-                <p className="truncate text-[12px] font-medium">{e.title}</p>
+                <p className="truncate text-sm font-medium">{e.title}</p>
                 {e.body && (
-                  <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">{e.body}</p>
+                  <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-secondary)]">{e.body}</p>
                 )}
-                <p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-                  {relativeTime(e.createdAt)}
-                </p>
+                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{relativeTime(e.createdAt)}</p>
               </button>
             </li>
           ))}
@@ -168,65 +246,38 @@ function MobileServiceCard({
   project,
   service,
   env,
+  latest,
+  status,
   onSelectService,
 }: {
   project: string;
   service: KusoService;
   env?: KusoEnvironment;
+  latest?: BuildSummary;
+  status: NodeStatus;
   onSelectService?: (svcName: string, tab?: string) => void;
 }) {
   const shortName = serviceShortName(project, service.metadata.name);
+  const displayName = service.spec.displayName?.trim() || shortName;
   const trigger = useTriggerBuild(project, shortName);
   const stop = useStopService(project, shortName);
   const start = useStartService(project, shortName);
-  // One project-level request shared by every card (same key as the
-  // canvas), instead of a per-service builds poller each.
-  const group = env ? envGroupName(env) : "production";
-  const latestBuilds = useQuery<Record<string, BuildSummary>>({
-    queryKey: ["projects", project, "builds", "latest", group],
-    queryFn: () =>
-      api(`/api/projects/${encodeURIComponent(project)}/builds/latest?env=${encodeURIComponent(group)}`),
-    refetchInterval: (q) =>
-      Object.values(q.state.data ?? {}).some((b) =>
-        ["queued", "pending", "running", "deploying"].includes((b.status ?? "").toLowerCase()),
-      )
-        ? 5_000
-        : 15_000,
-    refetchIntervalInBackground: false,
-    staleTime: 5_000,
-  });
   const [envOpen, setEnvOpen] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
   // Redeploy + stop/start are editor-level mutations; disable with a
   // hint for viewers instead of a post-tap 403 toast.
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
-  // URL fallback chain — mirrors ServiceOverlay/ServiceNode so all
-  // three surfaces agree. The old `env?.status?.url ||
-  // service.spec.domains?.[0]` fallback interpolated the domain
-  // OBJECT ({ host, tls }) into the href, producing
-  // "https://[object Object]".
-  const internal = !!service.spec.internal;
-  const envTLS = env?.spec?.tlsEnabled ?? true;
-  const envCustomHost = env?.spec?.additionalHosts?.find((h) => !!h);
-  const envHost = env?.spec?.host;
-  const customDomainEntry = service.spec.domains?.find((d) => d?.host);
-  const url = internal
-    ? undefined
-    : envCustomHost
-      ? `${hostScheme(envTLS, envCustomHost)}://${envCustomHost}`
-      : envHost
-        ? `${hostScheme(envTLS, envHost)}://${envHost}`
-        : customDomainEntry?.host
-          ? `${(customDomainEntry.tls ?? true) ? "https" : "http"}://${customDomainEntry.host}`
-          : env?.status?.url;
-  const phase = env?.status?.phase || "unknown";
+  const url = serviceUrl(service, env);
   const stopped = service.spec.stopped === true;
-  const latest = latestBuilds.data?.[shortName];
+  const deployed = lastDeployAt(env, latest);
+  const latestFailed = ["failed", "error", "release-failed"].includes((latest?.status ?? "").toLowerCase());
 
   const redeploy = () => {
+    // Build the branch this env group tracks; an empty body builds the
+    // project's default branch, which on a staging tab redeploys production.
     trigger.mutate(
-      {},
+      env?.spec.branch ? { branch: env.spec.branch } : {},
       {
         onSuccess: (res) =>
           toast.success(buildTriggerMessage(res, `Redeploy queued for ${shortName}`, shortName)),
@@ -249,26 +300,33 @@ function MobileServiceCard({
     <article className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4 shadow-[var(--shadow-sm)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate font-heading text-sm font-semibold">{shortName}</h3>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <StatusChip label={stopped ? "stopped" : phase} tone={statusTone(stopped ? "stopped" : phase)} />
-            {latest && <StatusChip label={`build ${latest.status}`} tone={statusTone(latest.status)} />}
+          <h3 className="truncate text-base font-semibold">{displayName}</h3>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+            <StatusLabel status={status} />
+            {deployed && <span className="text-[var(--text-tertiary)]">deployed {relativeTime(deployed)}</span>}
           </div>
+          {status.detail && <p className="mt-1 text-xs text-[var(--text-secondary)]">{status.detail}</p>}
+          {latestFailed && status.tone !== "error" && (
+            <p className="mt-1 text-xs text-[var(--error)]">Latest build failed; the previous build is still serving.</p>
+          )}
         </div>
         {url && (
           <a
             href={url}
             target="_blank"
             rel="noreferrer"
-            className="shrink-0 rounded-md border border-[var(--border-subtle)] p-2 text-[var(--text-secondary)]"
-            aria-label="Open service"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)]"
+            aria-label={`Open ${url.replace(/^https?:\/\//, "")} in a new tab`}
           >
             <ExternalLink className="h-4 w-4" />
           </a>
         )}
       </div>
+      {url && (
+        <p className="mt-2 truncate font-mono text-xs text-[var(--text-tertiary)]">{url.replace(/^https?:\/\//, "")}</p>
+      )}
 
-      <div className="mt-4 grid grid-cols-2 gap-2">
+      <div className="mt-3 grid grid-cols-2 gap-2 [&_button]:h-10">
         <Button type="button" variant="outline" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
           <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
         </Button>
@@ -345,8 +403,8 @@ function MobileEnvReadout({ project, service }: { project: string; service: stri
       ) : (
         <ul className="space-y-1.5">
           {masked && (
-            <li className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-              <Lock className="h-3 w-3" /> values hidden — read on desktop with secrets access
+            <li className="mb-1 flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+              <Lock className="h-3 w-3" aria-hidden /> Values hidden. Reading them needs secrets access.
             </li>
           )}
           {vars.map((v) => (
@@ -362,29 +420,4 @@ function MobileEnvReadout({ project, service }: { project: string; service: stri
       )}
     </div>
   );
-}
-
-function StatusChip({ label, tone }: { label: string; tone: "ok" | "warn" | "danger" | "muted" }) {
-  const cls = {
-    ok: "border-[var(--success)]/30 text-[var(--success)]",
-    warn: "border-[var(--warning)]/30 text-[var(--warning)]",
-    danger: "border-[var(--error)]/30 text-[var(--error)]",
-    muted: "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
-  }[tone];
-  return (
-    <span
-      className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest ${cls}`}
-    >
-      {label}
-    </span>
-  );
-}
-
-function statusTone(s: string): "ok" | "warn" | "danger" | "muted" {
-  const v = s.toLowerCase();
-  if (v.includes("run") && !v.includes("running")) return "warn"; // building/queued-ish
-  if (["running", "ready", "active", "succeeded", "healthy"].some((k) => v.includes(k))) return "ok";
-  if (["fail", "error", "crash", "stopped"].some((k) => v.includes(k))) return "danger";
-  if (["pending", "queued", "building", "progress", "unknown"].some((k) => v.includes(k))) return "warn";
-  return "muted";
 }
