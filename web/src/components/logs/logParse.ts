@@ -241,7 +241,8 @@ export function linesToText(
       const msg = stripAnsi(l.line);
       if (!withMeta) return msg;
       const svc = l.service ? `${l.service} ` : "";
-      return `${l.ts} ${svc}${l.pod} ${msg}`;
+      // A replayed line without a time keeps the column with a dash.
+      return `${l.ts || "-"} ${svc}${l.pod} ${msg}`;
     })
     .join("\n");
 }

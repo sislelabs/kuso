@@ -1,7 +1,7 @@
 "use client";
 
 import { Select } from "@/components/ui/select";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import {
   CornerDownLeft,
   Download,
   History,
+  Info,
   RefreshCw,
   Search,
   WrapText,
@@ -21,6 +22,8 @@ import {
 import { useLogStream, searchArchive } from "@/features/logs";
 import type { ArchivePage, StreamConnection } from "@/features/logs";
 import { useEnvironments } from "@/features/projects";
+import { ERRORS_WINDOW, useServiceErrorCount } from "@/features/errors";
+import type { ServiceErrorCount } from "@/features/errors";
 import { serviceEnvOptions } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -56,6 +59,8 @@ export interface ViewLine {
   env?: string;
   // ts is only the arrival time (live frame without a real timestamp).
   approx?: boolean;
+  // Replayed from before the stream connected, with no time at all.
+  backlog?: boolean;
   // The source object, used as the level-cache key.
   src: object;
 }
@@ -192,7 +197,7 @@ export function LogViewer({
   // ---- rows ---------------------------------------------------------------
   const rawLines: ViewLine[] = useMemo(() => {
     if (live) {
-      return stream.lines.map((l) => ({ key: `l${l.id}`, ts: l.ts, pod: l.pod, line: l.line, stream: l.stream, approx: l.approx, src: l }));
+      return stream.lines.map((l) => ({ key: `l${l.id}`, ts: l.ts, pod: l.pod, line: l.line, stream: l.stream, approx: l.approx, backlog: l.backlog, src: l }));
     }
     const out: ViewLine[] = [];
     const pages = archive.data?.pages ?? [];
@@ -214,17 +219,21 @@ export function LogViewer({
       // A continuation (stack-trace line) shares its head's pod and
       // instant, carries no level of its own, and either looks like a
       // trace line or follows an error/warn head.
+      // Replayed lines carry no time, so only the trace shape can tie
+      // them to their head.
+      const bothBacklog = prev !== null && !!prev.backlog && !!l.backlog;
       const sameInstant =
-        prev !== null && prev.pod === l.pod && Math.abs(Date.parse(prev.ts) - Date.parse(l.ts)) <= 2;
+        prev !== null && prev.pod === l.pod && (bothBacklog || Math.abs(Date.parse(prev.ts) - Date.parse(l.ts)) <= 2);
       const cont =
         sameInstant &&
         p.level === "none" &&
         !p.json &&
-        (CONT_SHAPE.test(stripAnsi(l.line)) || prev?.level === "error" || prev?.level === "warn");
+        (CONT_SHAPE.test(stripAnsi(l.line)) || (!bothBacklog && (prev?.level === "error" || prev?.level === "warn")));
       const row: Row = {
         ...l,
         ts: p.appTs ?? l.ts,
         approx: p.appTs ? false : l.approx,
+        backlog: p.appTs ? false : l.backlog,
         level: cont && prev ? prev.level : p.level,
         cont,
         json: p.json,
@@ -413,7 +422,8 @@ export function LogViewer({
   const filtersActive = view.levels.length > 0 || !!view.pod;
   const loading = live ? stream.connection === "connecting" && rows.length === 0 : archive.isPending;
   const narrow = useNarrow();
-  const approxTimes = live && rows.some((r) => r.approx);
+  const approxTimes = live && rows.some((r) => r.approx || r.backlog);
+  const errorGroups = useServiceErrorCount(project, service ?? "").data;
   const announcement = useStreamAnnouncement(live, stream.connection, levelCounts.error);
 
   return (
@@ -551,10 +561,10 @@ export function LogViewer({
         <div className="flex flex-wrap items-center gap-1.5">
           <div role="group" aria-label="Filter by level" className="hidden items-center gap-0.5 sm:inline-flex">
             {LOG_LEVELS.map((l) => (
-              <LevelChip key={l} level={l} count={levelCounts[l]} on={view.levels.includes(l)} onClick={() => toggleLevel(l)} />
+              <LevelChip key={l} level={l} count={levelCounts[l]} on={view.levels.includes(l)} onClick={() => toggleLevel(l)} errorGroups={errorGroups} />
             ))}
           </div>
-          <LevelPopover counts={levelCounts} levels={view.levels} onToggle={toggleLevel} onClear={() => setView({ levels: [] })} />
+          <LevelPopover counts={levelCounts} levels={view.levels} onToggle={toggleLevel} onClear={() => setView({ levels: [] })} errorGroups={errorGroups} />
           {!live && envOptions.length > 1 && (
             <Select
               size="sm"
@@ -658,19 +668,25 @@ export function LogViewer({
               currentPreset={view.range.kind === "preset" ? view.range.preset : ""}
             />
           ) : (
-            visible.map((r) => (
-              <LogRow
-                key={r.key}
-                row={r}
-                wrap={view.wrap}
-                showPod={multiPod}
-                withDate={withDate}
-                serviceLabel={serviceLabel}
-                highlight={highlightRe}
-                selected={selected?.key === r.key}
-                onSelect={setSelected}
-              />
-            ))
+            visible.map((r, i) => {
+              const prevBacklog = i > 0 && !!visible[i - 1].backlog;
+              const divider = r.backlog && !prevBacklog ? "backlog" : !r.backlog && prevBacklog ? "live" : null;
+              return (
+                <Fragment key={r.key}>
+                  {divider && <ReplayDivider kind={divider} />}
+                  <LogRow
+                    row={r}
+                    wrap={view.wrap}
+                    showPod={multiPod}
+                    withDate={withDate}
+                    serviceLabel={serviceLabel}
+                    highlight={highlightRe}
+                    selected={selected?.key === r.key}
+                    onSelect={setSelected}
+                  />
+                </Fragment>
+              );
+            })
           )}
           </div>
         </div>
@@ -754,11 +770,13 @@ function LevelPopover({
   levels,
   onToggle,
   onClear,
+  errorGroups,
 }: {
   counts: Record<LogLevel, number>;
   levels: LogLevel[];
   onToggle: (l: LogLevel) => void;
   onClear: () => void;
+  errorGroups?: ServiceErrorCount;
 }) {
   const label = levels.length === 0 ? "All levels" : levels.map((l) => l[0].toUpperCase() + l.slice(1)).join(", ");
   return (
@@ -784,7 +802,7 @@ function LevelPopover({
       <PopoverContent align="start" className="w-56 gap-0.5 p-1">
         <div role="group" aria-label="Filter by level" className="flex flex-col">
           {LOG_LEVELS.map((l) => (
-            <LevelChip key={l} level={l} count={counts[l]} on={levels.includes(l)} onClick={() => onToggle(l)} block />
+            <LevelChip key={l} level={l} count={counts[l]} on={levels.includes(l)} onClick={() => onToggle(l)} block errorGroups={errorGroups} />
           ))}
         </div>
         {levels.length > 0 && (
@@ -853,11 +871,18 @@ const LogRow = memo(function LogRow({
         className={cn(
           "shrink-0 select-none tabular-nums text-[var(--text-tertiary)] max-sm:w-auto",
           withDate ? "w-[10.5rem]" : r.approx ? "w-[7.5rem]" : "w-[6.5rem]",
-          r.cont && "max-sm:hidden",
+          (r.cont || r.backlog) && "max-sm:hidden",
+          r.backlog && "opacity-60",
         )}
-        title={r.approx ? `Arrival time ${fmtClock(r.ts, true)} (server didn't send timestamps)` : r.ts}
+        title={
+          r.backlog
+            ? "Time unknown: written before you connected"
+            : r.approx
+              ? `Arrival time ${fmtClock(r.ts, true)} (server didn't send timestamps)`
+              : r.ts
+        }
       >
-        {r.cont ? "" : r.approx ? <ArrivalCell ts={r.ts} /> : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
+        {r.cont ? "" : r.backlog ? <UnknownTimeCell /> : r.approx ? <ArrivalCell ts={r.ts} /> : withDate ? fmtClock(r.ts, true) : <ClockCell ts={r.ts} />}
       </span>
       <span
         className={cn("w-7 shrink-0 select-none text-xs font-semibold leading-[1.85] max-sm:w-auto", meta.text, (r.cont || r.level === "none") && "max-sm:hidden")}
@@ -888,6 +913,57 @@ const LogRow = memo(function LogRow({
   );
 });
 
+function UnknownTimeCell() {
+  return (
+    <>
+      <span aria-hidden>––:––:––</span>
+      <span className="sr-only">time unknown</span>
+    </>
+  );
+}
+
+// Splits a live tail from a server without log timestamps: the replayed
+// backlog has no times, lines after it carry ≈ arrival times.
+function ReplayDivider({ kind }: { kind: "backlog" | "live" }) {
+  return (
+    <div role="separator" className="flex items-center gap-2 px-3 pb-0.5 pt-1.5 font-sans text-xs text-[var(--text-tertiary)]">
+      <span className="shrink-0 font-medium text-[var(--text-secondary)]">
+        {kind === "backlog" ? "Earlier output · time unknown" : "Since you connected · ≈ arrival times"}
+      </span>
+      <span aria-hidden className="h-px flex-1 bg-[var(--border-subtle)]" />
+      <ArrivalTimesInfo />
+    </div>
+  );
+}
+
+// The one explanation of replayed / ≈ times, reachable by click and
+// keyboard (not a hover-only title).
+function ArrivalTimesInfo({ label }: { label?: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        className="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1 font-sans text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40"
+        aria-label="Why log times are missing or approximate"
+      >
+        {label}
+        <Info aria-hidden className="h-3.5 w-3.5" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 gap-2 p-3 text-xs leading-relaxed text-[var(--text-secondary)]">
+        <p className="font-medium text-[var(--text-primary)]">This kuso server streams lines without their log timestamps</p>
+        <p>
+          <span className="font-medium text-[var(--text-primary)]">Earlier output</span> is the backlog replayed when the
+          stream connected. It was written before you opened it, at times the server didn&apos;t send, so no time is shown.
+        </p>
+        <p>
+          Lines after that show <span className="font-medium text-[var(--text-primary)]">≈ arrival time</span>: when each one
+          reached your browser, in order.
+        </p>
+        <p>Searching history (pick a time range) always shows exact times.</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // Arrival time for a line the server sent without its log timestamp:
 // absolute like every other row, marked "≈" so it isn't read as the time
 // the app logged it.
@@ -914,18 +990,28 @@ function ClockCell({ ts }: { ts: string }) {
   );
 }
 
+function chipCountHint(level: Exclude<LogLevel, "none">, errors: ServiceErrorCount | undefined): string {
+  if (level !== "error") return "counts the lines loaded in this view";
+  if (errors === undefined) return "error-level log lines loaded in this view, not the Errors tab's grouped errors";
+  const n = errors.occurrences;
+  return `error-level log lines in this view; the Errors tab counts ${n.toLocaleString()} ${n === 1 ? "error" : "errors"} in the last ${ERRORS_WINDOW}, grouped as ${errors.groups.toLocaleString()}`;
+}
+
 function LevelChip({
   level,
   count,
   on,
   onClick,
   block,
+  errorGroups,
 }: {
   level: Exclude<LogLevel, "none">;
   count: number;
   on: boolean;
   onClick: () => void;
   block?: boolean;
+  // The Errors tab's count, to relate the two numbers.
+  errorGroups?: ServiceErrorCount;
 }) {
   const names = { error: "Error", warn: "Warn", info: "Info", debug: "Debug" } as const;
   const text = levelCountText(level, count);
@@ -935,7 +1021,7 @@ function LevelChip({
       type="button"
       aria-pressed={on}
       onClick={onClick}
-      title={`${on ? "Show all levels again" : `Show only ${names[level].toLowerCase()} lines`} · counts the lines loaded in this view, not the service's error groups`}
+      title={`${on ? "Show all levels again" : `Show only ${names[level].toLowerCase()} lines`} · ${chipCountHint(level, errorGroups)}`}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
         block ? "h-9 w-full" : "h-7",
@@ -1031,14 +1117,7 @@ function StatusLine({
         <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", state.dot)} />
         <span className="font-medium text-[var(--text-primary)]">{state.text}</span>
         <span className="text-[var(--text-tertiary)]">· {shown}</span>
-        {approxTimes && (
-          <span
-            className="hidden truncate text-[var(--text-tertiary)] sm:inline"
-            title="This kuso server sends live lines without their log timestamps, so ≈ rows show when each line reached your browser, in order. Upgrade kuso for exact times; searched history always has them."
-          >
-            · ≈ arrival times
-          </span>
-        )}
+        {approxTimes && <ArrivalTimesInfo label="≈ times" />}
         {(connection === "reconnecting" || connection === "ended" || connection === "failed") && (
           <button type="button" onClick={onReconnect} className="inline-flex items-center gap-1 rounded px-1 text-[var(--text-primary)] underline-offset-2 hover:underline">
             <RefreshCw className="h-3 w-3" />

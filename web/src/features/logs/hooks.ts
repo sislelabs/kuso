@@ -29,7 +29,16 @@ export interface LogLine {
   // with the second they read it (no fraction), so the whole replayed
   // backlog shares one instant. `ts` is then only the arrival time.
   approx?: boolean;
+  // Replayed backlog from such a server: written before the socket
+  // connected, so even the arrival time says nothing. `ts` is "".
+  backlog?: boolean;
 }
+
+// After a connect, a server without log timestamps sends the ?tail=N
+// backlog as one burst. The burst is over once the stream has been
+// quiet this long (or after REPLAY_MAX_MS, for a chatty service).
+const REPLAY_QUIET_MS = 400;
+const REPLAY_MAX_MS = 3_000;
 
 // hasPreciseTimestamp: kubelet stamps are RFC3339Nano with a fraction;
 // the old server's receipt stamp is whole-second RFC3339.
@@ -123,6 +132,22 @@ export function useLogStream(
     const accept = createReplayFilter();
     let nextId = 0;
     let lastArrival = 0;
+    // Set while the post-connect backlog burst is still arriving.
+    let replaying = false;
+    let replayQuiet: ReturnType<typeof setTimeout> | null = null;
+    let replayCap: ReturnType<typeof setTimeout> | null = null;
+    const endReplay = () => {
+      replaying = false;
+      if (replayQuiet !== null) clearTimeout(replayQuiet);
+      if (replayCap !== null) clearTimeout(replayCap);
+      replayQuiet = replayCap = null;
+    };
+    const startReplay = () => {
+      endReplay();
+      replaying = true;
+      replayQuiet = setTimeout(endReplay, REPLAY_QUIET_MS);
+      replayCap = setTimeout(endReplay, REPLAY_MAX_MS);
+    };
     // Frames arrive in bursts (a 200-line backfill, a chatty build).
     // Buffer them and commit every ~50ms instead of one state update +
     // full-array copy per line.
@@ -148,6 +173,7 @@ export function useLogStream(
         setStatus(s);
         if (s === "open") {
           everOpened = true;
+          startReplay();
           setError(null);
           setConnection("live");
           return;
@@ -204,15 +230,22 @@ export function useLogStream(
           };
           if (!accept(l)) return;
           const approx = !hasPreciseTimestamp(l.ts);
-          // Arrival time for imprecise frames, never earlier than the
-          // previous line's (wall-clock steps can't reorder the column),
-          // unlike the server's shared whole-second stamp.
           let ts = l.ts ?? "";
-          if (approx) {
+          let backlog = false;
+          if (approx && replaying) {
+            // No time at all rather than a made-up one.
+            backlog = true;
+            ts = "";
+            if (replayQuiet !== null) clearTimeout(replayQuiet);
+            replayQuiet = setTimeout(endReplay, REPLAY_QUIET_MS);
+          } else if (approx) {
+            // Arrival time, never earlier than the previous line's
+            // (wall-clock steps can't reorder the column), unlike the
+            // server's shared whole-second stamp.
             lastArrival = Math.max(Date.now(), lastArrival);
             ts = new Date(lastArrival).toISOString();
           }
-          pending.push({ ...l, id: nextId++, ts, approx });
+          pending.push({ ...l, id: nextId++, ts, approx, backlog });
           if (timer === null) timer = setTimeout(flush, 50);
         } else if (f.type === "phase" && f.value) {
           setPhase(f.value);
@@ -236,6 +269,7 @@ export function useLogStream(
 
     return () => {
       ws.close();
+      endReplay();
       if (timer !== null) clearTimeout(timer);
       wsRef.current = null;
     };

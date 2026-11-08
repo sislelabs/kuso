@@ -24,6 +24,7 @@ interface DetailLine {
   service?: string;
   env?: string;
   approx?: boolean;
+  backlog?: boolean;
 }
 
 const LEVEL_PILL: Record<LogLevel, string> = {
@@ -80,8 +81,11 @@ export function LogDetailPanel({
   }, []);
 
   const ctx = useQuery({
-    queryKey: ["log-context", scope.project, scope.service ?? "*", env ?? "", line.id ?? line.ts, line.pod],
-    queryFn: () => fetchLogContext(scope, env, { id: line.id, ts: line.ts, pod: line.pod, line: line.line }),
+    queryKey: ["log-context", scope.project, scope.service ?? "*", env ?? "", line.id ?? (line.ts || line.key), line.pod],
+    // A replayed line has no time; it was written before the stream
+    // connected, so search back from now and find it by pod + text.
+    queryFn: () =>
+      fetchLogContext(scope, env, { id: line.id, ts: line.ts || new Date().toISOString(), pod: line.pod, line: line.line }),
     enabled: showContext,
     staleTime: 60_000,
   });
@@ -109,7 +113,9 @@ export function LogDetailPanel({
   const d = new Date(line.ts);
   const svc = line.service ? (serviceLabel ? serviceLabel(line.service) : line.service) : undefined;
   const meta: [string, string | undefined][] = [
-    line.approx
+    line.backlog
+      ? ["Time", "Unknown — written before you connected; this kuso server doesn't send log timestamps"]
+      : line.approx
       ? ["Received", `${fmtClock(line.ts, true)} (local) — arrival time; this kuso server doesn't send log timestamps`]
       : ["Time", Number.isNaN(d.getTime()) ? line.ts : `${fmtClock(line.ts, true)} (local)`],
     ["UTC", Number.isNaN(d.getTime()) || line.approx ? undefined : d.toISOString()],
@@ -132,8 +138,8 @@ export function LogDetailPanel({
         <span className={cn("rounded border px-1.5 py-0.5 text-xs font-semibold capitalize", LEVEL_PILL[level])}>
           {level === "none" ? "log" : level}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-secondary)]">
-          {line.approx ? `~${fmtClock(line.ts, true).slice(0, -4)}` : fmtClock(line.ts, true)}
+        <span className={cn("min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]", !line.backlog && "font-mono")}>
+          {line.backlog ? "Earlier output · time unknown" : line.approx ? `~${fmtClock(line.ts, true).slice(0, -4)}` : fmtClock(line.ts, true)}
         </span>
         <Button size="sm" variant="outline" onClick={() => void copy()}>
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
