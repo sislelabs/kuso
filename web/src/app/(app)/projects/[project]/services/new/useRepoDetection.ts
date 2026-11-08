@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  checkRepoAccess,
+  classifyRepoReadFailure,
   inspectRepo,
   useDetectRuntime,
   useScanAddons,
   type AddonSuggestion,
   type DetectRuntimeResponse,
+  type RepoReadFailure,
 } from "@/features/github";
-import { friendlyApiError } from "@/features/projects/names";
 import type { PickedRepo } from "./RepoPicker";
 
 export type DetectState = "idle" | "detecting" | "done" | "failed";
@@ -18,13 +20,20 @@ export type DetectState = "idle" | "detecting" | "done" | "failed";
 // than the detector's marker files.
 export const FALLBACK_RUNTIME = "nixpacks";
 
-export interface RepoDetection {
+interface DetectionState {
   state: DetectState;
   result: DetectRuntimeResponse | null;
-  // Why detection failed (server note or request error).
-  note: string | null;
+  // Why the repo couldn't be read; set only when state is "failed".
+  failure: RepoReadFailure | null;
   suggestions: AddonSuggestion[];
 }
+
+export interface RepoDetection extends DetectionState {
+  // Re-runs detection for the current pick and path.
+  retry: () => void;
+}
+
+const IDLE: DetectionState = { state: "idle", result: null, failure: null, suggestions: [] };
 
 // useRepoDetection detects runtime + port for the picked repo, and again
 // when the monorepo path changes (debounced so typing "apps/api" doesn't
@@ -37,7 +46,9 @@ export function useRepoDetection(
 ): RepoDetection {
   const detect = useDetectRuntime();
   const scan = useScanAddons();
-  const [det, setDet] = useState<RepoDetection>({ state: "idle", result: null, note: null, suggestions: [] });
+  const [det, setDet] = useState<DetectionState>(IDLE);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
   const apply = useRef(onDetected);
   apply.current = onDetected;
   // Latest-wins token: detect requests aren't cancellable, so a slow
@@ -47,21 +58,27 @@ export function useRepoDetection(
   useEffect(() => {
     const mine = ++seq.current;
     if (!picked) {
-      setDet({ state: "idle", result: null, note: null, suggestions: [] });
+      setDet(IDLE);
       return;
     }
-    setDet((d) => ({ ...d, state: "detecting", note: null }));
+    setDet((d) => ({ ...d, state: "detecting", failure: null }));
     const done = (result: DetectRuntimeResponse) => {
       if (mine !== seq.current) return;
-      setDet((d) => ({ ...d, state: "done", result, note: null }));
+      setDet((d) => ({ ...d, state: "done", result, failure: null }));
       apply.current(result.runtime, result.port || null);
     };
-    const failed = (note: string | null) => {
+    const failed = (failure: RepoReadFailure) => {
       if (mine !== seq.current) return;
-      setDet((d) => ({ ...d, state: "failed", result: null, note }));
+      setDet((d) => ({ ...d, state: "failed", result: null, failure }));
       apply.current(FALLBACK_RUNTIME, null);
     };
     const trimmed = path.trim();
+    const base = {
+      repo: picked.repo.fullName,
+      branch: picked.repo.defaultBranch,
+      path: trimmed,
+      hasToken: !!picked.byUrl?.token,
+    };
     const timer = setTimeout(
       () => {
         if (picked.byUrl) {
@@ -74,8 +91,12 @@ export function useRepoDetection(
             branch: picked.repo.defaultBranch,
             path: trimmed || undefined,
           })
-            .then((res) => (res.runtime ? done(res.runtime) : failed(res.runtimeNote ?? null)))
-            .catch((e) => failed(friendlyApiError(e, "the repository couldn't be read")));
+            .then((res) =>
+              res.runtime
+                ? done(res.runtime)
+                : failed(classifyRepoReadFailure({ ...base, via: "url", note: res.runtimeNote ?? "" })),
+            )
+            .catch((error: unknown) => failed(classifyRepoReadFailure({ ...base, via: "url", error })));
           return;
         }
         const [owner, repo] = picked.repo.fullName.split("/");
@@ -89,7 +110,14 @@ export function useRepoDetection(
         detect
           .mutateAsync(target)
           .then(done)
-          .catch((e) => failed(friendlyApiError(e, "the repository couldn't be read")));
+          .catch(async (error: unknown) => {
+            // detect-runtime reports every GitHub error as a bare 500, so
+            // ask check-repo whether the App can see the repo at all.
+            const access = await checkRepoAccess({ installationId: target.installationId, owner: target.owner, repo: target.repo }).catch(
+              () => null,
+            );
+            failed(classifyRepoReadFailure({ ...base, via: "app", error, access }));
+          });
         scan
           .mutateAsync(target)
           .then((res) => {
@@ -104,9 +132,9 @@ export function useRepoDetection(
     return () => clearTimeout(timer);
     // detect/scan are stable mutation objects for this component.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, path]);
+  }, [picked, path, attempt]);
 
-  return det;
+  return { ...det, retry };
 }
 
 // The detector's rules, in order — see DetectFromFiles in

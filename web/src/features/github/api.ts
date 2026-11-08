@@ -81,6 +81,22 @@ export async function scanAddons(body: {
   return api("/api/github/scan-addons", { method: "POST", body });
 }
 
+// POST /api/github/check-repo: can the App installation read owner/repo?
+// Always 200 for the read itself; ok:false carries the reason.
+export interface CheckRepoAccessResponse {
+  ok: boolean;
+  error?: string;
+  installationId?: number;
+}
+
+export async function checkRepoAccess(body: {
+  installationId: number;
+  owner: string;
+  repo: string;
+}): Promise<CheckRepoAccessResponse> {
+  return api("/api/github/check-repo", { method: "POST", body });
+}
+
 // SetupStatus reports whether the GitHub App credentials are
 // configured on this kuso instance. Used by /settings/github to
 // switch between "configured" and "wizard" UI.
