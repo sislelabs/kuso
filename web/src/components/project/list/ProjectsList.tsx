@@ -1,5 +1,6 @@
 "use client";
 
+import { useRovingGrid } from "@/lib/use-roving-grid";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Box, ChevronDown, ExternalLink, Folder, Pause, Power, SearchX, Settings, Star } from "lucide-react";
@@ -163,7 +164,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
   };
 
   const renderGrid = (items: ReadonlyArray<Entry>) => (
-    <ul className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <CardGrid>
       {items.map((e) => (
         <ProjectCard
           key={e.model.name}
@@ -177,7 +178,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
           }}
         />
       ))}
-    </ul>
+    </CardGrid>
   );
 
   // Starred pins to the top (only there, not also in its folder), then
@@ -319,5 +320,15 @@ function Section({
       </button>
       {open && children}
     </section>
+  );
+}
+
+// One tab stop per grid: arrows move between cards (see useRovingGrid).
+function CardGrid({ children }: { children: React.ReactNode }) {
+  const ref = useRovingGrid<HTMLUListElement>();
+  return (
+    <ul ref={ref} className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {children}
+    </ul>
   );
 }

@@ -65,7 +65,7 @@ export function ProjectCard({
   const metrics = model.metrics && model.metrics.pods > 0 ? model.metrics : null;
 
   return (
-    <li className="h-full" onContextMenu={onContextMenu}>
+    <li className="h-full" data-roving-cell onContextMenu={onContextMenu}>
       <div
         className={cn(
           "group relative flex h-full flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors",
@@ -77,6 +77,7 @@ export function ProjectCard({
         <Link
           href={`/projects/${model.name}`}
           data-card-link
+          data-roving-item
           aria-label={`Open project ${model.name}`}
           className="absolute inset-0 z-10 rounded-lg outline-none"
         />
