@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/net/publicsuffix"
 	corev1 "k8s.io/api/core/v1"
@@ -897,6 +898,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Volumes: created.Spec.Volumes,
 		},
 	}
+	if envImage != nil && created.Spec.Runtime == "image" {
+		kube.StampPromotedAt(env, time.Now())
+	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 		// Best-effort cleanup so we don't leak a service without its env.
 		_ = s.Kube.DeleteKusoService(ctx, ns, fqn)
@@ -1336,6 +1340,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	}
 	if len(excludedConns) > 0 {
 		env.Annotations = map[string]string{addons.AnnotationExcludedAddonConns: strings.Join(excludedConns, ",")}
+	}
+	if envImage != nil && svc.Spec.Runtime == "image" {
+		kube.StampPromotedAt(env, time.Now())
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
 	if apierrors.IsAlreadyExists(err) {

@@ -3301,7 +3301,7 @@ func (p *Poller) deleteCloneTokenSecret(ns, buildName string) {
 // finishes first.
 const (
 	annPromotedBuild = "kuso.sislelabs.com/promoted-build"
-	annPromotedAt    = "kuso.sislelabs.com/promoted-at"
+	annPromotedAt    = kube.AnnPromotedAt
 )
 
 // buildTriggerTimestamp returns the wall-clock the build was created

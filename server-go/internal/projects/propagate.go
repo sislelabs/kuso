@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/imagerelease"
@@ -373,6 +374,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					delete(env.Annotations, imagerelease.AnnFailedAttempts)
 					delete(env.Annotations, imagerelease.AnnFailedAt)
 				} else {
+					if svc.Spec.Image != nil && !reflect.DeepEqual(env.Spec.Image, svc.Spec.Image) {
+						kube.StampPromotedAt(env, time.Now())
+					}
 					env.Spec.Image = svc.Spec.Image
 					env.Spec.PendingImage = nil
 				}

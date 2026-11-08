@@ -43,6 +43,11 @@ func TestPatchService_PropagatesImageToEnvs(t *testing.T) {
 		if env.Spec.Image.Tag != "v2" {
 			t.Errorf("%s: env still on tag %q, want v2", name, env.Spec.Image.Tag)
 		}
+		// Image services never pass through a build, so the redeploy
+		// itself is what dates "deployed N ago".
+		if env.Annotations[kube.AnnPromotedAt] == "" {
+			t.Errorf("%s: image change left no promoted-at stamp", name)
+		}
 	}
 }
 
