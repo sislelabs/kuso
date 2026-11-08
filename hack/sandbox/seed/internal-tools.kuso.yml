@@ -1,0 +1,37 @@
+# Two image services plus one service whose branch does not exist, so its
+# build fails at clone.
+apiVersion: kuso/v1
+project: internal-tools
+services:
+  - name: request-inspector
+    runtime: image
+    port: 80
+    image:
+      repository: traefik/whoami
+      tag: v1.10.3
+    sleep:
+      enabled: false
+      afterMinutes: 30
+    env:
+      WHOAMI_NAME: internal-tools
+  - name: docs
+    runtime: image
+    port: 8080
+    image:
+      # kuso drops every capability, which the stock nginx image needs to chown
+      # its cache dirs; the unprivileged build runs as nginx on 8080.
+      repository: nginxinc/nginx-unprivileged
+      tag: 1.27-alpine
+    sleep:
+      enabled: true
+      afterMinutes: 15
+  - name: reports
+    runtime: dockerfile
+    # apply drops `branch` when `repo` is omitted (inherits the project repo),
+    # so name the repo explicitly.
+    repo: https://github.com/ivo9999/kuso-demo-todo-api
+    port: 8080
+    branch: feature-csv-export
+    sleep:
+      enabled: false
+      afterMinutes: 30

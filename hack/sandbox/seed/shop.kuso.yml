@@ -1,0 +1,48 @@
+# A small storefront: API built from the demo repo, a static front end on a
+# public image, a background worker reusing the API image, Postgres and Redis.
+apiVersion: kuso/v1
+project: shop
+addons:
+  - name: db
+    kind: postgres
+    version: "16"
+    database: shop
+  - name: cache
+    kind: redis
+    version: "7"
+services:
+  - name: api
+    runtime: dockerfile
+    port: 8080
+    sleep:
+      enabled: false
+      afterMinutes: 30
+    env:
+      DATABASE_URL: ${{ db.DATABASE_URL }}
+      REDIS_URL: ${{ cache.REDIS_URL }}
+      MIGRATE_ON_BOOT: "1"
+      APP_ENV: production
+      GREETING: Welcome to Corner Shop
+      LOG_LEVEL: info
+      SESSION_SECRET:
+        generate: hex32
+      STRIPE_SECRET_KEY:
+        secret: true
+  - name: web
+    runtime: image
+    port: 8080
+    image:
+      # kuso drops every capability, which the stock nginx image needs to chown
+      # its cache dirs; the unprivileged build runs as nginx on 8080.
+      repository: nginxinc/nginx-unprivileged
+      tag: 1.27-alpine
+    sleep:
+      enabled: false
+      afterMinutes: 30
+    domains:
+      # example.com never points at the sandbox, so this stays "pending DNS".
+      - host: shop.example.com
+        tls: true
+    env:
+      API_URL: ${{ api.URL }}
+      PUBLIC_SITE_NAME: Corner Shop
