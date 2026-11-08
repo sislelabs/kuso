@@ -57,6 +57,7 @@ var validKinds = map[string]bool{"string": true, "password": true, "domain": tru
 var validCategories = map[string]bool{
 	"analytics": true, "automation": true, "monitoring": true,
 	"dev-tools": true, "data": true, "comms": true,
+	"content": true, "productivity": true, "media": true, "ai": true,
 }
 
 // ParseManifest strictly decodes and validates a manifest.yaml.
