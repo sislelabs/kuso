@@ -324,6 +324,7 @@ var (
 	// gap, and the cheapest way to survive a node drain.
 	serviceAddMinReplicas int
 	serviceAddMaxReplicas int
+	serviceAddNoBuild     bool
 )
 
 var projectServiceCmd = &cobra.Command{
@@ -390,7 +391,8 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 			Path:          serviceAddPath,
 			DefaultBranch: serviceAddBranch,
 		},
-		Command: serviceAddCommand,
+		Command:        serviceAddCommand,
+		SkipFirstBuild: serviceAddNoBuild,
 	}
 	// Build a ServiceScale only when the user actually set a flag —
 	// passing an all-zero struct would clobber the chart's defaults
@@ -663,6 +665,7 @@ func detectRuntimeViaApp(repoURL, branch, path string) (*detectedRuntime, error)
 // firstBuild block. Absent when there was nothing to build.
 type serviceFirstBuild struct {
 	Triggered bool   `json:"triggered"`
+	Skipped   bool   `json:"skipped"`
 	Error     string `json:"error"`
 }
 
@@ -676,6 +679,8 @@ func serviceAddedSummary(project, service, host string, fb *serviceFirstBuild) s
 	}
 	switch {
 	case fb == nil:
+	case fb.Skipped:
+		fmt.Fprintf(&b, "first build skipped (--no-build). Deploy with: kuso build trigger %s %s\n", project, service)
 	case fb.Triggered:
 		fmt.Fprintf(&b, "first build started. Find its id with: kuso build list %s %s\n", project, service)
 		fmt.Fprintf(&b, "then follow it with: kuso logs %s %s --build <id>\n", project, service)
@@ -1925,6 +1930,7 @@ func init() {
 	serviceAddCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
 	serviceAddCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	serviceAddCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
+	serviceAddCmd.Flags().BoolVar(&serviceAddNoBuild, "no-build", false, "create the service without starting its first build (set env vars first, then kuso build trigger)")
 	serviceAddCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
 	addServiceAddFieldFlags(serviceAddCmd)
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
@@ -2023,6 +2029,7 @@ func init() {
 	serviceAddTopCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
 	serviceAddTopCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
+	serviceAddTopCmd.Flags().BoolVar(&serviceAddNoBuild, "no-build", false, "create the service without starting its first build (set env vars first, then kuso build trigger)")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
 	addServiceAddFieldFlags(serviceAddTopCmd)
 	// Top-level alias `kuso service set` mirrors the long form. Cobra
