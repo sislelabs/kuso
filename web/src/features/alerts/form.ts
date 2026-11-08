@@ -258,6 +258,8 @@ export function prefillRuleForm(params: URLSearchParams): RuleFormState | null {
     f.service = f.project ? (params.get("service")?.trim() ?? "") : "";
     if (meta.scope === "env" && f.project) f.env = params.get("env")?.trim() ?? "";
   }
+  // log_match: the text to look for, e.g. from an error group.
+  if (kind === "log_match") f.query = params.get("query")?.trim() ?? "";
   const target = f.service || f.project;
   if (target) f.name = `${target} ${meta.label}`;
   return f;

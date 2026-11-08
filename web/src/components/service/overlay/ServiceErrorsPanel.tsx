@@ -3,18 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, BellPlus, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
 import { useBuilds, useErrors } from "@/features/services";
 import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
-import { errorCountLabel, useServiceErrorCount } from "@/features/errors";
+import { errorCountLabel, errorTitle, useServiceErrorCount } from "@/features/errors";
 import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
 import { serviceEnvOptions } from "@/lib/env-group";
 import { relativeTime, shortSha } from "@/lib/format";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
@@ -94,13 +95,17 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {envOptions.length > 1 && (
+          {/* Always shown so every service's Errors tab has the same
+              controls; with one env there's nothing to pick. */}
+          {envOptions.length > 0 && (
             <Select
               size="sm"
               value={env}
               onChange={(e) => setEnv(e.target.value)}
               aria-label="Environment"
               wrapperClassName="w-auto"
+              disabled={envOptions.length < 2}
+              title={envOptions.length < 2 ? `${service} only runs in ${envOptions[0]?.label ?? "one environment"}` : undefined}
             >
               <option value="">All envs</option>
               {envOptions.map((o) => (
@@ -251,8 +256,8 @@ function ErrorRow({
       >
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--error)]" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words font-mono text-[13px] text-[var(--text-primary)]">
-            {group.message || "(empty error)"}
+          <div className="line-clamp-2 break-words font-mono text-[13px] text-[var(--text-primary)]" title={group.message}>
+            {group.message ? errorTitle(group.message) : "(empty error)"}
           </div>
           {frames.length > 0 && !isOpen && (
             <div className="mt-1 space-y-px border-l-2 border-[var(--border-default)] pl-2 font-mono text-xs text-[var(--text-tertiary)]">
@@ -344,7 +349,7 @@ function ErrorDetail({
     return from.slice(0, 80);
   }, [trace.data, latest.rawLine]);
 
-  const needle = logNeedle(group.sampleLine || group.message);
+  const needle = logNeedle(errorTitle(stripAnsi(group.sampleLine || group.message)));
 
   const copy = async (text: string, what: string) => {
     try {
@@ -435,9 +440,18 @@ function ErrorDetail({
             <ScrollText className="h-3.5 w-3.5" /> View in logs at {fmtClock(latest.ts, false).slice(0, 8)}
           </Button>
         )}
-        <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]" title={`Searches “${needle}”`}>
-          Opens the Logs tab 30s either side of the latest occurrence
-        </span>
+        {onViewLogs && (
+          <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]" title={`Searches “${needle}”`}>
+            Opens the Logs tab 30s either side of the latest occurrence
+          </span>
+        )}
+        <Link
+          href={`/settings/alerts?${new URLSearchParams({ new: "1", kind: "log_match", project, service, query: needle }).toString()}`}
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          title={`New log-match alert rule for “${needle}”`}
+        >
+          <BellPlus className="h-3.5 w-3.5" /> Alert on this
+        </Link>
         <button
           type="button"
           onClick={() => void copy(group.fingerprint, "fingerprint")}
