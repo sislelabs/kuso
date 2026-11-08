@@ -22,7 +22,7 @@ import {
   useServiceUsageHistory,
 } from "@/features/service-metrics";
 import type { ResourceSample } from "@/features/service-metrics";
-import { shortSha } from "@/lib/format";
+import { formatCpu, shortSha } from "@/lib/format";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
 
@@ -377,8 +377,8 @@ function ResourceCharts({
   const n = Math.max(1, podCount);
 
   const cpuTh: ChartThreshold[] = [];
-  if (cpuLimit) cpuTh.push({ value: cpuLimit * n, label: `limit ${fmtCpu(cpuLimit * n)}` });
-  else if (cpuRequest) cpuTh.push({ value: cpuRequest * n, label: `request ${fmtCpu(cpuRequest * n)}` });
+  if (cpuLimit) cpuTh.push({ value: cpuLimit * n, label: `limit ${formatCpu(cpuLimit * n)}` });
+  else if (cpuRequest) cpuTh.push({ value: cpuRequest * n, label: `request ${formatCpu(cpuRequest * n)}` });
   const memTh: ChartThreshold[] = memLimit ? [{ value: memLimit * n, label: `limit ${fmtBytes(memLimit * n)}` }] : [];
 
   const collectingNote = !shape.sparse
@@ -400,17 +400,17 @@ function ResourceCharts({
     <div className="grid gap-3 @lg:grid-cols-2">
       <ChartCard
         title="CPU"
-        value={last ? fmtCpu(last.cpuMillicores) : "—"}
-        valueNote={cpuLimit ? `of ${fmtCpu(cpuLimit * n)} limit` : "now"}
+        value={last ? formatCpu(last.cpuMillicores) : "—"}
+        valueNote={cpuLimit ? `of ${formatCpu(cpuLimit * n)} limit` : "now"}
         foot={collectingNote ?? (cpuLimit || cpuRequest ? undefined : "No CPU limit set")}
         loading={loading}
-        pods={perPod.length > 1 ? perPod.map((p) => ({ pod: p.pod, value: fmtCpu(p.cpu) })) : undefined}
+        pods={perPod.length > 1 ? perPod.map((p) => ({ pod: p.pod, value: formatCpu(p.cpu) })) : undefined}
       >
         <TimeSeriesChart
           points={cpu}
           domain={domain}
-          format={fmtCpu}
-          ariaLabel={`CPU usage across ${podCount} replicas, current ${last ? fmtCpu(last.cpuMillicores) : "unknown"}.`}
+          format={formatCpu}
+          ariaLabel={`CPU usage across ${podCount} replicas, current ${last ? formatCpu(last.cpuMillicores) : "unknown"}.`}
           gapMs={gapMs}
           thresholds={cpuTh}
           markers={markers}
@@ -608,11 +608,6 @@ function fmtPct(v: number): string {
 function fmtMs(v: number): string {
   if (v >= 1000) return `${(v / 1000).toFixed(v >= 10_000 ? 0 : 1)}s`;
   return `${Math.round(v)}ms`;
-}
-
-function fmtCpu(m: number): string {
-  if (m >= 1000) return `${(m / 1000).toFixed(m >= 10_000 ? 0 : 2).replace(/\.?0+$/, "")} cores`;
-  return `${Math.round(m)}m`;
 }
 
 function fmtBytes(b: number): string {

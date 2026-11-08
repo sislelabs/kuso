@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import {
-  formatCores,
   lastDeployedAt,
   projectLastDeployedAt,
   projectPrimaryDomain,
@@ -199,19 +198,6 @@ describe("projectPrimaryDomain on real projects", () => {
   });
 });
 
-describe("formatCores", () => {
-  it("stays in cores across the 1000m boundary", () => {
-    expect(formatCores(0)).toBe("<0.01 cores");
-    expect(formatCores(4)).toBe("<0.01 cores");
-    expect(formatCores(100)).toBe("0.1 cores");
-    expect(formatCores(142)).toBe("0.14 cores");
-    expect(formatCores(998)).toBe("1 core");
-    expect(formatCores(1000)).toBe("1 core");
-    expect(formatCores(1400)).toBe("1.4 cores");
-    expect(formatCores(12000)).toBe("12 cores");
-  });
-});
-
 describe("projectStatsLabel", () => {
   it("builds the production strip with uptime", () => {
     const r = projectStatsLabel({
@@ -223,13 +209,13 @@ describe("projectStatsLabel", () => {
     });
     expect(r.scope).toBe("Production");
     expect(r.parts.map((p) => p.key)).toEqual(["cpu", "mem", "pods", "uptime"]);
-    expect(r.text).toBe("Production · CPU 0.1 cores · Mem 390 MiB · 6 pods · 3/3 uptime checks up");
+    expect(r.text).toBe("Production · 100 mCPU · Mem 390 MiB · 6 pods · 3/3 uptime checks up");
     expect(r.parts[0].title).toMatch(/production service.*Addons and cron jobs excluded/);
   });
 
   it("names a non-production group and drops empty uptime", () => {
     const r = projectStatsLabel({ env: "staging", cpuMillicores: 1500, memBytes: 0, pods: 1, uptime: { up: 0, total: 0 } });
-    expect(r.text).toBe("staging · CPU 1.5 cores · Mem 0 MiB · 1 pod");
+    expect(r.text).toBe("staging · 1.5 cores · Mem 0 MiB · 1 pod");
     expect(r.parts[2].title).toMatch(/every staging service/);
   });
 });

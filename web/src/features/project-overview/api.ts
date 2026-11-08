@@ -53,13 +53,6 @@ export async function searchProjectLogs(
   );
 }
 
-// "142m" up to 999m, then cores with one decimal ("1.4", "12").
-export function formatMillicores(m: number): string {
-  if (m < 1000) return `${m}m`;
-  const cores = m / 1000;
-  return cores >= 10 ? cores.toFixed(0) : cores.toFixed(1).replace(/\.0$/, "");
-}
-
 // Binary units to match metrics-server.
 export function formatBytes(b: number): string {
   if (b <= 0) return "0 MiB";

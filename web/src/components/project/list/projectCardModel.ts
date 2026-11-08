@@ -205,12 +205,6 @@ export function matchesStatus(m: ProjectCardModel, f: StatusFilter): boolean {
   return f === "all" || m.status === f;
 }
 
-export function formatMillicores(m: number): string {
-  if (m < 1000) return `${m}m`;
-  const cores = m / 1000;
-  return cores >= 10 ? `${cores.toFixed(0)}` : `${cores.toFixed(1).replace(/\.0$/, "")}`;
-}
-
 // MiB / GiB to match metrics-server's binary units.
 export function formatBytes(b: number): string {
   if (b <= 0) return "0 MiB";

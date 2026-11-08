@@ -4,11 +4,11 @@ import Link from "next/link";
 import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
 import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { Skeleton } from "@/components/ui/skeleton";
-import { relativeTime } from "@/lib/format";
+import { formatCpu, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ProjectCardMenu, type ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectStatusBadge } from "./ProjectStatusBadge";
-import { formatBytes, formatMillicores, type ProjectCardModel } from "./projectCardModel";
+import { formatBytes, type ProjectCardModel } from "./projectCardModel";
 
 const STATUS_RAIL: Record<ProjectCardModel["status"], string> = {
   live: "before:bg-[var(--success)]",
@@ -167,9 +167,9 @@ export function ProjectCard({
           {metrics && (
             <span
               className="ml-auto tabular-nums"
-              title={`${formatMillicores(metrics.cpuMillicores)} CPU, ${formatBytes(metrics.memBytes)} memory across ${metrics.pods} pod${metrics.pods === 1 ? "" : "s"}`}
+              title={`${formatCpu(metrics.cpuMillicores)} CPU, ${formatBytes(metrics.memBytes)} memory across ${metrics.pods} pod${metrics.pods === 1 ? "" : "s"}`}
             >
-              {metrics.cpuMillicores > 0 && <>{formatMillicores(metrics.cpuMillicores)} CPU · </>}
+              {metrics.cpuMillicores > 0 && <>{formatCpu(metrics.cpuMillicores)} CPU · </>}
               {formatBytes(metrics.memBytes)}
             </span>
           )}

@@ -14,7 +14,7 @@ import { toastError } from "@/lib/errors";
 import { ChevronRight, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { relativeTime } from "@/lib/format";
+import { formatCpu, relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
@@ -829,8 +829,8 @@ function NodeStats({ node }: { node: NodeSummary }) {
           label="CPU"
           detail={
             hasUsage
-              ? `${formatCPU(node.cpuUsageMilli ?? 0)} of ${formatCPU(node.cpuCapacityMilli ?? 0)} cores`
-              : `${formatCPU(node.cpuCapacityMilli ?? 0)} cores`
+              ? `${formatCpu(node.cpuUsageMilli ?? 0)} of ${formatCpu(node.cpuCapacityMilli ?? 0)}`
+              : formatCpu(node.cpuCapacityMilli ?? 0)
           }
           pct={hasUsage ? pct(node.cpuUsageMilli ?? 0, node.cpuCapacityMilli) : null}
           onClick={() => setOpenMetric("cpu")}
@@ -1958,7 +1958,7 @@ function TopConsumers({ node, metric }: { node: NodeSummary; metric: NodeMetricK
     staleTime: 5_000,
   });
 
-  const fmt = metric === "cpu" ? formatCPU : formatBytes;
+  const fmt = metric === "cpu" ? formatCpu : formatBytes;
   let section: ResourceConsumers | undefined;
   let capacity = 0;
   if (q.data) {
@@ -2218,17 +2218,17 @@ function Sparkline({
   const latest = points[points.length - 1];
   const latestUsed =
     metric === "cpu"
-      ? formatCPU(latest?.used ?? 0)
+      ? formatCpu(latest?.used ?? 0)
       : formatBytes(latest?.used ?? 0);
   const latestCap =
     metric === "cpu"
-      ? formatCPU(latest?.cap ?? 0)
+      ? formatCpu(latest?.cap ?? 0)
       : formatBytes(latest?.cap ?? 0);
 
   // Format helpers reused for the live row.
   const fmtUsedCap = (p: { used: number; cap: number; pct: number }) => {
-    const u = metric === "cpu" ? formatCPU(p.used) : formatBytes(p.used);
-    const c = metric === "cpu" ? formatCPU(p.cap) : formatBytes(p.cap);
+    const u = metric === "cpu" ? formatCpu(p.used) : formatBytes(p.used);
+    const c = metric === "cpu" ? formatCpu(p.cap) : formatBytes(p.cap);
     return `${u} / ${c} (${Math.round(p.pct)}%)`;
   };
 
@@ -2330,14 +2330,6 @@ function Sparkline({
   );
 }
 
-// formatCPU turns milli-CPU into a human string. 1000m → "1.0",
-// 250m → "250m", 1500m → "1.5".
-function formatCPU(milli: number): string {
-  if (milli === 0) return "0";
-  if (milli < 1000) return `${milli}m`;
-  const cores = milli / 1000;
-  return cores >= 10 ? `${Math.round(cores)}` : cores.toFixed(1);
-}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0";

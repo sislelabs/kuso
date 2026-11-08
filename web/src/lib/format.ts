@@ -56,3 +56,22 @@ export function stripRepoCredentials(raw?: string): string {
   }
   return scheme + rest;
 }
+
+// formatCpu is the one CPU format: millicores below one core
+// ("3 mCPU", "250 mCPU"), cores from there ("1 core", "1.3 cores",
+// "12 cores"). Idle pods read "<1 mCPU", never "0".
+export function formatCpu(milli: number): string {
+  if (!Number.isFinite(milli) || milli <= 0) return "0 mCPU";
+  if (milli < 1) return "<1 mCPU";
+  if (milli < 999.5) return `${Math.round(milli)} mCPU`;
+  const cores = milli / 1000;
+  const v = cores >= 10 ? cores.toFixed(0) : cores.toFixed(1).replace(/\.0$/, "");
+  return `${v} ${v === "1" ? "core" : "cores"}`;
+}
+
+// formatLatency: "4 ms", "1.2 s".
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0).replace(/\.0$/, "")} s`;
+}

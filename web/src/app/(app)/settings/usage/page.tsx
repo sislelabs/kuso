@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Segmented } from "@/components/ui/segmented";
 import { api } from "@/lib/api-client";
 import { describeError } from "@/lib/errors";
+import { formatCpu } from "@/lib/format";
 import { useProjects } from "@/features/projects";
 import { Cpu, MemoryStick, Server, Folder, ChevronDown, ChevronRight, Database, Archive } from "lucide-react";
 import Link from "next/link";
@@ -96,6 +97,8 @@ function rowKind(r: ProjectUsageRow, live: ReadonlySet<string> | null): UsageKin
 // Whole numbers above 10 — a projection has no business showing a
 // decimal place on "1597.1".
 function qty(n: number): string {
+  // A small but real amount must not read as "0" next to its share.
+  if (n > 0 && n < 0.1) return "<0.1";
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 }).format(n);
 }
 
@@ -182,9 +185,8 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
       {ratesUnset && (
         <SettingsNotice tone="info" title="No cost rates set">
           <div>
-            Usage is tracked, but there are no prices to turn it into cost. Set{" "}
-            <code className="font-mono">spec.cost.cpuPerHour</code> and{" "}
-            <code className="font-mono">spec.cost.memGBPerHour</code> in{" "}
+            Usage is tracked, but there are no prices to turn it into cost. Add a price per CPU-hour and per
+            GB-hour of memory in the Raw spec section of{" "}
             <Link href="/settings/config" className="underline">
               Cluster config
             </Link>{" "}
@@ -207,7 +209,7 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
         <Card
           label="CPU, next 30 days"
           big={`≈${qty(cpuHours)} CPU-hours`}
-          hint={`About ${qty(cpuHours / HOURS_IN_30_DAYS)} CPU cores busy on average, at the current rate`}
+          hint={`About ${formatCpu((cpuHours / HOURS_IN_30_DAYS) * 1000)} in use on average, at the current rate`}
           icon={<Cpu className="h-4 w-4" />}
         />
         <Card

@@ -3,7 +3,8 @@
 // same thing.
 
 import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
-import { formatBytes, formatMillicores } from "@/features/project-overview/api";
+import { formatBytes } from "@/features/project-overview/api";
+import { formatCpu } from "@/lib/format";
 import { serviceUrl } from "@/features/services/serviceUrl";
 import { hostScheme } from "@/lib/host-scheme";
 import { serviceShortName } from "@/lib/utils";
@@ -164,14 +165,6 @@ export function envScopeLabel(env: string): string {
   return env === "production" ? "Production" : env;
 }
 
-// Cores throughout, so "0.1 cores" and "1.4 cores" read on one scale
-// (formatMillicores alone switches unit at 1000m).
-export function formatCores(m: number): string {
-  // Idle reads like the metrics panel's sub-unit values, never "0".
-  if (m < 10) return "<0.01 cores";
-  const v = m < 1000 ? (m / 1000).toFixed(2).replace(/\.?0+$/, "") : formatMillicores(m);
-  return `${v} ${v === "1" ? "core" : "cores"}`;
-}
 
 // The canvas header strip. Scope mirrors GET /projects/{p}/metrics: pods
 // whose instance is an env CR in this env-group, i.e. every service's
@@ -183,8 +176,8 @@ export function projectStatsLabel({ env, cpuMillicores, memBytes, pods, uptime }
   const parts: ProjectStatsPart[] = [
     {
       key: "cpu",
-      label: "CPU",
-      value: formatCores(cpuMillicores),
+      // The unit (mCPU / cores) already names it.
+      value: formatCpu(cpuMillicores),
       title: `CPU in use now, summed over the running pods of ${where}. Addons and cron jobs excluded.`,
     },
     {
