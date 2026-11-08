@@ -151,7 +151,7 @@ export function BuildRow({
               className="min-w-0 flex-1 text-left text-sm font-medium text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded-sm"
             >
               <span className="line-clamp-2 break-words">
-                {b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy")}
+                {buildTitle(b, sha)}
               </span>
               <span className="sr-only">{`, ${m.label}. ${isOpen ? "Hide" : "Show"} build log`}</span>
             </button>
@@ -696,7 +696,7 @@ function RollbackSummary({
     <span className="block space-y-3">
       <span className="block rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2">
         <span className="block break-words text-sm font-medium text-[var(--text-primary)]">
-          {b.commitMessage || `Build ${buildRefLabel(b, 7) || b.id}`}
+          {buildTitle(b, buildRefLabel(b, 7))}
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
           <span className="font-mono">{buildRefLabel(b, 7) || b.id}</span>
@@ -746,6 +746,10 @@ function RollbackSummary({
 }
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
+
+function buildTitle(b: DeployBuild, sha: string): string {
+  return b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy");
+}
 
 // Server-side fallbacks that say a container failed without saying why;
 // the log's own first error line is more useful than these.

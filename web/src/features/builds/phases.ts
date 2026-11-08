@@ -59,6 +59,9 @@ const NOT_ERROR_RE = /\bnpm (notice|warn)\b|\bdeprecated\b|\b0 errors?\b|\bwarn(
 
 const CONTAINER_TITLES: Record<string, string> = {
   clone: "Clone repository",
+  "cache-init": "Prepare build cache",
+  buildkit: "Connect to BuildKit",
+  build: "Run the build",
   "env-detect": "Detect environment variables",
   "nixpacks-plan": "Plan nixpacks build",
   nixpacks: "Generate Dockerfile with nixpacks",
