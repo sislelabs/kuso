@@ -1,19 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
-import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { claimEscape } from "@/lib/escape-layer";
-import { serviceBlast } from "@/lib/blast-radius";
 import { Input } from "@/components/ui/input";
-import { Check, ChevronRight, Eye, EyeOff, Link2, Lock, Search, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Check,
+  ChevronRight,
+  ClipboardPaste,
+  Copy,
+  Eye,
+  EyeOff,
+  Link2,
+  Lock,
+  Plus,
+  Search,
+  Trash2,
+  Variable,
+  X,
+} from "lucide-react";
 import { useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
-import { listAddonSecretKeys, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
+import { setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { setSharedSecret } from "@/features/project-secrets/api";
 import { applySubscriptionDelta, putSubscriptionRebased } from "@/features/addons/subscriptionDelta";
 import { useProject, useAddons } from "@/features/projects";
-import { cloneBaseName, groupReferenceNames, resourceGroup } from "@/lib/env-group";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { api, ApiError } from "@/lib/api-client";
@@ -22,12 +33,10 @@ import {
   ENV_NAME_RE,
   addonShortByConnSecret,
   buildTimePrefix,
-  dotenvToRows,
   envApplyFailureMessage,
   prefixGroups,
   reservedEnvWarning,
   rid,
-  rowDiffLabel,
   rowsShallowEqual,
   rowUnchanged,
   toRow,
@@ -45,13 +54,27 @@ import {
   VarBadge,
   type SubscribableShape,
 } from "@/components/service/EnvVarParts";
+import { isSensitiveVar } from "@/components/service/envvars/sensitivity";
+import {
+  buildEnvDiff,
+  diffSize,
+  HIDDEN_MARKER,
+  parseRawEnv,
+  reconcileRaw,
+  rowsToRaw,
+  type EnvDiff,
+  type RawIssue,
+} from "@/components/service/envvars/rawEnv";
+import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envvars/RawEnvEditor";
+import { EnvDiffDialog } from "@/components/service/envvars/EnvDiffDialog";
+import { AddReferenceDialog, RefValueInput, type RefValueInputHandle } from "@/components/service/envvars/refCatalog";
+import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
 
-// Row + the pure transform helpers (toRow, literalToRef, the dotenv
-// serializers, ...) live in ./envVarTransforms so they're unit-testable
-// without rendering this component. This file keeps only the stateful
-// editor.
+// Row + the pure transform helpers live in ./envVarTransforms; raw-mode
+// parsing, diffing and the sensitivity heuristic live in ./envvars. This
+// file keeps only the stateful editor.
 
-// PendingSave is the payload the confirm dialog applies as idempotent
+// PendingSave is the payload the review dialog applies as idempotent
 // per-key operations (no wholesale bulk overwrite → no partial-save gap):
 //   1. valueWrites — every create/change, written per-key via the unified
 //      {value, auto:true} PUT so the SERVER decides storage (CR literal /
@@ -66,20 +89,44 @@ interface PendingSave {
   deletes: string[];
 }
 
+type ViewMode = "table" | "raw";
+const VIEW_PREF_KEY = "kuso.envvars.view";
+
+function readViewPref(): ViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_PREF_KEY) === "raw" ? "raw" : "table";
+  } catch {
+    return "table";
+  }
+}
+
+function writeViewPref(v: ViewMode) {
+  try {
+    window.localStorage.setItem(VIEW_PREF_KEY, v);
+  } catch {
+    // Private mode / blocked storage: the toggle still works for this visit.
+  }
+}
+
 export function EnvVarsEditor({
   project,
   service,
   env: envScope,
   onAddGithubSignIn,
+  restartImpact,
+  highlight,
 }: {
   project: string;
   service: string;
   // env-group scope the parent overlay is showing. Used to fetch
-  // per-env Secret keys so DetectedEnvBanner doesn't mark them as
-  // "missing" (they're mounted on the pod via envFromSecrets) and
-  // so the new InheritedPerEnvSection can surface them.
+  // per-env Secret keys so the missing-vars list doesn't flag keys that
+  // are mounted via the per-env Secret, and to label env overrides.
   env: string;
   onAddGithubSignIn?: () => void;
+  // Ready pods a save will restart. Undefined while unknown.
+  restartImpact?: RestartImpact;
+  // Variable name to scroll to + flash once loaded (?highlight=<KEY>).
+  highlight?: string | null;
 }) {
   const qc = useQueryClient();
   // Always the reveal read: the server resolves every value to plaintext for
@@ -87,53 +134,36 @@ export function EnvVarsEditor({
   // with their real values and the eye only toggles masking.
   const env = useServiceEnv(project, service, true);
   const overrides = useServiceEnvOverrides(project, service, envScope);
-  // The save runs as per-key upserts/deletes (see applyPending), not a
-  // single mutation, so we drive the saving/error UI from local state
-  // rather than a mutation object.
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const detected = useDetectedEnv(project, service);
   const drift = useDrift(project, service);
   const addons = useAddons(project);
-  // Per-env Secret keys. Powers the new "From per-env secret" group
-  // in InheritedSection AND the haveSet filter in DetectedEnvBanner
-  // so keys actually mounted (just via per-env Secret, not via
-  // shared subscription or spec.envVars) don't get flagged as
-  // "referenced in source but not set". Returns {keys: [...], env}.
   const perEnvSecrets = useQuery<{ keys: string[]; env: string | null }>({
     queryKey: ["projects", project, "services", service, "secrets", envScope],
     queryFn: () =>
       api<{ keys: string[]; env: string | null }>(
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/secrets?env=${encodeURIComponent(envScope)}`,
       ).catch((e: unknown) =>
-        e instanceof ApiError && e.status === 403
-          ? { keys: [], env: envScope }
-          : Promise.reject(e),
+        e instanceof ApiError && e.status === 403 ? { keys: [], env: envScope } : Promise.reject(e),
       ),
     staleTime: 15_000,
   });
-  // Shared-env subscription. Lifted to the editor level so both
-  // InheritedSection (chip rendering) and DetectedEnvBanner
-  // (haveSet inclusion) read from the same cache — InheritedSection
-  // already fetches the same key internally, but DetectedEnvBanner
-  // had no signal that a subscribed key was "set". Without this
-  // any subscribed key got flagged as "referenced in source but not
-  // set" even though the chip above it showed it as subscribed.
+  // Shared-env subscription: drives both the shared rows and the missing
+  // list (a subscribed key counts as set).
   const sharedSub = useQuery<SubscribableShape>({
     queryKey: ["projects", project, "services", service, "shared-env-keys"],
     queryFn: () =>
       api<SubscribableShape>(
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys?reveal=true`,
       ).catch((e: unknown) =>
-        e instanceof ApiError && e.status === 403
-          ? { subscribed: [], sources: [] }
-          : Promise.reject(e),
+        e instanceof ApiError && e.status === 403 ? { subscribed: [], sources: [] } : Promise.reject(e),
       ),
     staleTime: 30_000,
   });
   const [subscriptionSaving, setSubscriptionSaving] = useState(false);
   // Replaces the service's shared-secret subscription. Applied immediately,
-  // not through the SaveBar: it's its own spec field with its own rollout.
+  // not through the save bar: it's its own spec field with its own rollout.
   const [pendingUnsub, setPendingUnsub] = useState<string | null>(null);
   const setSubscription = async (wanted: string[]) => {
     setSubscriptionSaving(true);
@@ -158,19 +188,10 @@ export function EnvVarsEditor({
       setSubscriptionSaving(false);
     }
   };
-  // Memoised so the toRow effect below only re-runs when the addon set
-  // (or its connectionSecret status fields) actually changes. Without
-  // memo, every re-render rebuilds the map and the effect's dep array
-  // would point at a fresh reference each time.
-  const addonByConn = useMemo(
-    () => addonShortByConnSecret(addons.data ?? [], project),
-    [addons.data, project]
-  );
-  // Known env scopes for this project (production, staging, preview-pr-N,
-  // ...) so literalToRef can strip the env-scope segment a resolved
-  // service URL carries (`<project>-<svc>-<scope>...`) back to the short
-  // service name. Without this the read→save round-trip corrupts
-  // ${{ svc.URL }} into ${{ svc-production.URL }}.
+  const addonByConn = useMemo(() => addonShortByConnSecret(addons.data ?? [], project), [addons.data, project]);
+  // Known env scopes so literalToRef can strip the env-scope segment a
+  // resolved service URL carries back to the short service name. Without
+  // this the read→save round-trip corrupts ${{ svc.URL }}.
   const proj = useProject(project);
   const knownScopes = useMemo(() => {
     const envs =
@@ -181,226 +202,133 @@ export function EnvVarsEditor({
       const scope = e.metadata?.labels?.["kuso.sislelabs.com/env"];
       if (scope) scopes.add(scope);
     }
-    // Longest-first so "preview-pr-7" is tried before "pr" etc.
     return Array.from(scopes).sort((a, b) => b.length - a.length);
   }, [proj.data]);
-  // secrets:write gates the Save + the per-row destructive
-  // affordances.
-  //
-  // role-system v2: the server MASKS env values for non-admins (returns
-  // a "••••••••" sentinel + masked:true). If we let a masked session
-  // save, the sentinel would overwrite the real values — so masked ⇒
-  // read-only. Editors who need to CHANGE a value use the per-key blind
-  // set (kuso env set), not this whole-list editor.
+  // The server MASKS env values for non-admins ("••••••••" + masked:true).
+  // A masked session saving would write the sentinel over real values, so
+  // masked ⇒ read-only.
   const masked = env.data?.masked ?? false;
   const canWrite = useCanOnProject(project, Perms.SecretsWrite) && !masked;
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
-  // Type-ahead: when the user types "${{" into a row's value, open
-  // the ReferencePicker for that row so they can pick a service/addon
-  // without hunting for the icon button. One row at a time; the
-  // picker resets the latch via onForceCloseConsumed when it closes
-  // so a second edit on the same row can re-trigger.
-  const [pickerOpenForIndex, setPickerOpenForIndex] = useState<number | null>(null);
-  // Register dirty + save with the overlay shell so the unified
-  // SaveBar fires onSave for this panel. The previous version only
-  // registered dirty (for the ESC-prompt) but kept its own inline
-  // Save button — so users on a 1280-wide screen saw two save
-  // affordances (overlay SaveBar + inline button) for the same
-  // edit. Funnelling save through the shell removes the duplicate
-  // and matches ServiceSettingsPanel's pattern.
-  //
-  // The callbacks have to be set up via refs because save/reset
-  // close over `rows` + `baselineFromRows`, both of which only exist
-  // after this hook in the component body. The hook reads the ref at
-  // SaveBar-click time, so the latest closure is the one that fires.
   const saveRef = useRef<() => void>(() => {});
   const discardRef = useRef<() => void>(() => {});
-  // saveError stays set after a failed save until the next attempt
-  // next mutate() resets it; surface it through the SaveBar so the
-  // user sees a sticky reason for the failure (instead of a 4s toast
-  // that disappears while they're still reading it).
+  // Registered without onSave: the editor renders its own save bar (it
+  // needs the restart note and the review step), the overlay still uses
+  // `dirty` for its close-confirm.
   useOverlayDirty("variables", dirty && canWrite, {
-    onSave: () => saveRef.current(),
     onDiscard: () => discardRef.current(),
     saving,
     saveError,
   });
-  // Tracks the last server-known row set so the concurrent-edit
-  // detector can compare incoming refetches against the baseline,
-  // not the local (possibly-edited) rows.
+  // Last server-known row set: the save diff and the concurrent-edit
+  // detector compare against this, not the local (possibly-edited) rows.
   const baselineFromRows = useRef<Row[]>([]);
-  // UI-only state: which rows are open for editing, which values are
-  // unmasked, which prefix groups are expanded.
   const [editing, setEditing] = useState<Set<string>>(new Set());
+  // Values the user unmasked one by one; revealAll unmasks every secret.
   const [shownValues, setShownValues] = useState<Set<string>>(new Set());
   const [revealAll, setRevealAll] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [sharedOpen, setSharedOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [refOpen, setRefOpen] = useState(false);
+  const [view, setViewState] = useState<ViewMode>(readViewPref);
+  const [rawText, setRawText] = useState("");
+  const [rawErrors, setRawErrors] = useState<RawIssue[]>([]);
+  const rawRef = useRef<RawEnvEditorHandle>(null);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  const valueInputs = useRef(new Map<string, RefValueInputHandle>());
 
-  // Concurrent-edit guard: when env.data refetches, only re-baseline
-  // the rows when the user has nothing dirty. Otherwise we'd silently
-  // wipe in-progress edits the moment a teammate saved upstream.
-  // Surface a one-shot toast so the user knows a remote change came
-  // in — they can save (PATCH wins; server retries on conflict) or
-  // reload to pick up the upstream version.
+  // Concurrent-edit guard: when env.data refetches, only re-baseline the
+  // rows when the user has nothing dirty; otherwise keep local edits and
+  // warn once.
   const [conflictNotified, setConflictNotified] = useState(false);
   useEffect(() => {
     if (!env.data) return;
-    // Alphabetical (case-insensitive). Server returns env vars in
-    // insertion order which is meaningless to a human reading a
-    // 30-var list. Sorting client-side keeps the storage order
-    // intact (the server still sees whatever order PATCH posts —
-    // which IS sorted as a side effect, but that's fine; env-var
-    // order has no semantic meaning).
     const incoming = (env.data.envVars ?? [])
       .map((v) => toRow(v, project, addonByConn, knownScopes))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     if (!dirty) {
-      // Only collapse open rows when the values actually changed; a poll
-      // that merely re-derives addonByConn shouldn't close a row the user
-      // just opened.
       if (!rowsShallowEqual(incoming, baselineFromRows.current)) setEditing(new Set());
       setRows(incoming);
       baselineFromRows.current = incoming;
       setConflictNotified(false);
       return;
     }
-    // Dirty + remote change: keep local edits, warn once. The PATCH
-    // path is last-write-wins on the server, so a save will still go
-    // through, but the user should know they're on top of someone
-    // else's change.
     if (!conflictNotified && !rowsShallowEqual(incoming, baselineFromRows.current)) {
-      toast("Another edit landed on this service. Save will overwrite it; reload to merge.");
+      toast("Another edit landed on this service. Saving overwrites it; discard to load it.");
       setConflictNotified(true);
     }
-    // Always update the baseline ref so a refetch-then-discard maps
-    // back to the latest server state.
     baselineFromRows.current = incoming;
   }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes]);
 
+  // Raw text follows the rows whenever there's nothing unsaved in it
+  // (first entry, after a save, after a remote change).
+  useEffect(() => {
+    if (view === "raw" && !dirty) {
+      setRawText(rowsToRaw(rows, { hideSecrets: !revealAll }));
+      setRawErrors([]);
+    }
+  }, [view, dirty, rows, revealAll]);
+
+  const markDirty = () => setDirty(true);
+
   const update = (idx: number, patch: Partial<Row>) => {
-    // Type-ahead trigger: detect the moment the user just typed
-    // "${{" into a value (not present in the prior value, present
-    // now). Opens the ReferencePicker so they can pick a target
-    // without reaching for the icon button. Comparing against the
-    // prior value rather than just checking the new value means
-    // editing an existing ${{ ref }} doesn't re-open the picker on
-    // every keystroke.
-    if (typeof patch.value === "string") {
-      const prevValue = rows[idx]?.value ?? "";
-      if (!prevValue.includes("${{") && patch.value.includes("${{")) {
-        setPickerOpenForIndex(idx);
-      }
-    }
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-    // Only mark dirty when an actually-persisted field changed. The
-    // visible flag is a UI-only "show/hide value" toggle; clicking
-    // the eye should not pop the save bar. Keys to ignore: `visible`,
-    // `id` (internal row identity).
-    const persistedKeys = Object.keys(patch).filter(
-      (k) => k !== "visible" && k !== "id",
-    );
-    if (persistedKeys.length > 0) {
-      setDirty(true);
-    }
+    if (Object.keys(patch).some((k) => k !== "visible" && k !== "id")) markDirty();
   };
   const remove = (idx: number) => {
     setRows((prev) => prev.filter((_, i) => i !== idx));
-    setDirty(true);
+    markDirty();
   };
-  // Two-step save under the "one secret primitive" model. cleanRows()
-  // validates + dedups, splitting the result into:
-  //   1. envVars — the opaque secret-ref rows (fromSecret) the editor
-  //      can't represent as a typed value. Written via the bulk POST /env
-  //      (wholesale overwrite of spec.envVars). Running it first drops any
-  //      removed literal and clears the CR of everything the per-key
-  //      writes are about to re-add.
-  //   2. valueWrites — every typed value/ref the user entered, written
-  //      per-key via {value, auto:true} so the SERVER decides storage.
-  // Returns null when validation toast'd.
-  const cleanRows = (): PendingSave | null => {
-    // Baseline value per name so we can tell an untouched managed-secret
-    // row (whose real plaintext may have been revealed into `value`) from
-    // one the user actually edited. Re-writing an unrevealed/unchanged
-    // managed secret is pointless and would re-store revealed plaintext.
+
+  // Validates + plans the save as per-key writes/deletes. Returns null
+  // (after a toast) when the rows can't be saved as they are.
+  const planSave = (current: Row[]): PendingSave | null => {
     const baselineByName = new Map<string, Row>();
     for (const b of baselineFromRows.current) {
       const n = b.name.trim();
       if (n) baselineByName.set(n, b);
     }
     const seen = new Set<string>();
-    // Names present in the CURRENT rows — lets the rename guard below tell
-    // a true rename (old name gone → it'll be deleted) from a row that just
-    // happens to share a name with another still-present row.
-    const present0 = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
+    // Lets the rename guard tell a true rename (old name gone) from a row
+    // that shares a name with another still-present row.
+    const present = new Set(current.map((r) => r.name.trim()).filter(Boolean));
     const valueWrites: { name: string; value: string }[] = [];
-    for (const r of rows) {
+    for (const r of current) {
       const name = r.name.trim();
       if (!name) continue;
       if (!ENV_NAME_RE.test(name)) {
-        toast.error(`Invalid env var name "${name}" — letters, digits, underscore only`);
+        toast.error(`"${name}" isn't a valid name. Use letters, digits and _ only`);
         return null;
       }
       if (seen.has(name)) {
-        toast.error(`Duplicate env var name "${name}"`);
+        toast.error(`${name} is listed twice`);
         return null;
       }
       seen.add(name);
-      // Opaque secret-ref rows (fromSecret) can only be kept or removed —
-      // their inputs are locked, so an unchanged one needs NO write. It is
-      // NOT re-emitted through a wholesale bulk overwrite (that path
-      // introduced a save-atomicity gap: it cleared typed vars first, then
-      // re-added them per-key, so a mid-save failure left the CR partial).
-      // Removal is handled by the deletes channel below.
+      // Opaque secret refs can only be kept or removed; removal goes
+      // through the deletes channel below.
       if (r.fromSecret) continue;
-      // Mask-sentinel guard: never write the masked "••••••••" placeholder
-      // back over the real value. Masked sessions are already read-only
-      // (canWrite=false), but defend in depth here too — a revealed row
-      // whose value somehow still holds the sentinel is skipped, not saved.
+      // Never write the masked placeholder back over the real value.
       if (r.value === ENV_MASK_SENTINEL) continue;
-      // Empty value: skip. For a brand-new row that's a no-op; for a
-      // secret-backed row the user opened but didn't retype, skipping
-      // leaves the existing stored value untouched (we don't re-write it).
-      //
-      // EXCEPT when a secret-backed row was RENAMED: the old name is in
-      // the deletes channel below, so skipping the write here would drop
-      // the value entirely. We can't carry it over without the plaintext
-      // (a blank row means it was never revealed), so refuse the save and
-      // tell the user to reveal-and-retype rather than silently lose it.
+      // A blank secret-backed row means "untouched, keep stored value",
+      // except after a rename: the old name is deleted below and there's
+      // no plaintext to carry over, so refuse rather than lose it.
       if (r.value === "") {
-        const wasRenamed =
-          r.secretBacked &&
-          !!r.origName &&
-          r.origName !== name &&
-          !present0.has(r.origName);
+        const wasRenamed = r.secretBacked && !!r.origName && r.origName !== name && !present.has(r.origName);
         if (wasRenamed) {
-          toast.error(
-            `Reveal and re-enter the value for "${name}" — renaming a secret-backed var needs its value retyped.`,
-          );
+          toast.error(`Reveal and re-enter the value for "${name}": renaming a secret needs its value retyped.`);
           return null;
         }
-        continue;
+        if (r.secretBacked) continue;
       }
-      // Any row whose value matches the server-known row of the same name
-      // is a no-op: skip it. That covers untouched literals and refs, an
-      // unedited revealed managed secret (no churn, no re-storing revealed
-      // plaintext) and an untouched ADDON row (writing it back would mint
-      // an override that shadows the addon and goes stale on rotation).
-      // Everything else is a real create/change → a per-key
-      // {value, auto:true} upsert.
+      // Writing back an unchanged value would re-run storage selection,
+      // re-resolve refs, mint addon overrides and record a revision.
       if (rowUnchanged(r, baselineByName)) continue;
       valueWrites.push({ name, value: r.value });
     }
-    // Every removed row goes through an explicit per-key DELETE — the
-    // server's UnsetEnvVar removes any form (literal, secretKeyRef, or
-    // managed-secret key). This replaces the old wholesale bulk overwrite
-    // that dropped removals by omission; per-key deletes are idempotent
-    // and don't clear untouched vars. A DELETE on an already-gone name is
-    // tolerated (404 → treated as success in applyPending).
-    const present = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
     const deletes: string[] = [];
     for (const b of baselineFromRows.current) {
       const name = b.name.trim();
@@ -409,102 +337,82 @@ export function EnvVarsEditor({
     return { valueWrites, deletes };
   };
 
-  const [pendingPayload, setPendingPayload] = useState<PendingSave | null>(null);
-  const diffEntries = useMemo<DiffEntry[]>(() => {
-    if (!pendingPayload) return [];
-    // Diff the server-known baseline rows against the current rows, keyed
-    // by name. Working row-to-row (rather than payload-to-server) keeps
-    // untouched secret-backed rows — whose blank value is skipped on save
-    // and left in their Secret — from showing as spurious removals, and
-    // renders every value through the same masking so no plaintext leaks.
-    const beforeMap = new Map<string, string>();
-    for (const r of baselineFromRows.current) {
-      const name = r.name.trim();
-      if (!name) continue;
-      beforeMap.set(name, rowDiffLabel(r));
+  const [pending, setPending] = useState<{ plan: PendingSave; diff: EnvDiff } | null>(null);
+
+  // Brings the raw text into rows. Returns the reconciled rows, or null
+  // when the text has errors (shown inline, cursor jumps to the first).
+  const commitRaw = (): Row[] | null => {
+    const res = reconcileRaw(rawText, rows);
+    if (res.errors.length) {
+      setRawErrors(res.errors);
+      requestAnimationFrame(() => rawRef.current?.goToLine(res.errors[0].line));
+      return null;
     }
-    const afterMap = new Map<string, string>();
-    for (const r of rows) {
-      const name = r.name.trim();
-      if (!name || r.value === ENV_MASK_SENTINEL) continue;
-      // Untouched secret-backed row (blank value): not being rewritten,
-      // and its stored value survives — so treat it as unchanged by
-      // carrying the "before" label through rather than showing a diff.
-      if (r.value === "" && r.secretBacked) {
-        if (beforeMap.has(name)) afterMap.set(name, beforeMap.get(name)!);
-        continue;
-      }
-      afterMap.set(name, rowDiffLabel(r));
-    }
-    const keys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
-    const out: DiffEntry[] = [];
-    // Every env-var change re-renders the Deployment → rolling
-    // restart. Surface that blast radius once, on the first row.
-    const envWarning = serviceBlast("envVars") ?? undefined;
-    let first = true;
-    for (const k of keys) {
-      const b = beforeMap.get(k);
-      const a = afterMap.get(k);
-      if (b === a) continue;
-      out.push({ field: k, before: b, after: a, warning: first ? envWarning : undefined });
-      first = false;
-    }
-    out.sort((x, y) => x.field.localeCompare(y.field));
-    return out;
-  }, [pendingPayload, rows]);
+    setRawErrors([]);
+    setRows(res.rows);
+    return res.rows;
+  };
 
   const save = () => {
-    const cleaned = cleanRows();
-    if (cleaned == null) return;
-    // No effective changes — fast-path: just clear dirty without
-    // round-tripping. Saves a network call and a flash of the modal.
-    setPendingPayload(cleaned);
+    const current = view === "raw" ? commitRaw() : rows;
+    if (!current) return;
+    const plan = planSave(current);
+    if (!plan) return;
+    const diff = buildEnvDiff(plan, baselineFromRows.current, current);
+    if (diffSize(diff) === 0) {
+      toast("Nothing to save: every value matches what's deployed.");
+      setRows(baselineFromRows.current);
+      setEditing(new Set());
+      setDirty(false);
+      return;
+    }
+    setPending({ plan, diff });
   };
-  // Revert to the last server-known row set. Used by the overlay
-  // SaveBar's Discard button + ESC-prompt confirmation.
   const discard = () => {
     setRows(baselineFromRows.current);
     setEditing(new Set());
+    setRawErrors([]);
+    setSaveError(undefined);
     setDirty(false);
   };
-  // Re-point the refs every render so the overlay hook fires the
-  // latest closure (with the latest `rows`).
   saveRef.current = save;
   discardRef.current = discard;
 
+  // ⌘S / Ctrl+S saves while there's something to save.
+  useEffect(() => {
+    if (!dirty || !canWrite) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dirty, canWrite]);
+
   const refreshAfterApply = () =>
     Promise.all([
-      // env (incl. the reveal variant) + drift for the rollout banner, and
-      // the describe payload the canvas derives edges from.
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] }),
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] }),
       qc.invalidateQueries({ queryKey: ["projects", project], exact: true }),
     ]);
 
   const applyPending = async () => {
-    if (!pendingPayload) return;
-    const { valueWrites, deletes } = pendingPayload;
+    if (!pending) return;
+    const { valueWrites, deletes } = pending.plan;
     setSaving(true);
     setSaveError(undefined);
     const applied: string[] = [];
     let current = "";
     try {
-      // The whole save is expressed as idempotent per-key operations — no
-      // wholesale bulk overwrite, so there is no window where the CR is
-      // partially cleared (the earlier bulk-first-then-per-key approach had
-      // that atomicity gap). Upserts run before deletes; a failure surfaces
-      // the offending key and leaves already-applied keys correct.
-      //
-      // 1. Every create/change → {value, auto:true}. The server decides
-      //    storage (CR literal / managed secret / secretKeyRef) and clears
-      //    any stale prior form of the same name.
+      // Idempotent per-key operations, upserts before deletes; a failure
+      // names the key and leaves already-applied keys correct.
       for (const w of valueWrites) {
         current = w.name;
         await setServiceEnvValue(project, service, w.name, w.value);
         applied.push(w.name);
       }
-      // 2. Every removed row → DELETE. UnsetEnvVar removes any form. A
-      //    404 (already gone) is fine — treat it as success.
       for (const name of deletes) {
         current = name;
         try {
@@ -517,18 +425,19 @@ export function EnvVarsEditor({
       // Await the refetch before dropping dirty, or the sync effect
       // re-seeds the rows from the pre-save cache and they flash back.
       await refreshAfterApply();
-      toast.success("Env vars saved");
+      const n = applied.length;
+      toast.success(`Saved ${n} ${n === 1 ? "variable" : "variables"}. Pods are restarting.`);
+      setEditing(new Set());
       setDirty(false);
-      setPendingPayload(null);
+      setPending(null);
     } catch (e) {
       const reason = e instanceof Error ? e.message : "request failed";
       const msg = envApplyFailureMessage(applied, current, reason);
       setSaveError(msg);
       toast.error(msg);
-      // Some keys may already be live: refresh so the editor and the
-      // rollout banner reflect them. The local edits stay dirty so Save
-      // retries (every write is idempotent); the refetch is ours, so
-      // don't warn about "another edit".
+      setPending(null);
+      // Some keys may be live already; the refetch is ours, so don't warn
+      // about "another edit". Local edits stay dirty so Save retries.
       setConflictNotified(true);
       void refreshAfterApply();
     } finally {
@@ -545,7 +454,6 @@ export function EnvVarsEditor({
     const m = new Map<string, "project" | "instance">();
     for (const src of sharedSub.data?.sources ?? []) {
       const kind = src.secret === INSTANCE_SHARED_SECRET ? "instance" : "project";
-      // Project wins over instance on a key in both (same as the pod).
       for (const k of src.keys) if (!m.has(k) || kind === "project") m.set(k, kind);
     }
     return m;
@@ -557,16 +465,26 @@ export function EnvVarsEditor({
   const overrideNames = useMemo(() => new Set(overrideVars.map((v) => v.name)), [overrideVars]);
   const rowNames = useMemo(() => new Set(rows.map((r) => r.name.trim()).filter(Boolean)), [rows]);
   const subscribed = useMemo(() => sharedSub.data?.subscribed ?? [], [sharedSub.data]);
-  const baselineById = useMemo(() => {
+  // Keyed by name, not row id: a refetch while dirty re-mints baseline ids,
+  // which made every row look edited.
+  const baselineByName = useMemo(() => {
     const m = new Map<string, Row>();
-    for (const b of baselineFromRows.current) m.set(b.id, b);
+    for (const b of baselineFromRows.current) if (b.name.trim()) m.set(b.name.trim(), b);
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseline changes with rows
-  }, [rows]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseline changes with rows/env.data
+  }, [rows, env.data]);
   const isChanged = (r: Row) => {
-    const b = baselineById.get(r.id);
+    const b = baselineByName.get((r.origName ?? r.name).trim());
     return !b || b.name !== r.name || b.value !== r.value;
   };
+  const nameCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const n = r.name.trim();
+      if (n) m.set(n, (m.get(n) ?? 0) + 1);
+    }
+    return m;
+  }, [rows]);
 
   type Item =
     | { kind: "var"; name: string; row: Row; index: number }
@@ -576,22 +494,23 @@ export function EnvVarsEditor({
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     rows.forEach((row, index) => {
-      if (row.name.trim()) out.push({ kind: "var", name: row.name, row, index });
+      if (row.name.trim() && !(editing.has(row.id) && !row.origName))
+        out.push({ kind: "var", name: row.name, row, index });
     });
     for (const k of subscribed) {
-      // A service var of the same name wins on the pod; the var row says so.
       if (!rowNames.has(k)) out.push({ kind: "shared", name: k, source: sharedSourceOf.get(k) ?? "project" });
     }
     for (const v of overrideVars) {
       out.push({ kind: "override", name: v.name, value: v.value ?? "", ref: !!v.valueFrom });
     }
     return out.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-  }, [rows, subscribed, rowNames, sharedSourceOf, overrideVars]);
+  }, [rows, subscribed, rowNames, sharedSourceOf, overrideVars, editing]);
 
-  // Rows added this session with no name yet render on top, in edit mode.
-  const blankRows = rows
+  // Rows added this session that are still open render on top, so typing
+  // a name doesn't make the row jump into its sorted slot mid-edit.
+  const newRows = rows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => !row.name.trim());
+    .filter(({ row }) => !row.name.trim() || (editing.has(row.id) && !row.origName));
 
   const missing = useMemo(() => {
     const have = new Set<string>();
@@ -610,10 +529,57 @@ export function EnvVarsEditor({
   }, [rows, subscribed, perEnvSecrets.data, overrideNames, detected.data]);
 
   const q = search.trim().toUpperCase();
-  const shown = q ? items.filter((i) => i.name.toUpperCase().includes(q)) : items;
+  const matches = (it: Item) => {
+    if (!q) return true;
+    if (it.name.toUpperCase().includes(q)) return true;
+    // Values are searchable too, but never the masked ones.
+    if (it.kind === "var" && !isSensitiveVar(it.row.name, it.row.value)) return it.row.value.toUpperCase().includes(q);
+    return false;
+  };
+  const shown = q ? items.filter(matches) : items;
   const groupOf = useMemo(() => (q ? new Map<string, string>() : prefixGroups(items.map((i) => i.name))), [items, q]);
 
-  const isVisible = (key: string) => revealAll || shownValues.has(key);
+  // ── Highlight (?highlight=<KEY>) ─────────────────────────────────────
+  const handledHighlight = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlight || handledHighlight.current === highlight || !env.data) return;
+    // The row sync runs in an effect too; wait until it has landed.
+    if (rows.length === 0 && (env.data.envVars?.length ?? 0) > 0) return;
+    const target =
+      items.find((i) => i.name === highlight) ??
+      items.find((i) => i.name.toUpperCase() === highlight.toUpperCase());
+    const ghost = missing.find((m) => m.name.toUpperCase() === highlight.toUpperCase());
+    if (!target && !ghost) {
+      if (!sharedSub.isPending && !overrides.isPending) {
+        handledHighlight.current = highlight;
+        toast(`${highlight} isn't set on ${service}.`);
+      }
+      return;
+    }
+    handledHighlight.current = highlight;
+    const name = target?.name ?? ghost?.name ?? highlight;
+    if (view === "raw") setView("table");
+    setSearch("");
+    const g = groupOf.get(name);
+    if (g) setOpenGroups((prev) => new Set(prev).add(g));
+    setFlashKey(name);
+    // Wait a frame for the group to expand and the row to render.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(`[data-env-key="${CSS.escape(name)}"]`);
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot per highlight value once data is in
+  }, [highlight, env.data, rows, items, missing, sharedSub.isPending, overrides.isPending]);
+
+  useEffect(() => {
+    if (!flashKey) return;
+    const t = window.setTimeout(() => setFlashKey(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [flashKey]);
+
+  const isVisible = (key: string, sensitive: boolean) => !sensitive || revealAll || shownValues.has(key);
   const toggleVisible = (key: string) =>
     setShownValues((prev) => {
       const next = new Set(prev);
@@ -621,9 +587,9 @@ export function EnvVarsEditor({
       else next.add(key);
       return next;
     });
-  const copy = (value: string) => {
+  const copy = (value: string, name: string) => {
     void navigator.clipboard.writeText(value).then(
-      () => toast.success("Copied"),
+      () => toast.success(`Copied ${name}`),
       () => toast.error("Couldn't copy"),
     );
   };
@@ -635,33 +601,69 @@ export function EnvVarsEditor({
       return next;
     });
 
-  const addRow = (name = "") => {
-    const row: Row = { id: rid(), name, value: "", fromSecret: false, secretBacked: false, visible: true };
+  const addRow = (name = "", value = "") => {
+    const row: Row = { id: rid(), name, value, fromSecret: false, secretBacked: false, visible: true };
     setRows((prev) => [...prev, row]);
     setEditing((prev) => new Set(prev).add(row.id));
-    setDirty(true);
+    markDirty();
+    return row;
   };
-  const applyPaste = (text: string) => {
-    const parsed = dotenvToRows(text, []);
-    if (parsed.length === 0) {
-      toast.error("No KEY=value lines found");
-      return;
-    }
+
+  // Stages parsed KEY=value entries: existing names get the new value,
+  // the rest become new rows. `replaceId` is a blank row the paste came
+  // from, dropped so it doesn't linger empty.
+  const stageEntries = (entries: { name: string; value: string }[], replaceId?: string) => {
     setRows((prev) => {
-      const next = [...prev];
-      for (const p of parsed) {
-        const i = next.findIndex((r) => r.name === p.name);
-        if (i >= 0) {
-          next[i] = { ...next[i], value: p.value, fromSecret: false, origValueFrom: undefined };
-        } else {
-          next.push({ ...p, visible: true });
-        }
+      const next = prev.filter((r) => r.id !== replaceId);
+      for (const p of entries) {
+        const i = next.findIndex((r) => r.name.trim() === p.name);
+        if (i >= 0) next[i] = { ...next[i], value: p.value, fromSecret: false, origValueFrom: undefined };
+        else next.push({ id: rid(), name: p.name, value: p.value, fromSecret: false, secretBacked: false, visible: true });
       }
       return next;
     });
-    setDirty(true);
+    if (replaceId) stopEdit(replaceId);
+    markDirty();
+  };
+
+  const applyPaste = (text: string): string | null => {
+    const { entries, errors } = parseRawEnv(text);
+    if (errors.length) {
+      const first = errors[0];
+      return `Line ${first.line}: ${first.message}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""}. Nothing was added.`;
+    }
+    if (entries.length === 0) return "No KEY=value lines found.";
+    stageEntries(entries);
     setPasteOpen(false);
-    toast(`${parsed.length} ${parsed.length === 1 ? "variable" : "variables"} staged. Save to apply.`);
+    toast(`${entries.length} ${entries.length === 1 ? "variable" : "variables"} staged. Review and save to apply.`);
+    return null;
+  };
+
+  // Pasting a multi-line .env into a name field splits it into rows.
+  const onNamePaste = (e: ClipboardEvent<HTMLInputElement>, r: Row) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("=") || (!text.includes("\n") && !/^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(text))) return;
+    const { entries, errors } = parseRawEnv(text);
+    if (entries.length === 0) return;
+    e.preventDefault();
+    stageEntries(entries, r.name.trim() || r.value ? undefined : r.id);
+    if (errors.length) {
+      toast.error(`Added ${entries.length}; line ${errors[0].line} skipped: ${errors[0].message}`);
+    } else if (entries.length > 1) {
+      toast(`Split ${entries.length} variables from the paste.`);
+    }
+  };
+
+  const insertReference = (name: string, ref: string) => {
+    const i = rows.findIndex((r) => r.name.trim() === name);
+    if (i >= 0) {
+      update(i, { value: ref, fromSecret: false, origValueFrom: undefined, resolved: undefined });
+    } else {
+      const row: Row = { id: rid(), name, value: ref, fromSecret: false, secretBacked: false, visible: true };
+      setRows((prev) => [...prev, row]);
+      markDirty();
+    }
+    setFlashKey(name);
   };
 
   // Promote a service var to a project secret: write it to <project>-shared,
@@ -688,13 +690,45 @@ export function EnvVarsEditor({
     }
   };
 
+  const toggleRevealAll = () => {
+    const next = !revealAll;
+    if (view === "raw" && dirty) {
+      // Re-render the text in the other mode without losing typed edits.
+      const res = commitRaw();
+      if (!res) return;
+      setRawText(rowsToRaw(res, { hideSecrets: !next }));
+    }
+    setRevealAll(next);
+    setShownValues(new Set());
+  };
+
+  const setView = (next: ViewMode) => {
+    if (next === view) return;
+    if (next === "table") {
+      // Leaving raw applies the text; malformed lines keep you in raw.
+      if (dirty && !commitRaw()) return;
+    } else {
+      setRawText(rowsToRaw(rows, { hideSecrets: !revealAll }));
+      setRawErrors([]);
+      setEditing(new Set());
+    }
+    setViewState(next);
+    writeViewPref(next);
+  };
+
   if (env.isPending) {
-    return <div className="text-sm text-[var(--text-tertiary)]">loading…</div>;
+    return (
+      <div className="space-y-2" aria-busy="true" aria-label="Loading variables">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="h-9 animate-pulse rounded-md bg-[var(--bg-secondary)]" />
+        ))}
+      </div>
+    );
   }
   if (env.isError) {
     return (
-      <div className="text-sm text-red-500">
-        Failed to load env vars: {env.error?.message}
+      <div className="rounded-md border border-[var(--error)]/40 bg-[var(--error-subtle)] px-3 py-3 text-sm text-[var(--error)]">
+        Couldn&apos;t load variables: {env.error?.message}
       </div>
     );
   }
@@ -702,30 +736,54 @@ export function EnvVarsEditor({
   const settingsHref = (source: "project" | "instance") =>
     source === "instance" ? "/settings/instance-secrets" : `/projects/${encodeURIComponent(project)}/settings`;
 
-  const masking = (key: string, value: string | undefined, canReveal: boolean) => {
-    if (masked || !canReveal || value === undefined) return <span className="text-[var(--text-tertiary)]">••••••••</span>;
-    if (!isVisible(key)) return <span className="text-[var(--text-tertiary)]">••••••••</span>;
-    return <span className="break-all text-[var(--text-primary)]">{value === "" ? "(empty)" : value}</span>;
+  const MASK = <span className="tracking-wider text-[var(--text-tertiary)]">••••••••</span>;
+  const valueText = (key: string, value: string | undefined, sensitive: boolean) => {
+    if (masked || value === undefined) return MASK;
+    if (!isVisible(key, sensitive)) return MASK;
+    if (value === "") return <span className="italic text-[var(--text-tertiary)]">empty</span>;
+    return <span className="text-[var(--text-primary)]">{value}</span>;
   };
 
-  const eye = (key: string, name: string, canReveal: boolean) =>
-    !masked && canReveal ? (
+  const iconBtn =
+    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]";
+  const eye = (key: string, name: string, show: boolean) =>
+    !masked && show ? (
       <button
         type="button"
-        aria-label={isVisible(key) ? `Hide value of ${name}` : `Show value of ${name}`}
+        aria-label={shownValues.has(key) || revealAll ? `Hide value of ${name}` : `Show value of ${name}`}
+        title={shownValues.has(key) || revealAll ? "Hide value" : "Show value"}
         onClick={() => toggleVisible(key)}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        className={iconBtn}
       >
-        {isVisible(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        {shownValues.has(key) || revealAll ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
       </button>
     ) : (
-      <span className="h-7 w-7" />
+      <span className="h-7 w-7 shrink-0" />
+    );
+  const copyBtn = (value: string | undefined, name: string) =>
+    !masked && value ? (
+      <button
+        type="button"
+        aria-label={`Copy value of ${name}`}
+        title="Copy value"
+        onClick={() => copy(value, name)}
+        className={cn(iconBtn, "sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100")}
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
+    ) : (
+      <span className="h-7 w-7 shrink-0" />
     );
 
-  const rowShell = "grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-0.5 px-2 py-1 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto_auto]";
+  const rowShell = (name: string, extra?: string) =>
+    cn(
+      "group grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-1 gap-y-0.5 px-3 py-1.5 transition-colors duration-700 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)_auto_auto_auto]",
+      flashKey === name && "bg-[var(--warning-subtle)]",
+      extra,
+    );
   const nameCell = (name: string, badges: ReactNode) => (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <span className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={name}>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="min-w-0 truncate font-mono text-xs font-medium text-[var(--text-primary)]" title={name}>
         {name}
       </span>
       {badges}
@@ -735,7 +793,7 @@ export function EnvVarsEditor({
     <div
       onClick={onClick}
       className={cn(
-        "col-span-3 row-start-2 min-w-0 truncate font-mono text-[12px] sm:col-span-1 sm:col-start-2 sm:row-start-1",
+        "col-span-4 row-start-2 min-w-0 truncate font-mono text-xs sm:col-span-1 sm:col-start-2 sm:row-start-1",
         onClick && "cursor-text",
       )}
     >
@@ -743,67 +801,108 @@ export function EnvVarsEditor({
     </div>
   );
 
-  const renderEditRow = (r: Row, i: number) => (
-    <div key={r.id} className="space-y-1 border-l-2 border-[var(--accent)] bg-[var(--bg-secondary)]/60 px-2 py-2">
-      <div className="flex flex-col gap-1.5 sm:grid sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto_auto_auto] sm:items-center">
-        <Input
-          autoFocus={!r.name}
-          placeholder="KEY"
-          aria-label={r.name ? `Name of variable ${r.name}` : `Name of variable ${i + 1}`}
-          value={r.name}
-          onChange={(e) => update(i, { name: e.target.value })}
-          className={cn("h-8 font-mono text-[12px]", reservedEnvWarning(r.name) && "border-amber-500/60")}
-          disabled={r.fromSecret}
-          spellCheck={false}
-        />
-        <Input
-          autoFocus={!!r.name}
-          placeholder={r.fromSecret ? "secret reference (pick a new one with 🔗)" : "value or ${{ ref }}"}
-          aria-label={r.name ? `Value of ${r.name}` : `Value of variable ${i + 1}`}
-          value={r.value}
-          onChange={(e) => update(i, { value: e.target.value })}
-          className="h-8 min-w-0 font-mono text-[12px]"
-          disabled={r.fromSecret}
-          spellCheck={false}
-        />
-        <div className="flex items-center justify-end gap-0.5 sm:contents">
-          <ReferencePicker
-            project={project}
-            excludeService={service}
-            onPick={(ref) =>
-              update(i, { value: ref, visible: true, fromSecret: false, secretBacked: false, origValueFrom: undefined })
-            }
-            forceOpen={pickerOpenForIndex === i}
-            onForceCloseConsumed={() => setPickerOpenForIndex(null)}
+  const renderEditRow = (r: Row, i: number) => {
+    const name = r.name.trim();
+    const nameError = !name
+      ? ""
+      : !ENV_NAME_RE.test(name)
+        ? /^[0-9]/.test(name)
+          ? "Names can't start with a digit"
+          : "Use letters, digits and _ only"
+        : (nameCounts.get(name) ?? 0) > 1
+          ? `${name} is already set. Rename one of them`
+          : "";
+    const reserved = reservedEnvWarning(name);
+    return (
+      <div
+        key={r.id}
+        data-env-key={name || undefined}
+        className={cn(
+          "space-y-1.5 border-l-2 border-[var(--accent)] bg-[var(--bg-secondary)] px-3 py-2.5",
+          flashKey === name && "bg-[var(--warning-subtle)]",
+        )}
+      >
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+          <Input
+            autoFocus={!r.name}
+            placeholder="KEY or paste a .env"
+            aria-label={r.name ? `Name of variable ${r.name}` : `Name of new variable`}
+            aria-invalid={!!nameError}
+            value={r.name}
+            onChange={(e) => update(i, { name: e.target.value })}
+            onPaste={(e) => onNamePaste(e, r)}
+            className={cn("h-8 font-mono text-xs sm:w-64 sm:shrink-0", reserved && !nameError && "border-[var(--warning)]/60")}
+            disabled={r.fromSecret}
+            spellCheck={false}
+            autoComplete="off"
           />
-          {!r.addon ? (
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <RefValueInput
+              ref={(h) => {
+                if (h) valueInputs.current.set(r.id, h);
+                else valueInputs.current.delete(r.id);
+              }}
+              project={project}
+              service={service}
+              autoFocus={!!r.name}
+              placeholder={r.fromSecret ? "Mounted secret. Type a value to replace it" : "value, or ${{ to reference"}
+              ariaLabel={r.name ? `Value of ${r.name}` : "Value of new variable"}
+              value={r.value}
+              onChange={(v) => update(i, { value: v, ...(r.fromSecret ? { fromSecret: false, origValueFrom: undefined } : {}) })}
+              onSubmit={() => name && !nameError && stopEdit(r.id)}
+              className="h-8 font-mono text-xs"
+            />
             <button
               type="button"
-              aria-label={r.name ? `Remove ${r.name}` : "Remove variable"}
-              onClick={() => remove(i)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+              aria-label="Insert a reference"
+              title="Insert a ${{ reference }}"
+              onClick={() => {
+                const v = r.value.includes("${{") ? r.value : r.value + "${{ ";
+                update(i, { value: v, fromSecret: false, origValueFrom: undefined });
+                requestAnimationFrame(() => valueInputs.current.get(r.id)?.focus());
+              }}
+              className={cn(iconBtn, "h-8 w-8")}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Link2 className="h-3.5 w-3.5" />
             </button>
-          ) : (
-            <span className="h-8 w-8" />
-          )}
-          <button
-            type="button"
-            aria-label="Done editing"
-            onClick={() => stopEdit(r.id)}
-            disabled={!r.name.trim()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
-          >
-            <Check className="h-3.5 w-3.5" />
-          </button>
+            {!r.addon ? (
+              <button
+                type="button"
+                aria-label={r.name ? `Remove ${r.name}` : "Remove variable"}
+                title="Remove"
+                onClick={() => remove(i)}
+                className={cn(iconBtn, "h-8 w-8 hover:text-[var(--error)]")}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <span className="h-8 w-8 shrink-0" />
+            )}
+            <button
+              type="button"
+              aria-label="Done editing"
+              title="Done (Enter)"
+              onClick={() => stopEdit(r.id)}
+              disabled={!name || !!nameError}
+              className={cn(iconBtn, "h-8 w-8 disabled:opacity-30")}
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
+        {nameError ? (
+          <p className="text-xs text-[var(--error)]">{nameError}</p>
+        ) : reserved ? (
+          <p className="text-xs text-[var(--warning)]">{reserved}</p>
+        ) : buildTimePrefix(name) ? (
+          <p className="text-xs text-[var(--text-tertiary)]">
+            {buildTimePrefix(name)}* is inlined into the browser bundle: changing it needs a rebuild, and it&apos;s
+            public.
+          </p>
+        ) : null}
       </div>
-      {reservedEnvWarning(r.name) && (
-        <p className="font-mono text-[10px] text-amber-400">{reservedEnvWarning(r.name)}</p>
-      )}
-    </div>
-  );
+    );
+  };
 
   const renderItem = (it: Item) => {
     if (it.kind === "var") {
@@ -812,12 +911,16 @@ export function EnvVarsEditor({
       const isRef = r.value.startsWith("${{");
       const key = `var:${r.id}`;
       const plaintext = isRef ? r.resolved : r.value;
+      // Refs keep their resolved value hidden by default; the ref text
+      // itself is shown since it names the source, not the secret.
+      const sensitive = isRef || r.fromSecret || isSensitiveVar(r.name, plaintext ?? "");
       const badges = (
         <>
-          {r.addon && <VarBadge title={`From the ${r.addon} addon`}>{r.addon}</VarBadge>}
+          {r.addon && <VarBadge title={`Injected by the ${r.addon} addon`}>{r.addon}</VarBadge>}
           {buildTimePrefix(r.name) && (
             <VarBadge title="Inlined into the browser bundle at build time. A change needs a rebuild.">build</VarBadge>
           )}
+          {r.fromSecret && <VarBadge title="Mounted from a Kubernetes secret kuso doesn't manage">secret ref</VarBadge>}
           {sharedSourceOf.has(r.name) && subscribed.includes(r.name) && (
             <VarBadge tone="warn" title="This service value wins over the project secret of the same name.">
               overrides {sharedSourceOf.get(r.name)}
@@ -828,27 +931,35 @@ export function EnvVarsEditor({
               overridden
             </VarBadge>
           )}
+          {isChanged(r) && <span className="sr-only">(unsaved)</span>}
         </>
       );
-      const value = isRef && !isVisible(key) ? (
-        <span className="inline-flex items-center gap-1 text-[var(--text-secondary)]">
-          <Link2 className="h-3 w-3" />
-          {r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")}
-        </span>
-      ) : (
-        masking(key, plaintext, !r.fromSecret || !!r.value || !!r.resolved)
-      );
+      const value =
+        isRef && !(shownValues.has(key) || revealAll) ? (
+          <span className="inline-flex max-w-full items-center gap-1 text-[var(--text-secondary)]">
+            <Link2 className="h-3 w-3 shrink-0" />
+            <span className="truncate">{r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")}</span>
+          </span>
+        ) : (
+          valueText(key, plaintext, sensitive)
+        );
+      const canReveal = plaintext !== undefined && plaintext !== "";
       return (
-        <div key={r.id} className={cn(rowShell, isChanged(r) && "border-l-2 border-[var(--accent)]")}>
+        <div
+          key={r.id}
+          data-env-key={r.name}
+          className={rowShell(r.name, isChanged(r) ? "border-l-2 border-[var(--accent)] pl-[10px]" : undefined)}
+        >
           {nameCell(r.name, badges)}
-          {/* A masked cell must not open the editor: the input shows plaintext. */}
-          {valueCell(value, canWrite && (isRef || isVisible(key)) ? () => startEdit(r.id) : undefined)}
-          {eye(key, r.name, plaintext !== undefined && plaintext !== "" || !isRef)}
+          {valueCell(value, canWrite && (isRef || isVisible(key, sensitive)) ? () => startEdit(r.id) : undefined)}
+          {copyBtn(isVisible(key, sensitive) ? plaintext : undefined, r.name)}
+          {eye(key, r.name, sensitive && canReveal)}
           <RowMenu
             label={`Actions for ${r.name}`}
             items={[
               { label: "Edit", onSelect: () => startEdit(r.id), disabled: !canWrite },
-              { label: "Copy value", onSelect: () => copy(plaintext ?? ""), disabled: masked || !plaintext },
+              { label: "Copy value", onSelect: () => copy(plaintext ?? "", r.name), disabled: masked || !plaintext },
+              { label: "Copy name", onSelect: () => copy(r.name, "name") },
               {
                 label: "Move to project secrets",
                 onSelect: () => void moveToShared(r),
@@ -863,20 +974,22 @@ export function EnvVarsEditor({
     if (it.kind === "shared") {
       const key = `shared:${it.name}`;
       const v = sharedValues?.[it.name];
+      const sensitive = isSensitiveVar(it.name, v ?? "");
       return (
-        <div key={key} className={rowShell}>
+        <div key={key} data-env-key={it.name} className={rowShell(it.name)}>
           {nameCell(
             it.name,
             <VarBadge tone="accent" title={`Shared ${it.source} secret. Edit it in ${it.source} settings.`}>
               {it.source}
             </VarBadge>,
           )}
-          {valueCell(masking(key, v, v !== undefined))}
-          {eye(key, it.name, v !== undefined)}
+          {valueCell(valueText(key, v, sensitive))}
+          {copyBtn(isVisible(key, sensitive) ? v : undefined, it.name)}
+          {eye(key, it.name, sensitive && v !== undefined)}
           <RowMenu
             label={`Actions for ${it.name}`}
             items={[
-              { label: "Copy value", onSelect: () => copy(v ?? ""), disabled: masked || v === undefined },
+              { label: "Copy value", onSelect: () => copy(v ?? "", it.name), disabled: masked || v === undefined },
               { label: `Edit in ${it.source} settings`, href: settingsHref(it.source) },
               {
                 label: "Remove from this service",
@@ -890,22 +1003,24 @@ export function EnvVarsEditor({
       );
     }
     const key = `override:${it.name}`;
+    const sensitive = it.ref || isSensitiveVar(it.name, it.value);
     return (
-      <div key={key} className={rowShell}>
+      <div key={key} data-env-key={it.name} className={rowShell(it.name)}>
         {nameCell(
           it.name,
           <VarBadge
             tone="warn"
             title={`Only on ${envScope}. Change with: kuso env set ${project} ${service} ${it.name}=… --env ${envScope}`}
           >
-            {envScope}
+            {envScope} only
           </VarBadge>,
         )}
-        {valueCell(masking(key, it.value, it.value !== "" || !it.ref))}
-        {eye(key, it.name, it.value !== "" || !it.ref)}
+        {valueCell(valueText(key, it.value, sensitive))}
+        {copyBtn(isVisible(key, sensitive) ? it.value : undefined, it.name)}
+        {eye(key, it.name, sensitive && it.value !== "")}
         <RowMenu
           label={`Actions for ${it.name}`}
-          items={[{ label: "Copy value", onSelect: () => copy(it.value), disabled: masked || !it.value }]}
+          items={[{ label: "Copy value", onSelect: () => copy(it.value, it.name), disabled: masked || !it.value }]}
         />
       </div>
     );
@@ -927,12 +1042,15 @@ export function EnvVarsEditor({
     const forcedOpen = members.some((m) => m.kind === "var" && (editing.has(m.row.id) || isChanged(m.row)));
     const open = forcedOpen || openGroups.has(g);
     const sources = Array.from(
-      new Set(members.map((m) => (m.kind === "var" ? m.row.addon : m.kind === "shared" ? m.source : envScope)).filter(Boolean)),
+      new Set(
+        members.map((m) => (m.kind === "var" ? m.row.addon : m.kind === "shared" ? m.source : envScope)).filter(Boolean),
+      ),
     );
     body.push(
       <button
         key={`group:${g}`}
         type="button"
+        aria-expanded={open}
         onClick={() =>
           !forcedOpen &&
           setOpenGroups((prev) => {
@@ -942,13 +1060,13 @@ export function EnvVarsEditor({
             return next;
           })
         }
-        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left hover:bg-[var(--bg-secondary)]/60"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left hover:bg-[var(--bg-secondary)]"
       >
         <ChevronRight
-          className={cn("h-3 w-3 text-[var(--text-tertiary)] transition-transform", open && "rotate-90")}
+          className={cn("h-3.5 w-3.5 text-[var(--text-tertiary)] transition-transform", open && "rotate-90")}
         />
-        <span className="font-mono text-[12px] text-[var(--text-primary)]">{g}_*</span>
-        <span className="font-mono text-[11px] text-[var(--text-tertiary)]">{members.length}</span>
+        <span className="font-mono text-xs font-medium text-[var(--text-primary)]">{g}_*</span>
+        <span className="text-xs text-[var(--text-tertiary)]">{members.length} variables</span>
         {sources.map((s) => (
           <VarBadge key={s}>{s}</VarBadge>
         ))}
@@ -956,61 +1074,128 @@ export function EnvVarsEditor({
     );
     if (open) {
       body.push(
-        <div key={`group-body:${g}`} className="divide-y divide-[var(--border-subtle)] bg-[var(--bg-secondary)]/40">
+        <div key={`group-body:${g}`} className="divide-y divide-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 pl-3">
           {members.map(renderItem)}
         </div>,
       );
     }
   }
 
-  const empty = blankRows.length === 0 && items.length === 0;
+  const total = items.length;
+  const empty = newRows.length === 0 && total === 0;
+  const pendingCount = (() => {
+    if (view === "raw") return null;
+    const present = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
+    const removed = baselineFromRows.current.filter((b) => b.name.trim() && !present.has(b.name.trim())).length;
+    return rows.filter((r) => r.name.trim() && isChanged(r)).length + removed;
+  })();
+  const showRawToggle = !masked;
+  const hasSecrets = items.some(
+    (i) =>
+      (i.kind === "var" && (isSensitiveVar(i.row.name, i.row.value) || i.row.value.startsWith("${{"))) ||
+      (i.kind === "shared" && isSensitiveVar(i.name, sharedValues?.[i.name] ?? "")) ||
+      (i.kind === "override" && (i.ref || isSensitiveVar(i.name, i.value))),
+  );
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-heading text-sm font-semibold tracking-tight text-[var(--text-primary)]">Variables</h3>
-        {envScope !== "production" && (
-          <VarBadge
-            tone="warn"
-            title={`Service variables apply to every environment. Values only for ${envScope} show a ${envScope} badge.`}
-          >
-            all environments
-          </VarBadge>
-        )}
-        {masked && (
-          <span title="Values are hidden. Reading them needs the admin role." className="text-[var(--text-tertiary)]">
-            <Lock className="h-3.5 w-3.5" />
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="font-heading text-sm font-semibold tracking-tight text-[var(--text-primary)]">Variables</h3>
+          <span className="rounded-full bg-[var(--bg-tertiary)] px-2 py-px text-xs tabular-nums text-[var(--text-secondary)]">
+            {q && view === "table" ? `${shown.length} of ${total}` : total}
           </span>
-        )}
-        <DeployStatus drift={drift.data} />
-        <div className="ml-auto flex items-center gap-1.5">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-tertiary)]" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search"
-              aria-label="Search variables"
-              className="h-8 w-36 pl-7 text-[12px]"
-            />
-          </div>
-          {!masked && (
+          {envScope !== "production" && (
+            <VarBadge
+              tone="warn"
+              title={`Service variables apply to every environment. Values only for ${envScope} show a "${envScope} only" badge.`}
+            >
+              all environments
+            </VarBadge>
+          )}
+          {masked && (
+            <span
+              title="Values are hidden. Reading them needs the secrets:read permission."
+              className="inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)]"
+            >
+              <Lock className="h-3.5 w-3.5" /> read-only
+            </span>
+          )}
+          <DeployStatus drift={drift.data} />
+        </div>
+        <div className="flex w-full items-center gap-1.5 sm:ml-auto sm:w-auto">
+          {showRawToggle && (
+            <div
+              role="radiogroup"
+              aria-label="Editor view"
+              className="inline-flex shrink-0 rounded-md border border-[var(--border-subtle)] p-0.5"
+            >
+              {(["table", "raw"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={view === v}
+                  onClick={() => setView(v)}
+                  title={v === "raw" ? "Edit everything as one .env file" : "One row per variable"}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    view === v
+                      ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
+                  )}
+                >
+                  {v === "table" ? "Table" : "Raw .env"}
+                </button>
+              ))}
+            </div>
+          )}
+          {view === "table" && (
+            <div className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-tertiary)]" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && search) {
+                    e.preventDefault();
+                    setSearch("");
+                  }
+                }}
+                placeholder="Filter"
+                aria-label="Filter variables"
+                data-primary-search
+                className="h-8 pl-7 pr-7 text-xs"
+              />
+              {search && (
+                <button
+                  type="button"
+                  aria-label="Clear filter"
+                  onClick={() => setSearch("")}
+                  className="absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+          {view === "raw" && <div className="flex-1" />}
+          {!masked && hasSecrets && (
             <button
               type="button"
-              aria-label={revealAll ? "Hide all values" : "Show all values"}
-              title={revealAll ? "Hide all values" : "Show all values"}
-              onClick={() => {
-                setRevealAll((v) => !v);
-                setShownValues(new Set());
-              }}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              aria-label={revealAll ? "Hide secret values" : "Show secret values"}
+              aria-pressed={revealAll}
+              title={revealAll ? "Hide secret values" : "Show secret values"}
+              onClick={toggleRevealAll}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             >
               {revealAll ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             </button>
           )}
-          {canWrite && (
+          {canWrite && view === "table" && (
             <AddMenu
               onNew={() => addRow()}
+              onReference={() => setRefOpen(true)}
               onShared={() => setSharedOpen(true)}
               onPaste={() => setPasteOpen(true)}
               onGithub={onAddGithubSignIn}
@@ -1019,25 +1204,90 @@ export function EnvVarsEditor({
         </div>
       </div>
 
-      {empty ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-8 text-center text-xs text-[var(--text-tertiary)]">
-          No variables yet.
-        </p>
+      {view === "raw" ? (
+        <>
+          {canWrite && hasSecrets && (
+            <p className="text-xs text-[var(--text-secondary)]">
+              {revealAll ? (
+                "Secret values are shown in clear."
+              ) : (
+                <>
+                  Secret-looking values read <span className="font-mono">{HIDDEN_MARKER}</span>: leave it to keep the
+                  value, or type a new one. Use the eye to edit them in place.
+                </>
+              )}
+            </p>
+          )}
+          <RawEnvEditor
+            ref={rawRef}
+            value={rawText}
+            readOnly={!canWrite}
+            errors={rawErrors}
+            onChange={(v) => {
+              setRawText(v);
+              markDirty();
+              // Once errors are on screen, keep them current as the user fixes them.
+              if (rawErrors.length) {
+                const res = reconcileRaw(v, rows);
+                setRawErrors(res.errors);
+              }
+            }}
+          />
+        </>
+      ) : empty ? (
+        <div className="flex flex-col items-center rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-10 text-center">
+          <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+            <Variable className="h-4 w-4" />
+          </span>
+          <p className="text-sm font-medium text-[var(--text-primary)]">No variables yet</p>
+          <p className="mt-1 max-w-sm text-xs text-[var(--text-secondary)]">
+            Add the config your app reads from its environment. Reference an addon to wire up a database without
+            copying credentials.
+          </p>
+          {canWrite && (
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <Button size="sm" onClick={() => addRow()}>
+                <Plus className="h-3.5 w-3.5" /> Add variable
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setPasteOpen(true)}>
+                <ClipboardPaste className="h-3.5 w-3.5" /> Paste .env
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setRefOpen(true)}>
+                <Link2 className="h-3.5 w-3.5" /> Add reference
+              </Button>
+            </div>
+          )}
+        </div>
       ) : (
-        <div className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
-          {blankRows.map(({ row, index }) => renderEditRow(row, index))}
+        <div className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-md border border-[var(--border-subtle)]">
+          {newRows.map(({ row, index }) => renderEditRow(row, index))}
           {body}
           {shown.length === 0 && q && (
-            <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">No match.</p>
+            <div className="px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
+              Nothing matches &ldquo;{search.trim()}&rdquo;.{" "}
+              <button type="button" onClick={() => setSearch("")} className="text-[var(--text-primary)] underline">
+                Clear filter
+              </button>
+            </div>
           )}
         </div>
       )}
 
-      {missing.length > 0 && !q && (
+      {view === "table" && missing.length > 0 && !q && (
         <div className="rounded-md border border-dashed border-[var(--border-subtle)]">
+          <p className="border-b border-dashed border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
+            Your code reads {missing.length === 1 ? "this variable" : "these variables"}, but {missing.length === 1 ? "it isn't" : "they aren't"} set
+          </p>
           {missing.map((m) => (
-            <div key={m.name} className="flex items-center gap-2 px-2 py-1.5">
-              <span className="truncate font-mono text-[12px] text-[var(--text-tertiary)]">{m.name}</span>
+            <div
+              key={m.name}
+              data-env-key={m.name}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 transition-colors duration-700",
+                flashKey === m.name && "bg-[var(--warning-subtle)]",
+              )}
+            >
+              <span className="truncate font-mono text-xs text-[var(--text-secondary)]">{m.name}</span>
               {m.crash ? (
                 <VarBadge tone="warn" title={m.crash}>
                   crashed without it
@@ -1049,13 +1299,49 @@ export function EnvVarsEditor({
                 <button
                   type="button"
                   onClick={() => addRow(m.name)}
-                  className="ml-auto rounded px-2 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+                  className="ml-auto rounded px-2 py-0.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
                 >
                   Add
                 </button>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {dirty && canWrite && (
+        <div className="sticky bottom-3 z-30 pt-2">
+          <div
+            role="region"
+            aria-label="Unsaved variable changes"
+            className="flex flex-col gap-2 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2.5 shadow-[var(--shadow-lg)] sm:flex-row sm:items-center"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-primary)]">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]" />
+                {pendingCount === null
+                  ? "Unsaved edits in the .env"
+                  : pendingCount === 0
+                    ? "Unsaved edits"
+                    : `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`}
+              </p>
+              {saveError ? (
+                <p role="alert" className="mt-0.5 line-clamp-2 text-xs text-[var(--error)]" title={saveError}>
+                  {saveError}
+                </p>
+              ) : (
+                <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{restartNote(restartImpact)}</p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={discard} disabled={saving}>
+                Discard
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving} title="Review and save (⌘S)">
+                {saving ? "Saving…" : "Review and save"}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1073,14 +1359,20 @@ export function EnvVarsEditor({
         }
       />
       <PasteEnvDialog open={pasteOpen} onOpenChange={setPasteOpen} onApply={applyPaste} />
-      <DiffConfirmDialog
-        open={pendingPayload != null}
-        title="Apply env-var changes?"
-        description="Saving will roll a fresh pod with the updated environment. The current pod stays up until the new one is Ready."
-        entries={diffEntries}
-        confirmLabel="Apply & redeploy"
+      <AddReferenceDialog
+        open={refOpen}
+        onOpenChange={setRefOpen}
+        project={project}
+        service={service}
+        existingNames={rowNames}
+        onInsert={insertReference}
+      />
+      <EnvDiffDialog
+        open={pending != null}
+        diff={pending?.diff ?? { added: [], changed: [], removed: [] }}
+        restartNote={restartNote(restartImpact)}
         confirming={saving}
-        onCancel={() => setPendingPayload(null)}
+        onCancel={() => setPending(null)}
         onConfirm={applyPending}
       />
       <ConfirmDialog
@@ -1093,7 +1385,6 @@ export function EnvVarsEditor({
         onConfirm={() => {
           const name = pendingUnsub;
           if (!name) return;
-          // setSubscription already toasts its own error.
           setSubscription(subscribed.filter((k) => k !== name)).then(
             () => {
               toast.success(`Removed ${name} from ${service}`);
@@ -1106,222 +1397,3 @@ export function EnvVarsEditor({
     </div>
   );
 }
-
-// ReferencePicker — dropdown that lets the user insert a `${{ x.KEY }}`
-// reference into an env-var value. Shows services in the project
-// (with HOST/PORT/URL/INTERNAL_URL plus PUBLIC_HOST/PUBLIC_URL
-// synthetic keys) plus addons (with the keys actually present on
-// each conn-secret). Service refs resolve to literal strings on save
-// — in-cluster DNS for URL/INTERNAL_URL, the public domain for
-// PUBLIC_URL — and addon refs resolve to secretKeyRef entries.
-// All resolution happens server-side; the picker just inserts the
-// right ${{}} text.
-function ReferencePicker({
-  project,
-  excludeService,
-  onPick,
-  disabled,
-  forceOpen,
-  onForceCloseConsumed,
-}: {
-  project: string;
-  excludeService: string;
-  onPick: (ref: string) => void;
-  disabled?: boolean;
-  // forceOpen lets the parent (e.g. the value input's `${{ ` type-
-  // ahead detector) open the picker programmatically. The picker
-  // calls onForceCloseConsumed when the user closes it so the parent
-  // can reset its internal "user just typed ${{" latch — otherwise
-  // a second edit on the same row would re-open the picker forever.
-  forceOpen?: boolean;
-  onForceCloseConsumed?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  // Honour external open requests. When the parent flips forceOpen
-  // true we open; the closing flow notifies the parent so it can flip
-  // the trigger back off.
-  useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
-  const close = useCallback(() => {
-    setOpen(false);
-    onForceCloseConsumed?.();
-  }, [onForceCloseConsumed]);
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-label="Insert reference"
-        title="Insert a reference to another service or addon"
-        onClick={() => setOpen((v) => !v)}
-        disabled={disabled}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--accent)] disabled:opacity-30"
-      >
-        <Link2 className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <ReferenceMenu
-          project={project}
-          excludeService={excludeService}
-          onPick={(ref) => {
-            onPick(ref);
-            close();
-          }}
-          onClose={close}
-        />
-      )}
-    </div>
-  );
-}
-
-// ReferenceMenu is the dropdown contents — kept separate so the
-// React Query hooks fire only when the menu is actually opened.
-function ReferenceMenu({
-  project,
-  excludeService,
-  onPick,
-  onClose,
-}: {
-  project: string;
-  excludeService: string;
-  onPick: (ref: string) => void;
-  onClose: () => void;
-}) {
-  const proj = useProject(project);
-  const addons = useAddons(project);
-  // Scope both lists to the edited service's env-group. Inside a group
-  // the server resolves base names to that group's clones, so clones
-  // are offered by base name and other groups' clones are hidden.
-  const { services, addonNames } = useMemo(() => {
-    const prefix = project + "-";
-    const short = (fqn: string) => (fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn);
-    const svcList = proj.data?.services ?? [];
-    const self = svcList.find((s) => short(s.metadata.name) === excludeService);
-    const group = resourceGroup(self?.metadata.labels);
-    const selfBase = cloneBaseName(excludeService, group);
-    return {
-      services: groupReferenceNames(
-        svcList.map((s) => ({ name: short(s.metadata.name), labels: s.metadata.labels })),
-        group,
-      ).filter((s) => s !== selfBase),
-      addonNames: groupReferenceNames(
-        (addons.data ?? []).map((a) => ({ name: short(a.metadata.name), labels: a.metadata.labels })),
-        group,
-      ),
-    };
-  }, [proj.data, addons.data, project, excludeService]);
-
-  // Auto-close on outside click + Escape.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Capture + claim: close just this menu, not the service overlay.
-      claimEscape(e);
-      onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
-  return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
-      <div className="absolute right-0 top-9 z-50 w-72 max-h-[60vh] overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1.5 shadow-[var(--shadow-lg)]">
-        <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          Services
-        </p>
-        {services.length === 0 ? (
-          <p className="px-2 py-1.5 text-[11px] text-[var(--text-tertiary)]">
-            No other services in this project.
-          </p>
-        ) : (
-          services.map((svc) => <ServiceRefRow key={svc} service={svc} onPick={onPick} />)
-        )}
-
-        <div className="my-1.5 border-t border-[var(--border-subtle)]" />
-        <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          Addons
-        </p>
-        {addonNames.length === 0 ? (
-          <p className="px-2 py-1.5 text-[11px] text-[var(--text-tertiary)]">No addons.</p>
-        ) : (
-          addonNames.map((short) => (
-            <AddonRefRow key={short} project={project} addonShort={short} onPick={onPick} />
-          ))
-        )}
-      </div>
-    </>
-  );
-}
-
-// ServiceRefRow surfaces the canonical synthetic keys for a service.
-// INTERNAL_URL = in-cluster DNS (backend↔backend); PUBLIC_URL =
-// externally-reachable domain (frontend in a browser → backend);
-// PORT = the bare container port for callers that already have the
-// host (sidecar configs, healthchecks, etc.). URL/HOST still work as
-// refs for back-compat but aren't surfaced here — they duplicate the
-// matched _URL pair without adding signal.
-function ServiceRefRow({ service, onPick }: { service: string; onPick: (ref: string) => void }) {
-  const KEYS = ["INTERNAL_URL", "PUBLIC_URL", "PORT"];
-  return (
-    <div className="px-2 py-1">
-      <p className="font-mono text-[11px] text-[var(--text-secondary)]">{service}</p>
-      <div className="mt-1 flex flex-wrap gap-1">
-        {KEYS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onPick(`\${{ ${service}.${k} }}`)}
-            className="rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]"
-            title={`Insert \${{ ${service}.${k} }}`}
-          >
-            {k}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// AddonRefRow fetches the addon's connection-secret keys and renders
-// each as a clickable chip. Lazy fetched (only when the menu opens)
-// so the editor doesn't pay the round-trips up front.
-function AddonRefRow({
-  project,
-  addonShort,
-  onPick,
-}: {
-  project: string;
-  addonShort: string;
-  onPick: (ref: string) => void;
-}) {
-  const keys = useQuery({
-    queryKey: ["addons", project, addonShort, "secret-keys"],
-    queryFn: () => listAddonSecretKeys(project, addonShort),
-    staleTime: 60_000,
-  });
-  return (
-    <div className="px-2 py-1">
-      <p className="font-mono text-[11px] text-[var(--text-secondary)]">{addonShort}</p>
-      <div className="mt-1 flex flex-wrap gap-1">
-        {keys.isPending && (
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">loading…</span>
-        )}
-        {keys.isError && (
-          <span className="font-mono text-[10px] text-amber-400">no keys yet</span>
-        )}
-        {(keys.data?.keys ?? []).map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onPick(`\${{ ${addonShort}.${k} }}`)}
-            className="rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]"
-          >
-            {k}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
