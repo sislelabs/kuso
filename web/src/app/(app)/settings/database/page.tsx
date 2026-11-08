@@ -12,6 +12,7 @@ import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Database, Cloud, Server, Trash2, RotateCw, CheckCircle2, AlertCircle, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -72,7 +73,7 @@ export default function DatabasePage() {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
       toast.success("Provisioning started — Postgres will be ready in ~1 minute.");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Provision failed"),
+    onError: (e) => toastError(e, "Provision failed"),
   });
   const configureExt = useMutation({
     mutationFn: (dsn: string) => api("/api/instance-pg/external", { method: "POST", body: { dsn } }),
@@ -80,7 +81,7 @@ export default function DatabasePage() {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
       toast.success("External Postgres connected.");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Connection failed"),
+    onError: (e) => toastError(e, "Connection failed"),
   });
   const disable = useMutation({
     mutationFn: () => api("/api/instance-pg", { method: "DELETE" }),
@@ -88,7 +89,7 @@ export default function DatabasePage() {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
       toast.success("Disabled.");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Disable failed"),
+    onError: (e) => toastError(e, "Disable failed"),
   });
 
   const [showProvisionDialog, setShowProvisionDialog] = useState(false);
@@ -501,13 +502,13 @@ function AdditionalServers() {
     mutationFn: ({ name, dsn }: { name: string; dsn: string }) =>
       api("/api/instance-addons", { method: "PUT", body: { name, dsn } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-addons"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Register failed"),
+    onError: (e) => toastError(e, "Register failed"),
   });
   const unregister = useMutation({
     mutationFn: (name: string) =>
       api(`/api/instance-addons/${encodeURIComponent(name)}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-addons"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Unregister failed"),
+    onError: (e) => toastError(e, "Unregister failed"),
   });
 
   const [showAdd, setShowAdd] = useState(false);

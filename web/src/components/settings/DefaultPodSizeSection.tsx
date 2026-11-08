@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   POD_SIZE_NONE,
   getDefaultPodSize,
@@ -29,7 +30,7 @@ export function DefaultPodSizeSection({ canEdit }: { canEdit: boolean }) {
       toast.success(`Default pod size set to ${name}`);
       qc.invalidateQueries({ queryKey: ["admin", "default-podsize"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const selected = current.data ?? "";

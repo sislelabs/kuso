@@ -12,6 +12,7 @@ import { SettingsPage, SettingsPageLoading } from "@/components/settings/Setting
 import { SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { Markdown } from "@/components/settings/Markdown";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { isUpdateInFlight } from "./updatePhase";
@@ -71,7 +72,7 @@ export default function UpdatesPage() {
       toast.success("Update started");
       qc.invalidateQueries({ queryKey: ["system", "update-status"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+    onError: (e) => toastError(e, "Update failed"),
   });
 
   // Manual GH poll. The 6h background ticker is fine for "is there
@@ -92,7 +93,7 @@ export default function UpdatesPage() {
         toast.success(`Up to date (${res.current})`);
       }
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Refresh failed"),
+    onError: (e) => toastError(e, "Refresh failed", { retry: () => refresh.mutate() }),
   });
 
   const checkButton = (

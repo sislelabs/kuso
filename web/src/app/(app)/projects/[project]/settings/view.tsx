@@ -18,6 +18,7 @@ import {
   Users as UsersIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
 import { cn } from "@/lib/utils";
@@ -628,7 +629,7 @@ function NotificationsCard({ project, canWrite }: { project: string; canWrite: b
       void qc.invalidateQueries({ queryKey: ["admin", "notifications", "muted-projects"] });
       toast.success(next ? "Notifications muted" : "Notifications unmuted");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update mute");
+      toastError(err, "Failed to update mute");
     } finally {
       setBusy(false);
     }

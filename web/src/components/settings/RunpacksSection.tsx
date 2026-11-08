@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,7 +36,7 @@ export function RunpacksSection({ canEdit }: { canEdit: boolean }) {
       toast.success("Runpack deleted");
       void qc.invalidateQueries({ queryKey: runpacksQueryKey });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
     onSettled: () => setDeleting(null),
   });
 

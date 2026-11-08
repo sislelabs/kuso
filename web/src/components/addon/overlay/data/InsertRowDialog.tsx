@@ -8,6 +8,7 @@ import { insertSQLRow, type SQLColumn, type SQLCellValue } from "@/features/proj
 import { Button } from "@/components/ui/button";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { inputKindFor, validateCell, toCellValue } from "./cellInput";
 
 // Per-field draft state. omit=true means "don't send this column" → the DB
@@ -74,7 +75,7 @@ export function InsertRowDialog({
       toast.success("Row inserted");
       onInserted();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Insert failed"),
+    onError: (e) => toastError(e, "Insert failed"),
   });
 
   // A half-filled row survives a stray click outside; Escape and the

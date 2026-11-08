@@ -10,6 +10,7 @@ import {
 } from "@/features/project-secrets";
 import { Check, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ApiError } from "@/lib/api-client";
@@ -60,7 +61,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
             return;
           }
           setPendingShadowed(null);
-          toast.error(e instanceof Error ? e.message : `Failed to save ${k}`);
+          toastError(e, `Failed to save ${k}`);
         },
       }
     );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   listSharedSecrets,
   setSharedSecret,
@@ -45,6 +45,6 @@ export function useUnsetSharedSecret(project: string) {
   return useMutation({
     mutationFn: (key: string) => unsetSharedSecret(project, key),
     onSuccess: () => invalidateSharedSecretViews(qc, project),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
 }

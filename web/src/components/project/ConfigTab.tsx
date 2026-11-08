@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, Rocket, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -64,7 +65,7 @@ export function ConfigTab({ project }: { project: string }) {
       toast.success("Dry run complete — review the plan below");
     } catch (e) {
       setPlan(null);
-      toast.error(e instanceof Error ? e.message : "dry run failed");
+      toastError(e, "Dry run failed");
     } finally {
       setBusy(false);
     }
@@ -89,7 +90,7 @@ export function ConfigTab({ project }: { project: string }) {
       }
     } catch (e) {
       setResult(null);
-      toast.error(e instanceof Error ? e.message : "apply failed");
+      toastError(e, "Apply failed");
     } finally {
       setBusy(false);
     }

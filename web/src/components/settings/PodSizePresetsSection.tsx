@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,7 +67,7 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
       setEditing(null);
       void invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const remove = useMutation({
@@ -76,7 +77,7 @@ export function PodSizePresetsSection({ canEdit }: { canEdit: boolean }) {
       toast.success("Preset deleted");
       void invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
     onSettled: () => setDeleting(null),
   });
 

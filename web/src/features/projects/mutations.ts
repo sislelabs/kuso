@@ -2,6 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { api } from "@/lib/api-client";
 import { stopProject, startProject } from "./api";
 import {
@@ -148,9 +149,7 @@ export function useStopProject() {
       toast.success(`Stopping ${name}`);
     },
     onError: (err, name) => {
-      toast.error(
-        `Failed to stop ${name}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toastError(err, `Failed to stop ${name}`);
     },
   });
 }
@@ -165,9 +164,7 @@ export function useStartProject() {
       toast.success(`Starting ${name}`);
     },
     onError: (err, name) => {
-      toast.error(
-        `Failed to start ${name}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toastError(err, `Failed to start ${name}`);
     },
   });
 }

@@ -9,6 +9,7 @@ import { SettingsPage, SettingsPageLoading } from "@/components/settings/Setting
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 
 interface SessionSettings {
   ttlSeconds: number;
@@ -60,7 +61,7 @@ export default function SessionSettingsPage() {
         setLoaded(true);
       })
       .catch((e) => {
-        toast.error(e instanceof Error ? e.message : "Failed to load settings");
+        toastError(e, "Failed to load settings");
         setLoadFailed(true);
         setLoaded(true);
       });
@@ -72,7 +73,7 @@ export default function SessionSettingsPage() {
       await api("/api/admin/settings/session", { method: "PUT", body: s });
       toast.success("Saved. Applies the next time someone signs in.");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toastError(e, "Save failed");
     } finally {
       setSaving(false);
     }

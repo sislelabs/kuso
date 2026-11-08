@@ -65,6 +65,7 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
 import { SERVICE_STATUS, serverStateCause, type ServiceStatus } from "@/lib/status";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
@@ -227,7 +228,7 @@ function EditableTitle({
       toast.success(trimmed ? `Renamed to "${trimmed}"` : "Display name cleared");
       setEditing(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Rename failed");
+      toastError(e, "Rename failed");
     }
   }, [value, displayName, patch]);
 
@@ -1235,7 +1236,7 @@ function RestartControl({
       toast.success(`Restarting ${service} (${envGroup})`);
       setConfirming(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Restart failed");
+      toastError(e, "Restart failed");
     }
   };
 
@@ -1279,7 +1280,7 @@ function WakeControl({ project, service, env }: { project: string; service: stri
       await wake.mutateAsync(env);
       toast.success(`Waking ${service}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Wake failed");
+      toastError(e, "Wake failed");
     }
   };
   return (
@@ -1333,7 +1334,7 @@ function RollbackControl({
       setConfirming(false);
     },
     onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Rollback failed");
+      toastError(e, "Rollback failed");
       setConfirming(false);
     },
   });

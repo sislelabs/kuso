@@ -2,6 +2,7 @@
 
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { listBackups } from "@/features/projects";
 import { addonBackupsQueryKey, isBackupsNotConfigured, runBackupNow } from "./backups";
 import { getSubscribedAddons, setSubscribedAddons, type SubscribedAddons } from "./api";
@@ -74,6 +75,6 @@ export function useBackupNow(project: string, addon: string) {
       });
       void qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't start the backup"),
+    onError: (e) => toastError(e, "Couldn't start the backup"),
   });
 }

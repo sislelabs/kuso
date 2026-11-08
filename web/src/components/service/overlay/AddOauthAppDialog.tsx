@@ -16,6 +16,7 @@ import { Copy, ExternalLink, Github } from "lucide-react";
 import { setServiceEnv, getServiceEnv } from "@/features/services/api";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { hostScheme } from "@/lib/host-scheme";
 
 // "Sign in with GitHub" provisioning helper for a deployed service.
@@ -127,7 +128,7 @@ export function AddOauthAppDialog({
       setClientId("");
       setClientSecret("");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toastError(e, "Save failed");
     } finally {
       setSaving(false);
     }

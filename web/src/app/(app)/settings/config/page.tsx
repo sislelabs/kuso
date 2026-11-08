@@ -13,6 +13,7 @@ import { PodSizePresetsSection } from "@/components/settings/PodSizePresetsSecti
 import { RunpacksSection } from "@/components/settings/RunpacksSection";
 import { instanceInfoQueryKey } from "@/features/instance-config";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Save } from "lucide-react";
 import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
@@ -62,7 +63,7 @@ export default function ClusterConfigPage() {
       qc.invalidateQueries({ queryKey: ["admin", "settings"] });
       qc.invalidateQueries({ queryKey: instanceInfoQueryKey });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   if (settings.isPending) {

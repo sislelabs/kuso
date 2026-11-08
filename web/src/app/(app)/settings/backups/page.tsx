@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { relativeTime } from "@/lib/format";
 import { Save, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -248,7 +249,7 @@ export default function BackupSettingsPage() {
       toast.success("Backup settings saved");
       qc.invalidateQueries({ queryKey: ["admin", "backup-settings"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   return (

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Github, ExternalLink, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -298,7 +299,7 @@ function RenameRow({ project, service }: { project: string; service: string }) {
       // Close the overlay by routing back to the project page.
       router.push(`/projects/${encodeURIComponent(project)}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Rename failed");
+      toastError(e, "Rename failed");
     } finally {
       setPending(false);
     }

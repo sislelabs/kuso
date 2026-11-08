@@ -19,6 +19,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { Command } from "cmdk";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   ArrowLeft,
   ChevronRight,
@@ -447,7 +448,7 @@ export function CommandPalette() {
         toast.success(`Restarting ${svc.display} (${svc.group})`);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to ${kind} ${svc.display}`);
+      toastError(err, `Failed to ${kind} ${svc.display}`);
     }
   };
 

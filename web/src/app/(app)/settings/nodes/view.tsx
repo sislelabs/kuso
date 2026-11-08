@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ChevronRight, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -116,7 +117,7 @@ export function NodesView() {
       }
       qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Cleanup failed"),
+    onError: (e) => toastError(e, "Cleanup failed"),
   });
   // Hoist edits up here so we can render a single floating save bar
   // covering every node's pending changes — same pattern as service
@@ -172,7 +173,7 @@ export function NodesView() {
       setEdits({});
       await qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
+      toastError(e, "Failed to save");
     } finally {
       setSaving(false);
     }
@@ -446,7 +447,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
       setConfirmOpen(false);
       qc.invalidateQueries({ queryKey: ["kubernetes", "node-updates"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Apply failed"),
+    onError: (e) => toastError(e, "Apply failed"),
   });
 
   // While an apply is in flight, poll the advisory so phase transitions
@@ -961,7 +962,7 @@ function UncordonButton({ node }: { node: string }) {
       toast.success(`${node} is schedulable again`);
       qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Uncordon failed"),
+    onError: (e) => toastError(e, "Uncordon failed"),
   });
   return (
     <Button size="xs" variant="secondary" onClick={() => uncordon.mutate()} loading={uncordon.isPending}>
@@ -998,7 +999,7 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
       qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Remove failed");
+      toastError(err, "Remove failed");
     },
   });
   return (
@@ -1123,7 +1124,7 @@ function AddNodeModal({
       setValidation(null);
       void qc.invalidateQueries({ queryKey: ["ssh-keys"] });
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "Delete failed"),
+    onError: (err) => toastError(err, "Delete failed"),
     onSettled: () => setConfirmKeyDelete(false),
   });
 
@@ -1147,7 +1148,7 @@ function AddNodeModal({
       else toast.error("Validation has errors — see the checks below");
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Validate failed");
+      toastError(err, "Validate failed");
     },
   });
 
@@ -1570,7 +1571,7 @@ function BootstrapBody({
       void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Mint failed");
+      toastError(err, "Mint failed");
     },
   });
 
@@ -1786,7 +1787,7 @@ function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
           : { name, generate: true },
       }),
     onSuccess: (k) => onCreated(k),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Key create failed"),
+    onError: (e) => toastError(e, "Key create failed"),
   });
   return (
     <div className="mt-2 space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2">
@@ -2374,7 +2375,7 @@ function PendingBootstrapTokensCard() {
       void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
       toast.success("Token revoked");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
+    onError: (e) => toastError(e, "Revoke failed"),
   });
   const [revoking, setRevoking] = useState<PendingTokenRow | null>(null);
   const tokens = pending.data?.tokens ?? [];

@@ -18,6 +18,7 @@ import {
 import { useProjects, useSetIncidentMonitoring } from "@/features/projects";
 import { IncidentsSection } from "@/components/incidents/IncidentsSection";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
@@ -94,7 +95,7 @@ function MonitoredProjectsSection({
       {
         onSuccess: () =>
           toast.success(`${name} ${enabled ? "now monitored" : "no longer monitored"}`),
-        onError: (e) => toast.error(e instanceof Error ? e.message : "update failed"),
+        onError: (e) => toastError(e, "Update failed"),
         onSettled: () => setPending(null),
       },
     );
@@ -220,7 +221,7 @@ function ConfigSection({
       toast.success("Saved — applies within ~30s");
       onSaved();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
@@ -325,7 +326,7 @@ function CredentialsSection({
       setCreds("");
       onSaved();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   return (
@@ -402,7 +403,7 @@ function DiscordSection({
       setKusoBotToken("");
       onSaved();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const dirty = botToken !== "" || kusoBotToken !== "" || channelId !== (status.channelId ?? "");

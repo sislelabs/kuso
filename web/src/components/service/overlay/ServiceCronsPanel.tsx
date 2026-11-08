@@ -10,6 +10,7 @@ import type { KusoCron } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { CronPolicyFields } from "@/components/cron/CronPolicyFields";
 import { policyCreateFields, policyForm } from "@/components/cron/cronPatch";
@@ -132,7 +133,7 @@ function CronRow({
       qc.invalidateQueries({ queryKey: ["projects", project] });
     },
     onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
+      toastError(e, "Delete failed");
       setConfirming(false);
     },
   });
@@ -143,7 +144,7 @@ function CronRow({
       toast.success(`Cron ${short} synced`);
       qc.invalidateQueries({ queryKey: ["projects", project] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Sync failed"),
+    onError: (e) => toastError(e, "Sync failed"),
   });
 
   return (
@@ -235,7 +236,7 @@ function CronCreateForm({
       setCmd("");
       onCreated();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
+    onError: (e) => toastError(e, "Create failed"),
   });
   const submitDisabled = !name.trim() || !schedule.trim() || !cmd.trim() || create.isPending;
   return (

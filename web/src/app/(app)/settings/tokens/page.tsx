@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon } from "lucide-react";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsSection } from "@/components/settings/SettingsSection";
@@ -79,7 +80,7 @@ export default function TokensPage() {
       setIssued(r);
       setName("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to issue token");
+      toastError(err, "Failed to issue token");
     }
   };
 

@@ -13,6 +13,7 @@ import {
 } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { CellEditor } from "./CellEditor";
 import { InsertRowDialog } from "./InsertRowDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -101,7 +102,7 @@ export function TableGrid({
       toast.success("Row deleted");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
 
   const update = useMutation({
@@ -113,7 +114,7 @@ export function TableGrid({
       toast.success("Saved");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+    onError: (e) => toastError(e, "Update failed"),
   });
 
   // Build the PK value map for a given displayed row. Throws if a PK column
@@ -136,7 +137,7 @@ export function TableGrid({
     try {
       return pkOf(rowIdx);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't resolve the primary key");
+      toastError(e, "Couldn't resolve the primary key");
       return null;
     }
   };

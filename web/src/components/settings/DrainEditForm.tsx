@@ -3,6 +3,7 @@
 import { Switch } from "@/components/ui/switch";
 import { useId, useState } from "react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -49,7 +50,7 @@ export function DrainEditForm({
           toast.success(`Drain ${d.name} saved — applies within ~30s`);
           onDone();
         },
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Save failed"),
+        onError: (err) => toastError(err, "Save failed"),
       }
     );
   };

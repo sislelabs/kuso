@@ -74,6 +74,7 @@ import {
   Play,
 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -852,7 +853,7 @@ export function ProjectCanvas({
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       invalidateProjectDescribe(qc, project);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Connect failed");
+      toastError(err, "Connect failed");
     }
   };
 
@@ -973,7 +974,7 @@ export function ProjectCanvas({
                 await callStopStart(data.project, short, "start", qc);
                 toast.success(`Starting ${short}`);
               } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Failed to start service");
+                toastError(err, "Failed to start service");
               }
             },
           }
@@ -1379,7 +1380,7 @@ export function ProjectCanvas({
           } catch (err) {
             // Restore the node so the canvas matches reality.
             setNodes(prevNodes);
-            toast.error(err instanceof Error ? err.message : "Failed to delete");
+            toastError(err, "Failed to delete");
           } finally {
             setDeleting(false);
           }
@@ -1414,7 +1415,7 @@ export function ProjectCanvas({
             toast.success(buildTriggerMessage(res, `Redeploy started for ${short}`, short));
             setConfirmRedeploy(null);
           } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to redeploy");
+            toastError(err, "Failed to redeploy");
           } finally {
             setRedeploying(false);
           }
@@ -1437,7 +1438,7 @@ export function ProjectCanvas({
             toast.success(`Stopped ${short}`);
             setConfirmStop(null);
           } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to stop service");
+            toastError(err, "Failed to stop service");
           } finally {
             setStopping(false);
           }

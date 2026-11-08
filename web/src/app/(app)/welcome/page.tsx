@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
-import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 
 // Guided 3-step onboarding for users landing on a fresh kuso install.
 // Before this, the path from "I just signed up" to "I have a service
@@ -339,7 +339,7 @@ function Step2PickRepo({
       });
       onPicked(slug);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create project");
+      toastError(err, "Failed to create project");
     } finally {
       setBusyRepo(null);
     }

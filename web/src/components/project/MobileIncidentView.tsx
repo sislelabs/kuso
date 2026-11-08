@@ -42,6 +42,7 @@ import {
   BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { ErrorBadge, VulnBadge } from "@/components/canvas/NodeBadges";
@@ -307,7 +308,7 @@ function MobileServiceCard({
       {
         onSuccess: (res) =>
           toast.success(buildTriggerMessage(res, `Redeploy queued for ${shortName}`, shortName)),
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Redeploy failed"),
+        onError: (err) => toastError(err, "Redeploy failed"),
       },
     );
   };
@@ -316,7 +317,7 @@ function MobileServiceCard({
     const m = stopped ? start : stop;
     m.mutate(undefined, {
       onSuccess: () => toast.success(stopped ? `Starting ${shortName}` : `Stopping ${shortName}`),
-      onError: (err) => toast.error(err instanceof Error ? err.message : "Action failed"),
+      onError: (err) => toastError(err, "Action failed"),
       onSettled: () => setConfirmingStop(false),
     });
   };
@@ -404,7 +405,7 @@ function MobileServiceCard({
                 setMoreOpen(false);
                 restart.mutate(env ? envGroupName(env) : "production", {
                   onSuccess: () => toast.success(`Restarting ${shortName}`),
-                  onError: (err) => toast.error(err instanceof Error ? err.message : "Restart failed"),
+                  onError: (err) => toastError(err, "Restart failed"),
                 });
               }}
             >

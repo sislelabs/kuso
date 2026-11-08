@@ -17,6 +17,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   HeartPulse,
   AlertTriangle,
@@ -244,7 +245,7 @@ function OrphansSection({ orphans }: { orphans: ReconcileIssue[] }) {
       setTarget(null);
       qc.invalidateQueries({ queryKey: reconcileHealthQueryKey });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
   const visible = orphans.filter((o) => !deleted.has(keyOf(o)));
   if (visible.length === 0) return null;
@@ -313,7 +314,7 @@ function IssueRow({ issue }: { issue: ReconcileIssue }) {
         },
         onError: (e) => {
           setConfirming(false);
-          toast.error(e instanceof Error ? e.message : "Remediation failed");
+          toastError(e, "Remediation failed");
         },
       }
     );

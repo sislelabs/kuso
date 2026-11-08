@@ -20,6 +20,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Github } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 
 interface InviteSummary {
   token: string;
@@ -105,8 +106,7 @@ export function InviteRedeemView() {
       toast.success("Welcome to kuso");
       router.replace("/");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      toast.error(msg);
+      toastError(err, "Couldn't create your account");
     } finally {
       setSubmitting(false);
     }

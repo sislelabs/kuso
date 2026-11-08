@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ChevronDown, Undo2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { describeRevision, useRevertRevision, type Revision } from "@/features/revisions";
@@ -47,7 +48,7 @@ export function RevisionRow({
   const onConfirm = () =>
     revert.mutate(revision.id, {
       onSuccess: () => toast.success("Reverted"),
-      onError: (e) => toast.error(e instanceof Error ? e.message : "Revert failed"),
+      onError: (e) => toastError(e, "Revert failed"),
       onSettled: () => setOpen(false),
     });
   return (

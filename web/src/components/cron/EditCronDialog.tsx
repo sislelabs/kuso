@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { X, Globe, Terminal, Box, Clock, Save, Trash2, RefreshCw, Package, KeyRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { nextRuns } from "@/lib/cron-next";
@@ -191,7 +192,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
       qc.invalidateQueries({ queryKey: ["projects", project, "crons"] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const del = useMutation({
@@ -217,7 +218,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
       setConfirmDelete(false);
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
 
   // Sync image — re-resolve the parent service's CURRENT production image tag +
@@ -239,7 +240,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "crons"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Sync failed"),
+    onError: (e) => toastError(e, "Sync failed"),
   });
 
   if (!cron) return null;

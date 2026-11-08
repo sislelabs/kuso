@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { X, Users as UsersIcon, User as UserIcon, ChevronRight, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -81,7 +82,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
       toast.success("Access granted");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "grant failed"),
+    onError: (e) => toastError(e, "Grant failed"),
   });
 
   const remove = useMutation({
@@ -94,7 +95,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
       setConfirmRemove(null);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "remove failed"),
+    onError: (e) => toastError(e, "Remove failed"),
   });
 
   const setOverride = useMutation({
@@ -106,7 +107,7 @@ export function ProjectAccessPanel({ project }: { project: string }) {
         body: g.kind === "user" ? { userId: g.userId, role: g.roleOverride } : { groupId: g.groupId, role: g.roleOverride },
       }),
     onSuccess: invalidate,
-    onError: (e) => toast.error(e instanceof Error ? e.message : "update failed"),
+    onError: (e) => toastError(e, "Update failed"),
   });
 
   const userName = (id?: string) => users.data?.find((u) => u.id === id)?.username ?? id ?? "?";

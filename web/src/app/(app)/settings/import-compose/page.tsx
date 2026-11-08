@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
 import { useCan, Perms } from "@/features/auth";
-import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 
 // docker-compose import wizard — convert-preview, then apply.
 //
@@ -80,7 +80,7 @@ export default function ImportComposePage() {
       setNameTaken(null);
       setStepErrors([]);
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toastError(err, "Couldn't read the compose file"),
   });
 
   // Apply feeds the generated YAML to the config-as-code endpoint.
@@ -115,7 +115,7 @@ export default function ImportComposePage() {
       void qc.invalidateQueries({ queryKey: projectsSummaryQueryKey, exact: true });
       void qc.invalidateQueries({ queryKey: projectQueryKey(proj) });
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toastError(err, "Compose import failed"),
   });
 
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {

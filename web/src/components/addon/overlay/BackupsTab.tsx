@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { relativeTime } from "@/lib/format";
 
 // addonCRName + addonShort mirror the server's CRName/ShortName
@@ -88,7 +89,7 @@ function DownloadBackupButton({
         try {
           await downloadAddonBackup(project, addon);
         } catch (e) {
-          toast.error(e instanceof Error ? e.message : "Download failed");
+          toastError(e, "Download failed");
         } finally {
           setBusy(false);
         }
@@ -160,7 +161,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
       setConfirmKey(null);
       qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
+    onError: (e) => toastError(e, "Restore failed"),
   });
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const hasSchedule = !!thisAddon?.spec.backup?.schedule;
@@ -183,7 +184,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     try {
       await downloadStoredBackup(project, addon, key);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Download failed");
+      toastError(e, "Download failed");
     } finally {
       setDownloading(null);
     }
@@ -455,7 +456,7 @@ function BackupScheduleEditor({
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
       qc.invalidateQueries({ queryKey: addonBackupsQueryKey(project, addon) });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   return (

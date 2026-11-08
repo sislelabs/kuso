@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -69,7 +70,7 @@ export function useRedeploy(project: string, service: string, env?: KusoEnvironm
       const res = await trigger.mutateAsync(env?.spec?.branch ? { branch: env.spec.branch } : {});
       toast.success(buildTriggerMessage(res, `${verb} started`));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to trigger build");
+      toastError(e, "Failed to trigger build");
     }
   };
   const request = () => {
@@ -148,7 +149,7 @@ export function ServiceHeaderActions({
       toast.success(`Restarting ${service} (${group})`);
       setConfirm(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Restart failed");
+      toastError(e, "Restart failed");
     }
   };
   const onStop = async () => {
@@ -157,7 +158,7 @@ export function ServiceHeaderActions({
       toast.success(`Stopped ${service}`);
       setConfirm(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to stop service");
+      toastError(e, "Failed to stop service");
     }
   };
   const onStart = async () => {
@@ -165,7 +166,7 @@ export function ServiceHeaderActions({
       await start.mutateAsync();
       toast.success(`Starting ${service}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to start service");
+      toastError(e, "Failed to start service");
     }
   };
 

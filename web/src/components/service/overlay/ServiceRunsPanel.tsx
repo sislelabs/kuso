@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
 import { Play, X, Terminal, AlertCircle, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 
@@ -170,7 +171,7 @@ function NewRunComposer({ project, service }: { project: string; service: string
       setCmd("");
       setEnvText("");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to start run");
+      toastError(e, "Failed to start run");
     }
   };
 
@@ -446,7 +447,7 @@ function CancelRunButton({
               setConfirming(false);
             },
             onError: (e) => {
-              toast.error(e instanceof Error ? e.message : "Cancel failed");
+              toastError(e, "Cancel failed");
               setConfirming(false);
             },
           })
@@ -532,7 +533,7 @@ function DeleteRunButton({
               setConfirming(false);
             },
             onError: (e) => {
-              toast.error(e instanceof Error ? e.message : "Delete failed");
+              toastError(e, "Delete failed");
               setConfirming(false);
             },
           })

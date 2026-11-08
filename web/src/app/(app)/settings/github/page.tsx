@@ -19,6 +19,7 @@ import { SettingsPage, SettingsPageLoading } from "@/components/settings/Setting
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   Github,
   RotateCw,
@@ -224,7 +225,7 @@ function GithubSettingsPage() {
       setPrivateKey("");
       setOrg("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save GitHub App");
+      toastError(err, "Failed to save GitHub App");
     }
   };
 
@@ -325,9 +326,7 @@ function CreateAppPanel() {
       submitManifest(res.postURL, res.state, res.manifest);
     } catch (err) {
       setLoading(false);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't start the GitHub App setup",
-      );
+      toastError(err, "Couldn't start the GitHub App setup");
     }
   };
 
@@ -402,7 +401,7 @@ function ConfiguredPanel({
       toast.success("Installations refreshed");
       qc.invalidateQueries({ queryKey: ["github", "installations"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Refresh failed"),
+    onError: (e) => toastError(e, "Refresh failed", { retry: () => refresh.mutate() }),
   });
 
   const installURL = appSlug ? `https://github.com/apps/${appSlug}/installations/new` : null;

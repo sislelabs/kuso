@@ -20,6 +20,7 @@ import {
 import { Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { DrainEditForm } from "@/components/settings/DrainEditForm";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import {
@@ -87,7 +88,7 @@ export default function DrainsPage() {
     setTestingId(d.id);
     test.mutate(d.id, {
       onSuccess: (r) => toast.success(`${d.name}: upstream accepted the test line (${r.status})`),
-      onError: (e) => toast.error(e instanceof Error ? e.message : "Test failed"),
+      onError: (e) => toastError(e, "Test failed"),
       onSettled: () => setTestingId(null),
     });
   };
@@ -109,7 +110,7 @@ export default function DrainsPage() {
           setHeadersText("");
           setSecret("");
         },
-        onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+        onError: (e) => toastError(e, "Save failed"),
       }
     );
   };
@@ -334,7 +335,7 @@ export default function DrainsPage() {
         onConfirm={() => {
           if (pendingDelete) {
             remove.mutate(pendingDelete.id, {
-              onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+              onError: (e) => toastError(e, "Delete failed"),
             });
           }
           setPendingDelete(null);

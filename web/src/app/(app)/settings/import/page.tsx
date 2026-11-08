@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Database, Globe, Package, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useCan, Perms } from "@/features/auth";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 
 // Coolify import wizard — preview + commit.
 //
@@ -137,7 +138,7 @@ export default function ImportPage() {
       }
     },
     onError: (err) => {
-      toast.error(err.message);
+      toastError(err, "Coolify import failed");
     },
   });
 

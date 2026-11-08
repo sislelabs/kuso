@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { TableGrid } from "./data/TableGrid";
 
 export function SQLTab({ project, addon }: { project: string; addon: string }) {
@@ -74,7 +75,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
       tables.refetch();
       setError(null);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Repair failed"),
+    onError: (e) => toastError(e, "Repair failed"),
   });
 
   // The drift bug surfaces as Postgres SQLSTATE 28P01. Detect both

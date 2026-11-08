@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { buildSettingsPayload, type BuildSettingsResponse } from "./payload";
 
 type BuildSettings = Pick<
@@ -124,7 +125,7 @@ export default function BuildSettingsPage() {
         setLoaded(true);
       })
       .catch((e) => {
-        toast.error(e instanceof Error ? e.message : "Failed to load settings");
+        toastError(e, "Failed to load settings");
         setLoadFailed(true);
         setLoaded(true);
       });
@@ -139,7 +140,7 @@ export default function BuildSettingsPage() {
       });
       toast.success("Saved. New limits apply to the next build.");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toastError(e, "Save failed");
     } finally {
       setSaving(false);
     }

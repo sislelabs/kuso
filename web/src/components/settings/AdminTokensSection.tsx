@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Check, Copy, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,7 +59,7 @@ export function AdminTokensSection() {
       setName("");
       void invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to issue token"),
+    onError: (e) => toastError(e, "Failed to issue token"),
   });
 
   const revoke = useMutation({
@@ -68,7 +69,7 @@ export function AdminTokensSection() {
       toast.success("Token revoked");
       void invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
+    onError: (e) => toastError(e, "Revoke failed"),
     onSettled: () => setRevoking(null),
   });
 

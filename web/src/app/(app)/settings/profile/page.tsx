@@ -19,6 +19,7 @@ import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Save, KeyRound, ImageUp } from "lucide-react";
 
 // ProfilePage is the user's account home: identity + password. Two
@@ -97,7 +98,7 @@ function ProfilePage() {
       ]);
       toast.success("Profile saved");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save profile");
+      toastError(err, "Failed to save profile");
     } finally {
       setSavingProfile(false);
     }
@@ -120,7 +121,7 @@ function ProfilePage() {
       ]);
       toast.success("Avatar updated");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload avatar");
+      toastError(err, "Failed to upload avatar");
     } finally {
       setUploadingAvatar(false);
     }
@@ -144,7 +145,7 @@ function ProfilePage() {
       setPwNew("");
       setPwNew2("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change password");
+      toastError(err, "Failed to change password");
     } finally {
       setSavingPw(false);
     }

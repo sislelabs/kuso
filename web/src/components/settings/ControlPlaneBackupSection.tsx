@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Download, Loader2, Upload, X } from "lucide-react";
 import { SettingsField, SettingsSection } from "./SettingsSection";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,7 @@ export function ControlPlaneBackupSection() {
       if (fileInput.current) fileInput.current.value = "";
       toast.success(`Restore job ${r.jobName} started`);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed to start"),
+    onError: (e) => toastError(e, "Restore failed to start"),
   });
 
   const status = useQuery({
@@ -80,7 +81,7 @@ export function ControlPlaneBackupSection() {
       const r = await downloadControlPlaneBackup();
       toast.success(`Saved ${r.filename} (${formatKiB(r.bytes)})`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Backup download failed");
+      toastError(e, "Backup download failed");
     } finally {
       setDownloading(false);
     }

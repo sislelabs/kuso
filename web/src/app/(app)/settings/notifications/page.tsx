@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import {
   Bell,
   BellRing,
@@ -369,7 +370,7 @@ function MutedProjects() {
                     queryKey: ["admin", "notifications", "muted-projects"],
                   });
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Failed to unmute");
+                  toastError(e, "Failed to unmute");
                 }
               }}
             >
@@ -439,7 +440,7 @@ function NotificationRow({
     mutationFn: () =>
       api(`/api/notifications/${encodeURIComponent(n.id)}/test`, { method: "POST" }),
     onSuccess: () => toast.success(`Test sent to ${n.name}`),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Test failed"),
+    onError: (e) => toastError(e, "Test failed"),
   });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const remove = useMutation({
@@ -450,7 +451,7 @@ function NotificationRow({
       qc.invalidateQueries({ queryKey: ["admin", "notifications"] });
       setConfirmOpen(false);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
   const toggle = useMutation({
     mutationFn: (enabled: boolean) =>
@@ -462,7 +463,7 @@ function NotificationRow({
       toast.success(enabled ? `${n.name} enabled` : `${n.name} disabled`);
       qc.invalidateQueries({ queryKey: ["admin", "notifications"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+    onError: (e) => toastError(e, "Update failed"),
   });
 
   return (
@@ -692,7 +693,7 @@ function NotificationEditor({
       qc.invalidateQueries({ queryKey: ["admin", "notifications"] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   return (

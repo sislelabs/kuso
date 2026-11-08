@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Container, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -38,7 +39,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
           setUsername("");
           setPassword("");
         },
-        onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+        onError: (e) => toastError(e, "Save failed"),
       },
     );
   };
@@ -135,7 +136,7 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
               setPendingDelete(null);
             },
             onError: (e) => {
-              toast.error(e instanceof Error ? e.message : "Remove failed");
+              toastError(e, "Remove failed");
               setPendingDelete(null);
             },
           });

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, ChevronDown, ExternalLink, Undo2 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CopyButton } from "@/components/ui/copy-button";
 import { buildRefLabel, useRollbackToBuild, type DeployBuild } from "@/features/builds";
@@ -269,7 +270,7 @@ function RolledBackStrip({
                 setConfirm(false);
               },
               onError: (e) => {
-                toast.error(e instanceof Error ? e.message : "Couldn't undo the rollback");
+                toastError(e, "Couldn't undo the rollback");
                 setConfirm(false);
               },
             },

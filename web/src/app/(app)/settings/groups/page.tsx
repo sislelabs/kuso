@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Plus, X, Save, ShieldCheck, Check, UserPlus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
@@ -70,7 +71,7 @@ export default function GroupsSettingsPage() {
       setCreating(false);
       setNewName("");
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "create failed"),
+    onError: (e) => toastError(e, "Create failed"),
   });
 
   return (
@@ -215,7 +216,7 @@ function GroupEditor({
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       onDeleted();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
   const tenancy = useQuery({
     queryKey: ["admin", "groups", groupId, "tenancy"],
@@ -260,7 +261,7 @@ function GroupEditor({
       setBaseline(form);
       qc.invalidateQueries({ queryKey: ["admin", "groups", groupId, "tenancy"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   if (tenancy.isError) {
@@ -400,7 +401,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       toast.success("Member added");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "add failed"),
+    onError: (e) => toastError(e, "Add failed"),
   });
   const [removing, setRemoving] = useState<{ id: string; username: string } | null>(null);
   const remove = useMutation({
@@ -414,7 +415,7 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       setRemoving(null);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "remove failed"),
+    onError: (e) => toastError(e, "Remove failed"),
   });
 
   const roster = members.data ?? [];

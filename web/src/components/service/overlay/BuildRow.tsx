@@ -21,6 +21,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/services";
@@ -519,7 +520,7 @@ function CancelButton({ project, service, buildId }: { project: string; service:
       toast.success("Build cancelled");
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Cancel failed"),
+    onError: (e) => toastError(e, "Cancel failed"),
   });
   return (
     <button
@@ -559,7 +560,7 @@ function RetryBuildButton({
       toast.success(buildTriggerMessage(res, "Rebuild started"));
       setOpen(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to start the build");
+      toastError(e, "Failed to start the build");
     }
   };
   return (
@@ -611,7 +612,7 @@ function RetryReleaseButton({ project, service, buildId, sha }: { project: strin
   const run = () =>
     m.mutate(buildId, {
       onSuccess: (res) => toast.success(res.job ? `Release retry started (${res.job})` : "Release retry started"),
-      onError: (e) => toast.error(e instanceof Error ? e.message : "Retry failed"),
+      onError: (e) => toastError(e, "Retry failed"),
       onSettled: () => setOpen(false),
     });
   return (
@@ -671,7 +672,7 @@ export function RollbackButton({
             setStep("mismatch");
             return;
           }
-          toast.error(e instanceof Error ? e.message : "Rollback failed");
+          toastError(e, "Rollback failed");
           setStep("idle");
         },
       },

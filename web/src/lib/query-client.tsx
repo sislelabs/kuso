@@ -8,9 +8,9 @@ import {
   type Mutation,
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { clearJwt, onApiWarning } from "./api-client";
 import { kt } from "./toast";
+import { toastError } from "./errors";
 
 // onAuthError centralises the "session expired" handling. Triggered
 // from BOTH the QueryCache and MutationCache so a 401 from any path
@@ -114,8 +114,7 @@ function onMutationError(
   if ((mutation.meta as { skipGlobalErrorToast?: boolean } | undefined)?.skipGlobalErrorToast) {
     return;
   }
-  const msg = err instanceof Error && err.message ? err.message : "Something went wrong";
-  toast.error(msg);
+  toastError(err, "Something went wrong");
 }
 
 // restoreFormDraft is called by pages that want post-login restoration.

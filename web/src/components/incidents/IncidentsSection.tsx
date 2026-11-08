@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Siren } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -191,7 +192,7 @@ function IncidentDetail({ id }: { id: string }) {
   const inc = detail.data;
   const open = isOpenIncident(inc.state);
   const busy = feedback.isPending || resolve.isPending;
-  const onErr = (e: unknown) => toast.error(e instanceof Error ? e.message : "request failed");
+  const onErr = (e: unknown) => toastError(e, "Request failed");
 
   const runConfirmed = () => {
     const action = confirm;

@@ -43,6 +43,7 @@ import {
   type Row,
 } from "@/components/service/envVarTransforms";
 import { toast } from "sonner";
+import { toastError, describeError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import {
   AddMenu,
@@ -182,7 +183,7 @@ export function EnvVarsEditor({
       await qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "shared-env-keys"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update project secrets");
+      toastError(e, "Couldn't update project secrets");
       throw e;
     } finally {
       setSubscriptionSaving(false);
@@ -431,7 +432,7 @@ export function EnvVarsEditor({
       setDirty(false);
       setPending(null);
     } catch (e) {
-      const reason = e instanceof Error ? e.message : "request failed";
+      const reason = describeError(e, "request failed");
       const msg = envApplyFailureMessage(applied, current, reason);
       setSaveError(msg);
       toast.error(msg);
@@ -686,7 +687,7 @@ export function EnvVarsEditor({
       qc.invalidateQueries({ queryKey: ["projects", project, "shared-secrets"] });
       toast.success(`${r.name} moved to project secrets`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : `Couldn't move ${r.name}`);
+      toastError(e, `Couldn't move ${r.name}`);
     }
   };
 

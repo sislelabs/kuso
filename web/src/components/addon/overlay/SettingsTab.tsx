@@ -31,6 +31,7 @@ import {
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
 import { nodeMatchesLabels, placementLabels } from "./placementLabels";
 import { useCan, Perms } from "@/features/auth";
@@ -92,7 +93,7 @@ export function SettingsTab({
       qc.invalidateQueries({ queryKey: ["addons", project] });
       onClose();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
   // An external addon is a pointer to someone else's database. kuso runs no
   // pod for it, so everything that configures a pod — placement, public TCP,
@@ -269,7 +270,7 @@ function ConfigurationSection({
       // Connection details (DSN, TLS, pooler) render from this cache.
       qc.invalidateQueries({ queryKey: ["addons", project] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const reset = () => {
@@ -531,7 +532,7 @@ function ExternalSummarySection({
       toast.success("Credentials re-mirrored — services pick them up on their next restart");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Resync failed"),
+    onError: (e) => toastError(e, "Resync failed"),
   });
   const save = useMutation({
     mutationFn: () => {
@@ -543,7 +544,7 @@ function ExternalSummarySection({
       toast.success("Pooler saved");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
   useAddonOverlayDirty("addon-external-pooler", dirty, {
     onSave: () => save.mutateAsync(),
@@ -660,7 +661,7 @@ function ResyncInstanceSection({
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
       qc.invalidateQueries({ queryKey: ["addons", project] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Resync failed"),
+    onError: (e) => toastError(e, "Resync failed"),
   });
   return (
     <section className="rounded-md border border-[var(--border-subtle)] p-4">
@@ -751,7 +752,7 @@ function PlacementSection({
       // Connection details (DSN, TLS, pooler) render from this cache.
       qc.invalidateQueries({ queryKey: ["addons", project] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
 
   const dirty =
@@ -994,7 +995,7 @@ function RepairPasswordSection({
       ),
     onSuccess: () => toast.success("Password resynced — open connections may need to reconnect"),
     onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Failed to resync password"),
+      toastError(e, "Failed to resync password"),
   });
   if (kind !== "postgres") return null;
   return (
@@ -1066,7 +1067,7 @@ function PublicTCPSection({
       setConfirmingEnable(false);
     },
     onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Failed to enable public TCP"),
+      toastError(e, "Failed to enable public TCP"),
   });
 
   const disableM = useMutation({
@@ -1079,7 +1080,7 @@ function PublicTCPSection({
       setConfirming(false);
     },
     onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Failed to disable public TCP"),
+      toastError(e, "Failed to disable public TCP"),
   });
 
   // Hide entirely for non-admins. Showing a disabled toggle would

@@ -11,6 +11,7 @@ import { Plus, Trash2, KeyRound } from "lucide-react";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -45,13 +46,13 @@ export default function InstanceSecretsPage() {
     mutationFn: ({ key, value }: { key: string; value: string }) =>
       api("/api/instance-secrets", { method: "PUT", body: { key, value } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-secrets"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toastError(e, "Save failed"),
   });
   const unset = useMutation({
     mutationFn: (key: string) =>
       api(`/api/instance-secrets/${encodeURIComponent(key)}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-secrets"] }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
+    onError: (e) => toastError(e, "Delete failed"),
   });
   const [newKey, setNewKey] = useState("");
   // Typed-name confirm for an instance-secret delete. The blast

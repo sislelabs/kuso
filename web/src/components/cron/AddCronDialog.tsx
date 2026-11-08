@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { X, Plus, Globe, Terminal } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
 import { CronOnFailureFields, CronPolicyFields } from "./CronPolicyFields";
@@ -104,7 +105,7 @@ export function AddCronDialog({ project, open, onClose }: Props) {
       setPolicy(policyForm());
       setOnFailure(onFailureForm());
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to add cron"),
+    onError: (e) => toastError(e, "Failed to add cron"),
   });
 
   const onSubmit = () => {

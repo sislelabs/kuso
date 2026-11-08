@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { describeError, toastError } from "@/lib/errors";
 import { usePatchService } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
@@ -215,8 +216,8 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       setSavedAt(Object.fromEntries(sections.map((s) => [s, Date.now()])));
       toast.success(sections.length === 1 ? `${SECTION_LABEL[sections[0]]} saved` : "Changes saved");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to save";
-      toast.error(msg);
+      const msg = describeError(e, "Failed to save");
+      toastError(e, "Failed to save");
       setErrors((prev) => ({ ...prev, ...Object.fromEntries(sections.map((s) => [s, msg])) }));
     } finally {
       setPendingSave(null);
@@ -556,7 +557,7 @@ function EnvBranchSection({
       qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
       qc.invalidateQueries({ queryKey: ["projects", project], exact: true });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
+      toastError(e, "Save failed");
     } finally {
       setSaving(false);
     }

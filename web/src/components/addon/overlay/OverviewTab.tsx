@@ -23,6 +23,7 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { cn, serviceShortName } from "@/lib/utils";
 import { resourceGroup } from "@/lib/env-group";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { LoadingState } from "@/components/ui/loading-state";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { AddonPodsSection } from "./AddonPodsSection";
@@ -142,7 +143,7 @@ function UsedBy({ project, addon, group }: { project: string; addon: string; gro
       { service: svc, addon, on, current: q.data },
       {
         onSuccess: () => toast.success(on ? `Connected ${svc} to ${addon}` : `Disconnected ${svc} from ${addon}`),
-        onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+        onError: (e) => toastError(e, "Update failed"),
         onSettled: () => {
           setPending(null);
           setConfirm(null);
@@ -288,7 +289,7 @@ function ConnectionRows({
       if (transform && transform(v) === null) throw new Error("Couldn't build the public URL");
       setShown((s) => ({ ...s, [k]: true }));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't reveal the value");
+      toastError(e, "Couldn't reveal the value");
     }
   };
   const copy = async (k: string, source = k, transform?: (v: string) => string | null) => {
@@ -299,7 +300,7 @@ function ConnectionRows({
       if (!(await copyText(v))) throw new Error("Clipboard unavailable");
       toast.success(`Copied ${k}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Copy failed");
+      toastError(e, "Copy failed");
     }
   };
 

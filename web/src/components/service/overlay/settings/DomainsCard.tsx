@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Input } from "@/components/ui/input";
@@ -105,7 +106,7 @@ export function DomainsCard({
       setJustAdded((l) => l.filter((h) => h !== removing.host));
       void refreshStatus();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't remove the domain");
+      toastError(e, "Couldn't remove the domain");
     } finally {
       setRemoving(null);
     }

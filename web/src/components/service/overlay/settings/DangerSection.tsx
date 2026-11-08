@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Minus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useDeleteService, useService } from "@/features/services";
@@ -70,7 +71,7 @@ export function DangerSection({
     try {
       await del.mutateAsync();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete the service");
+      toastError(e, "Failed to delete the service");
       setWorking(false);
       return;
     }

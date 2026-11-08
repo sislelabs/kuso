@@ -21,6 +21,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { Moon, RefreshCw, Sun, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { useWakeService } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
@@ -159,7 +160,7 @@ export function ServiceTerminalPanel({
         await wake.mutateAsync(wakeEnv);
         toast.success(`Waking ${service}`);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Wake failed");
+        toastError(e, "Wake failed");
       }
     };
     return (

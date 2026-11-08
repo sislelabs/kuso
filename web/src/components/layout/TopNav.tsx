@@ -36,6 +36,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { envGroupLabel } from "@/lib/env-group";
 import { pullRequestUrl } from "@/lib/pull-request-url";
 import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {
@@ -543,7 +544,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
             const qs = next.toString();
             router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/"), { scroll: false });
           } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to delete environment");
+            toastError(err, "Failed to delete environment");
           } finally {
             setDeleting(false);
           }
