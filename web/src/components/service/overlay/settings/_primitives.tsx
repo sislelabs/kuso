@@ -1,7 +1,10 @@
 "use client";
 
+import { createContext, useContext, useId } from "react";
 import type React from "react";
+import { Check, CircleAlert } from "lucide-react";
 import type { KusoService, KusoVolume } from "@/types/projects";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 // ----- shape of the entire editable surface -----
@@ -44,9 +47,9 @@ export interface FormState {
   repoToken: string;
   // watchPaths: push-build globs, one per line. "" = server default.
   watchPaths: string;
-  // Networking
+  // Networking. Custom domains aren't form state: they apply
+  // immediately through the env domain endpoints (DomainsCard).
   port: string;
-  domains: string; // newline-separated
   internal: boolean;
   // Ingress limits. "" = inherit (project, then platform default).
   limitMaxConcurrent: string;
@@ -136,13 +139,6 @@ export interface FormState {
 export interface SectionProps {
   state: FormState;
   setState: React.Dispatch<React.SetStateAction<FormState>>;
-  // The auto-domain (project.baseDomain or cluster default) that
-  // kuso stamped on the production env. Read-only — surfaced in the
-  // Networking section so users see what hostname their service
-  // already serves on without having to dig through the canvas.
-  // Empty when env data hasn't loaded yet; the section just hides
-  // the auto-domain row in that case.
-  autoHost?: string;
 }
 
 export interface NodeSummary {
@@ -179,7 +175,6 @@ export function fromSvc(svc?: KusoService): FormState {
     repoToken: "",
     watchPaths: (svc?.spec.watchPaths ?? []).join("\n"),
     port: String(svc?.spec.port ?? 8080),
-    domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
     internal: !!svc?.spec?.internal,
     limitMaxConcurrent: String(svc?.spec?.requestLimits?.maxConcurrent || ""),
     limitRate: String(svc?.spec?.requestLimits?.ratePerSecond || ""),
@@ -245,115 +240,381 @@ export function fromSvc(svc?: KusoService): FormState {
   };
 }
 
-// shallowEqual compares two form states. We use it to drive the
-// "dirty" flag for the floating save bar — JSON.stringify is fine
-// for this shape (no Date / Map / Set) and 10× cheaper than a
-// hand-rolled walk.
+// isEqual compares two form states. JSON.stringify is fine for this
+// shape (no Date / Map / Set).
 export function isEqual(a: FormState, b: FormState): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+
 // ----- layout primitives shared by every section -----
+//
+// Vercel-style cards: title + description, then each field as label and
+// hint ABOVE a full-width control, then a footer with the card's save
+// state. Hints are sans at 12px; mono is reserved for literal values.
+
+// Shared control classes so native selects/textareas match <Input>.
+// S1 is building a styled Select; these are the swap points.
+export const selectClass =
+  "h-8 w-full min-w-0 rounded-sm border border-border bg-input px-2.5 text-[13px] text-[var(--text-primary)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
+export const textareaClass =
+  "block w-full min-w-0 rounded-sm border border-border bg-input px-3 py-2 font-mono text-[12px] leading-5 text-[var(--text-primary)] outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
+export const inputClass = "h-8 text-[13px] md:text-[13px]";
+export const monoInputClass = "h-8 font-mono text-[12px] md:text-[12px]";
+
+export interface SectionSaveStatus {
+  dirty: boolean;
+  saving: boolean;
+  // Set for a few seconds after a successful save of this card.
+  saved: boolean;
+  error: string | null;
+}
+
+export interface SettingsSaveApi {
+  canWrite: boolean;
+  status: (section: string) => SectionSaveStatus | null;
+  save: (section: string) => void;
+  discard: (section: string) => void;
+}
+
+const SettingsSaveContext = createContext<SettingsSaveApi | null>(null);
+export const SettingsSaveProvider = SettingsSaveContext.Provider;
+
+export function useCanWriteSettings(): boolean {
+  return useContext(SettingsSaveContext)?.canWrite ?? false;
+}
 
 export function Section({
   id,
   title,
   icon: Icon,
+  description,
+  status,
+  footerNote,
   children,
-  hint,
+  tone = "default",
 }: {
   id: string;
   title: string;
   icon: React.ComponentType<{ className?: string }>;
+  description?: React.ReactNode;
+  // Short summary pill in the header ("autoscales 1 → 3").
+  status?: React.ReactNode;
+  // Shown in the footer while the card is clean, e.g. what a save does.
+  footerNote?: React.ReactNode;
   children: React.ReactNode;
-  hint?: string;
+  tone?: "default" | "danger";
 }) {
+  const headingId = useId();
   return (
-    <section id={id} className="scroll-mt-6">
-      <header className="mb-2 flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
-        <h3 className="font-heading text-sm font-semibold tracking-tight">{title}</h3>
-        {hint && (
-          <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
-            {hint}
-          </span>
-        )}
+    <section
+      id={id}
+      aria-labelledby={headingId}
+      className={cn(
+        "scroll-mt-16 rounded-lg border bg-[var(--bg-secondary)]",
+        tone === "danger" ? "border-[var(--error)]/35" : "border-[var(--border-subtle)]",
+      )}
+    >
+      <header className="flex items-start gap-3 px-4 pt-4 sm:px-5 sm:pt-5">
+        <Icon
+          className={cn(
+            "mt-0.5 h-4 w-4 shrink-0",
+            tone === "danger" ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h3
+              id={headingId}
+              className={cn(
+                "font-heading text-[15px] font-semibold tracking-tight",
+                tone === "danger" && "text-[var(--error)]",
+              )}
+            >
+              {title}
+            </h3>
+            {status && (
+              <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
+                {status}
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">{description}</p>
+          )}
+        </div>
       </header>
-      <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-        {children}
-      </div>
+      <div className="space-y-5 px-4 py-4 sm:px-5 sm:py-5">{children}</div>
+      <SectionFooter section={id} note={footerNote} />
     </section>
   );
 }
 
-// Row is a single one-liner: label on the left, control on the
-// right, divider below (unless `last`). The hover background gives
-// the row a clickable feel even when only the control is interactive.
-export function Row({
+function SectionFooter({ section, note }: { section: string; note?: React.ReactNode }) {
+  const ctx = useContext(SettingsSaveContext);
+  const st = ctx?.status(section);
+  if (!ctx || !st) return null;
+  let left: React.ReactNode = note ? <span>{note}</span> : null;
+  if (st.error) {
+    left = (
+      <span role="alert" className="inline-flex items-start gap-1.5 text-[var(--error)]">
+        <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0" />
+        <span className="break-words">{st.error}</span>
+      </span>
+    );
+  } else if (st.dirty) {
+    left = (
+      <span className="inline-flex items-center gap-1.5 text-[var(--text-primary)]">
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+        Unsaved changes
+      </span>
+    );
+  } else if (st.saved) {
+    left = (
+      <span className="inline-flex items-center gap-1.5 text-[var(--success)]">
+        <Check className="h-3.5 w-3.5" />
+        Saved
+      </span>
+    );
+  }
+  return (
+    <footer className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 rounded-b-lg border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]/40 px-4 py-2.5 sm:px-5">
+      <div aria-live="polite" className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+        {left}
+      </div>
+      {ctx.canWrite ? (
+        <div className="flex shrink-0 items-center gap-2">
+          {st.dirty && (
+            <Button variant="ghost" size="sm" onClick={() => ctx.discard(section)} disabled={st.saving}>
+              Discard
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={st.dirty ? "default" : "outline"}
+            onClick={() => ctx.save(section)}
+            disabled={!st.dirty || st.saving}
+          >
+            {st.saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      ) : (
+        <span className="text-xs text-[var(--text-tertiary)]">Read-only for your role</span>
+      )}
+    </footer>
+  );
+}
+
+// Field: label + hint above a full-width control.
+export function Field({
   label,
   hint,
-  control,
-  last,
+  htmlFor,
+  children,
+  className,
 }: {
-  label: string;
-  hint?: string;
-  control: React.ReactNode;
-  last?: boolean;
+  label: React.ReactNode;
+  hint?: React.ReactNode;
+  // When set, the label is a real <label for>; otherwise the control
+  // should carry its own aria-label.
+  htmlFor?: string;
+  children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        // Phones get a stacked layout (label-then-control) so
-        // controls have the full row width to breathe; the side-by-
-        // side layout returns at sm and above where there's room.
-        "flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3",
-        !last && "border-b border-[var(--border-subtle)]",
-      )}
-    >
-      <div className="min-w-0 sm:w-[200px] sm:shrink-0">
-        <div className="text-[12px] text-[var(--text-secondary)]">{label}</div>
+    <div className={cn("min-w-0 space-y-2", className)}>
+      <div className="space-y-0.5">
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className="block text-[13px] font-medium text-[var(--text-primary)]">
+            {label}
+          </label>
+        ) : (
+          <div className="text-[13px] font-medium text-[var(--text-primary)]">{label}</div>
+        )}
+        {hint && <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// FieldGrid puts short related fields side by side on wider screens
+// (min/max replicas, request/limit) and stacks them on phones.
+export function FieldGrid({ children, cols = 2 }: { children: React.ReactNode; cols?: 2 | 3 }) {
+  return (
+    <div className={cn("grid grid-cols-1 gap-4", cols === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
+      {children}
+    </div>
+  );
+}
+
+// SwitchField: a boolean setting. Label + hint on the left, the switch on
+// the right; the hint still gets the full remaining width.
+export function SwitchField({
+  label,
+  hint,
+  on,
+  onChange,
+  disabled,
+  stateLabel,
+}: {
+  label: string;
+  hint?: React.ReactNode;
+  on: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  // Optional word next to the switch ("Sleeps when idle" / "Always on").
+  stateLabel?: string;
+}) {
+  const labelId = useId();
+  const hintId = useId();
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0 space-y-0.5">
+        <div id={labelId} className="text-[13px] font-medium text-[var(--text-primary)]">
+          {label}
+        </div>
         {hint && (
-          <div className="break-words font-mono text-[10px] text-[var(--text-tertiary)]/70">
+          <p id={hintId} className="text-xs leading-relaxed text-[var(--text-secondary)]">
             {hint}
-          </div>
+          </p>
         )}
       </div>
-      <div className="flex min-w-0 flex-1 items-center justify-start gap-2 sm:justify-end">
-        {control}
+      <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {stateLabel && <span className="hidden text-xs text-[var(--text-secondary)] sm:inline">{stateLabel}</span>}
+        <Switch
+          on={on}
+          onChange={onChange}
+          disabled={disabled}
+          labelledBy={labelId}
+          describedBy={hint ? hintId : undefined}
+        />
       </div>
     </div>
   );
 }
 
-// Toggle is the small pill switch the Deploy/Security rows use.
-export function Toggle({
+export function Switch({
   on,
   onChange,
+  disabled,
   label,
+  labelledBy,
+  describedBy,
 }: {
   on: boolean;
   onChange: (next: boolean) => void;
-  label: string;
+  disabled?: boolean;
+  label?: string;
+  labelledBy?: string;
+  describedBy?: string;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!on)}
-      aria-pressed={on}
+      role="switch"
+      aria-checked={on}
       aria-label={label}
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
       className={cn(
-        "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-        on
-          ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
-          : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
+        on ? "border-transparent bg-[var(--accent)]" : "border-[var(--text-tertiary)]/60 bg-[var(--bg-tertiary)]",
       )}
     >
       <span
+        aria-hidden
         className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
-          on ? "translate-x-4" : "translate-x-0.5",
+          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform",
+          on ? "translate-x-[18px]" : "translate-x-[2px]",
         )}
       />
     </button>
+  );
+}
+
+// Segmented: a small single-choice control for short option lists.
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  mono,
+}: {
+  options: readonly { value: T; label: string }[];
+  // string, not T: form state keeps these as plain strings.
+  value: string;
+  onChange: (v: T) => void;
+  label: string;
+  mono?: boolean;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5"
+    >
+      {options.map((o) => (
+        <button
+          key={o.value || "__none"}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "rounded px-2.5 py-1 text-xs whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            mono && "font-mono",
+            value === o.value
+              ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Suffix renders a unit after a short numeric input ("%", "min", "Gi").
+export function WithSuffix({ suffix, children }: { suffix: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-28 shrink-0">{children}</div>
+      <span className="text-xs text-[var(--text-secondary)]">{suffix}</span>
+    </div>
+  );
+}
+
+// Callout: an inline explanatory or warning block inside a card.
+export function Callout({
+  tone = "info",
+  children,
+}: {
+  tone?: "info" | "warning" | "danger";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-md border px-3 py-2.5 text-xs leading-relaxed",
+        tone === "info" && "border-[var(--border-subtle)] bg-[var(--bg-primary)]/50 text-[var(--text-secondary)]",
+        tone === "warning" && "border-[var(--warning)]/35 bg-[var(--warning-subtle)] text-[var(--text-primary)]",
+        tone === "danger" && "border-[var(--error)]/35 bg-[var(--error-subtle)] text-[var(--text-primary)]",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Code renders an inline literal (path, key, host) inside sans prose.
+export function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-[var(--bg-tertiary)] px-1 py-px font-mono text-[11.5px] text-[var(--text-primary)]">
+      {children}
+    </code>
   );
 }

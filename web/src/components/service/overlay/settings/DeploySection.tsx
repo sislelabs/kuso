@@ -2,125 +2,75 @@
 
 import { Cloud } from "lucide-react";
 import { useProject } from "@/features/projects";
-import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { Section, Row, type SectionProps } from "./_primitives";
+import { Section, Field, SwitchField, Callout, Code, monoInputClass, type SectionProps } from "./_primitives";
 
 export function DeploySection({
   project,
   state,
   setState,
 }: SectionProps & { project: string }) {
-  // Read the project's previews config so the user sees, in this
-  // service's settings, whether PR previews are on for the whole
-  // project + how long they live. Saves them digging through the
-  // project settings tab to answer "will my PR get its own URL?"
+  // The project's previews config, so "will my PR get its own URL?" is
+  // answered here instead of in project settings.
   const proj = useProject(project);
   type ProjSpec = { previews?: { enabled?: boolean; ttlDays?: number } };
   const spec = (proj.data as { project?: { spec?: ProjSpec } } | undefined)?.project?.spec;
   const previewsOn = !!spec?.previews?.enabled;
   const ttlDays = spec?.previews?.ttlDays ?? 7;
+  const branch = state.repoBranch.trim() || "main";
 
   return (
-    <Section id="deploy" title="Deploy" icon={Cloud}>
-      <div className="space-y-1 px-3 py-2.5 text-[12px] text-[var(--text-secondary)]">
-        <p>
-          Successful builds of <span className="font-mono">main</span> ship to{" "}
-          <span className="font-mono">production</span>.
-        </p>
-        {previewsOn ? (
-          <p>
-            PR previews <span className="text-emerald-400">on</span> for this project —
-            every PR gets a throwaway env at{" "}
-            <span className="font-mono">
-              &lt;service&gt;-pr-N.&lt;project-domain&gt;
-            </span>
-            , auto-deleted after the PR closes or {ttlDays} days idle. Previews boot
-            with no env vars (set per-env if needed).
-          </p>
-        ) : (
-          <p>
-            PR previews <span className="text-[var(--text-tertiary)]">off</span> for
-            this project. Enable in{" "}
-            <a
-              href={`/projects/${encodeURIComponent(project)}/settings`}
-              className="text-[var(--accent)] hover:underline"
-            >
-              project settings
-            </a>{" "}
-            to give each PR its own URL.
-          </p>
-        )}
-      </div>
-      <Row
-        label="start command"
-        hint="overrides the image's CMD · split on spaces · blank = image default"
-        control={
-          <Input
-            value={state.startCommand}
-            onChange={(e) => setState((s) => ({ ...s, startCommand: e.target.value }))}
-            placeholder="image default"
-            aria-label="Start command"
-            className="h-7 w-full max-w-[320px] font-mono text-[12px]"
-            spellCheck={false}
-          />
-        }
-      />
-      <Row
-        label="wait for CI"
-        hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."
-        control={
-          <button
-            type="button"
-            onClick={() => setState((s) => ({ ...s, waitForCI: !s.waitForCI }))}
-            aria-pressed={state.waitForCI}
-            aria-label="Toggle wait for CI"
-            className={cn(
-              "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-              state.waitForCI
-                ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
-                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
-            )}
-          >
-            <span
-              className={cn(
-                "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
-                state.waitForCI ? "translate-x-4" : "translate-x-0.5",
-              )}
-            />
-          </button>
-        }
-        last={!previewsOn}
-      />
-      {previewsOn && (
-        <Row
-          label="exclude from previews"
-          hint="skip PR previews for this service even when the project toggle is on"
-          control={
-            <button
-              type="button"
-              onClick={() =>
-                setState((s) => ({ ...s, previewsDisabled: !s.previewsDisabled }))
-              }
-              aria-pressed={state.previewsDisabled}
-              aria-label="Toggle preview opt-out"
-              className={cn(
-                "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-                state.previewsDisabled
-                  ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
-                  : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]",
-              )}
-            >
-              <span
-                className={cn(
-                  "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
-                  state.previewsDisabled ? "translate-x-4" : "translate-x-0.5",
-                )}
-              />
-            </button>
-          }
-          last
+    <Section
+      id="deploy"
+      title="Deploy"
+      icon={Cloud}
+      description={
+        <>
+          Successful builds of <Code>{branch}</Code> ship to production.
+        </>
+      }
+      footerNote="A new start command rolls the pods in every environment."
+    >
+      <Field
+        label="Start command"
+        hint="Overrides the image's CMD. Split on spaces. Blank uses the image default."
+        htmlFor="deploy-start-command"
+      >
+        <Input
+          id="deploy-start-command"
+          value={state.startCommand}
+          onChange={(e) => setState((s) => ({ ...s, startCommand: e.target.value }))}
+          placeholder="Image default"
+          className={monoInputClass}
+          spellCheck={false}
         />
+      </Field>
+      <SwitchField
+        label="Wait for CI"
+        hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."
+        on={state.waitForCI}
+        onChange={(v) => setState((s) => ({ ...s, waitForCI: v }))}
+      />
+      {previewsOn ? (
+        <>
+          <SwitchField
+            label="Skip PR previews for this service"
+            hint={`PR previews are on for this project: each PR gets its own environment, deleted when the PR closes or after ${ttlDays} idle days.`}
+            on={state.previewsDisabled}
+            onChange={(v) => setState((s) => ({ ...s, previewsDisabled: v }))}
+          />
+        </>
+      ) : (
+        <Callout>
+          PR previews are off for this project.{" "}
+          <a
+            href={`/projects/${encodeURIComponent(project)}/settings`}
+            className="text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--accent)]"
+          >
+            Turn them on in project settings
+          </a>{" "}
+          to give each pull request its own URL.
+        </Callout>
       )}
     </Section>
   );

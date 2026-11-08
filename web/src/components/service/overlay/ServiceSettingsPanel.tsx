@@ -1,27 +1,58 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/features/projects";
+import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
 import { stripRepoCredentials } from "@/lib/format";
 import { envGroupName } from "@/lib/env-group";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket, Moon, Activity } from "lucide-react";
+import {
+  Github,
+  Trash2,
+  Network,
+  Layers3,
+  Hammer,
+  Cloud,
+  HardDrive,
+  MapPin,
+  ShieldAlert,
+  Rocket,
+  Moon,
+  Activity,
+  Globe,
+  GitBranch,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { serviceBlast } from "@/lib/blast-radius";
-import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
-import { releasePatch } from "./settings/releasePatch";
-import { extraServicePatch } from "./settings/servicePatchExtras";
-import { parseWatchPathsText } from "@/features/services/watchPaths";
+import {
+  Code,
+  Section,
+  SettingsSaveProvider,
+  fromSvc,
+  monoInputClass,
+  type FormState,
+  type SettingsSaveApi,
+} from "./settings/_primitives";
+import { buildServicePatch, fieldDiffValues } from "./settings/buildServicePatch";
+import {
+  SECTION_FIELDS,
+  dirtySections,
+  discardSection,
+  isSaveableSection,
+  isSectionDirty,
+  scopedState,
+  type SaveableSection,
+} from "./settings/sectionFields";
 import { SourceSection } from "./settings/SourceSection";
+import { DomainsCard } from "./settings/DomainsCard";
 import { NetworkingSection } from "./settings/NetworkingSection";
 import { ScaleSection } from "./settings/ScaleSection";
 import { SleepSection } from "./settings/SleepSection";
@@ -47,830 +78,418 @@ interface Props {
 }
 
 const SECTIONS = [
-  { id: "source",     label: "Source",     icon: Github },
+  { id: "source", label: "Source", icon: Github },
+  { id: "domains", label: "Domains", icon: Globe },
   { id: "networking", label: "Networking", icon: Network },
-  { id: "scale",      label: "Scale",      icon: Layers3 },
-  { id: "sleep",      label: "Sleep",      icon: Moon },
-  { id: "placement",  label: "Placement",  icon: MapPin },
-  { id: "volumes",    label: "Volumes",    icon: HardDrive },
-  { id: "build",      label: "Build",      icon: Hammer },
-  { id: "deploy",     label: "Deploy",     icon: Cloud },
-  { id: "release",    label: "Release",    icon: Rocket },
-  { id: "uptime",     label: "Uptime",     icon: Activity },
-  { id: "security",   label: "Security",   icon: ShieldAlert },
-  { id: "danger",     label: "Danger",     icon: Trash2 },
+  { id: "scale", label: "Scale", icon: Layers3 },
+  { id: "sleep", label: "Sleep", icon: Moon },
+  { id: "placement", label: "Placement", icon: MapPin },
+  { id: "volumes", label: "Volumes", icon: HardDrive },
+  { id: "build", label: "Build", icon: Hammer },
+  { id: "deploy", label: "Deploy", icon: Cloud },
+  { id: "release", label: "Release", icon: Rocket },
+  { id: "uptime", label: "Uptime", icon: Activity },
+  { id: "security", label: "Security", icon: ShieldAlert },
+  { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
 
-// fieldDiffValues maps a PatchServiceBody key back to a human-readable
-// before/after pair, pulled from the real baseline vs current form
-// state. Several body keys aggregate multiple FormState fields (scale,
-// resources, repo, placement, image) so this can't be a naive
-// key-lookup — each field gets a small formatter. Returns
-// [before, after]; an empty string renders as "(unset)" / "(removed)"
-// in DiffConfirmDialog.
-function fieldDiffValues(
-  field: string,
-  base: FormState,
-  next: FormState,
-): [string, string] {
-  const norm = (s: string) =>
-    s.split("\n").map((x) => x.trim()).filter(Boolean).join(", ");
-  const resources = (s: FormState) =>
-    [
-      s.cpuRequest && `cpu req ${s.cpuRequest}`,
-      s.cpuLimit && `cpu lim ${s.cpuLimit}`,
-      s.memRequest && `mem req ${s.memRequest}`,
-      s.memLimit && `mem lim ${s.memLimit}`,
-    ]
-      .filter(Boolean)
-      .join(", ");
-  const scale = (s: FormState) =>
-    [
-      `min ${s.scaleMin}, max ${s.scaleMax}, cpu ${s.scaleCPU}%`,
-      s.scaleUpWindow && `up delay ${s.scaleUpWindow}s`,
-      s.scaleUpPods && `up step ${s.scaleUpPods} pods`,
-      s.scaleUpPercent && `up step ${s.scaleUpPercent}%`,
-      s.scaleDownWindow && `down delay ${s.scaleDownWindow}s`,
-    ]
-      .filter(Boolean)
-      .join(", ");
-  const repo = (s: FormState) =>
-    [
-      s.repoURL,
-      s.repoBranch && `@${s.repoBranch}`,
-      s.repoPath && `/${s.repoPath}`,
-      s.repoProvider && `(${s.repoProvider})`,
-      // The token is write-only and never shown, but flag its presence
-      // in the "after" column so a token-only change doesn't render as
-      // an identical before/after in the confirm dialog. `base` never
-      // carries a token (baseline repoToken is always ""), so this only
-      // ever decorates the changed side.
-      s.repoToken.trim() && "· token updated",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  const image = (s: FormState) =>
-    [s.imageRepository, s.imageTag && `:${s.imageTag}`, s.imagePullSecret && ` (pull secret ${s.imagePullSecret})`]
-      .filter(Boolean)
-      .join("");
-  const placement = (s: FormState) =>
-    [
-      s.placement
-        .filter((r) => r.key.trim())
-        .map((r) => `${r.key}=${r.value}`)
-        .join(", "),
-      s.placementNodes.filter(Boolean).length
-        ? `nodes: ${s.placementNodes.filter(Boolean).join(", ")}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  const volumes = (s: FormState) =>
-    s.volumes
-      .filter((v) => v.name && v.mountPath)
-      .map((v) => `${v.name}→${v.mountPath} (${[`${v.sizeGi}Gi`, v.accessMode, v.storageClass].filter(Boolean).join(", ")})`)
-      .join(", ");
-  const release = (s: FormState) =>
-    s.releaseCommand.trim()
-      ? `${s.releaseCommand.trim()}${s.releaseTimeout ? ` (${s.releaseTimeout}s)` : ""}`
-      : "";
-  const security = (s: FormState) =>
-    [
-      s.capAdd.trim() && `capAdd: ${s.capAdd.trim()}`,
-      s.allowPrivilegeEscalation ? "allowPrivilegeEscalation: true" : "",
-    ]
-      .filter(Boolean)
-      .join(", ");
-  const pick: Record<string, (s: FormState) => string> = {
-    displayName: (s) => s.displayName.trim(),
-    port: (s) => s.port,
-    domains: (s) => norm(s.domains),
-    internal: (s) => (s.internal ? "internal (no public URL)" : "public"),
-    requestLimits: (s) =>
-      [
-        s.limitMaxConcurrent && `max concurrent ${s.limitMaxConcurrent}`,
-        s.limitRate && `rate ${s.limitRate}/s`,
-        s.limitBurst && `burst ${s.limitBurst}`,
-      ]
-        .filter(Boolean)
-        .join(", "),
-    scale: scale,
-    sleep: (s) =>
-      [
-        `production ${Number(s.scaleMin) === 0 || s.sleepEnabled ? "sleeps" : "always on"}`,
-        `after ${s.sleepAfter}m`,
-        s.sleepExcludePaths.trim() ? `keep-warm: ${s.sleepExcludePaths.split("\n").filter(Boolean).join(", ")}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    resources: resources,
-    runtime: (s) => s.runtime,
-    dockerfile: (s) => s.dockerfile,
-    watchPaths: (s) => parseWatchPathsText(s.watchPaths).join(", ") || "default",
-    image: image,
-    repo: repo,
-    placement: placement,
-    volumes: volumes,
-    previews: (s) => (s.previewsDisabled ? "disabled" : "enabled"),
-    waitForCI: (s) => (s.waitForCI ? "wait for CI" : "build immediately"),
-    uptime: (s) => (s.uptimeEnabled ? `checked at ${s.uptimePath.trim() || "default path"}` : "not checked"),
-    release: release,
-    securityContext: security,
-    privateEgress: (s) => (s.privateEgress ? "namespace-only egress" : "internet egress"),
-    platformApiEgress: (s) => (s.platformApiEgress ? "can reach the kuso API" : "no kuso API access"),
-    snapshotBeforeDeploy: (s) => (s.snapshotBeforeDeploy ? "snapshot before deploy" : "no snapshot"),
-    command: (s) => s.startCommand.trim(),
-    buildArgs: (s) => norm(s.buildArgs.replace(/=.*$/gm, "")),
-    publicEnv: (s) => norm(s.publicEnv),
-    static: (s) =>
-      [
-        s.staticBuildCmd && `build: ${s.staticBuildCmd}`,
-        s.staticOutputDir && `output: ${s.staticOutputDir}`,
-        s.staticBuilderImage && `builder: ${s.staticBuilderImage}`,
-        s.staticRuntimeImage && `runtime: ${s.staticRuntimeImage}`,
-      ]
-        .filter(Boolean)
-        .join(", "),
-    buildpacks: (s) =>
-      [
-        s.buildpacksBuilderImage && `builder: ${s.buildpacksBuilderImage}`,
-        s.buildpacksLifecycleImage && `lifecycle: ${s.buildpacksLifecycleImage}`,
-      ]
-        .filter(Boolean)
-        .join(", "),
-  };
-  const fmt = pick[field];
-  if (!fmt) return ["current", "changed"];
-  return [fmt(base), fmt(next)];
+const SECTION_LABEL: Record<string, string> = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
+const ALL_SAVEABLE = Object.keys(SECTION_FIELDS) as SaveableSection[];
+const SAVED_FLASH_MS = 3000;
+
+interface PendingSave {
+  sections: SaveableSection[];
+  target: FormState;
+  body: PatchServiceBody;
 }
 
-// ServiceSettingsPanel orchestrates the per-service settings overlay.
-// Each section lives in ./settings/<Name>Section.tsx; this file owns
-// the form state, the dirty/save bar, and the section-anchor nav.
-
-// RFC 1123 hostname, optionally with a leading "*." wildcard label.
-const HOSTNAME_RE = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/i;
-
+// ServiceSettingsPanel orchestrates the per-service settings tab. Each
+// card lives in ./settings/<Name>Section.tsx and saves only its own
+// fields (sectionFields.ts); this file owns the form state, the save /
+// confirm flow and the section nav.
 export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const onProduction = !env || env === "production";
-  // Hoisted up from below so the env-domains save path inside onSave
-  // can invalidate the envs cache after a successful PUT.
-  const qcForPanel = useQueryClient();
-  // Resolve the active env CR so we can show env-scoped state
-  // (custom domains live here, not on the service spec). useEnvironments
-  // is cached + shared with the canvas, so this doesn't add a network
-  // round-trip beyond what the page already does.
-  const envsForActive = useEnvironments(project);
-  const activeEnv = useMemo(() => {
-    const list = envsForActive.data ?? [];
-    const matchesService = (e: typeof list[number]) =>
-      e.spec.service === service ||
-      e.spec.service === `${project}-${service}`;
-    const envName = env || "production";
-    // Group identity is the env label (unlabelled legacy = spec.kind).
-    // No cross-group fallback: showing another group's env here would let
-    // a save write its hosts onto the wrong env.
-    return list.find((e) => matchesService(e) && envGroupName(e) === envName);
-  }, [envsForActive.data, project, service, env]);
-  // baseline = service spec (most fields) + env CR AdditionalHosts
-  // (the domains list, which is per-env post-v0.16.19). The override
-  // means the Networking section shows what's actually serving on
-  // THIS env — staging's tickero.bg vs production's tickero.bg — and
-  // saving routes through the env endpoint, not svc PATCH.
-  const baseline = useMemo(() => {
-    const fromService = fromSvc(svc);
-    if (activeEnv) {
-      const envHosts = activeEnv.spec.additionalHosts ?? [];
-      return { ...fromService, domains: envHosts.join("\n") };
-    }
-    return fromService;
-  }, [svc, activeEnv]);
-  const [state, setState] = useState<FormState>(baseline);
-  const [pending, setPending] = useState(false);
-  // saveError surfaces the last save failure inline next to the
-  // unsaved-changes pip. Pure-toast errors disappeared too quickly
-  // and got buried during traefik flap (a Customer™ literally lost
-  // a domain edit because the toast fell off-screen behind a
-  // probe-failure stack — see /domains-add-remove-list change).
-  const [saveError, setSaveError] = useState<string | null>(null);
-  // pendingBody holds a built-but-not-yet-applied patch while the
-  // blast-radius confirm dialog is open. null = dialog closed.
-  const [pendingBody, setPendingBody] = useState<PatchServiceBody | null>(null);
-  // Env-scoped custom domains staged alongside pendingBody. They save via
-  // the env endpoint, not the service PATCH, but go through the same
-  // confirm dialog (a domain change can hit the Let's Encrypt rate limit).
-  const [pendingHosts, setPendingHosts] = useState<string[] | null>(null);
-  const patch = usePatchService(project, service);
-  // Pull the active env's host so the Networking section can
-  // surface the auto-domain inline (read-only). The KusoService spec
-  // doesn't carry the rendered hostname — that's stamped on the
-  // KusoEnvironment at create time — so we have to reach over here.
-  //
-  // Scope to the env the user is actually viewing (env-group name from
-  // the URL ?env= param, defaulted to "production"). Otherwise the
-  // staging tab would show production.tickero.bg in the Networking
-  // section because list.find() returned whichever env happened to be
-  // indexed first.
+  const envName = env || "production";
+  // useEnvironments is cached + shared with the canvas, so this doesn't
+  // add a round-trip. Domains and the env branch live on the env CR.
   const envs = useEnvironments(project);
-  const autoHost = useMemo(() => {
+  const activeEnv = useMemo(() => {
     const list = envs.data ?? [];
-    const matchesService = (e: typeof list[number]) =>
-      e.spec.service === service ||
-      e.spec.service === `${project}-${service}`;
-    const envName = env || "production";
-    return list.find((e) => matchesService(e) && envGroupName(e) === envName)?.spec.host;
-  }, [envs.data, project, service, env]);
-  // Gate the floating save bar on services:write — viewers can scroll
-  // through the panel but can't edit. Inputs are still editable to
-  // preserve copy/paste affordance, just not committable.
+    // Group identity is the env label (unlabelled legacy = spec.kind).
+    // No cross-group fallback: another group's env would let domain
+    // edits land on the wrong env.
+    return list.find(
+      (e) =>
+        (e.spec.service === service || e.spec.service === `${project}-${service}`) && envGroupName(e) === envName,
+    );
+  }, [envs.data, project, service, envName]);
+
+  const baseline = useMemo(() => fromSvc(svc), [svc]);
+  const [state, setState] = useState<FormState>(baseline);
+  const [saving, setSaving] = useState<SaveableSection[]>([]);
+  const [errors, setErrors] = useState<Partial<Record<SaveableSection, string>>>({});
+  const [savedAt, setSavedAt] = useState<Partial<Record<SaveableSection, number>>>({});
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const patch = usePatchService(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
-  // Whenever the upstream service changes (refetch lands fresh data),
-  // re-baseline so the dirty flag clears. We only do this when the
-  // user has no in-flight edits — otherwise their typing would get
-  // clobbered by a refetch.
-  // Ref carries the previous baseline across renders so we can ask
-  // "has the user edited yet" without putting `state` in the deps.
+  // When fresh service data lands, re-baseline every card the user hasn't
+  // edited, plus the cards that were just saved (adoptRef), so a server
+  // that normalises a value doesn't leave a just-saved card "dirty".
+  // Cards with in-flight edits keep them.
   const prevBaselineRef = useRef<FormState>(baseline);
+  const adoptRef = useRef<Set<SaveableSection>>(new Set());
   useEffect(() => {
-    setState((prev) => (isEqual(prev, prevBaselineRef.current) ? baseline : prev));
+    const prevBase = prevBaselineRef.current;
+    setState((prev) => {
+      let next = prev;
+      for (const s of ALL_SAVEABLE) {
+        if (adoptRef.current.has(s) || !isSectionDirty(s, prev, prevBase)) next = discardSection(s, next, baseline);
+      }
+      return next;
+    });
+    adoptRef.current.clear();
     prevBaselineRef.current = baseline;
   }, [baseline]);
 
-  const dirty = !isEqual(state, baseline);
+  const dirty = useMemo(() => dirtySections(state, baseline), [state, baseline]);
 
-  const onSave = async () => {
-    const body: PatchServiceBody = {};
-    let envHosts: string[] | null = null;
-    if (state.displayName !== baseline.displayName) {
-      const trimmed = state.displayName.trim();
-      // Hyphen at end of class doesn't need escaping (eslint
-      // no-useless-escape).
-      if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {
-        toast.error("Display name: letters/digits/spaces/hyphens only, ≤60 chars");
-        return;
-      }
-      body.displayName = trimmed;
-    }
-    const portNum = Number(state.port);
-    if (portNum !== Number(baseline.port)) {
-      if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-        toast.error("Port must be 1–65535");
-        return;
-      }
-      body.port = portNum;
-    }
-    {
-      // Compare normalised forms (trimmed + empty-filtered) so that
-      // adding/removing an empty editor row doesn't flip the form
-      // to "dirty" with no real change. The textarea-row UI renders
-      // an empty row at the bottom for the user to type into; we
-      // don't want that to fight the Save bar.
-      const norm = (s: string) =>
-        s.split("\n").map((x) => x.trim()).filter(Boolean).join("\n");
-      const a = norm(state.domains);
-      const b = norm(baseline.domains);
-      if (a !== b) {
-        const bad = a.split("\n").filter(Boolean).find((h) => !HOSTNAME_RE.test(h));
-        if (bad) {
-          toast.error(`"${bad}" isn't a hostname (e.g. app.example.com; no scheme, path or port)`);
-          return;
-        }
-        // Per-env scope (v0.16.19): the form binds to the env CR's
-        // AdditionalHosts, and saves go to the env endpoint so the
-        // change doesn't leak to sibling envs. Staged here; applyPatch
-        // PUTs them after the confirm dialog.
-        if (activeEnv) {
-          const wild = a.split("\n").find((h) => h.startsWith("*."));
-          if (wild) {
-            toast.error(`${wild}: add wildcard hosts under "wildcard domains" with their TLS secret`);
-            return;
-          }
-          envHosts = a.split("\n").filter(Boolean);
-        } else {
-          // No active env CR resolved (legacy fallback): use the old
-          // svc-level path. spec.domains becomes a seed-only template
-          // post-v0.16.19, so this is harmless for new envs.
-          body.domains = a
-            .split("\n")
-            .filter(Boolean)
-            .map((host) => ({ host, tls: true }));
-        }
-      }
-    }
-    if (state.internal !== baseline.internal) {
-      body.internal = state.internal;
-    }
-    // Blank clears the override (0); -1 means no limit.
-    const limitFields = [
-      ["maxConcurrent", "limitMaxConcurrent", -1],
-      ["ratePerSecond", "limitRate", -1],
-      ["burst", "limitBurst", 0],
-    ] as const;
-    for (const [key, field, lo] of limitFields) {
-      const raw = state[field].trim();
-      if (raw === baseline[field].trim()) continue;
-      const n = raw === "" ? 0 : Number(raw);
-      if (!Number.isInteger(n) || n < lo || n > 1000000) {
-        toast.error(`${key} must be a whole number${lo < 0 ? ", or -1 for no limit" : ""}`);
-        return;
-      }
-      body.requestLimits = { ...body.requestLimits, [key]: n };
-    }
-    const scaleChanged =
-      state.scaleMin !== baseline.scaleMin ||
-      state.scaleMax !== baseline.scaleMax ||
-      state.scaleCPU !== baseline.scaleCPU ||
-      state.scaleUpWindow !== baseline.scaleUpWindow ||
-      state.scaleUpPods !== baseline.scaleUpPods ||
-      state.scaleUpPercent !== baseline.scaleUpPercent ||
-      state.scaleDownWindow !== baseline.scaleDownWindow;
-    const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
-    const nonProdChanged = state.sleepNonProduction !== baseline.sleepNonProduction;
-    const sleepChanged =
-      state.sleepEnabled !== baseline.sleepEnabled ||
-      state.sleepAfter !== baseline.sleepAfter ||
-      nonProdChanged;
-    if (scaleChanged || excludeChanged || sleepChanged) {
-      const min = Number(state.scaleMin);
-      const max = Number(state.scaleMax);
-      const cpu = Number(state.scaleCPU);
-      if (min < 0 || max < Math.max(min, 1)) {
-        toast.error("max must be ≥ max(min, 1) and min ≥ 0");
-        return;
-      }
-      if (scaleChanged) {
-        body.scale = { min, max, targetCPU: cpu };
-        // Blank = back to the default: -1 for the delays (0 is a real
-        // value there), 0 for the step.
-        const speed = [
-          ["scaleUpStabilizationSeconds", "scaleUpWindow", -1, 0, 3600],
-          ["scaleUpPods", "scaleUpPods", 0, 1, 100],
-          ["scaleUpPercent", "scaleUpPercent", 0, 1, 1000],
-          ["scaleDownStabilizationSeconds", "scaleDownWindow", -1, 0, 3600],
-        ] as const;
-        for (const [key, field, reset, lo, hi] of speed) {
-          const raw = state[field].trim();
-          if (raw === baseline[field].trim()) continue;
-          const n = raw === "" ? reset : Number(raw);
-          if (raw !== "" && (!Number.isInteger(n) || n < lo || n > hi)) {
-            toast.error(`${key} must be a whole number from ${lo} to ${hi}`);
-            return;
-          }
-          body.scale[key] = n;
-        }
-      }
-      // min=0 only works behind the activator, so it forces production
-      // sleep on. Otherwise sleep.enabled follows the Sleep switch; it used
-      // to be reset to false on every scale save with min ≥ 1, silently
-      // undoing sleep enabled elsewhere (CLI, kuso.yml).
-      const minCrossedZero = (Number(baseline.scaleMin) === 0) !== (min === 0);
-      if (sleepChanged || excludeChanged || minCrossedZero) {
-        body.sleep = { enabled: min === 0 || state.sleepEnabled };
-        if (state.sleepAfter !== baseline.sleepAfter) {
-          const after = Number(state.sleepAfter);
-          if (!Number.isInteger(after) || after < 1) {
-            toast.error("Idle window must be a whole number of minutes ≥ 1");
-            return;
-          }
-          body.sleep.afterMinutes = after;
-        }
-        if (nonProdChanged) {
-          body.sleep.nonProduction = state.sleepNonProduction === "off" ? "off" : "on";
-        }
-        if (excludeChanged) {
-          // Paths that must stay reachable (webhooks/callbacks) keep the
-          // whole deployment warm. An empty list clears the override.
-          const paths = state.sleepExcludePaths
-            .split("\n")
-            .map((p) => p.trim())
-            .filter(Boolean);
-          body.sleep.wakeOn = paths.length > 0 ? { excludePaths: paths } : { clear: true };
-        }
-      }
-    }
-    if (
-      state.cpuRequest !== baseline.cpuRequest ||
-      state.cpuLimit !== baseline.cpuLimit ||
-      state.memRequest !== baseline.memRequest ||
-      state.memLimit !== baseline.memLimit
-    ) {
-      // Build a k8s ResourceRequirements map, omitting blank fields.
-      // All-blank → send an empty object to CLEAR resources (chart
-      // default). The server validates quantities at apply time.
-      const req: Record<string, string> = {};
-      const lim: Record<string, string> = {};
-      if (state.cpuRequest.trim()) req.cpu = state.cpuRequest.trim();
-      if (state.memRequest.trim()) req.memory = state.memRequest.trim();
-      if (state.cpuLimit.trim()) lim.cpu = state.cpuLimit.trim();
-      if (state.memLimit.trim()) lim.memory = state.memLimit.trim();
-      const resources: Record<string, unknown> = {};
-      if (Object.keys(req).length) resources.requests = req;
-      if (Object.keys(lim).length) resources.limits = lim;
-      body.resources = resources;
-    }
-    if (state.runtime !== baseline.runtime) {
-      body.runtime = state.runtime;
-    }
-    // dockerfile path: only meaningful for runtime=dockerfile. Send on
-    // change ("" clears back to the default "Dockerfile" server-side).
-    if (state.dockerfile !== baseline.dockerfile) {
-      body.dockerfile = state.dockerfile;
-    }
-    if (state.watchPaths !== baseline.watchPaths) {
-      body.watchPaths = parseWatchPathsText(state.watchPaths);
-    }
-    // Image reference: only meaningful for runtime=image services,
-    // where re-pointing repository/tag + saving is the redeploy path
-    // (they never build). Repository must stay non-empty — clearing
-    // it would strand the service with nothing to run.
-    if (
-      state.imageRepository !== baseline.imageRepository ||
-      state.imageTag !== baseline.imageTag ||
-      state.imagePullSecret !== baseline.imagePullSecret
-    ) {
-      const repository = state.imageRepository.trim();
-      if (!repository) {
-        toast.error("Image repository can't be empty");
-        return;
-      }
-      body.image = {
-        repository,
-        tag: state.imageTag.trim() || undefined,
-        pullSecret: state.imagePullSecret,
-      };
-    }
-    // A typed GitLab token is write-only — it never round-trips from the
-    // server, so it can't be diffed against the baseline the way the
-    // other repo fields are. Treat a non-empty token as its own reason
-    // to send the repo patch, in addition to url/branch/path/provider
-    // edits.
-    const tokenToSend = state.repoToken.trim();
-    if (
-      state.repoURL !== baseline.repoURL ||
-      state.repoBranch !== baseline.repoBranch ||
-      state.repoPath !== baseline.repoPath ||
-      state.repoInstallationID !== baseline.repoInstallationID ||
-      state.repoProvider !== baseline.repoProvider ||
-      tokenToSend
-    ) {
-      body.repo = {
-        url: state.repoURL,
-        branch: state.repoBranch || undefined,
-        path: state.repoPath || undefined,
-        // 0 → omit so the server doesn't clobber the existing
-        // installationId with "unset"; only send when explicitly
-        // changed by the picker.
-        installationId: state.repoInstallationID || undefined,
-        // Only send an explicit provider override; "" means "let the
-        // server infer from the URL host" (its authoritative detection).
-        provider:
-          state.repoProvider === "gitlab" || state.repoProvider === "github"
-            ? state.repoProvider
-            : undefined,
-        // WRITE-ONLY GitLab clone credential. Only send when the user
-        // actually typed one — a blank field must NOT clear an existing
-        // stored token, so we omit it entirely when empty.
-        token: tokenToSend || undefined,
-      };
-    }
-    const pNow = JSON.stringify({ p: state.placement, n: state.placementNodes });
-    const pBase = JSON.stringify({ p: baseline.placement, n: baseline.placementNodes });
-    if (pNow !== pBase) {
-      const labels: Record<string, string> = {};
-      for (const r of state.placement) {
-        if (!r.key.trim()) continue;
-        labels[r.key.trim()] = r.value;
-      }
-      const nodes = state.placementNodes.filter(Boolean);
-      // Sending an empty placement {} explicitly clears it; we only
-      // want to do that when the user actually had something set
-      // before. Otherwise nil-vs-{} gets ambiguous server-side.
-      if (Object.keys(labels).length === 0 && nodes.length === 0) {
-        body.placement = { clear: true };
-      } else {
-        body.placement = { labels, nodes };
-      }
-    }
-    const vNow = JSON.stringify(state.volumes);
-    const vBase = JSON.stringify(baseline.volumes);
-    if (vNow !== vBase) {
-      for (const v of state.volumes) {
-        if (!v.name || !v.mountPath) continue;
-        if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(v.name)) {
-          toast.error(`Volume name "${v.name}": lowercase, dashes, ≤32 chars`);
-          return;
-        }
-        if (!v.mountPath.startsWith("/")) {
-          toast.error(`Mount path "${v.mountPath}" must start with /`);
-          return;
-        }
-      }
-      body.volumes = state.volumes.filter((v) => v.name && v.mountPath);
-    }
-    if (state.previewsDisabled !== baseline.previewsDisabled) {
-      // The server merges `disabled` into spec.previews; {clear:true}
-      // would also wipe seed/reviewUrl/previewEnvVars.
-      body.previews = { disabled: state.previewsDisabled };
-    }
-    if (state.waitForCI !== baseline.waitForCI) {
-      body.waitForCI = state.waitForCI;
-    }
-    {
-      const path = state.uptimePath.trim();
-      const pathChanged = path !== baseline.uptimePath;
-      if (pathChanged && path) {
-        // Mirrors the server's rule so a bad path fails here, not as a 400.
-        if (!path.startsWith("/") || path.startsWith("//") || /\s/.test(path) || path.length > 512) {
-          toast.error("Check path must start with a single / and contain no spaces (≤512 chars)");
-          return;
-        }
-      }
-      if (pathChanged || state.uptimeEnabled !== baseline.uptimeEnabled) {
-        body.uptime = {
-          ...(state.uptimeEnabled !== baseline.uptimeEnabled ? { disabled: !state.uptimeEnabled } : {}),
-          ...(pathChanged ? { path } : {}),
-        };
-      }
-    }
-    {
-      const release = releasePatch(
-        state.releaseCommand,
-        state.releaseTimeout,
-        baseline.releaseCommand,
-        baseline.releaseTimeout,
-        svc?.spec.release?.command,
-      );
-      if (release) body.release = release;
-    }
-    if (
-      state.capAdd !== baseline.capAdd ||
-      state.allowPrivilegeEscalation !== baseline.allowPrivilegeEscalation
-    ) {
-      const caps = state.capAdd
-        .split(",")
-        .map((c) => c.trim())
-        .filter(Boolean);
-      // Server semantics: nil = leave alone, non-nil = set verbatim. We
-      // only get here when the user changed a field, so always send: an
-      // emptied block (no caps, escalation off) renders exactly kuso's
-      // hardened default, which is how the user clears an override.
-      body.securityContext = {
-        ...(caps.length > 0 ? { capabilities: { add: caps } } : {}),
-        allowPrivilegeEscalation: state.allowPrivilegeEscalation,
-      };
-    }
+  // Clear the "Saved" flash after a few seconds.
+  useEffect(() => {
+    const ids = Object.keys(savedAt) as SaveableSection[];
+    if (ids.length === 0) return;
+    const t = window.setTimeout(() => setSavedAt({}), SAVED_FLASH_MS);
+    return () => window.clearTimeout(t);
+  }, [savedAt]);
 
-    {
-      const extra = extraServicePatch(state, baseline, svc?.spec.command);
-      if ("error" in extra) {
-        toast.error(extra.error);
+  const requestSave = useCallback(
+    (sections: SaveableSection[]) => {
+      const target = scopedState(sections, state, baseline);
+      const res = buildServicePatch(target, baseline, {
+        command: svc?.spec.command,
+        releaseCommand: svc?.spec.release?.command,
+      });
+      if ("error" in res) {
+        // Attribute the error to the single card being saved; a save-all
+        // error shows on every dirty card involved.
+        setErrors((e) => ({ ...e, ...Object.fromEntries(sections.map((s) => [s, res.error])) }));
+        toast.error(res.error);
         return;
       }
-      Object.assign(body, extra.body);
-    }
+      setErrors((e) => {
+        const next = { ...e };
+        for (const s of sections) delete next[s];
+        return next;
+      });
+      if (Object.keys(res.body).length === 0) {
+        // Only cosmetic edits (an empty row added then removed): reset.
+        setState((s) => sections.reduce((acc, sec) => discardSection(sec, acc, baseline), s));
+        return;
+      }
+      // Open the blast-radius dialog first; applyPatch does the write.
+      setPendingSave({ sections, target, body: res.body });
+    },
+    [state, baseline, svc],
+  );
 
-    if (Object.keys(body).length === 0 && envHosts === null) {
-      // Nothing actually changed (user shuffled empty rows around or
-      // typed-then-deleted). Reset the baseline so the save bar
-      // hides without firing a no-op API call.
-      setState(baseline);
-      setSaveError(null);
-      return;
-    }
-
-    // Don't patch straight away — open the blast-radius confirm
-    // dialog so the user sees what each changed field does to the
-    // running workload (rolling restart, TLS re-issue, data orphan…)
-    // before committing. applyPatch (the dialog's confirm) does the
-    // actual mutation.
-    setSaveError(null);
-    setPendingHosts(envHosts);
-    setPendingBody(body);
-  };
-
-  // applyPatch commits the body the confirm dialog is showing.
-  const applyPatch = async (body: PatchServiceBody, hosts: string[] | null) => {
-    setPending(true);
-    setSaveError(null);
+  const applyPatch = async ({ sections, body }: PendingSave) => {
+    setSaving(sections);
     try {
-      // Domains first so a failure (e.g. cross-env conflict) surfaces
-      // before other service fields are partially applied.
-      if (hosts !== null) {
-        const envName = env || "production";
-        try {
-          await api<unknown>(
-            `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(envName)}/domains`,
-            { method: "PUT", body: { hosts } },
-          );
-        } catch (err) {
-          throw new Error(`Save domains: ${err instanceof Error ? err.message : "failed"}`);
-        }
-        // Refetch so the baseline picks up the new AdditionalHosts and
-        // the dirty flag clears.
-        await qcForPanel.invalidateQueries({ queryKey: envsQueryKey(project) });
-        // Canvas tiles / project card read the URL from the describe payload.
-        qcForPanel.invalidateQueries({ queryKey: ["projects", project], exact: true });
-      }
-      if (Object.keys(body).length > 0) {
-        await patch.mutateAsync(body);
-      }
-      toast.success("Changes saved");
-      setPendingBody(null);
-      setPendingHosts(null);
-      // The GitLab token is write-only — the server took it into a
-      // Secret and will never echo it back, so clear the field now that
-      // it's committed. Without this the typed value lingers in state
-      // while the refetched baseline has repoToken="", leaving the form
-      // permanently "dirty" and the save bar stuck open.
-      if (body.repo?.token) {
-        setState((s) => ({ ...s, repoToken: "" }));
-      }
+      await patch.mutateAsync(body);
+      for (const s of sections) adoptRef.current.add(s);
+      // The repo token is write-only: it never comes back, so clear it.
+      if (body.repo?.token) setState((s) => ({ ...s, repoToken: "" }));
+      setSavedAt(Object.fromEntries(sections.map((s) => [s, Date.now()])));
+      toast.success(sections.length === 1 ? `${SECTION_LABEL[sections[0]]} saved` : "Changes saved");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save";
-      // Both surfaces: toast for momentary visibility, inline
-      // saveError for "where did my changes go" recovery.
       toast.error(msg);
-      setSaveError(msg);
-      setPendingBody(null);
-      setPendingHosts(null);
+      setErrors((prev) => ({ ...prev, ...Object.fromEntries(sections.map((s) => [s, msg])) }));
     } finally {
-      setPending(false);
+      setPendingSave(null);
+      setSaving([]);
     }
   };
 
-  // diffEntries turns the pending patch body into the confirm
-  // dialog's row list, each tagged with its EDIT_SAFETY blast radius.
-  // The before/after values are read from the real baseline vs state
-  // (NOT the patch body — several body keys are reshaped, e.g. `scale`
-  // spans three form fields) so the user sees the actual change per
-  // field, mirroring how EnvVarsEditor builds its diff.
-  const diffEntries: DiffEntry[] = pendingBody
-    ? [...Object.keys(pendingBody), ...(pendingHosts !== null ? ["domains"] : [])].map((field) => {
-        const [before, after] = fieldDiffValues(field, baseline, state);
+  const discardAll = () => {
+    setState(baseline);
+    setErrors({});
+  };
+
+  // The tab-switch / close guard in the overlay shell still needs to know
+  // about unsaved edits. No onSave here: the cards and the bar below own
+  // saving, so the shell's generic save bar stays hidden.
+  useOverlayDirty("settings", dirty.length > 0 && canWrite, { onDiscard: discardAll });
+
+  const saveApi = useMemo<SettingsSaveApi>(
+    () => ({
+      canWrite,
+      status: (id) => {
+        if (!isSaveableSection(id)) return null;
         return {
-          field,
-          before,
-          after,
-          warning: serviceBlast(field) ?? undefined,
+          dirty: dirty.includes(id),
+          saving: saving.includes(id),
+          saved: savedAt[id] !== undefined,
+          error: errors[id] ?? null,
         };
+      },
+      save: (id) => {
+        if (isSaveableSection(id)) requestSave([id]);
+      },
+      discard: (id) => {
+        if (!isSaveableSection(id)) return;
+        setState((s) => discardSection(id, s, baseline));
+        setErrors((e) => {
+          const next = { ...e };
+          delete next[id];
+          return next;
+        });
+      },
+    }),
+    [canWrite, dirty, saving, savedAt, errors, requestSave, baseline],
+  );
+
+  const diffEntries: DiffEntry[] = pendingSave
+    ? Object.keys(pendingSave.body).map((field) => {
+        const [before, after] = fieldDiffValues(field, baseline, pendingSave.target);
+        return { field, before, after, warning: serviceBlast(field) ?? undefined };
       })
     : [];
 
-  const reset = () => {
-    setState(baseline);
-    setSaveError(null);
+  // Uptime checks ping the HTTP port, so workers and internal-only
+  // services have nothing to check. Domains need a public ingress.
+  const uptimeApplies = state.runtime !== "worker" && !state.internal;
+  const domainsApply = !baseline.internal;
+  const sections = SECTIONS.filter(
+    (s) => (s.id !== "uptime" || uptimeApplies) && (s.id !== "domains" || domainsApply),
+  );
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const active = useScrollSpy(rootRef, sections.map((s) => s.id).join(","));
+  const jump = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  // Register dirty + save with the overlay shell so the unified
-  // SaveBar (rendered in ServiceOverlay.tsx) fires onSave for this
-  // panel. The inline FloatingSaveBar below stays for the
-  // read-only "your role can't edit" affordance, but the dirty
-  // case is handled by the shell now.
-  useOverlayDirty("settings", dirty && canWrite, {
-    onSave,
-    onDiscard: reset,
-    saving: pending,
-    saveError: saveError ?? undefined,
-  });
-
-  // Uptime checks ping the HTTP port, so workers and internal-only
-  // services have nothing to check.
-  const uptimeApplies = state.runtime !== "worker" && !state.internal;
-  const sections = SECTIONS.filter((s) => s.id !== "uptime" || uptimeApplies);
-
   return (
-    <div className="relative">
-      {/* On md+ the layout is a 2-col grid with a sticky sidebar
-          jump-nav. On smaller screens the sidebar would steal half
-          the width from the actual form, so we collapse to a single
-          column + a horizontal-scroll chip strip pinned to the top.
-          That keeps the section anchors discoverable on phones
-          without crowding the inputs. */}
-      <nav className="sticky top-0 z-10 -mx-px flex gap-1 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/95 px-3 py-2 text-xs backdrop-blur md:hidden">
-        {sections.map((s) => (
-          <a
-            key={s.id}
-            href={`#${s.id}`}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]",
-              s.id === "danger" && "text-red-400/70 hover:text-red-400",
+    <SettingsSaveProvider value={saveApi}>
+      <div ref={rootRef} className="relative">
+        <MobileSectionNav sections={sections} active={active} dirty={dirty} onJump={jump} />
+        <div className="grid grid-cols-1 gap-0 pb-28 md:grid-cols-[minmax(0,1fr)_168px]">
+          <div className="min-w-0 space-y-6 px-3 py-4 sm:px-4 md:px-6 md:py-6">
+            {!onProduction && env && <EnvBranchSection project={project} env={env} service={service} svc={svc} />}
+            <SourceSection state={state} setState={setState} project={project} service={service} />
+            {domainsApply && (
+              <DomainsCard
+                project={project}
+                service={service}
+                envName={envName}
+                env={activeEnv}
+                envLoading={envs.isLoading}
+                canWrite={canWrite}
+              />
             )}
-          >
-            <s.icon className="h-3 w-3" />
-            {s.label}
-          </a>
-        ))}
-      </nav>
-      <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[minmax(0,1fr)_180px]">
-        <div className="min-w-0 space-y-8 px-4 py-4 md:px-6 md:py-6">
-          {!onProduction && env && (
-            <EnvBranchSection project={project} env={env} service={service} svc={svc} />
-          )}
-          <SourceSection state={state} setState={setState} project={project} service={service} />
-          <NetworkingSection
-            state={state}
-            setState={setState}
-            autoHost={autoHost}
-            envName={env || "production"}
-            savedHosts={baseline.domains.split("\n").map((h) => h.trim().toLowerCase()).filter(Boolean)}
-            wildcard={
-              activeEnv
-                ? { project, service, domains: activeEnv.spec.wildcardDomains ?? [], canWrite }
-                : undefined
-            }
-          />
-          <ScaleSection state={state} setState={setState} />
-          <SleepSection state={state} setState={setState} />
-          <PlacementSection state={state} setState={setState} />
-          <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
-          <BuildSection state={state} setState={setState} project={project} />
-          <DeploySection project={project} state={state} setState={setState} />
-          <ReleaseSection state={state} setState={setState} />
-          {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
-          <SecuritySection state={state} setState={setState} />
-          <DangerSection
-            project={project}
-            service={service}
-            env={
-              !onProduction &&
-              env &&
-              activeEnv &&
-              activeEnv.metadata.labels?.["kuso.sislelabs.com/env"] === env
-                ? { group: env, crName: activeEnv.metadata.name }
-                : undefined
-            }
-          />
+            <NetworkingSection state={state} setState={setState} />
+            <ScaleSection state={state} setState={setState} />
+            <SleepSection state={state} setState={setState} />
+            <PlacementSection state={state} setState={setState} />
+            <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
+            <BuildSection state={state} setState={setState} project={project} />
+            <DeploySection project={project} state={state} setState={setState} />
+            <ReleaseSection state={state} setState={setState} />
+            {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
+            <SecuritySection state={state} setState={setState} />
+            <DangerSection
+              project={project}
+              service={service}
+              canWrite={canWrite}
+              env={
+                !onProduction &&
+                env &&
+                activeEnv &&
+                activeEnv.metadata.labels?.["kuso.sislelabs.com/env"] === env
+                  ? { group: env, crName: activeEnv.metadata.name }
+                  : undefined
+              }
+            />
+          </div>
+
+          <nav aria-label="Settings sections" className="sticky top-0 hidden self-start py-6 pr-4 md:block">
+            <ul className="space-y-0.5 text-[13px]">
+              {sections.map((s) => {
+                const isDirty = isSaveableSection(s.id) && dirty.includes(s.id);
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => jump(s.id)}
+                      aria-current={active === s.id ? "true" : undefined}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                        active === s.id
+                          ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/60 hover:text-[var(--text-primary)]",
+                        s.id === "danger" && "text-[var(--error)] hover:text-[var(--error)]",
+                      )}
+                    >
+                      <s.icon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="flex-1 truncate">{s.label}</span>
+                      {isDirty && (
+                        <span
+                          aria-label="Unsaved changes"
+                          title="Unsaved changes"
+                          className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]"
+                        />
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
         </div>
 
-        <nav className="sticky top-0 hidden self-start px-4 py-6 text-sm md:block">
-          <ul className="space-y-2">
-            {sections.map((s) => (
-              <li key={s.id}>
-                <a
-                  href={`#${s.id}`}
-                  className={cn(
-                    "flex items-center gap-2 rounded px-2 py-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors",
-                    s.id === "danger" && "text-red-400/70 hover:text-red-400",
-                  )}
-                >
-                  <s.icon className="h-3 w-3" />
-                  {s.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
+        {dirty.length > 0 && canWrite && (
+          <div className="pointer-events-none sticky bottom-3 z-20 flex justify-center px-3">
+            <div
+              role="region"
+              aria-label="Unsaved settings"
+              className="pointer-events-auto flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
+            >
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-primary)]">
+                <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]" />
+                <span className="truncate">
+                  Unsaved changes in {dirty.map((d) => SECTION_LABEL[d]).join(", ")}
+                </span>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button variant="ghost" size="sm" onClick={discardAll} disabled={saving.length > 0}>
+                  Discard all
+                </Button>
+                <Button size="sm" onClick={() => requestSave(dirty)} disabled={saving.length > 0}>
+                  {saving.length > 0 ? "Saving…" : dirty.length > 1 ? "Save all" : "Save"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        {dirty.length > 0 && !canWrite && (
+          <div className="pointer-events-none sticky bottom-3 z-20 flex justify-center px-3">
+            <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 text-xs text-[var(--text-secondary)] shadow-[var(--shadow-md)]">
+              Read-only: your role can&apos;t edit services
+            </span>
+          </div>
+        )}
+        <DiffConfirmDialog
+          open={pendingSave !== null}
+          title={
+            pendingSave && pendingSave.sections.length === 1
+              ? `Apply ${SECTION_LABEL[pendingSave.sections[0]]} changes?`
+              : "Apply service changes?"
+          }
+          description="Review what each change does to the running service before it applies."
+          entries={diffEntries}
+          confirmLabel="Apply changes"
+          confirming={saving.length > 0}
+          onCancel={() => setPendingSave(null)}
+          onConfirm={() => {
+            if (pendingSave) void applyPatch(pendingSave);
+          }}
+        />
       </div>
-
-      {/* The dirty/save UX is now handled by the unified SaveBar
-          in ServiceOverlay.tsx via useOverlayDirty's onSave hook.
-          We only keep the inline "read-only" hint for users whose
-          role can't commit — they need an explanation, not a
-          disabled button. */}
-      {saveError && (
-        <div className="sticky bottom-16 z-20 mx-4 flex items-center justify-end">
-          <span className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 font-mono text-[10px] text-red-300 shadow-[var(--shadow-md)]">
-            {saveError}
-          </span>
-        </div>
-      )}
-      {dirty && !canWrite && (
-        <div className="sticky bottom-4 z-20 mx-4 flex items-center justify-end">
-          <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)] shadow-[var(--shadow-md)]">
-            read-only — your role can&apos;t edit services
-          </span>
-        </div>
-      )}
-      <DiffConfirmDialog
-        open={pendingBody !== null}
-        title="Apply service changes?"
-        description="Review the blast radius of each change before it reconciles."
-        entries={diffEntries}
-        confirmLabel="Apply & reconcile"
-        confirming={pending}
-        onCancel={() => {
-          setPendingBody(null);
-          setPendingHosts(null);
-        }}
-        onConfirm={() => {
-          if (pendingBody) void applyPatch(pendingBody, pendingHosts);
-        }}
-      />
-    </div>
+    </SettingsSaveProvider>
   );
 }
 
-// (FloatingSaveBar removed — the overlay shell renders a unified
-// SaveBar from useOverlayDirty's onSave hook now.)
+// useScrollSpy returns the id of the section nearest the top of the
+// overlay's scroll container. `idsKey` is the comma-joined section list.
+function useScrollSpy(rootRef: React.RefObject<HTMLDivElement | null>, idsKey: string): string {
+  const ids = useMemo(() => idsKey.split(","), [idsKey]);
+  const [active, setActive] = useState(ids[0] ?? "");
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let scroller: HTMLElement | null = root.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    const target: HTMLElement | Window = scroller ?? window;
+    const update = () => {
+      const top = scroller ? scroller.getBoundingClientRect().top : 0;
+      let current = ids[0] ?? "";
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top - top <= 96) current = id;
+      }
+      // At the very bottom the last short cards can't reach the top.
+      if (scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) {
+        current = ids[ids.length - 1] ?? current;
+      }
+      setActive(current);
+    };
+    update();
+    target.addEventListener("scroll", update, { passive: true });
+    return () => target.removeEventListener("scroll", update);
+  }, [rootRef, ids]);
+  return active;
+}
 
-// EnvBranchSection is the per-(env, service) branch override surface.
-// Only rendered for non-production envs; the production branch is set
-// via the regular Source section below (which writes to the
-// KusoService spec). For env-cloned services, branch is on the env CR
-// — kuso patches it via PATCH /api/projects/{p}/env-groups/{env}/
-// services/{service}/branch and the build poller picks up new pushes
-// to that branch as redeploys.
+// MobileSectionNav: below md the side nav becomes a sticky, horizontally
+// scrolling strip. The active chip is kept in view.
+function MobileSectionNav({
+  sections,
+  active,
+  dirty,
+  onJump,
+}: {
+  sections: readonly { id: string; label: string; icon: React.ComponentType<{ className?: string }> }[];
+  active: string;
+  dirty: SaveableSection[];
+  onJump: (id: string) => void;
+}) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    const chip = strip?.querySelector<HTMLElement>(`[data-section="${active}"]`);
+    if (!strip || !chip) return;
+    const left = chip.offsetLeft - strip.clientWidth / 2 + chip.clientWidth / 2;
+    strip.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [active]);
+  return (
+    <nav
+      aria-label="Settings sections"
+      className="sticky top-0 z-10 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/95 backdrop-blur md:hidden"
+    >
+      <div ref={stripRef} className="flex gap-1.5 overflow-x-auto px-3 py-2 [scrollbar-width:none]">
+        {sections.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            data-section={s.id}
+            onClick={() => onJump(s.id)}
+            aria-current={active === s.id ? "true" : undefined}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors",
+              active === s.id
+                ? "border-[var(--text-tertiary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                : "border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]",
+              s.id === "danger" && "text-[var(--error)]",
+            )}
+          >
+            <s.icon className="h-3.5 w-3.5" />
+            {s.label}
+            {isSaveableSection(s.id) && dirty.includes(s.id) && (
+              <span aria-label="Unsaved changes" className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+            )}
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+// EnvBranchSection is the per-(env, service) branch override. Only
+// rendered for non-production envs; production's branch is the Source
+// card's. It saves on its own through PATCH .../env-groups/{env}/
+// services/{service}/branch, and the build poller picks up new pushes to
+// that branch as redeploys.
 function EnvBranchSection({
   project,
   env,
@@ -882,28 +501,16 @@ function EnvBranchSection({
   service: string;
   svc?: KusoService;
 }) {
-  // Pull the current branch from the env CR (production's env CR for
-  // this service, narrowed by env-name label). Falls back to the
-  // service's repo default branch as a hint.
   const envs = useEnvironments(project);
   const fqn = `${project}-${service}`;
   const envRow = (envs.data ?? []).find(
-    (e) =>
-      e.spec.service === fqn &&
-      (e.metadata.labels?.["kuso.sislelabs.com/env"] ?? "") === env,
+    (e) => e.spec.service === fqn && (e.metadata.labels?.["kuso.sislelabs.com/env"] ?? "") === env,
   );
-  // The env CR's spec.branch is the OVERRIDE; empty means "no override,
-  // fall back to the service default branch". Keep these separate so we
-  // can (a) tell whether an override is actually set, and (b) prefill a
-  // sensible suggestion when it isn't.
+  // spec.branch is the OVERRIDE; empty means "fall back to the service
+  // default branch".
   const overrideBranch = envRow?.spec.branch ?? "";
   const serviceDefaultBranch = svc?.spec?.repo?.defaultBranch ?? "main";
   const hasOverride = overrideBranch.trim() !== "";
-  // When no override is set, the env's own name (the `staging`-env-
-  // tracks-`staging`-branch convention) is shown as the placeholder, not
-  // the value, so the input never looks like a live setting it isn't.
-  const suggestedBranch = env;
-  const currentBranch = overrideBranch;
   const repoLabel = (() => {
     // Credentials out FIRST: a gitlab deploy-token URL fell through the
     // github-only match below and rendered the token verbatim.
@@ -912,13 +519,12 @@ function EnvBranchSection({
     const m = url.match(/(?:github|gitlab)\.com[/:]([^/]+\/[^/.]+)/i);
     return m ? m[1] : url;
   })();
-  const [branch, setBranch] = useState(currentBranch);
+  const [branch, setBranch] = useState(overrideBranch);
   useEffect(() => {
-    setBranch(currentBranch);
-  }, [currentBranch]);
-  // "Dirty" = the input differs from what's actually persisted. Empty
-  // stays unsavable: the server rejects an empty branch, so there is no
-  // "clear override" call yet.
+    setBranch(overrideBranch);
+  }, [overrideBranch]);
+  // Empty stays unsavable: the server rejects an empty branch, so there
+  // is no "clear override" call yet.
   const dirty = branch.trim() !== "" && branch.trim() !== overrideBranch.trim();
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
@@ -926,9 +532,7 @@ function EnvBranchSection({
     setSaving(true);
     try {
       await setEnvGroupServiceBranch(project, env, service, branch.trim());
-      toast.success(
-        `${service} in ${env} now tracks ${branch.trim()} — push to that branch to redeploy.`,
-      );
+      toast.success(`${service} in ${env} now tracks ${branch.trim()}. Push to that branch to redeploy.`);
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
       qc.invalidateQueries({ queryKey: ["projects", project], exact: true });
@@ -939,70 +543,48 @@ function EnvBranchSection({
     }
   };
   return (
-    <section className="rounded-md border border-blue-500/30 bg-blue-500/5">
-      <header className="border-b border-blue-500/20 px-3 py-2">
-        <h3 className="text-sm font-medium">
-          Branch in <span className="font-mono text-blue-200">{env}</span>
-        </h3>
-        <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
-          {repoLabel ? (
-            <>
-              Branch of <span className="font-mono">{repoLabel}</span> that this service tracks
-              within <span className="font-mono">{env}</span>. Production keeps using its own
-              default-branch setting; this override is env-scoped.
-            </>
-          ) : (
-            <>
-              Branch this service tracks within{" "}
-              <span className="font-mono">{env}</span>. Doesn&apos;t affect production.
-            </>
-          )}
-        </p>
-      </header>
-      <div className="flex items-center gap-2 px-3 pt-3">
-        <input
-          type="text"
+    <Section
+      id="env-branch"
+      title={`Branch in ${env}`}
+      icon={GitBranch}
+      description={
+        <>
+          The branch {repoLabel ? <Code>{repoLabel}</Code> : "this service"} deploys in <Code>{env}</Code>. Production
+          keeps its own branch from the Source card.
+        </>
+      }
+    >
+      <form
+        className="flex flex-col gap-2 sm:flex-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (dirty && !saving) void save();
+        }}
+      >
+        <Input
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          placeholder={suggestedBranch}
+          placeholder={env}
           aria-label={`Branch ${service} tracks in ${env}`}
           spellCheck={false}
-          className="h-8 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--accent)]"
+          className={cn(monoInputClass, "flex-1")}
         />
-        <Button size="sm" disabled={!dirty || saving} onClick={save}>
+        <Button type="submit" size="sm" className="h-8" disabled={!dirty || saving}>
           {saving ? "Saving…" : "Save branch"}
         </Button>
-      </div>
-      {/* Inline resolution so the default-vs-override relationship is
-          legible: spell out which branch this env effectively deploys
-          and what the service default is. */}
-      <p className="px-3 pb-3 pt-1.5 text-[11px] text-[var(--text-secondary)]">
+      </form>
+      <p className="text-xs text-[var(--text-secondary)]">
         {hasOverride ? (
           <>
-            <span className="font-mono text-blue-200">{env}</span> deploys{" "}
-            <span className="font-mono">{overrideBranch}</span>{" "}
-            <span className="text-[var(--text-tertiary)]">(override)</span> · service default is{" "}
-            <span className="font-mono">{serviceDefaultBranch}</span>
+            Deploys <Code>{overrideBranch}</Code> here (override). The service default is{" "}
+            <Code>{serviceDefaultBranch}</Code>.
           </>
         ) : (
           <>
-            No override — <span className="font-mono text-blue-200">{env}</span> falls back to the
-            service default{" "}
-            <span className="font-mono">{serviceDefaultBranch}</span>.{" "}
-            {branch.trim() && branch.trim() !== serviceDefaultBranch ? (
-              <>
-                Save to track{" "}
-                <span className="font-mono">{branch.trim()}</span> here instead.
-              </>
-            ) : (
-              <>
-                Suggested:{" "}
-                <span className="font-mono">{suggestedBranch}</span>.
-              </>
-            )}
+            No override: <Code>{env}</Code> deploys the service default, <Code>{serviceDefaultBranch}</Code>.
           </>
         )}
       </p>
-    </section>
+    </Section>
   );
 }

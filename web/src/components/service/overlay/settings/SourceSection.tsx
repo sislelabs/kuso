@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
-import { Section, Row, type SectionProps } from "./_primitives";
+import { cn } from "@/lib/utils";
+import { Section, Field, FieldGrid, Code, inputClass, monoInputClass, textareaClass, type SectionProps } from "./_primitives";
 import { DeployHookRow } from "./DeployHookRow";
 
 export function SourceSection({
@@ -101,136 +102,112 @@ export function SourceSection({
   // installation reaches it (GitLab, or GitHub with no App).
   const needsToken = !!state.repoURL.trim() && (isGitlab || !autoResolved);
 
+  const providerNote = isGitlab
+    ? `GitLab${state.repoProvider === "gitlab" ? "" : " (detected from the URL)"}`
+    : autoResolved
+      ? <>GitHub, cloned through the <span className="text-[var(--text-primary)]">{autoResolved.accountLogin}</span> GitHub App installation</>
+      : "GitHub";
+
   return (
-    <Section id="source" title="Source" icon={Github}>
-      <Row
-        label="display name"
-        hint="visual label only · canvas / header"
-        control={
+    <Section
+      id="source"
+      title="Source"
+      icon={Github}
+      description="Where kuso pulls code from and which pushes trigger a build."
+      footerNote="Saving doesn't rebuild. The next push or manual deploy uses the new source."
+    >
+      <Field label="Display name" hint="Shown on the canvas and in the header. Doesn't change URLs or DNS." htmlFor="svc-display-name">
+        <Input
+          id="svc-display-name"
+          value={state.displayName}
+          onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
+          placeholder={service}
+          className={inputClass}
+          maxLength={60}
+          spellCheck={false}
+        />
+      </Field>
+      <Field label="Repository" hint={<>Full https URL. {providerNote}.</>} htmlFor="svc-repo-url">
+        <div className="flex items-center gap-1.5">
           <Input
-            value={state.displayName}
-            onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
-            placeholder={service}
-            className="h-7 w-full text-[12px]"
-            maxLength={60}
+            id="svc-repo-url"
+            value={state.repoURL}
+            onChange={(e) => setState((s) => ({ ...s, repoURL: e.target.value }))}
+            placeholder="e.g. https://github.com/owner/repo"
+            className={cn(monoInputClass, "flex-1")}
             spellCheck={false}
           />
-        }
-      />
-      <Row
-        label="repository"
-        hint={
-          isGitlab
-            ? `full https URL · gitlab${
-                state.repoProvider === "gitlab" ? "" : " (auto-detected)"
-              }`
-            : autoResolved
-              ? `full https URL · github app: ${autoResolved.accountLogin} (auto)`
-              : "full https URL · github"
-        }
-        control={
-          <div className="flex w-full items-center gap-1.5">
-            {state.repoURL && repoIsHttp && (
-              <a
-                href={state.repoURL}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="Open in new tab"
-                title={repoDisplay}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-              >
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-            {state.repoURL && !repoIsHttp && (
-              <span
-                aria-label="Repository URL is not a web link"
-                title={repoDisplay}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-40"
-              >
-                <ExternalLink className="h-3 w-3" />
-              </span>
-            )}
-            <Input
-              value={state.repoURL}
-              onChange={(e) => setState((s) => ({ ...s, repoURL: e.target.value }))}
-              placeholder="https://github.com/owner/repo"
-              className="h-7 flex-1 font-mono text-[12px]"
-              spellCheck={false}
-            />
-          </div>
-        }
-      />
-      <Row
-        label="branch"
-        hint="default branch · production + any env without an override"
-        control={
+          {state.repoURL && repoIsHttp && (
+            <a
+              href={state.repoURL}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open repository in a new tab"
+              title={repoDisplay}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-border text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+        </div>
+      </Field>
+      <FieldGrid>
+        <Field label="Branch" hint="Production, and any environment without its own branch, deploys this." htmlFor="svc-branch">
           <Input
+            id="svc-branch"
             value={state.repoBranch}
             onChange={(e) => setState((s) => ({ ...s, repoBranch: e.target.value }))}
             placeholder="main"
-            className="h-7 w-40 font-mono text-[12px]"
+            className={monoInputClass}
             spellCheck={false}
           />
-        }
-      />
-      <Row
-        label="path"
-        hint="monorepo subdir; leave blank for root"
-        control={
+        </Field>
+        <Field label="Root directory" hint="Subdirectory for monorepos. Blank builds from the repo root." htmlFor="svc-path">
           <Input
+            id="svc-path"
             value={state.repoPath}
             onChange={(e) => setState((s) => ({ ...s, repoPath: e.target.value }))}
-            placeholder="apps/api"
-            className="h-7 w-48 font-mono text-[12px]"
+            placeholder="e.g. apps/api"
+            className={monoInputClass}
             spellCheck={false}
           />
-        }
-      />
+        </Field>
+      </FieldGrid>
       {/* Push-build gate for monorepos. PR previews and manual builds
           ignore it; a push whose file list is unknown builds anyway. */}
-      <Row
-        label="watch paths"
-        hint="pushes build only when a changed file matches — blank = every push"
-        control={
-          <textarea
-            value={state.watchPaths}
-            onChange={(e) => setState((s) => ({ ...s, watchPaths: e.target.value }))}
-            placeholder={"apps/web/**\npackages/ui/**"}
-            rows={2}
-            spellCheck={false}
-            className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
-          />
-        }
-      />
-      {/* Access token for a private repo the GitHub App doesn't cover: a
-          GitLab token, or a GitHub personal access token. Hidden when an
-          App installation already reaches the repo. WRITE-ONLY: the
-          server stores it in a Secret and never returns it, so the field
-          starts blank and is never pre-filled. Leaving it blank on save
-          does NOT clear an existing token — the write path omits it
-          unless the user typed one. */}
-      {needsToken && (
-        <Row
-          label={isGitlab ? "gitlab access token" : "access token"}
-          hint="private repos only · write-only · blank keeps the existing token"
-          control={
-            <RepoTokenInput
-              value={state.repoToken}
-              placeholder={isGitlab ? "glpat-…" : "github_pat_…"}
-              onChange={(v) => setState((s) => ({ ...s, repoToken: v }))}
-            />
-          }
+      <Field
+        label="Watch paths"
+        hint="A push only builds when a changed file matches one of these globs, one per line. Blank builds on every push."
+        htmlFor="svc-watch-paths"
+      >
+        <textarea
+          id="svc-watch-paths"
+          value={state.watchPaths}
+          onChange={(e) => setState((s) => ({ ...s, watchPaths: e.target.value }))}
+          placeholder={"e.g. apps/web/**\npackages/ui/**"}
+          rows={3}
+          spellCheck={false}
+          className={textareaClass}
         />
+      </Field>
+      {/* Write-only clone credential for a private repo no GitHub App
+          installation reaches. The server stores it in a Secret and never
+          returns it; blank on save keeps the existing token. */}
+      {needsToken && (
+        <Field
+          label={isGitlab ? "GitLab access token" : "Access token"}
+          hint="Only for private repos. Write-only: leave blank to keep the stored token."
+          htmlFor="svc-repo-token"
+        >
+          <RepoTokenInput
+            id="svc-repo-token"
+            value={state.repoToken}
+            placeholder={isGitlab ? "glpat-…" : "github_pat_…"}
+            onChange={(v) => setState((s) => ({ ...s, repoToken: v }))}
+          />
+        </Field>
       )}
       {state.repoURL.trim() && <DeployHookRow project={project} service={service} />}
-      {/* The installation row used to live here. Removed since
-          kuso auto-resolves the GitHub App installation from the
-          repo URL's owner — the dropdown was a power-user knob
-          that ~no one actually flipped, and the auto-resolved
-          owner is now surfaced inline on the repository row's
-          hint. The server still accepts an explicit installationId
-          via the API if a future multi-org corner case needs it. */}
       <RenameRow project={project} service={service} />
     </Section>
   );
@@ -244,10 +221,12 @@ export function SourceSection({
 // env editor uses (Eye/EyeOff), minus the reveal-fetch since there's
 // nothing on the server to reveal.
 function RepoTokenInput({
+  id,
   value,
   placeholder,
   onChange,
 }: {
+  id: string;
   value: string;
   placeholder: string;
   onChange: (v: string) => void;
@@ -256,11 +235,12 @@ function RepoTokenInput({
   return (
     <div className="flex w-full items-center gap-1.5">
       <Input
+        id={id}
         type={shown ? "text" : "password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={`${placeholder} (leave blank to keep current)`}
-        className="h-7 flex-1 font-mono text-[12px]"
+        placeholder={`${placeholder} (blank keeps the current token)`}
+        className={cn(monoInputClass, "flex-1")}
         spellCheck={false}
         autoComplete="off"
         // Hint password managers to leave this alone — it's a clone
@@ -273,9 +253,9 @@ function RepoTokenInput({
         onClick={() => setShown((s) => !s)}
         aria-label={shown ? "Hide token" : "Show token"}
         title={shown ? "Hide token" : "Show token"}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-border text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
-        {shown ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+        {shown ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
       </button>
     </div>
   );
@@ -325,21 +305,26 @@ function RenameRow({ project, service }: { project: string; service: string }) {
   };
 
   return (
-    <Row
-      label="url slug"
-      hint={revealed ? "destructive — clones-then-deletes kube resources" : ""}
-      control={
-        !revealed ? (
-          <button
-            type="button"
-            onClick={() => setRevealed(true)}
-            className="font-mono text-[11px] text-[var(--text-tertiary)] underline hover:text-[var(--text-secondary)]"
-          >
-            change URL slug…
-          </button>
-        ) : (
-        <div className="flex w-full items-center gap-1.5">
-          <Input value={service} disabled className="h-7 flex-1 font-mono text-[12px]" />
+    <Field
+      label="Service slug"
+      hint={
+        <>
+          The name in URLs and in-cluster DNS (<Code>{service}</Code>). Renaming clones the service and deletes the
+          old one, so traffic drops for a few seconds.
+        </>
+      }
+    >
+      {!revealed ? (
+        <button
+          type="button"
+          onClick={() => setRevealed(true)}
+          className="text-xs text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+        >
+          Change slug…
+        </button>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <Input value={service} disabled aria-label="Current slug" className={cn(monoInputClass, "flex-1")} />
           {canWrite && (
             <Button
               variant="outline"
@@ -350,44 +335,40 @@ function RenameRow({ project, service }: { project: string; service: string }) {
                 setOpen(true);
               }}
             >
-              Rename
+              Rename…
             </Button>
           )}
-          <ConfirmDialog
-            open={open}
-            title="Rename service?"
-            destructive
-            confirmLabel={pending ? "Renaming…" : "Rename"}
-            pending={pending}
-            body={
-              <div className="space-y-3">
-                <p className="text-[12px] text-[var(--text-secondary)]">
-                  Renaming clones the service under a new name, then deletes the old
-                  one. Production traffic returns 503 for the seconds in between, and
-                  any service referencing this one via{" "}
-                  <span className="font-mono text-[var(--text-tertiary)]">
-                    {"${{...}}"}
-                  </span>{" "}
-                  needs to redeploy to pick up the new DNS.
-                </p>
-                <Input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="new-service-name"
-                  className="font-mono text-sm"
-                  autoFocus
-                  spellCheck={false}
-                />
-              </div>
-            }
-            onConfirm={submit}
-            onCancel={() => {
-              if (!pending) setOpen(false);
-            }}
-          />
         </div>
-        )
-      }
-    />
+      )}
+      <ConfirmDialog
+        open={open}
+        title="Rename service?"
+        destructive
+        confirmLabel={pending ? "Renaming…" : "Rename"}
+        pending={pending}
+        body={
+          <div className="space-y-3">
+            <p className="text-[13px] text-[var(--text-secondary)]">
+              Renaming clones the service under a new name, then deletes the old one. Production returns 503 for
+              the seconds in between, and services that reference this one through <Code>{"${{ … }}"}</Code> need a
+              redeploy to pick up the new DNS name.
+            </p>
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="new-service-name"
+              aria-label="New slug"
+              className="font-mono text-sm"
+              autoFocus
+              spellCheck={false}
+            />
+          </div>
+        }
+        onConfirm={submit}
+        onCancel={() => {
+          if (!pending) setOpen(false);
+        }}
+      />
+    </Field>
   );
 }
