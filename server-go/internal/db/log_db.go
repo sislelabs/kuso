@@ -257,13 +257,22 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 		fmt.Fprintf(&sqlStr, ` AND ts < $%d`, n)
 		args = append(args, req.Until.UTC())
 	}
+	forward := req.BeforeID <= 0 && req.AfterID > 0
 	if req.BeforeID > 0 {
 		n++
 		fmt.Fprintf(&sqlStr, ` AND id < $%d`, n)
 		args = append(args, req.BeforeID)
+	} else if forward {
+		n++
+		fmt.Fprintf(&sqlStr, ` AND id > $%d`, n)
+		args = append(args, req.AfterID)
 	}
 	n++
-	fmt.Fprintf(&sqlStr, ` ORDER BY id DESC LIMIT $%d`, n)
+	if forward {
+		fmt.Fprintf(&sqlStr, ` ORDER BY id ASC LIMIT $%d`, n)
+	} else {
+		fmt.Fprintf(&sqlStr, ` ORDER BY id DESC LIMIT $%d`, n)
+	}
 	args = append(args, limit)
 
 	rows, err := d.QueryContext(ctx, sqlStr.String(), args...)
@@ -283,7 +292,17 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 		}
 		out = append(out, ll)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Forward pages are fetched oldest-first (so the LIMIT keeps the rows
+	// nearest the anchor) but returned newest-first like every other page.
+	if forward {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	return out, nil
 }
 
 // CountLogMatches is the alert-rule helper: how many matches in a

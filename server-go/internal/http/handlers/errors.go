@@ -30,6 +30,7 @@ type ErrorsHandler struct {
 // access is verified against requireProjectAccess.
 func (h *ErrorsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}/errors", h.List)
+	r.Get("/api/projects/{project}/services/{service}/errors/{fingerprint}", h.Detail)
 }
 
 // List returns aggregated error groups. Query params:
@@ -102,4 +103,48 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(offset+limit))
 	}
 	writeJSON(w, http.StatusOK, groups)
+}
+
+// Detail returns one fingerprint's count histogram + newest occurrences.
+// Same ?since= / ?env= semantics as List. The bucket width targets ~48
+// bars across the window, never below a minute.
+func (h *ErrorsHandler) Detail(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	fingerprint := chi.URLParam(r, "fingerprint")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !requireParent(ctx, w, h.Kube, h.Namespace, project, service) {
+		return
+	}
+	if !strings.HasPrefix(service, project+"-") {
+		service = project + "-" + service
+	}
+	if fingerprint == "" || len(fingerprint) > 256 {
+		writeErr(w, http.StatusBadRequest, "invalid fingerprint")
+		return
+	}
+	window := 24 * time.Hour
+	if v := r.URL.Query().Get("since"); v != "" {
+		d, err := parseRangeDuration(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("invalid since %q: use a Go duration (30m, 6h) or days/weeks (7d, 2w), max 30d", v))
+			return
+		}
+		if d > 30*24*time.Hour {
+			d = 30 * 24 * time.Hour
+		}
+		window = d
+	}
+	detail, err := h.DB.GetErrorGroupDetail(ctx, project, service, r.URL.Query().Get("env"), fingerprint,
+		time.Now().Add(-window), window/48, 20)
+	if err != nil {
+		h.Logger.Error("errors: detail", "err", err, "project", project, "service", service)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
