@@ -105,7 +105,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
           satisfy every rule. No rules schedules anywhere.
         </>
       }
-      footerNote="Saving moves pods that sit on non-matching nodes."
+      footerNote="Deploying moves pods that sit on non-matching nodes."
     >
       <Field
         label="Label rules"

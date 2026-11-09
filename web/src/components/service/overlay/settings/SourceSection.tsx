@@ -147,7 +147,7 @@ export function SourceSection({
           <a href="#build" onClick={jumpToImage} className="font-medium text-[var(--link)] underline underline-offset-2">
             Change the image or tag
           </a>{" "}
-          in the Image section. Saving a new tag deploys it.
+          in the Image section. Deploying a new tag ships it.
         </p>
       </Section>
     );
@@ -159,7 +159,7 @@ export function SourceSection({
       title="Source"
       icon={Github}
       description="Where kuso pulls code from and which pushes trigger a build."
-      footerNote="Saving doesn't rebuild. The next push or manual deploy uses the new source."
+      footerNote="Deploying doesn't rebuild. The next push or manual deploy uses the new source."
     >
       {displayNameField}
       <Field label="Repository" hint={<>Full https URL. {providerNote}.</>} htmlFor="svc-repo-url">

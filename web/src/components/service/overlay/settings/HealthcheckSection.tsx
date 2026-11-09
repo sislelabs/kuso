@@ -46,7 +46,7 @@ export function HealthcheckSection({
       icon={HeartPulse}
       status={on && state.hcPath.trim() ? `HTTP ${state.hcPath.trim()}` : "Port check"}
       description="How kuso decides a pod is ready for traffic and when to restart one that stopped responding."
-      footerNote="Saving restarts every pod of this service with the new check."
+      footerNote="Deploying restarts every pod of this service with the new check."
     >
       <SwitchField
         label="HTTP health check"

@@ -80,7 +80,7 @@ export function ScaleSection({ state, setState }: SectionProps) {
       icon={Layers3}
       status={hint}
       description="Replica count, CPU autoscaling and how much CPU and memory each pod gets."
-      footerNote="Saving rolls the pods in every environment."
+      footerNote="Deploying rolls the pods in every environment."
     >
       <FieldGrid cols={3}>
         <Field label="Min replicas" hint="0 lets the service sleep when idle." htmlFor="scale-min">

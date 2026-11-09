@@ -30,8 +30,8 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
         title="Image"
         icon={Hammer}
         status="Pre-built image"
-        description="This service runs a pre-built image and never builds. Saving a new tag is how you deploy it."
-        footerNote="Saving a new repository or tag rolls the service onto that image."
+        description="This service runs a pre-built image and never builds. Deploying a new tag is how you ship it."
+        footerNote="Deploying a new repository or tag rolls the service onto that image."
       >
         <Field label="Repository" hint="Full registry path." htmlFor="build-image-repo">
           <Input

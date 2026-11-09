@@ -30,7 +30,7 @@ export function SecuritySection({ state, setState }: SectionProps) {
       icon={ShieldAlert}
       status={status}
       description="Every service runs with all Linux capabilities dropped and privilege escalation off. Only loosen this for images that drop root themselves at startup (setpriv, gosu, su-exec)."
-      footerNote="Saving rolls the pods in every environment."
+      footerNote="Deploying rolls the pods in every environment."
     >
       <Field
         label="Add capabilities"
