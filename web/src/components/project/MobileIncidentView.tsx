@@ -1,7 +1,7 @@
 "use client";
 
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
-import { lastDeployedAt } from "@/features/projects/facts";
+import { lastDeployedAt, serviceIssues } from "@/features/projects/facts";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { KusoAddon, KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
@@ -94,7 +94,7 @@ export function MobileIncidentView({
   });
   const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
   const live = rows.filter((r) => r.status.kind === "live").length;
-  const failing = rows.filter((r) => r.status.tone === "error").length;
+  const issues = serviceIssues(rows.map((r) => r.status));
 
   return (
     <div className="space-y-3 p-4 sm:hidden">
@@ -103,7 +103,9 @@ export function MobileIncidentView({
           <h1 className="truncate font-heading text-lg font-semibold tracking-tight">{project}</h1>
           <p className="mt-0.5 text-sm text-[var(--text-secondary)]">
             {live} of {rows.length} {rows.length === 1 ? "service" : "services"} live
-            {failing > 0 && <span className="text-[var(--error)]"> · {failing} failing</span>}
+            {issues.text && (
+              <span className={issues.tone === "error" ? "text-[var(--error)]" : "text-[var(--warning)]"}> · {issues.text}</span>
+            )}
           </p>
         </div>
         <span className="shrink-0 font-mono text-xs text-[var(--text-tertiary)]">{selectedEnv}</span>

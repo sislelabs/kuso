@@ -5,6 +5,7 @@ import {
   projectLastDeployedAt,
   projectPrimaryDomain,
   projectStatsLabel,
+  serviceIssues,
   PROMOTED_AT_ANNOTATION,
 } from "./facts";
 
@@ -209,7 +210,7 @@ describe("projectStatsLabel", () => {
     });
     expect(r.scope).toBe("Production");
     expect(r.parts.map((p) => p.key)).toEqual(["cpu", "mem", "pods", "uptime"]);
-    expect(r.text).toBe("Production · 100 mCPU · Mem 390 MiB · 6 service pods · 3/3 health checks up");
+    expect(r.text).toBe("Production · 100 mCPU · Mem 390 MiB · 6 service pods · 3/3 uptime checks up");
     expect(r.parts[0].title).toMatch(/production service.*Addons and cron jobs excluded/);
   });
 
@@ -217,5 +218,19 @@ describe("projectStatsLabel", () => {
     const r = projectStatsLabel({ env: "staging", cpuMillicores: 1500, memBytes: 0, pods: 1, uptime: { up: 0, total: 0 } });
     expect(r.text).toBe("staging · 1.5 cores · Mem 0 MiB · 1 service pod");
     expect(r.parts[2].title).toMatch(/every staging service/);
+  });
+});
+
+describe("serviceIssues", () => {
+  const st = (kind: string, tone: string) => ({ kind, tone });
+  it("counts failing, stuck and degraded services from the node statuses", () => {
+    const r = serviceIssues([st("live", "success"), st("crashing", "error"), st("build_failed", "error"), st("stuck", "error"), st("degraded", "warning")]);
+    expect(r).toMatchObject({ failing: 2, stuck: 1, degraded: 1, tone: "error" });
+    expect(r.text).toBe("2 services failing · 1 stuck · 1 degraded");
+  });
+  it("names the noun on the first part only and stays quiet when healthy", () => {
+    expect(serviceIssues([st("stuck", "error")]).text).toBe("1 service stuck");
+    expect(serviceIssues([st("degraded", "warning")]).tone).toBe("warning");
+    expect(serviceIssues([st("live", "success"), st("sleeping", "muted")]).text).toBeUndefined();
   });
 });

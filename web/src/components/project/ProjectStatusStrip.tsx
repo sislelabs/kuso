@@ -1,13 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Boxes, Cpu, MemoryStick, ScrollText } from "lucide-react";
+import { Activity, AlertCircle, Boxes, Cpu, MemoryStick, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useProjectMetrics } from "@/features/project-overview";
-import { envScopeLabel, projectStatsLabel } from "@/features/projects/facts";
+import { envScopeLabel, projectStatsLabel, serviceIssues } from "@/features/projects/facts";
+import { deriveServiceStatus, useLatestBuilds } from "@/features/services";
+import { isProductionGroup } from "@/lib/env-group";
+import type { KusoEnvironment, KusoService } from "@/types/projects";
 import { summarizeUptime, useProjectUptime } from "@/features/uptime";
 import { uptimeTitle } from "@/components/uptime/UptimeBadge";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 import { ProjectLogsSheet } from "./ProjectLogsSheet";
 import { ViewToggle } from "./ViewToggle";
 import type { ProjectViewMode } from "./projectViewPref";
@@ -19,12 +22,17 @@ import type { ProjectViewMode } from "./projectViewPref";
 export function ProjectStatusStrip({
   project,
   selectedEnv,
+  services,
+  envs,
   view,
   onViewChange,
   onOpenService,
 }: {
   project: string;
   selectedEnv: string;
+  // The selected group's services and envs, as the canvas gets them.
+  services: KusoService[];
+  envs: KusoEnvironment[];
   view?: ProjectViewMode;
   onViewChange?: (v: ProjectViewMode) => void;
   // Opens a service's overlay (its health strip leads the default tab).
@@ -39,6 +47,13 @@ export function ProjectStatusStrip({
       {view && onViewChange && <ViewToggle value={view} onChange={onViewChange} />}
       <MetricsSummary metrics={metrics} env={selectedEnv} />
       {selectedEnv === "production" && <UptimeSummary uptime={uptime} onOpenService={onOpenService} />}
+      <ServiceIssuesSummary
+        project={project}
+        selectedEnv={selectedEnv}
+        services={services}
+        envs={envs}
+        onOpenService={onOpenService}
+      />
       <Button
         type="button"
         variant="ghost"
@@ -136,7 +151,7 @@ function UptimeSummary({
         )}
       />
       <span className="tabular-nums">
-        {s.up}/{s.checked} health {s.checked === 1 ? "check" : "checks"} up
+        {s.up}/{s.checked} uptime {s.checked === 1 ? "check" : "checks"} up
       </span>
       {bad.length > 0 && (
         <span className="inline-flex flex-wrap items-center gap-x-1">
@@ -166,6 +181,56 @@ function UptimeSummary({
             );
           })}
         </span>
+      )}
+    </span>
+  );
+}
+
+// Uptime only pings public URLs; a crashing worker or a failed build
+// never shows there. This counts services the way the canvas nodes do.
+function ServiceIssuesSummary({
+  project,
+  selectedEnv,
+  services,
+  envs,
+  onOpenService,
+}: {
+  project: string;
+  selectedEnv: string;
+  services: KusoService[];
+  envs: KusoEnvironment[];
+  onOpenService?: (shortName: string) => void;
+}) {
+  const latestBuilds = useLatestBuilds(project, selectedEnv);
+  const rows = services.map((svc) => {
+    const mine = envs.filter((e) => e.spec.service === svc.metadata.name);
+    const env = mine.find((e) => isProductionGroup(e)) ?? mine[0];
+    const short = serviceShortName(project, svc.metadata.name);
+    const status = deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: latestBuilds.data?.[short] });
+    return { short, name: svc.spec.displayName?.trim() || short, status };
+  });
+  const issues = serviceIssues(rows.map((r) => r.status));
+  if (!issues.text) return null;
+  const bad = rows.filter((r) => r.status.tone === "error" || r.status.kind === "degraded");
+  const first = bad[0];
+  const tone = issues.tone === "error" ? "text-[var(--error)]" : "text-[var(--warning)]";
+  const title = bad.map((r) => `${r.name}: ${r.status.label}${r.status.detail ? ` (${r.status.detail})` : ""}`).join("\n");
+  return (
+    <span className="inline-flex items-center gap-1.5" title={title}>
+      <AlertCircle aria-hidden className={cn("h-3 w-3", tone)} />
+      {first && onOpenService ? (
+        <button
+          type="button"
+          onClick={() => onOpenService(first.short)}
+          className={cn(
+            "rounded-sm underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+            tone,
+          )}
+        >
+          {issues.text}
+        </button>
+      ) : (
+        <span className={tone}>{issues.text}</span>
       )}
     </span>
   );

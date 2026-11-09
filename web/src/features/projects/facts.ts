@@ -209,12 +209,47 @@ export function projectStatsLabel({ env, cpuMillicores, memBytes, pods, uptime }
   if (uptime && uptime.total > 0) {
     parts.push({
       key: "uptime",
-      value: `${uptime.up}/${uptime.total} health ${uptime.total === 1 ? "check" : "checks"} up`,
+      value: `${uptime.up}/${uptime.total} uptime ${uptime.total === 1 ? "check" : "checks"} up`,
       title: "Production health checks passing on their latest probe. Paused and not-yet-run checks aren't counted.",
     });
   }
   const text = [scope, ...parts.map((p) => (p.label ? `${p.label} ${p.value}` : p.value))].join(" · ");
   return { scope, parts, text };
+}
+
+export interface ServiceIssues {
+  // Failing, crashing or stuck: the node's error tone.
+  failing: number;
+  stuck: number;
+  degraded: number;
+  // "1 service failing · 1 stuck"; undefined when nothing needs attention.
+  text?: string;
+  tone: "error" | "warning" | "ok";
+}
+
+// serviceIssues counts the services that need attention from the same
+// per-service status the canvas nodes show (deriveServiceStatus), so a
+// project headline can't read healthy while a node is red.
+export function serviceIssues(statuses: ReadonlyArray<{ kind: string; tone: string }>): ServiceIssues {
+  let failing = 0;
+  let stuck = 0;
+  let degraded = 0;
+  for (const s of statuses) {
+    if (s.kind === "stuck") stuck++;
+    else if (s.tone === "error") failing++;
+    else if (s.kind === "degraded") degraded++;
+  }
+  const parts: string[] = [];
+  if (failing > 0) parts.push(`${failing} ${failing === 1 ? "service" : "services"} failing`);
+  if (stuck > 0) parts.push(failing > 0 ? `${stuck} stuck` : `${stuck} ${stuck === 1 ? "service" : "services"} stuck`);
+  if (degraded > 0) parts.push(parts.length > 0 ? `${degraded} degraded` : `${degraded} ${degraded === 1 ? "service" : "services"} degraded`);
+  return {
+    failing,
+    stuck,
+    degraded,
+    text: parts.length > 0 ? parts.join(" · ") : undefined,
+    tone: failing + stuck > 0 ? "error" : degraded > 0 ? "warning" : "ok",
+  };
 }
 
 // cronsForEnv: crons run against the production env (the server resolves

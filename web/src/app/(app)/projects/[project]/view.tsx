@@ -417,6 +417,8 @@ export function ProjectDetailView() {
         <ProjectStatusStrip
           project={projectName}
           selectedEnv={selectedEnv}
+          services={services}
+          envs={envs}
           view={viewMode}
           onViewChange={changeViewMode}
           onOpenService={selectService}
