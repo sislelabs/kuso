@@ -54,6 +54,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { isMac } from "@/lib/shortcuts";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { getProjectsSummary, projectsSummaryQueryKey, useAddons } from "@/features/projects";
+import { useLiveUrl } from "@/features/projects/liveDomain";
 import { useProjectPrefs } from "@/features/userprefs";
 import { useSession, useSignOut } from "@/features/auth";
 import { buildTriggerMessage, buildsQueryKey, restartService, triggerBuild, useBuilds } from "@/features/services";
@@ -152,6 +153,11 @@ const ID_SEP = "::";
 // and orders the rest by matchScore.
 const QueryContext = createContext("");
 
+// Rows that drill into a submenu register here under their cmdk value,
+// so → / Tab on the selected row can drill while Enter opens it.
+type DrillRegistry = Map<string, () => void>;
+const DrillContext = createContext<DrillRegistry | null>(null);
+
 type RowElement = ReactElement<RowProps>;
 
 function flattenRows(children: ReactNode): RowElement[] {
@@ -238,7 +244,8 @@ interface RowProps {
   children: ReactNode;
   hint?: ReactNode;
   right?: ReactNode;
-  drill?: boolean;
+  // Opens this row's submenu (→ or Tab); Enter still runs onSelect.
+  onDrill?: () => void;
   // Tier boost from tierBoost(): current project > recent > starred.
   boost?: number;
 }
@@ -252,11 +259,20 @@ function Row({
   children,
   hint,
   right,
-  drill,
+  onDrill,
 }: RowProps) {
+  const itemValue = id ? `${id}${ID_SEP}${value}` : value;
+  const drills = useContext(DrillContext);
+  useEffect(() => {
+    if (!drills || !onDrill) return;
+    drills.set(itemValue, onDrill);
+    return () => {
+      if (drills.get(itemValue) === onDrill) drills.delete(itemValue);
+    };
+  }, [drills, itemValue, onDrill]);
   return (
     <Command.Item
-      value={id ? `${id}${ID_SEP}${value}` : value}
+      value={itemValue}
       keywords={keywords}
       onSelect={onSelect}
       className="group relative flex min-h-10 cursor-pointer select-none items-center gap-3 rounded-md px-2.5 py-2 text-sm text-[var(--text-secondary)] outline-none before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-transparent data-[selected=true]:bg-[var(--selected)] data-[selected=true]:text-[var(--text-primary)] data-[selected=true]:before:bg-[var(--accent)]"
@@ -269,7 +285,12 @@ function Row({
         {hint && <span className="truncate text-xs text-[var(--text-tertiary)]">{hint}</span>}
       </span>
       {right}
-      {drill && <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />}
+      {onDrill && (
+        <span className="hidden shrink-0 items-center gap-1 text-xs text-[var(--text-tertiary)] group-data-[selected=true]:inline-flex">
+          Actions <Kbd>→</Kbd>
+        </span>
+      )}
+      {onDrill && <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] group-data-[selected=true]:hidden" />}
     </Command.Item>
   );
 }
@@ -284,6 +305,7 @@ export function CommandPalette() {
   const [selected, setSelected] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [drills] = useState<DrillRegistry>(() => new Map());
   const router = useRouter();
   const pathname = usePathname();
   const qc = useQueryClient();
@@ -474,7 +496,8 @@ export function CommandPalette() {
       value={p.name}
       keywords={[p.description ?? ""]}
       boost={tierBoost(rankCtx, { project: p.name, key: `p:${p.name}` })}
-      onSelect={() => {
+      onSelect={() => go(`/projects/${encodeURIComponent(p.name)}`, { kind: "project", project: p.name })}
+      onDrill={() => {
         remember({ kind: "project", project: p.name });
         pushPage({ kind: "project", project: p.name });
       }}
@@ -486,7 +509,6 @@ export function CommandPalette() {
           text={p.services === 0 ? "Empty" : p.status === "live" ? `${p.live}/${p.services} live` : undefined}
         />
       }
-      drill
     >
       {p.name}
     </Row>
@@ -499,14 +521,14 @@ export function CommandPalette() {
       value={pathLabel(s.project, s.display)}
       keywords={[s.name, s.runtime ?? "", s.repo ?? ""]}
       boost={svcBoost(s)}
-      onSelect={() => {
+      onSelect={() => go(serviceHref(s), { kind: "service", project: s.project, name: s.name, group: s.group })}
+      onDrill={() => {
         remember({ kind: "service", project: s.project, name: s.name, group: s.group });
         pushPage({ kind: "service", project: s.project, name: s.name, group: s.group });
       }}
       icon={<Server />}
       hint={showProject ? undefined : s.runtime}
       right={<StatusBadge status={s.status} />}
-      drill
     >
       {showProject ? <PathLabel project={s.project} name={s.display} /> : s.display}
     </Row>
@@ -549,6 +571,12 @@ export function CommandPalette() {
   }, [open, query, pages.length, summary.data]);
   // Only when there's genuinely nothing to show yet (first ever open).
   const loadingIndex = open && !liveIndex && !snapshot && summary.isFetching;
+
+  const pageSvc =
+    page?.kind === "service"
+      ? (servicesByProject.get(page.project) ?? []).find((s) => s.name === page.name && s.group === page.group)
+      : undefined;
+  const pageSvcUrl = useLiveUrl(pageSvc?.project ?? "", pageSvc?.name ?? "", pageSvc?.url, pageSvc?.urlFallback);
 
   let body: ReactNode;
   if (!page) {
@@ -931,12 +959,12 @@ export function CommandPalette() {
             >
               Restart
             </Row>
-            {svc.url && (
+            {pageSvcUrl && (
               <>
-                <Row value="open url" keywords={["visit", "browser", "domain"]} onSelect={() => { close(); window.open(svc.url, "_blank", "noopener"); }} icon={<ExternalLink />} hint={svc.url.replace(/^https?:\/\//, "")}>
+                <Row value="open url" keywords={["visit", "browser", "domain"]} onSelect={() => { close(); window.open(pageSvcUrl, "_blank", "noopener"); }} icon={<ExternalLink />} hint={pageSvcUrl.replace(/^https?:\/\//, "")}>
                   Open URL
                 </Row>
-                <Row value="copy url" keywords={["clipboard", "domain"]} onSelect={() => void copy(svc.url!, "URL")} icon={<Copy />}>
+                <Row value="copy url" keywords={["clipboard", "domain"]} onSelect={() => void copy(pageSvcUrl, "URL")} icon={<Copy />}>
                   Copy URL
                 </Row>
               </>
@@ -1011,6 +1039,17 @@ export function CommandPalette() {
               if (e.key === "Backspace" && !search && pages.length > 0) {
                 e.preventDefault();
                 popPage();
+                return;
+              }
+              // → drills only with the caret at the end, so it still moves
+              // through the typed query.
+              const input = inputRef.current;
+              const caretAtEnd = !input || (input.selectionStart === input.value.length && input.selectionEnd === input.value.length);
+              const wantsDrill = (e.key === "Tab" && !e.shiftKey) || (e.key === "ArrowRight" && caretAtEnd);
+              const drill = wantsDrill ? drills.get(selected) : undefined;
+              if (drill) {
+                e.preventDefault();
+                drill();
               }
             }}
           >
@@ -1053,7 +1092,9 @@ export function CommandPalette() {
                 {loadingIndex ? "Searching…" : <>No results for “{query}”.</>}
               </Command.Empty>
               <QueryContext.Provider value={query}>
-                <RankedGroups>{body}</RankedGroups>
+                <DrillContext.Provider value={drills}>
+                  <RankedGroups>{body}</RankedGroups>
+                </DrillContext.Provider>
               </QueryContext.Provider>
             </Command.List>
             <div className="hidden items-center gap-4 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-tertiary)] sm:flex">
@@ -1062,8 +1103,13 @@ export function CommandPalette() {
                 <Kbd>↓</Kbd> to navigate
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Kbd>↵</Kbd> to select
+                <Kbd>↵</Kbd> to open
               </span>
+              {pages[pages.length - 1]?.kind !== "service" && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Kbd>→</Kbd> for actions
+                </span>
+              )}
               {pages.length > 0 && (
                 <span className="inline-flex items-center gap-1.5">
                   <Kbd>⌫</Kbd> to go back
