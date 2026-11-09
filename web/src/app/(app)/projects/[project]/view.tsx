@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -27,6 +27,7 @@ import {
   type ProjectViewMode,
 } from "@/components/project/projectViewPref";
 import { Package } from "lucide-react";
+import { addonPageHref, servicePageHref } from "@/components/service/workspace/hrefs";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
 // blew up the static export build. ssr:false skips the prerender pass
@@ -162,6 +163,77 @@ export function ProjectDetailView() {
   // Env switcher legitimately changes what's on screen and survives
   // reload, so it stays in the URL as ?env=<short>.
   const selectedEnv = search?.get("env") ?? "production";
+
+  // Below sm there is no peek: the full page is the mobile view.
+  const phone = useMediaQuery("(max-width: 639px)");
+  const openServicePage = useCallback(
+    (name: string, tab?: string) => router.push(servicePageHref(projectName, name, { env: selectedEnv, tab })),
+    [router, projectName, selectedEnv],
+  );
+  const openAddonPage = useCallback(
+    (name: string, tab?: string) => router.push(addonPageHref(projectName, name, { env: selectedEnv, tab })),
+    [router, projectName, selectedEnv],
+  );
+  // An old ?service=/?addon= link opened on a phone lands on the page.
+  useEffect(() => {
+    if (!phone || !projectName) return;
+    const tab = search?.get("tab") ?? undefined;
+    if (selectedService) {
+      const q = new URLSearchParams();
+      for (const k of ["kind", "highlight"] as const) {
+        const v = search?.get(k);
+        if (v) q.set(k, v);
+      }
+      const base = servicePageHref(projectName, selectedService, { env: selectedEnv, tab });
+      const extra = q.toString();
+      router.replace(extra ? `${base}${base.includes("?") ? "&" : "?"}${extra}` : base);
+    } else if (selectedAddon) {
+      router.replace(addonPageHref(projectName, selectedAddon, { env: selectedEnv, tab }));
+    }
+  }, [phone, projectName, selectedService, selectedAddon, selectedEnv, search, router]);
+
+  // Double-click (or ⌘/Ctrl+Enter) on a canvas node or list row opens
+  // the full page; a single click keeps the peek. Capture phase, so it
+  // runs before React Flow's own double-click zoom.
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef({ openServicePage, openAddonPage, projectName });
+  pageRef.current = { openServicePage, openAddonPage, projectName };
+  useEffect(() => {
+    const el = surfaceRef.current;
+    if (!el) return;
+    const openFrom = (target: EventTarget | null): boolean => {
+      const node = target instanceof Element ? target.closest<HTMLElement>("[data-focus-key]") : null;
+      const key = node?.dataset.focusKey;
+      if (!key) return false;
+      const sep = key.indexOf(":");
+      const kind = key.slice(0, sep);
+      const name = key.slice(sep + 1);
+      const { openServicePage: svc, openAddonPage: addon, projectName: p } = pageRef.current;
+      if (kind === "service") svc(name);
+      else if (kind === "addon") addon(name.startsWith(`${p}-`) ? name.slice(p.length + 1) : name);
+      else return false;
+      return true;
+    };
+    const onDbl = (e: MouseEvent) => {
+      if (openFrom(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
+      if (openFrom(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    el.addEventListener("dblclick", onDbl, true);
+    el.addEventListener("keydown", onKey, true);
+    return () => {
+      el.removeEventListener("dblclick", onDbl, true);
+      el.removeEventListener("keydown", onKey, true);
+    };
+  });
 
   const project = useProject(projectName);
   const addons = useAddons(projectName);
@@ -372,8 +444,10 @@ export function ProjectDetailView() {
     );
   }
 
-  const selectService = (shortName: string, tab?: string) => openOverlay("service", shortName, tab);
-  const selectAddon = (name: string, tab?: string) => openOverlay("addon", stripPrefix(name), tab);
+  const selectService = (shortName: string, tab?: string) =>
+    phone ? openServicePage(shortName, tab) : openOverlay("service", shortName, tab);
+  const selectAddon = (name: string, tab?: string) =>
+    phone ? openAddonPage(stripPrefix(name), tab) : openOverlay("addon", stripPrefix(name), tab);
 
   return (
     <>
@@ -386,7 +460,7 @@ export function ProjectDetailView() {
         onSelectService={selectService}
         onSelectAddon={selectAddon}
       />
-      <div className="relative hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
+      <div ref={surfaceRef} className="relative hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
         {!onProduction && (
           // Sticky banner above the canvas. Reminds the user that the
           // env they're looking at started as a clone — env vars copied
@@ -454,6 +528,7 @@ export function ProjectDetailView() {
         failureKind={failureKind}
         onTabChange={changeTab}
         onRestore={(s) => selectService(s)}
+        onOpenPage={(s, tab) => openServicePage(s, tab)}
         onClose={closeOverlay}
       />
 
@@ -463,6 +538,7 @@ export function ProjectDetailView() {
         defaultTab={selectedAddon ? selectedTab : undefined}
         onTabChange={changeTab}
         onRestore={(a) => selectAddon(a)}
+        onOpenPage={(a, tab) => openAddonPage(stripPrefix(a), tab)}
         onClose={closeOverlay}
       />
     </>

@@ -14,12 +14,14 @@ interface Props {
   streamEnv?: string;
   // Switches the overlay to Deployments (the empty state's "View build logs").
   onOpenDeployments?: () => void;
+  // Fill the parent's height (the full page) instead of a viewport-based one.
+  fill?: boolean;
 }
 
 // ServiceLogsPanel is one logs view: it opens on the live tail and the
 // same search box / range picker switch it to the 7-day archive. View
 // state (query, range, filters, scroll) survives tab switches.
-export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv, onOpenDeployments }: Props) {
+export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv, onOpenDeployments, fill }: Props) {
   const { firstRun } = useFirstRun();
   if (firstRun.kind === "never") return <NeverStartedState title="This service has never started, so there are no logs yet." />;
   return (
@@ -29,7 +31,7 @@ export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv,
       streamEnv={streamEnv}
       defaultEnv={defaultEnv}
       onOpenDeployments={onOpenDeployments}
-      className="h-[calc(100dvh-13rem)] min-h-[24rem]"
+      className={fill ? "h-full min-h-[24rem]" : "h-[calc(100dvh-13rem)] min-h-[24rem]"}
     />
   );
 }
