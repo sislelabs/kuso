@@ -823,7 +823,9 @@ export function ServiceWorkspace({
   );
 
   const pad = page ? "px-4 py-5 sm:px-6 lg:px-8 lg:py-6" : "p-5";
-  const width = page ? cn("mx-auto w-full", PAGE_WIDTH[tab] ?? "max-w-5xl") : undefined;
+  // Left-aligned, not centred: the column starts on the header/tab grid
+  // line so the page reads as one sheet; the cap only limits line length.
+  const width = page ? cn("w-full", PAGE_WIDTH[tab] ?? "max-w-5xl") : undefined;
   const section = (children: React.ReactNode, fill = false) => (
     <div className={cn(pad, width, fill && "h-full")}>{children}</div>
   );
