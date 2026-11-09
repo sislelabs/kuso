@@ -9,12 +9,21 @@ import { projectNameError, projectSlugFromRepo } from "@/features/projects/names
 import { defaultServiceHost } from "@/lib/default-host";
 import { FormField } from "../[project]/services/new/FormField";
 import { EnvPastePanel, useDotenv } from "../[project]/services/new/EnvPastePanel";
+import { imageRegistryHost } from "../[project]/services/new/view";
+import {
+  RegistryLoginFields,
+  RuntimeConstraints,
+  registryLoginComplete,
+  type RegistryLoginDraft,
+} from "../[project]/services/new/ImageHelp";
 
 export interface DeployImageInput {
   projectName: string;
   image: ImageRef;
   port: string;
   envVars: { name: string; value: string }[];
+  // Saved on the new project before the service's first pull.
+  registryLogin?: RegistryLoginDraft;
 }
 
 const monoInputClass = "h-9 font-mono text-[13px]";
@@ -46,7 +55,9 @@ export function DeployImageForm({
   const [port, setPort] = useState("");
   const [envText, setEnvText] = useState("");
   const env = useDotenv(envText);
-  const [errors, setErrors] = useState<{ image?: string; project?: string; env?: string }>({});
+  const [errors, setErrors] = useState<{ image?: string; project?: string; env?: string; login?: string }>({});
+  const [privateImage, setPrivateImage] = useState(false);
+  const [login, setLogin] = useState<RegistryLoginDraft>({ registry: "", username: "", password: "" });
   const imageRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -56,6 +67,12 @@ export function DeployImageForm({
   const nameProblem = (n: string) =>
     projectNameError(n) ?? (taken.has(n) ? `A project named "${n}" already exists.` : null);
   const host = defaultServiceHost(name.trim() || "my-app", name.trim() || "my-app", baseDomain, instanceDomain);
+
+  // The registry follows the image until the user types their own.
+  const loginFor: RegistryLoginDraft = {
+    ...login,
+    registry: login.registry || (parsed ? imageRegistryHost(parsed.repository) : ""),
+  };
 
   const submit = () => {
     const errs = {
@@ -68,12 +85,20 @@ export function DeployImageForm({
             : undefined,
       project: nameProblem(name.trim()) ?? undefined,
       env: env.errors.length > 0 ? "Fix or remove the .env lines that can't be read." : undefined,
+      login:
+        privateImage && !registryLoginComplete(loginFor) ? "Fill in the registry, username and token, or turn off private image." : undefined,
     };
     setErrors(errs);
     if (errs.image) return imageRef.current?.focus();
     if (errs.project) return nameRef.current?.focus();
-    if (errs.env || !parsed) return;
-    onSubmit({ projectName: name.trim(), image: parsed, port, envVars: env.vars });
+    if (errs.env || errs.login || !parsed) return;
+    onSubmit({
+      projectName: name.trim(),
+      image: parsed,
+      port,
+      envVars: env.vars,
+      ...(privateImage ? { registryLogin: loginFor } : {}),
+    });
   };
 
   return (
@@ -84,8 +109,7 @@ export function DeployImageForm({
           parsed?.tag ? (
             <>
               Pulls <span className="font-mono text-[var(--text-primary)]">{parsed.repository}</span> at{" "}
-              <span className="font-mono text-[var(--text-primary)]">{parsed.tag}</span>. Public images
-              only here; for a private registry, create an empty project and add its registry login first.
+              <span className="font-mono text-[var(--text-primary)]">{parsed.tag}</span>.
             </>
           ) : (
             "Registry path with a tag or digest, e.g. ghcr.io/acme/api:1.4.2. Immutable tags roll out predictably; latest doesn't."
@@ -110,6 +134,49 @@ export function DeployImageForm({
           className={monoInputClass}
         />
       </FormField>
+
+      <RuntimeConstraints
+        onPick={(image, imagePort) => {
+          setImageText(image);
+          setPort(imagePort);
+          setErrors((x) => ({ ...x, image: undefined }));
+        }}
+      />
+
+      <div className="space-y-3">
+        <label className="flex items-center gap-2 text-[13px] text-[var(--text-primary)]">
+          <input
+            type="checkbox"
+            checked={privateImage}
+            onChange={(e) => {
+              setPrivateImage(e.target.checked);
+              setErrors((x) => ({ ...x, login: undefined }));
+            }}
+            className="h-4 w-4 accent-[var(--accent)]"
+          />
+          Private image: log in to its registry
+        </label>
+        {privateImage && (
+          <>
+            <RegistryLoginFields
+              value={loginFor}
+              onChange={(next) => {
+                setLogin(next);
+                setErrors((x) => ({ ...x, login: undefined }));
+              }}
+              idPrefix="image-registry"
+            />
+            <p className="text-xs text-[var(--text-secondary)]">
+              Saved on the new project before the first pull. The token is never shown again.
+            </p>
+            {errors.login && (
+              <p role="alert" className="text-xs text-[var(--error)]">
+                {errors.login}
+              </p>
+            )}
+          </>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_8rem]">
         <FormField

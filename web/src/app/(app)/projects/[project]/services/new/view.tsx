@@ -32,6 +32,7 @@ import { useRepoDetection } from "./useRepoDetection";
 import { detectionCopy, type DetectionCopy, type Provenance } from "./detectionCopy";
 import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "./RepoInsights";
 import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
+import { RegistryLoginInline, RuntimeConstraints } from "./ImageHelp";
 import { reportCreateOutcome } from "./reportCreateOutcome";
 import { ConnectAddons, connectedByDefault, existingAddons, subscriptionFor, type ExistingAddon } from "./ConnectAddons";
 import { setSubscribedAddons } from "@/features/addons";
@@ -94,6 +95,7 @@ export function AddServiceView() {
     return (registryCreds.data ?? []).find((c) => c.registry === host)?.secretName ?? "";
   }, [imageRepo, registryCreds.data]);
   const pullSecret = pullSecretChoice ?? autoPullSecret;
+  const [addingLogin, setAddingLogin] = useState(false);
 
   const [picked, setPicked] = useState<PickedRepo | null>(null);
   // Display name is free-form ("Todo API"); the URL slug derives from it.
@@ -485,7 +487,12 @@ export function AddServiceView() {
                   ref={imageInputRef}
                   value={imageRepo}
                   onChange={(e) => {
-                    setImageRepo(e.target.value);
+                    // A whole reference arriving at once (autofill, drop,
+                    // a scripted fill) splits like a paste; typing doesn't,
+                    // so "nginx:1" isn't torn apart mid-word.
+                    const next = e.target.value;
+                    if (next.length - imageRepo.length > 1 && splitImageInput(next)) return;
+                    setImageRepo(next);
                     clearFieldError("image");
                   }}
                   onPaste={(e) => {
@@ -552,8 +559,35 @@ export function AddServiceView() {
                       </option>
                     ))}
                   </Select>
+                  {!addingLogin && (
+                    <button
+                      type="button"
+                      onClick={() => setAddingLogin(true)}
+                      className="text-xs text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+                    >
+                      Add a registry login…
+                    </button>
+                  )}
                 </FormField>
               </div>
+              {addingLogin && (
+                <RegistryLoginInline
+                  project={project}
+                  registry={imageRepo.trim() ? imageRegistryHost(imageRepo) : ""}
+                  onCancel={() => setAddingLogin(false)}
+                  onSaved={(cred) => {
+                    setPullSecretChoice(cred.secretName);
+                    setAddingLogin(false);
+                    toast.success(`Logged in to ${cred.registry}`);
+                  }}
+                />
+              )}
+              <RuntimeConstraints
+                onPick={(image, imagePort) => {
+                  if (!splitImageInput(image)) setImageRepo(image);
+                  setPort(imagePort);
+                }}
+              />
             </div>
           )}
         </Step>

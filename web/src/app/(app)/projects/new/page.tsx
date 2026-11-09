@@ -42,6 +42,7 @@ import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { ImportArchiveCard } from "./ImportArchiveCard";
 import { DeployImageForm, type DeployImageInput } from "./DeployImageForm";
+import { loginRegistry } from "@/features/registry-credentials/api";
 import { specImageTag } from "@/features/services/imageRef";
 import { TemplateCard } from "./TemplateCard";
 import { FormField, SegmentedControl } from "../[project]/services/new/FormField";
@@ -249,7 +250,7 @@ export default function NewProjectPage() {
   };
 
   // ---- Image path: project + one image service, no build ----
-  const onDeployImage = async ({ projectName: pName, image, port: imagePort, envVars }: DeployImageInput) => {
+  const onDeployImage = async ({ projectName: pName, image, port: imagePort, envVars, registryLogin }: DeployImageInput) => {
     const pBody = buildCreateProjectBody({
       name: pName,
       description: `Runs ${image.repository}`,
@@ -275,14 +276,36 @@ export default function NewProjectPage() {
       setSubmitting(false);
       return;
     }
+    const projectHref = `/projects/${encodeURIComponent(pName)}`;
+    // A private image's login goes on the project before the service
+    // exists, so the first pull already has it.
+    let pullSecret = "";
+    if (registryLogin) {
+      try {
+        const cred = await loginRegistry(pName, {
+          registry: registryLogin.registry.trim(),
+          username: registryLogin.username.trim(),
+          password: registryLogin.password,
+        });
+        pullSecret = cred.secretName;
+      } catch (err) {
+        toast.error(
+          `Project ${pName} was created, but the registry login wasn't saved: ${friendlyApiError(err, "unknown error")}. Add the service below and log in there.`,
+          { duration: Infinity, closeButton: true },
+        );
+        router.replace(`${projectHref}/services/new`);
+        setSubmitting(false);
+        return;
+      }
+    }
     const sBody = buildCreateServiceBody({
       source: "image",
       name: defaultServiceName(pName, image.name),
       image: image.repository,
       tag: specImageTag(image.tag),
       port: imagePort,
+      pullSecret,
     });
-    const projectHref = `/projects/${encodeURIComponent(pName)}`;
     try {
       const out = await createServiceWithEnv(pName, sBody, { envVars });
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });

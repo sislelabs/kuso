@@ -270,7 +270,13 @@ export function RepoPicker({
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <Github className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                    <span className="truncate font-mono text-[13px]">{repo.fullName}</span>
+                    <span className="truncate font-mono text-[13px] max-sm:hidden">{repo.fullName}</span>
+                    {/* Phones: the repo name gets two lines, the owner its own
+                        line below, so repos sharing a long prefix stay apart. */}
+                    <span className="min-w-0 sm:hidden" title={repo.fullName}>
+                      <span className="line-clamp-2 break-all font-mono text-[13px]">{repo.fullName.split("/").slice(1).join("/")}</span>
+                      <span className="block truncate text-xs text-[var(--text-tertiary)]">{repoOwner(repo.fullName)}</span>
+                    </span>
                     {repo.private && (
                       <Lock className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" aria-label="private" />
                     )}
