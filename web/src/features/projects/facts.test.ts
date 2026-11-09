@@ -6,6 +6,7 @@ import {
   projectPrimaryDomain,
   projectStatsLabel,
   serviceIssues,
+  projectHealthLine,
   PROMOTED_AT_ANNOTATION,
 } from "./facts";
 
@@ -253,5 +254,69 @@ describe("serviceIssues", () => {
     expect(serviceIssues([st("stuck", "error")]).text).toBe("1 service stuck");
     expect(serviceIssues([st("degraded", "warning")]).tone).toBe("warning");
     expect(serviceIssues([st("live", "success"), st("sleeping", "muted")]).text).toBeUndefined();
+  });
+});
+
+describe("projectHealthLine", () => {
+  const row = (short: string, kind: string, tone: string) => ({ short, status: { kind, tone } });
+  it("counts a failing service the ping never reaches", () => {
+    const r = projectHealthLine(
+      [row("web", "live", "success"), row("api", "live", "success"), row("worker", "crashing", "error")],
+      [
+        { service: "web", state: "up" },
+        { service: "api", state: "up" },
+      ],
+    );
+    expect(r.text).toBe("2 of 3 services checked · 1 failing");
+    expect(r.tone).toBe("error");
+    expect(r.problems).toEqual(["worker"]);
+  });
+  it("folds a failing uptime check into the same failing count", () => {
+    const r = projectHealthLine(
+      [row("web", "live", "success"), row("img", "stuck", "error")],
+      [
+        { service: "web", state: "up" },
+        { service: "img", state: "down" },
+      ],
+    );
+    expect(r.text).toBe("2 of 2 services checked · 1 failing");
+  });
+  it("says all up only when nothing needs attention", () => {
+    expect(projectHealthLine([row("web", "live", "success")], [{ service: "web", state: "up" }]).text).toBe(
+      "1 of 1 service checked · all up",
+    );
+  });
+  it("names the noun when uptime is off", () => {
+    const r = projectHealthLine([row("web", "rollout_failing", "warning"), row("api", "crashing", "error")], null);
+    expect(r.text).toBe("1 service failing · 1 degraded");
+    expect(r.tone).toBe("error");
+    expect(r.problems).toEqual(["api", "web"]);
+  });
+  it("has nothing to say for a healthy unchecked project", () => {
+    expect(projectHealthLine([row("web", "live", "success")], null).text).toBeUndefined();
+  });
+});
+
+describe("lastDeployedAt mid-rollout", () => {
+  it("holds the last settled value until the new pods are ready", () => {
+    const settled = env("hold", { deployed: "2026-11-01T10:00:00Z" });
+    settled.status = { ...settled.status, state: "running", rolloutCompletedAt: "2026-11-09T09:58:00Z" };
+    expect(lastDeployedAt(settled)).toBe("2026-11-09T09:58:00Z");
+    // The rollout starts: the completion stamp is gone, the operator's is old.
+    const rolling = env("hold", { deployed: "2026-11-01T10:00:00Z", state: "deploying" });
+    expect(lastDeployedAt(rolling)).toBe("2026-11-09T09:58:00Z");
+    const done = env("hold", { deployed: "2026-11-01T10:00:00Z", state: "running" });
+    done.status = { ...done.status, rolloutCompletedAt: "2026-11-09T10:01:00Z" };
+    expect(lastDeployedAt(done)).toBe("2026-11-09T10:01:00Z");
+  });
+});
+
+describe("lastDeployedAt on a first deploy", () => {
+  it("is undefined until the first pods are ready", () => {
+    const e = env("firstdeploy", { promoted: "2026-11-09T10:00:00Z", deployed: "2026-11-09T10:00:00Z", state: "deploying" });
+    e.status = { ...e.status, replicas: { ready: 0, desired: 1 } };
+    expect(lastDeployedAt(e)).toBeUndefined();
+    e.status = { ...e.status, state: "running", replicas: { ready: 1, desired: 1 }, rolloutCompletedAt: "2026-11-09T10:00:40Z" };
+    expect(lastDeployedAt(e)).toBe("2026-11-09T10:00:40Z");
   });
 });

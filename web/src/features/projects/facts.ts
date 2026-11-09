@@ -298,6 +298,54 @@ export function serviceIssues(statuses: ReadonlyArray<{ kind: string; tone: stri
   };
 }
 
+export interface ProjectHealthLine {
+  // "2 of 3 services checked · 1 failing"; undefined when there's nothing to say.
+  text?: string;
+  // The two halves of text: uptime coverage, and what needs attention.
+  coverage?: string;
+  issues?: string;
+  tone: "error" | "warning" | "ok";
+  // Services needing attention, worst first (failing, then degraded).
+  problems: string[];
+}
+
+// projectHealthLine is the project headline: how many services the uptime
+// ping covers and how many need attention. A service counts as failing
+// when its status (the canvas node's) or its uptime check says so, so the
+// line can't read "2/2 up" next to a red node the ping never reaches.
+export function projectHealthLine(
+  services: ReadonlyArray<{ short: string; status: { kind: string; tone: string } }>,
+  // null when uptime checks are off or unavailable.
+  uptime: ReadonlyArray<{ service: string; state: string }> | null,
+): ProjectHealthLine {
+  const names = new Set(services.map((s) => s.short));
+  const checks = (uptime ?? []).filter((u) => names.has(u.service));
+  const checked = new Set(checks.filter((u) => u.state === "up" || u.state === "failing" || u.state === "down").map((u) => u.service));
+  const pingBad = new Set(checks.filter((u) => u.state === "failing" || u.state === "down").map((u) => u.service));
+  const failing: string[] = [];
+  const degraded: string[] = [];
+  for (const s of services) {
+    if (s.status.tone === "error" || s.status.kind === "stuck" || pingBad.has(s.short)) failing.push(s.short);
+    else if (s.status.kind === "degraded" || s.status.kind === "rollout_failing" || s.status.tone === "warning") degraded.push(s.short);
+  }
+  const covered = !!uptime && checked.size > 0;
+  const parts: string[] = [];
+  // Without the coverage lead-in the first count names its noun.
+  const count = (n: number) => (parts.length > 0 ? `${n}` : `${n} ${n === 1 ? "service" : "services"}`);
+  if (covered) parts.push(`${checked.size} of ${services.length} ${services.length === 1 ? "service" : "services"} checked`);
+  if (failing.length > 0) parts.push(`${count(failing.length)} failing`);
+  if (degraded.length > 0) parts.push(`${count(degraded.length)} degraded`);
+  if (covered && parts.length === 1) parts.push("all up");
+  const issues = (covered ? parts.slice(1) : parts).filter((p) => p !== "all up");
+  return {
+    text: parts.length > 0 ? parts.join(" · ") : undefined,
+    coverage: covered ? parts[0] : undefined,
+    issues: issues.length > 0 ? issues.join(" · ") : undefined,
+    tone: failing.length > 0 ? "error" : degraded.length > 0 ? "warning" : "ok",
+    problems: [...failing, ...degraded],
+  };
+}
+
 // cronsForEnv: crons run against the production env (the server resolves
 // their image and env vars from "<service>-production"), so they belong
 // on the production view. A non-production group shows only crons
