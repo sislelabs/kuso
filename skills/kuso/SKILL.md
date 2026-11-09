@@ -384,6 +384,8 @@ kuso addon-backup download <p> <addon> [--file dump.sql.gz] [--force]
 # Scheduled dumps to the cluster-wide S3 bucket:
 kuso addon-backup schedule <p> <addon> --schedule '0 3 * * *' --retention 14
 kuso addon-backup list <p> <addon>                 # stored dumps
+kuso addon-backup run <p> <addon>                  # take a scheduled-style dump now
+kuso addon-backup download <p> <addon> --key <s3-key>   # fetch a stored dump (admin)
 kuso addon-backup restore <p> <addon> <s3-key>     # in-place or --into <sibling>; overwrites the target, needs --confirm <target>
 
 # The S3 bucket + health for all of the above (admin):
@@ -820,8 +822,12 @@ adds a rule; `kuso alert list` shows each rule's threshold and whether it is fir
 | `http_p95_latency` | p95 in ms (default 1000) | same `--min-requests` floor; from traefik metrics |
 | `cert_expiry` | days before expiry (default 14) | also fires on a cert-manager Certificate not Ready for 15m+, with its reason |
 | `dns_mismatch` | none | env host doesn't resolve to the cluster's ingress IPs; Cloudflare-proxied hosts are skipped |
+| `crashloop` | restarts (default 3) inside `--window` | also fires on CrashLoopBackOff |
+| `deploy_failed` | none | newest build or release hook failed |
+| `healthcheck_failing` | minutes the uptime check has failed (default 5) | |
+| `rollout_failing` | none | the new version fails while the previous one still serves |
 
-These four fire once when the condition starts and send a `✓ Resolved` card when it
+These fire once when the condition starts and send a `✓ Resolved` card when it
 clears. `--throttle` is the minimum gap between two fires, which damps flapping.
 New installs get an instance-wide `cert_expiry` rule named "TLS certificates" (14 days).
 If DNS goes through an external load balancer the cluster can't see, set
@@ -830,6 +836,9 @@ If DNS goes through an external load balancer the cluster can't see, set
 ```bash
 kuso alert create --kind http_5xx_rate --project shop --service web --threshold 5 --window 5m
 kuso alert create --kind dns_mismatch --project shop
+kuso alert edit <id> --threshold 10 --window 10m  # flags you don't pass keep their value
+kuso alert test <id>                               # send a test card to every channel it reaches
+kuso notifications feed --attention [--project p]  # only what needs action
 ```
 
 ## Uptime checks
@@ -956,16 +965,26 @@ Don't change `kuso vulns policy` or instance settings unless the user asks.
 ```bash
 # Where am I? What's running?
 kuso get projects [-o json]                     # all projects
-kuso status <project>                           # rollup: services, URLs, replicas, latest build
-#   Each env shows a single derived state= (v0.23.0+): running | degraded |
-#   crashlooping | deploying | building | build_failed | release_failed |
-#   sleeping | stopped | no_image. This is the one-field answer to "is my app
-#   up?" — a failed latest build with the last-green image still serving reads
-#   `running` with a note, NOT a false alarm. Also on `kuso get envs` (STATE column).
-kuso get services <project> [-o json]           # service specs
+kuso status <project>                           # rollup: services, URLs, replicas, latest build, open errors
+#   Each env shows state=<raw> (<label>) with the dashboard's labels: Live |
+#   Deploying | Building | Degraded | Rollout failing | Stuck | Failing |
+#   Sleeping | Stopped | Not deployed, plus the plain-language reason.
+#   Rollout failing = the NEW version fails (health check, crash, image pull)
+#   while the PREVIOUS version keeps serving: the app is up, the change is bad
+#   (undo it: `kuso revision undo`). Stuck = pods can't start (unschedulable,
+#   image pull, bad config, rollout stalled >10m); the raw kube message follows.
+#   A failed latest build with the last-green image serving reads Live, not an alarm.
+#   Same STATUS/REASON columns on `kuso get services` and `kuso get envs`.
+kuso get services <project> [-o json]           # service specs + production STATUS
 kuso get addons <project> [-o json]             # addons + connection-secret names
 kuso service pods <project> <service> [--env <e>]   # pods backing an env
-kuso service errors <project> <service> [--since 6h] [--env <e>] # aggregated error groups
+kuso service errors <project> <service> [--since 6h|--since-deploy] [--env <e>] [--resolved]
+                                                # error groups (FINGERPRINT, open/recurred/resolved)
+kuso service errors show|resolve|reopen <project> <service> <fingerprint>
+                                                # occurrences / hide until it recurs / un-hide
+kuso service crash <project> <service> [--env <e>]   # why the container last died: exit, log tail, diagnosis
+kuso service events <project> <service> [--env <e>]  # recent pod/deployment kube events
+kuso service metrics <project> <service> [--range 24h]  # CPU/mem, traffic, pod usage history
 kuso service drift <project> <service>          # spec vs live-pod drift report
 kuso health [fix <resource>]                    # cluster-wide reconcile health + one-shot remediation
 kuso usage                                      # node/project resource + cost rollup
@@ -987,7 +1006,7 @@ kuso build trigger <project> <service>          # manual rebuild of the default 
 #   --dry-run prints what would build and creates NOTHING; --compile-only runs a
 #   real build on the shared builder but skips push + promotion.
 kuso redeploy <project> <service>               # alias; --branch <name>, or --ref <full 40-char sha> for one commit
-kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes)
+kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes; --env <e>)
 kuso build retry-release <project> <service> <id>  # re-run a RELEASE FAILED build's hook; promotes on success
 kuso build cancel <project> <service> <id>      # kill an in-flight build
 #   (branch deletes / force-pushes auto-cancel their in-flight builds)
@@ -997,6 +1016,10 @@ kuso env list <project> <service>               # plain vars + names of secret k
 kuso env set <project> <service> KEY=val KEY2=val2     # service-level; multiple K=V OK
 kuso env set <project> <service> --env <name> KEY=val  # per-env override (wins over service)
 kuso env unset <project> <service> KEY [KEY...]        # --env <name> to drop an override
+#   Several keys in one env set/unset roll the pods ONCE (batched), not once per key.
+kuso service apply-changes <project> <service> --set K=V... --unset K... [--patch-file p.json] [-m note]
+                                                # vars + a spec patch in ONE rollout
+kuso env example <project> <service>            # variables the repo's .env.example declares (SET column)
 kuso env share <project> <service> KEY [KEY...]        # subscribe svc to shared-secret keys
 kuso env unshare <project> <service> KEY [KEY...]      # unsubscribe
 kuso secret list|set|unset <project> <service> ...     # K8s-Secret-backed (KEY VALUE positional)
@@ -1020,8 +1043,19 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--snapshot-before-deploy on|off] [--previews on|off] \
     [--build-arg K=V]... [--build-args-clear] [--public-env NAME]... [--public-env-clear] \
     [--static-build-cmd '...'] [--static-output-dir dir] [--buildpacks-builder img] \
-    [--image-repo X] [--image-tag Y]
+    [--image-repo X] [--image-tag Y] \
+    [--healthcheck-path /healthz] [--healthcheck-port N] [--healthcheck-period SEC] \
+    [--healthcheck-timeout SEC] [--healthcheck-failure-threshold N] [--healthcheck-initial-delay SEC]
 #   --build-arg / --public-env / --command REPLACE the whole list.
+#   --healthcheck-path '' goes back to the TCP port check. Test a path FIRST:
+kuso service test-healthcheck <project> <service> --path /healthz [--env e]  # probes a running pod
+kuso service image-check <project> <service> ghcr.io/acme/app:v2   # found | not_found | unknown
+kuso service branches <project> <service>       # the repo's remote branches (* = default)
+
+# Undo a bad config change (the dashboard's Revert to previous / Revert to default)
+kuso revision list <project> service <service>  # CHANGED column: fields / env keys / (revert of X)
+kuso revision undo <project> <service> [--dry-run]   # replays the previous value, or the default
+kuso revision revert <project> <id> [--env <e>] # --env: image-only revision onto ONE env
 #   --previews off opts this service out of PR previews; on follows the project.
 #   Sleep (incl. wakeOn --exclude-path): `kuso project service sleep`.
 kuso project service volume list|add|rm <project> <service> [name]   # persistent disks
@@ -1054,6 +1088,7 @@ kuso shell <project> <service>                  # sh -l in a pod via the server 
 kuso domains add <project> <service> <host>     # add a custom domain (--no-tls for HTTP-only)
 kuso domains remove <project> <service> <host>  # alias: rm
 kuso domains list <project> <service>
+kuso domains status <project> <service> [--env e] [--fresh]   # per-host DNS + cert state and what to do
 
 # Imperative resource creation
 kuso project create <name> --repo <url> [--domain <d>] [--branch <b>] [--previews]
@@ -1200,8 +1235,12 @@ kuso build why <project> <service>              # cause + suggested fix
 # 3. Live logs.
 kuso logs <project> <service> -f
 
+# 3b. Crash-looping, Stuck or Rollout failing? Why the container died + kube events.
+kuso service crash <project> <service>
+kuso service events <project> <service>
+
 # 4. Aggregated recent errors + archive search (NOTE the --q flag).
-kuso service errors <project> <service> --since 6h
+kuso service errors <project> <service> --since-deploy
 kuso logs search <project> <service> --q "ECONNREFUSED" --since 24h
 
 # 5. Env vars — is what you expect actually set? Any drift?
@@ -1375,7 +1414,11 @@ get projects                  list every project
 status <p>                    project rollup (services, URLs, replicas, builds)
 logs <p> <s> [-f]             tail or stream pod logs (--build <id> for build logs)
 logs search <p> <s> --q "..." search persisted archive (note: --q FLAG)
-service errors|pods|drift     aggregated errors / pod list / spec-vs-live drift
+service errors|pods|drift     aggregated errors (show/resolve/reopen) / pod list / spec-vs-live drift
+service crash|events          last container death + diagnosis / kube events
+service test-healthcheck|image-check|branches   probe a path / registry has tag? / repo branches
+service apply-changes         vars + spec patch in one rollout
+revision undo <p> <s>         undo the newest config change (previous value or default)
 # NB: push/merge to a tracked branch AUTO-deploys — the build cmds below are out-of-band.
 build list <p> <s>            build history; status incl release-failed, cancelled
 build why <p> <s>             classified failure cause + suggested fix
@@ -1391,10 +1434,10 @@ env share/unshare <p> <s> K   subscribe/unsubscribe service to shared-secret key
 secret list/set/unset         K8s-Secret-backed (KEY VALUE positional) — provider secrets only
 shared-secret list/set/unset  project-level vars (ONE K=V/set; subscribed services inherit)
 project addon subscribe/unsubscribe/list   per-service addon mounts (least privilege)
-domains add/remove/list       custom hostnames (--env <n> to scope; else mirrors to production)
+domains add/remove/list/status   custom hostnames (--env <n> to scope; else mirrors to production); status = DNS/TLS
 get addons <p>                addons + their conn-secret names
 environment add <p> <s> <n> --branch <b>   long-lived env tracking a branch
-addon-backup download|list|restore|schedule    addon data backups
+addon-backup download|list|restore|run|schedule    addon data backups (download --key = a stored one)
 cron list/get/add/add-http/add-command/sync/edit/edit-service/delete[-project]
 marketplace list/info/deploy  one-click apps (gitea, n8n, obsidian-livesync, uptime-kuma, ...)
 import compose <file>         convert docker-compose (dry-run by default)

@@ -19,7 +19,10 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | Open a shell in a pod            | `kuso shell <project> <service>`                                         |
 | Kube events / project usage     | `kuso get events [--namespace <ns>]` · `kuso project metrics <project>`  |
 | Pods for a service               | `kuso service pods <project> <service>` (or `kuso get pods …`)           |
-| Recent service errors            | `kuso service errors <project> <service>`                                |
+| Recent service errors            | `kuso service errors <project> <service>` (`show/resolve/reopen <fp>`)   |
+| Why a pod keeps dying / is stuck | `kuso service crash <project> <service>` · `kuso service events …`       |
+| Domain DNS / cert state          | `kuso domains status <project> <service> [--env <env>]`                  |
+| Undo a bad config change         | `kuso revision undo <project> <service> [--dry-run]`                     |
 | Query an addon DB                | `kuso db sql <project> <addon> "SELECT …"` · `kuso db tables …`          |
 | Expose addon on a public port    | `kuso project addon public-tcp enable <project> <addon>`                 |
 | Pin an addon to nodes            | `kuso project addon placement set <project> <addon> --label k=v`         |
