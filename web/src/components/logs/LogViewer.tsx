@@ -7,6 +7,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowDown,
+  ChevronRight,
   ListFilter,
   Clock,
   Copy,
@@ -35,7 +36,7 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, dayChange, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortReplayedBacklog, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, fmtClock, isCollectorNote, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortByTime, splitLeadingTimestamp, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -85,15 +86,21 @@ interface Parsed {
   json: Record<string, unknown> | null;
   // The app's own timestamp from a JSON line, when it parses.
   appTs?: string;
+  // The line minus a leading ISO timestamp the app printed itself, and
+  // that stamp's instant when it names its zone.
+  lead?: { ts?: string; rest: string };
+  // Written by the kubelet / log collector, not the app.
+  note: boolean;
 }
 const parseCache = new WeakMap<object, Parsed>();
-function parsedOf(obj: object, line: string): Parsed {
+function parsedOf(obj: object, line: string, rowHasTime: boolean): Parsed {
   let p = parseCache.get(obj);
   if (!p) {
     const json = parseJsonLine(line);
     const t = json ? (json.time ?? json.timestamp ?? json.ts ?? json["@timestamp"]) : undefined;
     const appTs = typeof t === "string" && !Number.isNaN(Date.parse(t)) ? t : undefined;
-    p = { level: detectLevel(line), json, appTs };
+    const lead = json ? null : splitLeadingTimestamp(line, rowHasTime);
+    p = { level: detectLevel(line), json, appTs, lead: lead ?? undefined, note: isCollectorNote(line) };
     parseCache.set(obj, p);
   }
   return p;
@@ -213,10 +220,17 @@ export function LogViewer({
     return out;
   }, [live, stream.lines, archive.data]);
 
-  const rows: Row[] = useMemo(() => {
+  const { rows, notes } = useMemo(() => {
     let prev: Row | null = null;
-    const built = rawLines.map((l) => {
-      const p = parsedOf(l.src, l.line);
+    const notes: ViewLine[] = [];
+    const built: Row[] = [];
+    for (const l of rawLines) {
+      const p = parsedOf(l.src, l.line, !l.approx && !l.backlog);
+      // Collector notes go to their own strip, never between app lines.
+      if (p.note) {
+        notes.push(l);
+        continue;
+      }
       // A continuation (stack-trace line) shares its head's pod and
       // instant, carries no level of its own, and either looks like a
       // trace line or follows an error/warn head.
@@ -230,19 +244,23 @@ export function LogViewer({
         p.level === "none" &&
         !p.json &&
         (CONT_SHAPE.test(stripAnsi(l.line)) || (!bothBacklog && (prev?.level === "error" || prev?.level === "warn")));
+      // The app's own time beats an arrival time; a precise collector
+      // time is kept and the app's duplicate stamp just hidden.
+      const ownTs = p.appTs ?? (l.approx || l.backlog ? p.lead?.ts : undefined);
       const row: Row = {
         ...l,
-        ts: p.appTs ?? l.ts,
-        approx: p.appTs ? false : l.approx,
-        backlog: p.appTs ? false : l.backlog,
+        line: p.lead?.rest ?? l.line,
+        ts: ownTs ?? l.ts,
+        approx: ownTs ? false : l.approx,
+        backlog: ownTs ? false : l.backlog,
         level: cont && prev ? prev.level : p.level,
         cont,
         json: p.json,
       };
       prev = row;
-      return row;
-    });
-    return sortReplayedBacklog(rawLines, built);
+      built.push(row);
+    }
+    return { rows: sortByTime(built), notes };
   }, [rawLines]);
 
   const liveMatcher = useMemo(() => (live ? buildMatcher(view.q) : null), [live, view.q]);
@@ -644,6 +662,8 @@ export function LogViewer({
         </div>
       </div>
 
+      {notes.length > 0 && <CollectorNotes notes={notes} />}
+
       {/* Body */}
       <div className="relative min-h-[18rem] flex-1 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
         <div
@@ -947,6 +967,41 @@ const LogRow = memo(function LogRow({
     </div>
   );
 });
+
+// The log pipeline's own messages (a rotated-away container log, a
+// kubelet lookup) aren't app output: one collapsed line with a count.
+function CollectorNotes({ notes }: { notes: ViewLine[] }) {
+  const [open, setOpen] = useState(false);
+  const latest = notes[notes.length - 1];
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-xs">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-h-8 w-full items-center gap-2 px-3 py-1 text-left text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+      >
+        <ChevronRight aria-hidden className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <span className="font-medium">
+          Collector notes · {notes.length}
+        </span>
+        <span className="min-w-0 truncate text-[var(--text-tertiary)]">
+          From the kubelet, not your app{latest?.ts ? ` · latest ${fmtClock(latest.ts, false).slice(0, -4)}` : ""}
+        </span>
+      </button>
+      {open && (
+        <ul className="max-h-40 overflow-y-auto border-t border-[var(--border-subtle)] px-3 py-1.5 font-mono text-[var(--text-secondary)]">
+          {notes.map((n) => (
+            <li key={n.key} className="flex gap-3 py-0.5">
+              <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{n.ts ? fmtClock(n.ts, false) : "—"}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{stripAnsi(n.line).replace(/^WARN kubelet: /, "")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function DayDivider({ label }: { label: string }) {
   return (

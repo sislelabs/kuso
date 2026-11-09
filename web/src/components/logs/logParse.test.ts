@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMatcher, dayChange, detectLevel, parseAnsi, parseJsonLine, sortReplayedBacklog, splitMatches, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, parseAnsi, isCollectorNote, parseJsonLine, sortByTime, splitLeadingTimestamp, splitMatches, stripAnsi } from "./logParse";
 
 describe("detectLevel", () => {
   it.each([
@@ -66,22 +66,54 @@ describe("matching", () => {
   });
 });
 
-describe("sortReplayedBacklog", () => {
+describe("sortByTime", () => {
   const row = (ts: string, cont = false, backlog = false) => ({ ts, cont, backlog });
-  it("orders replayed entries by time, keeping continuations with their head", () => {
-    const raw = [{ backlog: true }, { backlog: true }, { backlog: true }, { backlog: false }];
-    const rows = [row("2026-01-01T00:00:05Z"), row("2026-01-01T00:00:05Z", true, true), row("2026-01-01T00:00:01Z"), row("2026-01-01T00:01:00Z")];
-    expect(sortReplayedBacklog(raw, rows).map((r) => r.ts)).toEqual([
+  it("orders the whole buffer by time, keeping continuations with their head", () => {
+    const rows = [
+      row("2026-01-01T00:00:05Z"),
+      row("2026-01-01T00:00:05Z", true),
+      row("2026-01-01T00:00:01Z"),
+      row("2026-01-01T00:01:00Z"),
+      row("2026-01-01T00:00:30Z"),
+    ];
+    expect(sortByTime(rows).map((r) => `${r.ts}${r.cont ? "+" : ""}`)).toEqual([
       "2026-01-01T00:00:01Z",
       "2026-01-01T00:00:05Z",
-      "2026-01-01T00:00:05Z",
+      "2026-01-01T00:00:05Z+",
+      "2026-01-01T00:00:30Z",
       "2026-01-01T00:01:00Z",
     ]);
   });
-  it("leaves the replay alone when a head has no timestamp of its own", () => {
-    const raw = [{ backlog: true }, { backlog: true }];
-    const rows = [row("2026-01-01T00:00:05Z"), row("", false, true)];
-    expect(sortReplayedBacklog(raw, rows)).toBe(rows);
+  it("keeps timeless lines after what preceded them and leaves sorted input alone", () => {
+    const rows = [row("", false, true), row("2026-01-01T00:00:05Z"), row("", false, true), row("2026-01-01T00:00:01Z")];
+    expect(sortByTime(rows)).toEqual([rows[0], rows[3], rows[1], rows[2]]);
+    const sorted = [row("2026-01-01T00:00:01Z"), row("2026-01-01T00:00:02Z")];
+    expect(sortByTime(sorted)).toBe(sorted);
+  });
+});
+
+describe("isCollectorNote", () => {
+  it("spots kubelet notes, prefixed by the server or raw", () => {
+    expect(isCollectorNote("WARN kubelet: unable to retrieve container logs for containerd://abc")).toBe(true);
+    expect(isCollectorNote("unable to retrieve container logs for containerd://abc")).toBe(true);
+    expect(isCollectorNote('failed to try resolving symlinks in path "/var/log/pods/x": lstat: no such file')).toBe(true);
+    expect(isCollectorNote("ERROR unable to retrieve user 42")).toBe(false);
+  });
+});
+
+describe("splitLeadingTimestamp", () => {
+  it("strips a zoned ISO prefix and returns its instant", () => {
+    expect(splitLeadingTimestamp("2026-11-09T07:55:29Z INFO processed 8 orders", true)).toEqual({
+      ts: "2026-11-09T07:55:29.000Z",
+      rest: "INFO processed 8 orders",
+    });
+    expect(splitLeadingTimestamp("[2026-11-09 09:55:29,120+0200] boot", false)?.ts).toBe("2026-11-09T07:55:29.120Z");
+  });
+  it("strips a zone-less stamp only when the row has its own time", () => {
+    expect(splitLeadingTimestamp("2026-11-09 07:55:29 WARN slow", true)).toEqual({ rest: "WARN slow" });
+    expect(splitLeadingTimestamp("2026-11-09 07:55:29 WARN slow", false)).toBeNull();
+    expect(splitLeadingTimestamp("GET / 200", true)).toBeNull();
+    expect(splitLeadingTimestamp("2026-11-09T07:55:29Z", true)).toBeNull();
   });
 });
 

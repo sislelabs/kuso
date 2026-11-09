@@ -294,26 +294,62 @@ export function dayChange(prevTs: string | undefined, ts: string): string | null
   return b.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: a.getFullYear() === b.getFullYear() ? undefined : "numeric" });
 }
 
-// The replayed backlog arrives pod by pod, so with several replicas it
-// reads out of order. When every replayed entry carries its own app
-// timestamp, put them in time order (continuation lines travel with
-// their head); otherwise leave the replay as it came.
-export function sortReplayedBacklog<T extends { ts: string; cont: boolean; backlog?: boolean }>(
-  raw: readonly { backlog?: boolean }[],
-  rows: T[],
-): T[] {
-  let end = 0;
-  while (end < raw.length && raw[end].backlog) end++;
-  if (end < 2) return rows;
-  const units: T[][] = [];
-  for (const r of rows.slice(0, end)) {
-    if (r.cont && units.length > 0) units[units.length - 1].push(r);
-    else units.push([r]);
+// sortByTime puts the whole buffer in time order: archive pages and
+// live frames interleave several pods, and the replayed backlog arrives
+// pod by pod. Continuation lines travel with their head; a line with no
+// usable time (replayed backlog without an app timestamp) stays right
+// after whatever preceded it. Ties keep arrival order.
+export function sortByTime<T extends { ts: string; cont: boolean; backlog?: boolean }>(rows: T[]): T[] {
+  type Group = { t: number; i: number; rows: T[] };
+  const groups: Group[] = [];
+  let lead: T[] = [];
+  for (const r of rows) {
+    const t = r.backlog ? NaN : Date.parse(r.ts);
+    const last = groups[groups.length - 1];
+    if (r.cont || Number.isNaN(t)) {
+      if (last) last.rows.push(r);
+      else lead.push(r);
+      continue;
+    }
+    groups.push({ t, i: groups.length, rows: [r] });
   }
-  // A head still flagged backlog had no app timestamp to read.
-  if (units.some((u) => u[0].backlog)) return rows;
-  const times = units.map((u) => Date.parse(u[0].ts));
-  if (times.some((t) => Number.isNaN(t))) return rows;
-  const order = units.map((u, i) => ({ u, t: times[i], i })).sort((a, b) => a.t - b.t || a.i - b.i);
-  return [...order.flatMap((o) => o.u), ...rows.slice(end)];
+  if (groups.length < 2) return rows;
+  let sorted = true;
+  for (let k = 1; k < groups.length; k++) if (groups[k].t < groups[k - 1].t) sorted = false;
+  if (sorted) return rows;
+  groups.sort((a, b) => a.t - b.t || a.i - b.i);
+  const out = lead;
+  lead = [];
+  for (const g of groups) out.push(...g.rows);
+  return out;
+}
+
+// Lines the log pipeline writes about itself rather than the app's
+// output: the kubelet's "unable to retrieve container logs …" (the
+// server prefixes it "WARN kubelet: ") and its symlink lookups for a
+// rotated-away log file.
+const COLLECTOR_NOTE = /^(?:WARN kubelet: )?(?:unable to retrieve container logs|failed to try resolving symlinks in path)/;
+export function isCollectorNote(raw: string): boolean {
+  return COLLECTOR_NOTE.test(stripAnsi(raw).trimStart());
+}
+
+// A leading ISO-8601 timestamp the app printed itself ("2026-11-09T07:55:29Z
+// INFO …"). The row already shows a time, so the viewer strips it. ts is
+// set only when the stamp names its zone; a zone-less one is ambiguous
+// (container-local) and only stripped when the row has its own time.
+const LEADING_ISO = /^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,9})?)(Z|[+-]\d{2}:?\d{2})?\]?\s+/;
+export function splitLeadingTimestamp(line: string, rowHasTime: boolean): { ts?: string; rest: string } | null {
+  const m = LEADING_ISO.exec(line);
+  if (!m) return null;
+  const rest = line.slice(m[0].length);
+  if (!rest.trim()) return null;
+  const base = m[1].replace(" ", "T").replace(",", ".");
+  if (m[2]) {
+    const zone = m[2] === "Z" ? "Z" : m[2].length === 5 ? `${m[2].slice(0, 3)}:${m[2].slice(3)}` : m[2];
+    const ms = Date.parse(base + zone);
+    if (Number.isNaN(ms)) return null;
+    return { ts: new Date(ms).toISOString(), rest };
+  }
+  if (!rowHasTime || Number.isNaN(Date.parse(base + "Z"))) return null;
+  return { rest };
 }
