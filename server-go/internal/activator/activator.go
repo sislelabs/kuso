@@ -453,6 +453,7 @@ func retriableDialErr(err error) bool {
 // ctx expires.
 func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	key := ns + "/" + name
+	start := a.now()
 
 	// Fast path: already serving? (e.g. another request already woke it,
 	// or the route reached us a beat late.) Endpoint-ready, not just
@@ -503,7 +504,13 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return a.waitReady(ctx, ns, name)
+	err := a.waitReady(ctx, ns, name)
+	if !inFlight && err == nil {
+		// One line per real cold start (the owning waiter only), so wake
+		// latency is measurable from logs instead of pod timestamps.
+		a.logger.Info("activator: woke", "namespace", ns, "service", name, "readyAfter", a.now().Sub(start).Round(time.Millisecond).String())
+	}
+	return err
 }
 
 // doWake restores the env to its pre-sleep replica count (idempotent /

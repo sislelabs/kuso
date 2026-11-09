@@ -355,13 +355,15 @@ spec:
             healthz route, may use non-standard frameworks, or may
             return non-2xx on /. TCP just checks "is the socket
             accepting connections?" which is the minimum signal that
-            the process is past startup. initialDelaySeconds=2 gives
-            the runtime a beat to bind; failureThreshold=30 with
-            periodSeconds=2 means a slow Rails/Spring boot has a full
-            minute before being declared unready.
+            the process is past startup.
 
-            startupProbe carries slow-boot apps for up to 5 min so
-            the readinessProbe doesn't false-fail during cold starts.
+            Both probes tick every second: readiness doesn't run until the
+            startupProbe first passes, so its period is dead time added to
+            every start — at the old 5s it was most of a sleeping service's
+            wake (median 4s from container start to Ready, measured). The
+            startupProbe still allows 5 min (300 x 1s) before a restart, and
+            readiness still tolerates 60s of failures once up. A TCP connect
+            a second, during startup only, costs nothing.
           */}}
           {{- if not (eq (default "" .Values.runtime) "worker") }}
           {{- /*
@@ -422,24 +424,24 @@ spec:
           startupProbe:
             tcpSocket:
               port: {{ .Values.port }}
-            periodSeconds: 5
+            periodSeconds: 1
             timeoutSeconds: 2
-            failureThreshold: 60
+            failureThreshold: 300
           {{- else }}
           readinessProbe:
             tcpSocket:
               port: {{ .Values.port }}
-            initialDelaySeconds: 2
-            periodSeconds: 2
+            initialDelaySeconds: 0
+            periodSeconds: 1
             timeoutSeconds: 2
-            failureThreshold: 30
+            failureThreshold: 60
             successThreshold: 1
           startupProbe:
             tcpSocket:
               port: {{ .Values.port }}
-            periodSeconds: 5
+            periodSeconds: 1
             timeoutSeconds: 2
-            failureThreshold: 60
+            failureThreshold: 300
           {{- end }}
           {{- end }}
           {{- /*
