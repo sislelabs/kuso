@@ -124,7 +124,7 @@ export function OverlayTabs<T extends string>({
             <span className="sr-only"> {t.badgeTone === "error" ? "errors" : "items"}</span>
           </span>
         )}
-        {selected && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]" />}
+        {selected && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--accent)]" />}
       </button>
     );
   };
@@ -206,7 +206,7 @@ export function OverlayTabs<T extends string>({
                 {activeInMore ? activeInMore.label : "More"}
                 {overflowBadge && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />}
                 <ChevronDown aria-hidden className="h-3.5 w-3.5" />
-                {activeInMore && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]" />}
+                {activeInMore && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--accent)]" />}
               </PopoverTrigger>
               <PopoverContent align="start" className="w-52 gap-0.5 rounded-lg p-1">
                 {overflow.map((t) => {
