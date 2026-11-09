@@ -8,6 +8,7 @@ describe("needsAttention", () => {
     expect(needsAttention({ type: "build.failed", severity: "warn" })).toBe(true);
     expect(needsAttention({ type: "pod.crashed", severity: "error" })).toBe(true);
     expect(needsAttention({ type: "alert.fired", severity: "info" })).toBe(true);
+    expect(needsAttention({ type: "alert.fired", severity: "info", extra: { state: "resolved" } })).toBe(false);
     expect(needsAttention({ type: "update.available", severity: "info" })).toBe(true);
     expect(needsAttention({ type: "security.deploy_blocked", severity: "info" })).toBe(true);
   });

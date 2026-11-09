@@ -140,7 +140,31 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 // update notices. Successes (build succeeded, recovered, backup ok)
 // are activity, not attention. Keep in sync with web
 // lib/notification-attention.ts.
-const attentionPredicate = `("severity" IN ('warn','error') OR "type" = 'alert.fired' OR "type" = 'update.available' OR "type" LIKE 'security.%')`
+//
+// A problem whose episode has since closed — a crash followed by its
+// recovery, an alert followed by its resolution, an uptime failure
+// followed by its recovery, a node back online — is no longer attention,
+// and neither is the closing row itself (an alert's all-clear keeps the
+// alert.fired type for channel delivery).
+const attentionPredicate = `(("severity" IN ('warn','error') OR "type" = 'alert.fired' OR "type" = 'update.available' OR "type" LIKE 'security.%')
+	AND NOT ("type" = 'alert.fired' AND COALESCE(NULLIF("extra", '')::jsonb->>'state', '') = 'resolved')
+	AND NOT EXISTS (
+		SELECT 1 FROM "NotificationEvent" r
+		WHERE r."id" > "NotificationEvent"."id"
+		  AND r."project" IS NOT DISTINCT FROM "NotificationEvent"."project"
+		  AND (
+		    ("NotificationEvent"."type" = 'alert.fired' AND r."type" = 'alert.fired'
+		      AND NULLIF(r."extra", '')::jsonb->>'state' = 'resolved'
+		      AND NULLIF(r."extra", '')::jsonb->>'rule_id' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'rule_id')
+		    OR (r."service" IS NOT DISTINCT FROM "NotificationEvent"."service"
+		      AND (COALESCE(NULLIF(r."extra", '')::jsonb->>'env', '') = ''
+		        OR COALESCE(NULLIF("NotificationEvent"."extra", '')::jsonb->>'env', '') = ''
+		        OR NULLIF(r."extra", '')::jsonb->>'env' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'env')
+		      AND (("NotificationEvent"."type" = 'pod.crashed' AND r."type" = 'pod.recovered')
+		        OR ("NotificationEvent"."type" = 'uptime.down' AND r."type" = 'uptime.recovered')
+		        OR ("NotificationEvent"."type" = 'node.unreachable' AND r."type" = 'node.recovered'
+		          AND NULLIF(r."extra", '')::jsonb->>'node' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'node')))
+		  )))`
 
 // IsAttentionEvent is attentionPredicate for an in-memory event.
 func IsAttentionEvent(eventType, severity string) bool {

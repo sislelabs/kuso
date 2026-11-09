@@ -3,8 +3,10 @@ import { useSyncExternalStore } from "react";
 // needsAttention mirrors the server's attentionPredicate
 // (internal/db/notification_events.go): failures and warnings, fired
 // alerts, security findings and kuso update notices. Applied client-side
-// too because servers older than the ?attention= filter ignore it.
-export function needsAttention(e: { type: string; severity?: string }): boolean {
+// too because servers older than the ?attention= filter ignore it. An
+// alert's all-clear keeps the alert.fired type, so it's excluded by state.
+export function needsAttention(e: { type: string; severity?: string; extra?: Record<string, string> }): boolean {
+  if (e.type === "alert.fired" && e.extra?.state === "resolved") return false;
   return (
     e.severity === "warn" ||
     e.severity === "error" ||
