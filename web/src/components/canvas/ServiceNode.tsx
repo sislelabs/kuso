@@ -5,6 +5,7 @@ import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { AlertTriangle, Check, Copy, ExternalLink, Layers, MoreHorizontal, Undo2, XCircle } from "lucide-react";
 import { StatusChip } from "@/components/ui/status-chip";
+import { useAnnounceChange } from "@/components/shared/LiveAnnouncer";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
   deriveServiceStatus,
@@ -79,6 +80,8 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const hasBadges = (data.errors?.occurrences ?? 0) > 0 || (data.vulns?.fixableCritical ?? 0) > 0;
   const compact = !!data.compact;
   const cause = failureCause(status, data.env?.status, data.latestBuild);
+  // Building → Deploying → Live (or Failing) is spoken, not only redrawn.
+  useAnnounceChange(cause ? `${status.label}: ${cause}` : status.label, (s) => `${displayName}: ${s}`);
   // Severity reads from the icon shape too, not only the dot's hue.
   const ToneIcon = status.tone === "error" ? XCircle : status.tone === "warning" ? AlertTriangle : null;
   const toneMark = ToneIcon ? (

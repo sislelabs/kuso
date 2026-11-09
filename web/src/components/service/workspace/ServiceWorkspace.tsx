@@ -1,5 +1,6 @@
 "use client";
 
+import { useAnnounceChange } from "@/components/shared/LiveAnnouncer";
 import { smoothScroll } from "@/lib/reduced-motion";
 import { ReasonTooltip } from "@/components/ui/tooltip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -566,6 +567,8 @@ export function ServiceWorkspace({
   const status = nodeServiceStatus(derived);
   const statusMeta = nodeStatusMeta(derived);
   const statusDetail = derived.detail || (derived.kind === "stuck" ? stuckFacts(env?.status)?.summary : undefined);
+  // The full page has no canvas behind it to announce rollout changes.
+  useAnnounceChange(statusMeta.label, (l) => `${service}: ${l}`, page && !!service);
 
   const stopped = !!svc.data?.spec?.stopped;
   // A state the problem table doesn't name yet (a newer server rollup)

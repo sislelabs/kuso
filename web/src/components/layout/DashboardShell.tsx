@@ -8,6 +8,7 @@ import { KeyboardShortcuts } from "@/components/layout/KeyboardShortcuts";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { ServerVersionGuard } from "@/components/layout/ServerVersionGuard";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { LiveAnnouncer } from "@/components/shared/LiveAnnouncer";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   // The top nav (h-12) is the desktop chrome; phones add a bottom tab
@@ -35,6 +36,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         <MobileNav />
         <CommandPalette />
         <KeyboardShortcuts />
+        <LiveAnnouncer />
         <Suspense fallback={null}>
           <ServerVersionGuard />
         </Suspense>

@@ -64,6 +64,7 @@ import { NotificationsButton } from "./Notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { ServersPopover } from "./ServersPopover";
 import { CommandTrigger } from "@/components/command/CommandPalette";
+import { useRovingToolbar } from "./useRovingToolbar";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
 // TopNav is the persistent shell across every authenticated page. Left:
@@ -82,6 +83,7 @@ export function TopNav() {
   const projectQuery = useProject(currentProject);
   const projectMissing = projectQuery.isError && classifyError(projectQuery.error) === "not-found";
   const projectScoped = !!currentProject && !settingsCrumbs && !projectMissing;
+  const toolbarRef = useRovingToolbar<HTMLDivElement>();
 
   return (
     <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:px-3 lg:px-4">
@@ -139,7 +141,8 @@ export function TopNav() {
         ))}
       </nav>
 
-      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+      {/* One tab stop for the global actions; arrows move along the row. */}
+      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="flex shrink-0 items-center gap-0.5 sm:gap-1">
         {/* Search + global actions live in the bottom bar on phones. */}
         <div className="hidden sm:flex">
           <CommandTrigger />
